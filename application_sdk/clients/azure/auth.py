@@ -64,6 +64,7 @@ from azure.core.exceptions import ClientAuthenticationError
 from azure.identity import ClientSecretCredential
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from application_sdk._runtime.offload import run_in_thread
 from application_sdk.clients.azure import AZURE_MANAGEMENT_API_ENDPOINT
 from application_sdk.clients.azure.azure_errors import (
     AzureCredentialError,
@@ -71,7 +72,6 @@ from application_sdk.clients.azure.azure_errors import (
     AzureCredentialTypeError,
 )
 from application_sdk.errors import AppError
-from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)

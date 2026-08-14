@@ -38,6 +38,7 @@ from conformance.suite.checks import (
     determinism,
     dev_entrypoint,
     dockerfile_conformance,
+    download_retry,
     e2e_agent_spec,
     e2e_deployment_name,
     e2e_generated_harness,
@@ -104,6 +105,11 @@ _CHECKS: list[CheckRegistration] = [
         series=client_seam.SERIES,
         discover=client_seam.discover,
         scan_path=client_seam.scan_path,
+    ),
+    CheckRegistration(
+        series=download_retry.SERIES,
+        discover=download_retry.discover,
+        scan_path=download_retry.scan_path,
     ),
     CheckRegistration(
         series=error_handling.SERIES,

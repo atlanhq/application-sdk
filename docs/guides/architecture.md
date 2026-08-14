@@ -69,13 +69,16 @@ Tasks are where side effects happen. Each completed task is a durable checkpoint
 
 ```python
 @task(
-    timeout_seconds=600,            # Activity start-to-close timeout (default 10 min)
     retry_max_attempts=3,           # Default 3 retries
     retry_max_interval_seconds=30,  # Max backoff between retries
 )
 async def my_task(self, input: TaskInput) -> TaskOutput:
     ...
 ```
+
+`timeout_seconds` (the activity's `start_to_close` bound) defaults to a **24-hour
+backstop** and is not a number to tune — a wedged-but-alive attempt is caught by the
+stall watchdog in minutes instead. See [Progress and Stalls](../concepts/progress-and-stalls.md).
 
 - `@task` validates the single-model contract (one `Input` model, one `Output` model) **at class definition time** — before any code runs.
 - Tasks run outside the Temporal sandbox; they can import any library without passthrough concerns.
@@ -231,6 +234,10 @@ Key chart features: KEDA `ScaledObject` (worker scales to zero on empty queue), 
 
 ```
 application_sdk/
+├── _runtime/               # Dependency-neutral substrate — importable at module scope from ANY layer (ADR-0019)
+│   ├── offload.py          # run_in_thread, submit_in_thread, run_fault_isolated, run_best_effort
+│   └── progress.py         # ProgressTracker, current_progress_tracker, holding_progress
+│
 ├── app/                    # Core: App ABC, @task, AppRegistry, TaskRegistry
 │   ├── base.py             # App class, run() wrapper, determinism helpers
 │   ├── client.py           # App client bootstrap helpers
@@ -256,7 +263,8 @@ application_sdk/
 ├── execution/              # Temporal abstraction layer (not for direct use)
 │   ├── decorators.py       # Execution-layer decorators
 │   ├── errors.py           # Execution error types
-│   ├── heartbeat.py        # HeartbeatController (Protocol + implementations), blocking executor backing run_in_thread
+│   ├── heartbeat.py        # HeartbeatController (Protocol + implementations), auto-heartbeat loop + stall watchdog; re-exports the _runtime/ offload primitives
+│   ├── progress.py         # App-facing re-export of _runtime/progress.py + ProgressWatchdogMode
 │   ├── retry.py            # RetryPolicy (framework wrapper)
 │   ├── sandbox.py          # SandboxConfig with framework defaults
 │   ├── settings.py         # Worker and activity settings

@@ -31,10 +31,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from application_sdk._runtime.offload import run_in_thread
 from application_sdk.common.incremental.helpers import (
     copy_directory_parallel,
     count_json_files_recursive,
-    download_s3_prefix_with_structure,
     get_persistent_artifacts_path,
     get_persistent_s3_prefix,
 )
@@ -53,7 +53,6 @@ from application_sdk.common.incremental.storage.duckdb_utils import (
 )
 from application_sdk.constants import INCREMENTAL_DIFF_SUBPATH_TEMPLATE
 from application_sdk.execution import get_object_store_prefix
-from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.batch import download_prefix, upload_prefix
 
@@ -113,9 +112,13 @@ async def download_transformed_data(output_path: str) -> Path:
     transformed_dir = Path(transformed_local_path)
     transformed_dir.mkdir(parents=True, exist_ok=True)
 
+    # strip_prefix: transformed_dir already *is* the run's transformed directory,
+    # so the store prefix must not be repeated inside it — downstream readers
+    # (table_scope, column extraction) key off <transformed_dir>/table (FND-340).
     await download_prefix(
         prefix=transformed_s3_prefix,
         local_dir=str(transformed_dir),
+        strip_prefix=True,
     )
 
     return transformed_dir
@@ -171,9 +174,10 @@ async def prepare_previous_state(
     # Download previous state from S3 to temporary location
     logger.info("Downloading previous state from S3: %s", current_state_s3_prefix)
     try:
-        await download_s3_prefix_with_structure(
-            s3_prefix=current_state_s3_prefix,
-            local_destination=previous_state_temp_dir,
+        await download_prefix(
+            prefix=current_state_s3_prefix,
+            local_dir=previous_state_temp_dir,
+            strip_prefix=True,
         )
         logger.info(
             "Previous state downloaded to temporary location: %s",
@@ -408,7 +412,19 @@ async def create_current_state_snapshot(
 
         try:
             # Step 1: Get table scope (qualified names and incremental states)
-            table_scope = get_current_table_scope(transformed_dir, conn=conn)
+            #
+            # Every sync step in this block is offloaded for the same reason:
+            # each one is a DuckDB scan over the run's transformed output or a
+            # blocking parallel directory copy, none of them yield, and their
+            # cost scales with the source. Inline they hold the event loop —
+            # and this activity's auto-heartbeat — for the whole snapshot, so a
+            # healthy large-connection run gets killed on heartbeat_timeout
+            # (ADR-0010). The DuckDB connection is `threads=1` and file-backed
+            # and each hop is awaited before the next starts, so it is only
+            # ever touched by one thread at a time.
+            table_scope = await run_in_thread(
+                get_current_table_scope, transformed_dir, conn=conn
+            )
             if not table_scope or get_scope_length(table_scope) == 0:
                 raise FileNotFoundError(
                     f"No tables found in transformed output: {transformed_dir}. "
@@ -426,14 +442,16 @@ async def create_current_state_snapshot(
             await run_in_thread(prepare_current_state_directory, current_state_dir)
 
             # Step 3: Copy non-column entities (tables, schemas, databases)
-            copy_non_column_entities(
+            await run_in_thread(
+                copy_non_column_entities,
                 transformed_dir=transformed_dir,
                 current_state_dir=current_state_dir,
                 copy_workers=copy_workers,
             )
 
             # Step 4: Copy columns from transformed (lightweight — no ancestral merge)
-            column_count = _copy_columns_from_transformed(
+            column_count = await run_in_thread(
+                _copy_columns_from_transformed,
                 transformed_dir=transformed_dir,
                 current_state_dir=current_state_dir,
                 copy_workers=copy_workers,
@@ -441,14 +459,18 @@ async def create_current_state_snapshot(
 
             # Track which tables have extracted columns
             tables_with_columns = (
-                get_table_qns_from_columns(
-                    current_state_dir.joinpath(EntityType.COLUMN.value), conn=conn
+                await run_in_thread(
+                    get_table_qns_from_columns,
+                    current_state_dir.joinpath(EntityType.COLUMN.value),
+                    conn=conn,
                 )
                 or set()
             )
             table_scope.tables_with_extracted_columns = tables_with_columns
 
-            total_files = count_json_files_recursive(current_state_dir)
+            total_files = await run_in_thread(
+                count_json_files_recursive, current_state_dir
+            )
 
             logger.info(
                 "Current-state snapshot complete (lightweight): tables=%d columns_copied=%d "
@@ -475,7 +497,8 @@ async def create_current_state_snapshot(
                 if incremental_diff_dir.exists():
                     await run_in_thread(shutil.rmtree, incremental_diff_dir)
 
-                diff_result = create_incremental_diff(
+                diff_result = await run_in_thread(
+                    create_incremental_diff,
                     transformed_dir=transformed_dir,
                     incremental_diff_dir=incremental_diff_dir,
                     table_scope=table_scope,

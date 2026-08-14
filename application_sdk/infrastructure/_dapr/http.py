@@ -29,7 +29,10 @@ from application_sdk.constants import (
     DEPLOYMENT_NAME,
     LOCAL_ENVIRONMENT,
 )
-from application_sdk.errors.leaves import ColdStartRaceError
+from application_sdk.errors.leaves import (
+    ColdStartRaceError,
+    DaprSidecarUnreachableError,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -355,7 +358,27 @@ async def retry_past_dapr_cold_start(
                 # answered — do NOT arm the gate, a later call should still
                 # wait out the cold start rather than assume steady-state
                 # readiness.
-                raise
+                #
+                # Re-label rather than re-raise the transient marker: the
+                # ColdStartRaceError means "not reachable yet"; exhausting the
+                # whole budget without one usable answer is the terminal
+                # state. Surfacing it as a race is what makes a persistent
+                # platform fault read as a blip. DaprSidecarUnreachableError
+                # stays a ColdStartRaceError subtype, so every upstream
+                # `except ColdStartRaceError` is unaffected; its fields are
+                # secret-free (component id, attempt count, elapsed) and the
+                # transport cause rides `cause`, never the message.
+                raise DaprSidecarUnreachableError(
+                    message=(
+                        f"Dapr sidecar unreachable: component={component} not "
+                        f"reachable after {attempt} attempts over "
+                        f"{DAPR_COLD_START_MAX_WAIT_SECONDS - remaining:.1f}s"
+                    ),
+                    component=component,
+                    attempts=attempt,
+                    elapsed_seconds=DAPR_COLD_START_MAX_WAIT_SECONDS - remaining,
+                    cause=exc.cause,
+                ) from exc
             # Cap the backoff to the remaining budget so the total wait can't
             # overshoot DAPR_COLD_START_MAX_WAIT_SECONDS by a full delay, and
             # cap the exponent so a very large max-wait override can't
@@ -528,6 +551,33 @@ class AsyncDaprClient:
     # Bindings
     # ------------------------------------------------------------------
 
+    # BLDX-1619: Dapr's HTTP binding API carries the payload inside a JSON body,
+    # so the only two shapes it can express are a parsed JSON value and a UTF-8
+    # string. A lossy decode used to turn every invalid byte of a parquet file
+    # into U+FFFD and write the damage without a word.
+    @staticmethod
+    def _encode_payload(data: bytes, binding_name: str) -> Any:
+        """Return the JSON-embeddable form of a binding payload.
+
+        Raises:
+            DaprBinaryPayloadError: If *data* is not valid UTF-8.
+        """
+        try:
+            parsed = orjson.loads(data)
+        # conformance: ignore[E009] not-JSON is the normal text path, handled below
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            parsed = None
+        if isinstance(parsed, (dict, list)):
+            return parsed
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            from application_sdk.infrastructure._dapr._dapr_errors import (  # noqa: PLC0415 — circular: _dapr_errors imports the error base which imports this module's package
+                DaprBinaryPayloadError,
+            )
+
+            raise DaprBinaryPayloadError(binding_name=binding_name) from exc
+
     async def invoke_binding(
         self,
         binding_name: str,
@@ -541,26 +591,16 @@ class AsyncDaprClient:
             If ``data`` contains valid JSON it is embedded as a parsed
             object so that Dapr forwards a proper JSON body to HTTP
             bindings (avoids double-encoding).  Otherwise the raw bytes
-            are decoded as UTF-8 text.  Binary data (protobuf, compressed)
-            should be base64-encoded by the caller.
+            are decoded as UTF-8 text.  Binary data (parquet, protobuf,
+            compressed) must be base64-encoded by the caller; sending it
+            raw raises ``DaprBinaryPayloadError``.
         """
         body: dict[str, Any] = {
             "operation": operation,
             "metadata": metadata or {},
         }
         if data:
-            try:
-                parsed = orjson.loads(data)
-                if isinstance(parsed, (dict, list)):
-                    body["data"] = parsed
-                else:
-                    body["data"] = data.decode("utf-8", errors="replace")
-            # conformance: ignore[E009] JSON/Unicode decode fallback; raw string is the safe default
-            except (
-                json.JSONDecodeError,
-                UnicodeDecodeError,
-            ):
-                body["data"] = data.decode("utf-8", errors="replace")
+            body["data"] = self._encode_payload(data, binding_name)
         resp = await self._client.post(
             BINDING_PATH.format(binding_name=binding_name),
             json=body,

@@ -11,6 +11,7 @@ import threading
 import warnings
 from abc import ABC
 from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -31,6 +32,7 @@ import orjson
 from temporalio import activity, workflow
 from temporalio.exceptions import FailureError
 
+from application_sdk._runtime.offload import run_best_effort, run_in_thread
 from application_sdk.app._ep_registration import (
     _apply_app_registration,
     _build_entry_points,
@@ -41,6 +43,7 @@ from application_sdk.app._ep_registration import (
 from application_sdk.app.base_errors import (
     AbstractRunNotImplementedError,
     ObjectStoreNotConfiguredError,
+    UpstreamObjectStoreNotConfiguredError,
 )
 from application_sdk.app.context import (
     AppContext,
@@ -84,6 +87,7 @@ from application_sdk.observability.logger_adaptor import (
 from application_sdk.observability.observability import AtlanObservability
 
 if TYPE_CHECKING:
+    from application_sdk.execution.progress import ProgressWatchdogMode
     from application_sdk.validation import AssetValidationReport
 
 _task_logger = get_logger(__name__)
@@ -200,7 +204,7 @@ async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) ->
     sampling) so the summary is accurate.
 
     The scan runs via
-    :func:`application_sdk.execution.heartbeat.run_best_effort`, for two reasons.
+    :func:`application_sdk._runtime.offload.run_best_effort`, for two reasons.
     It keeps the event loop and the activity's auto-heartbeat free while a large
     batch is validated (ADR-0010). More importantly, it makes the never-raises
     contract hold even against *native* faults: the decode exercises third-party
@@ -229,9 +233,6 @@ async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) ->
     if target is None:
         return
 
-    from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — deferred: app.base is imported by execution (circular)
-        run_best_effort,
-    )
     from application_sdk.validation import (  # noqa: PLC0415 — deferred: only load the validator on the upload path
         validate_transformed_dir,
     )
@@ -327,6 +328,27 @@ def _safe_uuid() -> UUID:
     Always runs in Temporal workflow context.
     """
     return UUID(str(workflow.uuid4()))
+
+
+def _run_started_at_epoch() -> float:
+    """When this run started, in wall-clock seconds since the epoch.
+
+    Deterministic for replay: ``workflow.info().start_time`` comes from the
+    run's own history, so every replay of a run reads the same instant and the
+    run-length observation measures the run rather than the attempt that
+    happens to be replaying it.
+
+    Returns ``0.0`` outside a workflow context — a task invoked directly in a
+    test or a local run has no run to measure. Never raises: this value only
+    feeds an alert, so failing to read it must cost the observation and nothing
+    else.
+    """
+    try:
+        start_time = workflow.info().start_time
+    # conformance: ignore[E004] probe for Temporal workflow context; the value only feeds an observability signal, so any failure degrades to "unknown run start"
+    except Exception:
+        return 0.0  # conformance: ignore[E007] workflow-context probe; "no run to measure" is the answer, and a log line here would fire per dispatch on every local run
+    return start_time.timestamp() if start_time is not None else 0.0
 
 
 def _safe_log(level: str, message: str, **attrs: Any) -> None:
@@ -929,7 +951,14 @@ class App(ABC):
     ) -> Any:
         """Run a blocking function in a thread pool.
 
-        Only available in @task methods.
+        Only available in @task methods. The offload is automatically wrapped in
+        an unbounded progress hold (ADR-0018), so a legitimately long blocking
+        call is never read as a stall. To bound it instead, wrap the offload in
+        :meth:`holding_progress` with the allowance you would give this one
+        call::
+
+            async with self.holding_progress("full table scan", timeout=7200):
+                rows = await self.run_in_thread(cursor.execute, sql)
 
         Args:
             func: Blocking function to run.
@@ -947,6 +976,39 @@ class App(ABC):
                 "run_in_thread() can only be called inside @task methods."
             )
         return await self._task_context.run_in_thread(func, *args, **kwargs)
+
+    def holding_progress(
+        self, label: str, *, timeout: float | None
+    ) -> AbstractAsyncContextManager[None]:
+        """Vouch for one opaque operation for as long as you would let it run.
+
+        Pauses the stall watchdog (ADR-0018) for a call the SDK cannot see into,
+        and records the completed call as progress on exit::
+
+            async with self.holding_progress("snapshot metadata query", timeout=1800):
+                rows = await long_single_query(...)
+
+        Only available in @task methods — outside one there is no attempt to
+        vouch for, so a hold there would claim coverage it cannot provide.
+
+        Args:
+            label: The call site being vouched for. Must identify a *site*,
+                never a query, key, credential or customer value.
+            timeout: How long you would let this one operation run before you
+                would rather it failed — not a prediction of its duration.
+                Keyword-only and required; ``None`` declares an unbounded hold.
+
+        Returns:
+            An async context manager. Use it with ``async with``.
+
+        Raises:
+            AppContextError: If called outside a @task method.
+        """
+        if self._task_context is None:
+            raise AppContextError(
+                "holding_progress() can only be called inside @task methods."
+            )
+        return self._task_context.holding_progress(label, timeout=timeout)
 
     # =========================================================================
     # State accessors
@@ -1159,6 +1221,7 @@ class App(ABC):
         from application_sdk.constants import (  # noqa: PLC0415 — import here to avoid module-level circular import (same pattern as normalize_key)
             DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED,
             DEPLOYMENT_ARTIFACT_DUAL_WRITE_REQUIRED,
+            ENABLE_ATLAN_UPLOAD,
         )
         from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: app.base is imported by execution which imports storage
             normalize_key,
@@ -1167,14 +1230,21 @@ class App(ABC):
             upload as _upload,
         )
 
+        deployment = self.context.storage
+        upstream = self.context.upstream_storage
+
+        # BLDX-1619: a deployment that set ENABLE_ATLAN_UPLOAD expects artifacts
+        # in Atlan's bucket. Falling back to the deployment store here returns a
+        # positive file count for a write publish will never see, so fail before
+        # doing any work rather than after.
+        if ENABLE_ATLAN_UPLOAD and upstream is None:
+            raise UpstreamObjectStoreNotConfiguredError()
+
         # BLDX-1555 defense-in-depth: validate transformed assets against the
         # pyatlan_v9 backbone before the handoff. Warn-only, best-effort, and
         # run in an isolated child process (CNCT-85) so a native decode fault
         # kills only the child and never blocks or crashes the event loop.
         await _warn_on_invalid_transformed_assets(input.local_path, self._app_name)
-
-        deployment = self.context.storage
-        upstream = self.context.upstream_storage
 
         # Build the ordered list of (store, label, fatal) upload targets.
         # See ADR-0014 §"BLDX-1464 dual-write" for the full routing decision.
@@ -1357,9 +1427,6 @@ class App(ABC):
         )
         from application_sdk.execution import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
             build_output_path,
-        )
-        from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
-            run_in_thread,
         )
 
         path_results: dict[str, bool] = {}
@@ -1872,6 +1939,7 @@ async def _run_preflight_gate(
             gate_timeouts,
             is_preflight_block,
             preflight_gate_activity_name,
+            underlying_error_type,
         )
 
     entry = entrypoint or "<implicit>"
@@ -1929,7 +1997,7 @@ async def _run_preflight_gate(
             app_name=app_name,
             entrypoint=entry,
             outcome="no_verdict",
-            reason=type(e).__name__,
+            reason=underlying_error_type(e),
             gate_classification=CLASSIFICATION_GATE_BROKEN,
             **{CHECK_MATRIX_KEY: EMPTY_CHECK_MATRIX},
         )
@@ -2345,6 +2413,9 @@ def _wrap_instance_tasks(app_instance: Any, context_data: dict[str, Any]) -> Non
                     task_meta.auto_heartbeat_seconds,
                     task_meta.retry_policy,
                     pool=task_meta.pool,
+                    schedule_to_close_seconds=task_meta.schedule_to_close_seconds,
+                    progress_watchdog=task_meta.progress_watchdog,
+                    max_no_progress_seconds=task_meta.max_no_progress_seconds,
                 )
                 setattr(app_instance, attr_name, wrapper)
 
@@ -2362,13 +2433,16 @@ def _create_task_activity_wrapper(
     retry_policy: Any = None,
     *,
     pool: str | None = None,
+    schedule_to_close_seconds: int | None = None,
+    progress_watchdog: "ProgressWatchdogMode | None" = None,
+    max_no_progress_seconds: float | None = None,
 ) -> Any:
     """Create a wrapper that executes a task as a Temporal activity.
 
     Args:
         app_name: Name of the app.
         task_name: Name of the task (simple name, no prefix).
-        timeout_seconds: Activity timeout.
+        timeout_seconds: Activity timeout for one attempt (``start_to_close``).
         retry_max_attempts: Maximum retry attempts.
         retry_max_interval_seconds: Maximum interval between retries.
         output_type: The typed output class for deserialization.
@@ -2382,6 +2456,18 @@ def _create_task_activity_wrapper(
             2. ``{ATLAN_TASK_QUEUE}-{pool}`` derived from the app's base queue
                (default — ensures different apps with the same pool name get
                different Temporal queues automatically).
+        schedule_to_close_seconds: Ceiling on the task's total time across every
+            attempt. ``None`` (the default) sends no ``schedule_to_close_timeout``
+            and leaves the retry product unbounded — ``retry_max_attempts ×
+            timeout_seconds``. Resolved against ``timeout_seconds`` by
+            :func:`~application_sdk.execution.retry.resolve_activity_time_bounds`.
+        progress_watchdog: The task's declared stall-watchdog mode, or ``None``
+            to inherit the fleet-wide setting. Forwarded verbatim onto the
+            ``TaskContext``; the activity side resolves it, so this path holds
+            no opinion about what the default is.
+        max_no_progress_seconds: The task's declared no-progress allowance in
+            seconds, or ``None`` to inherit the fleet-wide one. Forwarded
+            verbatim, for the same reason.
 
     Returns:
         Async function that executes the task as an activity.
@@ -2397,6 +2483,17 @@ def _create_task_activity_wrapper(
     )
     from application_sdk.execution.retry import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
         _to_temporal_retry_policy,
+        resolve_activity_time_bounds,
+    )
+
+    # Resolved once, outside the wrapper: the pair is fixed for the task's
+    # lifetime, so a dispatch does no arithmetic.
+    start_to_close_seconds, total_seconds = resolve_activity_time_bounds(
+        timeout_seconds, schedule_to_close_seconds
+    )
+    start_to_close_timeout = timedelta(seconds=start_to_close_seconds)
+    schedule_to_close_timeout = (
+        timedelta(seconds=total_seconds) if total_seconds is not None else None
     )
 
     with workflow.unsafe.imports_passed_through():
@@ -2427,6 +2524,19 @@ def _create_task_activity_wrapper(
             workflow_id=context_data.get("workflow_id", LOCAL_WORKFLOW_ID),
             heartbeat_timeout_seconds=heartbeat_timeout_seconds,
             auto_heartbeat_seconds=auto_heartbeat_seconds,
+            # The workflow is the only side that knows when the *run* started —
+            # nothing in `activity.info()` carries it — and the activity needs it
+            # for the run-length SLA alert (ADR-0018 → *Bounding total time*).
+            # Sourced from history rather than a clock, so a replayed run
+            # measures its real age instead of restarting the clock.
+            run_started_at_epoch=_run_started_at_epoch(),
+            # The task's own declaration, unresolved. Both are `None` for the
+            # overwhelming majority of tasks, which is the point: nothing here
+            # has to know that the fleet default is `warn` (ADR-0018), and an
+            # operator changing it on the worker does not need every workflow to
+            # be re-dispatched to take effect.
+            progress_watchdog=progress_watchdog,
+            max_no_progress_seconds=max_no_progress_seconds,
         )
 
         # Build heartbeat timeout if enabled
@@ -2447,11 +2557,20 @@ def _create_task_activity_wrapper(
         result: Output = await execute_activity_with_eviction_retry(
             f"{app_name}:{task_name}",
             args=[task_context, input_data],
-            start_to_close_timeout=timedelta(seconds=timeout_seconds),
+            start_to_close_timeout=start_to_close_timeout,
             heartbeat_timeout=heartbeat_timeout,
             retry_policy=temporal_retry_policy,
             result_type=output_type,
             summary=summary,
+            # Sent only when the task declares a ceiling on its retry product.
+            # Passing ``schedule_to_close_timeout=None`` would be equivalent, but
+            # omitting the key keeps the call byte-identical to before this knob
+            # existed for every task that has not opted in.
+            **(
+                {"schedule_to_close_timeout": schedule_to_close_timeout}
+                if schedule_to_close_timeout is not None
+                else {}
+            ),
             **({"task_queue": pool_queue} if pool_queue else {}),
         )
 

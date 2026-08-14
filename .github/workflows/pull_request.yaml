@@ -165,7 +165,12 @@ jobs:
       - uses: "./.github/actions/trivy"
         if: needs.changes.outputs.scan == 'true'
         with:
+          # Reporting and enforcement are separate switches on purpose — see the
+          # action's input docs. Both are passed explicitly so that a future edit
+          # to one is visibly not an edit to the other. The action itself skips
+          # the comments on merge_group; enforcement runs on every event.
           add-report-comment-to-pr: "true"
+          fail-on-findings: "true"
 
   trivy-container:
     name: Trivy Container Scan
@@ -597,6 +602,15 @@ jobs:
           # until that's added there too. Explicit so it doesn't silently
           # inherit a future default change.
           wait-mode: poll
+          # This leg is the single biggest source of merge-queue ejections: it
+          # dispatches into a k8s e2e that installs its whole toolchain from
+          # github.com at job time, so its failures are overwhelmingly transient
+          # infra rather than regressions (19/23 green on 2026-08-12, with all
+          # four failures being release-asset 503s / refused HTTP/2 streams).
+          # Because this job effectively only runs on merge_group, each of those
+          # ejects a PR and costs a full re-queue. One retry; still visible in
+          # the log and step summary when it fires.
+          retry-once: "true"
 
   # (No dedicated two-store-e2e job: mysql's own tests.yaml hardcodes
   # `two-store: true` unconditionally, so its EXISTING full-DAG run —

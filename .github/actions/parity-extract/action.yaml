@@ -153,8 +153,24 @@ runs:
         kill "$APP_PID" 2>/dev/null || true
         wait "$APP_PID" 2>/dev/null || true
 
-    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+    # Retry once: `upload-artifact` treats the artifact service's finalize 403
+    # as non-retryable and fails the step even though the bytes already landed,
+    # which on a gating path ejects the merge-queue entry. Still fatal if both
+    # attempts fail — a consumer in another repo depends on this artifact.
+    - name: Upload parity output
+      id: upload-parity
+      continue-on-error: true
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: ${{ inputs.artifact-name }}
         path: ./parity-output/
         retention-days: 7
+
+    - name: Upload parity output (retry)
+      if: steps.upload-parity.outcome == 'failure'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ./parity-output/
+        retention-days: 7
+        overwrite: true

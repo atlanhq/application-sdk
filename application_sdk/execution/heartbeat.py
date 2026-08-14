@@ -7,26 +7,41 @@ Two modes of heartbeating are supported:
 2. Manual (developer-controlled): developer calls heartbeat() with progress info
    for resume-on-retry support.
 
-This module is also the SDK's offload seam, with three sanctioned primitives:
-``run_in_thread`` offloads blocking calls so they don't starve the heartbeat
-loop (ADR-0010); ``run_fault_isolated`` runs work in a child process so a native
-fault can't kill the worker; and ``run_best_effort`` is the policy layer over it
-for non-essential work — it isolates *and* swallows failures so best-effort work
-can never break the caller.
+:func:`auto_heartbeat_loop` also runs the ADR-0018 stall watchdog on the same
+tick, since both questions are asked once per interval.
+
+This module is additionally the **app-facing path to the offload seam**. Its
+four sanctioned primitives — ``run_in_thread``, ``submit_in_thread``,
+``run_fault_isolated`` and ``run_best_effort`` — are implemented in
+:mod:`application_sdk._runtime.offload` and re-exported here unchanged. They
+moved to the substrate so every layer, ``storage/`` included, can import a
+mandatory seam at module scope (ADR-0019); this remains the documented path for
+app code, and SDK-internal callers import ``application_sdk._runtime.offload``
+directly.
 """
 
 import asyncio
-import concurrent.futures
-import contextvars
-import functools
-import multiprocessing
+import math
 import os
-import threading
 import time
 from collections.abc import Callable
 from concurrent.futures.process import BrokenProcessPool
-from typing import Any, Protocol, TypeVar
+from typing import Any, Protocol
 
+from application_sdk._runtime.offload import (
+    run_best_effort,
+    run_fault_isolated,
+    run_in_thread,
+    submit_in_thread,
+)
+from application_sdk._runtime.progress import (
+    ProgressTracker,
+    current_progress_tracker,
+    declared_hold_active,
+)
+from application_sdk.execution.progress import ProgressWatchdogMode
+from application_sdk.execution.progress_telemetry import record_no_progress_gap
+from application_sdk.execution.run_length import RunLengthWatch
 from application_sdk.observability import (
     resource_sampler as _resource_sampler,  # module alias kept so tests can patch _resource_sampler.sample()
 )
@@ -35,33 +50,36 @@ from application_sdk.observability.resource_sampler import parse_pod_memory_limi
 
 logger = get_logger(__name__)
 
+# Names this module never used itself but which were importable from it before the
+# offload seam moved out (FND-316), because the pre-split file imported them for its
+# own implementation. Nothing in the SDK or any consumer imports them from here
+# today — but they resolved, so removing them would be a breaking change dressed up
+# as a refactor. Kept so `from application_sdk.execution.heartbeat import <name>`
+# never regresses; their real homes are `_runtime.progress`,
+# `observability.logger_adaptor` and `concurrent.futures.process`. Pinned by
+# `tests/unit/runtime/test_layering.py`.
+__all__ = [
+    "AtlanLoggerAdapter",
+    "BrokenProcessPool",
+    "HeartbeatController",
+    "NoopHeartbeatController",
+    "ProgressTracker",
+    "ProgressWatchdogMode",
+    "TemporalHeartbeatController",
+    "auto_heartbeat_loop",
+    "current_progress_tracker",
+    "declared_hold_active",
+    "record_no_progress_gap",
+    "run_best_effort",
+    "run_fault_isolated",
+    "run_in_thread",
+    "submit_in_thread",
+]
+
 _MEMORY_WARN_THRESHOLD = 0.80
 _MEMORY_WARN_HYSTERESIS = (
     0.05  # re-arm only once ratio drops below threshold - hysteresis
 )
-
-# Dedicated executor for blocking operations dispatched via run_in_thread().
-#
-# Why not None (asyncio's default executor)?
-#   Temporal's Python SDK uses the event loop's default executor for its own
-#   internal scheduling.  Sharing that pool with long-running blocking calls
-#   (database queries, metadata extractions) can exhaust it and deadlock the
-#   worker, especially when multiple activities are running concurrently.
-#
-# Why not a per-call ThreadPoolExecutor?
-#   Creating one per call and calling shutdown(wait=False) leaks threads:
-#   the executor object is detached but live threads are not joined and
-#   accumulate over the lifetime of a worker process.
-#
-# This single instance is created once at module import and intentionally
-# outlives individual calls.  Named threads ("sdk-blocking-N") make it
-# distinguishable from Temporal's "activity-pool-N" threads in stack traces.
-_BLOCKING_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
-    max_workers=min(32, (os.cpu_count() or 1) + 4),
-    thread_name_prefix="sdk-blocking-",
-)
-
-T = TypeVar("T")
 
 
 class HeartbeatController(Protocol):
@@ -133,11 +151,93 @@ class NoopHeartbeatController:
         return self._details
 
 
+def _check_for_stall(
+    progress: ProgressTracker,
+    budget_seconds: float,
+    mode: ProgressWatchdogMode,
+    task_name: str,
+    on_stall: Callable[[float, str], None] | None,
+) -> bool:
+    """Report a no-progress gap if one is open. Returns True to stop the loop.
+
+    Called once per heartbeat tick, so detection latency is ``budget_seconds``
+    plus at most one tick.
+
+    Args:
+        progress: The attempt's tracker. ``stalled_for()`` already accounts for
+            holds, so a vouched-for operation reads as no gap at all.
+        budget_seconds: ``max_no_progress_seconds`` for this task.
+        mode: ``WARN`` reports; ``ENFORCE`` reports and fails the activity.
+        task_name: Task name, for the log and the metric.
+        on_stall: Injected by the activity layer to fail the attempt — the
+            watchdog itself stays free of activity/Temporal semantics. Only
+            called in ``ENFORCE``.
+
+    Returns:
+        ``True`` when the caller must return immediately: the watchdog *is*
+        ``heartbeat_task``, and the activity's ``finally`` sets ``stop_event``
+        and awaits it with a 1s bound, so it must not keep looping after
+        deciding to fail the attempt.
+    """
+    stalled = progress.stalled_for()
+    if stalled < budget_seconds:
+        return False
+
+    last_label = progress.last_label
+    record_no_progress_gap(task_name, stalled, last_label, mode)
+
+    if mode is not ProgressWatchdogMode.ENFORCE or on_stall is None:
+        # INFO, never WARNING: under a fleet-wide default this is an expected
+        # observation, and emitting it at WARNING would manufacture exactly the
+        # alert noise ADR-0018 exists to reduce. Dashboards read the metric.
+        logger.info(
+            "Task '%s' made no observable progress for %.0fs (budget %.0fs); last "
+            "signal was '%s' — not failing (warn mode)",
+            task_name,
+            stalled,
+            budget_seconds,
+            last_label or "<none>",
+        )
+        # Re-arm so each gap is reported once rather than every tick. The empty
+        # label deliberately leaves last_label alone: the signal just reported
+        # is still the most useful thing to name in the next report.
+        progress.mark_progress()
+        return False
+
+    logger.warning(
+        "Task '%s' made no observable progress for %.0fs (budget %.0fs); last "
+        "signal was '%s' — failing the activity",
+        task_name,
+        stalled,
+        budget_seconds,
+        last_label or "<none>",
+    )
+    try:
+        on_stall(stalled, last_label)
+    # The watchdog must not keep beating for an attempt it has already decided
+    # to fail; the failure is handled by stopping the loop below.
+    except Exception:
+        logger.warning(
+            "Stall handler for task '%s' raised, so the attempt was not failed "
+            "in-process; stopping the heartbeat loop so Temporal's "
+            "heartbeat_timeout reclaims it instead",
+            task_name,
+            exc_info=True,
+        )
+    return True
+
+
 async def auto_heartbeat_loop(
     interval_seconds: float,
     heartbeat_fn: Callable[[], None],
     stop_event: asyncio.Event,
     task_name: str,
+    *,
+    progress: ProgressTracker | None = None,
+    max_no_progress_seconds: float | None = None,
+    watchdog_mode: ProgressWatchdogMode = ProgressWatchdogMode.OFF,
+    on_stall: Callable[[float, str], None] | None = None,
+    run_length: RunLengthWatch | None = None,
 ) -> None:
     """Background task that sends heartbeats at regular intervals.
 
@@ -148,15 +248,85 @@ async def auto_heartbeat_loop(
     They WILL FAIL for blocking I/O, CPU-bound computation, or long-running
     C extensions. Use run_in_thread() to wrap blocking operations.
 
+    When a ``progress`` tracker and a budget are supplied, the same loop also
+    runs the ADR-0018 **stall watchdog**. The beat itself stays
+    **unconditional** — it is the crash detector (OOM, SIGKILL, node loss,
+    partition, starved loop) and ``heartbeat_timeout`` keeps its meaning and its
+    60s default. The watchdog is a second, independent question asked on the
+    same tick: *has this attempt done anything observable lately?*
+
+    A ``run_length`` watch is a third such question, and the one the watchdog
+    cannot answer: *has the whole run been going too long?* A run that dribbles
+    progress re-arms the watchdog on every mark and stalls by no definition it
+    has, so with the duration ceiling raised to a backstop the only thing left
+    to bound it is a human — which needs an alert (ADR-0018 → *Bounding total
+    time*). It rides this tick because the tick already exists; it throttles
+    itself and reports nothing while the run is inside its SLA.
+
     Args:
         interval_seconds: How often to send heartbeats.
         heartbeat_fn: Function to call for each heartbeat.
         stop_event: Event to signal loop termination.
         task_name: Name of the task (for warning messages).
+        progress: The attempt's :class:`ProgressTracker`. ``None`` leaves the
+            watchdog inert.
+        max_no_progress_seconds: How long this task may go without an
+            observable progress signal. ``None`` leaves the watchdog inert.
+        watchdog_mode: ``OFF`` (inert), ``WARN`` (report only) or ``ENFORCE``
+            (report, then fail the attempt via ``on_stall``).
+        on_stall: Called as ``on_stall(stalled_for, last_label)`` when a stall
+            is enforced. Injected by the activity layer — the same way
+            ``heartbeat_fn`` already is — so this module stays free of
+            activity/Temporal semantics and the watchdog is unit-testable
+            without a worker.
+        run_length: This attempt's :class:`~application_sdk.execution.run_length.RunLengthWatch`.
+            ``None`` — the default — makes the loop byte-identical to before:
+            no run-length observation is made. Injected rather than built here
+            because only the activity layer knows when the *run* started.
     """
     warning_threshold = interval_seconds * 0.5
     _limit_bytes = parse_pod_memory_limit(os.environ.get("K8S_POD_MEMORY_LIMIT", ""))
     _memory_warn_active = False
+
+    watchdog_budget: float | None = (
+        max_no_progress_seconds
+        if progress is not None and watchdog_mode is not ProgressWatchdogMode.OFF
+        else None
+    )
+    if watchdog_budget is not None and (
+        not math.isfinite(watchdog_budget) or watchdog_budget <= 0
+    ):
+        # Refuse rather than obey. A budget of zero makes every attempt stall on
+        # its first tick, so honouring it in enforce mode would turn one bad
+        # config value into a fleet-wide kill switch. NaN slips past the
+        # `<= 0` check (comparisons against NaN are always False) and would
+        # enforce on the first tick, while +inf would silently never enforce —
+        # so only a finite positive allowance counts as a real budget.
+        logger.warning(
+            "Stall watchdog for task '%s' was given a non-positive or "
+            "non-finite no-progress budget (%ss); disabling the watchdog — set "
+            "max_no_progress_seconds to a finite positive allowance, or the "
+            "mode to 'off' to disable it deliberately",
+            task_name,
+            watchdog_budget,
+        )
+        watchdog_budget = None
+    if (
+        watchdog_budget is not None
+        and watchdog_mode is ProgressWatchdogMode.ENFORCE
+        and on_stall is None
+    ):
+        # A wiring bug, not a config choice. Downgrade rather than raise: the
+        # watchdog must never itself be the thing that fails an activity, and
+        # reporting is strictly better than going silent. Downgraded here rather
+        # than at the call site so the metric's mode attribute describes what
+        # the watchdog actually did.
+        logger.warning(
+            "Stall watchdog for task '%s' was asked to enforce but no on_stall "
+            "handler was injected; reporting gaps without failing the attempt",
+            task_name,
+        )
+        watchdog_mode = ProgressWatchdogMode.WARN
 
     while not stop_event.is_set():
         loop_start = time.monotonic()
@@ -230,301 +400,26 @@ async def auto_heartbeat_loop(
                     exc_info=True,
                 )
 
+        # Ahead of the watchdog for the same reason the memory sample is: an
+        # enforced stall returns out of the loop, and the tick that kills a
+        # wedged attempt is exactly the tick on which "this run is also 30 hours
+        # long" is worth having recorded. `observe()` swallows its own failures.
+        if run_length is not None:
+            run_length.observe()
 
-async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
-    """Last-resort escape hatch: run a blocking function in a thread pool.
-
-    .. warning::
-        **Use only when no async-native alternative exists.** This is the
-        bottom of the preference list, not the default tool for "I have I/O
-        to do". Per ADR-0010 (async-first design), the SDK runs on Temporal's
-        asyncio event loop; blocking the loop breaks auto-heartbeats and
-        causes activities to be retried even though they are making progress.
-
-    **Decision order for blocking work (apps and SDK alike):**
-
-    1. **Prefer an async-native library.** If one exists, use it. No
-       ``run_in_thread`` needed:
-
-       =========================  ======================  ====================
-       Need                       Use (async)             Avoid (blocking)
-       =========================  ======================  ====================
-       HTTP requests              ``httpx``, ``aiohttp``  ``requests``
-       AWS SDK                    ``aioboto3``,           ``boto3``
-                                  ``aiobotocore``
-       PostgreSQL                 ``asyncpg``             ``psycopg2``
-       MySQL                      ``aiomysql``            ``pymysql``
-       File I/O                   ``aiofiles``            ``open()``
-       =========================  ======================  ====================
-
-    2. **Then check the SDK.** Many helpers are already async — for example,
-       ``self.context.storage`` (ObjectStore), ``self.context.state``
-       (StateStore), and credential resolution all expose ``await``-able
-       methods. Don't wrap them in ``run_in_thread``.
-    3. **Only then** fall back to ``run_in_thread`` — and only after
-       confirming there is no async-native alternative for the library
-       you're calling.
-
-    **Examples of incorrect use (do not do this):**
-
-    .. code-block:: python
-
-        # WRONG — boto3 has aioboto3; use that instead.
-        await self.task_context.run_in_thread(s3_client.put_object, ...)
-
-        # WRONG — requests has httpx; use that instead.
-        await self.task_context.run_in_thread(requests.get, url, timeout=30)
-
-    **Behavior:**
-
-    - ContextVars (ObjectStore, logger context, correlation ID, infrastructure
-      handles) are propagated to the worker thread via
-      ``contextvars.copy_context()``. Mutations inside the thread stay
-      isolated from the caller (copy semantics).
-    - Threads run on a dedicated ``sdk-blocking-*`` pool, separate from
-      Temporal's activity pool, to avoid deadlocking the worker.
-
-    **CRITICAL: your blocking code MUST have its own timeout.**
-    Python threads cannot be forcibly killed. If the wrapped call hangs
-    forever, the thread runs forever — this orphans state and consumes
-    pool slots even after the activity is retried.
-
-    Args:
-        func: Blocking function to run. MUST have internal timeout handling.
-        *args: Positional arguments for ``func``.
-        **kwargs: Keyword arguments for ``func``.
-
-    Returns:
-        Result of ``func(*args, **kwargs)``.
-
-    See Also:
-        - ``docs/adr/0010-async-first-blocking-code.md`` — full rationale.
-        - ``self.context.storage`` / ``self.context.state`` — already async.
-    """
-    ctx = contextvars.copy_context()
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        _BLOCKING_EXECUTOR,
-        functools.partial(ctx.run, functools.partial(func, *args, **kwargs)),
-    )
-
-
-# Executor for work that must not be able to take the worker down with it.
-#
-# Why a process, not a thread?
-#   A native fault (SIGSEGV in a C extension) is not a Python exception: it
-#   bypasses every try/except and kills the whole process. In a thread that
-#   means the Temporal worker dies mid-poll. In a child process the kernel
-#   kills only the child, and the parent observes an ordinary, catchable
-#   BrokenProcessPool.
-#
-# Why spawn, not fork?
-#   fork() in a multi-threaded process (a Temporal worker always is) copies a
-#   single thread but every lock, in whatever state the other threads left
-#   them — a deadlock/corruption factory. spawn starts a clean interpreter.
-#
-# Lazy and cached by width: callers passing the same max_workers share one
-# ProcessPoolExecutor of that width, created on first use; distinct widths get
-# distinct pools, so discarding one width's pool on a crash never disturbs
-# another's. Processes that never need isolation never pay for a child.
-#
-# Concurrency: the default pool runs several children so concurrent best-effort
-# callers decode in PARALLEL, not serialised behind one child. Isolation here is
-# purely fault containment — NOT a serialisation crutch to dodge the msgspec
-# 0.20.0 concurrent-decode segfault: that bug is same-process (a shared
-# in-process decoder across threads); separate child processes don't share that
-# state, and once msgspec 0.21.1 lands even same-process concurrent decode is
-# safe. The default width is capped low because each spawn child re-imports the
-# decode stack (pyatlan/msgspec), which costs memory under a pod limit. A caller
-# that wants to bound — or serialise (max_workers=1) — its own work passes an
-# explicit width. (A crash in any one child breaks the whole ProcessPoolExecutor
-# — inherent to the executor — so concurrent callers on that width then see
-# BrokenProcessPool; for best-effort work that is a benign skip.)
-_DEFAULT_PROCESS_POOL_MAX_WORKERS = min(4, (os.cpu_count() or 1))
-_PROCESS_EXECUTORS: dict[int, concurrent.futures.ProcessPoolExecutor] = {}
-_PROCESS_EXECUTORS_LOCK = threading.Lock()
-
-
-def _get_process_executor(max_workers: int) -> concurrent.futures.ProcessPoolExecutor:
-    with _PROCESS_EXECUTORS_LOCK:
-        executor = _PROCESS_EXECUTORS.get(max_workers)
-        if executor is None:
-            executor = concurrent.futures.ProcessPoolExecutor(
-                max_workers=max_workers,
-                mp_context=multiprocessing.get_context("spawn"),
+        # The stall watchdog runs last in the tick: the beat is the crash
+        # detector and goes out first, and an enforced stall returns from here,
+        # so putting it after the memory sample means the tick that kills a
+        # wedged attempt still carries that attempt's last memory observation.
+        if (
+            progress is not None
+            and watchdog_budget is not None
+            and _check_for_stall(
+                progress=progress,
+                budget_seconds=watchdog_budget,
+                mode=watchdog_mode,
+                task_name=task_name,
+                on_stall=on_stall,
             )
-            _PROCESS_EXECUTORS[max_workers] = executor
-        return executor
-
-
-def _discard_process_executor(max_workers: int) -> None:
-    """Drop the width-``max_workers`` pool (and kill its children) so the next
-    call at that width starts fresh."""
-    with _PROCESS_EXECUTORS_LOCK:
-        executor = _PROCESS_EXECUTORS.pop(max_workers, None)
-    if executor is None:
-        return
-    # Kill the children BEFORE shutdown(): a dead child is the pool's
-    # well-trodden unwind path — the manager thread sees it, marks the pool
-    # broken, resolves every still-queued work item with BrokenProcessPool,
-    # and every internal thread exits. The reverse order (shutdown, then kill)
-    # strands a manager/feeder thread on a lock and hangs interpreter exit.
-    # No cancel_futures=True: cancelling a *foreign* caller's queued future
-    # would surface as CancelledError (a BaseException) in that innocent
-    # caller; the broken-pool resolution reaches it as a catchable
-    # BrokenProcessPool instead. shutdown() never kills a *running* child
-    # (e.g. one hung past a timeout) and ProcessPoolExecutor exposes no
-    # supported kill, so reach for the internal process table (None once the
-    # pool is broken); on a future CPython that renames it, the child leaks
-    # until it finishes — degraded, not fatal.
-    for process in list((getattr(executor, "_processes", None) or {}).values()):
-        process.kill()
-    executor.shutdown(wait=False)
-
-
-async def run_fault_isolated(
-    func: Callable[..., T],
-    *args: Any,
-    timeout: float | None = None,
-    max_workers: int | None = None,
-    **kwargs: Any,
-) -> T:
-    """Run ``func`` in an isolated child process (native-crash containment).
-
-    The mechanism layer. Unlike :func:`run_in_thread`, this survives faults that
-    are not Python exceptions: if ``func`` segfaults a C extension, only the
-    child dies and the caller gets a catchable :class:`BrokenProcessPool`. Use it
-    for work whose native fault must never take the worker process down.
-
-    This *raises* on failure (``BrokenProcessPool`` / ``TimeoutError``) — the
-    caller decides what to do. For non-essential work that should be silently
-    skipped on failure, prefer :func:`run_best_effort`, which wraps this and
-    swallows failures. Essential work — where a failure should fail the activity
-    — should not be isolated per-call at all; run it in-process or via
-    :func:`run_in_thread` and let Temporal/k8s recover a crash.
-
-    Constraints that :func:`run_in_thread` does not have:
-
-    - ``func``, ``args``, ``kwargs`` and the return value must be picklable;
-      ``func`` must be a module-level function (pickled by reference).
-    - ContextVars do **not** propagate — the child is a fresh interpreter.
-      Have the child return data and log from the parent.
-    - The child imports ``func``'s module on first use (one-time cost,
-      amortized by the pooled worker).
-
-    Args:
-        func: Module-level function to run in the child.
-        timeout: Seconds to wait before killing the child and raising
-            ``TimeoutError``. ``None`` waits forever.
-        max_workers: Width of the (width-keyed) process pool this call runs on.
-            ``None`` (default) uses ``min(4, cpu_count)`` so concurrent callers
-            decode in parallel. Pass ``1`` to opt into sequential execution —
-            all ``max_workers=1`` callers share a single child and queue behind
-            one another; pass another integer to bound concurrency at a
-            different width. Must be >= 1.
-
-    Raises:
-        BrokenProcessPool: The child died abnormally (native crash), or a
-            concurrent caller on the same pool discarded it (timeout) while this
-            call was in flight. That pool is discarded; the next call at this
-            width gets a fresh child.
-        TimeoutError: ``timeout`` elapsed. The child is killed and the pool
-            discarded.
-        ValueError: ``max_workers`` is < 1.
-    """
-    workers = _DEFAULT_PROCESS_POOL_MAX_WORKERS if max_workers is None else max_workers
-    if workers < 1:
-        raise ValueError(f"max_workers must be >= 1, got {workers}")
-    loop = asyncio.get_running_loop()
-    future = loop.run_in_executor(
-        _get_process_executor(workers), functools.partial(func, *args, **kwargs)
-    )
-    if timeout is not None:
-        # Not asyncio.wait_for: on timeout it cancels the future and then waits
-        # for the cancellation to land — but a running executor call cannot be
-        # cancelled, so wait_for would hang exactly when the child hangs.
-        # asyncio.wait just stops waiting; we then kill the child ourselves.
-        done, _ = await asyncio.wait({future}, timeout=timeout)
-        if not done:
-            _discard_process_executor(workers)
-            # The kill resolves the abandoned future with BrokenProcessPool;
-            # consume it so asyncio never logs "exception was never retrieved".
-            future.add_done_callback(lambda f: None if f.cancelled() else f.exception())
-            raise TimeoutError(f"run_fault_isolated timed out after {timeout}s")
-    try:
-        return await future
-    except BrokenProcessPool:
-        _discard_process_executor(workers)
-        raise
-    except asyncio.CancelledError:
-        task = asyncio.current_task()
-        if task is not None and task.cancelling():
-            raise  # real cancellation of the caller — must propagate
-        # Foreign cancellation: a concurrent caller's timeout discarded the
-        # shared pool while this call was still queued. From this caller's
-        # perspective that is exactly a broken pool — surface it as the
-        # catchable exception the contract promises, never CancelledError.
-        raise BrokenProcessPool(
-            "process pool was discarded while this call was queued"
-        ) from None
-
-
-async def run_best_effort(
-    func: Callable[..., T],
-    *args: Any,
-    label: str,
-    logger: AtlanLoggerAdapter,
-    timeout: float | None = None,
-    max_workers: int | None = None,
-    **kwargs: Any,
-) -> T | None:
-    """Run non-essential native work fault-isolated; never let it break the caller.
-
-    The policy layer over :func:`run_fault_isolated`. Runs ``func`` in an
-    isolated child process and, on *any* failure — a native crash
-    (``BrokenProcessPool``), a ``timeout``, or an ordinary exception — logs a
-    warning via ``logger`` and returns ``None`` rather than propagating. This is
-    the SDK's sanctioned home for *best-effort* native work: work whose result is
-    used when present and safely skipped when absent, and which must never crash
-    or fail the worker (e.g. the warn-only upload validation scan). Essential
-    work — where a failure *should* fail the activity — must not use this.
-
-    A genuine caller cancellation (``asyncio.CancelledError`` from cooperative
-    task cancellation) is deliberately **not** swallowed — it propagates.
-
-    Args:
-        func: Module-level function to run in the child. Same picklability /
-            ContextVar constraints as :func:`run_fault_isolated`.
-        label: Human label for the work, interpolated into the warning
-            (e.g. ``"Transformed-asset validation"``).
-        logger: The caller's logger, so the warning is attributed to the
-            caller's module (OTel source) rather than this one.
-        timeout: Seconds before the child is killed and the run is skipped.
-        max_workers: Pool width, forwarded to :func:`run_fault_isolated`. ``None``
-            uses the default ``min(4, cpu_count)``; pass ``1`` to serialise this
-            work.
-
-    Returns:
-        ``func``'s result, or ``None`` if the run crashed, timed out, or errored.
-    """
-    try:
-        return await run_fault_isolated(
-            func, *args, timeout=timeout, max_workers=max_workers, **kwargs
-        )
-    except BrokenProcessPool:
-        logger.warning(
-            "%s subprocess died or was discarded (a native fault in a "
-            "dependency, or a concurrent call's timeout); continuing without it",
-            label,
-            exc_info=True,
-        )
-    except TimeoutError:
-        logger.warning(
-            "%s timed out after %ss; continuing without it",
-            label,
-            timeout,
-            exc_info=True,
-        )
-    except Exception:  # noqa: BLE001 — best-effort work must never break the caller
-        logger.warning("%s skipped due to an unexpected error", label, exc_info=True)
-    return None
+        ):
+            return

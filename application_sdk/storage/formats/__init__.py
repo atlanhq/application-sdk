@@ -4,10 +4,12 @@ This module provides base classes and utilities for handling various types of da
 in the application, including file outputs and object store interactions.
 """
 
+import errno
 import gc
 import inspect
 import os
 import shutil
+import uuid
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator
 from dataclasses import dataclass
@@ -16,10 +18,13 @@ from typing import TYPE_CHECKING, Any, Union, cast
 
 import orjson
 
+from application_sdk._runtime.offload import run_in_thread
+from application_sdk._runtime.progress import current_progress_tracker
+from application_sdk.common._listing import WRITER_STAGING_DIRNAME, prune_internal_dirs
+from application_sdk.common.atomic import atomic_copy, atomic_write, disk_full_guard
 from application_sdk.common.models import TaskStatistics
 from application_sdk.common.types import DataframeType
 from application_sdk.contracts.types import FileReference
-from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType
 from application_sdk.storage.formats.utils import (
@@ -54,6 +59,27 @@ class WriterResult(TaskStatistics):
 
 
 logger = get_logger(__name__)
+
+#: Directory holding every writer's private staging tree. Created as a *sibling*
+#: of the writer's output directory, never inside it — see
+#: :meth:`Writer._ensure_staging_root`.
+#:
+#: The name itself lives in ``common._listing`` alongside every other
+#: SDK-working-directory name, because being a sibling only puts this tree out
+#: of reach of a walk of the *output* directory — a prefix upload of the run
+#: root walks a level higher and would ship a cancelled attempt's staging tree
+#: as run output. One definition, so the walkers and this module cannot
+#: disagree about what is an artifact (FND-318).
+_STAGING_ROOT_DIRNAME = WRITER_STAGING_DIRNAME
+
+#: Subdirectory of a writer's staging root holding files bound for the output
+#: directory. Its layout mirrors the output directory exactly, so publishing is
+#: a relative-path-preserving move.
+_STAGED_OUTPUT_DIRNAME = "output"
+
+#: Subdirectory of a writer's staging root holding intermediates that are never
+#: published — parquet's accumulation tree is the only current occupant.
+_STAGED_SCRATCH_DIRNAME = "scratch"
 
 
 if TYPE_CHECKING:
@@ -274,6 +300,163 @@ class Writer(ABC):
     _is_closed: bool = False
     _statistics: TaskStatistics | None = None
     _result: "WriterResult | None" = None
+    #: Lazily created on first write; see :meth:`_ensure_staging_root`. Declared
+    #: as a class-level default so a third-party ``Writer`` subclass that does
+    #: not call a base ``__init__`` still resolves it — assignment below shadows
+    #: it per instance.
+    _staging_root: str | None = None
+    _staging_published: bool = False
+
+    # ── Staging (FND-317) ─────────────────────────────────────────────────
+    #
+    # A writer never writes into its output directory. It writes into a private
+    # staging tree and publishes into the output directory in one uninterrupted
+    # step at ``close()``.
+    #
+    # The reason is the window FND-315 established. Cancelling an activity
+    # leaves an orphaned ``run_in_thread`` worker that cannot be killed and is
+    # still inside its write, holding a path it resolved *before* the cancel.
+    # Every part of the old output path was attempt-independent — ``self.path``
+    # is the same directory for every attempt whenever ``typename`` is set, and
+    # both ``chunk_count`` and ``chunk_part`` restart from ``0`` — so a retry
+    # resolved the exact filename the orphan was mid-write into. Two failures
+    # followed: the orphan's late write replaced the retry's file, and (worse,
+    # because it needs no filename collision at all) ``_build_file_reference``
+    # listed the output directory, so the interceptor uploaded the orphan's
+    # non-colliding files as part of the retry's output — duplicate rows, with
+    # ``statistics.json`` reporting only the retry's own count.
+    #
+    # Staging closes both: an orphan's files land in the orphan's own tree, and
+    # only a writer that reaches ``close()`` publishes. The published names are
+    # untouched — they are a downstream contract, which is why FND-315's fix
+    # (suffix the path with a per-writer token) could not simply be extended
+    # from the private temp tree to the output directory.
+
+    def _ensure_staging_root(self) -> str:
+        """Create this writer's private staging tree on first use.
+
+        Sited as a sibling of the output directory rather than inside it, for
+        two reasons: the same parent means the same filesystem, so publishing
+        is an atomic ``os.replace`` per file rather than a copy; and a
+        directory ``FileReference`` walks its tree recursively, so anything
+        left under ``self.path`` by a cancelled attempt would be uploaded as
+        part of the next attempt's output — the very failure being fixed.
+
+        A successful ``close()`` removes the tree. What a cancelled attempt
+        leaves behind stays next to the output directory rather than inside
+        it, which is the point: it is inert there.
+        """
+        root = self._staging_root
+        if root is None:
+            # normpath first: a caller-supplied trailing separator would
+            # otherwise make dirname() return self.path itself, siting the
+            # staging tree *inside* the output directory.
+            parent = os.path.dirname(os.path.normpath(self.path)) or "."
+            # Full hex, not a truncated slice: a shorter token plus the
+            # non-exclusive makedirs below could collide two writers into one
+            # staging tree. 128 bits makes that a non-event.
+            root = os.path.join(parent, _STAGING_ROOT_DIRNAME, uuid.uuid4().hex)
+            os.makedirs(os.path.join(root, _STAGED_OUTPUT_DIRNAME), exist_ok=True)
+            os.makedirs(os.path.join(root, _STAGED_SCRATCH_DIRNAME), exist_ok=True)
+            self._staging_root = root
+        return root
+
+    @property
+    def _write_root(self) -> str:
+        """Directory this writer writes output files into before publishing.
+
+        Mirrors the layout of :attr:`path`: a file staged at
+        ``<_write_root>/<relative>`` publishes to ``<path>/<relative>`` and
+        uploads under that same key, so chunk filenames stay exactly what
+        downstream consumers already read.
+        """
+        return os.path.join(self._ensure_staging_root(), _STAGED_OUTPUT_DIRNAME)
+
+    @property
+    def _scratch_root(self) -> str:
+        """Directory for intermediates that must never reach the output.
+
+        Distinct from :attr:`_write_root` because publishing moves the whole
+        staged-output tree — anything a subclass leaves here after a failed
+        cleanup would otherwise be published alongside real chunks.
+        """
+        return os.path.join(self._ensure_staging_root(), _STAGED_SCRATCH_DIRNAME)
+
+    def _published_path(self, staged_path: str) -> str:
+        """Path — and object-store key — that *staged_path* publishes to.
+
+        A path that is not under :attr:`_write_root` is returned unchanged, so
+        a subclass or caller that hands over an already-published path keeps
+        working.
+        """
+        relative = os.path.relpath(staged_path, self._write_root)
+        if relative == os.pardir or relative.startswith(os.pardir + os.sep):
+            return staged_path
+        return os.path.normpath(os.path.join(self.path, relative))
+
+    def _publish_staged_files(self) -> None:
+        """Move this writer's staged output into its output directory.
+
+        Synchronous on purpose, and the one place in the writer where that is
+        the point rather than an oversight: there is no ``await`` between "the
+        files are staged" and "the files are published", so a cancellation can
+        never leave a half-published attempt for the next one to adopt. The
+        cost is a burst of same-filesystem renames — metadata operations, no
+        bytes moved — at the end of a writer's life.
+
+        SDK working directories under the staged tree are not descended into.
+        The writers below stage each individual file too (FND-318), so
+        ``.sdk-partial`` sits inside this tree by construction — publishing it
+        would recreate the directory in the output and, if an atomic write had
+        failed, hand a partial file the very name this staging exists to
+        withhold.
+        """
+        if self._staging_root is None or self._staging_published:
+            return
+
+        staged_output = os.path.join(self._staging_root, _STAGED_OUTPUT_DIRNAME)
+        copied = 0
+        for directory, subdirectories, file_names in os.walk(staged_output):
+            prune_internal_dirs(subdirectories)
+            destination_dir = os.path.normpath(
+                os.path.join(self.path, os.path.relpath(directory, staged_output))
+            )
+            os.makedirs(destination_dir, exist_ok=True)
+            for file_name in file_names:
+                source = os.path.join(directory, file_name)
+                destination = os.path.join(destination_dir, file_name)
+                try:
+                    os.replace(source, destination)
+                except OSError as exc:
+                    if exc.errno != errno.EXDEV:
+                        raise
+                    # Staging is a sibling of the output directory, so this only
+                    # happens when the output directory is itself a mount point.
+                    # Copy rather than fail — but never straight to the final
+                    # name: a copy interrupted there leaves a truncated file at
+                    # the artifact's real path, the exact incident class this
+                    # staging exists to kill. atomic_copy stages the copy next
+                    # to the destination and publishes it with a rename, so the
+                    # final name only ever appears complete; the source unlink
+                    # after a successful copy completes the move.
+                    atomic_copy(source, destination, operation="writer publish")
+                    os.unlink(source)
+                    copied += 1
+
+        if copied:
+            # Reported once for the whole publish, not per file: the fact worth
+            # knowing is that this deployment's layout turns a metadata-only
+            # publish into real byte copying.
+            logger.warning(
+                "Published %d file(s) by copying: staging and %s are on "
+                "different filesystems, so the rename this step relies on "
+                "could not be used",
+                copied,
+                self.path,
+            )
+
+        self._staging_published = True
+        shutil.rmtree(self._staging_root, ignore_errors=True)
 
     async def __aenter__(self) -> "Writer":
         """Enter the async context manager.
@@ -475,7 +658,14 @@ class Writer(ABC):
                     > self.max_file_size_bytes
                     and self.current_buffer_size_bytes > 0
                 ):
-                    output_file_name = f"{self.path}/{path_gen(self.chunk_count, self.chunk_part, extension=self.extension)}"
+                    output_file_name = os.path.join(
+                        self._write_root,
+                        path_gen(
+                            self.chunk_count,
+                            self.chunk_part,
+                            extension=self.extension,
+                        ),
+                    )
                     await self._upload_file(output_file_name)
                     self.chunk_part += 1
 
@@ -489,7 +679,12 @@ class Writer(ABC):
             if self.current_buffer_size_bytes > 0:
                 # Finally upload the final file to the object store.
                 # _flush_buffer already wrote the file; no existence check needed.
-                output_file_name = f"{self.path}/{path_gen(self.chunk_count, self.chunk_part, extension=self.extension)}"
+                output_file_name = os.path.join(
+                    self._write_root,
+                    path_gen(
+                        self.chunk_count, self.chunk_part, extension=self.extension
+                    ),
+                )
                 await self._upload_file(output_file_name)
                 self.chunk_part += 1
 
@@ -573,9 +768,18 @@ class Writer(ABC):
     async def close(self) -> WriterResult:
         """Close the writer, flush buffers, and return statistics + file reference.
 
-        Finalizes all pending writes, writes the statistics sidecar, and marks
-        the writer as closed. Calling close() multiple times is safe — subsequent
-        calls return the cached :class:`WriterResult`.
+        Finalizes all pending writes, writes the statistics sidecar, publishes
+        this writer's staged files into ``self.path``, and marks the writer as
+        closed. Calling close() multiple times is safe — subsequent calls
+        return the cached :class:`WriterResult`.
+
+        Publishing is what keeps one attempt's files out of another's: the
+        chunks live in a private staging tree until here, so a cancelled
+        attempt's orphaned worker can neither overwrite a retry's file nor slip
+        its own files into the retry's ``FileReference`` (FND-317). It only
+        ever *adds* — content already under ``self.path`` when the writer
+        started is left in place, and a directory ``FileReference`` still walks
+        it.
 
         The returned :class:`WriterResult` carries an ephemeral
         :class:`FileReference` pointing at the writer-owned output directory
@@ -635,6 +839,12 @@ class Writer(ABC):
             if typename:
                 self._statistics.typename = typename
 
+            # Publish last, once every chunk and the statistics sidecar are on
+            # disk: until this returns, the output directory holds nothing this
+            # writer produced, and any attempt that dies before reaching here
+            # publishes nothing at all.
+            self._publish_staged_files()
+
             self._is_closed = True
             self._result = WriterResult(
                 total_record_count=self._statistics.total_record_count,
@@ -667,9 +877,17 @@ class Writer(ABC):
         return None
 
     async def _upload_file(self, file_name: str):
-        """Upload a file to the object store."""
+        """Upload a staged file to the object store under its published key.
+
+        The key is derived from the *published* path, not the staged one, so
+        staging is invisible to the object store: the same chunk reaches the
+        same key it always did, whether it is uploaded inline here or moved
+        into the output directory at ``close()``.
+        """
         retain_local = getattr(self, "retain_local_copy", False)
-        await _upload_file(file_name, file_name, retain_local_copy=retain_local)
+        await _upload_file(
+            self._published_path(file_name), file_name, retain_local_copy=retain_local
+        )
         self.current_buffer_size_bytes = 0
 
     async def _flush_buffer(self, chunk: "pd.DataFrame", chunk_part: int):
@@ -684,10 +902,21 @@ class Writer(ABC):
         try:
             if not is_empty_dataframe(chunk):
                 self.total_record_count += len(chunk)
-                output_file_name = f"{self.path}/{path_gen(self.chunk_count, chunk_part, extension=self.extension)}"
+                output_file_name = os.path.join(
+                    self._write_root,
+                    path_gen(self.chunk_count, chunk_part, extension=self.extension),
+                )
                 await self._write_chunk(chunk, output_file_name)
 
                 self.current_buffer_size = 0
+
+                # One buffer chunk on disk is one observable unit of work
+                # (ADR-0018). This is the single chunk boundary every writer
+                # subclass shares — JsonFileWriter and the non-consolidating
+                # ParquetFileWriter path both reach it — so a long
+                # `write_batches` stream stays visible to the stall watchdog
+                # without any per-record cost.
+                current_progress_tracker().mark_progress("writer.flush_buffer")
 
                 # Record chunk metrics
                 self.metrics.record_metric(
@@ -743,8 +972,13 @@ class Writer(ABC):
                 statistics["typename"] = typename
 
             # Write the statistics to a json file inside a dedicated statistics/ folder
-            statistics_dir = os.path.join(self.path, "statistics")
-            os.makedirs(statistics_dir, exist_ok=True)
+            statistics_dir = os.path.join(self._write_root, "statistics")
+            # Inside the guard: creating the directory is itself a write, and
+            # on a full filesystem it fails with the same ENOSPC the sidecar
+            # write would have — classified identically rather than escaping as
+            # a raw OSError that FormatStatisticsWriteError would wrap untyped.
+            with disk_full_guard(statistics_dir, operation="writer statistics write"):
+                os.makedirs(statistics_dir, exist_ok=True)
             output_file_name = os.path.join(statistics_dir, "statistics.json.ignore")
             # If chunk_start is provided, include it in the statistics filename
             try:
@@ -759,8 +993,14 @@ class Writer(ABC):
                     exc_info=True,
                 )
 
-            # Write the statistics dictionary to the JSON file
-            with open(output_file_name, "wb") as f:
+            # Write the statistics dictionary to the JSON file. Atomic: the
+            # sidecar is the record of how many rows the chunks hold, so a
+            # truncated one does not fail loudly — it is read as a smaller,
+            # plausible count, and the shortfall is attributed to extraction
+            # rather than to the write (FND-318).
+            with atomic_write(
+                output_file_name, operation="writer statistics write"
+            ) as f:
                 f.write(orjson.dumps(statistics))
 
             # Push the file to the object store (key = local path for consistency).
@@ -768,6 +1008,13 @@ class Writer(ABC):
             # to a no-op so the statistics sidecar travels via close()'s
             # returned FileReference instead of inline.
             await self._upload_file(output_file_name)
+
+            # The statistics sidecar is the last thing a writer emits, and
+            # `close()` runs `_finalize()` (parquet consolidation, remaining
+            # uploads) immediately before it. Marking here means the quiet
+            # window the watchdog measures starts from the end of the writer's
+            # work rather than from its last buffer chunk.
+            current_progress_tracker().mark_progress("writer.statistics")
 
             return statistics
         # conformance: ignore[E004] re-raises as typed FormatStatisticsWriteError; no information is discarded

@@ -31,6 +31,7 @@ import asyncio
 import warnings
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
+from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.app.task import task
 from application_sdk.common.sql_filters import (
     normalize_filters,
@@ -268,6 +269,13 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
     # ------------------------------------------------------------------
     # Fetch tasks — default implementations using SQL class attributes
     # ------------------------------------------------------------------
+    #
+    # Each page loop below marks progress at the page boundary
+    # (ADR-0018 → *Feeding the tracker*, mechanism 1). Unlike the extract →
+    # write shape, these four fetch nothing to a writer — they accumulate names
+    # (or a count) in memory and return — so there is no write side to carry
+    # the signal for them, and a wide catalog can page for a long time. The
+    # mark goes outside the per-row loop: one page is already the unit.
 
     @task(timeout_seconds=1800)
     async def fetch_databases(self, input: FetchDatabasesInput) -> FetchDatabasesOutput:
@@ -296,6 +304,7 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
                     val = row.get(key)
                     if val:
                         databases.append(str(val))
+                current_progress_tracker().mark_progress("fetch_databases.page")
             return FetchDatabasesOutput(
                 databases=databases,
                 chunk_count=1,
@@ -328,6 +337,7 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
                     val = row.get(key)
                     if val:
                         schemas.append(str(val))
+                current_progress_tracker().mark_progress("fetch_schemas.page")
             return FetchSchemasOutput(
                 schemas=schemas,
                 chunk_count=1,
@@ -360,6 +370,7 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
                     val = row.get(key)
                     if val:
                         tables.append(str(val))
+                current_progress_tracker().mark_progress("fetch_tables.page")
             return FetchTablesOutput(
                 tables=tables,
                 chunk_count=1,
@@ -390,6 +401,7 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
             total = 0
             async for batch in client.run_query(sql):
                 total += len(batch)
+                current_progress_tracker().mark_progress("fetch_columns.page")
             return FetchColumnsOutput(chunk_count=1, total_record_count=total)
         finally:
             await client.close()

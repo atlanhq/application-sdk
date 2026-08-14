@@ -20,7 +20,12 @@ from pathlib import Path
 
 import pytest
 
-from application_sdk.storage.batch import delete_prefix, download_prefix, list_keys
+from application_sdk.storage.batch import (
+    delete_prefix,
+    download_prefix,
+    list_data_keys,
+    list_keys,
+)
 from application_sdk.storage.ops import (
     delete,
     download_file,
@@ -67,7 +72,12 @@ async def test_full_lifecycle_identical_for_both_key_shapes(
     # Regardless of the input shape, the stored key is the normalised v3 key.
     assert await exists(key, local_store) is True
     assert await get_file_size(key, local_store) == len(CONTENT)
-    assert await list_keys(prefix, local_store) == [V3_KEY]
+    # list_data_keys: the upload also wrote a ``{key}.sha256`` integrity
+    # sidecar (FND-306), and it is keyed off the *normalised* key too — which
+    # the unfiltered listing below pins, since sidecar naming has to survive
+    # the v2→v3 mapping exactly like the data key does.
+    assert await list_data_keys(prefix, local_store) == [V3_KEY]
+    assert await list_keys(prefix, local_store) == [V3_KEY, f"{V3_KEY}.sha256"]
 
     dest = tmp_path / "dest.txt"
     dl_sha = await download_file(key, dest, local_store, compute_hash=True)
@@ -101,7 +111,7 @@ async def test_cross_shape_interoperability(
     await upload_file(write_key, src, local_store)
 
     assert await exists(read_key, local_store) is True
-    assert await list_keys(read_prefix, local_store) == [V3_KEY]
+    assert await list_data_keys(read_prefix, local_store) == [V3_KEY]
 
     dest = tmp_path / "dest.txt"
     await download_file(read_key, dest, local_store)
@@ -134,7 +144,9 @@ async def test_prefix_batch_ops_identical_for_both_shapes(
         f"{V3_PREFIX}/b.txt",
     ]
 
-    assert await delete_prefix(prefix, local_store) == 2
+    # 4 = 2 data objects + their integrity sidecars; both shapes of the prefix
+    # reach the sidecars as well, so neither is left orphaned.
+    assert await delete_prefix(prefix, local_store) == 4
     assert await list_keys(V3_PREFIX, local_store) == []
 
 

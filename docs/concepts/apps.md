@@ -198,6 +198,37 @@ class MyIncrementalExtractor(IncrementalSqlMetadataExtractor):
 
 Base class for all metadata-extraction Apps. Provides upload, cleanup, and lifecycle plumbing without committing to a SQL-specific task layout. `SqlMetadataExtractor` extends this with SQL-specific defaults and task structure.
 
+## Offloading Blocking Work (`run_in_thread` and auto-holds)
+
+Connector code runs on Temporal's asyncio event loop, so a blocking call (a sync database driver, a filesystem read, a vendor SDK without async support) must not run on the loop itself. Offload it with `run_in_thread` — reachable as `self.run_in_thread(...)`, `self.task_context.run_in_thread(...)`, or the module-level `application_sdk.execution.heartbeat.run_in_thread`:
+
+```python
+rows = await self.run_in_thread(cursor.execute, sql)
+```
+
+Every offload is automatically wrapped in a **progress hold** (ADR-0018), so the stall watchdog never reads a legitimately long blocking call as a stall and false-kills it. There is nothing to do at the call site — a long blocking call behaves exactly as it did before the watchdog existed:
+
+- `run_in_thread` holds are **unbounded**. The SDK does not invent a duration for somebody else's blocking call, so the watchdog is inactive for the call's whole duration and the activity's duration bound is the only thing still holding it.
+- `run_fault_isolated` holds are **bounded by that call's own `timeout`** (the wall-clock kill it already enforces), and unbounded when `timeout=None`, matching its "wait forever" semantics.
+
+To give a blocking call a real bound instead of the unbounded default, wrap the offload in `holding_progress(label, timeout=...)` — declaring how long you would let this one call run before you would rather it failed. A wedged call is then caught at `timeout` plus the no-progress budget rather than at the duration backstop:
+
+```python
+async with self.holding_progress("full table scan", timeout=7200):
+    rows = await self.run_in_thread(cursor.execute, sql)
+```
+
+`timeout` is **not** a prediction of how long the call takes. Err generous: too generous only delays detection toward the backstop, while too tight kills a healthy run — and because stall kills retry, a too-tight allowance burns the same wasted work up to three times.
+
+**Inside a `holding_progress` block the automatic holds stand down**, so the allowance you declared is what governs. The example above lapses at 7200s rather than inheriting an unbounded auto-hold that would outlive it — the SDK never adds a vouch that outlives the one you asked for. (An offload running concurrently in a task that never entered the block is still auto-held.)
+
+For opaque *async* calls (the connector's own async client) there is no SDK-owned seam to auto-hold, so wrap those in `holding_progress` directly. Expect to need it: interleaved streaming reads (fetch a page, write a batch, repeat) are already covered by the SDK's own writer and transfer loops, but almost every connector makes at least one genuinely opaque single call — one large metadata query, one slow list/export that returns everything at once.
+
+See [Progress and Stalls](progress-and-stalls.md) for the whole picture — what counts as
+progress, how to size the allowance from your own data, and how to read the report the
+watchdog produces for your app — and [ADR-0018](../adr/0018-progress-aware-heartbeat.md)
+for the design.
+
 ## Lifecycle Hooks
 
 ### on_complete
@@ -219,6 +250,11 @@ Two cleanup tasks and two transfer tasks are available on every `App`:
 
 - `upload(UploadInput(...))` — pushes a local file or directory to object storage. Routes to the Atlan-owned `atlan-objectstore` (`infra.upstream_storage`) in SDR deployments; falls back to the customer-owned `objectstore` (`infra.storage`) in local dev. This is the explicit hand-off step that downstream Atlan system apps (publish, lineage, quality) consume. See [file-reference.md](file-reference.md) and [ADR-0014](../adr/0014-two-store-storage-architecture.md).
 - `download(DownloadInput(...))` — pulls a file or directory from object storage to a local path.
+
+Both transfer tasks validate the bytes they move. An upload confirms the local file did not shrink while it was read and that the store recorded what was sent, and records a `{key}.sha256` sidecar; a download confirms it wrote as many bytes as the store declared and, when a sidecar exists, that the content hashes to it. An artifact whose producer died mid-write therefore fails at the transfer boundary with a non-retryable `StorageIntegrityError` naming the file and both digests, rather than reaching a parser as an unattributable `Malformed JSON`. The checks live in the transfer primitives, so every path — these tasks, `FileReference` persist/materialize, prefix transfers, the writer chunk uploads — is covered by the same code. See [storage.md](storage.md#transfer-integrity).
+
+**Writer output is staged, then published at `close()`.** A `Writer` (parquet, JSON) never writes into its output directory directly — it writes into a private staging tree (a sibling directory, not inside the output) and publishes into the output directory in one step when `close()` returns. Files produced by that writer are therefore absent from the output directory until `close()` completes; a writer that is cancelled or fails before `close()` publishes nothing. This is what stops a cancelled attempt's orphaned writer from colliding with, or being adopted into, a retry's output. The published filenames and object-store keys are unchanged — only the timing of when files appear in the output directory moves to `close()`. Note that publishing only *adds*: content already sitting in a reused output directory is left in place, and a deferred writer's `FileReference` walks the whole directory, so it adopts that content too.
+
 - `cleanup_files()` — removes tracked `FileReference` local paths from task outputs, **then** convention-based temp directories (using `input.extra_paths` if provided, otherwise `ATLAN_CLEANUP_BASE_PATHS`, otherwise the default temp path).
 - `cleanup_storage()` — removes object store artifacts by tier:
   - `StorageTier.TRANSIENT` refs are always removed.
@@ -285,6 +321,30 @@ from application_sdk.storage import verify_object_store_access, ObjectStorePrefl
 
 Both symbols are exported from `application_sdk.storage`. The function is normally called by
 the SDK boot path — connectors do not need to call it manually.
+
+### SDR: Binding Secret Resolution (`auth.secretStore` + `secretKeyRef`)
+
+Dapr component YAMLs for the deployment and upstream object stores can carry credentials
+either inline (``value:``) or via a ``secretKeyRef:`` that names a secret in the component's
+``auth.secretStore``.  On the secure k8s SDR path the chart deliberately omits the matching
+environment variables and resolves credentials only through the secret store.
+
+At startup ``_create_infrastructure`` (in ``application_sdk.main``) reads each store's
+``secretKeyRef`` entries via ``read_binding_secret_refs``, fetches the referenced secrets from
+the Dapr sidecar (``_fetch_binding_secrets``), and hands them to the synchronous store
+factories (``create_store_from_binding*``) as the ``secrets=`` keyword.  The same secrets are
+also published to a process-wide registry (``set_fetched_binding_secrets``) so sync consumers
+constructed later — ``DaprCredentialVault.__init__`` is the canonical case — resolve the
+binding against the same values instead of falling back to env-only resolution and reaching
+a different verdict.
+
+Resolution order per field: the fetched secret map wins; environment variables are the
+fallback (Docker Compose / ``secretstores.local.env`` shape); a ``secretKeyRef`` that neither
+source holds marks the binding broken (``StorageBindingBrokenError``).
+
+The ``secrets=`` parameter is keyword-only and optional, so existing call sites and the
+public sync API are unchanged.  Secret values are never logged — the startup resolution log
+emits ``endpoint_configured=<bool>`` rather than the resolved endpoint.
 
 ### SDR: Interactive Activity Timeouts
 
@@ -358,7 +418,13 @@ raising a typed error whose category is plumbing-side (`RateLimitedError`,
 makes hard mode fail *closed* on a blip, which is the mirror-image bug.
 
 Two queryable events come out of the gate. The per-run **outcome** event carries `outcome`,
-`gate_mode`, `gate_classification` and the per-check `check_matrix`. A boot-time **posture** event
+`gate_mode`, `gate_classification` and the per-check `check_matrix`. On a `gate_broken` fail-open
+its `reason` names the *underlying* fault — the SDK unwraps Temporal's `ActivityError`/`ApplicationError`
+to the real error type (e.g. `DaprSidecarUnreachableError`), not the wrapper — so a persistent
+platform fault is separable from a transient blip on the dashboard. A deadline overrun carries no
+error type to unwrap, so it reports which deadline fired instead: `Timeout:START_TO_CLOSE` (one
+attempt outran its own budget — what a dependency wait wider than the gate's `start_to_close` looks
+like), `Timeout:SCHEDULE_TO_CLOSE` (the retry window closed), or `Timeout:HEARTBEAT`. A boot-time **posture** event
 (`Preflight gate posture`) is emitted once per gate-registered app — soft ones included — carrying
 `app_name`, `gate_mode` and `gate_timeout_seconds`. The posture event is the denominator the outcome
 events cannot supply: an app that never reaches a verdict emits no outcome row at all, so "which

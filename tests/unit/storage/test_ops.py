@@ -7,13 +7,14 @@ import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import obstore
 import orjson
 import pytest
 
 from application_sdk import constants
 from application_sdk.storage.batch import download_prefix, list_keys
 from application_sdk.storage.errors import StorageError, StorageNotFoundError
-from application_sdk.storage.factory import create_memory_store
+from application_sdk.storage.factory import create_local_store, create_memory_store
 from application_sdk.storage.ops import (
     _get_bytes,
     _put,
@@ -437,6 +438,148 @@ class TestIsNotFound:
 
         assert _is_not_found(RuntimeError("got HTTP 404 from S3")) is True
         assert _is_not_found(RuntimeError("key not found in bucket")) is True
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "Access is denied. (os error 5)",
+            "Unable to open file /tmp/t: Access is denied. (os error 5)",
+            "Is a directory (os error 21)",
+            "403 Forbidden: caller lacks storage.objects.delete",
+        ],
+        ids=["denied", "denied-opening-a-directory", "is-a-directory", "http-403"],
+    )
+    def test_permission_and_io_wordings_are_never_not_found(self, message) -> None:
+        """FND-341: this helper backs delete(), exists(), the chunked download and
+        delete_prefix, so anything it calls not-found is downgraded fleet-wide —
+        delete()/exists() return False, delete_prefix() takes its benign path.
+        A permission or I/O failure must never reach those paths; it has to raise.
+
+        The Windows directory-stat shape is listed deliberately: the narrow
+        relaxation for it lives in :func:`_is_local_dir_collision` and is consulted
+        at exactly one call site, never widened into this shared classifier.
+        """
+        from application_sdk.storage.ops import _is_not_found
+
+        assert _is_not_found(RuntimeError(message)) is False
+
+
+class TestIsLocalDirCollision:
+    """A local store key that resolves to a directory is 'no object', not a 403.
+
+    FND-341: the relaxation exists so the root-marker probe does not read a
+    directory stat as a permission failure. It must be decided by what the key
+    resolves to — never by message wording alone, which would reclassify a
+    genuine failure that happens to be worded the same way.
+    """
+
+    # The wording a Windows LocalStore produces when it stats a directory; used
+    # to prove the *facts* outrank it in both directions.
+    WINDOWS_DIR_STAT = (
+        "Generic LocalFileSystem error: Unable to open file "
+        "C:\\store\\t: Access is denied. (os error 5)"
+    )
+
+    def test_directory_key_is_a_collision(self, tmp_path) -> None:
+        from application_sdk.storage.ops import _is_local_dir_collision
+
+        store = create_local_store(tmp_path)
+        (tmp_path / "t").mkdir()
+
+        assert (
+            _is_local_dir_collision(RuntimeError(self.WINDOWS_DIR_STAT), store, "t")
+            is True
+        )
+
+    def test_nested_directory_key_is_a_collision(self, tmp_path) -> None:
+        """Keys are '/'-separated regardless of the host OS separator."""
+        from application_sdk.storage.ops import _is_local_dir_collision
+
+        store = create_local_store(tmp_path)
+        (tmp_path / "a" / "b").mkdir(parents=True)
+
+        assert (
+            _is_local_dir_collision(RuntimeError(self.WINDOWS_DIR_STAT), store, "a/b")
+            is True
+        )
+
+    def test_regular_file_is_not_a_collision(self, tmp_path) -> None:
+        """A regular *file* at the key is not a directory collision, even
+        though the error is worded exactly like the directory stat. ``is_dir``
+        is ``False`` for a file, so the probe leaves the failure fatal — this
+        pins the dangerous ``is_dir() == True`` regression direction."""
+        from application_sdk.storage.ops import _is_local_dir_collision
+
+        store = create_local_store(tmp_path)
+        (tmp_path / "t").write_bytes(b"x")
+
+        assert (
+            _is_local_dir_collision(RuntimeError(self.WINDOWS_DIR_STAT), store, "t")
+            is False
+        )
+
+    def test_missing_key_is_not_a_collision(self, tmp_path) -> None:
+        """Nothing at the key at all — `_is_not_found` owns that, not this."""
+        from application_sdk.storage.ops import _is_local_dir_collision
+
+        store = create_local_store(tmp_path)
+
+        assert (
+            _is_local_dir_collision(RuntimeError(self.WINDOWS_DIR_STAT), store, "t")
+            is False
+        )
+
+    def test_non_local_store_is_never_a_collision(self) -> None:
+        """Cloud backends have no directories, so a 403 worded like Windows'
+        ERROR_ACCESS_DENIED must not be reclassified as a missing object."""
+        from application_sdk.storage.ops import _is_local_dir_collision
+
+        store = create_memory_store()
+
+        assert (
+            _is_local_dir_collision(RuntimeError(self.WINDOWS_DIR_STAT), store, "t")
+            is False
+        )
+
+    @pytest.mark.parametrize(
+        "message,expected",
+        [
+            (WINDOWS_DIR_STAT, True),
+            (
+                "Generic LocalFileSystem error: Unable to open file "
+                "/store/t: Is a directory (os error 21)",
+                True,
+            ),
+            ("Access is denied. (os error 5)", False),
+            ("403 Forbidden: caller lacks storage.objects.get", False),
+            (
+                "Unable to open file /store/a.txt: Too many open files (os error 24)",
+                False,
+            ),
+            ("internal failure", False),
+        ],
+        ids=[
+            "windows-dir-stat",
+            "posix-is-a-directory",
+            "bare-denied",
+            "http-403",
+            "unrelated-open-failure",
+            "unrelated",
+        ],
+    )
+    def test_rootless_store_falls_back_to_the_conjunctive_message_shape(
+        self, message, expected
+    ) -> None:
+        """A LocalStore with no prefix cannot resolve a key to a path here, so
+        the message shape is all there is — and it stays conjunctive."""
+        from obstore.store import LocalStore
+
+        from application_sdk.storage.ops import _is_local_dir_collision
+
+        store = LocalStore()
+        assert store.prefix is None  # premise of the fallback branch
+
+        assert _is_local_dir_collision(RuntimeError(message), store, "t") is expected
 
 
 # ---------------------------------------------------------------------------
@@ -867,6 +1010,84 @@ class TestResumableChunkedDownload:
         # Mixed-generation partials are never left behind.
         assert not out.exists()
         assert not self._state_path(out).exists()
+
+    async def test_restart_after_412_is_still_pinned(self, store, tmp_path) -> None:
+        """The restart after a 412 must re-pin, not fall back to unpinned GETs.
+
+        The restart clears ``etag`` along with ``file_size``, and reading only
+        that half suggests attempt 2 runs unpinned — which would make a rewrite
+        *during the restart* undetectable. It does not: clearing the etag is
+        what lets the loop's ``if etag is None`` branch repopulate it from the
+        fresh HEAD, re-pinning against the new generation.
+
+        Pinned here means every range GET on attempt 2 carries ``If-Match``, so
+        a third generation appearing mid-restart raises rather than silently
+        splicing two generations into a right-length file. A review of this
+        code read the clear without the repopulation and concluded the
+        opposite, so the property is pinned rather than left to inspection.
+        """
+        await _put("res/pin.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "pin.bin"
+
+        real_get = obstore.get_async
+        real_get_range = obstore.get_range_async
+        real_head = obstore.head_async
+        pinned: list[str] = []
+        # Both range-GET entry points are instrumented on purpose. The unpinned
+        # branch calls get_range_async, NOT get_async, so a probe that watches
+        # only get_async cannot see the failure mode at all — it would pass on
+        # broken code by observing nothing.
+        unpinned: list[int] = []
+        heads = {"count": 0}
+        fired_412 = {"done": False}
+
+        async def counting_get(st, key, **kw):
+            options = kw.get("options") or {}
+            if "range" in options:
+                pinned.append(options["if_match"])
+                if not fired_412["done"]:
+                    fired_412["done"] = True
+                    from obstore.exceptions import PreconditionError
+
+                    raise PreconditionError("simulated: object rewritten once")
+            return await real_get(st, key, **kw)
+
+        async def counting_get_range(st, key, *, start, length):
+            unpinned.append(start)
+            return await real_get_range(st, key, start=start, length=length)
+
+        async def counting_head(st, key):
+            heads["count"] += 1
+            return await real_head(st, key)
+
+        with (
+            patch(
+                "application_sdk.storage.chunked.obstore.get_async", new=counting_get
+            ),
+            patch(
+                "application_sdk.storage.chunked.obstore.get_range_async",
+                new=counting_get_range,
+            ),
+            patch(
+                "application_sdk.storage.chunked.obstore.head_async", new=counting_head
+            ),
+        ):
+            await download_file_chunked(
+                "res/pin.bin", out, store, chunk_size_bytes=8, normalize=False
+            )
+
+        assert out.read_bytes() == self.CONTENT
+        # The restart happened: one HEAD for the original attempt, one more to
+        # re-resolve size + etag against the new generation.
+        assert fired_412["done"], "the 412 never fired — test proves nothing"
+        assert heads["count"] >= 2, f"no restart HEAD issued (heads={heads['count']})"
+        # Every range GET across both attempts carried If-Match. A single
+        # unpinned fetch means the restart lost the pin.
+        assert not unpinned, (
+            f"restart ran unpinned — {len(unpinned)} range GET(s) at offsets "
+            f"{unpinned} bypassed If-Match"
+        )
+        assert all(tag is not None for tag in pinned)
 
     async def test_checkpoint_from_other_generation_is_discarded(
         self, store, tmp_path
@@ -1673,8 +1894,15 @@ async def test_upload_file_does_not_delete_when_retain_local_copy_true(
         "application_sdk.storage.ops.obstore.open_writer_async",
         return_value=_DummyCM(),
     ):
+        # verify=False: open_writer_async is stubbed, so nothing actually
+        # lands in the store and the post-upload readback has nothing to find.
         digest = await upload_file(
-            "k", f, MagicMock(), retain_local_copy=True, normalize=False
+            "k",
+            f,
+            MagicMock(),
+            retain_local_copy=True,
+            normalize=False,
+            verify=False,
         )
     assert isinstance(digest, str)
     assert f.exists()
@@ -1927,6 +2155,9 @@ class TestUploadPartSizeConfiguration:
     *count* — not part size — decides whether an upload outruns a gateway idle
     timeout.  Deployments behind such a proxy need to raise the part size
     without a code change.
+
+    ``verify=False`` throughout: the writer is stubbed, so no object reaches
+    the store for the post-upload readback to find.
     """
 
     async def test_default_part_size_comes_from_constant(
@@ -1942,7 +2173,7 @@ class TestUploadPartSizeConfiguration:
         with patch("application_sdk.storage.ops.obstore.open_writer_async") as writer:
             writer.return_value.__aenter__ = AsyncMock()
             writer.return_value.__aexit__ = AsyncMock(return_value=False)
-            await upload_file("k", f, store, normalize=False)
+            await upload_file("k", f, store, normalize=False, verify=False)
 
         assert writer.call_args.kwargs["buffer_size"] == 32 * 1024 * 1024
 
@@ -1965,7 +2196,12 @@ class TestUploadPartSizeConfiguration:
             writer.return_value.__aenter__ = AsyncMock()
             writer.return_value.__aexit__ = AsyncMock(return_value=False)
             await upload_file(
-                "k", f, store, chunk_size=5 * 1024 * 1024, normalize=False
+                "k",
+                f,
+                store,
+                chunk_size=5 * 1024 * 1024,
+                normalize=False,
+                verify=False,
             )
 
         assert writer.call_args.kwargs["buffer_size"] == 32 * 1024 * 1024
@@ -1988,7 +2224,12 @@ class TestUploadPartSizeConfiguration:
             writer.return_value.__aenter__ = AsyncMock()
             writer.return_value.__aexit__ = AsyncMock(return_value=False)
             await upload_file(
-                "k", f, store, chunk_size=5 * 1024 * 1024, normalize=False
+                "k",
+                f,
+                store,
+                chunk_size=5 * 1024 * 1024,
+                normalize=False,
+                verify=False,
             )
 
         assert writer.call_args.kwargs["buffer_size"] == 5 * 1024 * 1024
@@ -2006,6 +2247,6 @@ class TestUploadPartSizeConfiguration:
         with patch("application_sdk.storage.ops.obstore.open_writer_async") as writer:
             writer.return_value.__aenter__ = AsyncMock()
             writer.return_value.__aexit__ = AsyncMock(return_value=False)
-            await upload_file("k", f, store, normalize=False)
+            await upload_file("k", f, store, normalize=False, verify=False)
 
         assert writer.call_args.kwargs["max_concurrency"] == 4

@@ -446,9 +446,9 @@ jobs:
           token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.3"
+          version: "0.12.4"
 
       # ── 1. v3 shape ─────────────────────────────────────────────────────────
       - name: Install SDK (migration tooling)
@@ -491,15 +491,12 @@ jobs:
       # The contract-toolkit-* workflows install it but this Certify job did
       # not, so for pkl apps `poe generate` failed with `pkl: not found` AFTER
       # wiping app/generated — breaking the enforced unit-test step.
+      # Absolute ref, not `./…`: this is a reusable workflow, so a relative
+      # action path would resolve against the CONSUMER repo's workspace, which
+      # has no copy of the SDK's actions.
       - name: Install PKL
         if: steps.app_install.outcome == 'success'
-        run: |
-          set -euo pipefail
-          PKL_VERSION="0.27.2"
-          curl -fsSL -o /tmp/pkl "https://github.com/apple/pkl/releases/download/${PKL_VERSION}/pkl-linux-amd64"
-          chmod +x /tmp/pkl
-          sudo mv /tmp/pkl /usr/local/bin/pkl
-          pkl --version
+        uses: atlanhq/application-sdk/.github/actions/install-pkl@main
 
       # Most app `poe generate` tasks invoke `pkl eval --ca-certificates
       # ~/.pkl-ca-bundle.pem ...` — that path is Atlan's local-dev convention
@@ -706,7 +703,11 @@ jobs:
           repository: atlanhq/application-sdk
           ref: main
           path: sdk
-          sparse-checkout: .github/scripts/credential-leak-gate
+          # Widened from .github/scripts/credential-leak-gate to the whole
+          # scripts dir so with-retry.sh comes along for the gitleaks download
+          # below. Non-cone mode treats this as a prefix, so it is still a few
+          # files rather than the repo.
+          sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
           token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
 
@@ -719,9 +720,14 @@ jobs:
           # hardcoded here, so a tampered release asset fails verification
           # rather than being trusted because it sits at the right URL.
           GITLEAKS_SHA256=5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba
-          curl -sSL \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
-            -o /tmp/gitleaks.tar.gz
+          # Retried: another github.com release asset, same 503-burst exposure
+          # as pkl. -f so a 503 is a non-zero exit the retry can see rather
+          # than an HTML error page written to the output file and then failing
+          # the checksum as if the release had been tampered with.
+          sdk/.github/scripts/with-retry.sh \
+            curl -fsSL \
+              "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+              -o /tmp/gitleaks.tar.gz
           echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c -
           tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
           sudo mv /tmp/gitleaks /usr/local/bin/gitleaks

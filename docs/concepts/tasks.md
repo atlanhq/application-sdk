@@ -51,6 +51,94 @@ class ProcessOutput(Output):
     results: FileReference  # large data stored in object store
 ```
 
+## Reporting Failure as Data
+
+Most tasks report failure by raising -- Temporal marks the activity failed and retries it
+per the task's retry policy. A few must not: when *retrying is itself the damage*, the task
+catches the exception and returns a structured failure on its `Output`, and the caller
+(`run()`) decides what to do.
+
+`SqlApp.prime_sql_auth` is the SDK's worked example. It issues one `SELECT 1` to warm the
+source's auth cache before the parallel extract burst. If the source rejects the
+credential, an activity-level retry just stacks the source's `failed_login_attempts`
+counter -- accelerating the very lockout the probe exists to prevent. So the task is
+declared `retry_max_attempts=1` and returns `PrimeAuthOutput(success=False, failure=...)`
+instead of raising.
+
+### The typed failure contract
+
+`failure` is a `FailureDetails` -- the SDK's wire envelope for a classified error (see
+[common.md](common.md#wire-envelope)). It carries routing (`category`, `audience`,
+`retryable`, `code`), a `message`, an optional `suggested_action`, and per-error
+`evidence`.
+
+`SqlApp.run()` consumes it by rebuilding the typed error and raising it, so the workflow
+fails with the verdict the task reached -- routing, evidence and remediation hint intact:
+
+```python
+prime_result = await self.prime_sql_auth(task_input)
+if not prime_result.success:
+    raise self._classify_prime_failure(prime_result)
+```
+
+**Classify where the exception is, not where the strings are.** Only serialisable fields
+cross an activity boundary, and `BaseSQLClient.get_results` rewraps every driver exception
+in one wrapper class with one fixed message -- so a DNS failure, a TLS error and a
+credential rejection arrive at the caller looking identical. A caller classifying from
+those strings routes all three to `INTERNAL` / `APP_OWNER`, telling Atlan to investigate a
+customer credential problem. Classifying inside the task, where the live `__cause__` chain
+still exists, is what makes `AuthError` / `USER` reach the right first-responder.
+
+Apply the same shape to your own task: classify against the live exception, put the verdict
+on the output, and let the caller rebuild it.
+
+### Legacy string fields
+
+`PrimeAuthOutput` also carries `error_type` and `error_message`. They are a fallback, not
+the contract -- read `failure` first:
+
+| Field | Semantics |
+|---|---|
+| `failure` | Authoritative typed verdict. `None` on success, and on outputs from an older SDK. |
+| `error_type` | Class name of the **root cause** (innermost `__cause__`), not the SDK wrapper around it. |
+| `error_message` | Message of the **root cause**, secret-redacted and truncated to 500 chars. |
+
+`_classify_prime_failure` falls back to matching those two strings only when `failure` is
+absent -- an activity result written by an older SDK and replayed from Temporal history, or
+a `PrimeAuthOutput` a connector built by hand.
+
+### Redaction is the producer's job
+
+A SQL driver message routinely embeds the whole connection string, password included, and
+everything on an output is persisted in Temporal history and in logs. The SDK therefore
+redacts at every boundary that writes to the wire: at capture (`error_message`), when
+serialising a typed verdict (`message`, `suggested_action`, and recursively through nested
+`evidence` values), and again when rebuilding an error from a replayed envelope -- history
+may predate the redaction, and the envelope's denylist rejects secret-named evidence *keys*
+only, never a secret sitting in a value.
+
+If your task returns failure as data, redact before it leaves the task:
+
+```python
+from application_sdk.errors import redact_secrets, safe_traceback
+
+@task(retry_max_attempts=1)
+async def probe(self, input: ProbeInput) -> ProbeOutput:
+    try:
+        await self._connect(input)
+    except Exception as exc:
+        # Never exc_info=True here -- the traceback renders the driver
+        # message, connection string and all, verbatim into the log.
+        logger.error("probe failed\n%s", safe_traceback(exc))
+        return ProbeOutput(success=False, error_message=redact_secrets(str(exc)))
+    return ProbeOutput(success=True)
+```
+
+Evidence keys are constrained too: `FailureDetails` rejects secret-named keys
+(`api_key`, `db_password`, `*_token`, …) outright. `prime_sql_auth` degrades such a verdict
+by dropping the offending keys and keeping the typed routing -- never by falling back to a
+string-matched guess, which would silently invert the connector's own verdict.
+
 ## Timeouts and Auto-Heartbeating
 
 Configure timeouts and heartbeating as keyword arguments on `@task`:
@@ -71,13 +159,16 @@ There is no `@auto_heartbeater` decorator in v3. Heartbeating is declarative.
 
 ### Process-wide timeout defaults via env vars
 
-When no explicit value is passed to `@task`, the framework reads two env vars at
+When no explicit value is passed to `@task`, the framework reads these env vars at
 process startup:
 
 | Env var | Default | Controls |
 |---|---|---|
-| `ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS` | `600` (10 min) | `timeout_seconds` — Temporal kills the activity after this many seconds |
+| `ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS` | `86400` (24 h) | `timeout_seconds` — Temporal kills the activity attempt after this many seconds |
 | `ATLAN_HEARTBEAT_TIMEOUT_SECONDS` | `60` | `heartbeat_timeout_seconds` — Temporal restarts the activity if no heartbeat is received within this window |
+| `ATLAN_SCHEDULE_TO_CLOSE_TIMEOUT_SECONDS` | unset | `schedule_to_close_seconds` — ceiling on the task's **total** time across every retry. Unset (or `0`) leaves the retry product unbounded |
+| `ATLAN_PROGRESS_WATCHDOG` | `warn` | `progress_watchdog` — the stall watchdog's mode. `off` is a kill-switch that beats a per-task declaration |
+| `ATLAN_MAX_NO_PROGRESS_SECONDS` | `900` | `max_no_progress_seconds` — how long an attempt may be silent before the watchdog reports a gap |
 
 Set these in `atlan.yaml` (or your deployment env) to apply a fleet-wide default
 without touching every `@task` decorator:
@@ -92,6 +183,107 @@ env:
 ```
 
 Explicit `@task(timeout_seconds=...)` values always take precedence over the env vars.
+
+### The three knobs
+
+Timeout-shaped settings are easy to confuse, so it is worth being explicit about which
+question each one answers:
+
+| Knob | Default | Answers | Tune it? |
+|---|---|---|---|
+| `heartbeat_timeout_seconds` | 60s | *"Is anything beating at all?"* — crash, OOM kill, node loss, a fully blocked event loop | No |
+| `max_no_progress_seconds` | 900s | *"How long may this attempt be silent before it counts as stalled?"* — wedged-but-alive | Rarely |
+| `timeout_seconds` (`start_to_close`) | a 24h backstop | *"What is the absolute ceiling on one attempt?"* | No — it is a backstop, not a budget |
+
+There is a fourth setting, `progress_watchdog` (`off` / `warn` / `enforce`, defaulting
+to `warn` fleet-wide), which decides what the watchdog *does* with a gap rather than how
+long a gap may be.
+
+`max_no_progress_seconds` is **not** the beat interval (that is `auto_heartbeat_seconds`,
+and it is unconditional) and **not** a duration budget — it measures the *gap* between
+progress signals, so a nine-hour task that writes a batch every thirty seconds never
+approaches it. See [Progress and Stalls](progress-and-stalls.md) for the full picture:
+what counts as progress, when you need `holding_progress()`, and how to read the report
+the watchdog produces for your app.
+
+All three bound **one attempt**. The ceiling on a task's *total* time across every
+attempt is a separate question, with its own answer below.
+
+### Bounding the retry product
+
+`timeout_seconds` bounds **one attempt**. The retry policy multiplies it, and
+`StartToClose` is a retryable failure in Temporal, so a wedged task can spend the
+whole product:
+
+```
+worst case per dispatch = retry_max_attempts x timeout_seconds
+```
+
+At the defaults — three attempts against the 24-hour backstop — that is 72 hours.
+The SDK leaves that product unbounded on purpose ([ADR-0018](../adr/0018-progress-aware-heartbeat.md)
+→ *Bounding total time*) — picking a total duration up front is the guess the
+whole design removes — so the ceiling is a declaration, available three ways:
+
+```python
+from application_sdk.execution.retry import retry_product_seconds
+
+class MyConnector(App):
+    # 1. Bound the total. A ceiling below timeout_seconds caps the attempt too,
+    #    so this works while inheriting a generous per-attempt backstop.
+    @task(schedule_to_close_seconds=7200)
+    async def extract(self, input: MyInput) -> MyOutput: ...
+
+    # 2. Bound at exactly what the retry policy already implies — makes today's
+    #    worst case explicit and enforced, and changes nothing about one attempt.
+    @task(
+        timeout_seconds=3600,
+        retry_max_attempts=3,
+        schedule_to_close_seconds=retry_product_seconds(3600, 3),
+    )
+    async def transform(self, input: MyInput) -> MyOutput: ...
+
+    # 3. Drop the multiplier instead — the right shape for a backstop-class task
+    #    where a retry cannot rescue anything.
+    @task(retry_max_attempts=1)
+    async def publish(self, input: MyInput) -> MyOutput: ...
+```
+
+Set `ATLAN_SCHEDULE_TO_CLOSE_TIMEOUT_SECONDS` to apply a ceiling to every task in
+the app without touching a decorator. Two caveats worth stating:
+
+- A ceiling smaller than **two** attempts makes the retry policy cosmetic — the
+  second attempt cannot start inside the window. `retry_product_seconds` exists
+  so that arithmetic is explicit rather than accidental.
+- The ceiling bounds one *dispatch*, which is what the retry policy spends.
+  Worker-eviction re-dispatches (pod SIGTERM: KEDA scale-down, spot reclaim,
+  rolling deploy) each get a fresh window by design, and are bounded separately
+  by `ATLAN_WORKER_EVICTION_MAX_RETRIES`.
+
+### The run-length SLA alert
+
+A ceiling on the retry product does not bound a run that keeps making *some*
+progress: every progress signal re-arms the stall watchdog, so it never fires,
+and no per-attempt timeout is ever reached. For that shape the SDK raises a
+duration **alert** rather than a duration kill — it cannot know how long a
+healthy run takes against a tenant it has never seen, but a run past the length
+its own operator declared is worth a human look.
+
+Every executing task attempt compares its run's age against the SLA on the same
+tick as its heartbeat. Past the SLA it logs one `WARNING` and records
+`task.run_length_over_sla` (a histogram of the run's age, re-asserted once a
+minute for as long as the run stays over), so the alert keeps firing while the
+run does and resolves once it ends.
+
+| Env var | Default | Controls |
+|---|---|---|
+| `ATLAN_RUN_LENGTH_SLA_SECONDS` | `86400` (24 h) | How long a run may take before the alert is raised. `0` disables it |
+
+Nothing terminates the run. See
+[Monitoring → Run length](monitoring.md#run-length-the-run-no-stall-and-no-timeout-catches)
+for the alert rule and the [long-running-run runbook](../runbooks/long-running-run.md)
+for what an operator does with one. An app whose healthy runs legitimately outlast
+24 hours declares its own value; that declaration is the point, and it costs one env
+var rather than a code change.
 
 ## Manual Heartbeats with Progress
 
@@ -117,6 +309,11 @@ class MyConnector(App):
             )
 ```
 
+A manual beat also **marks progress** for the stall watchdog, under the label
+`task.heartbeat` — so a custom loop that beats once per iteration is observable and
+needs no hold. It is the third of the three progress mechanisms in
+[Progress and Stalls](progress-and-stalls.md#the-one-rule).
+
 ## Infrastructure Access via self.context
 
 Inside a `@task` method, access infrastructure through `self.context`:
@@ -138,6 +335,8 @@ You do not create `DaprClient` instances or call `SecretStore` statics. Infrastr
 ## Blocking Sync Code
 
 Prefer native async libraries wherever possible. For legacy sync code that cannot be rewritten, `self.task_context.run_in_thread(fn, *args)` offloads the call to a thread pool, preventing it from stalling the event loop and blocking heartbeats. See [ADR-0010](../adr/0010-async-first-blocking-code.md) for when this is appropriate and the required internal-timeout precautions.
+
+Every offload is automatically wrapped in an unbounded progress hold, so a long blocking call is never read as a stall — see [Progress and Stalls](progress-and-stalls.md#automatic-holds-on-offloaded-work) for how to give it a real bound instead.
 
 ## FileReference: Passing Large Data Between Tasks
 

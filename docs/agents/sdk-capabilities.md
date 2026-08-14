@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.27.1
-source-sha:    b6e756091f012a5e5e7db9309f99e5e9655c931b
-source-date:   2026-08-11T10:10:51+00:00
+sdk-version:   3.27.2
+source-sha:    07f46ed5e21ee1f535a9d77b80e531805822507e
+source-date:   2026-08-13T18:08:24+00:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -23,14 +23,14 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 11 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 56 |
-| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 20 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 61 |
+| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 21 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
-| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 37 |
+| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 35 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 5 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 15 |
 
@@ -152,7 +152,7 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 #### `@task`
 
 - **Import:** `from application_sdk.app import task`
-- **Signature:** `task(func: F | None = None, ...)`
+- **Signature:** `task(func: F | None = None, *, ...)`
 - **Summary:** Decorator to mark a method as a task (Temporal activity).
 - **Defined in:** `application_sdk/app/task.py`
 
@@ -352,7 +352,7 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 #### `filter_matches`
 
 - **Import:** `from application_sdk.common import filter_matches`
-- **Signature:** `filter_matches(candidate: str, ...)`
+- **Signature:** `filter_matches(candidate: str, *, ...)`
 - **Summary:** Convenience one-shot: compile ``include``/``exclude`` and test ``candidate``.
 - **Defined in:** `application_sdk/common/filter_matching.py`
 
@@ -881,8 +881,8 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `parse_credentials_extra`
 
 - **Import:** `from application_sdk.credentials import parse_credentials_extra`
-- **Signature:** `parse_credentials_extra(credentials: dict[str, Any])`
-- **Summary:** Parse the 'extra' field from credentials, handling both string and dict inputs.
+- **Signature:** `parse_credentials_extra(credentials: dict[str, Any], *, strict: bool = True)`
+- **Summary:** Decode the ``extra`` field of a credential dict.
 - **Defined in:** `application_sdk/credentials/utils.py`
 
 #### `register_credential_type`
@@ -961,6 +961,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Summary:** Marker for a :class:`DependencyUnavailableError` that specifically means
 - **Defined in:** `application_sdk/errors/leaves.py`
 
+#### `DaprSidecarUnreachableError`
+
+- **Import:** `from application_sdk.errors import DaprSidecarUnreachableError`
+- **Signature:** `class DaprSidecarUnreachableError(*, ...)`
+- **Summary:** Terminal form of a cold-start race: the Dapr sidecar never became
+- **Defined in:** `application_sdk/errors/leaves.py`
+
 #### `DataIntegrityError`
 
 - **Import:** `from application_sdk.errors import DataIntegrityError`
@@ -973,6 +980,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Import:** `from application_sdk.errors import DependencyUnavailableError`
 - **Signature:** `class DependencyUnavailableError(*, ...)`
 - **Summary:** Required Atlan-internal platform service is temporarily down or degraded.
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `DiskFullError`
+
+- **Import:** `from application_sdk.errors import DiskFullError`
+- **Signature:** `class DiskFullError(*, ...)`
+- **Summary:** A local write failed because the filesystem had no room for it (FND-318).
 - **Defined in:** `application_sdk/errors/leaves.py`
 
 #### `ErrorCode`
@@ -1043,6 +1057,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Import:** `from application_sdk.errors import SourceUnavailableError`
 - **Signature:** `class SourceUnavailableError(*, ...)`
 - **Summary:** Customer-controlled source system is temporarily unreachable.
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `TaskStalledError`
+
+- **Import:** `from application_sdk.errors import TaskStalledError`
+- **Signature:** `class TaskStalledError(*, ...)`
+- **Summary:** An activity attempt was failed for making no observable progress (ADR-0018).
 - **Defined in:** `application_sdk/errors/leaves.py`
 
 #### `UnimplementedError`
@@ -1266,6 +1287,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
+#### `STORAGE_INTEGRITY`
+
+- **Import:** `from application_sdk.errors import STORAGE_INTEGRITY`
+- **Signature:** `STORAGE_INTEGRITY`
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
+- **Defined in:** `application_sdk/errors/__init__.py`
+
 #### `STORAGE_NOT_FOUND`
 
 - **Import:** `from application_sdk.errors import STORAGE_NOT_FOUND`
@@ -1284,6 +1312,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 
 - **Import:** `from application_sdk.errors import STORAGE_PERMISSION`
 - **Signature:** `STORAGE_PERMISSION`
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `STORAGE_PREFLIGHT`
+
+- **Import:** `from application_sdk.errors import STORAGE_PREFLIGHT`
+- **Signature:** `STORAGE_PREFLIGHT`
 - **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
@@ -1417,14 +1452,14 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 #### `create_temporal_client`
 
 - **Import:** `from application_sdk.execution import create_temporal_client`
-- **Signature:** `create_temporal_client(host: str = 'localhost:7233', ...)`
+- **Signature:** `create_temporal_client(host: str = 'localhost:7233', *, ...)`
 - **Summary:** Create a Temporal client with optional TLS and auth.
 - **Defined in:** `application_sdk/execution/_temporal/backend.py`
 
 #### `create_worker`
 
 - **Import:** `from application_sdk.execution import create_worker`
-- **Signature:** `create_worker(client: Client, ...)`
+- **Signature:** `create_worker(client: Client, *, ...)`
 - **Summary:** Create a Temporal worker for registered Apps.
 - **Defined in:** `application_sdk/execution/_temporal/worker.py`
 
@@ -1441,6 +1476,13 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Signature:** `needs_lock(max_locks: int = 5, lock_name: Optional[str] = None)`
 - **Summary:** Decorator to mark activities that require distributed locking.
 - **Defined in:** `application_sdk/execution/decorators.py`
+
+#### `retry_product_seconds`
+
+- **Import:** `from application_sdk.execution import retry_product_seconds`
+- **Signature:** `retry_product_seconds(timeout_seconds: int, *, ...)`
+- **Summary:** The worst-case total seconds a task can consume across *every* attempt.
+- **Defined in:** `application_sdk/execution/retry.py`
 
 ## `application_sdk.handler`
 
@@ -1593,14 +1635,14 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 #### `create_app_handler_service`
 
 - **Import:** `from application_sdk.handler import create_app_handler_service`
-- **Signature:** `create_app_handler_service(handler: Handler, ...)`
+- **Signature:** `create_app_handler_service(handler: Handler, *, ...)`
 - **Summary:** Create a FastAPI app for a single handler.
 - **Defined in:** `application_sdk/handler/service.py`
 
 #### `run_app_handler_service`
 
 - **Import:** `from application_sdk.handler import run_app_handler_service`
-- **Signature:** `run_app_handler_service(handler: Handler, ...)`
+- **Signature:** `run_app_handler_service(handler: Handler, *, ...)`
 - **Summary:** Create and run the handler service with uvicorn.
 - **Defined in:** `application_sdk/handler/service.py`
 
@@ -1785,6 +1827,13 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 - **Summary:** The secret store / Dapr sidecar was *unreachable* — a transport failure
 - **Defined in:** `application_sdk/infrastructure/secrets.py`
 
+#### `SecretStoreUnreachableError`
+
+- **Import:** `from application_sdk.infrastructure import SecretStoreUnreachableError`
+- **Signature:** `class SecretStoreUnreachableError(secret_name: str, ...)`
+- **Summary:** Terminal counterpart of :class:`SecretStoreUnavailableError`: the secret
+- **Defined in:** `application_sdk/infrastructure/secrets.py`
+
 #### `StateStore`
 
 - **Import:** `from application_sdk.infrastructure import StateStore`
@@ -1891,7 +1940,7 @@ Dev entry point — run_dev_combined() and AppConfig for local execution and con
 #### `run_dev_combined`
 
 - **Import:** `from application_sdk.main import run_dev_combined`
-- **Signature:** `run_dev_combined(app_class: type[App], ...)`
+- **Signature:** `run_dev_combined(app_class: type[App], *, ...)`
 - **Summary:** Run worker + handler in a single process for local development.
 - **Defined in:** `application_sdk/main.py`
 
@@ -2023,6 +2072,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 
 ### Classes
 
+#### `BindingSecretRefs`
+
+- **Import:** `from application_sdk.storage import BindingSecretRefs`
+- **Signature:** `class BindingSecretRefs(secret_store: str | None = None, refs: list[tuple[str, str]] = list())`
+- **Summary:** Which secrets a Dapr component needs, and which store holds them.
+- **Defined in:** `application_sdk/storage/binding.py`
+
 #### `BoundStore`
 
 - **Import:** `from application_sdk.storage import BoundStore`
@@ -2036,6 +2092,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Signature:** `class CloudStore(store: ObjectStore, *, provider: str = 'unknown', put_attributes: dict[str, str] | None = None)`
 - **Summary:** Async client for external customer-provided cloud object stores.
 - **Defined in:** `application_sdk/storage/cloud.py`
+
+#### `DataObject`
+
+- **Import:** `from application_sdk.storage import DataObject`
+- **Signature:** `class DataObject(key: str, size: int, etag: str | None, has_sidecar: bool)`
+- **Summary:** One data object from a listing, with everything a transfer needs.
+- **Defined in:** `application_sdk/storage/batch.py`
 
 #### `ObjectStoreCheckResult`
 
@@ -2079,6 +2142,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Summary:** Generic storage-subsystem failure (category=DEPENDENCY_UNAVAILABLE).
 - **Defined in:** `application_sdk/storage/errors.py`
 
+#### `StorageIntegrityError`
+
+- **Import:** `from application_sdk.storage import StorageIntegrityError`
+- **Signature:** `class StorageIntegrityError(message: str, ...)`
+- **Summary:** Transferred bytes do not match the digest recorded for them (FND-306).
+- **Defined in:** `application_sdk/storage/errors.py`
+
 #### `StorageNotFoundError`
 
 - **Import:** `from application_sdk.storage import StorageNotFoundError`
@@ -2119,21 +2189,21 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `create_store_from_binding`
 
 - **Import:** `from application_sdk.storage import create_store_from_binding`
-- **Signature:** `create_store_from_binding(name: str, *, components_dir: Path | str = Path('./components'))`
+- **Signature:** `create_store_from_binding(name: str, *, secrets: SecretMap | None = None, ...)`
 - **Summary:** Create an obstore store from a Dapr component binding YAML file.
 - **Defined in:** `application_sdk/storage/binding.py`
 
 #### `create_store_from_binding_optional`
 
 - **Import:** `from application_sdk.storage import create_store_from_binding_optional`
-- **Signature:** `create_store_from_binding_optional(name: str, *, components_dir: Path | str = Path('./components'))`
+- **Signature:** `create_store_from_binding_optional(name: str, *, secrets: SecretMap | None = None, ...)`
 - **Summary:** Create an obstore store from a Dapr component binding, or ``None`` if absent.
 - **Defined in:** `application_sdk/storage/binding.py`
 
 #### `create_store_from_binding_with_put_attrs`
 
 - **Import:** `from application_sdk.storage import create_store_from_binding_with_put_attrs`
-- **Signature:** `create_store_from_binding_with_put_attrs(name: str, *, components_dir: Path | str = Path('./components'))`
+- **Signature:** `create_store_from_binding_with_put_attrs(name: str, *, secrets: SecretMap | None = None, ...)`
 - **Summary:** Create an obstore store and any associated put attributes from a Dapr binding.
 - **Defined in:** `application_sdk/storage/binding.py`
 
@@ -2154,21 +2224,21 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `download_file`
 
 - **Import:** `from application_sdk.storage import download_file`
-- **Signature:** `download_file(key: str, ...)`
+- **Signature:** `download_file(key: str, *, ...)`
 - **Summary:** Stream-download *key* from the store to a local file.
 - **Defined in:** `application_sdk/storage/ops.py`
 
 #### `download_file_chunked`
 
 - **Import:** `from application_sdk.storage import download_file_chunked`
-- **Signature:** `download_file_chunked(key: str, ...)`
+- **Signature:** `download_file_chunked(key: str, *, ...)`
 - **Summary:** Download *key* using parallel range GETs, writing chunks at fixed offsets.
 - **Defined in:** `application_sdk/storage/chunked.py`
 
 #### `download_prefix`
 
 - **Import:** `from application_sdk.storage import download_prefix`
-- **Signature:** `download_prefix(prefix: str, ...)`
+- **Signature:** `download_prefix(prefix: str, *, ...)`
 - **Summary:** Download all objects under *prefix* to a local directory.
 - **Defined in:** `application_sdk/storage/batch.py`
 
@@ -2190,8 +2260,8 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 
 - **Import:** `from application_sdk.storage import is_sidecar_key`
 - **Signature:** `is_sidecar_key(key: str)`
-- **Summary:** Return ``True`` if *key* is a SHA-256 sidecar rather than a data object.
-- **Defined in:** `application_sdk/storage/batch.py`
+- **Summary:** Return ``True`` when *key* is a SHA-256 sidecar rather than a data object.
+- **Defined in:** `application_sdk/storage/integrity.py`
 
 #### `list_data_keys`
 
@@ -2207,17 +2277,24 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Summary:** Like :func:`list_data_keys`, but return ``(key, size_bytes, e_tag)`` tuples.
 - **Defined in:** `application_sdk/storage/batch.py`
 
+#### `list_data_objects`
+
+- **Import:** `from application_sdk.storage import list_data_objects`
+- **Signature:** `list_data_objects(prefix: str = '', store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
+- **Summary:** List data objects under *prefix*, pairing each with its sidecar flag.
+- **Defined in:** `application_sdk/storage/batch.py`
+
 #### `list_keys`
 
 - **Import:** `from application_sdk.storage import list_keys`
-- **Signature:** `list_keys(prefix: str = '', ...)`
+- **Signature:** `list_keys(prefix: str = '', *, ...)`
 - **Summary:** List all object keys under *prefix*.
 - **Defined in:** `application_sdk/storage/batch.py`
 
 #### `list_keys_with_meta`
 
 - **Import:** `from application_sdk.storage import list_keys_with_meta`
-- **Signature:** `list_keys_with_meta(prefix: str = '', ...)`
+- **Signature:** `list_keys_with_meta(prefix: str = '', *, ...)`
 - **Summary:** Like :func:`list_keys`, but return ``(key, size_bytes, e_tag)`` tuples.
 - **Defined in:** `application_sdk/storage/batch.py`
 
@@ -2235,10 +2312,24 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Summary:** Serialise *obj* to JSON and write to *key*.
 - **Defined in:** `application_sdk/storage/ops.py`
 
+#### `read_binding_secret_refs`
+
+- **Import:** `from application_sdk.storage import read_binding_secret_refs`
+- **Signature:** `read_binding_secret_refs(name: str, *, components_dir: Path | str = Path('./components'))`
+- **Summary:** Report the ``secretKeyRef`` entries of the component named *name*.
+- **Defined in:** `application_sdk/storage/binding.py`
+
+#### `set_fetched_binding_secrets`
+
+- **Import:** `from application_sdk.storage import set_fetched_binding_secrets`
+- **Signature:** `set_fetched_binding_secrets(name: str, secrets: SecretMap)`
+- **Summary:** Publish the secrets startup fetched for *name* to later sync callers.
+- **Defined in:** `application_sdk/storage/binding.py`
+
 #### `upload_file`
 
 - **Import:** `from application_sdk.storage import upload_file`
-- **Signature:** `upload_file(key: str, ...)`
+- **Signature:** `upload_file(key: str, *, ...)`
 - **Summary:** Stream-upload a local file to *key* in the store.
 - **Defined in:** `application_sdk/storage/ops.py`
 
@@ -2252,7 +2343,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `upload_prefix`
 
 - **Import:** `from application_sdk.storage import upload_prefix`
-- **Signature:** `upload_prefix(local_dir: str | Path, ...)`
+- **Signature:** `upload_prefix(local_dir: str | Path, *, ...)`
 - **Summary:** Upload all files under *local_dir* to the store under *prefix*.
 - **Defined in:** `application_sdk/storage/batch.py`
 
@@ -2265,12 +2356,19 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 
 ### Constants and Enums
 
+#### `SecretMap`
+
+- **Import:** `from application_sdk.storage import SecretMap`
+- **Signature:** `SecretMap`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/storage/binding.py`
+
 #### `SIDECAR_SUFFIX`
 
 - **Import:** `from application_sdk.storage import SIDECAR_SUFFIX`
 - **Signature:** `SIDECAR_SUFFIX`
 - **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/storage/batch.py`
+- **Defined in:** `application_sdk/storage/integrity.py`
 
 ## `application_sdk.templates`
 
@@ -3116,8 +3214,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Fields:**
   - `duration_ms: float` `= 0.0` — Wall-clock time spent on the probe connection + ``SELECT 1`` + close.
   - `success: bool` `= True` — Whether the probe completed cleanly. ``False`` means the probe
-  - `error_type: str | None` — Exception class name (e.g. ``OperationalError``) when ``success``
-  - `error_message: str | None` — Truncated exception message when ``success`` is ``False``.
+  - `failure: FailureDetails | None` — Typed classification of the probe failure, produced inside
+  - `error_type: str | None` — Exception class name of the probe failure's **root cause** (e.g.
+  - `error_message: str | None` — Truncated, secret-redacted message of the probe failure's **root
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `QueryBatchInput`

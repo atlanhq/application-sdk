@@ -520,7 +520,7 @@ def test_composite_action_invokes_this_script_at_a_real_path(action: str):
     action_yaml = (action_dir / "action.yaml").read_text()
 
     assert re.search(
-        r"^  extra-env:", action_yaml, re.M
+        r"^  extra-env:", action_yaml, re.MULTILINE
     ), f"{action}/action.yaml no longer declares the extra-env input"
 
     match = re.search(
@@ -595,16 +595,29 @@ _PROSE_ONLY_FILES = {
 # not exist, and the `>> "$GITHUB_ENV"` lines in its docstring and its tests would
 # read as unmasked writes.
 #
+# fetch_dataforge_source.py is the fourth and fifth (with its tests): it never
+# invokes this script — its call sites do, and those are YAML files this guard
+# audits — but its module docstring documents the required call-site shape with
+# a literal `--json … --mask-only` / `>> "$GITHUB_ENV"` pair, and its test file
+# pins the same shape in regex fixtures. Both would otherwise be audited as
+# call sites. The capture-side property those call sites add (fetch stdout into
+# a shell variable, never the log) is guarded by test_fetch_dataforge_source's
+# own call-site tests, the same twin-guard split as resolve_e2e_tenant.
+#
 # Computed rather than spelled out: the paths cannot drift, and the exclusion
-# cannot quietly widen to cover some fourth file.
+# cannot quietly widen to cover some further file.
 _RESOLVE_TENANT_MODULE = _MODULE_PATH.parent / "resolve_e2e_tenant.py"
 _RESOLVE_TENANT_TESTS = Path(__file__).parent / "test_resolve_e2e_tenant.py"
+_FETCH_DATAFORGE_MODULE = _MODULE_PATH.parent / "fetch_dataforge_source.py"
+_FETCH_DATAFORGE_TESTS = Path(__file__).parent / "test_fetch_dataforge_source.py"
 _NOT_A_CALLER = frozenset(
     {
         _MODULE_PATH.resolve(),
         Path(__file__).resolve(),
         _RESOLVE_TENANT_MODULE.resolve(),
         _RESOLVE_TENANT_TESTS.resolve(),
+        _FETCH_DATAFORGE_MODULE.resolve(),
+        _FETCH_DATAFORGE_TESTS.resolve(),
     }
 )
 
@@ -723,7 +736,7 @@ def test_call_sites_are_the_expected_files():
             id="indirect-via-shell-var",
         ),
         pytest.param(
-            '        python3 "$D/export_extra_env.py" --json "$P" ' '>> "$GITHUB_ENV"',
+            '        python3 "$D/export_extra_env.py" --json "$P" >> "$GITHUB_ENV"',
             id="single-line-no-continuation",
         ),
     ],

@@ -2,6 +2,7 @@
 """Execution context for Apps."""
 
 from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -11,6 +12,8 @@ from uuid import uuid4
 from loguru import logger as _loguru_logger
 from temporalio import workflow as _workflow
 
+from application_sdk._runtime.offload import run_in_thread
+from application_sdk._runtime.progress import holding_progress
 from application_sdk.app.base_errors import (
     SecretStoreNotConfiguredError,
     StateStoreNotConfiguredError,
@@ -435,6 +438,8 @@ class TaskExecutionContext:
     - heartbeat(): Send manual heartbeats with progress details
     - get_last_heartbeat_details(): Get last heartbeat for resume on retry
     - run_in_thread(): Run blocking operations without breaking heartbeats
+    - holding_progress(): Vouch for one opaque call the SDK cannot see into,
+      so the stall watchdog does not read it as a stall
 
     This context is only available inside @task methods, not in run().
     Access via self.task_context in your task methods.
@@ -474,6 +479,12 @@ class TaskExecutionContext:
         IMPORTANT: If heartbeating is disabled (heartbeat_timeout_seconds=None),
         this is a no-op.
 
+        A manual beat also **marks progress** for the stall watchdog
+        (ADR-0018), under the label ``task.heartbeat``. That is the third of the
+        three progress mechanisms, and the one an author reaches for in a custom
+        loop the SDK cannot see into — a loop that beats every iteration needs no
+        hold.
+
         Args:
             *details: Serializable progress details (e.g., index, count).
                 These are stored by Temporal and available via
@@ -486,6 +497,18 @@ class TaskExecutionContext:
                 if i % 100 == 0:
                     self.task_context.heartbeat(i, len(records))
         """
+        # Marked here rather than inside the controller for two reasons. It must
+        # count on a task with heartbeating disabled
+        # (``heartbeat_timeout_seconds=None``), where the controller is a no-op
+        # and the stall watchdog is the *only* thing bounding a wedged attempt.
+        # And it must be this call, never ``heartbeat_keepalive`` — the keepalive
+        # is unconditional, so treating it as progress would make every attempt
+        # permanently look like it was progressing.
+        from application_sdk.execution.progress import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+            current_progress_tracker,
+        )
+
+        current_progress_tracker().mark_progress("task.heartbeat")
         self.heartbeat_controller.heartbeat(*details)
 
     def get_last_heartbeat_details(self) -> tuple[Any, ...]:
@@ -572,6 +595,20 @@ class TaskExecutionContext:
         ContextVars (ObjectStore, logger context, correlation ID, infrastructure
         handles) are propagated to the worker thread automatically.
 
+        The offload is automatically wrapped in an unbounded progress hold
+        (ADR-0018), so however long the blocking call takes, the stall watchdog
+        never accuses it of stalling. Nothing to do at the call site, and a
+        legitimately long blocking call behaves exactly as it did before the
+        watchdog existed. To bound it instead, wrap the offload in
+        :meth:`holding_progress` with the allowance you would actually let this
+        one call have — a wedged call is then caught at ``timeout`` plus the
+        no-progress budget rather than at the duration backstop::
+
+            async with self.task_context.holding_progress(
+                "full table scan", timeout=7200
+            ):
+                rows = await self.task_context.run_in_thread(cursor.execute, sql)
+
         **CRITICAL: your blocking code MUST have its own timeout.** Python
         threads cannot be forcibly killed; a hang here hangs the thread
         forever.
@@ -595,8 +632,52 @@ class TaskExecutionContext:
         See Also:
             ``docs/adr/0010-async-first-blocking-code.md`` for full rationale.
         """
-        from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
-            run_in_thread,
-        )
-
         return await run_in_thread(func, *args, **kwargs)
+
+    def holding_progress(
+        self, label: str, *, timeout: float | None
+    ) -> AbstractAsyncContextManager[None]:
+        """Vouch for one opaque operation for as long as you would let it run.
+
+        Pauses the ADR-0018 stall watchdog for the duration of a call the SDK
+        cannot see into, and records the completed call as progress on exit.
+        Covers both shapes of opaque work — an ``await`` against your own async
+        client, and a blocking call offloaded through :meth:`run_in_thread`::
+
+            # async: your own client, which the SDK cannot see into
+            async with self.task_context.holding_progress(
+                "snapshot metadata query", timeout=1800
+            ):
+                rows = await long_single_query(...)
+
+            # blocking: the same wrapper around the offload
+            async with self.task_context.holding_progress(
+                "full table scan", timeout=7200
+            ):
+                rows = await self.task_context.run_in_thread(cursor.execute, sql)
+
+        Expect to need this in almost every connector: streaming reads that
+        interleave fetch and write are already covered by the write side, but a
+        genuinely opaque *single* call — one large metadata query, one slow
+        list/export — emits nothing until it completes and would otherwise read
+        as a stall.
+
+        Args:
+            label: The call site being vouched for. Must identify a *site* —
+                never interpolate a query, a key, a credential or a customer
+                value into it.
+            timeout: How long you would let this one operation run before you
+                would rather it failed — **not** a prediction of how long it
+                takes. Keyword-only and required: the SDK never defaults this
+                number. ``timeout=None`` declares an unbounded hold, leaving the
+                duration backstop as the only bound. Err generous — too tight
+                kills a healthy run, and stall kills retry.
+
+        Returns:
+            An async context manager. Use it with ``async with``.
+
+        See Also:
+            ``docs/adr/0018-progress-aware-heartbeat.md`` → *Holds* and
+            *Choosing the allowance*.
+        """
+        return holding_progress(label, timeout=timeout)

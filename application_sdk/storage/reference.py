@@ -40,21 +40,22 @@ entirely.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import os
 import tempfile
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from application_sdk._runtime.offload import run_in_thread
 from application_sdk.common._listing import safe_list_directory
+from application_sdk.common.atomic import atomic_write
 from application_sdk.contracts.types import FileReference
-from application_sdk.execution.heartbeat import run_in_thread
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
 
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.storage import integrity
 
 logger = get_logger(__name__)
 
@@ -94,61 +95,21 @@ def _make_storage_prefix(ref: FileReference, *, output_path: str | None = None) 
     )
 
 
-def _sha256_hex_file(path: Path) -> str:
-    """Return the hex-encoded SHA-256 digest of *path* using chunked reads.
-
-    Reads in 1 MiB chunks so memory usage is constant regardless of file size.
-    """
-    h = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-async def _sha256_hex_file_async(path: Path) -> str:
-    """Run :func:`_sha256_hex_file` in a worker thread.
-
-    ``_sha256_hex_file`` reads and digests the whole file with no ``await``;
-    calling it directly on the event loop blocks the loop for the full
-    read+hash. A blocked loop cannot run the SDK's auto-heartbeat coroutine, so
-    activities that verify many/large files heartbeat-time-out even while making
-    progress. Uses ``run_in_thread`` (the SDK's dedicated blocking pool) rather
-    than the shared default executor, so this doesn't contend with Temporal's own
-    use of that executor — same reason directory listing is offloaded this way in
-    ``persist``. See conformance rule P031.
-    """
-    return await run_in_thread(_sha256_hex_file, path)
-
-
-async def _get_stored_sidecar(storage_path: str, store: ObjectStore) -> str | None:
-    """Fetch the stored sha256 sidecar for *storage_path*, or None if absent.
-
-    Uses a HEAD request first to confirm the sidecar exists before issuing a
-    GET.  This avoids the obstore Rust retry cycle (up to the configured
-    retry_timeout) that would otherwise fire on every missing sidecar — which
-    is common for refs persisted before sidecar support was added.
-    """
-    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        _get_bytes,
-        exists,
-    )
-
-    sidecar_key = storage_path + ".sha256"
-    try:
-        if not await exists(sidecar_key, store, normalize=False):
-            return None
-        raw = await _get_bytes(sidecar_key, store, normalize=False)
-        return raw.decode().strip() if raw else None
-    except Exception:
-        logger.warning("Failed to fetch sha256 sidecar from store", exc_info=True)
-        return None
-
-
 def _write_local_sidecar(local_path: str, sha256: str) -> None:
-    """Write a local ``.sha256`` sidecar next to *local_path*."""
+    """Write a local ``.sha256`` sidecar next to *local_path*.
+
+    Atomic even though the write is best-effort, and *because* it is: a
+    truncated digest is not a missing sidecar, it is a wrong one. A later
+    ``materialize`` would compare a good local file against a partial digest,
+    conclude the file is stale, and re-download it every time — a silent,
+    permanent tax rather than the visible failure a missing sidecar produces
+    (FND-318).
+    """
     try:
-        Path(local_path + ".sha256").write_text(sha256)
+        with atomic_write(
+            local_path + ".sha256", operation="local sidecar write"
+        ) as sidecar:
+            sidecar.write(sha256.encode())
     except Exception:
         logger.warning(
             "Sidecar write failed (best-effort, continuing without)", exc_info=True
@@ -197,7 +158,6 @@ async def persist_file_reference(
         StorageError,
     )
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        _put,
         upload_file,
     )
 
@@ -237,17 +197,10 @@ async def persist_file_reference(
         async def _upload_one(file_path: Path) -> None:
             relative = str(file_path.relative_to(local)).replace(os.sep, "/")
             file_key = f"{prefix}{relative}"
-            sha256 = await upload_file(file_key, file_path, store, normalize=False)
-            assert sha256 is not None
-            try:
-                await _put(
-                    file_key + ".sha256", sha256.encode(), store, normalize=False
-                )
-            except Exception:
-                logger.warning(
-                    "Sidecar write failed (best-effort, continuing without)",
-                    exc_info=True,
-                )
+            # upload_file validates the write and writes the store-side
+            # ``{key}.sha256`` sidecar itself (FND-306) — one implementation of
+            # the sidecar protocol, shared by every upload path.
+            await upload_file(file_key, file_path, store, normalize=False)
 
         try:
             from application_sdk.constants import (  # noqa: PLC0415
@@ -318,18 +271,13 @@ async def persist_file_reference(
         )
 
         try:
+            # upload_file validates the write and writes the store-side
+            # ``{key}.sha256`` sidecar itself (FND-306); only the *local*
+            # sidecar — a materialize-time cache key, not part of the store
+            # protocol — is this module's business.
             sha256 = await upload_file(storage_path, local, store, normalize=False)
             # compute_hash defaults to True, so the digest is always returned here.
             assert sha256 is not None
-            try:
-                await _put(
-                    storage_path + ".sha256", sha256.encode(), store, normalize=False
-                )
-            except Exception:
-                logger.warning(
-                    "Sidecar write failed (best-effort, continuing without)",
-                    exc_info=True,
-                )
             _write_local_sidecar(ref.local_path, sha256)
         except Exception as exc:
             # conformance: ignore[L018,L009] structured failure event; keys promoted to indexed OTLP attributes via _KNOWN_EXTRA_KEYS; distinct transfer-boundary telemetry not re-emitted by caller
@@ -397,10 +345,10 @@ async def materialize_file_reference(
         FILE_REF_CHUNKED_THRESHOLD_BYTES,
     )
     from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        list_data_keys_with_meta,
+        DataObject,
+        list_data_objects,
     )
     from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        StorageError,
         StorageNotFoundError,
     )
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
@@ -416,8 +364,11 @@ async def materialize_file_reference(
     # Determine single-file vs directory by listing sub-keys under the path.
     # Sizes come back with the listing so the directory branch can chunk large
     # files without a per-file HEAD (BLDX-1513).
-    data_items = await list_data_keys_with_meta(ref.storage_path, store)
-    data_keys = [k for k, _, _ in data_items]
+    # The listing records which objects carry a ``{key}.sha256`` sidecar, so
+    # the per-file integrity check below the transfer call costs no extra
+    # existence probe (FND-306).
+    data_objects = await list_data_objects(ref.storage_path, store)
+    data_keys = [obj.key for obj in data_objects]
 
     # Structured kwargs in the logger calls below are intentional: every key used
     # (storage_path, local_path, file_size_bytes, bytes_downloaded,
@@ -432,8 +383,8 @@ async def materialize_file_reference(
         # Fast path: local file exists — validate before deciding to download.
         stored_hash: str | None = None
         if ref.local_path is not None and Path(ref.local_path).exists():
-            local_hash = await _sha256_hex_file_async(Path(ref.local_path))
-            stored_hash = await _get_stored_sidecar(ref.storage_path, store)
+            local_hash = await integrity.sha256_file(Path(ref.local_path))
+            stored_hash = await integrity.read_expected_digest(store, ref.storage_path)
 
             if stored_hash is not None and local_hash == stored_hash:
                 # File is intact — stamp local sidecar and reuse.
@@ -527,6 +478,12 @@ async def materialize_file_reference(
                     file_size=remote_size,
                     etag=remote_etag,
                     resume=False if owns_temp else None,
+                    # The local-file fast path above may already have fetched
+                    # the producer's digest; hand it down rather than making the
+                    # transfer layer re-read the sidecar. Verification itself
+                    # lives there now, so it fires for every download in the
+                    # SDK rather than only for FileReference (FND-306).
+                    expected_sha256=stored_hash,
                 )
             else:
                 sha256 = await download_file(
@@ -535,21 +492,12 @@ async def materialize_file_reference(
                     store,
                     compute_hash=True,
                     normalize=False,
+                    expected_sha256=stored_hash,
                 )
 
             if sha256 is None:
                 raise StorageNotFoundError(
                     f"FileReference storage path not found in store: {ref.storage_path}",
-                    key=ref.storage_path,
-                )
-
-            # Verify against stored sidecar (reuse fetched value if already retrieved).
-            if stored_hash is None:
-                stored_hash = await _get_stored_sidecar(ref.storage_path, store)
-            if stored_hash is not None and sha256 != stored_hash:
-                raise StorageError(
-                    f"SHA-256 mismatch for {ref.storage_path}: "
-                    f"downloaded={sha256}, stored={stored_hash}",
                     key=ref.storage_path,
                 )
 
@@ -613,8 +561,9 @@ async def materialize_file_reference(
 
         prefix = ref.storage_path.rstrip("/") + "/"
 
-        async def _download_one(key: str, size: int, etag: str | None) -> bool:
+        async def _download_one(obj: DataObject) -> bool:
             """Download one file from the prefix. Returns True if skipped (cache hit)."""
+            key = obj.key
             rel = key.removeprefix(prefix)
             # Reject keys whose resolved path escapes local_directory.
             dest_path = _safe_join_under(local_directory, rel)
@@ -628,7 +577,7 @@ async def materialize_file_reference(
             # OOM recoveries on the same node) free after the first pass.
             if dest_path.exists() and dest_sidecar.exists():
                 try:
-                    local_hash = await _sha256_hex_file_async(dest_path)
+                    local_hash = await integrity.sha256_file(dest_path)
                     if local_hash == dest_sidecar.read_text().strip():
                         # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
                         logger.debug(
@@ -664,8 +613,9 @@ async def materialize_file_reference(
                 max_concurrent_chunks=FILE_REF_CHUNK_CONCURRENCY,
                 compute_hash=True,
                 normalize=False,
-                file_size=size,
-                etag=etag,
+                file_size=obj.size,
+                etag=obj.etag,
+                sidecar_present=obj.has_sidecar,
             )
             if sha256 is not None:
                 _write_local_sidecar(dest, sha256)
@@ -681,7 +631,7 @@ async def materialize_file_reference(
 
             sem = asyncio.Semaphore(MAX_CONCURRENT_STORAGE_TRANSFERS)
             results = await _gather_with_semaphore(
-                [_download_one(k, s, e) for k, s, e in data_items], sem
+                [_download_one(obj) for obj in data_objects], sem
             )
             skipped = sum(results)
         except Exception as exc:

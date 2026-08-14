@@ -20,6 +20,7 @@ from application_sdk.contracts.base import Input, Output, PublishInputMixin
 from application_sdk.contracts.types import ConnectionRef, FileReference, MaxItems
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.credentials.spec import AgentCredentialSpec
+from application_sdk.errors.wire import FailureDetails
 
 # Type alias for SQL filter maps: database-regex → list of schema-regexes.
 # Example: {"^prod$": ["^analytics$", "^reporting$"]}
@@ -444,15 +445,35 @@ class PrimeAuthOutput(Output):
     raised; ``run()`` will short-circuit the workflow with an
     ``AuthError`` carrying ``error_type`` / ``error_message``."""
 
+    failure: FailureDetails | None = None
+    """Typed classification of the probe failure, produced inside
+    ``prime_sql_auth`` while the live exception and its ``__cause__``
+    chain are still available. ``None`` on success.
+
+    This is the authoritative field. ``run()`` rebuilds the typed error
+    from it, and wire consumers can read ``category`` / ``audience`` /
+    ``retryable`` directly off the activity result without re-deriving
+    them from a class name. Mirrors ``PreflightCheck.error``, the
+    SDK's existing typed-failure field.
+
+    Why it exists: ``error_type`` / ``error_message`` describe whatever
+    exception reached the ``except`` clause, which on the default client
+    path is always ``BaseSQLClient.get_results``' catch-all wrapper — the
+    same class and the same fixed message for a DNS failure, a TLS
+    error and a credential rejection alike. Classifying from those two
+    strings therefore cannot discriminate anything."""
+
     error_type: str | None = None
-    """Exception class name (e.g. ``OperationalError``) when ``success``
-    is ``False``. ``None`` on success."""
+    """Exception class name of the probe failure's **root cause** (e.g.
+    ``OperationalError``), not of the SDK wrapper around it. ``None`` on
+    success. Retained for backward compatibility and for logs; prefer
+    ``failure``."""
 
     error_message: str | None = None
-    """Truncated exception message when ``success`` is ``False``.
-    ``None`` on success. Secrets in the underlying driver message are
-    sanitised by the SDK error-wrapping layer; this field is the raw
-    short summary for observability."""
+    """Truncated, secret-redacted message of the probe failure's **root
+    cause**. ``None`` on success. Redacted at the point of capture
+    (``redact_secrets``) because the root driver message can embed a
+    connection string; do not assume a later layer sanitises it."""
 
 
 class ExtractionTaskOutput(Output):

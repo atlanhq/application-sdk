@@ -134,6 +134,43 @@ ATLAN_AUTH_CLIENT_SECRET_KEY=ATLAN_AUTH_CLIENT_SECRET
 
 ---
 
+## Secrets inside an objectstore binding
+
+An objectstore component can take its credentials from a secret store rather
+than from plain `value` entries:
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: atlan-objectstore
+spec:
+  type: bindings.aws.s3
+  version: v1
+  metadata:
+    - name: accessKey
+      secretKeyRef:
+        name: atlan-auth-secret
+        key: ATLAN_AUTH_CLIENT_ID
+auth:
+  secretStore: deployment-secret-store
+```
+
+The SDK builds its own obstore store from this YAML, in parallel with the Dapr
+sidecar, and resolves each `secretKeyRef` in this order:
+
+1. The secret store named by `auth.secretStore`, read at worker startup once the
+   sidecar is ready.
+2. An environment variable named after the ref's `key` — the fallback, and what
+   `secretstores.local.env` amounts to in Docker Compose and SDR-local runs.
+
+A ref that neither source holds makes the component *broken*. A broken optional
+binding degrades to "absent"; a broken **required** binding (the upstream store
+when `ENABLE_ATLAN_UPLOAD=true`) fails at startup and names the unresolved
+fields, rather than routing writes to the wrong bucket.
+
+---
+
 ## Testing Without Dapr
 
 Inject a `MockSecretStore` in tests to avoid needing a Dapr sidecar:

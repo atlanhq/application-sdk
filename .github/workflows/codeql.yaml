@@ -31,22 +31,22 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
         with:
           languages: ${{ matrix.language }}
 
       - name: Autobuild
-        uses: github/codeql-action/autobuild@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        uses: github/codeql-action/autobuild@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
         with:
           category: "/language:${{matrix.language}}"
           upload: never
           output: codeql-results
 
       - name: Upload to Security tab
-        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
         continue-on-error: true
         with:
           sarif_file: codeql-results/python.sarif
@@ -101,13 +101,32 @@ jobs:
             echo "No SARIF output found." >> $GITHUB_STEP_SUMMARY
           fi
 
+      # `upload-artifact` classifies the artifact service's finalize 403 as
+      # non-retryable and fails on the first occurrence, even though the bytes
+      # already landed and the next attempt normally succeeds. That failed the
+      # job, which failed the aggregate gate, which ejected the merge-queue
+      # entry. So: retry once, and never fail the gate on it:
+      # results reach the Security tab via codeql-action/upload-sarif;
+      # this artifact is a debugging copy.
       - name: Upload SARIF as artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        id: upload-codeql-sarif
         if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: codeql-sarif
           path: codeql-results/
           retention-days: 30
+
+      - name: Upload SARIF as artifact (retry)
+        if: steps.upload-codeql-sarif.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: codeql-sarif
+          path: codeql-results/
+          retention-days: 30
+          overwrite: true
 
   # Code Quality Checks
   lint:

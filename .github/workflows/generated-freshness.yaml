@@ -85,17 +85,16 @@ jobs:
       # Provides `uvx ruff`, used by the driver to format generated Python so the
       # diff compares against ruff-formatted output (matching how the artifacts
       # were committed).
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.3"
+          version: "0.12.4"
 
-      - name: Install pkl
-        run: |
-          set -euo pipefail
-          curl -fsSL -o /tmp/pkl \
-            "https://github.com/apple/pkl/releases/download/${{ inputs.pkl-version }}/pkl-linux-amd64"
-          chmod +x /tmp/pkl
-          sudo mv /tmp/pkl /usr/local/bin/pkl
+      # Absolute ref, not `./…`: this is a reusable workflow, so a relative
+      # action path would resolve against the CONSUMER repo's workspace, which
+      # has no copy of the SDK's actions.
+      - uses: atlanhq/application-sdk/.github/actions/install-pkl@main
+        with:
+          version: ${{ inputs.pkl-version }}
 
       # A `uses:` reusable workflow does NOT bring its repo's files into the
       # caller's checkout, so the consumer repo has no copy of the driver. Sparse

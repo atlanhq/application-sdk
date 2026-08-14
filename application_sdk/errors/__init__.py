@@ -13,7 +13,7 @@ Canonical API (v3.x+)::
         InvalidInputError, PreconditionError,
         RateLimitedError, UnimplementedError,
         DependencyUnavailableError, SourceUnavailableError,
-        ResourceExhaustedError,
+        ResourceExhaustedError, DiskFullError,
         DataIntegrityError, CancelledError, InternalError,
     )
 
@@ -40,8 +40,10 @@ from application_sdk.errors.leaves import (
     AuthError,
     CancelledError,
     ColdStartRaceError,
+    DaprSidecarUnreachableError,
     DataIntegrityError,
     DependencyUnavailableError,
+    DiskFullError,
     InternalError,
     InvalidInputError,
     NotFoundError,
@@ -49,6 +51,7 @@ from application_sdk.errors.leaves import (
     RateLimitedError,
     ResourceExhaustedError,
     SourceUnavailableError,
+    TaskStalledError,
     UnimplementedError,
 )
 from application_sdk.errors.wire import FailureDetails
@@ -91,6 +94,7 @@ STORAGE_CONFIG = ErrorCode("STR", 3)
 STORAGE_OPERATION = ErrorCode("STR", 4)
 STORAGE_EMPTY_UPLOAD = ErrorCode("STR", 5)
 STORAGE_PREFLIGHT = ErrorCode("STR", 6)
+STORAGE_INTEGRITY = ErrorCode("STR", 7)
 
 # CTR - Contract errors
 CONTRACT_VALIDATION = ErrorCode("CTR", 1)
@@ -138,8 +142,10 @@ __all__ = [
     "AuthError",
     "CancelledError",
     "ColdStartRaceError",
+    "DaprSidecarUnreachableError",
     "DataIntegrityError",
     "DependencyUnavailableError",
+    "DiskFullError",
     "SourceUnavailableError",
     "InternalError",
     "InvalidInputError",
@@ -147,6 +153,7 @@ __all__ = [
     "PreconditionError",
     "RateLimitedError",
     "ResourceExhaustedError",
+    "TaskStalledError",
     "UnimplementedError",
     "WORKER_EVICTED_TYPE",
     # Legacy (deprecated — removed in v4.0)
@@ -162,6 +169,8 @@ __all__ = [
     "STORAGE_CONFIG",
     "STORAGE_OPERATION",
     "STORAGE_EMPTY_UPLOAD",
+    "STORAGE_PREFLIGHT",
+    "STORAGE_INTEGRITY",
     "CONTRACT_VALIDATION",
     "PAYLOAD_SAFETY",
     "HANDLER_ERROR",

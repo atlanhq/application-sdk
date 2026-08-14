@@ -5,11 +5,13 @@ when task-wrapping is not desired (edge-case opt-in).
 
 SHA-256-based deduplication
 ---------------------------
-Every uploaded object gets a tiny sidecar ``{key}.sha256`` stored alongside
-it in the object store.  On subsequent uploads (``skip_if_exists=True``) the
-local file hash is compared against the sidecar; the upload is skipped when
-they match.  The same sidecar is used during downloads to verify integrity
-and skip unchanged local files.
+Every uploaded object gets a tiny sidecar ``{key}.sha256`` stored alongside it
+in the object store — written by ``ops.upload_file`` itself, so it exists for
+every upload path in the SDK and not just this one (FND-306).  On subsequent
+uploads (``skip_if_exists=True``) the local file hash is compared against the
+sidecar; the upload is skipped when they match.  The same sidecar is what the
+transfer primitives verify downloads against, so a truncated artifact is caught
+here rather than in a downstream parser; see ``storage.integrity``.
 
 Cross-store deduplication (SDR deployments)
 -------------------------------------------
@@ -34,31 +36,30 @@ identically for single files and directories.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import os
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from application_sdk._runtime.offload import run_in_thread
+from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.common._listing import safe_list_directory
 from application_sdk.constants import MAX_CONCURRENT_STORAGE_TRANSFERS
 from application_sdk.contracts.types import FileReference, StorageTier
-from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 
-# Sidecar suffix / predicate and the batch key listers are owned by
-# ``storage.batch`` — the single source of truth for what counts as a sidecar
-# vs. a data key (see ``batch.SIDECAR_SUFFIX`` / ``list_data_keys``). Imported at
-# top level, unlike the other storage-sibling imports in this module which are
-# lazy: ``batch`` depends only on ``storage.ops`` (``batch → ops``) and never on
-# ``transfer``, so ``transfer → batch`` is unconditionally acyclic — the import
-# is safe regardless of module load order.
-from application_sdk.storage.batch import SIDECAR_SUFFIX as _SHA256_SUFFIX
-from application_sdk.storage.batch import (
-    list_data_keys,
-    list_data_keys_with_meta,
-    list_keys,
-)
+# The batch key listers are imported at top level, unlike the other
+# storage-sibling imports in this module which are lazy: ``batch`` depends only
+# on ``storage.ops`` / ``storage.integrity`` and never on ``transfer``, so
+# ``transfer → batch`` is unconditionally acyclic — the import is safe
+# regardless of module load order.
+from application_sdk.storage.batch import list_data_keys, list_data_objects, list_keys
+
+# Sidecar naming, digest computation and the read/write of ``{key}.sha256`` all
+# live in ``storage.integrity``, which ``ops`` calls on every transfer. This
+# module holds no copy of them: a second implementation of the digest protocol
+# is how the reader and the writer drift apart.
+from application_sdk.storage.integrity import read_expected_digest, sha256_file
 
 _logger = get_logger(__name__)
 
@@ -70,52 +71,6 @@ if TYPE_CHECKING:
     from application_sdk.contracts.storage import DownloadOutput, UploadOutput
 
 
-def _sidecar_key(key: str) -> str:
-    """Object-store key of the SHA-256 sidecar written alongside *key*."""
-    return key + _SHA256_SUFFIX
-
-
-def _sha256_file(path: Path) -> str:
-    """Compute SHA-256 hex digest of a local file (streaming, 64 KiB chunks)."""
-    h = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-async def _sha256_file_async(path: Path) -> str:
-    """Run :func:`_sha256_file` in a worker thread.
-
-    ``_sha256_file`` reads and digests the whole file with no ``await``;
-    calling it directly on the event loop blocks the loop for the full
-    read+hash. A blocked loop cannot run the SDK's auto-heartbeat coroutine, so
-    ``App.upload``/``App.download`` (``skip_if_exists=True``) heartbeat-time-out
-    on large files even while making progress — the same failure mode fixed in
-    ``storage.reference._sha256_hex_file_async``.
-    """
-    return await run_in_thread(_sha256_file, path)
-
-
-async def _get_remote_sha256(store: ObjectStore, key: str) -> str | None:
-    """Fetch the stored SHA-256 sidecar for *key*, or ``None`` if absent."""
-    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        _get_bytes,
-    )
-
-    data = await _get_bytes(_sidecar_key(key), store, normalize=False)
-    return data.decode() if data else None
-
-
-async def _put_remote_sha256(store: ObjectStore, key: str, digest: str) -> None:
-    """Write the SHA-256 sidecar for *key*."""
-    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        _put,
-    )
-
-    await _put(_sidecar_key(key), digest.encode(), store, normalize=False)
-
-
 async def _upload_one(
     store: ObjectStore,
     local_file: Path,
@@ -123,21 +78,34 @@ async def _upload_one(
     *,
     skip_if_exists: bool,
 ) -> tuple[bool, str]:
-    """Upload a single file.  Returns ``(transferred, reason)``."""
+    """Upload a single file.  Returns ``(transferred, reason)``.
+
+    The ``{key}.sha256`` sidecar is written by ``upload_file`` itself, after it
+    has validated that what landed in the store is what was sent — so it is not
+    written here (FND-306).
+    """
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         upload_file,
     )
 
     if skip_if_exists:
-        local_digest = await _sha256_file_async(local_file)
-        remote_digest = await _get_remote_sha256(store, store_key)
+        local_digest = await sha256_file(local_file)
+        remote_digest = await read_expected_digest(store, store_key)
         if remote_digest == local_digest:
+            # A skip is still one file resolved. Directory uploads that skip
+            # thousands of hash-matching files on an idempotent retry are doing
+            # real work (a digest and a sidecar GET each) and must not read as
+            # a stall.
+            current_progress_tracker().mark_progress("storage.upload_file")
             return False, "skipped:hash_match"
-        sha256 = await upload_file(store_key, local_file, store, normalize=False)
-    else:
-        sha256 = await upload_file(store_key, local_file, store, normalize=False)
 
-    await _put_remote_sha256(store, store_key, sha256)
+    await upload_file(store_key, local_file, store, normalize=False)
+    # Per-file boundary, on top of the per-part marks inside upload_file: this
+    # is the label an operator wants in a stall message, since it says the
+    # attempt was moving whole files rather than stuck mid-transfer on one.
+    # (The sidecar write that used to sit here is upload_file's job now — see
+    # the docstring above.)
+    current_progress_tracker().mark_progress("storage.upload_file")
     return True, "uploaded"
 
 
@@ -153,10 +121,10 @@ async def _cross_store_sha256_match(
     that are already current in the target store (idempotent retry support).
     Returns ``False`` when either sidecar is absent so the upload proceeds.
     """
-    source_digest = await _get_remote_sha256(source_store, source_key)
+    source_digest = await read_expected_digest(source_store, source_key)
     if source_digest is None:
         return False
-    target_digest = await _get_remote_sha256(target_store, target_key)
+    target_digest = await read_expected_digest(target_store, target_key)
     return source_digest == target_digest
 
 
@@ -173,7 +141,9 @@ async def _upload_from_store(
     * Step 1 — cross-store SHA-256 dedup: skips the transfer when both stores
       already hold the same content at their respective keys.
     * Step 3 — deployment-store fallback: downloads to a temporary local file
-      and re-uploads to the target, writing the SHA-256 sidecar.
+      and re-uploads to the target.  Both legs validate: the download against
+      the source's sidecar, the upload against what the target reports back,
+      and ``upload_file`` writes the target's own sidecar (FND-306).
 
     Returns ``(transferred, reason)``.
     """
@@ -185,6 +155,9 @@ async def _upload_from_store(
     if await _cross_store_sha256_match(
         source_store, source_key, target_store, target_key
     ):
+        # Two sidecar GETs per key: a fallback reconcile over a large prefix
+        # that skips everything is still forward progress.
+        current_progress_tracker().mark_progress("storage.copy_file")
         return False, "skipped:hash_match"
 
     fd, tmp_path_str = tempfile.mkstemp()
@@ -199,8 +172,8 @@ async def _upload_from_store(
         await download_file_chunked(
             source_key, tmp, source_store, normalize=False, resume=False
         )
-        sha256 = await upload_file(target_key, tmp, target_store, normalize=False)
-        await _put_remote_sha256(target_store, target_key, sha256)
+        await upload_file(target_key, tmp, target_store, normalize=False)
+        current_progress_tracker().mark_progress("storage.copy_file")
         return True, "uploaded"
     finally:
         tmp.unlink(missing_ok=True)
@@ -217,6 +190,7 @@ async def _download_one(
     file_size: int | None = None,
     etag: str | None = None,
     resume: bool | None = None,
+    sidecar_present: bool | None = None,
 ) -> tuple[bool, str]:
     """Download a single file.  Returns ``(transferred, reason)``.
 
@@ -226,16 +200,26 @@ async def _download_one(
     (single-file case). Pass ``resume=False`` when *local_file* is a
     fresh-named temp file — its checkpoint sidecar could never be reused, so
     it would only be stranded on failure. (BLDX-1513 / BLDX-1523)
+
+    *sidecar_present* is threaded the same way: a prefix download's listing
+    already knows whether ``{key}.sha256`` exists, so the integrity check below
+    the call does not have to probe for it per file (FND-306).
     """
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         download_file_chunked,
     )
 
+    remote_digest: str | None = None
     if skip_if_exists and local_file.exists():
-        remote_digest = await _get_remote_sha256(store, store_key)
+        remote_digest = await read_expected_digest(
+            store, store_key, sidecar_present=sidecar_present
+        )
         if remote_digest is not None:
-            local_digest = await _sha256_file_async(local_file)
+            local_digest = await sha256_file(local_file)
             if local_digest == remote_digest:
+                # See _upload_one: a hash-match skip is one file resolved, and
+                # the prefix download loop below runs these sequentially.
+                current_progress_tracker().mark_progress("storage.download_file")
                 return False, "skipped:hash_match"
 
     local_file.parent.mkdir(parents=True, exist_ok=True)
@@ -247,7 +231,12 @@ async def _download_one(
         file_size=file_size,
         etag=etag,
         resume=resume,
+        # Already fetched above when skip_if_exists forced a comparison —
+        # hand it down so the transfer is verified without re-reading it.
+        expected_sha256=remote_digest,
+        sidecar_present=sidecar_present,
     )
+    current_progress_tracker().mark_progress("storage.download_file")
     return True, "downloaded"
 
 
@@ -879,8 +868,10 @@ async def download(
         # ── Directory / prefix ─────────────────────────────────────────────
         prefix = norm_path.rstrip("/") + "/"
         # Listing carries per-object sizes, so large files chunk without a
-        # per-file HEAD (BLDX-1513). SHA-256 sidecars are excluded by the helper.
-        data_items = await list_data_keys_with_meta(prefix, resolved, normalize=False)
+        # per-file HEAD (BLDX-1513); it also records which objects have a
+        # SHA-256 sidecar, so integrity verification costs no extra probe
+        # (FND-306). Sidecars themselves are excluded by the helper.
+        data_objects = await list_data_objects(prefix, resolved, normalize=False)
 
         if local_path is not None:
             dest_dir = Path(local_path)
@@ -891,17 +882,18 @@ async def download(
         strip = prefix
 
         transferred_count = 0
-        for key, size, etag in data_items:
-            rel = key.removeprefix(strip)
+        for obj in data_objects:
+            rel = obj.key.removeprefix(strip)
             # Reject keys whose resolved path escapes dest_dir (e.g. via ".." segments).
             local_file = _safe_join_under(dest_dir, rel)
             ok, _ = await _download_one(
                 resolved,
-                key,
+                obj.key,
                 local_file,
                 skip_if_exists=skip_if_exists,
-                file_size=size,
-                etag=etag,
+                file_size=obj.size,
+                etag=obj.etag,
+                sidecar_present=obj.has_sidecar,
             )
             if ok:
                 transferred_count += 1
@@ -911,6 +903,6 @@ async def download(
             local_path=str(dest_dir),
             storage_path=prefix,
             is_durable=True,
-            file_count=len(data_items),
+            file_count=len(data_objects),
         )
         return DownloadOutput(ref=ref, synced=transferred_count > 0, reason=reason)

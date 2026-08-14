@@ -43,6 +43,50 @@ class AppTimeoutError(AppError):
 
 
 @dataclass(kw_only=True)
+class TaskStalledError(AppTimeoutError):
+    """An activity attempt was failed for making no observable progress (ADR-0018).
+
+    Raised by the SDK's activity wrapper, not by app code: the stall watchdog in
+    the auto-heartbeat loop cancels the attempt, and the cancellation handler
+    turns that cancel into this error. It means the attempt kept heartbeating —
+    the event loop was alive — while nothing observable advanced for longer than
+    the task's ``max_no_progress_seconds``.
+
+    A subtype of :class:`AppTimeoutError` rather than a sixteenth categorical
+    leaf: a stall *is* a TIMEOUT-category failure, so ``except AppTimeoutError``
+    catch sites and TIMEOUT-keyed consumers keep working, while the distinct
+    ``code`` and the Temporal wire type ``"TaskStalledError"`` let a stall kill
+    be counted separately from a ``StartToClose`` or heartbeat timeout. The
+    ``TIMEOUT_`` prefix on the code is the convention every leaf subclass follows
+    (P003) so the code column carries its category without a join.
+
+    ``stalled_for_seconds`` is not the inherited ``elapsed_seconds``, and both
+    can be meaningful at once: ``elapsed_seconds`` measures how long a bounded
+    wait ran before it was abandoned, while this measures the *quiet gap* inside
+    an attempt that may have been productively running for hours before it went
+    silent. A stall has no bounded wait that elapsed — that absence is the whole
+    problem the watchdog exists to detect — so ``timeout_seconds`` and
+    ``elapsed_seconds`` are left unset on this path.
+
+    **Retryable, deliberately.** The dominant cause is a transient source-side
+    hang in an app whose error handling never surfaced it, which self-heals on a
+    fresh attempt; a genuine wedge re-stalls and costs at most a few multiples of
+    ``max_no_progress_seconds``, not of the duration backstop. Non-retryable
+    would convert the self-healing majority into failed runs needing a manual
+    re-run that restarts from zero anyway (ADR-0018 → *Failing the activity*).
+    Pinned here rather than inherited so a future change to
+    :class:`AppTimeoutError`'s default cannot silently flip it.
+    """
+
+    stalled_for_seconds: float | None = None
+    last_progress_label: str | None = None
+
+    default_retryable: ClassVar[bool] = True
+    code: ClassVar[str] = "TIMEOUT_TASK_STALLED"
+    audience: ClassVar[Audience] = Audience.APP_OWNER
+
+
+@dataclass(kw_only=True)
 class RateLimitedError(AppError):
     limit_type: str | None = None
     retry_after_seconds: float | None = None
@@ -204,6 +248,51 @@ class ColdStartRaceError(DependencyUnavailableError):
 
 
 @dataclass(kw_only=True)
+class DaprSidecarUnreachableError(ColdStartRaceError):
+    """Terminal form of a cold-start race: the Dapr sidecar never became
+    reachable for the entire cold-start budget, across every attempt.
+
+    Raised by
+    :func:`~application_sdk.infrastructure.retry_past_dapr_cold_start` only at
+    budget exhaustion — the point at which no attempt ever got a usable
+    answer. A transient race that eventually resolves returns normally and
+    never reaches this type, so this type distinguishes a budget-exhausted
+    outage from a still-booting one for diagnosis.
+
+    It stays wire-retryable (inherits ``default_retryable = True``): naming the
+    terminal state does not by itself change retry or fail-open behaviour. An
+    activity-level retry can still recover when a later attempt lands on a
+    healthy worker (a single bad pod in a multi-replica pool), so the retry
+    hint is left on deliberately — the same topology reasoning that keeps a
+    platform fault failing open rather than blocking the run. Choosing to
+    *stop* on this state instead of retrying is a separate policy decision, not
+    made here.
+
+    Distinct from a plain ``ColdStartRaceError`` purely so the two read
+    differently to an operator or a triaging agent: a bare
+    ``ColdStartRaceError`` says "not reachable yet, still waiting"; this says
+    "not reachable for the whole budget, done waiting". Reporting a persistent
+    platform fault as a transient race is the defect this fixes. Subclasses
+    ``ColdStartRaceError`` (not ``DependencyUnavailableError`` directly) so it
+    inherits ``DEPENDENCY_UNAVAILABLE`` — keeping error routing and the
+    preflight gate's ``gate_broken`` classification unchanged — and so every
+    existing ``except ColdStartRaceError`` catch site keeps catching it.
+
+    Carries the diagnosis an operator needs with no secret surface:
+    ``component`` (a Dapr config identifier), ``attempts``, and
+    ``elapsed_seconds`` are all safe to render. The underlying transport error
+    rides the inherited ``cause`` field and is never string-interpolated into
+    the message.
+    """
+
+    component: str | None = None
+    attempts: int | None = None
+    elapsed_seconds: float | None = None
+
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_SIDECAR_UNREACHABLE"
+
+
+@dataclass(kw_only=True)
 class SourceUnavailableError(AppError):
     """Customer-controlled source system is temporarily unreachable.
 
@@ -245,6 +334,54 @@ class ResourceExhaustedError(AppError):
     default_retryable: ClassVar[bool] = True
     code: ClassVar[str] = "RESOURCE_EXHAUSTED"
     audience: ClassVar[Audience] = Audience.PLATFORM
+
+
+@dataclass(kw_only=True)
+class DiskFullError(ResourceExhaustedError):
+    """A local write failed because the filesystem had no room for it (FND-318).
+
+    Raised by the SDK's write boundary (:mod:`application_sdk.common.atomic`)
+    for ``ENOSPC`` and ``EDQUOT`` — either the volume is out of blocks or the
+    writing identity is over its quota. Both mean the same thing to whoever has
+    to act, which is why they share one type.
+
+    A bare ``OSError`` is the failure this replaces. It carries no category, so
+    it lands in whatever broad ``except`` happens to be in the call stack and
+    the run reports some downstream symptom instead — in the incident that
+    motivated this, a truncated JSON artifact that failed in a *consuming*
+    app's parser forty minutes later. A typed error is classified, attributable
+    to the writing step, and alertable.
+
+    **This error is also the operator's signal that the deployment needs more
+    ephemeral storage.** Requests and limits are deployment configuration and
+    are deliberately not requested from either the SDK or the app — neither can
+    know the number. Naming the path, what the write needed, and what was free
+    tells the operator which deployment to raise and by roughly how much,
+    without either codebase guessing.
+
+    **Retryable, inherited deliberately.** Disk pressure is often not ours: a
+    co-tenant's scratch space frees, or a fresh attempt starts on a node that
+    has room. A genuinely undersized deployment re-fails at
+    :func:`~application_sdk.common.atomic.ensure_free_space` in seconds rather
+    than part-way through a long write, so the retries are cheap and each one
+    re-emits the same operator signal.
+    """
+
+    path: str | None = None
+    operation: str | None = None
+    required_bytes: int | None = None
+    free_bytes: int | None = None
+
+    code: ClassVar[str] = "RESOURCE_EXHAUSTED_DISK_FULL"
+    resource: str | None = "disk"
+    # Defaulted on the class rather than passed at each raise site: the
+    # remediation is the same wherever this is raised from, and a raise site
+    # that forgot it would ship the one failure whose whole purpose is telling
+    # an operator what to change with no instruction attached.
+    suggested_action: str | None = (
+        "Raise the ephemeral-storage request/limit on this deployment, or "
+        "reduce the volume this step stages on local disk."
+    )
 
 
 @dataclass(kw_only=True)

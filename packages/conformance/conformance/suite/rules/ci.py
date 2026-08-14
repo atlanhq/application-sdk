@@ -105,4 +105,53 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/ci.md#c003",
     ),
+    RuleDefinition(
+        id="C004",
+        scope=RuleScope.BOTH,
+        name="UnretriedToolDownload",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="ci-reliability",
+        # Not autofixable: the right remediation differs per site — wrap in
+        # with-retry.sh, add curl/wget retry flags, or (best) stop downloading
+        # and take the tool from the runner cache. Picking between those is a
+        # judgment call, so findings route to residue rather than a mechanical fix.
+        autofixable=False,
+        orthogonal_gate="skip",
+        since="0.18.0",
+        rationale=(
+            "CI that installs its toolchain at job time takes a live dependency on a "
+            "third-party CDN every run, and those CDNs serve 5xx bursts lasting minutes. "
+            "A one-shot fetch turns a transient upstream blip into a failed build — and "
+            "on a merge-queue-gating job, into an ejected PR that costs a full re-queue. "
+            "The remediation is almost always a single flag."
+        ),
+        short_description="CI downloads a tool over the network with no retry",
+        full_description=(
+            "Flags a `curl`/`wget` that installs something — it writes the response to "
+            "a file or pipes it into a shell or `tar` — and carries no retry, plus "
+            "`uv python install`, which fetches a python-build-standalone tarball from "
+            "GitHub releases with no retry of its own.\n\n"
+            "Recognised as retried: the `with-retry.sh` wrapper (including via a shell "
+            "variable holding its path), `curl --retry`, and `wget --tries` / "
+            "`--retry-on-http-error`. A `curl --retry` WITHOUT `--retry-all-errors` is "
+            "still flagged: plain `--retry` covers transport errors but not an HTTP 503, "
+            "which is the failure this rule exists for. Tuning-only companion flags "
+            "(`curl --retry-delay` / `--retry-max-time`, `wget --waitretry`) never count "
+            "on their own: they pace a retry but do not enable one — `wget "
+            "`--waitretry=10` without `--tries` still makes exactly one attempt. Flags "
+            "are evaluated per command segment (split on `&&` / `||` / `;`; a pipe does "
+            "not split), so one curl's complete retry does not excuse a sibling curl's "
+            "incomplete one.\n\n"
+            "Not flagged: fetches whose body is read rather than installed (a version "
+            "lookup, a `-o /dev/null` health probe — those sit in their own poll loops), "
+            "and localhost URLs.\n\n"
+            "WARN, not BLOCK: existing repos carry these throughout, and a one-shot "
+            "fetch is a reliability defect rather than a security or correctness one. "
+            "The best fix is often not a retry at all but removing the download — "
+            "taking the tool from the runner tool cache, or from "
+            "`atlanhq/application-sdk/.github/actions/setup-deps@main`."
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/ci.md#c004",
+    ),
 )

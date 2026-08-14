@@ -885,9 +885,11 @@ class TestCreateInfrastructureUpstreamStore:
         assert infra.upstream_storage is upstream_store
         assert infra.storage is deployment_store
         mock_optional.assert_called_once_with(
-            "atlan-objectstore", components_dir=ANY, required=ANY
+            "atlan-objectstore", components_dir=ANY, required=ANY, secrets=ANY
         )
-        mock_binding.assert_called_once_with("objectstore", components_dir=ANY)
+        mock_binding.assert_called_once_with(
+            "objectstore", components_dir=ANY, secrets=ANY
+        )
 
     async def test_upstream_required_true_when_sdr_enabled(
         self,

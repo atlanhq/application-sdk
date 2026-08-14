@@ -1,6 +1,9 @@
+import asyncio
 import contextlib
 import os
 import shutil
+import threading
+import time
 from collections.abc import Generator
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,6 +14,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from application_sdk import constants
+from application_sdk.common.atomic import PARTIAL_DIRNAME
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.infrastructure.context import (
     InfrastructureContext,
@@ -23,6 +27,35 @@ from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.formats.parquet import ParquetFileReader, ParquetFileWriter
 from application_sdk.storage.formats.utils import path_gen
 from application_sdk.storage.reference import persist_file_reference
+
+
+def _published_name(where: object) -> str:
+    """Filename a path handed to ``pq.write_table`` publishes under.
+
+    Each chunk is written to ``<dir>/.sdk-partial/<name>.<token>`` and renamed
+    onto ``<dir>/<name>`` once the write succeeds (FND-318), so the staged
+    filename carries a token the published one does not.
+    """
+    staged = Path(str(where))
+    if staged.parent.name != PARTIAL_DIRNAME:
+        return staged.name
+    return staged.name.rsplit(".", 1)[0]
+
+
+def _stub_write_table(table: pa.Table, where: object, **kwargs: object) -> None:
+    """Stand in for ``pq.write_table`` while still producing a file.
+
+    A bare ``MagicMock`` writes nothing, and the writer stages each chunk and
+    renames it into place (FND-318) — so a stub that produces no file makes the
+    writer report, correctly, that the chunk was never written. Touching the
+    path keeps these tests about *which* path the writer resolves without
+    paying for real parquet encoding.
+
+    ``where`` is a buffer rather than a path on the writer's size-estimation
+    call; there is nothing to create in that case.
+    """
+    if isinstance(where, (str, os.PathLike)):
+        Path(where).write_bytes(b"")
 
 
 @pytest.fixture
@@ -292,7 +325,9 @@ class TestParquetFileWriterWriteDataframe:
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
         """Test successful DataFrame writing."""
-        with patch("pyarrow.parquet.write_table") as mock_write_table:
+        with patch(
+            "pyarrow.parquet.write_table", side_effect=_stub_write_table
+        ) as mock_write_table:
             parquet_output = ParquetFileWriter(
                 path=os.path.join(base_output_path, "test"),
                 use_consolidation=False,
@@ -308,7 +343,9 @@ class TestParquetFileWriterWriteDataframe:
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
         """Test DataFrame writing with custom path generation."""
-        with patch("pyarrow.parquet.write_table") as mock_write_table:
+        with patch(
+            "pyarrow.parquet.write_table", side_effect=_stub_write_table
+        ) as mock_write_table:
             parquet_output = ParquetFileWriter(
                 path=base_output_path,
                 start_marker="test_start",
@@ -320,7 +357,13 @@ class TestParquetFileWriterWriteDataframe:
             mock_write_table.assert_called()
             call_args = mock_write_table.call_args
             file_path = call_args[0][1]  # Second positional arg is the file path
-            assert "chunk-" in str(file_path) and ".parquet" in str(file_path)
+            # Mapped back through the per-file staging directory before the
+            # name is read: the chunk is written to
+            # `<dir>/.sdk-partial/<name>.<token>` and renamed onto `<dir>/<name>`
+            # once the write succeeds (FND-318). The generated name is what this
+            # test is about, and it is unchanged.
+            assert "chunk-" in _published_name(file_path)
+            assert _published_name(file_path).endswith(".parquet")
 
     @pytest.mark.asyncio
     async def test_write_error_handling(
@@ -668,16 +711,21 @@ class TestParquetFileWriterConsolidation:
             typename="test_type",
         )
 
-        # Test temp folder path generation
+        # Test temp folder path generation. The accumulation tree hangs off the
+        # writer's own token-named staging root, so no two writers can share an
+        # accumulation directory (FND-315) and nothing left there by a
+        # cancelled attempt sits inside the output directory (FND-317).
         temp_path = parquet_output._get_temp_folder_path(0)
         expected_path = os.path.join(
-            base_output_path,
-            "test_suffix",
-            "test_type",
+            parquet_output._scratch_root,
             "temp_accumulation",
             "folder-0",
         )
         assert temp_path == expected_path
+        assert parquet_output._scratch_root.startswith(
+            os.path.join(base_output_path, "test_suffix", ".sdk-writer-staging")
+            + os.sep
+        )
 
     def test_consolidated_file_path_generation(self, base_output_path: str):
         """Test consolidated file path generation."""
@@ -686,14 +734,17 @@ class TestParquetFileWriterConsolidation:
             typename="test_type",
         )
 
-        # Test consolidated file path generation
+        # A consolidated file carries its published name from the moment it is
+        # written; only the directory is private until close() publishes it.
         consolidated_path = parquet_output._get_consolidated_file_path(
             folder_index=0, chunk_part=0
         )
-        expected_path = os.path.join(
+        assert consolidated_path == os.path.join(
+            parquet_output._write_root, "chunk-0-part0.parquet"
+        )
+        assert parquet_output._published_path(consolidated_path) == os.path.join(
             base_output_path, "test_suffix", "test_type", "chunk-0-part0.parquet"
         )
-        assert consolidated_path == expected_path
 
     def test_start_new_temp_folder(self, base_output_path: str):
         """Test starting a new temp folder."""
@@ -1048,7 +1099,7 @@ class TestParquetFileWriterConsolidation:
         assert parquet_output.total_record_count == 600
         assert parquet_output.chunk_count >= 1
 
-        temp_base = os.path.join(parquet_output.path, "temp_accumulation")
+        temp_base = parquet_output._get_temp_base_path()
         assert not os.path.exists(temp_base) or not os.listdir(temp_base)
 
     @pytest.mark.asyncio
@@ -1211,24 +1262,55 @@ class TestWriteChunkNullColumns:
         assert combined.column("extra").to_pylist() == [None, None, 10, 18]
 
     async def test_write_chunk_offloaded_to_thread(self, tmp_path) -> None:
-        """pq.write_table() must not run inline on the event loop.
+        """Chunk conversion and the disk write must not run on the event loop.
 
-        A large chunk's disk write can take long enough to stall every other
-        coroutine — including the enclosing @task's auto-heartbeat — for the
-        write's full duration.
+        A large chunk's Arrow conversion plus disk write can take long enough
+        to stall every other coroutine — including the enclosing @task's
+        auto-heartbeat — for the operation's full duration (ADR-0010).
+
+        Asserts the thread the work actually lands on rather than which
+        callable was handed to run_in_thread, so the guarantee survives the
+        blocking section being regrouped.
         """
         df = pd.DataFrame({"a": [1, 2, 3], "b": ["x", "y", "z"]})
         file_name = str(tmp_path / "offloaded.parquet")
         writer = ParquetFileWriter(str(tmp_path / "output"))
 
-        with patch(
-            "application_sdk.storage.formats.parquet.run_in_thread",
-            new_callable=AsyncMock,
-            side_effect=lambda func, *a, **kw: func(*a, **kw),
-        ) as mock_offload:
-            await writer._write_chunk(df, file_name)
+        loop_thread = threading.current_thread().name
+        write_thread: list[str] = []
+        real_write_table = pq.write_table
 
-        assert mock_offload.await_args_list, "pq.write_table was not offloaded"
-        assert mock_offload.await_args_list[0].args[0] is pq.write_table
+        def _slow_write_table(*args, **kwargs):
+            write_thread.append(threading.current_thread().name)
+            # Stand in for a large chunk's write cost, so a regression that
+            # puts this back on the loop actually stalls the ticker below.
+            time.sleep(0.3)
+            return real_write_table(*args, **kwargs)
+
+        ticks = 0
+
+        async def _ticker() -> None:
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.01)
+                ticks += 1
+
+        with patch("pyarrow.parquet.write_table", side_effect=_slow_write_table):
+            ticker = asyncio.create_task(_ticker())
+            try:
+                await writer._write_chunk(df, file_name)
+            finally:
+                ticker.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await ticker
+
+        assert write_thread, "pq.write_table was never called"
+        assert write_thread[0] != loop_thread, "the write ran on the event loop"
+        assert write_thread[0].startswith(
+            "sdk-blocking-"
+        ), f"the write ran on {write_thread[0]}, not the SDK blocking pool"
+        # The loop kept running coroutines for the whole write — which is what
+        # lets the enclosing @task's auto-heartbeat keep beating.
+        assert ticks >= 5, f"event loop stalled during the write ({ticks} ticks)"
         table = pq.read_table(file_name)
         assert table.num_rows == 3

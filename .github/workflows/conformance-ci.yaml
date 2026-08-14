@@ -60,9 +60,9 @@ jobs:
 
       - name: "Set up uv"
         if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push'
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.3"
+          version: "0.12.4"
 
       - name: "Run C-series checks (published package)"
         if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push') && inputs.conformance-ref == ''
@@ -82,12 +82,30 @@ jobs:
             --series C \
             --output ci.sarif
 
+      # `upload-artifact` classifies the artifact service's finalize 403 as
+      # non-retryable and fails on the first occurrence, even though the bytes
+      # already landed and the next attempt normally succeeds. That failed the
+      # job, which failed the aggregate gate, which ejected the merge-queue
+      # entry. So: retry once, and never fail the gate on it:
+      # the series verdict is the gate; this artifact only feeds the
+      # Security tab, whose consumer already tolerates absence.
       - name: "Upload SARIF artifact"
+        id: upload-sarif
         if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push') && !cancelled()
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: conformance-ci-sarif
           path: ci.sarif
+
+      - name: "Upload SARIF artifact (retry)"
+        if: steps.upload-sarif.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-ci-sarif
+          path: ci.sarif
+          overwrite: true
 
       - name: "Strip suppressed results for Security tab"
         if: ${{ inputs.upload-sarif && inputs.event_name == 'push' }}
@@ -97,6 +115,6 @@ jobs:
 
       - name: "Upload SARIF to Security tab"
         if: ${{ inputs.upload-sarif && inputs.event_name == 'push' }}
-        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
         with:
           sarif_file: ci-upload.sarif

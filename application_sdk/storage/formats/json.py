@@ -1,10 +1,12 @@
 import os
 import warnings
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Generator
 from typing import TYPE_CHECKING, Any
 
 import orjson
 
+from application_sdk._runtime.offload import run_in_thread
+from application_sdk.common.atomic import disk_full_guard
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.common.types import DataframeType
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
@@ -200,21 +202,40 @@ class JsonFileReader(Reader):
             logger.info("Reading %d JSON files in batches", len(json_files))
 
             chunk_size = self.chunk_size or 100000
-            batch: list[dict] = []
+
             # Files must be JSONL (one JSON object per line). Multi-line JSON
             # arrays are not supported and will raise orjson.JSONDecodeError.
-            for json_file in json_files:
-                with open(json_file, "rb") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        batch.append(orjson.loads(line))
-                        if len(batch) >= chunk_size:
-                            yield pd.DataFrame(batch)
-                            batch = []
-            if batch:
-                yield pd.DataFrame(batch)
+            def _iter_batches() -> Generator[list[dict], None, None]:
+                batch: list[dict] = []
+                for json_file in json_files:
+                    with open(json_file, "rb") as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            batch.append(orjson.loads(line))
+                            if len(batch) >= chunk_size:
+                                yield batch
+                                batch = []
+                if batch:
+                    yield batch
+
+            batches = _iter_batches()
+
+            def _next_frame() -> "pd.DataFrame | None":
+                records = next(batches, None)
+                return None if records is None else pd.DataFrame(records)
+
+            # Offloaded per batch: filling one batch is a tight loop of blocking
+            # reads and orjson parses that does not yield until chunk_size
+            # records are in hand — at the 100k default that is well past the
+            # heartbeat interval, so inline it starves the auto-heartbeat and
+            # gets a healthy activity killed (ADR-0010).
+            while True:
+                frame = await run_in_thread(_next_frame)
+                if frame is None:
+                    break
+                yield frame
         # An already-typed AppError carries its own category/audience/evidence
         # (e.g. ObjectStoreReadError -> DEPENDENCY_UNAVAILABLE + the searched
         # prefix). Re-wrapping it as FormatReadError would downgrade that to
@@ -247,14 +268,21 @@ class JsonFileReader(Reader):
             # All records are accumulated in memory before building the
             # DataFrame. Suitable only for small datasets (≲ a few hundred MB).
             # For large inputs, use read_batches() to stay bounded.
-            all_records: list[dict] = []
-            for json_file in json_files:
-                with open(json_file, "rb") as f:
-                    for line in f:
-                        line = line.strip()
-                        if line:
-                            all_records.append(orjson.loads(line))
-            return pd.DataFrame(all_records)
+            def _read_all() -> "pd.DataFrame":
+                all_records: list[dict] = []
+                for json_file in json_files:
+                    with open(json_file, "rb") as f:
+                        for line in f:
+                            line = line.strip()
+                            if line:
+                                all_records.append(orjson.loads(line))
+                return pd.DataFrame(all_records)
+
+            # Offloaded as one hop: this reads and parses every record in the
+            # prefix before it returns, with no await in between. Inline it
+            # holds the event loop — and the auto-heartbeat — for that whole
+            # span (ADR-0010).
+            return await run_in_thread(_read_all)
         # See _get_batched_dataframe: preserve an already-typed AppError.
         except AppError:
             raise
@@ -394,7 +422,19 @@ class JsonFileWriter(Writer):
             self.chunk_count = self.chunk_start + self.chunk_count
 
     async def _write_chunk(self, chunk: "pd.DataFrame", file_name: str):
-        """Write a chunk to a JSON file using orjson."""
+        """Write a chunk to a JSON file using orjson.
+
+        Not an atomic write, unlike the SDK's other artifact writers (FND-318):
+        successive calls *append* to the same chunk file, and an append cannot
+        be staged-and-renamed without rewriting everything already in the file
+        on every call. What it does get is :func:`disk_full_guard` around a
+        flushed and fsync'd write, so running out of disk here is a typed
+        ``DiskFullError`` naming this file and this step rather than a bare
+        ``OSError`` that some broad ``except`` upstream swallows — or, on a
+        delayed-allocation filesystem, no error at all. A chunk left short by
+        that failure is still short — the run fails, and the residue is bounded
+        by the writer's staging (FND-317) rather than by this method.
+        """
 
         def _default_serializer(obj: object) -> str:
             # pandas.Timestamp and similar datetime-like objects are not
@@ -402,15 +442,32 @@ class JsonFileWriter(Writer):
             return str(obj)
 
         mode = "ab+" if SafeFileOps.exists(file_name) else "wb"
-        with SafeFileOps.open(file_name, mode=mode) as f:
-            for record in chunk.to_dict(orient="records"):
-                f.write(
-                    orjson.dumps(
-                        record,
-                        default=_default_serializer,
-                        option=orjson.OPT_APPEND_NEWLINE,
-                    )
-                )
+
+        def _serialize_and_write() -> None:
+            with disk_full_guard(file_name, operation="json chunk write"):
+                with SafeFileOps.open(file_name, mode=mode) as f:
+                    for record in chunk.to_dict(orient="records"):
+                        f.write(
+                            orjson.dumps(
+                                record,
+                                default=_default_serializer,
+                                option=orjson.OPT_APPEND_NEWLINE,
+                            )
+                        )
+                    # Flush and fsync inside the guard, as the atomic writers
+                    # do (FND-318): on a delayed-allocation filesystem the
+                    # write() calls only dirty page cache, so without this the
+                    # ENOSPC surfaces later — or never — and a short chunk
+                    # passes as complete. This does not make the append atomic;
+                    # it makes its failure typed and attributed here.
+                    f.flush()
+                    os.fsync(f.fileno())
+
+        # Offloaded as one hop: `to_dict` materialises the whole chunk and the
+        # write loop is one blocking syscall per record. Neither yields, so
+        # inline this stalls the event loop — including the auto-heartbeat —
+        # for the chunk's full write duration (ADR-0010).
+        await run_in_thread(_serialize_and_write)
 
     async def _finalize(self) -> None:
         """Finalize the JSON writer before closing.
@@ -421,7 +478,16 @@ class JsonFileWriter(Writer):
         after its own upload.
         """
         if self.current_buffer_size_bytes > 0:
-            output_file_name = f"{self.path}/{path_gen(self.chunk_count, self.chunk_part, self.start_marker, self.end_marker, extension=self.extension)}"
+            output_file_name = os.path.join(
+                self._write_root,
+                path_gen(
+                    self.chunk_count,
+                    self.chunk_part,
+                    self.start_marker,
+                    self.end_marker,
+                    extension=self.extension,
+                ),
+            )
             await self._upload_file(output_file_name)
             self.chunk_part += 1
             if self.chunk_start is None:

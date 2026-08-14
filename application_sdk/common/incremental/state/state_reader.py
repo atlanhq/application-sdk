@@ -14,12 +14,12 @@ import shutil
 from pathlib import Path
 from typing import Tuple
 
+from application_sdk._runtime.offload import run_in_thread
 from application_sdk.common.incremental.helpers import (
     count_json_files_recursive,
     get_persistent_artifacts_path,
     get_persistent_s3_prefix,
 )
-from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.batch import download_prefix
 from application_sdk.storage.errors import StorageError
@@ -79,9 +79,13 @@ async def download_current_state(
     json_count = 0
 
     try:
+        # strip_prefix: current_state_dir already *is* the current-state
+        # directory, so the store prefix must not be repeated inside it —
+        # readers key off <current_state_dir>/table etc. (FND-340).
         await download_prefix(
             prefix=current_state_s3_prefix,
             local_dir=str(current_state_dir),
+            strip_prefix=True,
         )
 
         json_count = count_json_files_recursive(current_state_dir)

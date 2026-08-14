@@ -12,6 +12,7 @@ from application_sdk import constants
 from application_sdk.storage.batch import (
     delete_prefix,
     download_prefix,
+    list_data_keys,
     list_keys,
     upload_file_from_bytes,
     upload_prefix,
@@ -70,8 +71,10 @@ async def test_upload_retain_local_copy_false_deletes_file(store, staging):
     await upload_file("retain/ephemeral.txt", src, store, retain_local_copy=False)
     assert not src.exists(), "File should be deleted after upload"
 
-    # Verify the file was actually uploaded
-    assert await list_keys("retain", store) == ["retain/ephemeral.txt"]
+    # Verify the file was actually uploaded. list_data_keys: the upload also
+    # wrote a ``{key}.sha256`` integrity sidecar (FND-306), which is SDK
+    # bookkeeping rather than a data object.
+    assert await list_data_keys("retain", store) == ["retain/ephemeral.txt"]
 
 
 @pytest.mark.integration
@@ -142,8 +145,11 @@ async def test_list_keys_suffix_filter(store, tmp_path):
     json_keys = await list_keys("mixed", store, suffix=".json")
     assert json_keys == ["mixed/c.json"]
 
-    all_keys = await list_keys("mixed", store)
+    all_keys = await list_data_keys("mixed", store)
     assert len(all_keys) == 4
+    # The suffix filter runs against the raw listing, so it never picks up a
+    # sidecar: ``a.parquet.sha256`` does not end in ``.parquet``.
+    assert not any(k.endswith(".sha256") for k in parquet + json_keys)
 
 
 # ------------------------------------------------------------------
@@ -162,7 +168,7 @@ async def test_upload_prefix_roundtrip(store, tmp_path):
     uploaded = await upload_prefix(local_dir=src_dir, prefix="batch/run1", store=store)
     assert len(uploaded) == 5
 
-    keys = await list_keys("batch/run1", store)
+    keys = await list_data_keys("batch/run1", store)
     assert len(keys) == 5
 
     dest_dir = tmp_path / "download_dest"
@@ -190,7 +196,7 @@ async def test_upload_prefix_with_retain_local_false(store, staging):
     assert not (src_dir / "b.txt").exists()
 
     # But they should exist in the store
-    keys = await list_keys("ephemeral", store)
+    keys = await list_data_keys("ephemeral", store)
     assert len(keys) == 2
 
 
@@ -235,11 +241,14 @@ async def test_delete_prefix_removes_all(store, tmp_path):
         src.write_text(f"data-{i}")
         await upload_file(f"to-delete/file_{i}.txt", src, store)
 
-    keys_before = await list_keys("to-delete", store)
+    keys_before = await list_data_keys("to-delete", store)
     assert len(keys_before) == 3
 
+    # 6 = 3 data objects + their integrity sidecars. delete_prefix counts every
+    # object removed, and taking the sidecars with them is the point — one left
+    # behind would advertise a digest for an object that no longer exists.
     deleted = await delete_prefix("to-delete", store)
-    assert deleted == 3
+    assert deleted == 6
 
     keys_after = await list_keys("to-delete", store)
     assert keys_after == []

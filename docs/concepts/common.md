@@ -56,7 +56,9 @@ AppError  (base — application_sdk.errors)
 │   ├── DependencyUnavailableError  DEPENDENCY_UNAVAILABLE retryable=True  audience=PLATFORM
 │   ├── SourceUnavailableError   SOURCE_UNAVAILABLE        retryable=True   audience=USER
 │   ├── ResourceExhaustedError RESOURCE_EXHAUSTED         retryable=True   audience=PLATFORM
+│   │   └── DiskFullError      RESOURCE_EXHAUSTED (RESOURCE_EXHAUSTED_DISK_FULL)  retryable=True   audience=PLATFORM
 │   ├── AppTimeoutError        TIMEOUT                    retryable=True   audience=APP_OWNER
+│   │   └── TaskStalledError   TIMEOUT (TIMEOUT_TASK_STALLED)  retryable=True   audience=APP_OWNER
 │   ├── CancelledError         CANCELLED                  retryable=False  audience=APP_OWNER
 │   ├── DataIntegrityError     DATA_INTEGRITY             retryable=False  audience=APP_OWNER
 │   ├── InternalError          INTERNAL                   retryable=False  audience=APP_OWNER
@@ -73,7 +75,8 @@ AppError  (base — application_sdk.errors)
     │   └── StorageConfigError(InvalidInputError, StorageError)
     └── SecretStoreError(DependencyUnavailableError)
         ├── SecretNotFoundError(NotFoundError, SecretStoreError)
-        └── SecretStoreUnavailableError(SecretStoreError, ColdStartRaceError)
+        ├── SecretStoreUnavailableError(SecretStoreError, ColdStartRaceError)          # transient
+        └── SecretStoreUnreachableError(SecretStoreError, DaprSidecarUnreachableError)  # terminal
 ```
 
 The **categorical leaf** (listed first in the MRO) drives `category`, `audience`, and
@@ -99,6 +102,39 @@ config fetches tomorrow) just by catching this one marker, with no new per-domai
 `SecretStoreUnavailableError` above is the first concrete example: it multiply-inherits
 `SecretStoreError` (so `except SecretStoreError:` still catches it) and `ColdStartRaceError`
 (so the retry helper does too).
+
+**Terminal vs transient — `DaprSidecarUnreachableError`.** `ColdStartRaceError` means "not
+reachable *yet*, still waiting". Its terminal counterpart is
+`DaprSidecarUnreachableError(ColdStartRaceError)`, raised by `retry_past_dapr_cold_start` only
+when the whole cold-start budget elapses without one usable answer — "waited the whole budget,
+*done* waiting". It stays a `ColdStartRaceError` subtype on purpose: the same
+`except ColdStartRaceError:` sites keep catching it and its category stays `DEPENDENCY_UNAVAILABLE`
+(so preflight-gate routing and `gate_broken` are unchanged), while its distinct type name and
+`code = DEPENDENCY_UNAVAILABLE_SIDECAR_UNREACHABLE` — plus `component` / `attempts` /
+`elapsed_seconds` — let an operator tell a persistent sidecar outage from a still-booting one. Catch
+`ColdStartRaceError` to retry the race; read the concrete subtype to report the fault.
+
+The secrets domain carries both forms as a pair: `SecretStoreUnavailableError` (transient) and
+`SecretStoreUnreachableError(SecretStoreError, DaprSidecarUnreachableError)` (terminal). The
+secret-resolution catch sites re-raise the terminal one — hash-labelled and cause-free, same
+redaction as the transient — when `retry_past_dapr_cold_start` exhausts its budget, so a
+budget-exhausted outage stays distinguishable from a still-cold race end-to-end even after the raw
+`DaprSidecarUnreachableError` is redacted at the secret boundary. Both stay `SecretStoreError` (so
+`except SecretStoreError:` catches either) and `ColdStartRaceError` (so the probe aggregators route
+either); only a store that has already answered once (steady state, not first contact) surfaces the
+transient type on a later blip.
+
+### TaskStalledError — raised by the SDK, never by an app
+
+`TaskStalledError(AppTimeoutError)` is the failure the stall watchdog produces when an activity
+attempt keeps heartbeating but nothing observable advances for longer than the task's
+no-progress budget (ADR-0018). It carries `stalled_for_seconds` and `last_progress_label`, so
+the failure names *where* the attempt went quiet rather than only that it did, and it is
+**retryable**: the dominant cause is a transient source-side hang that self-heals on a fresh
+attempt. A subtype rather than a sixteenth leaf, so `except AppTimeoutError:` still catches it
+while the distinct `TIMEOUT_TASK_STALLED` code and the `TaskStalledError` Temporal wire type keep stall
+kills countable apart from `StartToClose` and heartbeat timeouts. App code should not raise it —
+raise the leaf that describes what the source actually did.
 
 ### Raise by failure shape
 
@@ -179,6 +215,27 @@ fd = e.to_failure_details()
 Tenant identity is intentionally absent from `FailureDetails`. Per-tenant attribution is
 the consumer's responsibility (e.g., the Automation Engine attaches tenant from its own
 session at ingest time).
+
+#### Evidence keys may not be secret-named
+
+`FailureDetails` refuses evidence keys that advertise a secret -- exact names
+(`password`, `token`, `secret`, `api_key`, `private_key`, `authorization`, `auth_header`,
+`cookie`) and compound suffixes (`*_password`, `*_token`, `*_secret`, so `client_secret`
+and `db_password` are rejected while `object_key` and `cache_key` pass). Construction
+raises `ValidationError`, so a leaf that declares such a dataclass field cannot serialise
+at all:
+
+```python
+from application_sdk.errors.wire import secret_named_evidence_keys
+
+# Ask before you build — the rejection names no keys you can act on.
+bad = secret_named_evidence_keys({"host": "db.internal", "api_key": "…"})
+# frozenset({'api_key'})
+```
+
+The denylist is a name check, not a value check: it cannot see a credential sitting in an
+innocently-named key, or nested inside a dict or list value. Redact values yourself with
+`redact_secrets` before attaching them as evidence.
 
 ### Legacy error-code namespaces (backward-compat only)
 

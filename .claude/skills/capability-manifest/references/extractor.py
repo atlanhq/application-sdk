@@ -187,6 +187,9 @@ def _render_signature(obj: Any) -> str:
     griffe's .signature() already includes the function name, e.g.:
       task(func: F | None = None, ...) -> F | Callable[[F], F]
     We use it directly; no extra name prefix.
+
+    Truncation preserves the keyword-only marker ``*`` and any ``secrets``
+    parameter so security-relevant kwargs stay visible in the manifest.
     """
     try:
         if hasattr(obj, "signature") and callable(obj.signature):
@@ -217,7 +220,26 @@ def _render_signature(obj: Any) -> str:
         if "," in args_part
         else args_part.split(")")[0].strip()
     )
-    return fn_name + "(" + first_arg + ", ...)"
+    # Keep the keyword-only marker and the secrets kwarg visible when truncating:
+    # callers reading the manifest need to see that the function takes
+    # keyword-only args and accepts a secret map.
+    extras: list[str] = []
+    if "," in args_part and ("*," in args_part or args_part.lstrip().startswith("*")):
+        extras.append("*")
+    if "secrets:" in args_part:
+        secrets_arg = next(
+            (
+                a.strip()
+                for a in args_part.split(",")
+                if a.strip().startswith("secrets:")
+            ),
+            None,
+        )
+        if secrets_arg:
+            # Strip any trailing close-paren(s) captured when secrets is the last arg.
+            extras.append(secrets_arg.rstrip(")"))
+    suffix = (", " + ", ".join(extras)) if extras else ""
+    return fn_name + "(" + first_arg + suffix + ", ...)"
 
 
 def _render_class_signature(cls_obj: Any) -> str:

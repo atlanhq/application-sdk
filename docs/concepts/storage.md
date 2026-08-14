@@ -78,6 +78,35 @@ found = await exists("artifacts/my-app/output.json")
 keys = await list_keys("artifacts/my-app/")  # returns list[str]
 ```
 
+`delete_prefix(prefix)` removes every object under a prefix and returns the
+number of objects this call actually removed. A key that vanishes between the
+listing and the delete — a concurrent writer removed it first — is benign (the
+desired end state is already true for it): it is logged as a warning naming the
+prefix and excluded from the returned count rather than failing the caller.
+Every other deletion error still raises `StorageError`.
+
+### Prefix downloads
+
+`download_prefix` writes one of two layouts, and picking the wrong one is
+silent — the bytes arrive, just not where the reader looks:
+
+```python
+from application_sdk.storage import download_prefix
+
+# Default: the full store path is preserved under local_dir.
+# key "artifacts/run/transformed/table/a.json" → "<out>/artifacts/run/transformed/table/a.json"
+await download_prefix("artifacts/run/transformed", "<out>")
+
+# strip_prefix=True: only the tree *under* the prefix lands in local_dir.
+# key "artifacts/run/transformed/table/a.json" → "<out>/table/a.json"
+await download_prefix("artifacts/run/transformed", "<out>", strip_prefix=True)
+```
+
+Use `strip_prefix=True` whenever `local_dir` already names the same directory as
+the prefix (the usual shape when recovering a run's `transformed/` or
+`current-state/` tree), otherwise the prefix appears twice and a reader keyed on
+a fixed subpath such as `<out>/table` finds nothing.
+
 ---
 
 ## FileReference
@@ -188,6 +217,117 @@ Both are called automatically by the default `on_complete()` implementation. Do 
 | `ATLAN_STORAGE_PROGRESS_LOG_INTERVAL_SECONDS` | `30` | Heartbeat log interval during long transfers (`0` disables) |
 | `ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES` | `8388608` (8 MiB) | Multipart part size for uploads. Raise it when the destination makes part *count* expensive (e.g. an S3 proxy fronting GCS, which emulates multipart with 32-source-capped `compose` round trips) |
 | `ATLAN_STORAGE_UPLOAD_MAX_CONCURRENCY` | `12` | Parts uploaded concurrently. Peak upload memory is roughly part size times this — lower it alongside a larger part size to hold memory steady |
+| `ATLAN_STORAGE_VERIFY_TRANSFERS` | `true` | Validate every transfer's bytes (see [Transfer integrity](#transfer-integrity)) |
+| `ATLAN_STORAGE_WRITE_SIDECARS` | `true` | Emit the `{key}.sha256` sidecar that downstream verification reads |
+
+---
+
+## Transfer integrity
+
+A producing app that dies part-way through a write — the motivating case was
+`ENOSPC` during a state carry-forward — leaves a *truncated* artifact in the
+object store and still reports success. The consuming app then downloads that
+file on every retry and fails inside its parser (`Malformed JSON … unexpected
+end of data`), burning the whole retry budget on a deterministically corrupt
+input and attributing the failure to the consumer instead of the producer.
+
+The SDK closes that loop at the byte layer both apps share, so every transfer
+path is covered by the same checks rather than each caller rolling its own:
+
+**On upload** (`upload_file`, and therefore `App.upload`, `FileReference`
+persist, `upload_prefix`, and the writer chunk uploads):
+
+1. the local file must not shrink between the opening `stat` and the read
+   reaching EOF — a file truncated under the reader would put a prefix of the
+   intended artifact in the store (`StorageIntegrityError`);
+2. a HEAD after the writer closes must report the byte count that was sent —
+   this is what catches a backend silently dropping the object (`StorageError`,
+   retryable);
+3. the SHA-256 computed during the upload pass is written to `{key}.sha256`.
+
+**On download** (`download_file` / `download_file_chunked`, and therefore
+`App.download`, `FileReference` materialize, `download_prefix`, and the
+incremental-state fetches):
+
+1. the bytes written to disk must match the size the store declared for the
+   object — a shortfall is a truncated transfer (`StorageError`, retryable);
+2. when `{key}.sha256` exists, the content must hash to it. A mismatch means
+   the stored object is corrupt at source and raises `StorageIntegrityError` —
+   **non-retryable**, naming the key and both digests, because a byte-stable
+   corrupt file fails identically on every attempt.
+
+Sidecars are SDK bookkeeping, never data: every listing helper
+(`list_data_keys`, `list_data_objects`, …) excludes them, and `download_prefix`
+consumes rather than mirrors them, so a directory handed to a reader that globs
+it never contains files the producer did not write.
+
+Objects written before this protocol existed, or by a non-SDK producer, simply
+have no sidecar; those downloads keep the size check and skip the digest check.
+
+### What this does not prove
+
+The sidecar attests to **the bytes the SDK read at upload time**, not to the
+artifact being semantically complete. A producer that wrote a truncated file to
+disk and *then* uploaded it gets a sidecar recording the truncated content as
+the expected digest, and every downstream check passes — exactly the intended
+bytes moved, as far as the transfer layer can tell.
+
+Closing that half is [atomic artifact writes](#atomic-artifact-writes) below.
+What the transfer layer buys on top of it is narrower, and still worth having:
+a file truncated *while the upload reads it* is caught; any corruption after a
+good upload is caught on the next download rather than surfacing as a parser
+error; and the failure is attributed to the artifact and its producing key
+instead of to whichever consumer opened it.
+
+---
+
+## Atomic artifact writes
+
+Every SDK writer that produces an app artifact writes it **atomically**: the
+bytes go to a staging file, are flushed to the filesystem, and are renamed onto
+the artifact's path in one step. The artifact's final path therefore either does
+not exist or holds a complete file. A partial artifact is *unnameable*.
+
+That matters because a truncated file at an artifact's real name is
+indistinguishable from a correct one. It gets carried forward, uploaded, and
+integrity-checked against its own truncated bytes, and the failure surfaces much
+later inside a consuming app's parser — at a byte offset that is identical on
+every retry, which is what makes it look like a consumer bug.
+
+Covered writers: the incremental carry-forward state copy, the incremental
+marker, incremental diff metadata, writer chunk output and its statistics
+sidecar, and the local `.sha256` sidecar. `JsonFileWriter` chunks are the one
+exception — successive calls append to the same file, and an append cannot be
+staged and renamed without rewriting it — so those get the typed error below
+without the atomicity.
+
+Staging lives in a `.sdk-partial/` directory beside the artifact rather than as
+a `.tmp` suffix next to it, so it is never picked up by a directory listing, a
+directory `FileReference`, or a prefix upload. `safe_list_directory` and
+`upload_prefix` read one shared definition of what to skip.
+
+An app that opens its own file handle bypasses all of this. The guarantee covers
+the writers the SDK owns, which is where app artifacts actually come from.
+
+### Running out of disk
+
+A write that fails for lack of space raises `DiskFullError` — a
+`ResourceExhaustedError` leaf naming the path, the step, the bytes needed, and
+the bytes free. A bare `OSError` is what this replaces: it carries no category,
+so it lands in whatever broad `except` is in the call stack and the run reports
+some unrelated downstream symptom instead.
+
+**This error is the signal that a deployment needs more ephemeral storage.**
+Requests and limits are deployment configuration and are deliberately not
+requested from the SDK or from app code — neither can know the number. The error
+tells the operator which deployment to raise and roughly by how much.
+
+Before a large write whose size is known up front, the SDK checks free space
+first, so a plainly undersized volume fails in seconds with `needs ~N GiB, has
+M` rather than corrupting output forty minutes in. The check is strict — free
+space is not padded with an invented margin — so it catches the impossible write,
+not the marginal one; a marginal write that still runs out is caught during the
+write and reported identically.
 
 ---
 

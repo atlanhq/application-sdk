@@ -20,9 +20,24 @@ The receiver's own grouping expression is deliberately not modelled here. It
 lives in another repo and moves independently; see
 ``docs/standards/connector-ci-e2e.md`` for the contract.
 
+Re-keying a retry
+-----------------
+``--attempt N`` (N > 1) validates the payload and then prints it back with
+``distinct_id`` suffixed ``-attemptN``, for e2e-apps' retry of a dispatched run
+that failed transiently.
+
+A retry MUST NOT reuse the first attempt's ``distinct_id``. The receiver echoes
+it into a step name purely so return-dispatch can locate the run by scanning
+step names, and keys a ``cancel-in-progress: true`` concurrency group on it. Reuse
+therefore breaks the retry twice over: return-dispatch can match the *first*,
+already-concluded run and re-report its failure, and the receiver may cancel one
+attempt in favour of the other. Either way the retry burns ten minutes and
+changes nothing — a retry that silently cannot succeed is worse than no retry.
+
 Usage::
 
     python validate_dispatch_inputs.py --workflow-inputs "$WORKFLOW_INPUTS"
+    python validate_dispatch_inputs.py --workflow-inputs "$WORKFLOW_INPUTS" --attempt 2
 """
 
 from __future__ import annotations
@@ -71,6 +86,21 @@ def validate(raw: str, required_keys: tuple[str, ...] = REQUIRED_KEYS) -> None:
         )
 
 
+def rekey_for_attempt(raw: str, attempt: int) -> str:
+    """Return ``raw`` with ``distinct_id`` suffixed for a retry attempt.
+
+    ``attempt <= 1`` returns the payload unchanged, so the first dispatch keeps
+    the caller's SHA verbatim and only a genuine retry diverges. The payload is
+    validated first: re-keying a payload with no ``distinct_id`` would invent a
+    correlation key ("-attempt2") that correlates nothing.
+    """
+    validate(raw)
+    payload = json.loads(raw)
+    if attempt > 1:
+        payload["distinct_id"] = f"{payload['distinct_id']}-attempt{attempt}"
+    return json.dumps(payload)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -78,12 +108,21 @@ def main() -> int:
         required=True,
         help="The literal workflow-inputs JSON object passed to the dispatch.",
     )
+    parser.add_argument(
+        "--attempt",
+        type=int,
+        default=1,
+        help="Dispatch attempt number. >1 prints the payload back with distinct_id "
+        "suffixed so the retry cannot collide with the first attempt's run.",
+    )
     args = parser.parse_args()
     try:
-        validate(args.workflow_inputs)
+        rekeyed = rekey_for_attempt(args.workflow_inputs, args.attempt)
     except DispatchInputsError as exc:
         print(f"::error::{exc}", file=sys.stderr)
         return 1
+    if args.attempt > 1:
+        print(rekeyed)
     return 0
 
 
