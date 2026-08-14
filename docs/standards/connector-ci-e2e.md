@@ -229,9 +229,15 @@ mechanism exists to remove.
 after tenant resolution and before it publishes anything — it does not skip the
 install. Skipping would leave the job green having done nothing, the tenant on
 whatever version it was already running, and every leg reding on its own version
-check instead: one confusing failure per leg in place of one clear failure. Since
-`install-app-to-tenant` is opt-in, a caller that has opted in without a
-`tenant_id` is misconfigured rather than on a supported path.
+check instead: one confusing failure per leg in place of one clear failure. A
+caller on the install path without a `tenant_id` is misconfigured rather than on a
+supported path.
+
+Since FND-203 fails the install path at discovery when no tenant matrix is shared
+at all, the way to reach this step is `e2e_clouds: none` on a dispatch: that
+resolves the single legacy tenant, which has no matrix entry to carry a
+`tenant_id`. Use the `E2E Tenant Install` workflow's `tenant_id` input for that
+one-off case, or set `install-app-to-tenant: false`.
 
 Each entry may also carry `"deployment_name"` when that tenant's system apps
 (publish / quality / lineage) are not registered under `production`. It reaches
@@ -334,7 +340,35 @@ side benefit.
 > is what executes (`processAutomationEngineWorkflow`); the harness's local
 > `manifest_path` seed DAG establishes the workflow record, not the graph. So the
 > DAG contract a full-DAG e2e exercises is whatever version is installed on that
-> tenant. Until FND-31 lands, that is whatever was last hand-deployed there.
+> tenant. With `install-app-to-tenant: false`, that is whatever was last
+> hand-deployed there.
+
+### Adoption: on by default (FND-128)
+
+`install-app-to-tenant` defaults to **true**. No app repo has to opt in, and none
+should need a PR to get the behaviour.
+
+It shipped opt-in under FND-31 for one reason: the install cannot resolve a tenant
+without `E2E_TENANT_MATRIX_JSON`, and that secret was shared with a handful of
+repos. Once it went org-wide, the opt-in stopped protecting anything and started
+costing something — an un-adopted repo still fanned out across every cloud in the
+matrix (the fan-out is gated on the secret, not on this input) and each leg tested
+whatever version that cloud's tenant already served. Three legs of wrong-version
+green in place of one.
+
+**Opting out.** Set `install-app-to-tenant: false` in the app's `tests.yaml` when
+the app genuinely cannot be installed onto the e2e tenants — not published to GM,
+or a tenant carrying an orphan that fails every install (FND-131). Every job on
+the install path is gated on the input, so opting out restores the previous
+behaviour exactly: per-leg builds, no lease, no install, legs against whatever the
+tenant runs. It reinstates the wrong-version risk along with it, so fixing the
+tenant is the better move where there is a choice.
+
+**What a first run tells you.** The install path is a hygiene report for that app's
+footprint on each tenant. `prepare-tenant` names offending images in its log, so a
+dirty tenant produces a precise cleanup list rather than a blanket "install
+failed". Expect the FND-131 shapes: an unpullable orphan, an `Evicted` straggler,
+a TWD version skew.
 
 ### Multi-arch on the install path
 

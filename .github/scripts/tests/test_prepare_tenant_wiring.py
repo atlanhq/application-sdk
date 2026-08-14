@@ -44,27 +44,41 @@ def jobs(workflow: dict) -> dict:  # type: ignore[type-arg]
     return workflow["jobs"]
 
 
-# ── Opt-in, so unadopted repos are untouched ─────────────────────────────────
+# ── On by default, with a working opt-out ────────────────────────────────────
 
 
-def test_install_is_off_by_default(workflow: dict) -> None:  # type: ignore[type-arg]
-    # Turning this on makes tenant health a gate. 25+ repos consume this
-    # workflow; it must not switch on under them.
+def test_install_is_on_by_default(workflow: dict) -> None:  # type: ignore[type-arg]
+    # Flipped by FND-128. This assertion was `is False`, guarding the opposite
+    # property: the install could not resolve a tenant without
+    # E2E_TENANT_MATRIX_JSON, which was shared with a handful of repos, so
+    # switching it on under the fleet would have reded every e2e leg.
+    #
+    # The secret is now org-wide, which removed that prerequisite and left the
+    # opt-in doing harm instead: an un-adopted repo still fanned out across every
+    # cloud in the matrix and tested whatever version each tenant already served.
+    #
+    # Kept as an assertion rather than deleted, pointing the other way: a silent
+    # revert to opt-in would restore three-clouds-of-wrong-version green, which
+    # no other test in this file would notice.
     #
     # `workflow[True]`: YAML 1.1 resolves the bare key `on` to the boolean true,
     # so safe_load never yields the string "on". Both spellings are accepted here
     # so the guard survives a future quoted `"on":`.
     triggers = workflow.get("on", workflow.get(True))
     spec = triggers["workflow_call"]["inputs"]["install-app-to-tenant"]
-    assert spec["default"] is False
+    assert spec["default"] is True
     assert spec["type"] == "boolean"
 
 
 @pytest.mark.parametrize("job", ["build-e2e-image", "lease-tenant", "prepare-tenant"])
 def test_new_jobs_are_gated_on_the_input(jobs: dict, job: str) -> None:  # type: ignore[type-arg]
+    # Still gated, and it matters more now that the default is on: the gate is
+    # what makes `install-app-to-tenant: false` a real opt-out for an app that
+    # cannot be installed onto the e2e tenants, rather than a flag that reds the
+    # run anyway.
     assert "inputs.install-app-to-tenant" in jobs[job]["if"], (
-        f"{job} must not run when install-app-to-tenant is off — otherwise every "
-        "existing caller pays for a build and an install it did not ask for"
+        f"{job} must not run when install-app-to-tenant is off — otherwise a repo "
+        "that opted out still pays for a build and an install it declined"
     )
 
 
