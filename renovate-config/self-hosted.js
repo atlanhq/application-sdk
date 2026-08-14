@@ -55,23 +55,34 @@ module.exports = {
   // match is skipped with a log line and nothing else, so the failure is silent
   // — .github/scripts/check_renovate_allowed_commands.py guards the pairing.
   //
-  // A `uv lock --exclude-newer` entry briefly lived in this list (FND-367), to
-  // enforce a 7-day dependency cooldown on the lock-refresh lane. It is gone, and
-  // nothing should replace it. Two reasons, in increasing order of importance.
+  // The release-age driver: applies the org §5 cooldown to the lock-refresh lane
+  // by re-resolving under `--exclude-newer` and then stripping uv's `[options]`
+  // block, so the lock's CONTENT is bounded while its recorded resolver settings
+  // stay default and `uv sync --locked` still validates downstream. See the
+  // lockFileMaintenance description in default.json for why the bound lives in
+  // this command rather than in every repo's pyproject.toml.
   //
-  // Mechanically, this list is a bad home for a security control: a command the
-  // allowlist does not match is skipped with a log line and nothing else, so when
-  // a config-resolution race meant the entry was not yet live, the lock refreshed
-  // unbounded and pulled a package published three minutes earlier — with no red
+  // An earlier `uv lock --exclude-newer` entry here (FND-367) was reverted, and
+  // the reason is worth keeping in view rather than repeating: a command this
+  // allowlist does not match is skipped with a log line and nothing else. When a
+  // config-resolution race meant that entry was not yet live, the lock refreshed
+  // unbounded and pulled a package published three minutes earlier, with no red
   // check anywhere to show for it. A control whose failure mode is silent is not
-  // a control.
-  //
-  // Substantively, the cooldown itself was dropped fleet-wide. This fleet fixes
-  // vulnerabilities by keeping dependencies continuously current, so any
-  // release-age bound on this lane is a delay on every security fix — paid in
-  // exchange for a supply-chain window that no plausible duration meaningfully
-  // closes. See the lockFileMaintenance description in default.json.
+  // a control. Two things now stand behind this pairing: the preset sets
+  // statusCheckWhen.artifactError=always so a skipped/failed task publishes a red
+  // renovate/artifacts context, and renovate-auto-approve-reusable.yml withholds
+  // the atlan-ci approval unless that context is green — so a silently unbounded
+  // lock cannot auto-merge. .github/scripts/check_renovate_allowed_commands.py
+  // asserts the preset↔allowlist pairing in CI so the drift is caught earlier
+  // still. Keep the regex in step with the preset's command string, exactly.
   allowedCommands: [
     "^renovate-pkl-sync --contract-dir contract --regenerate (true|false) --no-commit$",
+    // Fully literal, deliberately: the window and the exempt set are policy, so
+    // changing either must edit this file as well as the preset, and the guard
+    // test fails until both agree. Avoid character classes and backslashes in
+    // these entries — a `]` truncates the allowlist the guard parses, and a
+    // backslash means something different to the JS string literal than to the
+    // regex ("\d" is just "d" in JS, silently breaking the pattern at runtime).
+    "^renovate-uv-lock-bounded --window P7D --exempt atlan-application-sdk --exempt atlan-application-sdk-conformance --exempt pyatlan$",
   ],
 };

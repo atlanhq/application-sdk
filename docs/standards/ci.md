@@ -168,6 +168,41 @@ it, or kept out of that file in the first place.
 `export_extra_env.py` and `test_export_extra_env.py` are the worked example,
 including a static check that every call site masks before it writes.
 
+## Renovate post-upgrade commands
+
+Two run today, both installed as bare PATH commands by `.github/workflows/renovate.yaml`
+and both declared in `renovate-config/default.json`:
+
+| command | lane | what it does |
+|---|---|---|
+| `renovate-pkl-sync` | `app-contract-toolkit` | re-resolves the Pkl lock and regenerates contract artifacts |
+| `renovate-uv-lock-bounded` | `lockFileMaintenance` | re-resolves `uv.lock` under the org §5 release-age bound, then strips uv's `[options]` block |
+
+Three rules apply to any command added here.
+
+**No `${VARS}`.** Renovate does not shell-expand post-upgrade commands, so a
+variable is passed through literally. Everything the command needs must be a
+literal argument.
+
+**Every command needs a matching regex in `allowedCommands`** in
+`renovate-config/self-hosted.js` — an admin-only option, which is why the fleet
+runs a self-hosted runner at all. A command the allowlist does not match is
+**skipped with a log line and nothing else**, so the drift is invisible exactly
+when it matters: in FND-367 a bound that was not yet allowlisted meant the lock
+refreshed unbounded and took a package published three minutes earlier, with
+nothing red anywhere. `.github/scripts/check_renovate_allowed_commands.py`
+asserts the preset↔allowlist pairing in CI for that reason. Keep allowlist
+entries free of character classes and backslashes: a `]` truncates the array the
+guard parses, and `"\d"` in a JS string literal is just `"d"`.
+
+**Anything that writes a lockfile must leave it valid for every consumer.** uv
+records its resolver settings into `uv.lock` under `[options]`, and every
+`uv sync --locked` compares its own settings against that block — so a bound
+applied at lock time and left recorded makes the lock unusable in the app
+Dockerfiles. That is what reddened `scan / Build Image` fleet-wide in #3212. The
+bounded driver strips the block; if you add another lock-writing command, check
+what it records.
+
 ## Reusing scripts from a reusable workflow
 
 A `uses:` reusable workflow does **not** bring its own repo's files into the
