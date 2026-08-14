@@ -60,7 +60,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "flags any managed file that is missing or whose content has diverged "
             "from what `bootstrap` would write. Re-run `bootstrap` to re-sync; "
             "structural drift is flagged while intentional per-repo value choices "
-            "(e.g. `package_name`, `unit_tests_workflow_file`) are preserved."
+            "(e.g. `package_name`, `unit_tests_workflow_file`) are preserved. "
+            "The exceptions are `tests.yaml` and `renovate.json`, write-if-absent "
+            "scaffolds a bare re-run never rewrites — pass `--resync` to pull their "
+            "structure forward, which likewise preserves each file's recognized "
+            "per-repo values (tests.yaml's app-name, app-image-name, enable-e2e "
+            "and services-script; renovate.json's auto-merge mode)."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/ci.md#c002",
     ),

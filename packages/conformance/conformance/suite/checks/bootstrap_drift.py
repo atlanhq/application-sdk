@@ -15,17 +15,18 @@ package_name, etc.) are not flagged as drift — only structural changes are cau
 1. **Managed shims** (``MANAGED_WORKFLOWS`` — 14 files): always-overwrite.
    Absent or drifted → WARN finding; run bootstrap to re-sync (re-runs overwrite).
 
-2. **tests.yaml**: write-if-absent scaffold.  Bootstrap creates it once and
-   never clobbers customisations.  Drift is also tracked at WARN, never BLOCK.
-   Remediation: *delete tests.yaml* then re-run bootstrap to regenerate from
-   canonical.
+2. **tests.yaml / renovate.json**: write-if-absent scaffolds.  Bootstrap
+   creates each once and never clobbers customisations.  Drift is also tracked
+   at WARN, never BLOCK.  Remediation: re-run bootstrap with ``--resync``,
+   which re-renders them from the canonical while reusing the same values
+   extracted here — so the structural catch-up lands and the per-repo choices
+   survive.
 
 Remediation: run ``atlan-application-sdk-conformance bootstrap`` to re-sync.
 """
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 from conformance.bootstrap.extract import (
@@ -33,7 +34,9 @@ from conformance.bootstrap.extract import (
     extract_apt_packages,
     extract_field,
     extract_renovate_automerge,
+    extract_tests_yaml_params,
     resolve_renovate_fallback_exit_zero,
+    strip_action_pins,
 )
 from conformance.bootstrap.render import MANAGED_ACTION_FILES, MANAGED_WORKFLOWS, render
 from conformance.suite.checks._ast_common import safe_read_text
@@ -50,16 +53,6 @@ _CLI_CMD = "atlan-application-sdk-conformance bootstrap"
 # Write-if-absent scaffolds tracked alongside managed shims (WARN-only drift).
 _TESTS_WORKFLOW = "tests.yaml"
 _RENOVATE_JSON = "renovate.json"
-
-# Matches a pinned SHA (40 lowercase hex chars) and its optional trailing version
-# comment so automated pin bumps (Renovate/Dependabot) are not flagged as drift.
-# Example: "@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3" → "@<pinned>"
-_ACTION_PIN_RE = re.compile(r"@[0-9a-f]{40}(?:[ \t]+#[^\n]*)?")
-
-
-def _strip_action_pins(text: str) -> str:
-    return _ACTION_PIN_RE.sub("@<pinned>", text)
-
 
 # ---------------------------------------------------------------------------
 # Managed-shim param extractors
@@ -105,39 +98,6 @@ def _extract_exit_zero(text: str, root: Path) -> str:
     except (OSError, UnicodeDecodeError):
         return "false"
     return resolve_renovate_fallback_exit_zero(renovate_text)
-
-
-# ---------------------------------------------------------------------------
-# tests.yaml param extractors
-# ---------------------------------------------------------------------------
-
-_APP_NAME_RE = re.compile(r'app-name:\s+"([^"]+)"')
-_APP_IMAGE_NAME_RE = re.compile(r'app-image-name:\s+"([^"]+)"')
-_ENABLE_E2E_RE = re.compile(r"enable-e2e:\s+(true|false)")
-# Matches an *uncommented* services-script line (quoted value) in the with: block.
-_SERVICES_SCRIPT_RE = re.compile(r'^\s+services-script:\s+"([^"]+)"$', re.MULTILINE)
-
-
-def _extract_tests_yaml_params(text: str) -> dict[str, str]:
-    """Extract the per-repo customised values from a scaffolded tests.yaml.
-
-    Returns only the keys that were found; callers should pass these as kwargs
-    to ``render("tests.yaml", ...)`` so defaults apply for any that are absent.
-    """
-    params: dict[str, str] = {}
-    m = _APP_NAME_RE.search(text)
-    if m:
-        params["app_name"] = m.group(1)
-    m = _APP_IMAGE_NAME_RE.search(text)
-    if m:
-        params["app_image_name"] = m.group(1)
-    m = _ENABLE_E2E_RE.search(text)
-    if m:
-        params["enable_e2e"] = m.group(1)
-    m = _SERVICES_SCRIPT_RE.search(text)
-    if m:
-        params["services_script"] = m.group(1).strip()
-    return params
 
 
 # ---------------------------------------------------------------------------
@@ -203,7 +163,7 @@ def _scan_managed_action_file(
         return []
     canonical = render(template_name)
 
-    if _strip_action_pins(on_disk) == _strip_action_pins(canonical):
+    if strip_action_pins(on_disk) == strip_action_pins(canonical):
         return []
 
     return [
@@ -266,7 +226,7 @@ def _scan_managed_shim(path: Path, root: Path) -> list[Finding]:
 
     canonical = render(name, **kwargs)
 
-    if _strip_action_pins(on_disk) == _strip_action_pins(canonical):
+    if strip_action_pins(on_disk) == strip_action_pins(canonical):
         return []
 
     return [
@@ -290,10 +250,7 @@ def _scan_renovate_json(path: Path, root: Path) -> list[Finding]:
     except ValueError:
         rel = str(path)
 
-    _remediate = (
-        f"To regenerate, delete renovate.json and re-run `{_CLI_CMD}` "
-        f"(drift is informational — WARN only, never blocks CI)."
-    )
+    _warn_only = "Drift is informational — WARN only, never blocks CI."
 
     if not path.exists():
         return [
@@ -303,8 +260,9 @@ def _scan_renovate_json(path: Path, root: Path) -> list[Finding]:
                 line=1,
                 column=1,
                 message=(
-                    f"Scaffolded renovate.json is absent. "
-                    f"Run `{_CLI_CMD}` to regenerate it. " + _remediate
+                    f"Scaffolded renovate.json is absent. Run `{_CLI_CMD}` to "
+                    f"scaffold it (write-if-absent: a bare re-run is enough, "
+                    f"nothing to preserve). " + _warn_only
                 ),
             )
         ]
@@ -314,7 +272,7 @@ def _scan_renovate_json(path: Path, root: Path) -> list[Finding]:
         return []
     canonical = render(_RENOVATE_JSON, automerge=extract_renovate_automerge(on_disk))
 
-    if _strip_action_pins(on_disk) == _strip_action_pins(canonical):
+    if strip_action_pins(on_disk) == strip_action_pins(canonical):
         return []
 
     return [
@@ -325,7 +283,11 @@ def _scan_renovate_json(path: Path, root: Path) -> list[Finding]:
             column=1,
             message=(
                 "Scaffolded renovate.json has drifted from the bootstrap canonical. "
-                + _remediate
+                f"Run `{_CLI_CMD} --resync` to re-render it, keeping the auto-merge "
+                "mode this file already declares — pass --enforce or "
+                "--renovate-automerge instead only to deliberately CHANGE that mode. "
+                "Any other hand edit is replaced (kept as renovate.json.bak). "
+                + _warn_only
             ),
         )
     ]
@@ -338,10 +300,7 @@ def _scan_tests_yaml(path: Path, root: Path) -> list[Finding]:
     except ValueError:
         rel = str(path)
 
-    _remediate = (
-        f"To regenerate, delete tests.yaml and re-run `{_CLI_CMD}` "
-        f"(drift is informational — WARN only, never blocks CI)."
-    )
+    _warn_only = "Drift is informational — WARN only, never blocks CI."
 
     if not path.exists():
         return [
@@ -351,8 +310,9 @@ def _scan_tests_yaml(path: Path, root: Path) -> list[Finding]:
                 line=1,
                 column=1,
                 message=(
-                    f"Scaffolded tests.yaml is absent. "
-                    f"Run `{_CLI_CMD}` to regenerate it. " + _remediate
+                    f"Scaffolded tests.yaml is absent. Run `{_CLI_CMD}` to "
+                    f"scaffold it (write-if-absent: a bare re-run is enough, "
+                    f"nothing to preserve). " + _warn_only
                 ),
             )
         ]
@@ -363,10 +323,10 @@ def _scan_tests_yaml(path: Path, root: Path) -> list[Finding]:
 
     # Extract per-repo customised values so structural drift is caught while
     # legitimate param choices (app-name, enable-e2e, services-script) are not.
-    params = _extract_tests_yaml_params(on_disk)
+    params = extract_tests_yaml_params(on_disk)
     canonical = render(_TESTS_WORKFLOW, **params)
 
-    if _strip_action_pins(on_disk) == _strip_action_pins(canonical):
+    if strip_action_pins(on_disk) == strip_action_pins(canonical):
         return []
 
     return [
@@ -378,7 +338,10 @@ def _scan_tests_yaml(path: Path, root: Path) -> list[Finding]:
             message=(
                 "Scaffolded tests.yaml has drifted from the bootstrap canonical "
                 "(structural changes detected; param customizations are not flagged). "
-                + _remediate
+                f"Run `{_CLI_CMD} --resync` to re-render it from the "
+                "canonical, reusing the app-name/app-image-name/enable-e2e/"
+                "services-script values read back off this file. Any other hand "
+                "edit is replaced (kept as tests.yaml.bak). " + _warn_only
             ),
         )
     ]
