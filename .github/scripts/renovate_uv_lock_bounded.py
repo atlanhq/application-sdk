@@ -253,13 +253,24 @@ def strip_options(lock_text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "".join(kept))
 
 
+# A requirement counts as a deliberate floor only when it pins a version with an
+# explicit lower bound (``>=``) or an exact pin (``==``). A bare name (``"orjson"``)
+# constrains nothing — it admits any version, so there is no floor for the
+# cooldown to conflict with. ``/fix-vulnerabilities`` always writes ``>=min`` and
+# ``constraint-dependencies`` CVE floors are always lower bounds, so this loses no
+# intended case while closing the fail-open seam where a bare dep named in uv's
+# error would otherwise be admitted inside the window for an unrelated failure.
+_FLOOR_SPECIFIER_RE = re.compile(r">=|==")
+
+
 def floored_packages(pyproject_text: str) -> set[str]:
     """Packages the repo has deliberately pinned a minimum version for.
 
     Both sources count as deliberate: ``[tool.uv] constraint-dependencies`` (where
     the CVE floors live) and ``[project] dependencies`` / ``optional-dependencies``
     (where ``/fix-vulnerabilities`` writes a floor when it promotes a vulnerable
-    transitive to a direct dependency).
+    transitive to a direct dependency). A requirement only counts when it carries
+    an explicit ``>=`` or ``==`` specifier — a bare package name is not a floor.
     """
     try:
         data = tomllib.loads(pyproject_text)
@@ -288,7 +299,7 @@ def floored_packages(pyproject_text: str) -> set[str]:
     names: set[str] = set()
     for requirement in requirements:
         match = re.match(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)", requirement)
-        if match:
+        if match and _FLOOR_SPECIFIER_RE.search(requirement):
             names.add(normalise(match.group(1)))
     return names
 

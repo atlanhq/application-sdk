@@ -115,13 +115,33 @@ dev = ["pytest>=8"]
 [tool.uv]
 constraint-dependencies = ["cryptography>=46.0.5", "protobuf>=6.33.5"]
 """
+        # "orjson" is a bare name with no version specifier, so it is NOT a floor.
         assert bounded.floored_packages(pyproject) == {
             "atlan-application-sdk",
-            "orjson",
             "pytest",
             "cryptography",
             "protobuf",
         }
+
+    def test_bare_name_without_a_specifier_is_not_a_floor(self):
+        # A requirement with no version constraint pins nothing, so it must not be
+        # treated as a deliberate floor the cooldown should yield to.
+        pyproject = """\
+[project]
+name = "app"
+dependencies = ["orjson", "requests"]
+"""
+        assert bounded.floored_packages(pyproject) == set()
+
+    def test_exact_pin_counts_as_a_floor(self):
+        pyproject = """\
+[project]
+name = "app"
+dependencies = ["orjson==3.10.7", "urllib3~=2.2"]
+"""
+        # "==" is an exact pin (a floor); "~=" is a compatible-release range, not
+        # an explicit lower-bound/exact pin, so it is not treated as a floor.
+        assert bounded.floored_packages(pyproject) == {"orjson"}
 
     def test_malformed_pyproject_is_empty_not_an_exception(self):
         assert bounded.floored_packages("[project\nname =") == set()
@@ -395,6 +415,33 @@ class TestMain:
         monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
         assert bounded.main(["--window", "P7D", "--project-dir", str(project)]) == 1
         assert len(calls) == 1, "must not retry blind, and must never resolve unbounded"
+
+    def test_bare_dep_named_in_error_does_not_get_a_p0d_exemption(
+        self, monkeypatch, tmp_path
+    ):
+        """The fail-open seam from the review: a bare dependency (no version
+        specifier) is not a floor, so its mere mention in uv's stderr must NOT earn
+        it a P0D exemption that bypasses the window. The driver must fail rather
+        than retry with the bound relaxed for that package."""
+        project = self._project(
+            tmp_path,
+            lock(orjson="3.10.7"),
+            "[project]\nname = 'app'\ndependencies = ['orjson']\n",
+        )
+        calls: list[list[str]] = []
+
+        def fake_run(command, cwd):
+            calls.append(command)
+            return __import__("subprocess").CompletedProcess(
+                command, 1, "", "error: No solution found ... orjson ..."
+            )
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        assert bounded.main(["--window", "P7D", "--project-dir", str(project)]) == 1
+        assert len(calls) == 1, "a bare dep is not a floor, so no P0D retry"
+        assert not any(
+            "orjson=P0D" in part for command in calls for part in command
+        ), "orjson must never be exempted inside the window"
 
     def test_ceilings_come_from_head_not_the_working_tree(self, monkeypatch, tmp_path):
         """The single most important property in this file.
