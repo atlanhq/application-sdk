@@ -247,6 +247,24 @@ class TestRollbacks:
             {"boto3": "1.43.67"}, {"boto3": "1.43.9"}, ["boto3"]
         ) == {"boto3": ("1.43.67", "1.43.9")}
 
+    def test_flags_a_prerelease_rollback(self):
+        # A leading-digits comparison reads both as 0.62 and misses this; PEP 440
+        # orders a beta before its release, so 0.62b2 -> 0.62b1 is a rollback.
+        assert bounded.rollbacks({"a": "0.62b2"}, {"a": "0.62b1"}) == {
+            "a": ("0.62b2", "0.62b1")
+        }
+
+    def test_flags_an_epoch_rollback(self):
+        # The epoch (1!) outranks every version without one, so dropping it is a
+        # rollback even though 2.0 > 1.0 numerically.
+        assert bounded.rollbacks({"a": "1!2.0"}, {"a": "2.0"}) == {
+            "a": ("1!2.0", "2.0")
+        }
+
+    def test_a_forward_prerelease_move_is_clean(self):
+        # 0.62b1 -> 0.62b2 moves forward and must not be flagged.
+        assert bounded.rollbacks({"a": "0.62b1"}, {"a": "0.62b2"}) == {}
+
 
 class TestParseWindow:
     def test_days_and_hours(self):

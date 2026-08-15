@@ -110,12 +110,15 @@ import sys
 import tomllib
 from pathlib import Path
 
-try:  # PEP 508 parsing for floor classification; see floored_packages.
+try:  # PEP 508/440 parsing for floor classification and the rollback gate.
     from packaging.requirements import Requirement
     from packaging.utils import canonicalize_name
+    from packaging.version import InvalidVersion, Version
 except ImportError:  # pragma: no cover - packaging is effectively universal
     Requirement = None  # type: ignore[assignment]
     canonicalize_name = None  # type: ignore[assignment]
+    Version = None  # type: ignore[assignment]
+    InvalidVersion = ValueError  # type: ignore[assignment]
 
 # ISO 8601 durations, restricted to the forms a release-age window sensibly takes.
 # Calendar units are rejected rather than approximated — uv refuses months and
@@ -132,8 +135,6 @@ _ERROR_TOKEN_RE = re.compile(r"[A-Za-z0-9._-]+")
 
 # PEP 503 normalisation, so `Foo_Bar` and `foo-bar` compare equal.
 _NORMALISE_RE = re.compile(r"[-_.]+")
-
-_LEADING_DIGITS_RE = re.compile(r"^(\d+(?:\.\d+)*)")
 
 
 def normalise(name: str) -> str:
@@ -352,11 +353,22 @@ def blocked_by_floor(uv_stderr: str, floors: set[str]) -> list[str]:
     return sorted(mentioned & floors)
 
 
-def _version_key(version: str) -> tuple[int, ...] | None:
-    match = _LEADING_DIGITS_RE.match(version)
-    if not match:
+def _version_key(version: str) -> "Version | None":
+    """Parse a PEP 440 version, or None when it does not parse.
+
+    Structural, not textual: a leading-digits prefix reads ``0.62b1`` as ``0.62``
+    and ``1!2.0`` as ``2``, so a prerelease or epoch rollback would compare equal
+    to (or greater than) the version it actually regresses. ``Version`` orders
+    those correctly — a prerelease sorts before its release, and an epoch beats
+    every version without one. Returns None on an unparseable string so the caller
+    reports it for a human rather than silently dropping the comparison.
+    """
+    if Version is None:
         return None
-    return tuple(int(part) for part in match.group(1).split("."))
+    try:
+        return Version(version)
+    except InvalidVersion:
+        return None
 
 
 def rollbacks(
@@ -371,9 +383,11 @@ def rollbacks(
     downgrade can no longer happen for age reasons, so anything reported here is
     a real signal.
 
-    Compares leading numeric components only; a version either side that does not
-    start with digits is reported rather than ignored, because an unparseable
-    version is the case most worth a human look.
+    Versions are compared as parsed PEP 440 ``Version`` objects, so a prerelease
+    (``0.62b2 -> 0.62b1``) or epoch (``1!2.0 -> 2.0``) rollback is caught rather
+    than read as a numeric prefix. A version either side that does not parse is
+    reported rather than ignored, because an unparseable version is the case most
+    worth a human look.
     """
     found: dict[str, tuple[str, str]] = {}
     names = (normalise(p) for p in packages) if packages is not None else before.keys()

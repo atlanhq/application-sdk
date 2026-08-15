@@ -106,6 +106,20 @@ class TestAllowedPatterns:
         )
         assert guard.allowed_patterns(source) == ["^only --real$"]
 
+    def test_quotes_inside_a_block_comment_are_not_collected_as_entries(self):
+        # A quoted regex inside a /* */ block comment is not an allowlist entry;
+        # the JS runtime ignores it, so the guard must too (otherwise the two
+        # disagree about which commands are authorized).
+        source = (
+            "module.exports = {\n"
+            "  allowedCommands: [\n"
+            '    /* retired: "^old --pattern$" — superseded by the entry below */\n'
+            '    "^only --real$",\n'
+            "  ],\n"
+            "};\n"
+        )
+        assert guard.allowed_patterns(source) == ["^only --real$"]
+
 
 class TestUnauthorizedCommands:
     def test_flags_command_the_allowlist_does_not_cover(self):

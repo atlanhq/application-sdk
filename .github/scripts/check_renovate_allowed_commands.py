@@ -71,10 +71,10 @@ def allowed_patterns(self_hosted_source: str) -> list[str]:
 
     Scans to the array's closing bracket while tracking string state, so a `]`
     inside an entry (a character class, say) ends the entry rather than the
-    allowlist. `//` comments between entries are skipped, including any quotes
-    they contain — prose about the patterns is normal here, and a stray
-    apostrophe-pair in a comment would otherwise be collected as a pattern and
-    desynchronise everything after it.
+    allowlist. `//` line comments and `/* */` block comments between entries are
+    skipped, including any quotes they contain — prose about the patterns is
+    normal here, and a stray quoted string inside a comment would otherwise be
+    collected as a pattern and desynchronise everything after it.
     """
     start = _ALLOWLIST_START_RE.search(self_hosted_source)
     if not start:
@@ -84,16 +84,29 @@ def allowed_patterns(self_hosted_source: str) -> list[str]:
     current: list[str] = []
     in_string = False
     escaped = False
-    in_comment = False
+    in_line_comment = False
+    in_block_comment = False
     previous = ""
 
     for char in self_hosted_source[start.end() :]:
-        if in_comment:
+        if in_line_comment:
             if char == "\n":
-                in_comment = False
+                in_line_comment = False
+            previous = ""
+            continue
+        if in_block_comment:
+            if char == "/" and previous == "*":
+                in_block_comment = False
+                previous = ""
+                continue
+            previous = char
             continue
         if not in_string and char == "/" and previous == "/":
-            in_comment = True
+            in_line_comment = True
+            previous = ""
+            continue
+        if not in_string and char == "*" and previous == "/":
+            in_block_comment = True
             previous = ""
             continue
         previous = char
