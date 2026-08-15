@@ -143,6 +143,17 @@ dependencies = ["orjson==3.10.7", "urllib3~=2.2"]
         # an explicit lower-bound/exact pin, so it is not treated as a floor.
         assert bounded.floored_packages(pyproject) == {"orjson"}
 
+    def test_marker_only_specifier_is_not_a_floor(self):
+        # The `>=` here constrains the interpreter, not the package, so a
+        # floor-less dependency carrying only an environment marker must not be
+        # classified as floored (and so must not earn a P0D retry exemption).
+        pyproject = """\
+[project]
+name = "app"
+dependencies = ["foo; python_version >= \\"3.10\\"", "bar>=1.0; python_version >= \\"3.10\\""]
+"""
+        assert bounded.floored_packages(pyproject) == {"bar"}
+
     def test_malformed_pyproject_is_empty_not_an_exception(self):
         assert bounded.floored_packages("[project\nname =") == set()
 

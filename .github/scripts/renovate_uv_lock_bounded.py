@@ -260,6 +260,9 @@ def strip_options(lock_text: str) -> str:
 # ``constraint-dependencies`` CVE floors are always lower bounds, so this loses no
 # intended case while closing the fail-open seam where a bare dep named in uv's
 # error would otherwise be admitted inside the window for an unrelated failure.
+# The specifier must appear in the package portion, BEFORE any ``;`` environment
+# marker: ``foo; python_version >= "3.10"`` floors nothing (the bound is on the
+# interpreter, not the package), so the marker is stripped before matching.
 _FLOOR_SPECIFIER_RE = re.compile(r">=|==")
 
 
@@ -299,7 +302,9 @@ def floored_packages(pyproject_text: str) -> set[str]:
     names: set[str] = set()
     for requirement in requirements:
         match = re.match(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)", requirement)
-        if match and _FLOOR_SPECIFIER_RE.search(requirement):
+        # Only the package portion (before any ``;`` marker) can carry the floor.
+        package_part = requirement.split(";", 1)[0]
+        if match and _FLOOR_SPECIFIER_RE.search(package_part):
             names.add(normalise(match.group(1)))
     return names
 
