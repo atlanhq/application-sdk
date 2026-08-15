@@ -600,6 +600,37 @@ class TestMain:
         monkeypatch.setattr(bounded, "run_uv_lock", fail_if_called)
         assert bounded.main(["--window", "P7D", "--project-dir", str(project)]) == 1
 
+    def test_lock_absent_from_head_returns_none_and_proceeds(
+        self, monkeypatch, tmp_path
+    ):
+        # A lock added in this very branch: HEAD has no committed copy, so the
+        # driver proceeds with no ceilings and no rollback comparison (the
+        # documented new-lockfile path). The fail-closed rework must NOT turn
+        # this into a failure — absence is established by `git ls-tree`
+        # succeeding empty, not by `git show` failing (which it also does for an
+        # unreadable blob).
+        project = self._project(tmp_path, lock(boto3="1.43.72"))
+        env = {
+            "GIT_AUTHOR_NAME": "t",
+            "GIT_AUTHOR_EMAIL": "t@t",
+            "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@t",
+        }
+        subprocess.run(["git", "rm", "-q", "uv.lock"], cwd=project, check=True)
+        subprocess.run(
+            ["git", "commit", "-qm", "drop the lock"], cwd=project, check=True, env=env
+        )
+        (project / "uv.lock").write_text(lock(boto3="1.43.72"))
+
+        def fake_run(command, cwd):
+            (Path(cwd) / "uv.lock").write_text(lock(boto3="1.43.72"))
+            return __import__("subprocess").CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        assert bounded.main(["--window", "P7D", "--project-dir", str(project)]) == 0
+        # Absence is verifiable: the tree probe is what returned None.
+        assert bounded.baseline_lock_text(project) is None
+
     def test_repo_with_its_own_bound_is_left_completely_alone(
         self, monkeypatch, tmp_path
     ):

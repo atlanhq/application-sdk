@@ -471,8 +471,8 @@ def baseline_lock_text(cwd: Path) -> str | None:
     baseline" would drop the ceilings and quietly reintroduce the rollback this
     exists to prevent. That includes a HEAD that resolves but whose lock blob
     cannot be read: absent is a fact about the tree, not a guess from a failed
-    command, so absence is established by probing `git cat-file -e` and every
-    other `git show` failure is treated as fatal.
+    command, so absence is established positively with `git ls-tree` and every
+    `git show` failure on a path known to be present is treated as fatal.
     """
     head = subprocess.run(
         ["git", "rev-parse", "--verify", "HEAD"],
@@ -485,26 +485,25 @@ def baseline_lock_text(cwd: Path) -> str | None:
             f"cannot resolve HEAD in {cwd}, so the pre-refresh lockfile is "
             f"unavailable: {head.stderr.strip()}"
         )
-    exists = subprocess.run(
-        ["git", "cat-file", "-e", "HEAD:uv.lock"],
+    # Absence must be established positively, not inferred from a failed read:
+    # `git show` exits non-zero for BOTH "path absent" and "blob unreadable",
+    # so it cannot tell the two apart. `git ls-tree` can — it exits 0 and
+    # prints nothing when the path is absent, prints the path when present, and
+    # only exits non-zero when git itself is broken.
+    listing = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", "HEAD", "--", "uv.lock"],
         cwd=cwd,
         capture_output=True,
         text=True,
     )
-    if exists.returncode != 0:
-        # cat-file -e exits non-zero both when the path is absent from HEAD and
-        # when git itself is broken; disambiguate by reading the blob. A clean
-        # show means the path genuinely is absent — a lock added in this very
-        # branch, which legitimately has no baseline. Anything else is "cannot
-        # tell", which must fail closed rather than masquerade as no baseline.
-        probe = subprocess.run(
-            ["git", "show", "HEAD:uv.lock"], cwd=cwd, capture_output=True, text=True
+    if listing.returncode != 0:
+        raise RuntimeError(
+            f"cannot inspect HEAD's tree in {cwd}, so the pre-refresh lockfile "
+            f"is unavailable: {listing.stderr.strip()}"
         )
-        if probe.returncode != 0:
-            raise RuntimeError(
-                f"cannot read uv.lock from HEAD in {cwd}, so the pre-refresh "
-                f"lockfile is unavailable: {probe.stderr.strip()}"
-            )
+    if "uv.lock" not in listing.stdout.splitlines():
+        # Verifiably absent from HEAD — a lock added in this very branch, which
+        # legitimately has no baseline.
         return None
     show = subprocess.run(
         ["git", "show", "HEAD:uv.lock"], cwd=cwd, capture_output=True, text=True
