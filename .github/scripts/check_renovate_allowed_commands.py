@@ -29,12 +29,15 @@ REPO_ROOT = Path(__file__).parent.parent.parent
 PRESET = REPO_ROOT / "renovate-config" / "default.json"
 SELF_HOSTED = REPO_ROOT / "renovate-config" / "self-hosted.js"
 
-# The allowedCommands array literal in the admin config, and the double-quoted
-# strings inside it. Deliberately narrow: a JS parser is not worth the dependency
-# for one array of literals, and a malformed match fails the guard loudly rather
-# than passing it silently (an empty allowlist matches no command).
-_ALLOWLIST_BLOCK_RE = re.compile(r"allowedCommands:\s*\[(.*?)\]", re.DOTALL)
-_QUOTED_RE = re.compile(r'"((?:[^"\\]|\\.)*)"')
+# Where the allowedCommands array starts in the admin config. The array is then
+# scanned character by character rather than matched with a regex: the entries
+# are themselves regexes, and `allowedCommands:\s*\[(.*?)\]` stops at the first
+# `]` — including one inside a character class like `[0-9]`, which silently
+# truncates the allowlist and makes the guard pass commands it never checked.
+# Exactly the silent-failure mode this file exists to prevent, so it is scanned
+# properly. A JS parser is still not worth the dependency for one array of
+# string literals.
+_ALLOWLIST_START_RE = re.compile(r"allowedCommands:\s*\[")
 
 
 def preset_commands(preset_json: str) -> list[str]:
@@ -64,11 +67,68 @@ def preset_commands(preset_json: str) -> list[str]:
 
 
 def allowed_patterns(self_hosted_source: str) -> list[str]:
-    """Regex strings from the admin config's allowedCommands allowlist."""
-    block = _ALLOWLIST_BLOCK_RE.search(self_hosted_source)
-    if not block:
+    """Regex strings from the admin config's allowedCommands allowlist.
+
+    Scans to the array's closing bracket while tracking string state, so a `]`
+    inside an entry (a character class, say) ends the entry rather than the
+    allowlist. `//` line comments and `/* */` block comments between entries are
+    skipped, including any quotes they contain — prose about the patterns is
+    normal here, and a stray quoted string inside a comment would otherwise be
+    collected as a pattern and desynchronise everything after it.
+    """
+    start = _ALLOWLIST_START_RE.search(self_hosted_source)
+    if not start:
         return []
-    return [m.group(1) for m in _QUOTED_RE.finditer(block.group(1))]
+
+    patterns: list[str] = []
+    current: list[str] = []
+    in_string = False
+    escaped = False
+    in_line_comment = False
+    in_block_comment = False
+    previous = ""
+
+    for char in self_hosted_source[start.end() :]:
+        if in_line_comment:
+            if char == "\n":
+                in_line_comment = False
+            previous = ""
+            continue
+        if in_block_comment:
+            if char == "/" and previous == "*":
+                in_block_comment = False
+                previous = ""
+                continue
+            previous = char
+            continue
+        if not in_string and char == "/" and previous == "/":
+            in_line_comment = True
+            previous = ""
+            continue
+        if not in_string and char == "*" and previous == "/":
+            in_block_comment = True
+            previous = ""
+            continue
+        previous = char
+        if in_string:
+            if escaped:
+                current.append(char)
+                escaped = False
+            elif char == "\\":
+                current.append(char)
+                escaped = True
+            elif char == '"':
+                patterns.append("".join(current))
+                current = []
+                in_string = False
+            else:
+                current.append(char)
+        elif char == '"':
+            in_string = True
+        elif char == "]":
+            break
+
+    return patterns
 
 
 def unauthorized_commands(preset_json: str, self_hosted_source: str) -> list[str]:

@@ -15,6 +15,10 @@
   "statusCheckWhen": {
     "artifactError": "always"
   },
+  "vulnerabilityAlerts": {
+    "description": "Security updates bypass the release-age cooldown (FND-359). A cooldown that also delayed known-CVE fixes would be indefensible — and it is why the cooldown's actual value is narrower than it looks: it buys detection time against releases nobody knows are bad yet, NOT against published advisories, which this rule lets straight through. Renovate keys this off the platform's own vulnerability alerts, so it needs no maintained exemption list, which is the property that matters — the fleet's previous cooldowns died of hand-dated per-package exemptions rotting in each repo's pyproject.toml. Note the gap this cannot close: an upstream fix that ships BEFORE an advisory exists looks like an ordinary release and is delayed the full window. That is the real cost of the cooldown, and the argument for a shorter one.",
+    "minimumReleaseAge": null
+  },
   "prHourlyLimit": 0,
   "prConcurrentLimit": 8,
   "labels": [
@@ -32,7 +36,7 @@
     "github-actions[bot]@users.noreply.github.com"
   ],
   "lockFileMaintenance": {
-    "description": "Python in-range deps: refresh uv.lock without touching pyproject.toml; auto-merge on green. This lane's rung on the prPriority ladder is set by a packageRule below (matchUpdateTypes: lockFileMaintenance), NOT here: prPriority is only honoured inside packageRules, so setting it in this object is silently ignored — it sat here until FND-359 and the lane ran at the default priority the whole time. NO RELEASE-AGE BOUND, deliberately (FND-367). A 7-day cooldown was tried here twice and removed: Renovate cannot age-check a lockFileMaintenance update at all (it delegates resolution to uv, and uv is not passed a bound — renovatebot/renovate#41652), so the bound had to be expressed in uv itself, and uv records its resolver settings into uv.lock under `[options]`, where every consumer that validates the lock compares them against its own. Passed as a postUpgradeTasks flag it produced locks that `uv sync --locked` rejected fleet-wide; declared in each repo's `[tool.uv]` it worked, but only at the cost of a per-repo stanza in every connector. The decisive argument was not mechanical though: this fleet fixes vulnerabilities by keeping dependencies continuously current, so a release-age bound on this lane is a delay on every security fix, in exchange for a supply-chain window that no plausible duration meaningfully closes. Note what this does NOT protect against, so nobody reintroduces the bound expecting it to: a release published minutes ago can land here, and if it changes behaviour our tests must catch it. When that happens the fix is the test, not a wait — the case that prompted all this was a test asserting a third-party parser's exact error column.",
+    "description": "Python in-range deps: refresh uv.lock without touching pyproject.toml; auto-merge on green. This lane's rung on the prPriority ladder is set by a packageRule below (matchUpdateTypes: lockFileMaintenance), NOT here: prPriority is only honoured inside packageRules, so setting it in this object is silently ignored — it sat here until FND-359 and the lane ran at the default priority the whole time. RELEASE-AGE BOUND (FND-359): this is the one lane that upgrades to latest with no human in the loop, and the only channel through which transitive dependencies reach a connector at all, so it is the only lane that carries the org §5 cooldown. Renovate cannot age-check it itself — it delegates resolution to uv and passes no bound (renovatebot/renovate#41652) — so the bound is applied by re-resolving in postUpgradeTasks. Two earlier attempts failed and the differences matter: passing `--exclude-newer` alone leaves uv's resolver settings recorded in uv.lock under `[options]`, which every consumer running `uv sync --locked` then rejects as stale (that is what reddened scan / Build Image fleet-wide in #3212); declaring it in each repo's `[tool.uv]` fixes that but bounds EVERY resolve in the repo, including the /fix-vulnerabilities workflow that is how a CVE fix actually lands. The driver below does both halves: bounded resolve, then strip `[options]` — so the lock's content is bounded while its recorded settings stay default. Deliberately NOT bounded, because the bound lives in this command and nowhere else: a human's `uv lock`, `/fix-vulnerabilities`, and each package's own Renovate lane. That asymmetry is the design, not an oversight — the cooldown buys detection time against releases nobody knows are bad yet, and has no business slowing down someone who has decided to take a specific version. On the --exempt set: it must cover the dependency CLOSURE of a first-party release, not just the names we publish. pyatlan is in it for that reason and must not be dropped — with only the two SDK packages exempted, atlan-application-sdk 3.28.0 became unresolvable (it requires pyatlan>=10, and pyatlan 10.0.0 was inside the window) and uv silently backtracked to 3.27.2. A bounded resolve does not fail when it cannot reach a package; it quietly picks an older one, so unattended that would auto-merge an SDK downgrade fleet-wide. The driver refuses to commit a lock where an exempt package moved backwards, which is the backstop if this list ever goes stale.",
     "enabled": true,
     "schedule": [
       "at any time"
@@ -42,7 +46,16 @@
     "platformAutomerge": true,
     "addLabels": [
       "update:lock-maintenance"
-    ]
+    ],
+    "postUpgradeTasks": {
+      "commands": [
+        "renovate-uv-lock-bounded --window P7D --exempt atlan-application-sdk --exempt atlan-application-sdk-conformance --exempt pyatlan"
+      ],
+      "fileFilters": [
+        "uv.lock"
+      ],
+      "executionMode": "branch"
+    }
   },
   "packageRules": [
     {
@@ -56,14 +69,30 @@
       "enabled": false
     },
     {
-      "description": "SDK lane: give atlan-application-sdk bumps their own uv.lock-only PR (rangeStrategy update-lockfile, mirroring the conformance-package rule) instead of riding the batched lockFileMaintenance refresh — a stale lock-refresh branch that is not behind main never re-resolves, so it can sit pinned one SDK release behind indefinitely. prPriority 10: when prConcurrentLimit is contended, the SDK PR is created before every other dependency PR (Renovate cannot exempt a package from the limit; priority ordering + the bounded lanes below are the substitute). Deliberately NOT auto-merged — runtime SDK bumps stay human-reviewed, matching the python-dep policy. The sdk-package-update label is the fleet scanner's classification signal.",
+      "description": "SDK lane: give atlan-application-sdk bumps their own uv.lock-only PR (rangeStrategy update-lockfile, mirroring the conformance-package rule) instead of riding the batched lockFileMaintenance refresh — a stale lock-refresh branch that is not behind main never re-resolves, so it can sit pinned one SDK release behind indefinitely. prPriority 10: when prConcurrentLimit is contended, the SDK PR is created before every other dependency PR (Renovate cannot exempt a package from the limit; priority ordering + the bounded lanes below are the substitute). Auto-merged on green as of FND-359: an SDK release must reach the fleet in minutes, and now that the lock-refresh lane is release-age bounded this is the only lane that can deliver it promptly. A repo not ready for that opts OUT in its own renovate.json, since repo-local packageRules are appended after this preset's and later matching rules win: {matchPackageNames: ['atlan-application-sdk'], automerge: false, platformAutomerge: false}. Set it inside a packageRule — a top-level automerge:false will not override this. The soft-mode bootstrap template already opts every package out this way. minimumReleaseAge is explicitly null: first-party releases are never subject to the cooldown. The sdk-package-update label is the fleet scanner's classification signal.",
       "matchPackageNames": [
         "atlan-application-sdk"
       ],
       "rangeStrategy": "update-lockfile",
       "prPriority": 10,
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true,
+      "minimumReleaseAge": null,
       "addLabels": [
         "sdk-package-update"
+      ]
+    },
+    {
+      "description": "pyatlan lane (FND-359): Atlan-published, so it is first-party for cooldown purposes and gets its own uv.lock-only PR rather than riding the bounded lock refresh. It had no lane at all until now, which meant it moved only via lockFileMaintenance — and under the release-age bound that would have made it the one first-party package delayed a week. It is also load-bearing for the SDK: SDK releases track pyatlan majors, so a held-back pyatlan silently holds back the SDK too (see the lockFileMaintenance description). Not auto-merged: pyatlan majors carry real API change (9.x -> 10.x landed in the fleet as an in-range lock bump, unreviewed, which is precisely what this lane exists to stop), so these stay human-reviewed while still being immediate to raise.",
+      "matchPackageNames": [
+        "pyatlan"
+      ],
+      "rangeStrategy": "update-lockfile",
+      "prPriority": 9,
+      "minimumReleaseAge": null,
+      "addLabels": [
+        "pyatlan-package-update"
       ]
     },
     {
@@ -139,13 +168,31 @@
       "prPriority": 5
     },
     {
-      "description": "Lane model: group every OTHER PyPI dependency's non-major updates into ONE rolling PR. With bounded lanes — SDK (1) + conformance (1) + contract-toolkit (1) + lock maintenance (1) + this group (1) + github-actions (1) — the crowd occupies a single prConcurrentLimit slot and can never starve the critical lanes, which soft-mode repos previously hit: 5 human-review dep PRs squatting every slot meant an SDK bump PR was simply never created. Excludes the packages with dedicated lanes above.",
+      "description": "Release-age cooldown for third-party PyPI packages on the lanes Renovate can actually age-check (FND-359). Upstream exempts lockFileMaintenance, lockfileUpdate, pin, bump, rollback and replacement from minimumReleaseAge, so this covers only the lanes where Renovate itself picks the version; the lock-refresh lane carries its own bound via postUpgradeTasks. matchUpdateTypes is a positive ALLOWLIST rather than a blanket match on purpose: minimumReleaseAgeBehaviour defaults to timestamp-required, so an update type with no release timestamp counts as never-aged and a blanket rule would suppress those lanes permanently rather than delay them. Failing open that way (a newly-supported type is merely not yet cooled down) is the right direction for a rule whose job is to delay, not to block. First-party packages are excluded here and set minimumReleaseAge: null in their own lanes above — belt and braces, since rule order decides. docker is deliberately absent: base-image bumps are mostly CVE patches, so a week's hold is a net security loss, and the docker timestamp is the publisher-controlled org.opencontainers.image.created annotation, which Renovate's own docs flag as bypassable.",
       "matchDatasources": [
         "pypi"
       ],
       "matchPackageNames": [
         "!atlan-application-sdk",
-        "!atlan-application-sdk-conformance"
+        "!atlan-application-sdk-conformance",
+        "!pyatlan"
+      ],
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch"
+      ],
+      "minimumReleaseAge": "7 days"
+    },
+    {
+      "description": "Lane model: group every OTHER PyPI dependency's non-major updates into ONE rolling PR. With bounded lanes — SDK (1) + conformance (1) + pyatlan (1) + contract-toolkit (1) + lock maintenance (1) + this group (1) + github-actions (1) — the crowd occupies a single prConcurrentLimit slot and can never starve the critical lanes, which soft-mode repos previously hit: 5 human-review dep PRs squatting every slot meant an SDK bump PR was simply never created. Excludes the packages with dedicated lanes above.",
+      "matchDatasources": [
+        "pypi"
+      ],
+      "matchPackageNames": [
+        "!atlan-application-sdk",
+        "!atlan-application-sdk-conformance",
+        "!pyatlan"
       ],
       "matchUpdateTypes": [
         "minor",
@@ -163,7 +210,8 @@
       ],
       "matchPackageNames": [
         "!atlan-application-sdk",
-        "!atlan-application-sdk-conformance"
+        "!atlan-application-sdk-conformance",
+        "!pyatlan"
       ],
       "matchUpdateTypes": [
         "major"
