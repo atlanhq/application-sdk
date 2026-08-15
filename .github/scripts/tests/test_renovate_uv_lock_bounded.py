@@ -154,6 +154,21 @@ dependencies = ["foo; python_version >= \\"3.10\\"", "bar>=1.0; python_version >
 """
         assert bounded.floored_packages(pyproject) == {"bar"}
 
+    def test_direct_reference_url_is_not_a_floor(self):
+        # The `==`/`>=` here live in the URL, not the version specifier, so a
+        # direct-reference dependency must not be misread as floored. The PEP 508
+        # parse separates the URL from the (empty) specifier.
+        pyproject = """\
+[project]
+name = "app"
+dependencies = [
+    "foo @ https://example.example/pkg.tar.gz?constraint==1",
+    "bar @ https://example.example/bar.whl ; python_version >= \\"3.10\\"",
+    "baz>=2.0",
+]
+"""
+        assert bounded.floored_packages(pyproject) == {"baz"}
+
     def test_malformed_pyproject_is_empty_not_an_exception(self):
         assert bounded.floored_packages("[project\nname =") == set()
 

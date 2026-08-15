@@ -110,6 +110,13 @@ import sys
 import tomllib
 from pathlib import Path
 
+try:  # PEP 508 parsing for floor classification; see floored_packages.
+    from packaging.requirements import Requirement
+    from packaging.utils import canonicalize_name
+except ImportError:  # pragma: no cover - packaging is effectively universal
+    Requirement = None  # type: ignore[assignment]
+    canonicalize_name = None  # type: ignore[assignment]
+
 # ISO 8601 durations, restricted to the forms a release-age window sensibly takes.
 # Calendar units are rejected rather than approximated — uv refuses months and
 # years for the same reason, and a window that silently means something other
@@ -254,16 +261,42 @@ def strip_options(lock_text: str) -> str:
 
 
 # A requirement counts as a deliberate floor only when it pins a version with an
-# explicit lower bound (``>=``) or an exact pin (``==``). A bare name (``"orjson"``)
-# constrains nothing — it admits any version, so there is no floor for the
-# cooldown to conflict with. ``/fix-vulnerabilities`` always writes ``>=min`` and
-# ``constraint-dependencies`` CVE floors are always lower bounds, so this loses no
-# intended case while closing the fail-open seam where a bare dep named in uv's
-# error would otherwise be admitted inside the window for an unrelated failure.
-# The specifier must appear in the package portion, BEFORE any ``;`` environment
-# marker: ``foo; python_version >= "3.10"`` floors nothing (the bound is on the
-# interpreter, not the package), so the marker is stripped before matching.
-_FLOOR_SPECIFIER_RE = re.compile(r">=|==")
+# explicit lower bound (``>=``) or an exact pin (``==``) in its PEP 508 version
+# specifier. A bare name (``"orjson"``) constrains nothing — it admits any version,
+# so there is no floor for the cooldown to conflict with. ``/fix-vulnerabilities``
+# always writes ``>=min`` and ``constraint-dependencies`` CVE floors are always
+# lower bounds, so this loses no intended case while closing the fail-open seam
+# where a floor-less dep named in uv's error would otherwise be admitted inside
+# the window for an unrelated failure.
+#
+# The requirement is parsed as PEP 508 rather than scanned as text. Substring
+# matching over the raw string reads bounds out of two places that are not package
+# floors: an environment marker (``foo; python_version >= "3.10"`` bounds the
+# interpreter, not the package) and a direct-reference URL (``foo @
+# https://…/pkg.tar.gz?constraint==1`` — the ``==`` is URL data). Parsing inspects
+# only the parsed ``SpecifierSet``, so neither can be misread as a floor.
+
+
+def _floor_specified(requirement: str) -> str | None:
+    """The package's normalised name if ``requirement`` floors a version, else None.
+
+    Structural, not textual: the PEP 508 parse separates the version specifier
+    from both the environment marker and any direct-reference URL, so a ``>=`` /
+    ``==`` is honoured only where it actually constrains the package. Fails closed:
+    a requirement that does not parse, or a missing ``packaging`` library, yields
+    no floor classification rather than a guess — the safe direction for a control
+    whose whole point is to *not* admit a package early.
+    """
+    if Requirement is None:
+        return None
+    try:
+        parsed = Requirement(requirement)
+    except Exception:  # InvalidRequirement and friends — not a floor we can trust
+        return None
+    for specifier in parsed.specifier:
+        if specifier.operator in (">=", "=="):
+            return normalise(parsed.name)
+    return None
 
 
 def floored_packages(pyproject_text: str) -> set[str]:
@@ -272,8 +305,9 @@ def floored_packages(pyproject_text: str) -> set[str]:
     Both sources count as deliberate: ``[tool.uv] constraint-dependencies`` (where
     the CVE floors live) and ``[project] dependencies`` / ``optional-dependencies``
     (where ``/fix-vulnerabilities`` writes a floor when it promotes a vulnerable
-    transitive to a direct dependency). A requirement only counts when it carries
-    an explicit ``>=`` or ``==`` specifier — a bare package name is not a floor.
+    transitive to a direct dependency). A requirement only counts when its PEP 508
+    version specifier carries an explicit ``>=`` or ``==`` — a bare package name,
+    an environment-marker bound, or a direct-reference URL is not a floor.
     """
     try:
         data = tomllib.loads(pyproject_text)
@@ -301,11 +335,9 @@ def floored_packages(pyproject_text: str) -> set[str]:
 
     names: set[str] = set()
     for requirement in requirements:
-        match = re.match(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)", requirement)
-        # Only the package portion (before any ``;`` marker) can carry the floor.
-        package_part = requirement.split(";", 1)[0]
-        if match and _FLOOR_SPECIFIER_RE.search(package_part):
-            names.add(normalise(match.group(1)))
+        floored = _floor_specified(requirement)
+        if floored is not None:
+            names.add(floored)
     return names
 
 
