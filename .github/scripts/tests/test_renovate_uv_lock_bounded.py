@@ -577,6 +577,29 @@ class TestMain:
         (tmp_path / "pyproject.toml").write_text("[project]\nname = 'app'\n")
         assert bounded.main(["--window", "P7D", "--project-dir", str(tmp_path)]) == 1
 
+    def test_unreadable_head_lock_blob_fails_closed(self, monkeypatch, tmp_path):
+        # HEAD resolves, but `git show HEAD:uv.lock` fails for a reason other
+        # than "path absent" (a corrupt/missing blob). Treating that as "no
+        # baseline" would silently drop the retention ceilings and the rollback
+        # comparison — the one fail-open path left in the driver — so the run
+        # must fail closed and never reach uv.
+        project = self._project(tmp_path, lock(boto3="1.43.72"))
+        real_run = subprocess.run
+
+        def fake_git_run(command, **kwargs):
+            if command[:2] == ["git", "show"]:
+                return subprocess.CompletedProcess(
+                    command, 128, "", "fatal: bad object HEAD:uv.lock"
+                )
+            return real_run(command, **kwargs)
+
+        def fail_if_called(command, cwd):
+            raise AssertionError("uv must not run when the baseline is unreadable")
+
+        monkeypatch.setattr(bounded.subprocess, "run", fake_git_run)
+        monkeypatch.setattr(bounded, "run_uv_lock", fail_if_called)
+        assert bounded.main(["--window", "P7D", "--project-dir", str(project)]) == 1
+
     def test_repo_with_its_own_bound_is_left_completely_alone(
         self, monkeypatch, tmp_path
     ):
