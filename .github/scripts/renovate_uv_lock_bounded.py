@@ -300,6 +300,33 @@ def _floor_specified(requirement: str) -> str | None:
     return None
 
 
+def declares_own_bound(pyproject_text: str) -> bool:
+    """Does the repo already bound its own resolves via ``[tool.uv]``?
+
+    Four repos do (glue, bw, thoughtspot, dbt), predating the fleet mechanism.
+    For them this driver must do nothing at all: they already have a cooldown, so
+    ours is redundant, and stripping ``[options]`` would leave a lock their own
+    ``pyproject.toml`` disagrees with — `uv sync --locked` in the image build then
+    fails, which is FND-367's breakage arriving from the opposite direction.
+
+    Skipping rather than failing keeps those repos working while they converge on
+    the central mechanism on their own schedule, instead of turning a fleet-wide
+    rollout into four simultaneous conversations with repo owners. The skip is
+    reported, not silent, so the convergence work stays visible.
+    """
+    try:
+        data = tomllib.loads(pyproject_text)
+    except tomllib.TOMLDecodeError:
+        return False
+    tool = data.get("tool")
+    uv_table = tool.get("uv", {}) if isinstance(tool, dict) else {}
+    if not isinstance(uv_table, dict):
+        return False
+    # Either key alone is enough: uv records both into the lockfile's [options],
+    # so either one makes the strip destructive.
+    return "exclude-newer" in uv_table or "exclude-newer-package" in uv_table
+
+
 def floored_packages(pyproject_text: str) -> set[str]:
     """Packages the repo has deliberately pinned a minimum version for.
 
@@ -493,6 +520,22 @@ def main(argv: list[str] | None = None) -> int:
 
     if not lock_path.exists():
         print(f"No uv.lock in {project_dir} — nothing to bound.", file=sys.stderr)
+        return 0
+
+    if pyproject_path.exists() and declares_own_bound(pyproject_path.read_text()):
+        summarise(
+            [
+                "**Release-age bound skipped:** this repo declares its own "
+                "`[tool.uv] exclude-newer`, so it already has a cooldown and the "
+                "lockfile records settings that must keep matching it.",
+                "",
+                "- The fleet now bounds this lane centrally (FND-359), so the "
+                "repo-local stanza is redundant and can be removed.",
+                "- Until it is, this driver leaves `uv.lock` untouched — stripping "
+                "`[options]` here would leave a lock `pyproject.toml` disagrees "
+                "with, and `uv sync --locked` would fail in the image build.",
+            ]
+        )
         return 0
 
     try:

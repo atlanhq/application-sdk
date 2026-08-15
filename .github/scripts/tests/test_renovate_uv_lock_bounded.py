@@ -173,6 +173,23 @@ dependencies = [
         assert bounded.floored_packages("[project\nname =") == set()
 
 
+class TestDeclaresOwnBound:
+    def test_detects_either_key(self):
+        assert bounded.declares_own_bound('[tool.uv]\nexclude-newer = "P7D"\n')
+        assert bounded.declares_own_bound(
+            '[tool.uv]\nexclude-newer-package = { pyatlan = "P0D" }\n'
+        )
+
+    def test_absent_or_unrelated_tool_uv_is_not_a_bound(self):
+        assert not bounded.declares_own_bound("[project]\nname = 'app'\n")
+        assert not bounded.declares_own_bound(
+            '[tool.uv]\ndefault-groups = ["dev"]\nconstraint-dependencies = ["x>=1"]\n'
+        )
+
+    def test_malformed_pyproject_is_not_treated_as_a_bound(self):
+        assert not bounded.declares_own_bound("[tool.uv\nexclude-newer =")
+
+
 class TestBlockedByFloor:
     def test_intersects_the_error_with_deliberate_floors_only(self):
         stderr = (
@@ -559,6 +576,27 @@ class TestMain:
         (tmp_path / "uv.lock").write_text(lock(boto3="1.43.72"))
         (tmp_path / "pyproject.toml").write_text("[project]\nname = 'app'\n")
         assert bounded.main(["--window", "P7D", "--project-dir", str(tmp_path)]) == 1
+
+    def test_repo_with_its_own_bound_is_left_completely_alone(
+        self, monkeypatch, tmp_path
+    ):
+        # glue, bw, thoughtspot and dbt predate the fleet mechanism. Their lock
+        # already carries [options] matching their pyproject, so stripping it
+        # would break `uv sync --locked` in their image build — FND-367 from the
+        # other direction. Skip, do not touch, and say so.
+        original = lock(boto3="1.43.72")
+        project = self._project(
+            tmp_path,
+            original,
+            "[project]\nname = 'app'\n\n[tool.uv]\nexclude-newer = \"7 days\"\n",
+        )
+
+        def fail_if_called(command, cwd):
+            raise AssertionError("uv must not run against a repo with its own bound")
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fail_if_called)
+        assert bounded.main(["--window", "P7D", "--project-dir", str(project)]) == 0
+        assert (project / "uv.lock").read_text() == original
 
     def test_rejects_an_unparseable_window_before_running_uv(self, tmp_path):
         project = self._project(tmp_path, lock(boto3="1.43.72"))
