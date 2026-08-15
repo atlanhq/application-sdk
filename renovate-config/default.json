@@ -84,18 +84,6 @@
       ]
     },
     {
-      "description": "pyatlan lane (FND-359): Atlan-published, so it is first-party for cooldown purposes and gets its own uv.lock-only PR rather than riding the bounded lock refresh. It had no lane at all until now, which meant it moved only via lockFileMaintenance — and under the release-age bound that would have made it the one first-party package delayed a week. It is also load-bearing for the SDK: SDK releases track pyatlan majors, so a held-back pyatlan silently holds back the SDK too (see the lockFileMaintenance description). Not auto-merged: pyatlan majors carry real API change (9.x -> 10.x landed in the fleet as an in-range lock bump, unreviewed, which is precisely what this lane exists to stop), so these stay human-reviewed while still being immediate to raise.",
-      "matchPackageNames": [
-        "pyatlan"
-      ],
-      "rangeStrategy": "update-lockfile",
-      "prPriority": 9,
-      "minimumReleaseAge": null,
-      "addLabels": [
-        "pyatlan-package-update"
-      ]
-    },
-    {
       "description": "app-contract-toolkit (Pkl): minor+patch in one PR; auto-merge on green. Matched by the regex customManager below. postUpgradeTasks re-resolves contract/PklProject.deps.json and regenerates app/generated/** (+ atlan.yaml/app.yaml) in-branch via the shared renovate-pkl-sync driver, so the bump lands as a self-contained PR with no follow-up glue workflow. Runs ONLY under self-hosted Renovate: postUpgradeTasks commands are gated by the allowedCommands admin allowlist (set in application-sdk's central renovate workflow), so this block is an inert no-op under the Mend-hosted app. The driver is installed as a bare PATH command by that workflow (Renovate does NOT shell-expand the command, so it must not contain ${VARS}); --no-commit leaves the fileFilters commit to Renovate.",
       "matchManagers": [
         "custom.regex"
@@ -136,29 +124,20 @@
       "enabled": false
     },
     {
-      "description": "Conformance package: give in-range bumps their own uv.lock-only PR instead of riding the batched lockFileMaintenance refresh. Apps declare atlan-application-sdk-conformance as an in-range dev dep, so without update-lockfile a new release only reaches an app inside the full lock refresh — which soft-mode apps hold for human review. A dedicated single-package PR lets the soft-mode template carve out auto-merge for just this package while everything else keeps requiring approval. The lock refresh may still pick up the same bump; whichever PR merges first wins and the other rebases clean.",
+      "description": "Conformance package: give in-range bumps their own uv.lock-only PR instead of riding the batched lockFileMaintenance refresh. Apps declare atlan-application-sdk-conformance as an in-range dev dep, so without update-lockfile a new release only reaches an app inside the full lock refresh — which soft-mode apps hold for human review. A dedicated single-package PR lets the soft-mode template carve out auto-merge for just this package while everything else keeps requiring approval. The lock refresh may still pick up the same bump; whichever PR merges first wins and the other rebases clean. Auto-merged on green for EVERY update type, majors included (FND-378) — deliberately unlike the SDK and contract-toolkit lanes, which disable majors as opt-in migrations. Those two ship runtime code; this one ships a checker, whose worst case is a red check on the very PR that introduced it, so the conformance suite is its own gate and a major it cannot pass simply never merges. Treating majors as opt-in instead would be a silent hold, not a reviewed one: dependencyDashboard is false fleet-wide, so a disabled lane raises nothing and announces nothing, and the fleet would drift on the one package whose job is to propagate fleet policy. minimumReleaseAge is explicitly null: first-party releases are never subject to the cooldown.",
       "matchPackageNames": [
         "atlan-application-sdk-conformance"
       ],
       "rangeStrategy": "update-lockfile",
       "groupName": "conformance package",
       "prPriority": 9,
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true,
+      "minimumReleaseAge": null,
       "addLabels": [
         "conformance-package-update"
       ]
-    },
-    {
-      "description": "Conformance package: auto-merge minor/patch on green (the conformance suite itself gates the PR). Major bumps stay human-reviewed, mirroring the app-contract-toolkit policy.",
-      "matchPackageNames": [
-        "atlan-application-sdk-conformance"
-      ],
-      "matchUpdateTypes": [
-        "minor",
-        "patch"
-      ],
-      "automerge": true,
-      "automergeType": "pr",
-      "platformAutomerge": true
     },
     {
       "description": "Lock-refresh lane's rung on the prPriority ladder: created ahead of the non-critical crowd (0) but after the SDK (10) and conformance/toolkit (9) lanes. It has to live in packageRules — prPriority declares parents: ['packageRules'], so Renovate ignores it anywhere else and only says so as a config warning. It sat inside the lockFileMaintenance object from the lane's introduction until FND-359, which means the ladder this preset documents was never fully in effect: the lock refresh ran at the default priority 0, tied with the non-critical group it was supposed to outrank. Only observable under contention, since prConcurrentLimit (8) is what makes creation order matter at all — which is why it went unnoticed, along with nothing validating this preset until FND-359 added renovate-config-validator to pre-commit.",
@@ -168,14 +147,13 @@
       "prPriority": 5
     },
     {
-      "description": "Release-age cooldown for third-party PyPI packages on the lanes Renovate can actually age-check (FND-359). Upstream exempts lockFileMaintenance, lockfileUpdate, pin, bump, rollback and replacement from minimumReleaseAge, so this covers only the lanes where Renovate itself picks the version; the lock-refresh lane carries its own bound via postUpgradeTasks. matchUpdateTypes is a positive ALLOWLIST rather than a blanket match on purpose: minimumReleaseAgeBehaviour defaults to timestamp-required, so an update type with no release timestamp counts as never-aged and a blanket rule would suppress those lanes permanently rather than delay them. Failing open that way (a newly-supported type is merely not yet cooled down) is the right direction for a rule whose job is to delay, not to block. First-party packages are excluded here and set minimumReleaseAge: null in their own lanes above — belt and braces, since rule order decides. docker is deliberately absent: base-image bumps are mostly CVE patches, so a week's hold is a net security loss, and the docker timestamp is the publisher-controlled org.opencontainers.image.created annotation, which Renovate's own docs flag as bypassable.",
+      "description": "Release-age cooldown for third-party PyPI packages on the lanes Renovate can actually age-check (FND-359). Upstream exempts lockFileMaintenance, lockfileUpdate, pin, bump, rollback and replacement from minimumReleaseAge, so this covers only the lanes where Renovate itself picks the version; the lock-refresh lane carries its own bound via postUpgradeTasks. matchUpdateTypes is a positive ALLOWLIST rather than a blanket match on purpose: minimumReleaseAgeBehaviour defaults to timestamp-required, so an update type with no release timestamp counts as never-aged and a blanket rule would suppress those lanes permanently rather than delay them. Failing open that way (a newly-supported type is merely not yet cooled down) is the right direction for a rule whose job is to delay, not to block. The two packages we publish are excluded here and set minimumReleaseAge: null in their own lanes above — belt and braces, since rule order decides. pyatlan is Atlan-published too but is deliberately NOT excluded and has no lane of its own (FND-378): a connector receives a pyatlan major only by taking an SDK release that raises the SDK's own `pyatlan>=N,<N+1` cap, which is already a reviewed, CI-gated artifact, and exactly one fleet repo declares pyatlan at all — Renovate's uv manager extracts only DECLARED dependencies, so in the rest a pyatlan lane can never raise a PR. The two repos where it is declared get the ordinary third-party treatment, which is the treatment a dedicated lane was reaching for anyway: majors as their own human-reviewed PR, non-majors in the grouped lane, both a week behind. Do not read the `--exempt pyatlan` in the lockFileMaintenance command as contradicting this: that exemption is resolution correctness (without it a bounded resolve silently backtracks the SDK), not cooldown policy. docker is deliberately absent: base-image bumps are mostly CVE patches, so a week's hold is a net security loss, and the docker timestamp is the publisher-controlled org.opencontainers.image.created annotation, which Renovate's own docs flag as bypassable.",
       "matchDatasources": [
         "pypi"
       ],
       "matchPackageNames": [
         "!atlan-application-sdk",
-        "!atlan-application-sdk-conformance",
-        "!pyatlan"
+        "!atlan-application-sdk-conformance"
       ],
       "matchUpdateTypes": [
         "major",
@@ -185,14 +163,13 @@
       "minimumReleaseAge": "7 days"
     },
     {
-      "description": "Lane model: group every OTHER PyPI dependency's non-major updates into ONE rolling PR. With bounded lanes — SDK (1) + conformance (1) + pyatlan (1) + contract-toolkit (1) + lock maintenance (1) + this group (1) + github-actions (1) — the crowd occupies a single prConcurrentLimit slot and can never starve the critical lanes, which soft-mode repos previously hit: 5 human-review dep PRs squatting every slot meant an SDK bump PR was simply never created. Excludes the packages with dedicated lanes above.",
+      "description": "Lane model: group every OTHER PyPI dependency's non-major updates into ONE rolling PR. With bounded lanes — SDK (1) + conformance (1) + contract-toolkit (1) + lock maintenance (1) + this group (1) + github-actions (1) — the crowd occupies a single prConcurrentLimit slot and can never starve the critical lanes, which soft-mode repos previously hit: 5 human-review dep PRs squatting every slot meant an SDK bump PR was simply never created. Excludes the packages with dedicated lanes above.",
       "matchDatasources": [
         "pypi"
       ],
       "matchPackageNames": [
         "!atlan-application-sdk",
-        "!atlan-application-sdk-conformance",
-        "!pyatlan"
+        "!atlan-application-sdk-conformance"
       ],
       "matchUpdateTypes": [
         "minor",
@@ -210,8 +187,7 @@
       ],
       "matchPackageNames": [
         "!atlan-application-sdk",
-        "!atlan-application-sdk-conformance",
-        "!pyatlan"
+        "!atlan-application-sdk-conformance"
       ],
       "matchUpdateTypes": [
         "major"
