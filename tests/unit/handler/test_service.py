@@ -377,9 +377,9 @@ class TestAuthEndpoint:
         """If someone adds a new AuthStatus without updating the map, this
         test catches it."""
         for status in AuthStatus:
-            assert isinstance(status.http_status, int), (
-                f"{status} missing from _AUTH_STATUS_HTTP_CODES"
-            )
+            assert isinstance(
+                status.http_status, int
+            ), f"{status} missing from _AUTH_STATUS_HTTP_CODES"
 
 
 class TestPreflightEndpoint:
@@ -1298,9 +1298,9 @@ class TestStartWorkflowRouting:
             # The started workflow name must end in ':extract', not ':load'
             started_name = mock_client.start_workflow.call_args[0][0]
             assert ":load" not in started_name, f"load was dispatched: {started_name!r}"
-            assert started_name.endswith(":extract"), (
-                f"Expected :extract, got {started_name!r}"
-            )
+            assert started_name.endswith(
+                ":extract"
+            ), f"Expected :extract, got {started_name!r}"
             assert not any(
                 issubclass(w.category, DeprecationWarning) for w in caught
             ), "Canonical ?entrypoint= path must not emit DeprecationWarning"
@@ -1707,18 +1707,18 @@ class TestStartWorkflowInvocability:
                 resp = client.post(
                     f"/workflows/v1/start?entrypoint={ep_name}", json={"name": "x"}
                 )
-                assert resp.status_code == 200, (
-                    f"?entrypoint={ep_name} returned {resp.status_code}"
-                )
+                assert (
+                    resp.status_code == 200
+                ), f"?entrypoint={ep_name} returned {resp.status_code}"
                 wf_name = self._started_workflow_name(mock_client)
                 if ep_suffix is None:
-                    assert ":" not in wf_name, (
-                        f"?entrypoint={ep_name}: expected bare name (no colon), got {wf_name!r}"
-                    )
+                    assert (
+                        ":" not in wf_name
+                    ), f"?entrypoint={ep_name}: expected bare name (no colon), got {wf_name!r}"
                 else:
-                    assert wf_name.endswith(ep_suffix), (
-                        f"?entrypoint={ep_name}: expected suffix {ep_suffix!r}, got {wf_name!r}"
-                    )
+                    assert wf_name.endswith(
+                        ep_suffix
+                    ), f"?entrypoint={ep_name}: expected suffix {ep_suffix!r}, got {wf_name!r}"
             finally:
                 patcher.stop()
 
@@ -2244,9 +2244,9 @@ class TestWorkflowConfigValidation:
             "/workflows/v1/config/valid-id",
             params={"type": type_param},
         )
-        assert response.status_code == 422, (
-            f"Expected 422 from FastAPI pattern validator for type={type_param!r}, got {response.status_code}"
-        )
+        assert (
+            response.status_code == 422
+        ), f"Expected 422 from FastAPI pattern validator for type={type_param!r}, got {response.status_code}"
 
     @pytest.mark.parametrize(
         "type_param",
@@ -2259,9 +2259,9 @@ class TestWorkflowConfigValidation:
             params={"type": type_param},
             json={"key": "value"},
         )
-        assert response.status_code == 422, (
-            f"Expected 422 from FastAPI pattern validator for type={type_param!r}, got {response.status_code}"
-        )
+        assert (
+            response.status_code == 422
+        ), f"Expected 422 from FastAPI pattern validator for type={type_param!r}, got {response.status_code}"
 
     @pytest.mark.parametrize(
         "config_id",
@@ -2271,9 +2271,9 @@ class TestWorkflowConfigValidation:
         """Valid config_ids pass the regex check (result is 503/404 without a store, not 400)."""
         client = _make_client()
         response = client.get(f"/workflows/v1/config/{config_id}")
-        assert response.status_code != 400, (
-            f"Valid config_id {config_id!r} was wrongly rejected"
-        )
+        assert (
+            response.status_code != 400
+        ), f"Valid config_id {config_id!r} was wrongly rejected"
 
 
 class TestDaprSubscribeEndpoint:
@@ -7103,9 +7103,9 @@ class TestAgentJsonLift:
 
     def test_placeholder_widget_is_not_promoted(self) -> None:
         out = _lift_agent_json({"metadata": {"agent-json": self._PLACEHOLDER}})
-        assert "agent_json" not in out, (
-            "a placeholder spec must not reach the typed agent_json field"
-        )
+        assert (
+            "agent_json" not in out
+        ), "a placeholder spec must not reach the typed agent_json field"
 
     def test_placeholder_widget_body_still_validates(self) -> None:
         """The regression: the normalized body must be accepted by the typed input."""
