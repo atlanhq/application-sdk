@@ -1,0 +1,128 @@
+name: Bound the Renovate lock refresh
+
+# The release-age cooldown for application-sdk's OWN lock-refresh lane (FND-376).
+#
+# The fleet gets this from a Renovate `postUpgradeTasks` command (FND-359), which
+# only exists on the self-hosted runner because `allowedCommands` is admin-only.
+# application-sdk's dependency PRs come from Mend, which has no such hook — so
+# the repo that publishes the wheel ~100 repos install was the only one still
+# adopting minutes-old transitive releases unattended. This runs the same tested
+# driver at the only other point where it can reach this repo: the push Mend
+# makes to its own branch.
+#
+# Deliberately NOT a workflow that opens its own PR. Keeping Mend as the PR author
+# is what lets `renovate-auto-approve-reusable.yml` stay untouched — a
+# self-authored PR would fail its author condition outright, and widening a
+# fleet-wide approval gate for one repo is not a trade worth making. The gate's
+# other condition, a green `renovate/artifacts`, does NOT survive our commit on
+# its own: statuses are per-SHA and Renovate stamps only its own commits. The
+# last step carries that state forward — see carry_artifact_status.py.
+#
+# Scope is `renovate/lock-file-maintenance` alone. The `update-lockfile` lanes
+# (SDK, conformance) also write uv.lock, but each moves a single named package
+# that is first-party and explicitly chosen — the cooldown has no business
+# delaying a deliberate pick, only the unattended upgrade-everything refresh.
+#
+# All logic lives in the tested driver .github/scripts/bound_lock_branch.py; this
+# workflow provides the toolchain, the baseline ref, and the push.
+
+on:
+  push:
+    branches:
+      - renovate/lock-file-maintenance
+    paths:
+      - "uv.lock"
+      - "packages/conformance/uv.lock"
+
+permissions:
+  contents: read
+
+# A newer force-push from Renovate supersedes whatever we are resolving, and a
+# bound computed against a branch that no longer exists is worth nothing —
+# cancel rather than race it to the push.
+concurrency:
+  group: bound-lock-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bound:
+    name: Re-resolve uv.lock under the release-age window
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Re-entrancy guard. Our own push re-fires this workflow (an App-token push
+    # does trigger workflows — that is the whole reason we use one). The driver is
+    # idempotent, so the second run would find nothing to commit and exit clean,
+    # but it would pay for two full `uv lock` resolves to learn that. Renovate's
+    # own commit subject is "chore(deps): lock file maintenance", so this never
+    # skips a real refresh.
+    if: "${{ !startsWith(github.event.head_commit.message, 'chore(deps): bound the refreshed locks') }}"
+    permissions:
+      contents: write
+      # For the carry-forward below. Written with GITHUB_TOKEN rather than the
+      # App token: publishing a commit status needs no identity that re-triggers
+      # anything, so the narrower credential is the right one.
+      statuses: write
+    steps:
+      # A real (non-github-actions[bot]) identity is required: the push below must
+      # re-trigger the PR's required checks against the new commit, which a push
+      # made with the default GITHUB_TOKEN does not. Same reason, same mechanism
+      # as dependabot-requirements-sync.yaml, which has been pushing to this
+      # repo's renovate/** branches on that basis.
+      - name: Mint fleet App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          ref: ${{ github.ref }}
+
+      # The baseline the bound is computed against — see the driver's
+      # baseline_lock_text docstring. Only the tree at the tip of the base branch
+      # is needed (one `git show` of each lock), so a depth-1 fetch is enough and
+      # a full-history checkout is not.
+      - name: Fetch the base branch
+        env:
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        run: git fetch --no-tags --depth=1 origin "+refs/heads/$BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH"
+
+      # Pinned to the same uv the fleet runner and the requirements sync use — a
+      # resolver version skew here would show up as unexplained lock churn.
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+
+      # P7D matches the fleet. A shorter window here would put application-sdk's
+      # CI on a different dependency set from the connectors again, which is half
+      # of what FND-376 exists to fix.
+      - name: Bound the refreshed locks
+        env:
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          python3 .github/scripts/bound_lock_branch.py \
+            --window P7D \
+            --baseline-ref "origin/$BASE_BRANCH"
+
+      # No-op when the locks were already inside the window (the driver commits
+      # nothing), so this needs no condition of its own.
+      - name: Push
+        run: git push
+
+      # Commit statuses are per-SHA and Renovate stamps only its own commits, so
+      # our push moves the head off the SHA `renovate/artifacts` lives on — which
+      # the approval gate reads as not-green and withholds on, permanently. This
+      # republishes the state read from our commit's parent, and only when that
+      # state is `success`; anything else publishes nothing and the gate keeps
+      # withholding. Runs after the push so it stamps the SHA that is actually
+      # the head.
+      - name: Carry renovate/artifacts forward
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 .github/scripts/carry_artifact_status.py \
+            --target-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

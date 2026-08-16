@@ -5,6 +5,16 @@
     "github>atlanhq/application-sdk//renovate-config/default.json"
   ],
   "semanticCommitType": "chore",
+  "lockFileMaintenance": {
+    "description": "Drop the fleet preset's postUpgradeTasks for THIS repo only. The preset's release-age bound (FND-359) runs as a post-upgrade command, which exists solely on the self-hosted runner — `allowedCommands` is admin-only, and this repo is excluded from the runner's discovery precisely so Mend can keep updating its action pins (the fleet App holds no `workflows: write`). Mend therefore sees a command it cannot run and publishes `renovate/artifacts: failure`, which the auto-approve gate reads as not-green and withholds on: measured, the lane went from `success` on #3216 to `failure` on the first branch Renovate rebased after #3227 merged, and that PR then sat unapproved. Clearing the commands here removes a signal that can only ever be false on this repo. The bound itself is NOT lost — `.github/workflows/renovate-lock-cooldown.yaml` applies the same driver to the branch Mend pushes (FND-376), which is the only place it can run here. Scoped to `commands` so the lane's schedule, automerge and labels all still come from the preset.",
+    "postUpgradeTasks": {
+      "commands": [],
+      "fileFilters": [
+        "uv.lock"
+      ],
+      "executionMode": "branch"
+    }
+  },
   "github-actions": {
     "description": "Also track SHA-pinned third-party actions in files outside the default github-actions fileMatch: the conformance bootstrap templates shipped in the package, and the .github/workflow-templates/ starter workflows (Renovate's default anchor for the latter is root-level workflow-templates/, so the nested copies are not matched by default). Scoped to those dirs so it never touches the .md doc examples or the actions_pinning test fixtures. Repo-local (not the fleet preset) because packages/conformance/ is SDK-specific.",
     "managerFilePatterns": [
