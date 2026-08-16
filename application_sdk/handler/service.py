@@ -52,6 +52,7 @@ from fastapi import Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
+from pydantic import ValidationError
 from temporalio.client import WorkflowFailureError
 
 from application_sdk._runtime.offload import run_in_thread
@@ -186,6 +187,96 @@ def _rank_agent_json(raw: Any, key: str) -> int:
     return (2 if isinstance(raw, dict) else 0) + (1 if key == "agent-json" else 0)
 
 
+def _parses_as_agent_spec(candidate: dict[str, Any]) -> bool:
+    """Whether *candidate* is a well-formed :class:`AgentCredentialSpec`.
+
+    A rendered-but-unfilled agent widget submits every field name as its own
+    value (``{"agent-name": "agent-name", "host": "host", "port": "port", …}``).
+    ``port`` is the spec's only non-``str`` field, so such a payload is coercible
+    to a dict yet fails typed validation. Promoting it to the typed ``agent_json``
+    field therefore turns an optional, unused widget into an unhandled
+    ``ValidationError`` — a 500 on *every* direct-mode request whose form renders
+    the widget, surfacing to the caller as an opaque JSON-decode error rather
+    than anything actionable.
+
+    ``ExtractionInput._skip_agent_json_for_direct`` already discards these on the
+    extraction path for exactly this reason; this is the handler-path equivalent.
+    """
+    from application_sdk.credentials.spec import (  # noqa: PLC0415 — avoid import cycle at module load
+        AgentCredentialSpec,
+    )
+
+    try:
+        AgentCredentialSpec.model_validate(candidate)
+    except ValidationError:
+        return False
+    return True
+
+
+def _select_agent_json(body: dict[str, Any]) -> dict[str, Any] | None:
+    """The highest-ranked agent-json binding in *body*, or ``None`` if absent.
+
+    Searches the top level plus every container the FE may nest a copy in.
+    Ranking is :func:`_rank_agent_json` — freshest copy wins.
+    """
+    selected_spec: dict[str, Any] | None = None
+    selected_rank = -1
+
+    def consider(raw_value: Any, key: str) -> None:
+        nonlocal selected_spec, selected_rank
+        candidate = _coerce_agent_json(raw_value)
+        rank = _rank_agent_json(raw_value, key)
+        if candidate is not None and rank > selected_rank:
+            selected_spec, selected_rank = candidate, rank
+
+    for key in _AGENT_JSON_KEYS:
+        if key in body:
+            consider(body[key], key)
+
+    for container in ("metadata", "connection_config", "credentials"):
+        container_value = body.get(container)
+        if isinstance(container_value, dict):
+            for key in _AGENT_JSON_KEYS:
+                if key in container_value:
+                    consider(container_value[key], key)
+        elif isinstance(container_value, list):  # v3 credentials: list[{key, value}]
+            for item in container_value:
+                if isinstance(item, dict) and item.get("key") in _AGENT_JSON_KEYS:
+                    consider(item.get("value"), item["key"])
+
+    return selected_spec
+
+
+def _strip_agent_json_keys(body: dict[str, Any]) -> dict[str, Any]:
+    """Copy of *body* with every agent-json key removed from every container.
+
+    Runs whenever a binding was found, whether or not it gets promoted: leaving
+    one inside ``credentials`` would let :func:`_normalize_credentials` flatten it
+    into a bogus credential pair.
+    """
+    stripped: dict[str, Any] = {}
+    for key, value in body.items():
+        if key in _AGENT_JSON_KEYS:
+            continue  # drop stale top-level aliases; re-added canonically by the caller
+        if key in ("metadata", "connection_config") and isinstance(value, dict):
+            stripped[key] = {
+                k: v for k, v in value.items() if k not in _AGENT_JSON_KEYS
+            }
+        elif key == "credentials" and isinstance(value, list):
+            stripped[key] = [
+                item
+                for item in value
+                if not (isinstance(item, dict) and item.get("key") in _AGENT_JSON_KEYS)
+            ]
+        elif key == "credentials" and isinstance(value, dict):
+            stripped[key] = {
+                k: v for k, v in value.items() if k not in _AGENT_JSON_KEYS
+            }
+        else:
+            stripped[key] = value
+    return stripped
+
+
 def _lift_agent_json(body: dict[str, Any]) -> dict[str, Any]:
     """Surface the freshest agent-json binding to the top level for SDR detection.
 
@@ -200,56 +291,32 @@ def _lift_agent_json(body: dict[str, Any]) -> dict[str, Any]:
     level and every container, surface it as top-level ``agent_json`` (overriding
     any stale top-level alias Pydantic would otherwise resolve first), and strip
     every agent-json key from the containers so credential flattening never turns
-    one into a bogus pair. No-op when none is found (direct-mode requests)."""
-    best_rank = -1
-    best_aj: dict[str, Any] | None = None
+    one into a bogus pair. No-op when none is found (direct-mode requests).
 
-    for key in _AGENT_JSON_KEYS:
-        if key in body:
-            aj = _coerce_agent_json(body[key])
-            rank = _rank_agent_json(body[key], key)
-            if aj is not None and rank > best_rank:
-                best_rank, best_aj = rank, aj
+    A binding that is not a well-formed spec — the rendered-but-unfilled widget
+    described in :func:`_parses_as_agent_spec` — is stripped but **not** promoted:
+    the request proceeds as direct mode instead of failing typed validation. The
+    strip still happens, because the bogus-credential-pair hazard above applies to
+    a placeholder just as much as to a real spec.
 
-    for container in ("metadata", "connection_config", "credentials"):
-        c = body.get(container)
-        if isinstance(c, dict):
-            for key in _AGENT_JSON_KEYS:
-                if key in c:
-                    aj = _coerce_agent_json(c[key])
-                    rank = _rank_agent_json(c[key], key)
-                    if aj is not None and rank > best_rank:
-                        best_rank, best_aj = rank, aj
-        elif isinstance(c, list):  # v3 credentials: list[{key, value}]
-            for item in c:
-                if isinstance(item, dict) and item.get("key") in _AGENT_JSON_KEYS:
-                    raw = item.get("value")
-                    aj = _coerce_agent_json(raw)
-                    rank = _rank_agent_json(raw, item["key"])
-                    if aj is not None and rank > best_rank:
-                        best_rank, best_aj = rank, aj
-
-    if best_aj is None:
+    Trade-off: an SDR user whose spec is genuinely malformed (say a non-numeric
+    ``port`` they typed themselves) sees "no agent detected" rather than a
+    field-level error. That is deliberate — the alternative is rejecting every
+    direct-mode request whose form merely renders the widget."""
+    selected_spec = _select_agent_json(body)
+    if selected_spec is None:
         return body
 
-    result: dict[str, Any] = {}
-    for k, v in body.items():
-        if k in _AGENT_JSON_KEYS:
-            continue  # drop stale top-level aliases; re-added canonically below
-        if k in ("metadata", "connection_config") and isinstance(v, dict):
-            result[k] = {kk: vv for kk, vv in v.items() if kk not in _AGENT_JSON_KEYS}
-        elif k == "credentials" and isinstance(v, list):
-            result[k] = [
-                i
-                for i in v
-                if not (isinstance(i, dict) and i.get("key") in _AGENT_JSON_KEYS)
-            ]
-        elif k == "credentials" and isinstance(v, dict):
-            result[k] = {kk: vv for kk, vv in v.items() if kk not in _AGENT_JSON_KEYS}
-        else:
-            result[k] = v
-    result["agent_json"] = best_aj
-    return result
+    lifted = _strip_agent_json_keys(body)
+    if _parses_as_agent_spec(selected_spec):
+        lifted["agent_json"] = selected_spec
+    else:
+        logger.debug(
+            "Discarding an agent-json binding that is not a valid "
+            "AgentCredentialSpec (typically a rendered-but-unfilled agent "
+            "widget); handling this request as direct mode."
+        )
+    return lifted
 
 
 # v2-compat: remove when Heracles sends credentials in v3 list[{key, value}] format.

@@ -34,6 +34,7 @@ from application_sdk.handler.service import (
     _flatten_to_pairs,
     _lift_agent_json,
     _normalize_credentials,
+    _normalize_preflight_request,
     _rank_agent_json,
     _wrap_response,
     create_app_handler_service,
@@ -376,9 +377,9 @@ class TestAuthEndpoint:
         """If someone adds a new AuthStatus without updating the map, this
         test catches it."""
         for status in AuthStatus:
-            assert isinstance(
-                status.http_status, int
-            ), f"{status} missing from _AUTH_STATUS_HTTP_CODES"
+            assert isinstance(status.http_status, int), (
+                f"{status} missing from _AUTH_STATUS_HTTP_CODES"
+            )
 
 
 class TestPreflightEndpoint:
@@ -1297,9 +1298,9 @@ class TestStartWorkflowRouting:
             # The started workflow name must end in ':extract', not ':load'
             started_name = mock_client.start_workflow.call_args[0][0]
             assert ":load" not in started_name, f"load was dispatched: {started_name!r}"
-            assert started_name.endswith(
-                ":extract"
-            ), f"Expected :extract, got {started_name!r}"
+            assert started_name.endswith(":extract"), (
+                f"Expected :extract, got {started_name!r}"
+            )
             assert not any(
                 issubclass(w.category, DeprecationWarning) for w in caught
             ), "Canonical ?entrypoint= path must not emit DeprecationWarning"
@@ -1706,18 +1707,18 @@ class TestStartWorkflowInvocability:
                 resp = client.post(
                     f"/workflows/v1/start?entrypoint={ep_name}", json={"name": "x"}
                 )
-                assert (
-                    resp.status_code == 200
-                ), f"?entrypoint={ep_name} returned {resp.status_code}"
+                assert resp.status_code == 200, (
+                    f"?entrypoint={ep_name} returned {resp.status_code}"
+                )
                 wf_name = self._started_workflow_name(mock_client)
                 if ep_suffix is None:
-                    assert (
-                        ":" not in wf_name
-                    ), f"?entrypoint={ep_name}: expected bare name (no colon), got {wf_name!r}"
+                    assert ":" not in wf_name, (
+                        f"?entrypoint={ep_name}: expected bare name (no colon), got {wf_name!r}"
+                    )
                 else:
-                    assert wf_name.endswith(
-                        ep_suffix
-                    ), f"?entrypoint={ep_name}: expected suffix {ep_suffix!r}, got {wf_name!r}"
+                    assert wf_name.endswith(ep_suffix), (
+                        f"?entrypoint={ep_name}: expected suffix {ep_suffix!r}, got {wf_name!r}"
+                    )
             finally:
                 patcher.stop()
 
@@ -2243,9 +2244,9 @@ class TestWorkflowConfigValidation:
             "/workflows/v1/config/valid-id",
             params={"type": type_param},
         )
-        assert (
-            response.status_code == 422
-        ), f"Expected 422 from FastAPI pattern validator for type={type_param!r}, got {response.status_code}"
+        assert response.status_code == 422, (
+            f"Expected 422 from FastAPI pattern validator for type={type_param!r}, got {response.status_code}"
+        )
 
     @pytest.mark.parametrize(
         "type_param",
@@ -2258,9 +2259,9 @@ class TestWorkflowConfigValidation:
             params={"type": type_param},
             json={"key": "value"},
         )
-        assert (
-            response.status_code == 422
-        ), f"Expected 422 from FastAPI pattern validator for type={type_param!r}, got {response.status_code}"
+        assert response.status_code == 422, (
+            f"Expected 422 from FastAPI pattern validator for type={type_param!r}, got {response.status_code}"
+        )
 
     @pytest.mark.parametrize(
         "config_id",
@@ -2270,9 +2271,9 @@ class TestWorkflowConfigValidation:
         """Valid config_ids pass the regex check (result is 503/404 without a store, not 400)."""
         client = _make_client()
         response = client.get(f"/workflows/v1/config/{config_id}")
-        assert (
-            response.status_code != 400
-        ), f"Valid config_id {config_id!r} was wrongly rejected"
+        assert response.status_code != 400, (
+            f"Valid config_id {config_id!r} was wrongly rejected"
+        )
 
 
 class TestDaprSubscribeEndpoint:
@@ -7077,6 +7078,94 @@ class TestAgentJsonLift:
 
     def test_unparseable_string_ignored(self) -> None:
         assert "agent_json" not in _lift_agent_json({"metadata": {"agent_json": "{"}})
+
+    # ---- rendered-but-unfilled agent widget (placeholder values) ----------
+    #
+    # The FE submits every field name as its own value when the agent widget is
+    # rendered but never filled in. ``port`` is AgentCredentialSpec's only
+    # non-str field, so the payload coerces to a dict but fails typed validation.
+    # Promoting it made PreflightInput/AuthInput/MetadataInput raise an unhandled
+    # ValidationError -> plain-text 500 -> opaque JSON-decode error at the caller,
+    # on every direct-mode request whose form renders the widget.
+    _PLACEHOLDER = {
+        "agent-name": "agent-name",
+        "aws-auth-method": "aws-auth-method",
+        "host": "host",
+        "port": "port",
+        "secret-manager": "secret-manager",
+    }
+    _REAL = {
+        "agent-name": "acme-agent",
+        "secret-path": "arn:aws:secretsmanager:us-east-1:1:secret:x",
+        "host": "db.example.com",
+        "port": 1521,
+    }
+
+    def test_placeholder_widget_is_not_promoted(self) -> None:
+        out = _lift_agent_json({"metadata": {"agent-json": self._PLACEHOLDER}})
+        assert "agent_json" not in out, (
+            "a placeholder spec must not reach the typed agent_json field"
+        )
+
+    def test_placeholder_widget_body_still_validates(self) -> None:
+        """The regression: the normalized body must be accepted by the typed input."""
+        body = _normalize_preflight_request(
+            {
+                "connector": "oracle",
+                "entrypoint": "miner",
+                "credentials": {"extra": {}},
+                "metadata": {
+                    "agent_json": json.dumps(self._PLACEHOLDER),
+                    "agent-json": json.dumps(self._PLACEHOLDER),
+                    "extraction_method": "query_history",
+                },
+            }
+        )
+        PreflightInput.model_validate(body)  # must not raise
+
+    def test_placeholder_inside_credentials_is_still_stripped(self) -> None:
+        """Not promoted, but still removed — otherwise _normalize_credentials
+        flattens it into a bogus `agent-json` credential pair."""
+        out = _lift_agent_json(
+            {"credentials": {"agent-json": self._PLACEHOLDER, "host": "h"}}
+        )
+        assert "agent_json" not in out
+        assert "agent-json" not in out["credentials"]
+        assert out["credentials"]["host"] == "h"
+
+    def test_placeholder_in_v3_credentials_list_is_still_stripped(self) -> None:
+        out = _lift_agent_json(
+            {
+                "credentials": [
+                    {"key": "agent-json", "value": self._PLACEHOLDER},
+                    {"key": "host", "value": "h"},
+                ]
+            }
+        )
+        assert "agent_json" not in out
+        assert all(c["key"] != "agent-json" for c in out["credentials"])
+
+    def test_real_spec_is_still_promoted(self) -> None:
+        out = _lift_agent_json({"metadata": {"agent-json": self._REAL}})
+        assert out["agent_json"] == self._REAL
+
+    def test_real_spec_wins_over_a_placeholder_copy(self) -> None:
+        """Rank prefers the parsed object; validity must not un-rank the winner."""
+        out = _lift_agent_json(
+            {
+                "metadata": {
+                    "agent-json": self._REAL,
+                    "agent_json": json.dumps(self._REAL),
+                }
+            }
+        )
+        assert out["agent_json"] == self._REAL
+
+    def test_valid_but_unpopulated_spec_is_still_promoted(self) -> None:
+        """is_populated() is the consumers' call, not the lift's. A name-only spec
+        parses, so it is promoted and left for sdr.py to reject."""
+        out = _lift_agent_json({"metadata": {"agent-json": {"agent-name": "acme"}}})
+        assert out["agent_json"] == {"agent-name": "acme"}
 
 
 class TestManifestPostTransport:
