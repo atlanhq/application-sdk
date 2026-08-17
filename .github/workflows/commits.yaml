@@ -84,6 +84,21 @@ permissions:
   contents: read
   pull-requests: write
 
+# One in-flight run per PR. Both paths below mutate the same sticky comment, so
+# without this a `synchronize` run and a later `edited` (re-title) run overlap
+# and the older run's comment-POST can land after the newer run's comment-CLEAR
+# — leaving an obsolete failure comment on a check that now passes, which is the
+# same stuck-red shape FND-381 is about.
+#
+# The group resolves in the CALLER's context, so it is per-PR in the repo being
+# checked; `merge_group` (and any other event without a PR number) falls back to
+# github.sha, which is run-distinct and therefore serialises nothing. Same shape
+# as generated-freshness.yaml, the other sticky-commenting reusable here, and as
+# this repo's own pr-title-convention.yaml.
+concurrency:
+  group: conventional-commits-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
 jobs:
   conventional-commits:
     name: Validate PR title

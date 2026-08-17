@@ -142,6 +142,53 @@ def test_every_pr_only_step_has_a_verdict_case() -> None:
     assert tuple(name for name, _ in _PR_ONLY_STEPS_WITH_VERDICT) == _PR_ONLY_STEPS
 
 
+# ── Coverage: the classifications are pinned to the YAML, not to each other ──
+
+
+def test_every_step_is_named() -> None:
+    """An unnamed step is invisible to every check below, which look steps up by
+    name — so the coverage assertion would silently stop covering it."""
+    for index, step in enumerate(_steps()):
+        assert step.get("name"), f"step {index} in {_REUSABLE.name} has no `name:`"
+
+
+def test_every_step_is_classified() -> None:
+    """Anchors coverage to the workflow itself.
+
+    Comparing the classification lists only to each other proves they agree, not
+    that they describe the job: a step added to the YAML without a
+    classification would pass every test in this file while breaking the
+    merge_group or fork design it was never checked against.
+    """
+    named = {str(step["name"]) for step in _steps()}
+    classified = set(_PR_ONLY_STEPS) | {_NOOP_STEP, _FAIL_STEP}
+    assert named == classified, (
+        "unclassified step(s): "
+        f"{sorted(named - classified)}; stale classification(s): "
+        f"{sorted(classified - named)}"
+    )
+
+
+def test_every_step_is_gated() -> None:
+    """Every step in this job is conditional on the event or the verdict. An
+    ungated one would run on merge_group, where there is no PR title to act on
+    and no verdict to read."""
+    for step in _steps():
+        assert step.get("if"), f"step {step['name']!r} has no `if:` gate"
+
+
+# ── The sticky comment cannot be raced by an overlapping run ─────────────────
+
+
+def test_reusable_serialises_runs_per_pr() -> None:
+    """Both comment paths mutate one sticky comment, so an older run's POST
+    landing after a newer run's CLEAR would leave an obsolete failure comment on
+    a passing check. A per-PR group with cancel-in-progress is what prevents it."""
+    concurrency = _load(_REUSABLE)["concurrency"]
+    assert "github.event.pull_request.number" in concurrency["group"]
+    assert concurrency["cancel-in-progress"] is True
+
+
 def test_noop_step_runs_on_merge_group() -> None:
     """The one step that must carry the conclusion when there is no PR title."""
     gate = _gate(_NOOP_STEP)
