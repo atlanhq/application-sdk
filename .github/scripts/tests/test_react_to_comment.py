@@ -190,6 +190,45 @@ def test_the_request_targets_the_comment_reactions_endpoint() -> None:
     assert "POST" in args
 
 
+def test_a_runner_that_raises_warns_and_returns_false() -> None:
+    """A missing/non-executable `gh` raises before any CompletedProcess exists.
+
+    `subprocess.run` raises FileNotFoundError when the binary is absent; the
+    always-exit-0 contract has to hold for that too, not just for non-zero
+    return codes — an exception escaping `main()` fails the step exactly the
+    way the unguarded 503 did.
+    """
+
+    def missing_gh(*args, **kwargs) -> subprocess.CompletedProcess:
+        raise FileNotFoundError(2, "No such file or directory", "gh")
+
+    assert (
+        react_mod.react(
+            REPO, COMMENT_ID, "eyes", runner=missing_gh, sleeper=RecordingSleeper()
+        )
+        is False
+    )
+
+
+def test_a_sleeper_that_raises_warns_and_returns_false() -> None:
+    """Same boundary one call later: the wait between attempts must not kill
+    the job either."""
+
+    def broken_sleeper(_seconds: float) -> None:
+        raise OverflowError("timestamp out of range for platform time_t")
+
+    assert (
+        react_mod.react(
+            REPO,
+            COMMENT_ID,
+            "eyes",
+            runner=RecordingRunner(fail(GH_503)),
+            sleeper=broken_sleeper,
+        )
+        is False
+    )
+
+
 # --------------------------------------------------------------------------
 # The exit-code contract — the actual point of the script
 # --------------------------------------------------------------------------
@@ -207,6 +246,22 @@ def test_main_always_exits_zero_however_the_reaction_fails(
     monkeypatch.setenv("REACTION", "eyes")
     monkeypatch.setenv("REACT_BACKOFF_SECONDS", "0.001")
     monkeypatch.setattr(react_mod, "_RUN", lambda *a, **k: fail(stderr))
+
+    assert react_mod.main() == 0
+
+
+def test_main_exits_zero_even_when_the_runner_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end for the spawn-failure path: `gh` absent → warning, exit 0."""
+    monkeypatch.setenv("REPO", REPO)
+    monkeypatch.setenv("COMMENT_ID", COMMENT_ID)
+    monkeypatch.setenv("REACTION", "eyes")
+
+    def missing_gh(*args, **kwargs) -> subprocess.CompletedProcess:
+        raise FileNotFoundError(2, "No such file or directory", "gh")
+
+    monkeypatch.setattr(react_mod, "_RUN", missing_gh)
 
     assert react_mod.main() == 0
 

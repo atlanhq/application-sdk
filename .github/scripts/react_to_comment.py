@@ -161,7 +161,20 @@ def react(
     ]
 
     for attempt in range(1, max_attempts + 1):
-        result = runner(args, capture_output=True, text=True, check=False)
+        try:
+            result = runner(args, capture_output=True, text=True, check=False)
+        except Exception as exc:  # noqa: BLE001 — see below
+            # A missing or non-executable `gh` raises FileNotFoundError before
+            # any CompletedProcess exists, and nothing else in this file would
+            # catch it — the exception would escape main() and fail the step,
+            # which is the exact always-exit-0 contract this script exists to
+            # hold. The boundary is deliberately broad: ANY raise from the
+            # spawn path is a reason to warn and degrade, never to fail.
+            print(
+                f"::warning::could not react :{reaction}: on comment "
+                f"{comment_id} (runner raised): {exc}"
+            )
+            return False
         if result.returncode == 0:
             print(f"Reacted :{reaction}: on comment {comment_id}")
             return True
@@ -181,7 +194,14 @@ def react(
             f"::notice::reaction attempt {attempt}/{max_attempts} failed "
             f"({stderr}); retrying in {delay:g}s"
         )
-        sleeper(delay)
+        try:
+            sleeper(delay)
+        except Exception as exc:  # noqa: BLE001 — same contract as above
+            print(
+                f"::warning::could not react :{reaction}: on comment "
+                f"{comment_id} (sleeper raised): {exc}"
+            )
+            return False
 
     print(
         f"::warning::could not react :{reaction}: on comment {comment_id} "
