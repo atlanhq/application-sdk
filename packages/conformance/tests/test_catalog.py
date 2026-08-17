@@ -90,12 +90,19 @@ def test_catalog_block_rules_state_customer_impact() -> None:
 #: warn to block" — that is a tier reference. These are justifications, and a
 #: BLOCK rule carrying one publishes a doc page whose tier column and body
 #: disagree (``gen-rule-docs`` renders both from the same definition).
-_WARN_JUSTIFYING_PHRASES = (
-    "this is a warn",
-    "land as ``warn``",
-    "warn (not block)",
-    "warn (new-rule tier policy)",
-    "warn (per the new-rule tier policy)",
+#:
+#: Word-boundary regexes, not bare substrings: ``"this is a warn"`` as a
+#: substring also matches "this is a warn*ing* sign", which never argues for
+#: the WARN tier. ``\b`` keeps the match on the standalone phrase.
+_WARN_JUSTIFYING_PHRASES = tuple(
+    re.compile(rf"\b{re.escape(phrase)}\b")
+    for phrase in (
+        "this is a warn",
+        "land as ``warn``",
+        "warn (not block)",
+        "warn (new-rule tier policy)",
+        "warn (per the new-rule tier policy)",
+    )
 )
 
 
@@ -110,17 +117,30 @@ def test_catalog_block_rules_carry_no_warn_justifying_prose() -> None:
     """
     rules = load_catalog()
     offenders = [
-        (rule.id, phrase)
+        (rule.id, phrase.pattern)
         for rule in rules
         if rule.tier is EnforcementTier.BLOCK
         for phrase in _WARN_JUSTIFYING_PHRASES
-        if phrase in f"{rule.rationale}\n{rule.full_description}".lower()
+        if phrase.search(f"{rule.rationale}\n{rule.full_description}".lower())
     ]
     assert not offenders, (
         "BLOCK rules whose prose still argues for WARN: "
         f"{offenders} — rewrite the paragraph to say why the rule blocks, or "
         "return the rule to WARN"
     )
+
+
+def test_warn_justifying_phrases_do_not_over_match() -> None:
+    """Regression pin for the word-boundary fix.
+
+    "This is a warning sign …" is ordinary English, not a WARN-tier
+    justification — a bare substring match on ``"this is a warn"`` trips it.
+    The word-boundary regexes must not.
+    """
+    prose = "This is a warning sign for operators".lower()
+    assert not any(p.search(prose) for p in _WARN_JUSTIFYING_PHRASES)
+    # The real justifying phrase still matches.
+    assert _WARN_JUSTIFYING_PHRASES[0].search("this is a warn, not a block")
 
 
 def test_catalog_all_have_scope() -> None:

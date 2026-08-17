@@ -88,10 +88,11 @@ call detect-fix-recheck
 
 _Read by `remediate-finding` when `finding.area == "contract-toolkit"`._
 
-All K-series rules are **WARN-tier except K009, K011, and K012 (BLOCK)** — the
-WARN rules surface only under `--strict` mode, while K009 (unresolved scaffold
-placeholder), K011 (missing `app_id`), and K012 (missing `generate` poe task) are
-FAILING results that must be remediated even in default mode.
+All K-series rules are **WARN-tier except K003, K009, K011, and K012 (BLOCK)** —
+the WARN rules surface only under `--strict` mode, while K003 (pin/lock drift),
+K009 (unresolved scaffold placeholder), K011 (missing `app_id`), and K012
+(missing `generate` poe task) are FAILING results that must be remediated even
+in default mode.
 Before proposing any edit, read the actual lines around `finding.line` in
 `finding.file`.  **Never hand-edit `atlan.yaml`, `app/generated/`, or any other
 generated artifact directly** — those are outputs of `pkl eval`, and K004/K005
