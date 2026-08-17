@@ -2,6 +2,12 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.20.0] - 2026-08-17
+
+### Features
+
+- graduate P030 + seven WARN rules to BLOCK; customer-impact line required in every BLOCK rationale (FND-311) (#3169) ([34c541a](https://github.com/atlanhq/application-sdk/commit/34c541a))
+
 ## [0.19.1] - 2026-08-14
 
 ### Bug fixes
