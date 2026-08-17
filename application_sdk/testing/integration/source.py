@@ -161,6 +161,7 @@ class DataForgeSource:
         #    tenant creds, flags, everything — so the flat pass requires a real
         #    datasource-specific prefix.
         prefix = ""
+        derived = ""
         if resolved_ds:
             derived = re.sub(r"[^A-Za-z0-9]", "_", resolved_ds.upper())
             # Require at least one alphanumeric: a separator-only datasource
@@ -169,10 +170,28 @@ class DataForgeSource:
                 derived = ""
             if derived:
                 prefix = "E2E_" + derived + "_"
+        # Sibling-collision guard: when the datasource needed NO folding to
+        # derive its prefix — it was already alphanumerics only (``postgres``,
+        # ``POWERBI``) — the prefix is EXACT: ``E2E_POSTGRES_`` can only be
+        # followed by a plain field name, and a source's own field names are
+        # alphanumeric (``E2E_POSTGRES_HOST``'s ``HOST``, never
+        # ``READONLY_HOST``). So any matched key whose remainder still
+        # contains a separator is really a sibling datasource's var — the
+        # classic pair being ``E2E_POSTGRES_READONLY_HOST`` folding into the
+        # ``postgres`` bag as ``readonlyhost`` — and is skipped. A datasource
+        # that DID fold (``sql.dwh``, ``power bi`` → ``SQL_DWH``, ``POWER_BI``)
+        # derives an ambiguous prefix where a separator in the remainder can
+        # be a legitimate fold of the datasource's own characters, so the
+        # guard stays off there: the old, looser matching is preserved rather
+        # than dropping real fields.
+        guard_siblings = bool(prefix) and derived == resolved_ds.upper()
         if prefix:
             for key, value in env.items():
                 if key.startswith(prefix):
-                    normalised = _normalise(key[len(prefix) :])
+                    remainder = key[len(prefix) :]
+                    if guard_siblings and "_" in remainder:
+                        continue
+                    normalised = _normalise(remainder)
                     # A var exactly equal to the prefix has no field name; a
                     # normalised-empty key would be stored but never readable.
                     if not normalised or normalised in blob_keys:
