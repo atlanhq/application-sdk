@@ -28,6 +28,19 @@
 # quota, which is the point: a reconciler polling every PR on the `atlan-ci` PAT
 # would become a new source of the exhaustion it exists to recover from. The PAT
 # is spent only on the APPROVE call, once per PR actually approved.
+#
+# Quota-aware: before the first approval of a run it reads `GET /rate_limit` on
+# the approver (free — it does not count against the quota it reports) and
+# attempts nothing if the quota is spent. Taking a 403 to discover that spends a
+# doomed request, and hammering an exhausted primary limit is how it escalates
+# into a secondary/abuse block.
+#
+# A quota-blocked approval is a DEFERRAL: annotated and summarised, but the run
+# stays green, because the next tick after the hourly reset posts it. Going red
+# every ten minutes for an hour would bury the annotation that matters when the
+# problem does not clear on its own. A verdict still unapproved past
+# --stale-after-minutes (90) has outlived a full reset without recovering, and
+# that does red the run.
 
 name: SDK Review — reconcile lost approvals
 
