@@ -99,13 +99,19 @@ def parse_junit_tier(path: str | Path) -> TierTestCounts:
 
 
 def resolve_junit_paths(patterns: Iterable[str]) -> list[str]:
-    """Expand *patterns* (plain paths or globs) into existing files, de-duplicated.
+    """Expand *patterns* (plain paths or globs) into existing junit files, de-duplicated.
 
     The e2e tier arrives as N per-leg artifacts (one per suite × cloud since
     FND-6), so the CLI is handed a glob rather than a list the workflow would
     have to build with shell branching.  A pattern that matches nothing yields
     nothing — which the caller reads as "e2e did not run", never as "e2e ran and
     scored zero".
+
+    A match is only kept if it looks like a junit document — a ``.xml`` file
+    whose root element is ``<testsuite>`` or ``<testsuites>``.  Without that
+    gate a broad caller glob would either crash the scorecard (binary / non-XML
+    match handed to ``ET.parse``) or silently fold an unrelated XML's
+    ``<testcase>`` elements into the e2e counts.
     """
     seen: dict[str, None] = {}
     for pattern in patterns:
@@ -115,9 +121,27 @@ def resolve_junit_paths(patterns: Iterable[str]) -> list[str]:
         # A plain (non-glob) path is its own match; glob returns it only when it
         # exists, which is the same existence check the single-file reader does.
         for match in matches:
-            if Path(match).is_file():
+            if _is_junit_file(match):
                 seen.setdefault(match, None)
     return list(seen)
+
+
+def _is_junit_file(path: str) -> bool:
+    """Cheap "is this a junit XML?" gate for glob matches.
+
+    Checks the ``.xml`` suffix first (a directory or suffix-less file never
+    reaches the parser), then reads just the root element — not the whole tree —
+    so a malformed tail cannot reject a file whose root is genuine junit.
+    """
+    candidate = Path(path)
+    if candidate.suffix != ".xml" or not candidate.is_file():
+        return False
+    try:
+        for _event, element in ET.iterparse(str(candidate), events=("start",)):
+            return element.tag in ("testsuite", "testsuites")
+    except ET.ParseError:
+        return False
+    return False
 
 
 def parse_junit_tier_merged(paths: Iterable[str | Path]) -> TierTestCounts:

@@ -235,6 +235,44 @@ def test_resolve_junit_paths_matching_nothing_is_empty(tmp_path: Path) -> None:
     assert resolve_junit_paths([""]) == []
 
 
+def test_resolve_junit_paths_skips_a_directory_match(tmp_path: Path) -> None:
+    """A glob can land on a directory named *.xml — never hand that to ET.parse."""
+    (tmp_path / "results.xml").mkdir()
+    (tmp_path / "real.xml").write_text("<testsuites/>", encoding="utf-8")
+    resolved = resolve_junit_paths([str(tmp_path / "*.xml")])
+    assert resolved == [str(tmp_path / "real.xml")]
+
+
+def test_resolve_junit_paths_skips_a_non_junit_xml(tmp_path: Path) -> None:
+    """An unrelated XML must not fold its <testcase> elements into e2e counts."""
+    (tmp_path / "pom.xml").write_text(
+        "<project><modelVersion>4.0.0</modelVersion></project>", encoding="utf-8"
+    )
+    (tmp_path / "results.xml").write_text("<testsuites/>", encoding="utf-8")
+    resolved = resolve_junit_paths([str(tmp_path / "*.xml")])
+    assert resolved == [str(tmp_path / "results.xml")]
+
+
+def test_resolve_junit_paths_skips_a_malformed_xml(tmp_path: Path) -> None:
+    """A truncated / binary-ish .xml must not crash the scorecard."""
+    (tmp_path / "broken.xml").write_bytes(b"\x00\x01not xml")
+    (tmp_path / "real.xml").write_text(
+        '<testsuite name="pytest" tests="1"/>', encoding="utf-8"
+    )
+    resolved = resolve_junit_paths([str(tmp_path / "*.xml")])
+    assert resolved == [str(tmp_path / "real.xml")]
+
+
+def test_resolve_junit_paths_accepts_a_testsuite_root(tmp_path: Path) -> None:
+    """Both junit root forms (<testsuites> and bare <testsuite>) are accepted."""
+    (tmp_path / "suites.xml").write_text("<testsuites/>", encoding="utf-8")
+    (tmp_path / "single.xml").write_text(
+        '<testsuite name="pytest" tests="0"/>', encoding="utf-8"
+    )
+    resolved = resolve_junit_paths([str(tmp_path / "*.xml")])
+    assert resolved == [str(tmp_path / "single.xml"), str(tmp_path / "suites.xml")]
+
+
 def test_parse_coverage_json_totals_and_branch() -> None:
     cov = parse_coverage_json(_FIXTURES / "coverage.json")
     assert isinstance(cov, CoverageMetrics)
