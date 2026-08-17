@@ -597,10 +597,22 @@ def test_label_guard_reads_the_snapshot_not_the_label_it_just_wrote(monkeypatch)
     """
     gh = slow_gh(labels=[])
     assert run_main(gh, monkeypatch, **slow_env()) == 0
-    # It still reconciles labels (that part is unconditional)...
-    assert gh.called(is_label_add)
-    # ...but the freshly-added label must not satisfy its own guard.
     assert gh.called(is_approve) == []
+
+
+def test_a_fired_label_guard_does_not_resurrect_the_stripped_label(monkeypatch):
+    """Bailing must happen before the label reconcile, not after it.
+
+    `sdk-review-approved` is what every invalidator strips and what
+    sdk_review_reconcile.py's cron gates on. Re-adding it on the way to
+    declining the approval would leave the PR wearing a label with nothing
+    behind it, and the next reconciler tick would read that as a lost stamp and
+    approve a verdict a human had deliberately cleared.
+    """
+    gh = slow_gh(labels=[])
+    assert run_main(gh, monkeypatch, **slow_env()) == 0
+    assert gh.called(is_label_add) == []
+    assert gh.called(lambda a: "DELETE" in a) == []
 
 
 def test_fast_path_does_not_require_the_label(monkeypatch):
