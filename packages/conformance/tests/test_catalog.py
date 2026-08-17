@@ -93,9 +93,18 @@ def test_catalog_block_rules_state_customer_impact() -> None:
 #:
 #: Word-boundary regexes, not bare substrings: ``"this is a warn"`` as a
 #: substring also matches "this is a warn*ing* sign", which never argues for
-#: the WARN tier. ``\b`` keeps the match on the standalone phrase.
+#: the WARN tier. ``\b`` keeps the match on the standalone phrase. A boundary
+#: is only added on a side where the phrase actually begins/ends with a word
+#: char — anchoring ``\b`` against a leading/trailing backtick or paren would
+#: force a word char that isn't there and the phrase would never match.
+def _word_boundary(phrase: str) -> re.Pattern[str]:
+    left = r"\b" if phrase[0].isalnum() else ""
+    right = r"\b" if phrase[-1].isalnum() else ""
+    return re.compile(left + re.escape(phrase) + right)
+
+
 _WARN_JUSTIFYING_PHRASES = tuple(
-    re.compile(rf"\b{re.escape(phrase)}\b")
+    _word_boundary(phrase)
     for phrase in (
         "this is a warn",
         "land as ``warn``",
@@ -139,8 +148,17 @@ def test_warn_justifying_phrases_do_not_over_match() -> None:
     """
     prose = "This is a warning sign for operators".lower()
     assert not any(p.search(prose) for p in _WARN_JUSTIFYING_PHRASES)
-    # The real justifying phrase still matches.
-    assert _WARN_JUSTIFYING_PHRASES[0].search("this is a warn, not a block")
+    # Every real justifying phrase still matches its own canonical form — a
+    # boundary fix that silences a true positive would gut the guard.
+    canonical = (
+        "this is a warn, not a block",
+        "should land as ``warn`` here",
+        "tier is warn (not block)",
+        "tier is warn (new-rule tier policy)",
+        "tier is warn (per the new-rule tier policy)",
+    )
+    for phrase, prose in zip(_WARN_JUSTIFYING_PHRASES, canonical):
+        assert phrase.search(prose), f"{phrase.pattern!r} stopped matching {prose!r}"
 
 
 def test_catalog_all_have_scope() -> None:
