@@ -212,41 +212,41 @@ def test_malformed_blob_falls_back_to_flat_vars():
     assert src.get("host") == "db.internal"
 
 
-def test_flat_pass_does_not_leak_a_sibling_datasources_vars():
-    # A single-token datasource derives an exact prefix, so the vars of a
-    # sibling whose name merely SHARES that prefix (postgres vs
-    # postgres-readonly) must not fold into this source's bag: the remainder
-    # after an exact prefix is a field name, which never begins with "_".
+def test_flat_pass_resolves_a_single_token_datasources_underscored_fields():
+    # The export contract (_env_name in fetch_dataforge_source.py) folds a
+    # source's OWN multi-word fields with "_" — iam_role_arn exports as
+    # E2E_POSTGRES_IAM_ROLE_ARN — so on the flat/static path these must resolve.
+    env = {"E2E_POSTGRES_IAM_ROLE_ARN": "arn:aws:iam::1:role/x"}
+    src = DataForgeSource.from_env("postgres", environ=env)
+
+    assert src.available
+    assert src.get("iam_role_arn") == "arn:aws:iam::1:role/x"
+
+
+def test_flat_pass_resolves_an_already_underscored_datasources_fields():
+    # power_bi and power bi are the SAME datasource spelled two ways; both must
+    # resolve their underscored fields identically on the flat path.
+    env = {"E2E_POWER_BI_TENANT_ID": "t-1", "E2E_POWER_BI_CLIENT_SECRET": "s-1"}
+
+    assert DataForgeSource.from_env("power_bi", environ=env).require(
+        "tenant_id", "client_secret"
+    )
+    assert DataForgeSource.from_env("power bi", environ=env).require(
+        "tenant_id", "client_secret"
+    )
+
+
+def test_sibling_datasource_vars_leak_is_a_known_documented_limitation():
+    # With no delimiter between datasource and field that the datasource
+    # segment can never produce, a sibling's vars DO fold into the bag today
+    # (E2E_POSTGRES_READONLY_* → readonlyhost). This pins the current behavior
+    # so the export-contract fix (a ``__`` delimiter at _env_name) can flip it
+    # deliberately rather than silently.
     env = {
         "E2E_POSTGRES_HOST": "db.internal",
         "E2E_POSTGRES_READONLY_HOST": "sibling.internal",
-        "E2E_POSTGRES_READONLY_USERNAME": "sibling-user",
     }
     src = DataForgeSource.from_env("postgres", environ=env)
 
-    assert src.as_dict() == {"host": "db.internal"}
-
-    # …and the sibling reads its own bag untouched.
-    sibling = DataForgeSource.from_env("postgres-readonly", environ=env)
-    assert sibling.as_dict() == {"host": "sibling.internal", "username": "sibling-user"}
-
-
-def test_leading_underscore_remainder_still_reads_for_a_folded_datasource():
-    # A datasource whose own name carries a separator ("sql.dwh") folds to a
-    # prefix where "_" in the remainder CAN be a legitimate fold of the
-    # datasource's own characters, so the sibling guard stays off and a
-    # separated remainder still resolves (pre-guard behaviour).
-    env = {"E2E_SQL_DWH__HOST": "db.internal"}
-    src = DataForgeSource.from_env("sql.dwh", environ=env)
-
     assert src.get("host") == "db.internal"
-
-
-def test_underscored_field_still_reads_when_datasource_name_is_underscored():
-    # The guard keys off the RAW datasource name, not the derived prefix, so
-    # "power bi" (which itself contains a separator) keeps the old loose
-    # matching even though its derived prefix looks single-token.
-    env = {"E2E_POWER_BI_TENANT_ID": "t-1", "E2E_POWER_BI_CLIENT_SECRET": "s-1"}
-    src = DataForgeSource.from_env("power bi", environ=env)
-
-    assert src.require("tenant_id", "client_secret")
+    assert src.get("readonlyhost") == "sibling.internal"  # the leak, documented

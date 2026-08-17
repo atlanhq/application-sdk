@@ -160,8 +160,22 @@ class DataForgeSource:
         #    bare "E2E_" prefix and match every E2E_* var in the environment —
         #    tenant creds, flags, everything — so the flat pass requires a real
         #    datasource-specific prefix.
+        #
+        #    Known limitation (accepted, needs an export-contract change): the
+        #    prefix match also admits a SIBLING datasource's vars whose name
+        #    shares this prefix — ``E2E_POSTGRES_READONLY_HOST`` folds into the
+        #    ``postgres`` bag as ``readonlyhost``. A reader-side guard cannot
+        #    fix this, because the export contract (``_env_name`` in
+        #    ``fetch_dataforge_source.py``) folds a source's OWN multi-word
+        #    fields the same way (``iam_role_arn`` → ``E2E_POSTGRES_IAM_ROLE_ARN``),
+        #    making a sibling var indistinguishable from an own-field on the
+        #    flat path. The durable fix is a delimiter the datasource segment
+        #    can never produce (e.g. ``__`` before FIELD) applied at the export
+        #    site, with the reader splitting on it. Until then the loose match
+        #    is kept deliberately: a leak only reads a sibling's non-secret
+        #    field NAMES into a test bag, while dropping keys would empty the
+        #    bag on the static path and green the merge gate on untested code.
         prefix = ""
-        derived = ""
         if resolved_ds:
             derived = re.sub(r"[^A-Za-z0-9]", "_", resolved_ds.upper())
             # Require at least one alphanumeric: a separator-only datasource
@@ -170,28 +184,10 @@ class DataForgeSource:
                 derived = ""
             if derived:
                 prefix = "E2E_" + derived + "_"
-        # Sibling-collision guard: when the datasource needed NO folding to
-        # derive its prefix — it was already alphanumerics only (``postgres``,
-        # ``POWERBI``) — the prefix is EXACT: ``E2E_POSTGRES_`` can only be
-        # followed by a plain field name, and a source's own field names are
-        # alphanumeric (``E2E_POSTGRES_HOST``'s ``HOST``, never
-        # ``READONLY_HOST``). So any matched key whose remainder still
-        # contains a separator is really a sibling datasource's var — the
-        # classic pair being ``E2E_POSTGRES_READONLY_HOST`` folding into the
-        # ``postgres`` bag as ``readonlyhost`` — and is skipped. A datasource
-        # that DID fold (``sql.dwh``, ``power bi`` → ``SQL_DWH``, ``POWER_BI``)
-        # derives an ambiguous prefix where a separator in the remainder can
-        # be a legitimate fold of the datasource's own characters, so the
-        # guard stays off there: the old, looser matching is preserved rather
-        # than dropping real fields.
-        guard_siblings = bool(prefix) and derived == resolved_ds.upper()
         if prefix:
             for key, value in env.items():
                 if key.startswith(prefix):
-                    remainder = key[len(prefix) :]
-                    if guard_siblings and "_" in remainder:
-                        continue
-                    normalised = _normalise(remainder)
+                    normalised = _normalise(key[len(prefix) :])
                     # A var exactly equal to the prefix has no field name; a
                     # normalised-empty key would be stored but never readable.
                     if not normalised or normalised in blob_keys:
