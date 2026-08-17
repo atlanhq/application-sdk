@@ -398,9 +398,12 @@ def baseline_contract_ref(contract_dir: str = "contract") -> str | None:
       * Renovate ``postUpgradeTasks`` (``--no-commit``): Renovate rewrote
         ``contract/PklProject`` in the working tree but has not committed, so
         ``HEAD`` still holds the old pin.
-      * The per-app ``renovate-pkl-sync.yaml`` shim: Renovate already committed
-        the bump, so the baseline is the parent of the last commit that touched
-        ``PklProject``.
+      * An already-committed bump — a human editing the pin, or the freshness
+        gate running on a PR head. The baseline is then the parent of the last
+        commit that touched ``PklProject``. (Until FND-395 the per-app
+        ``renovate-pkl-sync.yaml`` shim was the main way to arrive here; it is
+        retired, but a committed bump still reaches this code by both routes
+        above, so the branch stays.)
 
     Returns None when the pin is unchanged — which is the common case on an
     ordinary PR, and deliberately switches override detection OFF there. With no

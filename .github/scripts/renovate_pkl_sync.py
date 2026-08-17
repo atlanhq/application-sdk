@@ -1,8 +1,19 @@
 #!/usr/bin/env python3
 """Renovate app-contract-toolkit sync driver.
 
-Invoked by .github/workflows/renovate-pkl-sync.yaml when Renovate bumps the
-``@<version>`` URI in ``contract/PklProject`` on a ``renovate/**`` branch.
+Invoked by the fleet preset's ``postUpgradeTasks`` command (see the
+``app-contract-toolkit`` rule in ``renovate-config/default.json``) when Renovate
+bumps the ``@<version>`` URI in ``contract/PklProject``, so the re-resolve lands
+inside the PR Renovate is already opening. The self-hosted runner installs this
+file on PATH as ``renovate-pkl-sync`` — see the install step in
+``.github/workflows/renovate.yaml``.
+
+Until FND-395 there was a second entry point: a ``renovate-pkl-sync.yaml``
+reusable that each app called on ``push`` to ``renovate/**``, which existed only
+because ``postUpgradeTasks`` commands are gated by the admin-only
+``allowedCommands`` allowlist and were therefore inert under the Mend-hosted
+app. Mend is uninstalled fleet-wide, so that path was retired along with its
+callers. Anything reachable only from a pushed bot branch is gone with it.
 
 Two responsibilities:
 
