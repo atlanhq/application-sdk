@@ -9,15 +9,22 @@ unbounded lock, or a requirements.txt left describing the lock we just replaced.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import bound_lock_branch as orchestrator
+import renovate_approval_conditions as approval
+
+WORKFLOW = (
+    Path(__file__).parent.parent.parent / "workflows" / "renovate-lock-cooldown.yaml"
+)
 
 GIT_ENV = {
     "GIT_AUTHOR_NAME": "t",
@@ -62,6 +69,68 @@ def head_files(repo: Path) -> set[str]:
 
 def head_subject(repo: Path) -> str:
     return git(repo, "log", "-1", "--format=%s").stdout.strip()
+
+
+class TestWorkflowGuards:
+    """The `if:` on the job, which is two guards doing two unrelated jobs.
+
+    Both are asserted here rather than trusted, because both fail silently. A
+    skipped job is not red anywhere: an actor list that drifts out of step with
+    the identity actually pushing would stop bounding the lock and announce
+    nothing, which is the shape of failure FND-367 already paid for once.
+    """
+
+    @property
+    def job(self) -> dict:
+        workflow = yaml.safe_load(WORKFLOW.read_text())
+        return workflow["jobs"]["bound"]
+
+    def test_the_actor_list_matches_the_approval_gates_renovate_identities(self):
+        """One list of Renovate identities, not two.
+
+        The gate accepts these as PR authors; this workflow accepts them as
+        pushers. They describe the same fact — "a Renovate is driving this" — so a
+        change to one that misses the other leaves the lane running for a PR it
+        will not approve, or approving a PR it did not bound.
+        """
+        declared = re.findall(r'"([a-z0-9-]+\[bot\])"', self.job["if"])
+        assert sorted(declared) == sorted(approval.RENOVATE_AUTHORS), (
+            "the workflow's actor allowlist has drifted from "
+            f"RENOVATE_AUTHORS ({approval.RENOVATE_AUTHORS})"
+        )
+
+    def test_the_condition_folds_to_a_single_line(self):
+        # The `if:` is a folded scalar spanning two lines. A continuation line
+        # indented deeper than the block keeps its newline rather than folding to
+        # a space, leaving a literal line break inside the `${{ }}` — which is
+        # not something YAML validation or a lint pass flags.
+        assert "\n" not in self.job["if"]
+
+    def test_the_guard_reads_the_actor_and_not_something_spoofable(self):
+        # `github.actor` is set by GitHub from the push. Deriving the identity
+        # from anything inside the pushed content — a commit author, a trailer —
+        # would let the push assert who made it.
+        assert "github.actor" in self.job["if"]
+        assert "head_commit.author" not in self.job["if"]
+
+    def test_re_entrancy_is_guarded_by_the_commit_subject_we_actually_write(self):
+        # The actor list admits atlan-app-fleet[bot], which is the identity our
+        # own push arrives as, so the actor check cannot be what stops the loop.
+        # This is — and it only works while it matches the driver's message.
+        assert orchestrator.COMMIT_MESSAGE.startswith(
+            "chore(deps): bound the refreshed locks"
+        )
+        assert "chore(deps): bound the refreshed locks" in self.job["if"]
+
+    def test_the_lane_is_scoped_to_the_lock_refresh_branch(self):
+        # Widening this to `renovate/**` would put the bound on the single-package
+        # lanes, where a deliberately chosen first-party version has no business
+        # being delayed.
+        workflow = yaml.safe_load(WORKFLOW.read_text())
+        # YAML 1.1 resolves a bare `on` to the boolean True, so that — not the
+        # string — is the key the loader produces for a workflow's trigger block.
+        triggers = workflow[True]
+        assert triggers["push"]["branches"] == ["renovate/lock-file-maintenance"]
 
 
 class TestProjects:

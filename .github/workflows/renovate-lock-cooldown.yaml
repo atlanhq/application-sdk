@@ -49,13 +49,36 @@ jobs:
     name: Re-resolve uv.lock under the release-age window
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # Re-entrancy guard. Our own push re-fires this workflow (an App-token push
-    # does trigger workflows — that is the whole reason we use one). The driver is
-    # idempotent, so the second run would find nothing to commit and exit clean,
-    # but it would pay for two full `uv lock` resolves to learn that. Renovate's
-    # own commit subject is "chore(deps): lock file maintenance", so this never
-    # skips a real refresh.
-    if: "${{ !startsWith(github.event.head_commit.message, 'chore(deps): bound the refreshed locks') }}"
+    # Two guards, for two unrelated reasons.
+    #
+    # ACTOR. This lane exists to serve pushes made by a Renovate identity, so run
+    # for those and nothing else. The list is the same one the approval gate
+    # accepts as a PR author (`renovate_approval_conditions.RENOVATE_AUTHORS`):
+    # renovate[bot] is Mend, which is what drives this repo today, and
+    # atlan-app-fleet[bot] is the self-hosted runner, kept so this lane does not
+    # quietly stop working if that ever changes. A drift test pins the two lists
+    # together rather than trusting them to stay in step by hand.
+    #
+    # Read this for what it is: defence in depth, not a control. The check is
+    # evaluated from the workflow file at the pushed ref, so it constrains what
+    # runs by accident, not what runs by intent — anything that can change what
+    # this job does can change this line in the same breath. Restricting who may
+    # push these branches is branch configuration, which lives outside the repo;
+    # see FND-395.
+    #
+    # RE-ENTRANCY. Our own push re-fires this workflow (an App-token push does
+    # trigger workflows — that is the whole reason we use one) and arrives as
+    # atlan-app-fleet[bot], which the actor list admits. The driver is idempotent,
+    # so a second run would find nothing to commit and exit clean, but it would
+    # pay for two full `uv lock` resolves to learn that. Renovate's own commit
+    # subject is "chore(deps): lock file maintenance", so this never skips a real
+    # refresh.
+    # Both continuation lines sit at the block's own indentation deliberately: a
+    # more-indented line in a folded scalar keeps its newline instead of folding
+    # to a space, which would leave a literal line break inside the `${{ }}`.
+    if: >-
+      ${{ contains(fromJSON('["atlan-app-fleet[bot]", "renovate[bot]"]'), github.actor)
+      && !startsWith(github.event.head_commit.message, 'chore(deps): bound the refreshed locks') }}
     permissions:
       contents: write
       # For the carry-forward below. Written with GITHUB_TOKEN rather than the

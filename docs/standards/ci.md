@@ -243,6 +243,13 @@ recorded in `dependabot-requirements-sync.yaml`: a `GITHUB_TOKEN` push does not
 re-trigger the PR's required checks, which would leave the PR green against a
 commit that is no longer its head.
 
+The job runs only for a push made by one of the Renovate identities the approval
+gate also accepts as PR authors (`RENOVATE_AUTHORS`), pinned to that list by a
+drift test rather than copied. Treat it as defence in depth and not as a control:
+it is evaluated from the workflow file at the pushed ref, so it constrains what
+runs by accident, not what runs by intent. Restricting who may push a branch is
+branch configuration and lives outside the repo.
+
 ### Any bot commit on a Renovate branch loses `renovate/artifacts`
 
 Commit statuses are per-SHA and Renovate stamps only the commits it authors, so
