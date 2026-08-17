@@ -680,13 +680,35 @@ def test_ready_refuses_to_approve_when_the_listing_is_unreadable(monkeypatch, ca
 
 
 def test_non_ready_fails_loudly_when_stale_approvals_cannot_be_listed(monkeypatch):
-    """Failing to dismiss leaves the merge gate open on a superseded approval."""
+    """Failing to dismiss leaves the merge gate open on a superseded approval.
+
+    The run still writes the failure status: returning before the write would
+    let a prior green `sdk-review` status on this head outlive the verdict that
+    superseded it. The status POST does not depend on the reviews listing, so
+    one degradation does not excuse the other silence."""
     gh = base_gh()
     gh.on(is_review_list, fail("gh: Not Found (HTTP 404)"))
 
     code = run_main(gh, monkeypatch, COMMENT_BODY=verdict_comment("NEEDS_FIXES"))
     assert code == 1
     assert gh.called(lambda a: "dismissals" in a[2]) == []
+    (status,) = gh.called(is_status)
+    assert "state=failure" in status
+
+
+def test_non_ready_unreadable_listing_respects_write_status_false(monkeypatch):
+    """The slow path (WRITE_STATUS=false) owns no status writes, even here."""
+    gh = base_gh()
+    gh.on(is_review_list, fail("gh: Not Found (HTTP 404)"))
+
+    code = run_main(
+        gh,
+        monkeypatch,
+        COMMENT_BODY=verdict_comment("NEEDS_FIXES"),
+        WRITE_STATUS="false",
+    )
+    assert code == 1
+    assert gh.called(is_status) == []
 
 
 # --- stamp_verdict() reports what it did ----------------------------------

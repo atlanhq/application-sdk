@@ -726,7 +726,15 @@ def stamp_verdict(
         if stale is None:
             # Cannot see the reviews, so cannot clear a superseded approval. The
             # merge gate would stay open on it, which is the wrong way to fail —
-            # so leave everything else as-is and fail loudly to be re-driven.
+            # so leave the approval itself untouched and fail loudly to be
+            # re-driven. The failure status is still written: without it a prior
+            # green `sdk-review` status on this same head would outlive the
+            # verdict that superseded it. The status POST is independent of the
+            # reviews listing, and post_status is already best-effort (it warns
+            # rather than raising), so a second degradation costs a warning, not
+            # a harder failure.
+            if write_status:
+                client.post_status(head_sha, state, description)
             print(
                 f"::error::PR #{pr_number}: verdict is {verdict} but the review "
                 f"listing could not be read, so a stale bot approval cannot be "
