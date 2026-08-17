@@ -2,6 +2,13 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.20.1] - 2026-08-17
+
+### Bug fixes
+
+- feed e2e evidence and cross-CSP coverage to the test-readiness scorecard (FND-33, FND-34) (#3245) ([752808d](https://github.com/atlanhq/application-sdk/commit/752808d))
+- give the commits shim a real reusable, retire docstring-coverage (FND-381) (#3236) ([ca132f2](https://github.com/atlanhq/application-sdk/commit/ca132f2))
+
 ## [0.20.0] - 2026-08-17
 
 ### Features
