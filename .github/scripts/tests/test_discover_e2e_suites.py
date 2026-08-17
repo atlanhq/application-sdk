@@ -205,6 +205,50 @@ def test_main_count_is_suites_and_leg_count_is_legs(capsys, tmp_path: Path) -> N
     assert len(_matrix(out)["include"]) == 6
 
 
+def test_main_emits_the_resolved_cloud_list(capsys, tmp_path: Path) -> None:
+    """The `clouds` output is what the scorecard records as observed coverage.
+
+    It comes from the same `parse_clouds` call that built the matrix, so
+    "what we recorded as covered" cannot disagree with "what ran" (FND-34).
+    """
+    e2e = tmp_path / "tests" / "e2e"
+    _mk(e2e, "test_one.py")
+    main(["--test-dir", str(e2e), "--clouds", "aws,azure,gcp"])
+    assert "clouds=aws,azure,gcp" in capsys.readouterr().out.splitlines()
+
+
+def test_main_clouds_output_is_narrowed_like_the_matrix(capsys, tmp_path: Path) -> None:
+    # Recording the REQUESTED list rather than the resolved one would report
+    # coverage the run did not have — worse than reporting none.
+    e2e = tmp_path / "tests" / "e2e"
+    _mk(e2e, "test_one.py")
+    main(["--test-dir", str(e2e), "--clouds", "", "--available-clouds", "aws,gcp"])
+    assert "clouds=aws,gcp" in capsys.readouterr().out.splitlines()
+
+
+def test_main_clouds_output_is_empty_without_a_cloud_dimension(
+    capsys, tmp_path: Path
+) -> None:
+    """The degraded single-tenant fallback records as "", not as absent.
+
+    A consumer must be able to tell "ran against one legacy tenant" from "e2e
+    never ran"; the latter is signalled by the field being omitted upstream.
+    """
+    e2e = tmp_path / "tests" / "e2e"
+    _mk(e2e, "test_one.py")
+    main(["--test-dir", str(e2e), "--clouds", "none"])
+    assert "clouds=" in capsys.readouterr().out.splitlines()
+
+
+def test_clouds_only_also_emits_the_resolved_cloud_list(capsys, tmp_path: Path) -> None:
+    # The scorecard job resolves `configured` through this mode, so the output
+    # has to exist on both paths or the rollout signal is missing exactly where
+    # it is read.
+    rc = main(["--clouds", "aws,azure", "--clouds-only"])
+    assert rc == 0
+    assert "clouds=aws,azure" in capsys.readouterr().out.splitlines()
+
+
 def test_main_logs_the_fan_out_explicitly(capsys, tmp_path: Path) -> None:
     e2e = tmp_path / "tests" / "e2e"
     _mk(e2e, "test_one.py")

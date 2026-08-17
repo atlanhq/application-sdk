@@ -7,8 +7,14 @@ Post tier-split, unit and integration run as separate CI jobs, so evidence
 arrives per-tier: a dedicated aggregation job downloads both jobs' artifacts and
 invokes this with per-tier flags.  unit + integration are always scored (a
 missing junit → an empty, zero-scored tier, so a missing integration suite
-still counts against the grade); e2e is scored only when ``--e2e-junit`` is
-supplied — otherwise the e2e tier is marked not-applicable.
+still counts against the grade); e2e is scored only when ``--e2e-junit``
+resolves to at least one file — otherwise the e2e tier is marked not-applicable.
+
+``--e2e-junit`` is repeatable and each value may be a **glob**, because the e2e
+matrix emits one artifact per suite × cloud leg (FND-6).  Resolving the glob
+here rather than in the workflow keeps the "how many legs ran" branching out of
+YAML, and makes "matched nothing" mean *not applicable* rather than *scored
+zero* — absent evidence must never drag an app's grade (FND-33).
 
 This is the one impure edge: it touches the filesystem and stamps
 ``generatedAt``.  All scoring logic lives in the pure ``readers`` + ``compute``.
@@ -20,6 +26,9 @@ Usage::
         --unit-coverage unit/coverage.json \\
         --integration-junit integration/results/test-results.xml \\
         --integration-coverage integration/coverage.json \\
+        --e2e-junit 'e2e-evidence/*/results/sdr-test-results.xml' \\
+        --cross-cloud-configured aws,azure,gcp \\
+        --cross-cloud-observed aws,azure \\
         --repo "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" \\
         --out results/test-readiness.json
 """
@@ -32,10 +41,16 @@ import json
 from pathlib import Path
 
 from conformance.scorecard.compute import build_scorecard
-from conformance.scorecard.readers import parse_coverage_json, parse_junit_tier
+from conformance.scorecard.readers import (
+    parse_coverage_json,
+    parse_junit_tier,
+    parse_junit_tier_merged,
+    resolve_junit_paths,
+)
 from conformance.scorecard.rubric import load_rubric
 from conformance.scorecard.schema import (
     CoverageMetrics,
+    CrossCloudCoverage,
     RawTests,
     TierName,
     TierTestCounts,
@@ -71,6 +86,18 @@ def _coverage(path: str | None) -> CoverageMetrics | None:
     return None
 
 
+def _clouds(raw: str | None) -> list[str] | None:
+    """Split a comma-separated cloud list; ``None`` (flag absent) stays ``None``.
+
+    The distinction is the whole point of the field: ``None`` is omitted from
+    the artifact and means "not known", while ``""`` yields ``[]`` and means
+    "known, and it is no clouds" — the degraded single-tenant fallback.
+    """
+    if raw is None:
+        return None
+    return [c for c in (part.strip() for part in raw.split(",")) if c]
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="atlan-application-sdk-conformance scorecard",
@@ -82,9 +109,15 @@ def main(argv: list[str]) -> int:
     )
     parser.add_argument(
         "--e2e-junit",
+        action="append",
         default=None,
-        help="E2E tier junit XML. Omit when e2e did not run — the e2e tier is "
-        "then marked not-applicable (no grade cap, excluded from the aggregate).",
+        metavar="PATH_OR_GLOB",
+        help="E2E tier junit XML; repeatable, and each value may be a glob "
+        "(the e2e matrix emits one artifact per suite x cloud leg). Legs are "
+        "folded worst-case per test, so a test failing on any cloud does not "
+        "pass. Omit — or pass a glob that matches nothing — when e2e did not "
+        "run: the e2e tier is then marked not-applicable (no grade cap, "
+        "excluded from the aggregate) rather than scored zero.",
     )
     parser.add_argument("--unit-coverage", default=None, help="Unit coverage.json.")
     parser.add_argument(
@@ -106,6 +139,23 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--app", default=None, help="App name (default: derived from --repo)."
     )
+    parser.add_argument(
+        "--cross-cloud-configured",
+        default=None,
+        metavar="CLOUDS",
+        help="Comma-separated clouds this repo's e2e is WIRED for (the "
+        "requested fan-out narrowed to what the tenant matrix carries for it). "
+        "Descriptive only, never scored. Omit when unknown; an empty value "
+        "records 'no cloud dimension', which is a different fact from omitting.",
+    )
+    parser.add_argument(
+        "--cross-cloud-observed",
+        default=None,
+        metavar="CLOUDS",
+        help="Comma-separated clouds an e2e run actually EXERCISED. Pass only "
+        "when e2e ran; omitting it records that nothing is known about "
+        "cross-CSP coverage for this run, which must not read as zero.",
+    )
     parser.add_argument("--rubric", default="v1", help="Rubric version (default: v1).")
     parser.add_argument(
         "--tool-version",
@@ -126,16 +176,32 @@ def main(argv: list[str]) -> int:
     if not unit_junit:
         parser.error("at least --unit-junit (or the deprecated --junit) is required")
 
+    # One or many per-leg e2e junits, resolved from repeatable globs. Empty
+    # means e2e did not run (or uploaded nothing) — NOT that it scored zero.
+    e2e_paths = resolve_junit_paths(args.e2e_junit or [])
+    if args.e2e_junit and not e2e_paths:
+        print(
+            "warning: no e2e junit matched "
+            f"{', '.join(args.e2e_junit)} — e2e tier marked not-applicable"
+        )
+
     tests = RawTests(
         unit=_counts(unit_junit),
         integration=_counts(args.integration_junit),
-        e2e=_counts(args.e2e_junit),
+        e2e=parse_junit_tier_merged(e2e_paths),
     )
 
-    # unit + integration are always measured; e2e only when its junit is given.
+    # unit + integration are always measured; e2e only when evidence resolved.
     measured_tiers: set[TierName] = {"unit", "integration"}
-    if args.e2e_junit:
+    if e2e_paths:
         measured_tiers.add("e2e")
+        print(f"e2e evidence: {len(e2e_paths)} leg junit(s) merged worst-case per test")
+
+    cross_cloud = None
+    configured = _clouds(args.cross_cloud_configured)
+    observed = _clouds(args.cross_cloud_observed)
+    if configured is not None or observed is not None:
+        cross_cloud = CrossCloudCoverage(configured=configured, observed=observed)
 
     coverage: dict[TierName, CoverageMetrics] = {}
     if (unit_cov := _coverage(unit_coverage)) is not None:
@@ -153,6 +219,7 @@ def main(argv: list[str]) -> int:
         commit_sha=args.commit,
         tool_version=args.tool_version or __version__,
         generated_at=_now_iso(),
+        cross_cloud=cross_cloud,
     )
 
     out_path = Path(args.out)

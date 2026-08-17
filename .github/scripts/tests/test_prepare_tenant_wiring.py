@@ -557,17 +557,25 @@ def test_the_gate_is_told_about_the_lease() -> None:
 # ── The two cloud fan-outs must agree ────────────────────────────────────────
 
 
-def test_suite_and_cloud_discovery_use_the_same_clouds_expression() -> None:
+def test_suite_and_cloud_discovery_use_the_same_clouds_expression(jobs: dict) -> None:  # type: ignore[type-arg]
     """A prepare-tenant that missed a cloud the legs then ran against is a
     silent coverage hole, not a visible failure — so the two `clouds:` inputs
-    are asserted identical rather than merely both present."""
-    text = _WORKFLOW.read_text(encoding="utf-8")
+    are asserted identical rather than merely both present.
+
+    Keyed on the discovery action's `with.clouds` rather than on every line
+    reading `clouds:`, which also matched the job OUTPUT of the same name added
+    for the scorecard's cross-CSP record (FND-34) — an unrelated key that has no
+    fan-out to agree with.
+    """
     exprs = [
-        line.split("clouds:", 1)[1].strip()
-        for line in text.splitlines()
-        if line.strip().startswith("clouds:")
+        step["with"]["clouds"]
+        for step in jobs["discover-e2e"]["steps"]
+        if "discover-e2e-suites@" in str(step.get("uses", ""))
     ]
-    assert len(exprs) == 2, f"expected exactly two `clouds:` inputs, found {len(exprs)}"
+    assert len(exprs) == 2, (
+        f"expected exactly two discovery invocations, found {len(exprs)} — the "
+        "suite fan-out and the cloud-only fan-out prepare-tenant installs from"
+    )
     assert exprs[0] == exprs[1], (
         "the suite fan-out and the cloud fan-out resolve different cloud lists; "
         f"{exprs[0]!r} vs {exprs[1]!r}"
