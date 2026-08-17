@@ -40,8 +40,8 @@ The old code sent label errors to /dev/null under `|| true`, so that failure was
 invisible. Here a delete that 404s is tolerated (the label was already absent)
 and anything else is surfaced as a ::warning::.
 
-Two callers
------------
+Three callers
+-------------
 The fast path (`sdk-review-approve-on-verdict.yml`) passes the verdict comment
 in via COMMENT_BODY, straight off the `issue_comment` event, and owns the
 `sdk-review` commit status.
@@ -53,13 +53,22 @@ not write the commit status (its workflow has its own failure-path step), and
 sets REQUIRE_APPROVED_LABEL so it will not approve a verdict something has since
 invalidated.
 
+The reconciler (`sdk_review_reconcile.py`, on a cron) drives this per PR with the
+same environment as the slow path, plus APPROVE_MAX_ATTEMPTS=1: it exists to
+recover approvals the other two paths lost, so retrying in-process would only
+duplicate the loop it already is. That also holds it to exactly one `atlan-ci`
+request per PR it approves.
+
 That label guard is the solo-approval safety property. `sdk-review-approved` is
 the one signal every invalidator clears: `dismiss-on-human` strips it (and
 notably does NOT touch the commit status, so the status cannot substitute),
 `downgrade-on-ci-failure` strips it, `reset-on-push` strips it. It is therefore
 read from a snapshot taken BEFORE this run reconciles labels — the shell version
 read it back after adding it, so the guard could only ever see the label it had
-just written and never fired.
+just written and never fired — and, when it fires on a READY verdict, it bails
+before writing anything at all. Reconciling labels first would re-add
+`sdk-review-approved` on the way to declining the approval, resurrecting the
+signal the invalidator had just stripped.
 
 Environment:
     REPO                        owner/repo (e.g. atlanhq/application-sdk)
@@ -285,17 +294,25 @@ class Client:
         ids = [comment.get("id", 0) for comment in self._summary_comments()]
         return max(ids) if ids else 0
 
-    def latest_summary_body(self) -> str:
-        """Body of the newest SDK review summary comment, or "" if none.
+    def latest_summary_comment(self) -> dict | None:
+        """The newest SDK review summary comment, or None if the PR has none.
 
         Ids are monotonic, so max-by-id is the newest — not merely the last in
         page order.
+
+        Returns the whole comment rather than just its body so a caller that
+        also needs the metadata (`sdk_review_reconcile.py` reads `created_at`
+        to age-gate a verdict) can get both from one listing request.
         """
         comments = self._summary_comments()
         if not comments:
-            return ""
-        newest = max(comments, key=lambda comment: comment.get("id", 0))
-        return newest.get("body") or ""
+            return None
+        return max(comments, key=lambda comment: comment.get("id", 0))
+
+    def latest_summary_body(self) -> str:
+        """Body of the newest SDK review summary comment, or "" if none."""
+        newest = self.latest_summary_comment()
+        return (newest or {}).get("body") or ""
 
     def current_labels(self) -> set[str]:
         result = self.run(
@@ -595,6 +612,34 @@ def main(
     # label was standing when this run started, which the post-reconcile state
     # can no longer answer.
     labels_before = client.current_labels()
+
+    # Solo-approval guard, checked BEFORE any write. Every invalidator —
+    # dismiss-on-human, downgrade-on-ci-failure, reset-on-push — clears this
+    # label, so its absence under a READY verdict means something has spoken
+    # since and this verdict no longer stands.
+    #
+    # Bailing here rather than after the label reconcile matters: `label_plan`
+    # would otherwise re-add `sdk-review-approved` on the way to declining the
+    # approval, resurrecting the very signal the invalidator had just stripped.
+    # The PR would then wear the label with no approval behind it — and the
+    # reconciler cron, which gates on exactly that label, would read the
+    # resurrected label as a lost stamp and approve on the next tick.
+    #
+    # Only READY is gated: a NEEDS_FIXES/NEEDS_HUMAN verdict still has to clear
+    # labels and dismiss a stale approval regardless of what the label says.
+    if (
+        verdict == READY
+        and require_approved_label
+        and APPROVED_LABEL not in labels_before
+    ):
+        print(
+            f"::notice::PR #{pr_number}: `{APPROVED_LABEL}` was not present when "
+            f"this run started (a downgrade, dismissal or push likely intervened) "
+            f"— skipping approval, and leaving labels untouched so the label is "
+            f"not resurrected."
+        )
+        return 0
+
     to_add, to_remove = label_plan(verdict, labels_before)
     added_ok = client.add_labels(to_add)
     for label in sorted(to_remove):
@@ -631,18 +676,6 @@ def main(
         if write_status:
             client.post_status(head_sha, state, description)
         print(f"Verdict '{verdict}' is not READY TO MERGE — no approval posted.")
-        return 0
-
-    # Solo-approval guard (slow path). Every invalidator — dismiss-on-human,
-    # downgrade-on-ci-failure, reset-on-push — clears this label, so its absence
-    # means something has spoken since the verdict and the approval must not be
-    # (re-)posted.
-    if require_approved_label and APPROVED_LABEL not in labels_before:
-        print(
-            f"::notice::PR #{pr_number}: `{APPROVED_LABEL}` was not present when "
-            f"this run started (a downgrade, dismissal or push likely intervened) "
-            f"— skipping approval."
-        )
         return 0
 
     # Don't double-approve: sdk-review.yml's slow path runs the same stamp after
