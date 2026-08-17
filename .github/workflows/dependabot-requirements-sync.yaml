@@ -35,6 +35,10 @@ jobs:
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
           owner: atlanhq
           repositories: application-sdk
+          # Same reasoning as renovate-lock-cooldown.yaml (FND-395): this job
+          # runs from the pushed branch, so the token it mints should carry only
+          # the permission the job uses. Checkout plus one push is contents.
+          permission-contents: write
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
