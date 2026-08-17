@@ -13,7 +13,6 @@ Usage::
 
     # Render a parameterised template
     content = render("build-and-publish.yaml", unit_tests_workflow="tests.yaml")
-    content = render("docstring-coverage.yaml", package_name="app")
 """
 
 from __future__ import annotations
@@ -52,10 +51,26 @@ MANAGED_WORKFLOWS: tuple[str, ...] = (
     "vulnerability-scan.yml",
     "build-and-publish.yaml",
     "stale.yml",
-    "docstring-coverage.yaml",
     "auto-fix.yml",
     "generated-freshness.yaml",
 )
+
+# Workflow shims bootstrap once managed and now actively removes (relative to
+# ``.github/workflows/``).  A retired name must be deleted rather than merely
+# dropped from ``MANAGED_WORKFLOWS``: bootstrap wrote these files into every
+# consumer repo, so dropping the template alone leaves ~54 copies behind, each
+# still firing on every PR.  ``bootstrap`` deletes them on its next run and
+# C002 reports any that are still present, so the retirement propagates by the
+# same path that installed them.
+#
+# ``docstring-coverage.yaml`` (FND-381): its shim called
+# ``atlanhq/application-sdk/.github/workflows/docstring-coverage.yaml@main``,
+# which never existed — docstring coverage lives here as a *composite action*
+# (``.github/actions/docstring-coverage/``), not a reusable workflow, so the
+# shim's shape was wrong outright.  Every call therefore failed at startup:
+# conclusion ``failure``, zero jobs, no check run, no logs.  Retired rather
+# than repointed — the check is not wanted on connectors.
+RETIRED_WORKFLOWS: tuple[str, ...] = ("docstring-coverage.yaml",)
 
 # Non-workflow files that must also be vendored into every consumer repo,
 # keyed by (repo-root-relative dest path, template filename in templates/).
@@ -97,7 +112,6 @@ _STATIC_TEMPLATES: frozenset[str] = frozenset(
 def render(
     name: str,
     *,
-    package_name: str = "app",
     unit_tests_workflow: str = "tests.yaml",
     app_name: str = "app",
     app_image_name: str = "",
@@ -133,7 +147,6 @@ def render(
       newline, and that one blank line would read as C002 drift in every
       already-bootstrapped repo. ``test_bootstrap`` locks the empty render
       byte-for-byte.
-    - ``docstring-coverage.yaml``: ``package_name`` (default ``"app"``)
     - ``renovate.json``: ``automerge`` (default ``"true"``; set to ``"false"``
       to disable Renovate auto-merge during initial rollouts — the preset's
       ``automerge: true`` packageRules are overridden by a catch-all rule so
@@ -166,7 +179,6 @@ def render(
 
     tmpl = _ENV.from_string(raw)
     return tmpl.render(
-        package_name=package_name,
         unit_tests_workflow=unit_tests_workflow,
         app_name=app_name,
         app_image_name=app_image_name,

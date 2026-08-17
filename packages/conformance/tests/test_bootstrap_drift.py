@@ -6,6 +6,7 @@ Covers:
 - Byte-drifted managed workflow → one C002 WARN finding
 - Parameterised files with a custom-but-valid value → no finding (structural match)
 - Parameterised files with structural drift beyond the value → finding
+- Retired managed workflow still on disk → finding; absent → no finding
 """
 
 from __future__ import annotations
@@ -15,7 +16,12 @@ import re
 
 import pytest
 from conformance.bootstrap import extract as extract_mod
-from conformance.bootstrap.render import MANAGED_ACTION_FILES, MANAGED_WORKFLOWS, render
+from conformance.bootstrap.render import (
+    MANAGED_ACTION_FILES,
+    MANAGED_WORKFLOWS,
+    RETIRED_WORKFLOWS,
+    render,
+)
 from conformance.cli import _cmd_bootstrap
 from conformance.suite.checks.bootstrap_drift import (
     _extract_exit_zero,
@@ -86,10 +92,20 @@ def test_discover_returns_all_managed_paths(tmp_path: pathlib.Path) -> None:
 def test_discover_returns_paths_even_when_absent(tmp_path: pathlib.Path) -> None:
     """discover() must not filter out non-existent files."""
     paths = discover(tmp_path)
-    # managed shims + managed action files + tests.yaml + renovate.json scaffolds.
-    assert len(paths) == len(MANAGED_WORKFLOWS) + len(MANAGED_ACTION_FILES) + 2
+    # managed shims + retired shims + managed action files + tests.yaml and
+    # renovate.json scaffolds.
+    assert len(paths) == (
+        len(MANAGED_WORKFLOWS) + len(RETIRED_WORKFLOWS) + len(MANAGED_ACTION_FILES) + 2
+    )
     # None of them exist yet.
     assert all(not p.exists() for p in paths)
+
+
+def test_discover_includes_retired_workflows(tmp_path: pathlib.Path) -> None:
+    """A retired shim must still be discovered, or a repo that never re-runs
+    bootstrap is never told the dead file is there."""
+    names = {p.name for p in discover(tmp_path)}
+    assert set(RETIRED_WORKFLOWS).issubset(names)
 
 
 # ---------------------------------------------------------------------------
@@ -230,18 +246,6 @@ def test_structural_change_alongside_pin_still_flagged(tmp_path: pathlib.Path) -
 # ---------------------------------------------------------------------------
 
 
-def test_docstring_coverage_custom_package_name_not_flagged(
-    tmp_path: pathlib.Path,
-) -> None:
-    """A repo that used --package-name myapp should not be flagged."""
-    wf_dir = tmp_path / ".github" / "workflows"
-    wf_dir.mkdir(parents=True)
-    wf = wf_dir / "docstring-coverage.yaml"
-    wf.write_text(render("docstring-coverage.yaml", package_name="myapp"))
-    findings = scan_path(wf, tmp_path)
-    assert findings == []
-
-
 def test_build_and_publish_custom_unit_tests_workflow_not_flagged(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -357,20 +361,61 @@ def test_checks_hand_written_system_deps_step_flagged_then_fixed_by_bootstrap(
 # ---------------------------------------------------------------------------
 
 
-def test_docstring_coverage_structural_drift_flagged(tmp_path: pathlib.Path) -> None:
+def test_build_and_publish_structural_drift_flagged(tmp_path: pathlib.Path) -> None:
     """Structural change (not just the value) in a templated file is still flagged."""
     wf_dir = tmp_path / ".github" / "workflows"
     wf_dir.mkdir(parents=True)
-    wf = wf_dir / "docstring-coverage.yaml"
+    wf = wf_dir / "build-and-publish.yaml"
     # Write canonical then inject an extra job-level key.
-    canonical = render("docstring-coverage.yaml")
-    drifted = canonical.replace(
-        "  docstring-coverage:", "  docstring-coverage:\n    timeout-minutes: 5"
-    )
+    canonical = render("build-and-publish.yaml")
+    drifted = canonical.replace("jobs:\n", "jobs:\n  injected:\n    runs-on: ubuntu\n")
+    assert drifted != canonical
     wf.write_text(drifted)
     findings = scan_path(wf, tmp_path)
     assert len(findings) == 1
     assert "drifted" in findings[0].message
+
+
+# ---------------------------------------------------------------------------
+# Retired shims (FND-381): present on disk → finding; gone → silent
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", RETIRED_WORKFLOWS)
+def test_retired_workflow_still_present_is_flagged(
+    tmp_path: pathlib.Path, name: str
+) -> None:
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / name
+    wf.write_text("name: legacy\n")
+    findings = scan_path(wf, tmp_path)
+    assert len(findings) == 1
+    assert "retired" in findings[0].message
+    assert findings[0].file == f".github/workflows/{name}"
+
+
+@pytest.mark.parametrize("name", RETIRED_WORKFLOWS)
+def test_retired_workflow_absent_is_not_flagged(
+    tmp_path: pathlib.Path, name: str
+) -> None:
+    """The inverse of a managed shim: absence is the desired end state, not a
+    finding — otherwise every repo that already converged reports drift."""
+    wf = tmp_path / ".github" / "workflows" / name
+    assert scan_path(wf, tmp_path) == []
+
+
+def test_bootstrapped_repo_has_no_retired_workflow(tmp_path: pathlib.Path) -> None:
+    """End to end: bootstrap removes the file, so the sweep is clean after."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    for name in RETIRED_WORKFLOWS:
+        (wf_dir / name).write_text("name: legacy\n")
+    _bootstrap(tmp_path)
+    findings = []
+    for path in discover(tmp_path):
+        findings.extend(scan_path(path, tmp_path))
+    assert findings == [], [f.message for f in findings]
 
 
 # ---------------------------------------------------------------------------

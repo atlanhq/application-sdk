@@ -23,14 +23,24 @@ from conformance.bootstrap.extract import (
     extract_tests_yaml_params,
     strip_action_pins,
 )
-from conformance.bootstrap.render import MANAGED_ACTION_FILES, MANAGED_WORKFLOWS, render
+from conformance.bootstrap.render import (
+    MANAGED_ACTION_FILES,
+    MANAGED_WORKFLOWS,
+    RETIRED_WORKFLOWS,
+    render,
+)
 
 _PACKAGE_NAME = "atlan-application-sdk-conformance"
 
 # Statuses that count as "this path was written" for --json's touched_files
 # manifest (see main()). Everything else (an "exists"/"unchanged" no-op) is
-# reported under `unchanged` instead.
-_TOUCHED_STATUSES = frozenset({"installed", "updated", "scaffolded", "backed_up"})
+# reported under `unchanged` instead. "removed" counts: a deletion is a change
+# to that path like any write, so it has to fall inside the pass's declared
+# write scope (see remediate-finding.prose.md's touched_files note) — both to
+# be committed and to be reverted if a later gate rejects the fix.
+_TOUCHED_STATUSES = frozenset(
+    {"installed", "updated", "scaffolded", "backed_up", "removed"}
+)
 
 
 def _bootstrap_file(dest: pathlib.Path, content: str) -> str:
@@ -67,6 +77,26 @@ def _bootstrap_file(dest: pathlib.Path, content: str) -> str:
     dest.write_text(content, encoding="utf-8")
     print(f"installed: {dest}")
     return "installed"
+
+
+def _retire_file(dest: pathlib.Path) -> str:
+    """Delete *dest* if present — the counterpart to ``_bootstrap_file``.
+
+    Bootstrap wrote every ``RETIRED_WORKFLOWS`` name into every consumer repo,
+    so retiring one has to actively remove those copies: dropping the template
+    alone would leave each repo's copy in place, still firing on every PR.
+    Deleting here (rather than in a one-shot fleet script) means the retirement
+    rides the same always-overwrite re-run that installed the file, and cannot
+    be undone by the next resync.
+
+    Returns ``"removed"`` or ``"absent"``, mirroring ``_bootstrap_file``'s
+    written/no-op classification for ``main()``'s ``--json`` manifest.
+    """
+    if not dest.exists():
+        return "absent"
+    dest.unlink()
+    print(f"removed: {dest}  (retired workflow — no longer managed)")
+    return "removed"
 
 
 def _is_inside_conformance_repo(start: pathlib.Path) -> bool:
@@ -439,6 +469,15 @@ def main(argv: list[str]) -> int:
     for name in MANAGED_WORKFLOWS:
         dest = root / ".github" / "workflows" / name
         _record(dest, _bootstrap_file(dest, render(name, **kwargs)))
+
+    # Shims bootstrap once installed and now removes. See RETIRED_WORKFLOWS.
+    # Only an actual deletion is recorded: a repo that never had the file (or
+    # already dropped it) has no such path, and listing it under `unchanged`
+    # would put a file that does not and will not exist into the manifest.
+    for name in RETIRED_WORKFLOWS:
+        dest = root / ".github" / "workflows" / name
+        if _retire_file(dest) == "removed":
+            _record(dest, "removed")
 
     # Non-workflow files referenced by conformance-reusable.yaml via a local
     # `./...`-relative path, which GitHub resolves against the caller's

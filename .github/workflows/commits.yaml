@@ -1,0 +1,175 @@
+# Reusable workflow: conventional-commit PR title guard for the connector fleet.
+#
+# Every bootstrap-managed connector repo ships a `commits.yaml` shim (see
+# packages/conformance/conformance/bootstrap/templates/commits.yaml) that calls
+# this. Until FND-381 that shim pointed at a path that did not exist here, so
+# every call failed at startup — no job, no check run, no logs, ~54 repos red
+# on every PR since the template shipped.
+#
+# What it enforces: the PR title is a well-formed conventional commit
+# (`<type>[optional scope][!]: <description>`). Connector repos release through
+# release-version-bump.yaml, whose release.py derives the semver bump from
+# `^feat[(!:]` / `^fix[(!:]` / `BREAKING CHANGE` in the squash-merge subjects
+# and whose update_changelog.py files each subject into a changelog section by
+# the same grammar. Those repos squash-merge, so the subject IS the PR title —
+# a title outside the grammar lands in neither the version bump nor the
+# changelog.
+#
+# What it deliberately does NOT enforce: which type a given change must use.
+# That is this repo's own `pr-title-convention.yaml`, and it is unshareable —
+# its rules are `application_sdk/` / `contract-toolkit/` / `packages/conformance/`
+# path rules that mean nothing in a connector repo. Hence a separate,
+# path-agnostic reusable rather than adding `workflow_call` to that one.
+#
+# Automation is exempt: the bump-version/release PRs opened by
+# release-version-bump.yaml, and (by default) Dependabot, whose titles are
+# machine-generated and cannot be fixed by anyone on the PR. Renovate is NOT
+# exempt — the fleet preset forces `semanticCommitType: chore`, so its titles
+# are already conventional.
+#
+# Usage in each app repo (.github/workflows/commits.yaml):
+#
+#   on:
+#     pull_request:
+#       types: [opened, edited, synchronize, reopened]
+#       branches: [main]
+#     merge_group:
+#   permissions:
+#     contents: read
+#     pull-requests: write
+#   jobs:
+#     conventional-commits:
+#       uses: atlanhq/application-sdk/.github/workflows/commits.yaml@main
+#
+# `types: [edited]` matters: without it, re-titling a flagged PR does not
+# re-run the check and the PR stays red until an unrelated push.
+#
+# A `merge_group` (or any other non-`pull_request`) event is a passing no-op:
+# there is no PR title to inspect and the title was already validated at PR
+# time. Running rather than skipping keeps the conclusion "success", so this
+# can be a REQUIRED check without leaving the merge queue permanently pending.
+#
+# That no-op only helps if the CALLER declares `merge_group:` — an undispatched
+# workflow produces no conclusion at all, and a required check with no
+# conclusion wedges the queue entry rather than failing it. The shim template
+# declares it; a caller written by hand must too.
+#
+# The decision logic lives in .github/scripts/conventional_pr_title.py
+# (unit-tested in .github/scripts/tests/test_conventional_pr_title.py), per
+# docs/standards/ci.md: a workflow `run:` block must not itself contain
+# branching shell.
+
+name: Conventional Commits
+
+on:
+  workflow_call:
+    inputs:
+      types:
+        description: "Comma-separated allowed conventional-commit types. Default: the types documented in docs/standards/commits.md."
+        required: false
+        type: string
+        default: "feat,fix,docs,style,refactor,perf,test,build,ci,chore,revert"
+      exempt_actors:
+        description: "Comma-separated PR-author logins this guard never polices. Machine-generated titles only — a human exemption here just turns the check off for that person."
+        required: false
+        type: string
+        default: "dependabot[bot]"
+      sdk_scripts_ref:
+        description: "Ref of atlanhq/application-sdk to pull the validator script from (default: main). Named explicitly because a reusable workflow cannot resolve its own ref — github.job_workflow_sha renders empty here, so an implicit checkout would silently take the default branch."
+        required: false
+        type: string
+        default: "main"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+# One in-flight run per PR. Both paths below mutate the same sticky comment, so
+# without this a `synchronize` run and a later `edited` (re-title) run overlap
+# and the older run's comment-POST can land after the newer run's comment-CLEAR
+# — leaving an obsolete failure comment on a check that now passes, which is the
+# same stuck-red shape FND-381 is about.
+#
+# The group resolves in the CALLER's context, so it is per-PR in the repo being
+# checked; `merge_group` (and any other event without a PR number) falls back to
+# github.sha, which is run-distinct and therefore serialises nothing. Same shape
+# as generated-freshness.yaml, the other sticky-commenting reusable here, and as
+# this repo's own pr-title-convention.yaml.
+concurrency:
+  group: conventional-commits-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  conventional-commits:
+    name: Validate PR title
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # The `.sdk-scripts` side-path pattern from docs/standards/ci.md. There
+      # is deliberately no checkout of the CALLER: the verdict comes entirely
+      # from the event payload, so this job never reads the consumer's tree.
+      # application-sdk is public, so this needs no auth even from a private
+      # caller.
+      - name: Checkout SDK helper scripts
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ inputs.sdk_scripts_ref }}
+          path: .sdk-scripts
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
+      - name: Validate PR title
+        id: detect
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          HEAD_REF: ${{ github.head_ref }}
+          PR_ACTOR: ${{ github.event.pull_request.user.login }}
+          ALLOWED_TYPES: ${{ inputs.types }}
+          EXEMPT_ACTORS: ${{ inputs.exempt_actors }}
+        run: |
+          set -euo pipefail
+          python3 .sdk-scripts/.github/scripts/conventional_pr_title.py \
+            --pr-title "${PR_TITLE}" \
+            --head-ref "${HEAD_REF}" \
+            --actor "${PR_ACTOR}" \
+            --types "${ALLOWED_TYPES}" \
+            --exempt-actors "${EXEMPT_ACTORS}" \
+            --comment-out pr-title-comment.md
+
+      # Fork PRs get a read-only token, so the comment steps are skipped there
+      # — the pass/fail verdict above still runs and still gates.
+      - name: Post sticky comment on violation
+        if: >-
+          github.event_name == 'pull_request'
+          && steps.detect.outputs.violation == 'true'
+          && github.event.pull_request.head.repo.fork == false
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
+        with:
+          header: conventional-commits
+          path: pr-title-comment.md
+
+      - name: Clear sticky comment when resolved
+        if: >-
+          github.event_name == 'pull_request'
+          && steps.detect.outputs.violation == 'false'
+          && github.event.pull_request.head.repo.fork == false
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
+        with:
+          header: conventional-commits
+          delete: true
+
+      - name: Fail on invalid PR title
+        if: steps.detect.outputs.violation == 'true'
+        env:
+          ERROR_MESSAGE: ${{ steps.detect.outputs.error_message }}
+        run: |
+          echo "::error title=Invalid PR title::${ERROR_MESSAGE}"
+          exit 1
+
+      - name: Non-PR event no-op
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "${{ github.event_name }} event — no PR title to inspect; passing."

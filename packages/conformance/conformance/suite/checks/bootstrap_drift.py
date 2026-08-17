@@ -3,12 +3,16 @@
 The ``atlan-application-sdk-conformance bootstrap`` command installs a standard
 set of CI workflow shims.  This check flags any managed file that is:
 
-- missing (never bootstrapped, or accidentally deleted), or
-- structurally drifted from what ``bootstrap`` would write.
+- missing (never bootstrapped, or accidentally deleted),
+- structurally drifted from what ``bootstrap`` would write, or
+- retired (``RETIRED_WORKFLOWS``) and still on disk — a shim bootstrap once
+  installed fleet-wide and now removes, which until it does keeps firing on
+  every PR with nothing behind it.
 
 For parameterised templates the per-repo custom values are *extracted from the
 on-disk file* before comparing, so intentional per-repo choices (app-name,
-package_name, etc.) are not flagged as drift — only structural changes are caught.
+unit_tests_workflow, etc.) are not flagged as drift — only structural changes
+are caught.
 
 Two of those choices are app-owned opt-*ups* rather than plain identity values,
 and are allowed for that reason:
@@ -26,8 +30,10 @@ the better thing, which is what flagging them amounted to.
 
 **Two drift tracks:**
 
-1. **Managed shims** (``MANAGED_WORKFLOWS`` — 14 files): always-overwrite.
-   Absent or drifted → WARN finding; run bootstrap to re-sync (re-runs overwrite).
+1. **Managed shims** (``MANAGED_WORKFLOWS``): always-overwrite.
+   Absent or drifted → WARN finding; run bootstrap to re-sync (re-runs
+   overwrite). A ``RETIRED_WORKFLOWS`` name still present is the same track in
+   reverse: WARN, and the same bare re-run deletes it.
 
 2. **tests.yaml / renovate.json**: write-if-absent scaffolds.  Bootstrap
    creates each once and never clobbers customisations.  Drift is also tracked
@@ -61,7 +67,12 @@ from conformance.bootstrap.extract import (
     resolve_renovate_fallback_exit_zero,
     strip_action_pins,
 )
-from conformance.bootstrap.render import MANAGED_ACTION_FILES, MANAGED_WORKFLOWS, render
+from conformance.bootstrap.render import (
+    MANAGED_ACTION_FILES,
+    MANAGED_WORKFLOWS,
+    RETIRED_WORKFLOWS,
+    render,
+)
 from conformance.suite.checks._ast_common import safe_read_text
 from conformance.suite.schema.findings import Finding
 
@@ -87,10 +98,6 @@ _RENOVATE_JSON = "renovate.json"
 # extractors and ``bootstrap``'s own re-run autodetection can import them at
 # module level without an import cycle.
 # ---------------------------------------------------------------------------
-
-
-def _extract_package_name(text: str) -> str:
-    return extract_field(text, "package_name") or "app"
 
 
 def _extract_unit_tests_workflow(text: str) -> str:
@@ -136,6 +143,10 @@ def discover(root: Path) -> list[Path]:
     """
     wf_dir = root / ".github" / "workflows"
     paths = [wf_dir / name for name in MANAGED_WORKFLOWS]
+    # Retired shims: bootstrap installed these once and now deletes them, so a
+    # copy still on disk is drift in the other direction — the file is reported
+    # until the repo re-runs bootstrap (which removes it).
+    paths.extend(wf_dir / name for name in RETIRED_WORKFLOWS)
     # Non-workflow vendored files (composite action + arg-building script).
     paths.extend(root / dest_rel for dest_rel in _MANAGED_ACTION_FILES_BY_DEST)
     # Write-if-absent scaffolds (WARN-only drift tracking).
@@ -146,6 +157,8 @@ def discover(root: Path) -> list[Path]:
 
 def scan_path(path: Path, root: Path) -> list[Finding]:
     """Return C002 findings for *path* (may or may not exist on disk)."""
+    if path.name in RETIRED_WORKFLOWS:
+        return _scan_retired_shim(path, root)
     if path.name == _TESTS_WORKFLOW:
         return _scan_tests_yaml(path, root)
     if path.name == _RENOVATE_JSON:
@@ -157,6 +170,36 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
     if rel in _MANAGED_ACTION_FILES_BY_DEST:
         return _scan_managed_action_file(path, root, _MANAGED_ACTION_FILES_BY_DEST[rel])
     return _scan_managed_shim(path, root)
+
+
+def _scan_retired_shim(path: Path, root: Path) -> list[Finding]:
+    """Flag a retired managed shim that is still on disk.
+
+    The inverse of the absent-file finding for a managed shim: bootstrap wrote
+    these into every consumer repo and now deletes them, so a surviving copy is
+    a workflow still firing on every PR with nothing behind it. Remediation is
+    the same bare re-run, which removes the file.
+    """
+    try:
+        rel = path.relative_to(root).as_posix()
+    except ValueError:
+        rel = str(path)
+
+    if not path.exists():
+        return []
+
+    return [
+        Finding(
+            rule_id=RULE_ID,
+            file=rel,
+            line=1,
+            column=1,
+            message=(
+                f"CI workflow '{path.name}' was retired and is no longer managed, "
+                f"but is still present. Run `{_CLI_CMD}` to remove it."
+            ),
+        )
+    ]
 
 
 def _scan_managed_action_file(
@@ -233,9 +276,7 @@ def _scan_managed_shim(path: Path, root: Path) -> list[Finding]:
     # For parameterised templates, extract the on-disk value so structural
     # drift is caught while per-repo value choices are preserved.
     kwargs: dict[str, str] = {}
-    if name == "docstring-coverage.yaml":
-        kwargs["package_name"] = _extract_package_name(on_disk)
-    elif name == "build-and-publish.yaml":
+    if name == "build-and-publish.yaml":
         kwargs["unit_tests_workflow"] = _extract_unit_tests_workflow(on_disk)
         # The GHCR base redirect is opt-in per app while the SDK-side default is
         # still false, and the fleet won't be ready to flip that default for a
