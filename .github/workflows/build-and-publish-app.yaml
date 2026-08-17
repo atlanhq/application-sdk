@@ -1167,7 +1167,7 @@ jobs:
     # needs chain, so without this override `build` skips even though `prepare`
     # successfully ran with its own override.
     if: ${{ !failure() && !cancelled() && needs.prepare.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -1175,8 +1175,10 @@ jobs:
         include:
           - platform: linux/amd64
             arch: amd64
+            runner: ubuntu-latest
           - platform: linux/arm64
             arch: arm64
+            runner: ubuntu-24.04-arm
 
     steps:
       - name: Checkout
