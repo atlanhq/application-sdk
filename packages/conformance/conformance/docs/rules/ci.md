@@ -56,14 +56,16 @@ invisible until exploited or until the step fails.
 
 The `atlan-application-sdk-conformance bootstrap` command installs a standard set of CI
 workflow shims into `.github/workflows/`. This rule flags any managed file that is
-missing or whose content has diverged from what `bootstrap` would write. Re-run
-`bootstrap` to re-sync; structural drift is flagged while intentional per-repo value
-choices (e.g. `package_name`, `unit_tests_workflow_file`) are preserved. The exceptions
-are `tests.yaml` and `renovate.json`, write-if-absent scaffolds a bare re-run never
-rewrites — pass `--resync` to pull their structure forward, which likewise preserves
-each file's recognized per-repo values (tests.yaml's app-name, app-image-name,
-enable-e2e, services-script and unit-coverage-fail-under; renovate.json's auto-merge
-mode).
+missing or whose content has diverged from what `bootstrap` would write, plus any
+*retired* shim still present — one `bootstrap` once installed fleet-wide and now
+deletes, which until it does keeps firing on every PR with nothing behind it. Re-run
+`bootstrap` to re-sync (the same bare re-run removes a retired file); structural drift
+is flagged while intentional per-repo value choices (e.g. `unit_tests_workflow_file`)
+are preserved. The exceptions are `tests.yaml` and `renovate.json`, write-if-absent
+scaffolds a bare re-run never rewrites — pass `--resync` to pull their structure
+forward, which likewise preserves each file's recognized per-repo values (tests.yaml's
+app-name, app-image-name, enable-e2e, services-script and unit-coverage-fail-under;
+renovate.json's auto-merge mode).
 
 Two recognized values are app-owned opt-*ups*, allowed so an app doing the better thing
 does not report as drifted. `tests.yaml`'s `unit-coverage-fail-under` may raise the

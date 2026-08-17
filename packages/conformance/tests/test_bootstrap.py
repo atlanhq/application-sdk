@@ -16,7 +16,12 @@ from conformance.bootstrap import extract as extract_mod
 from conformance.bootstrap.args import BOOTSTRAP_USAGE, FLAGS, parse_bootstrap_args
 from conformance.bootstrap.autodetect import derive_app_name_from_dir
 from conformance.bootstrap.command import _bootstrap_file
-from conformance.bootstrap.render import MANAGED_ACTION_FILES, MANAGED_WORKFLOWS, render
+from conformance.bootstrap.render import (
+    MANAGED_ACTION_FILES,
+    MANAGED_WORKFLOWS,
+    RETIRED_WORKFLOWS,
+    render,
+)
 from conformance.cli import _cmd_bootstrap
 
 # ---------------------------------------------------------------------------
@@ -91,13 +96,11 @@ def test_bootstrap_file_does_not_rewrite_unchanged_content(
 
 
 def test_parse_bootstrap_args_defaults() -> None:
-    # "" for package_name/unit_tests_workflow means "not explicitly set" —
-    # _cmd_bootstrap auto-detects each from an existing managed workflow file,
-    # falling back to "app"/"tests.yaml" respectively (mirrors app_name and
-    # services_script below).
+    # "" for unit_tests_workflow means "not explicitly set" — _cmd_bootstrap
+    # auto-detects it from an existing managed workflow file, falling back to
+    # "tests.yaml" (mirrors app_name and services_script below).
     result = parse_bootstrap_args([])
     assert result == {
-        "package_name": "",
         "unit_tests_workflow": "",
         "app_name": "",
         "app_image_name": "",
@@ -119,8 +122,8 @@ def test_parse_bootstrap_args_defaults() -> None:
 
 
 def test_parse_bootstrap_args_space_separated() -> None:
-    result = parse_bootstrap_args(["--package-name", "myapp"])
-    assert result["package_name"] == "myapp"
+    result = parse_bootstrap_args(["--unit-tests-workflow", "ci.yaml"])
+    assert result["unit_tests_workflow"] == "ci.yaml"
 
 
 def test_parse_bootstrap_args_equals_form() -> None:
@@ -130,10 +133,43 @@ def test_parse_bootstrap_args_equals_form() -> None:
 
 def test_parse_bootstrap_args_both_flags() -> None:
     result = parse_bootstrap_args(
-        ["--package-name", "connector", "--unit-tests-workflow", "ci.yaml"]
+        ["--app-name", "connector", "--unit-tests-workflow", "ci.yaml"]
     )
-    assert result["package_name"] == "connector"
+    assert result["app_name"] == "connector"
     assert result["unit_tests_workflow"] == "ci.yaml"
+
+
+# --------------------------------------------------------------------------
+# Retired flags: a caller still passing one must not be broken by it (the
+# invocation lives in app-repo runbooks and CI steps we don't control), but
+# must be told. Warn on stderr, ignore the flag AND its value, carry on.
+# --------------------------------------------------------------------------
+
+
+def test_retired_flag_space_form_is_ignored_with_a_warning(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    result = parse_bootstrap_args(["--package-name", "myapp", "--app-name", "mysql"])
+    assert "package_name" not in result
+    # The value must be consumed too, not left to be read as another flag.
+    assert result["app_name"] == "mysql"
+    err = capsys.readouterr().err
+    assert "--package-name" in err
+    assert "was removed" in err
+
+
+def test_retired_flag_equals_form_is_ignored_with_a_warning(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    result = parse_bootstrap_args(["--package-name=myapp", "--app-name", "mysql"])
+    assert result["app_name"] == "mysql"
+    assert "--package-name" in capsys.readouterr().err
+
+
+def test_retired_flag_alone_still_parses(capsys: pytest.CaptureFixture[str]) -> None:
+    result = parse_bootstrap_args(["--package-name", "myapp"])
+    assert result["app_name"] == ""
+    assert "--package-name" in capsys.readouterr().err
 
 
 def test_parse_bootstrap_args_app_name() -> None:
@@ -745,17 +781,6 @@ def test_no_jinja2_placeholders_in_rendered_output() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_docstring_coverage_default_package_name() -> None:
-    content = render("docstring-coverage.yaml")
-    assert 'package_name: "app"' in content
-
-
-def test_docstring_coverage_custom_package_name() -> None:
-    content = render("docstring-coverage.yaml", package_name="myconnector")
-    assert 'package_name: "myconnector"' in content
-    assert "myconnector" in content
-
-
 def test_build_and_publish_default_unit_tests_workflow() -> None:
     content = render("build-and-publish.yaml")
     assert 'unit_tests_workflow_file: "tests.yaml"' in content
@@ -770,15 +795,11 @@ def test_cmd_bootstrap_custom_args_propagate(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    _cmd_bootstrap(
-        ["--package-name", "myapp", "--unit-tests-workflow", "run-tests.yaml"]
-    )
-    docstring = (
-        tmp_path / ".github" / "workflows" / "docstring-coverage.yaml"
-    ).read_text()
+    _cmd_bootstrap(["--app-name", "myapp", "--unit-tests-workflow", "run-tests.yaml"])
     build = (tmp_path / ".github" / "workflows" / "build-and-publish.yaml").read_text()
-    assert 'package_name: "myapp"' in docstring
+    tests = (tmp_path / ".github" / "workflows" / "tests.yaml").read_text()
     assert 'unit_tests_workflow_file: "run-tests.yaml"' in build
+    assert 'app-name: "myapp"' in tests
 
 
 # ---------------------------------------------------------------------------
@@ -1912,81 +1933,82 @@ def test_cmd_bootstrap_restores_step_from_ci_deps_file_when_checks_stripped(
 
 
 # ---------------------------------------------------------------------------
-# Auto-detection: package-name from docstring-coverage.yaml,
-# unit-tests-workflow from build-and-publish.yaml
+# Retired workflows (FND-381): bootstrap installed these fleet-wide, so
+# retiring one has to actively DELETE the copies it wrote. Dropping the
+# template alone would leave ~54 repos with a workflow that still fires on
+# every PR.
 # ---------------------------------------------------------------------------
 
 
-def test_cmd_bootstrap_reads_package_name_from_docstring_coverage(
+def test_retired_and_managed_sets_are_disjoint() -> None:
+    """A name in both would be written and deleted in the same run."""
+    assert not set(RETIRED_WORKFLOWS) & set(MANAGED_WORKFLOWS)
+
+
+def test_retired_workflows_have_no_template() -> None:
+    """The template must go with the registry entry, or bootstrap could still
+    render a file it is meanwhile removing."""
+    for name in RETIRED_WORKFLOWS:
+        with pytest.raises(FileNotFoundError):
+            render(name)
+
+
+def test_cmd_bootstrap_removes_a_retired_workflow(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """bootstrap reuses the existing package_name when --package-name is absent."""
     wf_dir = tmp_path / ".github" / "workflows"
     wf_dir.mkdir(parents=True)
-    (wf_dir / "docstring-coverage.yaml").write_text(
-        'jobs:\n  docstring-coverage:\n    with:\n      package_name: "myconnector"\n'
-    )
+    for name in RETIRED_WORKFLOWS:
+        (wf_dir / name).write_text("name: legacy\n")
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap([])
-    docstring = (wf_dir / "docstring-coverage.yaml").read_text()
-    assert 'package_name: "myconnector"' in docstring
+    for name in RETIRED_WORKFLOWS:
+        assert not (wf_dir / name).exists()
 
 
-def test_cmd_bootstrap_defaults_package_name_when_absent(
+def test_cmd_bootstrap_does_not_recreate_a_retired_workflow(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Without an existing docstring-coverage.yaml, package-name defaults to app."""
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap([])
-    docstring = (
-        tmp_path / ".github" / "workflows" / "docstring-coverage.yaml"
-    ).read_text()
-    assert 'package_name: "app"' in docstring
+    _cmd_bootstrap([])
+    for name in RETIRED_WORKFLOWS:
+        assert not (tmp_path / ".github" / "workflows" / name).exists()
 
 
-def test_cmd_bootstrap_defaults_package_name_when_file_exists_but_field_missing(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+def test_cmd_bootstrap_retired_workflow_absent_is_not_touched(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys
 ) -> None:
-    """An existing docstring-coverage.yaml with no package_name: line falls back
-    to "app", the same as the file-absent case -- the presence of the file alone
-    must not be mistaken for a match."""
+    """A repo that never had the file must not report it at all — neither as a
+    removal nor as an unchanged path, since it does not and will not exist."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--json"])
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    for name in RETIRED_WORKFLOWS:
+        rel = f".github/workflows/{name}"
+        assert rel not in payload["touched"]
+        assert rel not in payload["unchanged"]
+
+
+def test_cmd_bootstrap_json_reports_a_removal_as_touched(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """touched_files drives what a remediation pass stages -- a deletion is a
+    change to that path and has to appear there, not under ``unchanged``."""
     wf_dir = tmp_path / ".github" / "workflows"
     wf_dir.mkdir(parents=True)
-    (wf_dir / "docstring-coverage.yaml").write_text(
-        "jobs:\n  docstring-coverage:\n    with:\n      other_field: true\n"
-    )
+    for name in RETIRED_WORKFLOWS:
+        (wf_dir / name).write_text("name: legacy\n")
     monkeypatch.chdir(tmp_path)
-    _cmd_bootstrap([])
-    docstring = (wf_dir / "docstring-coverage.yaml").read_text()
-    assert 'package_name: "app"' in docstring
+    _cmd_bootstrap(["--json"])
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    for name in RETIRED_WORKFLOWS:
+        assert f".github/workflows/{name}" in payload["touched"]
 
 
-def test_cmd_bootstrap_explicit_package_name_overrides_autodetect(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Explicit --package-name takes priority over the auto-detected value."""
-    wf_dir = tmp_path / ".github" / "workflows"
-    wf_dir.mkdir(parents=True)
-    (wf_dir / "docstring-coverage.yaml").write_text('package_name: "myconnector"\n')
-    monkeypatch.chdir(tmp_path)
-    _cmd_bootstrap(["--package-name", "override"])
-    docstring = (wf_dir / "docstring-coverage.yaml").read_text()
-    assert 'package_name: "override"' in docstring
-
-
-def test_cmd_bootstrap_reads_unquoted_package_name_from_docstring_coverage(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """An unquoted package_name: value (valid YAML) is still auto-detected."""
-    wf_dir = tmp_path / ".github" / "workflows"
-    wf_dir.mkdir(parents=True)
-    (wf_dir / "docstring-coverage.yaml").write_text(
-        "jobs:\n  docstring-coverage:\n    with:\n      package_name: myconnector\n"
-    )
-    monkeypatch.chdir(tmp_path)
-    _cmd_bootstrap([])
-    docstring = (wf_dir / "docstring-coverage.yaml").read_text()
-    assert 'package_name: "myconnector"' in docstring
+# ---------------------------------------------------------------------------
+# Auto-detection: unit-tests-workflow from build-and-publish.yaml
+# ---------------------------------------------------------------------------
 
 
 def test_cmd_bootstrap_reads_unit_tests_workflow_from_build_and_publish(

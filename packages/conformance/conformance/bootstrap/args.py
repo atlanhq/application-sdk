@@ -19,7 +19,6 @@ from conformance.bootstrap import extract as extract_mod
 from conformance.bootstrap.extract import APT_PACKAGE_RE
 
 FLAGS = {
-    "--package-name": "package_name",
     "--unit-tests-workflow": "unit_tests_workflow",
     "--app-name": "app_name",
     "--app-image-name": "app_image_name",
@@ -74,7 +73,27 @@ PRESENCE_FLAGS = {
     "--resync": "resync",
 }
 
+# Flags that used to exist, mapped to why they are gone. A caller still
+# passing one gets that sentence instead of a bare "unknown option": these are
+# baked into app-repo runbooks and CI steps we don't control, and "unknown
+# option '--package-name'" reads as a broken install rather than as a
+# deliberate retirement.
+RETIRED_FLAGS = {
+    "--package-name": (
+        "the docstring-coverage workflow it parameterised was retired (FND-381)"
+        " — bootstrap no longer writes that file and removes it on re-run"
+    ),
+}
+
 _DEST_TO_FLAG = {dest: flag for flag, dest in FLAGS.items()}
+
+
+def _match_retired_flag(arg: str) -> str:
+    """Return the retired flag *arg* spells, in either form, else ""."""
+    for flag in RETIRED_FLAGS:
+        if arg == flag or arg.startswith(f"{flag}="):
+            return flag
+    return ""
 
 
 def parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
@@ -85,7 +104,6 @@ def parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
     kept in one place so it can't drift out of sync with this parser.
     """
     result: dict[str, str] = {
-        "package_name": "",
         "unit_tests_workflow": "",
         "app_name": "",
         "app_image_name": "",
@@ -106,6 +124,22 @@ def parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
         consumed = False
         if arg in PRESENCE_FLAGS:
             result[PRESENCE_FLAGS[arg]] = "true"
+            i += 1
+            continue
+        retired = _match_retired_flag(arg)
+        if retired:
+            # Warn and carry on rather than exit 2. The flag is a no-op now, so
+            # ignoring it produces exactly the right result, and bootstrap runs
+            # inside the automated remediate loop — failing there would block a
+            # repo's remediation on a stale argument that changes nothing.
+            print(
+                f"warning: option {retired!r} was removed: {RETIRED_FLAGS[retired]}."
+                " Ignoring it; drop it from the invocation.",
+                file=sys.stderr,
+            )
+            # Skip its value too, in the `--flag value` form.
+            if arg == retired and i + 1 < len(argv) and not argv[i + 1].startswith("-"):
+                i += 1
             i += 1
             continue
         for flag, dest in FLAGS.items():
@@ -233,8 +267,6 @@ below govern is 0-touch — conformance blocking CI, and Renovate merging withou
 human — which is what the four-tier bar is a prerequisite for.
 
 options:
-  --package-name NAME         docstring-coverage package; omit to auto-detect from an
-                              existing docstring-coverage.yaml (else "app")
   --unit-tests-workflow FILE  build-and-publish test workflow; omit to auto-detect from
                               an existing build-and-publish.yaml (else "tests.yaml")
   --app-name NAME             connector app name for tests.yaml (default: from atlan.yaml, else "app")
