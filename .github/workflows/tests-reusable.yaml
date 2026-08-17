@@ -311,15 +311,26 @@ on:
         type: string
         default: "true"
         description: |
-          Whether this connector can run its e2e suite against a local
+          Whether this connector can run its suite against a local
           hermetic source (a seeded sibling container) when neither the
           dataforge fetch nor E2E_SOURCE_ENV_JSON produced credentials.
           Set "false" for SaaS-style connectors with no hermetic option:
           the source-resolution step then FAILS FAST with an explicit
           "no e2e source available" error instead of letting the leg limp
           to the extract node and die minutes later on a cryptic
-          empty-credential auth failure. Only consulted when
-          dataforge-datasource is set.
+          empty-credential auth failure. Only consulted when neither
+          credential path resolved (a dataforge fetch or E2E_SOURCE_ENV_JSON
+          short-circuits ahead of it).
+          ONE input, BOTH tiers — e2e and integration read this same value, so
+          a connector cannot be fatal in one tier and forgiving in the other.
+          Note the consequence of the "true" default on the INTEGRATION tier,
+          which is the merge gate: a connector with no hermetic source that
+          leaves this at the default turns an unresolved source into a green
+          job rather than a failure. Connectors that cannot seed a local
+          source — every SaaS-style one — should set "false" when they opt into
+          dataforge-datasource. The default stays "true" because the majority
+          of callers are containerizable and must not be reddened by a
+          dataforge/VPN outage; opting out is the control for the rest.
       private-git-deps:
         required: false
         type: boolean
@@ -865,12 +876,12 @@ jobs:
       # The "Resolve source" step below is the compensating control: it FAILS the
       # job when a source was expected but NONE resolved — no repo creds, no
       # dataforge creds, and the connector declared no hermetic container
-      # (dataforge-hermetic-fallback: false). Integration is the merge gate, so a
-      # genuinely absent source is a hard error, not a green skip; but a
-      # containerizable connector on hermetic-fallback: true (the default) falls
-      # back to its seeded container and never touches the VPN at all. Apps that
-      # set neither dataforge-datasource nor E2E_SOURCE_ENV_JSON self-skip the
-      # whole chain, fail-fast included.
+      # (dataforge-hermetic-fallback: false). A connector that CAN seed one and
+      # left the input at its "true" default degrades to that seeded source
+      # instead — the fetch was still attempted, so the VPN was dialled, but a
+      # blip there no longer decides the job. Apps that set neither
+      # dataforge-datasource nor E2E_SOURCE_ENV_JSON self-skip the whole chain,
+      # fail-fast included.
       # READ-ONLY: the job only fetches credentials; it never seeds or mutates
       # the instance (curation is the instance owner's one-time setup).
       #
@@ -929,15 +940,24 @@ jobs:
           python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
             --json "$DF_ENV_JSON" >> "$GITHUB_ENV"
 
-      # The compensating control for the continue-on-error fetch above: with no
-      # continue-on-error, FAIL the job one minute in — with the fix in the
-      # message — when a connector declared a dataforge source but none resolved
-      # (E2E_SOURCE_DATASOURCE breadcrumb absent AND no E2E_SOURCE_ENV_JSON).
-      # hermetic-fallback is hard-wired false: the integration tier has no
-      # seeded-container path, so an unresolved opted-in source is always a hard
-      # error, never a silent skip that would green a merge-gating job on code it
-      # never tested. Reuses the e2e job's script verbatim.
-      - name: Resolve integration source (fail fast when none)
+      # The compensating control for the continue-on-error fetch above: this step
+      # has no continue-on-error, so it reports the resolved source and — when
+      # nothing resolved (E2E_SOURCE_DATASOURCE breadcrumb absent AND no
+      # E2E_SOURCE_ENV_JSON) — fails the job one minute in, with the fix in the
+      # message, instead of letting the leg limp on empty credentials.
+      #
+      # Whether "nothing resolved" is fatal is the CALLER's declaration, exactly
+      # as in the e2e job: hermetic-fallback is wired to
+      # dataforge-hermetic-fallback (default "true"), so a connector that can run
+      # its suite against a locally seeded source degrades to it, and a connector
+      # that cannot MUST set "false" to get the hard error. That default is
+      # deliberate — the two tiers read one input, so a connector cannot be fatal
+      # in one and forgiving in the other — but it does mean a source-less
+      # connector left on the default greens this merge-gating job on code it
+      # never exercised against a real source. The opt-out is the control; see the
+      # dataforge-hermetic-fallback input description. Reuses the e2e job's
+      # script verbatim.
+      - name: Resolve integration source
         if: inputs.dataforge-datasource != '' || env.E2E_SOURCE_ENV_JSON != ''
         env:
           DF_HERMETIC_FALLBACK: ${{ inputs.dataforge-hermetic-fallback }}
