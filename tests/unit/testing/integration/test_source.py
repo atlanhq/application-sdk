@@ -13,6 +13,14 @@ import json
 from application_sdk.testing.integration.source import DataForgeSource
 
 
+def test_public_reexport_is_the_same_class():
+    # The public package path re-exports the class; pin it so an __all__ or
+    # import regression in __init__.py can't ship green under these tests.
+    from application_sdk.testing.integration import DataForgeSource as PublicSource
+
+    assert PublicSource is DataForgeSource
+
+
 def test_reads_the_dataforge_raw_json_blob():
     env = {
         "E2E_SOURCE_DATASOURCE": "postgres",
@@ -174,6 +182,19 @@ def test_absent_source_is_unavailable_not_an_error():
     assert src.get("host", default="fallback") == "fallback"
 
 
+def test_require_with_no_arguments_is_false():
+    # The availability gate must not read as "source present" when it names no
+    # fields: a bare require() is vacuous, and vacuous must not gate green.
+    env = {
+        "E2E_SOURCE_DATASOURCE": "postgres",
+        "E2E_SOURCE_RAW_JSON": json.dumps({"host": "db.internal"}),
+    }
+    src = DataForgeSource.from_env(environ=env)
+
+    assert src.available
+    assert not src.require()
+
+
 def test_datasource_prefix_scoping_never_leaks_unrelated_env():
     # Tenant creds and flags share the E2E_ namespace; they must not land in the
     # source bag just because they start with E2E_.
@@ -210,6 +231,48 @@ def test_malformed_blob_falls_back_to_flat_vars():
     src = DataForgeSource.from_env(environ=env)
 
     assert src.get("host") == "db.internal"
+
+
+def test_non_scalar_blob_values_are_skipped_but_reserve_the_key():
+    # The blob contract is scalars-only (the fetch puts structured fields in
+    # E2E_SOURCE_EXTRA_JSON, which this reader ignores). A hand-written blob
+    # with a nested value must not be stored as its Python repr — but the key
+    # stays RESERVED, so a flat var can't backfill it with a divergent scalar.
+    env = {
+        "E2E_SOURCE_DATASOURCE": "postgres",
+        "E2E_SOURCE_RAW_JSON": json.dumps(
+            {"host": "db.internal", "region": {"name": "us-east-1"}}
+        ),
+        "E2E_POSTGRES_REGION": "flat-region",
+    }
+    src = DataForgeSource.from_env(environ=env)
+
+    assert src.get("host") == "db.internal"
+    assert src.get("region") is None
+    assert src.as_dict() == {"host": "db.internal"}
+
+
+def test_flat_pass_resolves_vars_under_a_custom_output_prefix():
+    # The fetch exports flat vars under E2E_<dataforge-output-prefix>_ when the
+    # caller sets one (metabase → E2E_META_BASE_HOST). On the static path there
+    # is no blob and no prefix breadcrumb, so the reader must be told the alias
+    # via env_prefix — otherwise the bag comes back empty and the suite
+    # silently skips.
+    env = {
+        "E2E_META_BASE_HOST": "mb.internal",
+        "E2E_META_BASE_USERNAME": "u",
+        "E2E_META_BASE_PASSWORD": "p",
+    }
+    src = DataForgeSource.from_env("metabase", env_prefix="meta_base", environ=env)
+
+    assert src.available
+    assert src.datasource == "metabase"
+    assert src.require("host", "username", "password")
+    assert src.get("host") == "mb.internal"
+
+    # Without the hint the derived prefix (E2E_METABASE_) matches nothing —
+    # this is the bug env_prefix exists to close, pinned so it stays visible.
+    assert not DataForgeSource.from_env("metabase", environ=env).available
 
 
 def test_flat_pass_resolves_a_single_token_datasources_underscored_fields():

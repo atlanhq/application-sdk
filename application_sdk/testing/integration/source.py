@@ -68,8 +68,9 @@ class DataForgeSource:
     ``datasource`` is the DataForge datasource name — supplied by the connector
     or taken from the ``E2E_SOURCE_DATASOURCE`` breadcrumb — or ``""`` when
     unknown. ``fields`` maps each field's normalised name to its value; use
-    :meth:`get` / :meth:`require` rather than indexing it directly, so ``host`` /
-    ``hostname`` and case differences resolve the same way in every connector.
+    :meth:`get` / :meth:`require` rather than indexing it directly, so
+    separator and case differences (``iam_role_arn`` vs ``iamRoleArn`` vs
+    ``IAM-ROLE-ARN``) resolve the same way in every connector.
     """
 
     datasource: str
@@ -101,9 +102,11 @@ class DataForgeSource:
         """True iff every name resolves to a non-empty value.
 
         The availability predicate every connector's ``skipif`` should call, in
-        place of a hand-rolled ``bool(HOST and USER and PASSWORD)``.
+        place of a hand-rolled ``bool(HOST and USER and PASSWORD)``. With no
+        arguments it returns ``False`` — a bare ``require()`` names no fields,
+        so it must not read as "source present".
         """
-        return all(self.get(name) for name in names)
+        return bool(names) and all(self.get(name) for name in names)
 
     def as_dict(self) -> dict[str, str]:
         """A copy of the field bag, keyed by normalised field name."""
@@ -114,6 +117,7 @@ class DataForgeSource:
         cls,
         datasource: str = "",
         *,
+        env_prefix: str = "",
         environ: Mapping[str, str] | None = None,
     ) -> "DataForgeSource":
         """Build from the process environment (or an explicit ``environ`` map).
@@ -123,16 +127,32 @@ class DataForgeSource:
         breadcrumb the fetch writes is used instead. Supplying it lets the flat
         ``E2E_<DATASOURCE>_*`` vars be read even on the static path, where no
         breadcrumb is written.
+
+        ``env_prefix`` overrides the flat-var prefix when the fetch exported
+        under a custom ``dataforge-output-prefix`` (``metabase`` exported as
+        ``E2E_META_BASE_HOST``): pass the same value (``"meta_base"`` — any
+        spelling; it is folded the same way) or the flat pass derives
+        ``E2E_METABASE_`` and never matches. A future ``E2E_SOURCE_PREFIX``
+        breadcrumb exported beside ``E2E_SOURCE_DATASOURCE`` would let the
+        reader discover the alias itself; until then the caller must say it.
         """
         env = os.environ if environ is None else environ
         resolved_ds = (datasource or env.get("E2E_SOURCE_DATASOURCE") or "").strip()
+        # The explicit prefix wins over the datasource-derived one; it is folded
+        # through the same derivation so casing/separators never matter.
+        prefix_source = (env_prefix or "").strip() or resolved_ds
         fields: dict[str, str] = {}
 
         # 1) The uniform blob, present only when the DataForge fetch ran. It is
         #    the authoritative field map, so it is read first and wins over the
         #    flat vars below on any collision — a blob field RESERVES its
         #    normalised key even when empty/None, so a flat var can never
-        #    backfill a field the fetch explicitly reported as empty.
+        #    backfill a field the fetch explicitly reported as empty. The blob
+        #    is SCALARS-ONLY: the fetch puts structured fields in a separate
+        #    E2E_SOURCE_EXTRA_JSON (not read here), and a non-scalar value in a
+        #    hand-written blob would otherwise be stored as its Python repr —
+        #    a string that looks like data but isn't. It still reserves its
+        #    key, so a flat var can't backfill it with a divergent scalar.
         raw = env.get("E2E_SOURCE_RAW_JSON")
         blob_keys: set[str] = set()
         if raw:
@@ -146,7 +166,11 @@ class DataForgeSource:
                     if not normalised:
                         continue
                     blob_keys.add(normalised)
-                    if value is not None and str(value).strip() != "":
+                    if (
+                        value is not None
+                        and not isinstance(value, (dict, list))
+                        and str(value).strip() != ""
+                    ):
                         fields[normalised] = str(value)
 
         # 2) The flat ``E2E_<PREFIX>_<FIELD>`` vars — written by BOTH the static
@@ -172,12 +196,12 @@ class DataForgeSource:
         #    flat path. The durable fix is a delimiter the datasource segment
         #    can never produce (e.g. ``__`` before FIELD) applied at the export
         #    site, with the reader splitting on it. Until then the loose match
-        #    is kept deliberately: a leak only reads a sibling's non-secret
-        #    field NAMES into a test bag, while dropping keys would empty the
-        #    bag on the static path and green the merge gate on untested code.
+        #    is kept deliberately: a leak copies a sibling's non-secret field
+        #    names AND values into a test bag, while dropping keys would empty
+        #    the bag on the static path and green the merge gate on untested code.
         prefix = ""
-        if resolved_ds:
-            derived = re.sub(r"[^A-Za-z0-9]", "_", resolved_ds.upper())
+        if prefix_source:
+            derived = re.sub(r"[^A-Za-z0-9]", "_", prefix_source.upper())
             # Require at least one alphanumeric: a separator-only datasource
             # ("-", " — ") folds to bare underscores, which is no real scope.
             if not re.search(r"[A-Z0-9]", derived):
