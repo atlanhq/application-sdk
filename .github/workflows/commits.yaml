@@ -33,6 +33,7 @@
 #     pull_request:
 #       types: [opened, edited, synchronize, reopened]
 #       branches: [main]
+#     merge_group:
 #   permissions:
 #     contents: read
 #     pull-requests: write
@@ -47,6 +48,11 @@
 # there is no PR title to inspect and the title was already validated at PR
 # time. Running rather than skipping keeps the conclusion "success", so this
 # can be a REQUIRED check without leaving the merge queue permanently pending.
+#
+# That no-op only helps if the CALLER declares `merge_group:` — an undispatched
+# workflow produces no conclusion at all, and a required check with no
+# conclusion wedges the queue entry rather than failing it. The shim template
+# declares it; a caller written by hand must too.
 #
 # The decision logic lives in .github/scripts/conventional_pr_title.py
 # (unit-tested in .github/scripts/tests/test_conventional_pr_title.py), per

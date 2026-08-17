@@ -11,12 +11,20 @@ name: Conventional Commits
 # Automation is exempt in the reusable: the bump-version/release PRs opened by
 # release-version-bump.yaml, and Dependabot. Renovate is not — the fleet preset
 # already forces a `chore(deps):` subject.
+#
+# `merge_group` is declared so this can be a REQUIRED check in a merge-queue
+# repo. A required check that is never dispatched for the merge-group event
+# leaves the queue entry pending forever, so the workflow has to run and
+# conclude rather than not run at all — the reusable's non-PR path is a passing
+# no-op for exactly this. Matches the four sibling templates that already
+# declare it (checks.yml, conformance.yaml, tests.yaml, vulnerability-scan.yml).
 
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
     branches:
       - main
+  merge_group:
 
 permissions:
   contents: read

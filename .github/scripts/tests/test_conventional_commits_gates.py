@@ -1,0 +1,190 @@
+"""Guards for the merge-group path of the `commits.yaml` reusable (FND-381).
+
+`Conventional Commits` is meant to be safe to make a REQUIRED check in a
+connector repo that uses a merge queue. Two independent things have to hold for
+that, and neither is exercisable here by a runner:
+
+1. **The caller must dispatch on `merge_group`.** A required check that is never
+   dispatched for the merge-group event produces no conclusion at all, and the
+   queue entry sits pending forever rather than failing — strictly worse than a
+   red check. The bootstrap shim template is the only place a connector can get
+   this from (hand-adding it locally trips C002 drift), so the trigger is pinned
+   there.
+
+2. **The reusable must conclude `success` on that event.** There is no PR title
+   to inspect, so every validating/commenting step is `pull_request`-gated and a
+   final no-op step carries the conclusion. If the no-op's gate were ever
+   narrowed — or the fail step's widened — a merge-group entry would either have
+   no successful step or go red on an empty verdict.
+
+Both are GitHub-evaluated `if:` expressions, so each gate is lifted verbatim out
+of the YAML and evaluated against synthetic contexts — the same approach as
+test_trivy_action_gates.py and test_label_trigger_gates.py, and for the same
+reason: a presence check proves a term is there, not that it is wired in at the
+right precedence.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+from typing import Any
+
+import pytest
+import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _gha_expr import evaluate  # noqa: E402
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_REUSABLE = _REPO_ROOT / ".github/workflows/commits.yaml"
+_SHIM = _REPO_ROOT / "packages/conformance/conformance/bootstrap/templates/commits.yaml"
+
+#: Steps that need a PR title and must therefore be skipped on merge_group.
+_PR_ONLY_STEPS = (
+    "Checkout SDK helper scripts",
+    "Validate PR title",
+    "Post sticky comment on violation",
+    "Clear sticky comment when resolved",
+)
+
+#: The step that carries the conclusion when there is no PR title.
+_NOOP_STEP = "Non-PR event no-op"
+
+#: The step that turns a violation into a failure.
+_FAIL_STEP = "Fail on invalid PR title"
+
+
+def _load(path: Path) -> dict[str, Any]:
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+def _steps() -> list[dict[str, Any]]:
+    return _load(_REUSABLE)["jobs"]["conventional-commits"]["steps"]
+
+
+def _gate(name: str) -> str:
+    for step in _steps():
+        if step.get("name") == name:
+            gate = step.get("if")
+            assert gate, f"step {name!r} lost its `if:` gate"
+            return str(gate)
+    raise AssertionError(f"{_REUSABLE.name} has no step named {name!r}")
+
+
+def _contexts(*, event: str, violation: str, fork: bool = False) -> dict[str, Any]:
+    """Synthetic contexts for one event.
+
+    ``violation`` is the *string* a step output holds — `""` on merge_group,
+    where the step that would set it never ran.
+    """
+    return {
+        "github": {
+            "event_name": event,
+            "event": {"pull_request": {"head": {"repo": {"fork": fork}}}},
+        },
+        "steps": {"detect": {"outputs": {"violation": violation}}},
+    }
+
+
+# ── 1. The shim dispatches on merge_group ────────────────────────────────────
+
+
+def test_shim_declares_merge_group() -> None:
+    """Without this the check is never dispatched for a queue entry, and a
+    required check with no conclusion wedges the queue instead of failing it."""
+    # `on` is parsed by PyYAML 1.1 rules, where a bare `on:` key is the boolean
+    # True — hence the fallback rather than a plain ["on"].
+    shim = _load(_SHIM)
+    triggers = shim.get("on", shim.get(True))
+    assert triggers is not None, "shim lost its `on:` block"
+    assert "merge_group" in triggers
+
+
+def test_shim_still_dispatches_on_edited() -> None:
+    """Re-titling a flagged PR has to re-run the check and clear its comment."""
+    shim = _load(_SHIM)
+    triggers = shim.get("on", shim.get(True))
+    assert "edited" in triggers["pull_request"]["types"]
+
+
+# ── 2. The reusable concludes success on merge_group ─────────────────────────
+
+
+@pytest.mark.parametrize("name", _PR_ONLY_STEPS)
+def test_pr_only_steps_are_skipped_on_merge_group(name: str) -> None:
+    gate = _gate(name)
+    assert evaluate(gate, _contexts(event="merge_group", violation="")) is False
+
+
+#: Each PR-only step paired with the verdict that makes it the applicable one:
+#: checkout/validate run either way, post-comment only on a violation, and
+#: clear-comment only once the title is fixed.
+_PR_ONLY_STEPS_WITH_VERDICT = (
+    ("Checkout SDK helper scripts", ""),
+    ("Validate PR title", ""),
+    ("Post sticky comment on violation", "true"),
+    ("Clear sticky comment when resolved", "false"),
+)
+
+
+@pytest.mark.parametrize("name, violation", _PR_ONLY_STEPS_WITH_VERDICT)
+def test_pr_only_steps_run_on_a_non_fork_pull_request(
+    name: str, violation: str
+) -> None:
+    gate = _gate(name)
+    assert evaluate(gate, _contexts(event="pull_request", violation=violation)) is True
+
+
+def test_every_pr_only_step_has_a_verdict_case() -> None:
+    """Keeps the two lists from drifting apart when a step is added."""
+    assert tuple(name for name, _ in _PR_ONLY_STEPS_WITH_VERDICT) == _PR_ONLY_STEPS
+
+
+def test_noop_step_runs_on_merge_group() -> None:
+    """The one step that must carry the conclusion when there is no PR title."""
+    gate = _gate(_NOOP_STEP)
+    assert evaluate(gate, _contexts(event="merge_group", violation="")) is True
+
+
+def test_noop_step_is_skipped_on_a_pull_request() -> None:
+    gate = _gate(_NOOP_STEP)
+    assert evaluate(gate, _contexts(event="pull_request", violation="false")) is False
+
+
+def test_fail_step_is_skipped_on_merge_group() -> None:
+    """An empty verdict must not be read as a violation — a merge-group entry
+    would go red on a title that already passed at PR time."""
+    gate = _gate(_FAIL_STEP)
+    assert evaluate(gate, _contexts(event="merge_group", violation="")) is False
+
+
+def test_fail_step_fires_on_a_real_violation() -> None:
+    gate = _gate(_FAIL_STEP)
+    assert evaluate(gate, _contexts(event="pull_request", violation="true")) is True
+
+
+# ── Fork PRs: verdict still gates, commenting does not ──────────────────────
+
+
+@pytest.mark.parametrize(
+    "name",
+    ("Post sticky comment on violation", "Clear sticky comment when resolved"),
+)
+def test_comment_steps_are_skipped_on_a_fork_pr(name: str) -> None:
+    """Fork PRs get a read-only token, so commenting would fail the job."""
+    gate = _gate(name)
+    assert (
+        evaluate(gate, _contexts(event="pull_request", violation="true", fork=True))
+        is False
+    )
+
+
+def test_fail_step_still_fires_on_a_fork_pr() -> None:
+    """Skipping the comment must not skip the gate."""
+    gate = _gate(_FAIL_STEP)
+    assert (
+        evaluate(gate, _contexts(event="pull_request", violation="true", fork=True))
+        is True
+    )
