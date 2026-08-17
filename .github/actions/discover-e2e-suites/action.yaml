@@ -65,6 +65,13 @@ outputs:
   leg-count:
     description: Number of matrix legs emitted (suites × clouds).
     value: ${{ steps.discover.outputs.leg-count }}
+  clouds:
+    description: |
+      The resolved cloud list, comma-separated; "" means no cloud dimension
+      (the legacy single-tenant fallback). Emitted from the same `parse_clouds`
+      call that decided the fan-out, so a consumer recording cross-CSP coverage
+      cannot disagree with the coverage that actually ran (FND-34).
+    value: ${{ steps.discover.outputs.clouds }}
 
 runs:
   using: composite

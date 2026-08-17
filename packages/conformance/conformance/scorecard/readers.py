@@ -13,9 +13,11 @@ catch-all base tier).
 
 from __future__ import annotations
 
+import glob as _glob
 import json
 import re
 import xml.etree.ElementTree as ET
+from collections.abc import Iterable
 from pathlib import Path
 
 from conformance.scorecard.schema import (
@@ -26,6 +28,11 @@ from conformance.scorecard.schema import (
 )
 
 _SEGMENT_SPLIT = re.compile(r"[./\\]+")
+
+#: Outcome names, ordered worst-last.  Used to fold one test's results across
+#: several per-leg junits down to a single outcome — see
+#: :func:`parse_junit_tier_merged` for why ``passed`` outranks ``skipped``.
+_OUTCOME_RANK: dict[str, int] = {"skipped": 0, "passed": 1, "failed": 2, "errors": 3}
 
 
 def tier_for_path(path: str) -> TierName:
@@ -91,18 +98,93 @@ def parse_junit_tier(path: str | Path) -> TierTestCounts:
     return counts
 
 
+def resolve_junit_paths(patterns: Iterable[str]) -> list[str]:
+    """Expand *patterns* (plain paths or globs) into existing files, de-duplicated.
+
+    The e2e tier arrives as N per-leg artifacts (one per suite × cloud since
+    FND-6), so the CLI is handed a glob rather than a list the workflow would
+    have to build with shell branching.  A pattern that matches nothing yields
+    nothing — which the caller reads as "e2e did not run", never as "e2e ran and
+    scored zero".
+    """
+    seen: dict[str, None] = {}
+    for pattern in patterns:
+        if not pattern:
+            continue
+        matches = sorted(_glob.glob(pattern))
+        # A plain (non-glob) path is its own match; glob returns it only when it
+        # exists, which is the same existence check the single-file reader does.
+        for match in matches:
+            if Path(match).is_file():
+                seen.setdefault(match, None)
+    return list(seen)
+
+
+def parse_junit_tier_merged(paths: Iterable[str | Path]) -> TierTestCounts:
+    """Fold N per-leg junits for ONE tier into a single worst-case count.
+
+    The e2e matrix runs each suite once per cloud, so the same test id appears
+    in several junits.  Tests are keyed on ``(classname, name)`` and folded to
+    their **worst** outcome across legs, rather than summed:
+
+    * Summing would make the pass rate a function of how many clouds a repo has
+      onboarded — a failure on one of three clouds reads better (11/12) than the
+      same failure on the only cloud (3/4).  Onboarding a cloud would *raise*
+      the score by diluting an existing failure, which is precisely backwards.
+    * Worst-case keeps the denominator at "distinct e2e tests" and treats a test
+      that fails on any supported cloud as not passing, which is what
+      "e2e-ready" has to mean.
+
+    ``passed`` outranks ``skipped`` deliberately: a test that ran green on one
+    cloud and self-skipped on another (absent creds) genuinely ran, and
+    :attr:`TierTestCounts.ran` excludes skips.  Ranking skip highest would erase
+    the evidence a leg actually produced.
+
+    ``duration_sec`` is the per-test **max** across legs, matching the per-test
+    dedup — a sum would count the same test's wall time once per cloud.
+    """
+    worst: dict[tuple[str, str], str] = {}
+    longest: dict[tuple[str, str], float] = {}
+
+    for path in paths:
+        for testcase in ET.parse(str(path)).getroot().iter("testcase"):
+            key = (testcase.get("classname") or "", testcase.get("name") or "")
+            outcome = _outcome(testcase)
+            if _OUTCOME_RANK[outcome] > _OUTCOME_RANK.get(worst.get(key, ""), -1):
+                worst[key] = outcome
+            longest[key] = max(
+                longest.get(key, 0.0), float(testcase.get("time") or 0.0)
+            )
+
+    counts = TierTestCounts()
+    for key, outcome in worst.items():
+        counts.total += 1
+        counts.duration_sec += longest[key]
+        setattr(counts, outcome, getattr(counts, outcome) + 1)
+    return counts
+
+
+def _outcome(testcase: ET.Element) -> str:
+    """Classify one ``<testcase>`` (error > failure > skipped > pass).
+
+    error takes precedence over failure, matching how pytest reports
+    collection/fixture errors distinctly from assertion failures.
+    """
+    if testcase.find("error") is not None:
+        return "errors"
+    if testcase.find("failure") is not None:
+        return "failed"
+    if testcase.find("skipped") is not None:
+        return "skipped"
+    return "passed"
+
+
 def _tally(counts: TierTestCounts, testcase: ET.Element) -> None:
     """Fold one ``<testcase>`` into *counts* (error > failure > skipped > pass)."""
     counts.total += 1
     counts.duration_sec += float(testcase.get("time") or 0.0)
-    if testcase.find("error") is not None:
-        counts.errors += 1
-    elif testcase.find("failure") is not None:
-        counts.failed += 1
-    elif testcase.find("skipped") is not None:
-        counts.skipped += 1
-    else:
-        counts.passed += 1
+    outcome = _outcome(testcase)
+    setattr(counts, outcome, getattr(counts, outcome) + 1)
 
 
 def parse_coverage_json(path: str | Path) -> CoverageMetrics:

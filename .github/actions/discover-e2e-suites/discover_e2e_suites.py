@@ -15,6 +15,14 @@ consumes:
               but nothing found" guard is about suites, and a cloud fan-out over
               zero suites is still zero suites.
   leg-count — number of matrix legs actually emitted (suites × clouds).
+  clouds    — the RESOLVED cloud list, comma-separated ("" for no cloud
+              dimension). The matrix already carries it per leg, but only a
+              consumer that parses the matrix can see it, and "which clouds did
+              this repo actually run against" is a fact the test-readiness
+              scorecard records descriptively (FND-34). Emitting it here means
+              the answer comes from the same ``parse_clouds`` call that decided
+              the fan-out, so the recorded coverage cannot disagree with the
+              coverage that ran.
 
 Cross-CSP fan-out (FND-6)
 -------------------------
@@ -309,6 +317,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"matrix={matrix}")
         print(f"count={len(entries)}")
         print(f"leg-count={len(entries)}")
+        print(f"clouds={','.join(clouds)}")
         return 0
 
     suites = discover(args.test_dir)
@@ -340,6 +349,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"matrix={matrix}")
     print(f"count={len(suites)}")
     print(f"leg-count={len(entries)}")
+    # Empty means "no cloud dimension" — the legacy single-tenant fallback — and
+    # the consumer must be able to tell that apart from "e2e never ran", which is
+    # why the scorecard omits the field entirely in the latter case rather than
+    # recording an empty list.
+    print(f"clouds={','.join(clouds)}")
     return 0
 
 
