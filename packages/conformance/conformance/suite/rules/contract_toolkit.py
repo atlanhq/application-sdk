@@ -30,7 +30,11 @@ These are deterministic *proxy* signals — a stale lock (K003), a missing outpu
 (K004), or a stripped provenance banner (K005). They cannot prove full content
 freshness (a hand-edit that keeps the banner is invisible to a static scanner);
 that guarantee belongs to the CI regenerate-and-diff freshness gate. All three
-are WARN and APP-scoped, and no-op on any repo without a ``contract/`` directory.
+are APP-scoped and no-op on any repo without a ``contract/`` directory. K003 is
+BLOCK — a pin that disagrees with its lock means the committed artifacts were
+generated from a toolkit version the contract no longer claims, which is the
+route the K009/K011 customer-facing breakages travel; K004 and K005 stay WARN as
+hygiene proxies.
 
 Manifest-vs-contract field validation (BLDX-1527)
 --------------------------------------------------
@@ -273,7 +277,7 @@ RULES: tuple[RuleDefinition, ...] = (
         id="K003",
         scope=RuleScope.APP,
         name="ContractLockDrift",
-        tier=EnforcementTier.WARN,
+        tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         autofixable=False,
@@ -290,7 +294,13 @@ RULES: tuple[RuleDefinition, ...] = (
             "on bot bumps (regenerating the lock and artifacts in the same PR via "
             "postUpgradeTasks), but a manual pin edit bypasses it entirely.  Comparing "
             "the two files is a pure, deterministic text check that needs no pkl "
-            "toolchain, so it catches the drift the moment it lands (BLDX-1414)."
+            "toolchain, so it catches the drift the moment it lands (BLDX-1414). "
+            "Customer impact: the artifacts the customer installs were generated from "
+            "a toolkit version the contract no longer claims, so the manifest, "
+            "contract and marketplace record they receive can each be a version behind "
+            "what was reviewed — this is the gap the K009 and K011 breakages reach "
+            "customers through, and it hides them by making the committed artifacts "
+            "look freshly generated."
         ),
         short_description=(
             "contract/PklProject pin does not match the resolved version in "
@@ -633,7 +643,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "and the one legitimate single-brace token {deployment_name} is not in "
             "the flagged set), this is a BLOCK-tier rule rather than the usual "
             "land-as-WARN default: the only correct resolution is to upgrade to the "
-            "latest app-contract-toolkit and regenerate."
+            "latest app-contract-toolkit and regenerate. "
+            "Customer impact: the literal template token ships to the tenant on the "
+            "wire — artifacts get rooted under a path segment named '{app_name}' or the "
+            "marketplace record carries template text, so the customer's install or crawl "
+            "fails on identity plumbing they can neither see nor fix."
         ),
         short_description=(
             "Generated artifact contains an unresolved single-brace scaffold "
@@ -741,7 +755,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "connector when atlan.yaml became fully pkl-generated and the app_id, "
             "previously hand-carried in the file, was dropped because the pkl "
             "metadata block never declared it. BLOCK-tier because the only "
-            "outcome of shipping without it is a broken release."
+            "outcome of shipping without it is a broken release. "
+            "Customer impact: the fix a customer is waiting on looks shipped from the "
+            "inside (tag cut, image pushed) but never appears in the marketplace they "
+            "install from — the customer stays on the broken version while everyone "
+            "believes the release went out."
         ),
         short_description=(
             "atlan.yaml is present but declares no top-level app_id — the "
@@ -803,7 +821,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "of that name, so the check passed locally yet the release died in "
             "CI. A one-line poe alias mirroring the Makefile target closes the "
             "gap. BLOCK-tier because, like K011, the only outcome of the missing "
-            "piece is a broken release rather than degraded quality."
+            "piece is a broken release rather than degraded quality. "
+            "Customer impact: every marketplace release of the app is dead on arrival "
+            "until someone reads the failed Certify log — including the urgent one that "
+            "carries a fix a customer is actively blocked on."
         ),
         short_description=(
             "pyproject.toml defines no [tool.poe.tasks.generate] task — the SDK "

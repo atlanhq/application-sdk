@@ -393,7 +393,11 @@ drafting.
 
 **SDR-readiness rules (P029/P030, P037/P038/P039, P041, P042)** — all suggest-only,
 scope=app; `classification` is always `"judgment"`.  All gate on
-`self_deployed_runtime: true` in `atlan.yaml`.
+`self_deployed_runtime: true` in `atlan.yaml`.  Suggest-only is about *how the
+loop treats them* — never auto-edit an SDR finding, always draft and route to
+residue — and is independent of tier: P029, P030, P038 and P039 are BLOCK, so
+their residue entries are release-blocking for the app and should be written to
+say so.
 
 - **P029 SdrManifestMissingAgentJson** (BLOCK) — a `manifest.json` under
   `app/generated/` is missing the `agent_json` key in `dag.extract.inputs.args`.
@@ -414,7 +418,7 @@ scope=app; `classification` is always `"judgment"`.  All gate on
   manifest.  Draft the required `app.pkl` addition and route to residue for the
   developer to apply.
 
-- **P030 SdrUploadNotCalled** (WARN) — no real `self.upload(...)` **call**
+- **P030 SdrUploadNotCalled** (BLOCK) — no real `self.upload(...)` **call**
   exists in any app source file outside `tests/` (matched on the AST, so a
   comment or docstring merely *mentioning* it does not clear the finding),
   making the `ENABLE_ATLAN_UPLOAD` gate structurally unreachable — OR a custom
@@ -487,7 +491,7 @@ scope=app; `classification` is always `"judgment"`.  All gate on
   `CredentialRef.from_workflow_args(workflow_args)`, keeping the direct
   `credential_guid` path only as a fallback; route to residue for confirmation.
 
-- **P038 SdrArtifactMisrooted** (WARN) — the object-store output path/prefix
+- **P038 SdrArtifactMisrooted** (BLOCK) — the object-store output path/prefix
   (`artifacts/apps/<identity>/...`) is rooted from the *workflow-input*
   `application_name` field (read as `input_data.get("application_name", ...)`,
   `input_data["application_name"]`, or `input.application_name`) instead of the
@@ -505,7 +509,7 @@ scope=app; `classification` is always `"judgment"`.  All gate on
   `APPLICATION_NAME` / `self._app_name` (or `WORKFLOW_OUTPUT_PATH_TEMPLATE`);
   route to residue for confirmation.
 
-- **P039 SdrAgentJsonDroppedByInputContract** (WARN) — the generated manifest
+- **P039 SdrAgentJsonDroppedByInputContract** (BLOCK) — the generated manifest
   declares `{{agent-json}}` at the extract-args top level (P029 passes), but the
   generated extract-input contract model (`AppInputContract` in a generated
   `_input.py`) subclasses the bare `Input` base, declares no `agent_json` field,
