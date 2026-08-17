@@ -15,7 +15,7 @@ optional_triggers:
   - "what does the SDK expose"
   - "list public methods of the SDK"
 owner: connector-platform-team
-last_updated: "2026-08-12"
+last_updated: "2026-08-17"
 staleness_days: 30
 inputs:
   - mode: "create | refresh | verify (auto-detected from existing state)"
@@ -74,10 +74,10 @@ the raw four-command sequence below if you need to run steps individually:
 mkdir -p /tmp/capability-manifest
 EXTRACTOR=.claude/skills/capability-manifest/references/extractor.py
 PURPOSES=.claude/skills/capability-manifest/references/subpackage-purposes.yaml
-uv run --with griffe python "$EXTRACTOR" dump > /tmp/capability-manifest/raw.json
-uv run --with griffe python "$EXTRACTOR" normalize /tmp/capability-manifest/raw.json > /tmp/capability-manifest/normalized.json
-uv run --with griffe python "$EXTRACTOR" render /tmp/capability-manifest/normalized.json "$PURPOSES" > /tmp/capability-manifest/fresh1.md
-uv run --with griffe python "$EXTRACTOR" render /tmp/capability-manifest/normalized.json "$PURPOSES" > /tmp/capability-manifest/fresh2.md
+uv run --with griffe==2.1.0 python "$EXTRACTOR" dump > /tmp/capability-manifest/raw.json
+uv run --with griffe==2.1.0 python "$EXTRACTOR" normalize /tmp/capability-manifest/raw.json > /tmp/capability-manifest/normalized.json
+uv run --with griffe==2.1.0 python "$EXTRACTOR" render /tmp/capability-manifest/normalized.json "$PURPOSES" > /tmp/capability-manifest/fresh1.md
+uv run --with griffe==2.1.0 python "$EXTRACTOR" render /tmp/capability-manifest/normalized.json "$PURPOSES" > /tmp/capability-manifest/fresh2.md
 cmp /tmp/capability-manifest/fresh1.md /tmp/capability-manifest/fresh2.md \
   && echo "IDEMPOTENCE OK" \
   || { echo "IDEMPOTENCE FAILURE — fix extractor before proceeding"; exit 1; }
@@ -97,7 +97,7 @@ the updated file as `github-actions[bot]`.
 ## Phase 4 — Validate coverage
 
 ```bash
-uv run --with griffe python - <<'EOF'
+uv run --with griffe==2.1.0 python - <<'EOF'
 import ast, json
 from pathlib import Path
 
@@ -227,6 +227,18 @@ The YAML key is the short name (e.g., `app`), not the full import path.
 
 - **griffe doesn't find application_sdk** — ensure you're running from the repo root.
 - **Idempotence failure** — check for `datetime.now()`, `random`, or dict-ordering issues in `extractor.py`.
+- **Drift you did not cause, in `Field(...)` defaults** — check the griffe version. griffe renders
+  those defaults, so it is pinned (`griffe==2.1.0`) everywhere it is invoked: the `regen-capabilities`
+  poe task, the raw commands above, and Phase 4. Unpinned, the committed manifest becomes a function
+  of whichever griffe the machine last cached — griffe 2.2.0 changed the parenthesisation of a call
+  inside a `Field` default, which silently rewrote ten committed lines with no source change and then
+  reported as drift on every PR built on an older cache. The `cmp` idempotence gate cannot catch this:
+  it proves one machine agrees with itself, not that two machines agree with each other. Bump the pin
+  deliberately, in all three files at once, and regenerate in the same commit — and observe the org §5
+  release-age cooldown when choosing the version, exactly as for any other dependency.
+- **`source-date` flips between `Z` and `+00:00`** — expected and harmless. It comes from
+  `git log --format=%cI`, whose UTC rendering changed across git versions. The drift check excludes
+  `source-date` (along with `source-sha` and `sdk-version`), so this never fails CI.
 - **Missing symbols** — symbol not in `__all__`? Not exposed at subpackage level? Check the `__init__.py`.
 - **Dirty-tree refusal** — stash or commit changes under `application_sdk/` before running.
 - **"No drift" when CI says stale** — most likely the committed snapshot was not saved before running poe (Step A). The `poe regen-capabilities` task overwrites `docs/agents/sdk-capabilities.md` in place; if you diff the file against itself it always looks clean. Verify with `git diff HEAD docs/agents/sdk-capabilities.md` — if that shows drift, commit the file.
