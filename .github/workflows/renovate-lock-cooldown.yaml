@@ -99,6 +99,17 @@ jobs:
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
           owner: atlanhq
           repositories: application-sdk
+          # Down-scope to the one permission this lane uses (FND-395). An
+          # installation token has no *branch* scope — that is what the `bot
+          # branches` ruleset is for — but it does have a permission scope, and
+          # by default this step mints the App's whole installation grant on
+          # this repo. Since the workflow definition and the scripts it runs
+          # both come from the pushed branch, whatever the token can do is
+          # reachable from that branch: contents-only is a materially smaller
+          # blast radius than the full grant. The commit status published below
+          # is written with GITHUB_TOKEN, so `statuses` is deliberately absent
+          # here rather than an omission.
+          permission-contents: write
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
