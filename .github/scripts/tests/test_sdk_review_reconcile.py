@@ -167,14 +167,24 @@ def is_label_write(argv) -> bool:
     return argv[1] == "api" and f"repos/{REPO}/issues/{PR}/labels" in argv[2]
 
 
+def is_rate_limit(argv) -> bool:
+    return argv[1] == "api" and argv[2] == "rate_limit"
+
+
+RESET = int(NOW.timestamp()) + 1800  # half an hour out
+
+
 def base_gh(
     prs: list[dict] | None = None,
     comments: list[dict] | None = None,
     reviews: list[dict] | None = None,
     labels: list[str] | None = None,
+    quota_remaining: int = 4999,
+    quota_reset: int = RESET,
 ) -> FakeGH:
     """A repo where PR #7 carries a standing READY verdict and no approval."""
     gh = FakeGH()
+    gh.on(is_rate_limit, lambda: ok(f"{quota_remaining}\n{quota_reset}\n"))
     gh.on(
         is_pr_list,
         ok("\n".join(json.dumps(pr) for pr in (prs if prs is not None else [pull()]))),
@@ -210,7 +220,12 @@ def _tokens(monkeypatch):
 
 
 def run_sweep(gh: FakeGH, **kwargs) -> list:
-    return reconcile.sweep(REPO, runner=gh, now=NOW, **kwargs)
+    """Sweep with a recorded sleeper, so a retry path never really sleeps."""
+    slept: list[float] = []
+    kwargs.setdefault("sleeper", slept.append)
+    outcomes = reconcile.sweep(REPO, runner=gh, now=NOW, **kwargs)
+    gh.slept = slept  # type: ignore[attr-defined]
+    return outcomes
 
 
 # --- the recovery this exists for ----------------------------------------
@@ -227,15 +242,21 @@ def test_lost_approval_is_reconciled():
     assert f"commit_id={HEAD}" in posted[0]
 
 
-def test_reconcile_spends_exactly_one_atlan_ci_request():
+def test_reconcile_spends_exactly_one_quota_bearing_atlan_ci_request():
     """The reconciler must not become a new source of the exhaustion it recovers
-    from: every read runs on the App token, the PAT only on the APPROVE."""
+    from: every read runs on the App token, the PAT only on the APPROVE.
+
+    The pre-flight meter read also carries the PAT, but `GET /rate_limit` does
+    not count against the quota it reports — so the budget that matters is
+    "one APPROVE", not "one request".
+    """
     gh = base_gh()
     run_sweep(gh)
 
     approver = gh.approver_calls()
-    assert len(approver) == 1
-    assert is_approve(approver[0])
+    assert [argv for argv in approver if is_approve(argv)] != []
+    assert len([argv for argv in approver if is_approve(argv)]) == 1
+    assert all(is_approve(argv) or is_rate_limit(argv) for argv in approver)
 
 
 def test_reconcile_does_not_green_the_sdk_review_status():
@@ -384,19 +405,139 @@ def test_dry_run_reports_without_approving():
     assert gh.called(is_approve) == []
 
 
-# --- failure reporting ----------------------------------------------------
+# --- quota pre-flight -----------------------------------------------------
 
 
-def test_still_rate_limited_reports_failed_and_does_not_retry_in_process():
-    """APPROVE_MAX_ATTEMPTS=1: this cron is the retry loop, so the stamper must
-    not hold the runner waiting out a primary-quota reset."""
-    gh = base_gh()
-    gh.on(is_approve, fail(RATE_LIMIT_STDERR))
+def test_exhausted_quota_spends_no_approve_request_at_all():
+    """The original shape discovered exhaustion by taking a 403 — a doomed
+    request to learn what a free one already knows. Repeatedly hammering an
+    exhausted primary limit is also how it escalates to an abuse block."""
+    gh = base_gh(quota_remaining=0)
+    outcomes = run_sweep(gh)
+
+    assert [o.action for o in outcomes] == [reconcile.DEFERRED]
+    assert gh.called(is_approve) == []
+    assert gh.approver_calls() == [
+        argv for argv in gh.calls if is_rate_limit(argv)
+    ], "the only atlan-ci request should be the free meter read"
+
+
+def test_deferral_names_the_reset_and_does_not_red_the_run(capsys):
+    """Deferring is the self-healing case: the next tick after the reset posts
+    it. A red run every ten minutes for an hour would bury the annotation that
+    matters when it does NOT clear."""
+    gh = base_gh(quota_remaining=0)
+    outcomes = run_sweep(gh)
+    reconcile.report(outcomes, REPO)
+
+    assert "resets in 30min" in outcomes[0].reason
+    out = capsys.readouterr().out
+    assert "::warning::" in out
+    assert "::error::" not in out
+
+
+def test_main_stays_green_on_a_deferral(monkeypatch):
+    monkeypatch.setattr(
+        reconcile,
+        "sweep",
+        lambda *args, **kwargs: [
+            reconcile.Outcome(PR, reconcile.DEFERRED, "atlan-ci quota exhausted")
+        ],
+    )
+    assert reconcile.main(["--repo", REPO]) == 0
+
+
+def test_a_verdict_outliving_a_full_quota_window_reds_the_run():
+    """Past one hourly reset, "waiting for quota" stops being an explanation."""
+    gh = base_gh(
+        quota_remaining=0, comments=[comment(created_at="2026-08-17T09:00:00Z")]
+    )
     outcomes = run_sweep(gh)
 
     assert [o.action for o in outcomes] == [reconcile.FAILED]
+    assert "without recovery" in outcomes[0].reason
+    assert gh.called(is_approve) == []
+
+
+def test_quota_is_read_once_per_run_not_once_per_pr():
+    gh = base_gh(
+        quota_remaining=0,
+        prs=[pull(number=PR), pull(number=11), pull(number=12)],
+    )
+    run_sweep(gh)
+
+    assert len(gh.called(is_rate_limit)) == 1
+
+
+def test_no_candidates_means_no_quota_read():
+    """A sweep with nothing to approve must not spend a request establishing
+    that it could have."""
+    gh = base_gh(reviews=[bot_approval()])
+    run_sweep(gh)
+
+    assert gh.called(is_rate_limit) == []
+
+
+def test_unreadable_quota_still_attempts_the_approval():
+    """Failing to read the meter is not evidence the tank is empty."""
+    gh = base_gh()
+    gh.on(is_rate_limit, fail("network go boom"))
+    outcomes = run_sweep(gh)
+
+    assert [o.action for o in outcomes] == [reconcile.RECONCILED]
     assert len(gh.called(is_approve)) == 1
+
+
+# --- failure reporting ----------------------------------------------------
+
+
+def test_quota_emptying_mid_run_is_a_deferral_not_a_failure():
+    """Other `atlan-ci` workflows share the quota, so it can empty between the
+    pre-flight and the POST. That race is a deferral; re-reading the meter is
+    how we tell it from a real failure without parsing stderr."""
+    gh = base_gh()
+    gh.on(is_approve, fail(RATE_LIMIT_STDERR))
+    # Full at pre-flight, empty by the time we ask again.
+    reads = {"n": 0}
+
+    def meter():
+        reads["n"] += 1
+        return ok(f"{0 if reads['n'] > 1 else 4999}\n{RESET}\n")
+
+    gh.on(is_rate_limit, meter)
+    outcomes = run_sweep(gh)
+
+    assert [o.action for o in outcomes] == [reconcile.DEFERRED]
     assert gh.called(is_status) == []
+
+
+def test_a_non_quota_approval_failure_is_a_real_failure():
+    gh = base_gh()
+    gh.on(is_approve, fail("gh: Validation Failed (HTTP 422)"))
+    outcomes = run_sweep(gh)
+
+    assert [o.action for o in outcomes] == [reconcile.FAILED]
+    assert outcomes[0].reason == "approval could not be posted"
+    assert gh.called(is_status) == []
+
+
+def test_secondary_throttle_gets_one_inline_retry():
+    """Secondary limits clear in seconds, so a single short retry is worth it —
+    unlike a primary reset, which the next tick handles instead of this runner."""
+    gh = base_gh()
+    attempts = {"n": 0}
+
+    def approve_once_then_succeed():
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            return fail("You have exceeded a secondary rate limit (HTTP 403)")
+        return ok()
+
+    gh.on(is_approve, approve_once_then_succeed)
+    outcomes = run_sweep(gh)
+
+    assert [o.action for o in outcomes] == [reconcile.RECONCILED]
+    assert len(gh.called(is_approve)) == 2
 
 
 def test_main_exits_nonzero_when_a_reconcile_failed(monkeypatch, capsys):
