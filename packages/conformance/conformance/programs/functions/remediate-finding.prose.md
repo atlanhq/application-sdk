@@ -92,11 +92,12 @@ a structured value the model reads rather than one it has to parse. It is
 what lets `detect-fix-recheck` revert the *entire* fix, not just
 `finding.file`, if the gates below reject it. A path in the JSON line's
 `unchanged` array was left alone and is not part of `touched_files`. (The
-`backed up:` write only happens if a prior invocation passed `--enforce`
-explicitly and `renovate.json` had non-canonical content, writing a
-`renovate.json.bak` that appears in `touched` alongside `renovate.json` —
-not reachable via the no-flags procedure below, but real if this function is
-ever invoked with an explicit `--enforce`.)
+`backed up:` write only happens if a prior invocation passed `--enforce` or
+`--renovate-automerge` explicitly and `renovate.json` had non-canonical
+content, writing a `renovate.json.bak` that appears in `touched` alongside
+`renovate.json` — not reachable via the no-flags procedure below, but real if
+this function is ever invoked with an explicit `--enforce` or
+`--renovate-automerge`.)
 
 - It **always overwrites** `.claude/skills/remediate/SKILL.md` in consumer
   app repos — the very document driving this remediation loop — on every

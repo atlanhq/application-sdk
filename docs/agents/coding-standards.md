@@ -150,6 +150,57 @@ result = requests.get(url)
 result = await self.run_in_thread(requests.get, url)
 ```
 
+## Writing Files
+
+Never write an artifact directly to its final name. Use `application_sdk.common.atomic`:
+
+```python
+from application_sdk.common.atomic import atomic_write
+
+# Wrong — a write that dies part-way leaves a truncated file at the real name.
+# Nothing downstream can tell it from a correct one, so it gets carried forward
+# and uploaded, and the failure surfaces in a consuming app's parser instead.
+Path(out).write_text(payload)
+
+# Right — the final path either does not exist or holds a complete file.
+with atomic_write(out, operation="entity export") as handle:
+    handle.write(payload.encode())
+```
+
+`operation` is a short phrase naming the step; it goes into the failure message and
+its evidence. Two companions:
+
+- `atomic_path(path, operation=...)` for writers that take a filename rather than a
+  handle (`pq.write_table`, `shutil.copy2`), and `atomic_copy(src, dst)` for copies.
+- `disk_full_guard(path, operation=...)` for a write that genuinely cannot be atomic
+  — an append across calls. It types the failure without the atomicity.
+
+A full disk raises `DiskFullError` naming the path and the shortfall, which is the
+signal an operator reads to raise a deployment's ephemeral storage. Pass
+`required_bytes=` when the size is known up front and the check happens before the
+first byte moves. See `docs/concepts/storage.md` → *Atomic artifact writes*.
+
+Every SDK writer already goes through this, so a `Writer`, `FileReference`, or the
+incremental helpers need nothing from you. This rule is for code that opens a file
+itself.
+
+## Long-Running Tasks: Progress and Stalls
+
+A task that goes quiet for longer than `max_no_progress_seconds` (900s) is reported as a
+stall — and failed, in an app that enforces. The SDK covers its own write, transfer and
+page loops, and auto-holds every `run_in_thread` offload; what it cannot see is a custom
+async loop or an opaque single `await` against the connector's own source client. Those
+need one line: `self.heartbeat(...)` in the loop, or
+`async with self.holding_progress(label, timeout=...)` around the opaque call.
+
+`timeout` is *how long you would let this one call run before you would rather it
+failed* — not a prediction of its duration. Err generous; too tight false-kills a
+healthy run, and stall kills retry.
+
+Read [Progress and Stalls](../concepts/progress-and-stalls.md) before writing a
+long-running task, and [ADR-0018](../adr/0018-progress-aware-heartbeat.md) if you need
+the design rationale.
+
 ## Large Payloads and FileReference
 
 Use `FileReference` for any data that cannot fit in Temporal's 2 MB payload limit.
@@ -393,6 +444,23 @@ return MyOutput(statistics=result, data=result.files)
 
 The opt-in flag is a bridge for in-flight migrations only. New code should
 go straight to the direct copy-paste pattern above.
+
+**A writer's own files appear only after `close()`.** Both legacy writers stage
+their chunks in a private directory (a hidden `.sdk-writer-staging/` sibling of
+the output path) and move them into the output directory in one step at
+`close()`. Chunk filenames, object-store keys, and the `statistics/` layout are
+exactly what they always were — only the moment the files land changes. Do not
+read a writer's output directory before its `close()` returns. Publishing only
+adds: anything already in a reused output directory stays there, and a deferred
+writer's `FileReference` covers it too.
+
+The reason is cancellation. A cancelled activity leaves an orphaned worker
+thread that cannot be killed and is still writing to a path it resolved before
+the cancel; the chunk name it holds (`chunk-<n>-part<m>`) is identical to the
+one the retry will resolve. Staging means only a writer that reaches `close()`
+ever touches the output directory, so a retry can neither have its file
+overwritten by that orphan nor sweep the orphan's other files into its own
+`FileReference` (FND-315, FND-317).
 
 ## Before Every Commit
 

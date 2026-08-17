@@ -893,6 +893,42 @@ class TestSingleKeyProbeConcurrency:
         assert "unreachable-key" not in str(exc_info.value)
         assert "sha256:" in str(exc_info.value)
 
+    async def test_terminal_outage_surfaces_as_unreachable_with_diagnostics(
+        self,
+    ) -> None:
+        """A budget-exhausted DaprSidecarUnreachableError must surface as the
+        TERMINAL SecretStoreUnreachableError — redacted, carrying the secret-free
+        component/attempts/elapsed diagnostics — not the transient sibling."""
+        from application_sdk.errors.leaves import DaprSidecarUnreachableError
+        from application_sdk.infrastructure.secrets import (
+            SecretStoreUnavailableError,
+            SecretStoreUnreachableError,
+        )
+
+        async def _get_secret(value: str, *, log_label: str | None = None):
+            raise DaprSidecarUnreachableError(
+                message="Dapr sidecar unreachable: component=secretstore "
+                "after 2 attempts over 120.0s",
+                component="secretstore",
+                attempts=2,
+                elapsed_seconds=120.0,
+            )
+
+        config = {"a": "unreachable-key"}
+
+        with pytest.raises(SecretStoreUnreachableError) as exc_info:
+            await self._vault(_get_secret)._fetch_single_key_secrets(config)
+
+        err = exc_info.value
+        assert isinstance(err, ColdStartRaceError)
+        assert not isinstance(err, SecretStoreUnavailableError)
+        assert err.component == "secretstore"
+        assert err.attempts == 2
+        assert err.elapsed_seconds == 120.0
+        assert "unreachable-key" not in str(err)
+        assert "sha256:" in str(err)
+        assert err.cause is None
+
     async def test_store_errors_still_fall_through_and_are_summarised(self) -> None:
         """A genuine store error on one field stays non-fatal (it may simply
         not be a secret), and the existing failure summary is preserved."""

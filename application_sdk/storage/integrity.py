@@ -52,10 +52,17 @@ disk and *then* handed it to ``upload_file`` gets a sidecar recording the
 truncated content as the expected digest, and every downstream check passes: as
 far as the transfer layer can tell, exactly the intended bytes moved.
 
-Closing that half needs the producer to fail hard on its own write errors and
-delete partial output rather than upload it — the producer-side half of FND-306,
-tracked against the connector apps. What the machinery here does buy against a
-mid-write producer failure is narrower and still worth having:
+Closing that half needs the producer to never leave partial output at an
+artifact's real name in the first place, which is
+:mod:`application_sdk.common.atomic` (FND-318): every SDK writer stages its
+bytes elsewhere and renames them into place, so a write that fails leaves the
+final path either absent or holding the previous complete artifact — there is
+nothing partial for this module to faithfully record. That is the producer-side
+half, and it belongs in the SDK for the same reason this module does: the SDK
+owns the writers apps actually use.
+
+What the machinery here buys *on top of* that is narrower and still worth
+having:
 
 * a file truncated *while the upload is reading it* is caught (local-shrink);
 * any corruption after a good upload — a rewrite, a partial restore, a
@@ -75,6 +82,7 @@ from __future__ import annotations
 import hashlib
 from typing import TYPE_CHECKING
 
+from application_sdk._runtime.offload import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
@@ -166,14 +174,6 @@ async def sha256_file(path: Path) -> str:
     rather than asyncio's default executor, which Temporal's own SDK uses for
     internal scheduling — sharing that pool risks exhausting it.
     """
-    # Imported lazily, and it has to be: this module is in ``storage/__init__``'s
-    # eager chain, so importing ``application_sdk.execution.heartbeat`` at module
-    # scope runs ``execution/__init__`` -> Temporal activity utils ->
-    # ``application_sdk.app`` -> back to a still-initialising ``contracts.base``,
-    # raising ImportError. The cycle is via ``execution/__init__``, not a direct
-    # storage -> execution edge. See ``storage/batch.py`` for the full chain.
-    from application_sdk.execution.heartbeat import run_in_thread  # noqa: PLC0415
-
     return await run_in_thread(_sha256_file_sync, path)
 
 

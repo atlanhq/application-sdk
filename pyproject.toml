@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "3.27.2"
+version = "3.28.0"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -26,7 +26,7 @@ dependencies = [
     "opentelemetry-instrumentation-fastapi>=0.62b1,<0.63",
     "prometheus-client>=0.20.0,<1.0",
     "fastapi[standard]>=0.141.1,<0.142.0",
-    "pyatlan>=9,<10",
+    "pyatlan>=10,<11",
     "httpx-retries>=0.6.0,<0.7.0",
     "pydantic>=2.10.6,<3.0.0",
     "loguru>=0.7.3,<0.8.0",
@@ -162,7 +162,7 @@ test = [
     "coverage>=7.6.1,<8.0.0",
     "pytest-asyncio>=1.4.0,<2.0.0",
     "pytest-timeout>=2.3.0,<3.0.0",
-    "pytest-rerunfailures>=16.4,<16.5",
+    "pytest-rerunfailures>=16.5,<16.6",
     "pytest-socket>=0.7.0,<1.0.0",
     "hypothesis>=6.114.0,<7.0.0",
     "trustme>=1.2.1,<2.0.0",

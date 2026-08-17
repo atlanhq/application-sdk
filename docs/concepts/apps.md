@@ -224,7 +224,10 @@ async with self.holding_progress("full table scan", timeout=7200):
 
 For opaque *async* calls (the connector's own async client) there is no SDK-owned seam to auto-hold, so wrap those in `holding_progress` directly. Expect to need it: interleaved streaming reads (fetch a page, write a batch, repeat) are already covered by the SDK's own writer and transfer loops, but almost every connector makes at least one genuinely opaque single call — one large metadata query, one slow list/export that returns everything at once.
 
-See [ADR-0018](../adr/0018-progress-aware-heartbeat.md) for the design.
+See [Progress and Stalls](progress-and-stalls.md) for the whole picture — what counts as
+progress, how to size the allowance from your own data, and how to read the report the
+watchdog produces for your app — and [ADR-0018](../adr/0018-progress-aware-heartbeat.md)
+for the design.
 
 ## Lifecycle Hooks
 
@@ -249,6 +252,9 @@ Two cleanup tasks and two transfer tasks are available on every `App`:
 - `download(DownloadInput(...))` — pulls a file or directory from object storage to a local path.
 
 Both transfer tasks validate the bytes they move. An upload confirms the local file did not shrink while it was read and that the store recorded what was sent, and records a `{key}.sha256` sidecar; a download confirms it wrote as many bytes as the store declared and, when a sidecar exists, that the content hashes to it. An artifact whose producer died mid-write therefore fails at the transfer boundary with a non-retryable `StorageIntegrityError` naming the file and both digests, rather than reaching a parser as an unattributable `Malformed JSON`. The checks live in the transfer primitives, so every path — these tasks, `FileReference` persist/materialize, prefix transfers, the writer chunk uploads — is covered by the same code. See [storage.md](storage.md#transfer-integrity).
+
+**Writer output is staged, then published at `close()`.** A `Writer` (parquet, JSON) never writes into its output directory directly — it writes into a private staging tree (a sibling directory, not inside the output) and publishes into the output directory in one step when `close()` returns. Files produced by that writer are therefore absent from the output directory until `close()` completes; a writer that is cancelled or fails before `close()` publishes nothing. This is what stops a cancelled attempt's orphaned writer from colliding with, or being adopted into, a retry's output. The published filenames and object-store keys are unchanged — only the timing of when files appear in the output directory moves to `close()`. Note that publishing only *adds*: content already sitting in a reused output directory is left in place, and a deferred writer's `FileReference` walks the whole directory, so it adopts that content too.
+
 - `cleanup_files()` — removes tracked `FileReference` local paths from task outputs, **then** convention-based temp directories (using `input.extra_paths` if provided, otherwise `ATLAN_CLEANUP_BASE_PATHS`, otherwise the default temp path).
 - `cleanup_storage()` — removes object store artifacts by tier:
   - `StorageTier.TRANSIENT` refs are always removed.
@@ -412,7 +418,13 @@ raising a typed error whose category is plumbing-side (`RateLimitedError`,
 makes hard mode fail *closed* on a blip, which is the mirror-image bug.
 
 Two queryable events come out of the gate. The per-run **outcome** event carries `outcome`,
-`gate_mode`, `gate_classification` and the per-check `check_matrix`. A boot-time **posture** event
+`gate_mode`, `gate_classification` and the per-check `check_matrix`. On a `gate_broken` fail-open
+its `reason` names the *underlying* fault — the SDK unwraps Temporal's `ActivityError`/`ApplicationError`
+to the real error type (e.g. `DaprSidecarUnreachableError`), not the wrapper — so a persistent
+platform fault is separable from a transient blip on the dashboard. A deadline overrun carries no
+error type to unwrap, so it reports which deadline fired instead: `Timeout:START_TO_CLOSE` (one
+attempt outran its own budget — what a dependency wait wider than the gate's `start_to_close` looks
+like), `Timeout:SCHEDULE_TO_CLOSE` (the retry window closed), or `Timeout:HEARTBEAT`. A boot-time **posture** event
 (`Preflight gate posture`) is emitted once per gate-registered app — soft ones included — carrying
 `app_name`, `gate_mode` and `gate_timeout_seconds`. The posture event is the denominator the outcome
 events cannot supply: an app that never reaches a verdict emits no outcome row at all, so "which

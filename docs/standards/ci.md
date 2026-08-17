@@ -168,6 +168,41 @@ it, or kept out of that file in the first place.
 `export_extra_env.py` and `test_export_extra_env.py` are the worked example,
 including a static check that every call site masks before it writes.
 
+## Renovate post-upgrade commands
+
+Two run today, both installed as bare PATH commands by `.github/workflows/renovate.yaml`
+and both declared in `renovate-config/default.json`:
+
+| command | lane | what it does |
+|---|---|---|
+| `renovate-pkl-sync` | `app-contract-toolkit` | re-resolves the Pkl lock and regenerates contract artifacts |
+| `renovate-uv-lock-bounded` | `lockFileMaintenance` | re-resolves `uv.lock` under the org §5 release-age bound, then strips uv's `[options]` block |
+
+Three rules apply to any command added here.
+
+**No `${VARS}`.** Renovate does not shell-expand post-upgrade commands, so a
+variable is passed through literally. Everything the command needs must be a
+literal argument.
+
+**Every command needs a matching regex in `allowedCommands`** in
+`renovate-config/self-hosted.js` — an admin-only option, which is why the fleet
+runs a self-hosted runner at all. A command the allowlist does not match is
+**skipped with a log line and nothing else**, so the drift is invisible exactly
+when it matters: in FND-367 a bound that was not yet allowlisted meant the lock
+refreshed unbounded and took a package published three minutes earlier, with
+nothing red anywhere. `.github/scripts/check_renovate_allowed_commands.py`
+asserts the preset↔allowlist pairing in CI for that reason. Keep allowlist
+entries free of character classes and backslashes: a `]` truncates the array the
+guard parses, and `"\d"` in a JS string literal is just `"d"`.
+
+**Anything that writes a lockfile must leave it valid for every consumer.** uv
+records its resolver settings into `uv.lock` under `[options]`, and every
+`uv sync --locked` compares its own settings against that block — so a bound
+applied at lock time and left recorded makes the lock unusable in the app
+Dockerfiles. That is what reddened `scan / Build Image` fleet-wide in #3212. The
+bounded driver strips the block; if you add another lock-writing command, check
+what it records.
+
 ## Reusing scripts from a reusable workflow
 
 A `uses:` reusable workflow does **not** bring its own repo's files into the
@@ -190,6 +225,39 @@ sparse-checkout it into a side path and invoke from there — the
 
 The driver runs from the consumer's working directory, so it acts on the
 consumer's files; `.sdk-scripts` only holds SDK code and must never be staged.
+
+### Do not try to derive the ref from `github.job_workflow_sha`
+
+`ref: main` above is deliberate and is the default answer. Every consumer pins
+these reusables at `@main`, and several checkouts of this repo pin `main` for a
+stronger reason — they fetch *content* that must reflect `main` whatever ref the
+caller is on (`trivy-container.yaml`'s base allowlist,
+`vuln-reconcile-on-release.yml`'s scan baseline,
+`contract-toolkit-publish.yml`'s published content). Those carry their reasoning
+inline; leave them as they are.
+
+The tempting "improvement" is to derive the ref so the script always matches the
+workflow that resolved it. `${{ github.job_workflow_sha }}` is documented in the
+`github` context as exactly that — the commit of the reusable workflow file the
+caller resolved. **It renders empty.** It is an OIDC token claim, not a usable
+expression value.
+
+The failure is silent and the wrong way round: `actions/checkout` treats an
+empty `ref` as *not supplied* and takes the default branch, so the step goes
+**green having fetched a different commit's script than the workflow the caller
+pinned** — the wrong version of every code path, with nothing red to show for
+it. FND-372 hit this; it only surfaced because the script did not exist on
+`main` yet, so the *next* step died on a missing file.
+
+Generalising: never let a `with:` value that must not be blank come from an
+expression that can evaluate to empty. Prefer a shape where "unset" cannot be
+expressed over a guard that checks for it after the fact — a declared input with
+a default, or a literal.
+
+**When verifying any change to a workflow like this, read the checkout step's
+logged `ref:` rather than concluding from a green tick.** A step that fetched the
+wrong ref still passes; it is the next step that fails, and only if what it
+wanted happens to be absent from the fallback.
 
 ## `concurrency:` is not a lock, and not a queue
 

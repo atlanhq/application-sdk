@@ -141,6 +141,44 @@ scrape_configs:
     metrics_path: /metrics
 ```
 
+### Stall-watchdog metrics
+
+The in-process stall watchdog (ADR-0018) emits two histograms, and they have **two
+different audiences**: an app author reading their own work-list, and an operator being
+paged. See [Progress and Stalls](progress-and-stalls.md#reading-your-warn-report) for the
+author-side queries.
+
+| Metric | Records | Labels | Read by |
+|---|---|---|---|
+| `task_no_progress_gap_seconds` | one entry per gap that exceeded `max_no_progress_seconds` | `task_name`, `progress_last_label`, `watchdog_mode` | The author's work-list **and** the `AtlanAppTaskStalled` alert — while an app is in `warn`, this is the containment |
+| `task_hold_duration_seconds` | one entry per hold released — every hold, not only long ones | `task_name`, `hold_label`, `hold_bounded`, `hold_lapsed` | The author's work-list only — deliberately not alerted |
+
+`watchdog_mode` is what keeps warn-mode observations and enforced kills aggregating
+separately; `hold_bounded="false"` isolates the sites still relying on the duration
+backstop.
+
+The accompanying log lines are **INFO by design**, not WARNING: warn mode is a
+fleet-wide default, so one gap observation is an expected observation rather than an
+actionable failure, and alerting off the log level would manufacture exactly the
+fleet-wide noise ADR-0018 exists to reduce. **The alert reads the metric**, and it is
+deliberately not one-gap-sensitive — see the threshold below.
+
+- **Alert rule:** `AtlanAppTaskStalled` in
+  [`atlanhq/atlan-alerts`](https://github.com/atlanhq/atlan-alerts/blob/main/alerting/rules/App-Platform/atlan-apps-task-stall-alerts.yaml).
+- **Runbook:** [Stalled task](../runbooks/stalled-task.md) — how an operator tells a
+  wedge from a healthy-but-quiet spot, and what to do with each.
+- **Dashboard:** import
+  [`task-stall-dashboard.json`](../static/observability/task-stall-dashboard.json)
+  into Grafana against the Prometheus/VictoriaMetrics datasource.
+
+!!! warning "Split-deployment workers need the Pushgateway to be configured"
+
+    Activities run in the worker process, so in a split deployment these series only
+    reach VictoriaMetrics if `ATLAN_PROMETHEUS_PUSHGATEWAY_URL` is set. With it unset the
+    worker logs a warning at startup and pushes nothing — no task-level series exists for
+    that app, so neither the work-list nor the stall alert works for it.
+    Combined-mode pods are covered by the FastAPI `/metrics` scrape.
+
 ### Recommended Alerts
 
 | Alert | Condition | Severity |
@@ -149,6 +187,81 @@ scrape_configs:
 | Worker slots exhausted | `temporal_worker_task_slots_available == 0` | Critical |
 | Elevated workflow latency | `histogram_quantile(0.99, temporal_workflow_endtoend_latency_bucket) > 300` | Warning |
 | Temporal server errors | `rate(temporal_long_request_failure_total[5m]) > 0` | Warning |
+| Task stalled (wedged but alive) | `AtlanAppTaskStalled` — see below | High |
+| Run past its length SLA | `increase(task_run_length_over_sla_seconds_count[15m]) > 0` — see below | Warning |
+
+The stall alert is **not optional while an app is in `warn`.** Warn mode cannot fail an
+activity, so an alert on this metric is what stands in for the kill: a wedged attempt is
+visible within `max_no_progress_seconds`, but it will hold its worker slot until the 24h
+backstop unless a human intervenes. Once an app runs in `enforce`, the same series
+measures its kill rate instead.
+
+It is the one alert here that ships as a real rule rather than a suggestion —
+`AtlanAppTaskStalled` in `atlanhq/atlan-alerts`, with the
+[stalled-task runbook](../runbooks/stalled-task.md) behind it:
+
+```promql
+sum by (clusterName, domainName, app_name, task_name,
+        progress_last_label, watchdog_mode) (
+  increase(task_no_progress_gap_seconds_sum{app_name!="", task_name!=""}[1h])
+) >= 3600
+```
+
+**Seconds of silence per hour, not a count of gaps** — and the difference matters. In
+warn mode *every* app with an uninstrumented quiet spot emits gaps; that is what warn
+mode is for, and paging each one would manufacture the fleet-wide noise ADR-0018 exists
+to reduce. Only *sustained* silence separates a wedge from a healthy-but-quiet spot,
+because both emit nothing and only the wedge keeps emitting nothing. `3600` is one
+permanently-silent attempt, and N concurrent wedges reach it N times faster — so the page
+arrives soonest exactly when worker-slot exhaustion is the real risk. A single gap belongs
+on the dashboard and in the app's own work-list, not in an operator's inbox.
+
+### Run length: the run no stall and no timeout catches
+
+The stall alert above catches an attempt that goes *silent*. It cannot catch a run
+that keeps making **some** progress: every progress signal re-arms the watchdog, so
+no gap is ever observed, and with `start_to_close` raised to a backstop no timeout
+fires either. `temporal_workflow_duration_seconds` does not help — it is recorded
+when a run *ends*, so it can never describe a run that has not ended. That run is
+bounded by nothing, which is why ADR-0018 → *Bounding total time* replaces the
+duration **kill** with a duration **alert**.
+
+Every executing task attempt compares its run's age against
+`ATLAN_RUN_LENGTH_SLA_SECONDS` (24 h by default; `0` disables) on the same tick as
+its heartbeat. Past the SLA it emits:
+
+| Signal | Shape |
+|---|---|
+| `task_run_length_over_sla_seconds` | Histogram of the run's age, labels `task_name`, `temporal_workflow_type`. Recorded **only** while a run is over its SLA, and re-asserted once a minute for as long as it stays over |
+| One `WARNING` log line per attempt | The age, the SLA, the task that was running and the workflow type |
+
+```promql
+increase(task_run_length_over_sla_seconds_count[15m]) > 0
+```
+
+**A count, here, where the stall alert needs accumulated seconds** — and the
+asymmetry is the point. Gaps are emitted by every warn-mode app with an
+uninstrumented quiet spot, so only sustained silence distinguishes a wedge from a
+healthy pause. This series is emitted *only* by a run already past the length its
+own operator declared, so there is nothing to threshold: one observation is the
+finding. `histogram_quantile` over `_bucket` then answers "how far over". Because
+the observation re-asserts every minute, the window only has to exceed a minute —
+`[15m]` leaves slack and resolves within one window of the run ending.
+
+**Runbook:** [Long-running run](../runbooks/long-running-run.md) — how an operator
+separates healthy-but-slow from wedged, and what to do with each.
+
+!!! warning "Same Pushgateway requirement as the stall metric"
+
+    This series is emitted from the worker process, so in a split deployment it
+    only reaches VictoriaMetrics if `ATLAN_PROMETHEUS_PUSHGATEWAY_URL` is set.
+
+**Blind spot, stated.** The observation rides an activity's heartbeat tick, so a
+run is measured only while at least one of its tasks is executing. A run parked
+between activities, a run whose worker is gone entirely, and a task with
+heartbeating disabled are not covered — those are "no worker / no activity"
+conditions, and the worker-liveness and activity-failure alerts above are what see
+them.
 
 ---
 

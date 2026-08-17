@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING
 import obstore
 import orjson
 
+from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage._telemetry import _log_transfer_progress
 
@@ -181,13 +182,6 @@ async def _fetch_chunk(
             otherwise leave a hole of NUL bytes that reads back as a
             plausible-looking file of exactly the right length.
     """
-    # Lazy, and it cannot be hoisted to module scope: application_sdk.execution's
-    # package __init__ reaches back into storage.ops, which imports this module.
-    # A sys.modules lookup per chunk is nothing against a multi-MiB range GET.
-    from application_sdk.execution.progress import (  # noqa: PLC0415 — circular: see comment above
-        current_progress_tracker,
-    )
-
     length = min(chunk_size_bytes, size - offset)
     async with sem:
         if etag is not None:

@@ -416,6 +416,131 @@ class TestTaskEnvVarDefaults:
 
 
 # =============================================================================
+# @task stall watchdog (ADR-0018 / FND-296)
+# =============================================================================
+
+
+class TestTaskDurationBackstop:
+    """``timeout_seconds`` stops being a duration budget and becomes a backstop."""
+
+    def test_the_default_is_the_24h_backstop(self) -> None:
+        """The relief half of FND-296, and the one thing that changes on upgrade.
+
+        It ships in the same release as warn mode on purpose: coupling it to
+        ``enforce`` would leave every app dying at its guessed ceiling while the
+        fleet gathered data, so "no upgrade task" would buy nobody anything
+        (ADR-0018 → *Migration*).
+        """
+        from application_sdk.app.task import _START_TO_CLOSE_BACKSTOP_SECONDS
+
+        class MyApp:
+            @task
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.timeout_seconds == _START_TO_CLOSE_BACKSTOP_SECONDS == 86_400
+
+    def test_an_app_that_still_declares_one_keeps_it(self) -> None:
+        """Deleting the guesses is an optimisation, not a migration step."""
+
+        class MyApp:
+            @task(timeout_seconds=7200)
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.timeout_seconds == 7200
+
+
+class TestTaskProgressWatchdog:
+    """``@task(progress_watchdog=..., max_no_progress_seconds=...)``."""
+
+    def test_declaring_nothing_stores_nothing(self) -> None:
+        """``None``, not ``WARN``.
+
+        "Declares nothing" and "declares warn" are different facts: only the
+        first one follows an operator moving the fleet, and only the first one
+        yields to the ``off`` kill-switch without argument.
+        """
+
+        class MyApp:
+            @task
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.progress_watchdog is None
+        assert metadata.max_no_progress_seconds is None
+
+    @pytest.mark.parametrize("declared", ["off", "warn", "enforce"])
+    def test_a_string_mode_is_coerced_to_the_enum(self, declared: str) -> None:
+        """The enum is a ``StrEnum``, so the string form is the ergonomic one."""
+        from application_sdk.execution.progress import ProgressWatchdogMode
+
+        class MyApp:
+            @task(progress_watchdog=declared)
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.progress_watchdog is ProgressWatchdogMode(declared)
+
+    def test_the_enum_is_accepted_directly(self) -> None:
+        from application_sdk.execution.progress import ProgressWatchdogMode
+
+        class MyApp:
+            @task(progress_watchdog=ProgressWatchdogMode.ENFORCE)
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.progress_watchdog is ProgressWatchdogMode.ENFORCE
+
+    def test_an_unknown_mode_is_rejected_at_decoration(self) -> None:
+        """Loud at import, unlike the env-var reader next door.
+
+        A typo in a deployment manifest must not stop a worker booting; a typo in
+        an app's own source is a bug its author should see immediately.
+        """
+        with pytest.raises(TaskContractError, match="not a valid mode"):
+
+            class MyApp:
+                @task(progress_watchdog="enfroce")
+                async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                    return SimpleOutput()
+
+    def test_a_declared_allowance_is_stored_as_seconds(self) -> None:
+        class MyApp:
+            @task(max_no_progress_seconds=1800)
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.max_no_progress_seconds == 1800.0
+
+    @pytest.mark.parametrize("bad", [0, -1, float("nan"), float("inf")])
+    def test_an_unusable_allowance_is_rejected(self, bad: float) -> None:
+        """Zero stalls every attempt on its first tick; NaN slips past ``<= 0``.
+
+        In an enforcing task either one is a kill switch wearing a config knob's
+        clothes, so neither is allowed to reach a decoration.
+        """
+        with pytest.raises(TaskContractError, match="finite positive"):
+
+            class MyApp:
+                @task(max_no_progress_seconds=bad)
+                async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                    return SimpleOutput()
+
+
+# =============================================================================
 # @task pool field
 # =============================================================================
 

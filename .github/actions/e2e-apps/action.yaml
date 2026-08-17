@@ -296,7 +296,7 @@ runs:
       # outcome: a skipped step yields an empty output, so this is one
       # condition instead of two that could drift apart.
       if: steps.retry_inputs.outputs.workflow-inputs != ''
-      uses: codex-/return-dispatch@2e404d40b641ba1deb44be941660bb34828e4f6d # v4.0.0
+      uses: codex-/return-dispatch@85e564d60eaec3cc4aca885373d510cfe4bd5b19 # v4.0.1
       id: return_dispatch_retry
       with:
         token: "${{ inputs.github-token }}"

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from loguru import logger as _loguru_logger
 
-from application_sdk.execution.progress import (
+from application_sdk._runtime.progress import (
     ClosedHold,
     ProgressTracker,
     bind_progress_tracker,

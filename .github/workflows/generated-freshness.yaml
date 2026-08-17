@@ -85,9 +85,9 @@ jobs:
       # Provides `uvx ruff`, used by the driver to format generated Python so the
       # diff compares against ruff-formatted output (matching how the artifacts
       # were committed).
-      - uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.3"
+          version: "0.12.5"
 
       # Absolute ref, not `./…`: this is a reusable workflow, so a relative
       # action path would resolve against the CONSUMER repo's workspace, which

@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.27.2
-source-sha:    aaaed3a54415a5dba8626bd74796c586cfa1c168
-source-date:   2026-08-13T03:04:30+01:00
+source-sha:    07f46ed5e21ee1f535a9d77b80e531805822507e
+source-date:   2026-08-13T18:08:24+00:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -23,10 +23,10 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 11 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 59 |
-| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 20 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 61 |
+| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 21 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
-| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 37 |
+| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
@@ -961,6 +961,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Summary:** Marker for a :class:`DependencyUnavailableError` that specifically means
 - **Defined in:** `application_sdk/errors/leaves.py`
 
+#### `DaprSidecarUnreachableError`
+
+- **Import:** `from application_sdk.errors import DaprSidecarUnreachableError`
+- **Signature:** `class DaprSidecarUnreachableError(*, ...)`
+- **Summary:** Terminal form of a cold-start race: the Dapr sidecar never became
+- **Defined in:** `application_sdk/errors/leaves.py`
+
 #### `DataIntegrityError`
 
 - **Import:** `from application_sdk.errors import DataIntegrityError`
@@ -973,6 +980,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Import:** `from application_sdk.errors import DependencyUnavailableError`
 - **Signature:** `class DependencyUnavailableError(*, ...)`
 - **Summary:** Required Atlan-internal platform service is temporarily down or degraded.
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `DiskFullError`
+
+- **Import:** `from application_sdk.errors import DiskFullError`
+- **Signature:** `class DiskFullError(*, ...)`
+- **Summary:** A local write failed because the filesystem had no room for it (FND-318).
 - **Defined in:** `application_sdk/errors/leaves.py`
 
 #### `ErrorCode`
@@ -1463,6 +1477,13 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Summary:** Decorator to mark activities that require distributed locking.
 - **Defined in:** `application_sdk/execution/decorators.py`
 
+#### `retry_product_seconds`
+
+- **Import:** `from application_sdk.execution import retry_product_seconds`
+- **Signature:** `retry_product_seconds(timeout_seconds: int, *, ...)`
+- **Summary:** The worst-case total seconds a task can consume across *every* attempt.
+- **Defined in:** `application_sdk/execution/retry.py`
+
 ## `application_sdk.handler`
 
 HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory
@@ -1804,6 +1825,13 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 - **Import:** `from application_sdk.infrastructure import SecretStoreUnavailableError`
 - **Signature:** `class SecretStoreUnavailableError(secret_name: str, *, cause: Exception | None = None)`
 - **Summary:** The secret store / Dapr sidecar was *unreachable* — a transport failure
+- **Defined in:** `application_sdk/infrastructure/secrets.py`
+
+#### `SecretStoreUnreachableError`
+
+- **Import:** `from application_sdk.infrastructure import SecretStoreUnreachableError`
+- **Signature:** `class SecretStoreUnreachableError(secret_name: str, ...)`
+- **Summary:** Terminal counterpart of :class:`SecretStoreUnavailableError`: the secret
 - **Defined in:** `application_sdk/infrastructure/secrets.py`
 
 #### `StateStore`

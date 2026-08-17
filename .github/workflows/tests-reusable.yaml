@@ -52,12 +52,18 @@ name: tests-reusable
 #   A caller-supplied `test-paths` scopes the INTEGRATION job only; the unit job
 #   always runs tests/unit/.
 #
-# GitHub check name hierarchy (caller → tests-reusable):
+# GitHub check name hierarchy as the UI displays it (caller → tests-reusable):
 #   Tests / tests / Unit         (every event)
 #   Tests / tests / Integration  (merge queue if the base branch has one, else
 #                                 on the PR; skipped when there is no suite)
 #   Tests / tests / End-to-end   (label / dispatch)
 #   Tests / tests / Tests Gate   (aggregator — the required check)
+#
+# Branch protection does NOT use those display strings. A ruleset's
+# required_status_checks `context` is the check-run name, which omits the
+# workflow name: require `tests / Tests Gate` — the caller's job id, then this
+# job's name. (Verified against atlan-mysql-app's live `main` ruleset, which
+# also carries `suite / Conformance Gate`; an inline job is a single segment.)
 #
 # Nested reusable depth: caller → tests-reusable = 2 (GitHub max is 4).
 # secrets: inherit chains from the caller; the inlined e2e job reads secrets.*.
@@ -131,7 +137,7 @@ on:
       install-app-to-tenant:
         required: false
         type: boolean
-        default: false
+        default: true
         description: |
           Install the app under test onto each cloud's e2e tenant before the
           legs run, and fail a leg whose tenant is not on that version (FND-31).
@@ -144,10 +150,21 @@ on:
           tenant — which is nobody's PR — and a manifest/DAG/entrypoint change
           can go green against an older contract, or red for an unrelated reason.
 
-          Off by default because turning it on makes tenant health a gate: a
-          tenant that cannot be installed to reds the leg rather than quietly
-          testing the wrong version. Adopt it per repo once that trade is
-          understood.
+          ON by default since FND-128. It shipped opt-in (FND-31) for one
+          reason: `E2E_TENANT_MATRIX_JSON` was shared with a handful of repos,
+          and without it the install cannot resolve a tenant at all. That secret
+          is now org-wide, so the prerequisite that justified per-repo adoption
+          is gone — and leaving it opt-in meant every un-adopted repo ran the
+          cross-CSP matrix against whatever version each tenant already served,
+          which is three legs of wrong-version green instead of one.
+
+          Set it to false to opt OUT, for the case this default cannot serve: an
+          app that genuinely cannot be installed onto the e2e tenants (not
+          published to GM, or a tenant carrying an orphan that fails every
+          install — FND-131). That is a real escape hatch and it stays; what
+          changed is which way round the default points. Opting out restores the
+          pre-FND-31 behaviour, wrong-version risk included, so prefer fixing
+          the tenant.
       e2e-clouds:
         required: false
         type: string
@@ -163,11 +180,17 @@ on:
           discover_e2e_suites.py's DEFAULT_CLOUDS — deliberately NOT restated
           here, so adding a fourth CSP is one edit rather than one per repo, and
           so an app forwarding an untouched dispatch input doesn't opt out of
-          the matrix by accident.
+          the matrix by accident — intersected with the clouds the tenant secret
+          actually carries (FND-354). Removing a cloud's entry from
+          E2E_TENANT_MATRIX_JSON is therefore the fleet-wide way to take it out
+          of the rotation while its tenant is down: one secret edit, no PR,
+          effective next run, and warned about in the log of every run it
+          narrows. A cloud named HERE is never narrowed away — it reaches the
+          per-leg resolver and fails there, because naming it asserts it should
+          run.
 
           Narrow it to re-run one cloud ("aws"), or pass "none" to collapse back
-          to the single legacy tenant — the escape hatch when a tenant is down
-          and the fleet should not be blocked on it. Forced to "none" when
+          to the single legacy tenant. Forced to "none" when
           E2E_TENANT_MATRIX_JSON is not shared with the calling repo, which is
           what keeps un-onboarded repos on their existing behaviour.
       timeout-minutes:
@@ -928,18 +951,59 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "::error::install-app-to-tenant is on but E2E_TENANT_MATRIX_JSON is not available to this repository, so no tenant ID can be resolved and a release cannot be scoped to any tenant. GM matches allowed_tenants EXACTLY against the tenant's vcluster instance name (e.g. 'markeznp37') — not its hostname — and the legacy single-tenant fallback (SDR_TEST_TENANT) has no matrix entry to carry that value, so there is nothing to fall back to. Either share E2E_TENANT_MATRIX_JSON with this repository, with a 'tenant_id' field on each cloud's entry (see docs/standards/connector-ci-e2e.md), or leave install-app-to-tenant off and use the E2E Tenant Install workflow, whose tenant_id input covers the one-off case. Failing at discovery rather than at prepare-tenant so this costs seconds instead of two image builds."
+          echo "::error::the tenant-install path is on (the default since FND-128) but E2E_TENANT_MATRIX_JSON is not available to this repository, so no tenant ID can be resolved and a release cannot be scoped to any tenant. GM matches allowed_tenants EXACTLY against the tenant's vcluster instance name (e.g. 'markeznp37') — not its hostname — and the legacy single-tenant fallback (SDR_TEST_TENANT) has no matrix entry to carry that value, so there is nothing to fall back to. Either share E2E_TENANT_MATRIX_JSON with this repository, with a 'tenant_id' field on each cloud's entry (see docs/standards/connector-ci-e2e.md), or set 'install-app-to-tenant: false' in this repo's tests.yaml and use the E2E Tenant Install workflow, whose tenant_id input covers the one-off case. Failing at discovery rather than at prepare-tenant so this costs seconds instead of two image builds."
           exit 1
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
+      # ── Which clouds the secret actually carries (FND-354) ─────────────────
+      # Sparse-checked-out rather than folded into the discover action, and
+      # `ref: job.workflow_sha` rather than @main, for the reason the source-
+      # credential export gives at length: an action pinned @main cannot see a
+      # change until it lands, whereas a script pulled at the workflow's own SHA
+      # is testable on the branch that changes it. `repository:` stays hardcoded
+      # so the executed payload's provenance is pinned; application-sdk is
+      # public, so the caller's default token reads it when ORG_PAT_GITHUB is
+      # not shared.
+      - name: Fetch SDK CI scripts (tenant-matrix cloud keys)
+        if: env.HAS_TENANT_MATRIX != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+          token: ${{ secrets.ORG_PAT_GITHUB || github.token }}
+          persist-credentials: false
+
+      # The KEY LIST, never the blob: the credentials stay with the per-leg
+      # resolver, which is the only thing that needs them. Skipped without the
+      # secret, and a skipped step's output is "" — which discovery reads as
+      # "not known" and narrows nothing, the same as before FND-354.
+      - name: Read the tenant matrix's cloud keys
+        id: matrix-clouds
+        if: env.HAS_TENANT_MATRIX != ''
+        env:
+          E2E_TENANT_MATRIX_JSON: ${{ secrets.E2E_TENANT_MATRIX_JSON }}
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/scripts/e2e_tenant_matrix_clouds.py \
+            --matrix-json "$E2E_TENANT_MATRIX_JSON" >> "$GITHUB_OUTPUT"
+
       - name: Discover suites
         id: discover
         uses: atlanhq/application-sdk/.github/actions/discover-e2e-suites@main
         with:
           test-dir: ${{ inputs.e2e-test-path }}
+          # Narrows the DEFAULTED cloud list to what the secret carries, so
+          # dropping a cloud from E2E_TENANT_MATRIX_JSON takes it out of the
+          # rotation fleet-wide instead of reding one leg in every repo that
+          # runs e2e. A cloud named explicitly in e2e-clouds is NOT narrowed —
+          # it reaches the resolver and still fails there. FND-354.
+          available-clouds: ${{ steps.matrix-clouds.outputs.clouds }}
           # The cloud dimension is only meaningful when the tenant map exists;
           # without it every leg would resolve the same fallback tenant, so N
           # identical runs would masquerade as N clouds of coverage. Collapsing
@@ -969,6 +1033,11 @@ jobs:
         with:
           clouds-only: "true"
           clouds: ${{ secrets.E2E_TENANT_MATRIX_JSON == '' && 'none' || inputs.e2e-clouds }}
+          # Same narrowing as the full matrix above, from the same step output:
+          # prepare-tenant must install onto exactly the clouds the legs then
+          # run against, and a cloud it prepared but no leg used (or vice versa)
+          # is the drift the duplicated `clouds` expression already guards.
+          available-clouds: ${{ steps.matrix-clouds.outputs.clouds }}
 
       # A repo that has not been granted the tenant-matrix secret silently gets
       # one cloud's worth of coverage from a workflow that asked for three.
@@ -1013,9 +1082,10 @@ jobs:
   # can install it, so the build is hoisted here and every leg reuses the
   # reference via sdr-e2e's `prebuilt-image` input.
   #
-  # Only runs on the install path: with install-app-to-tenant off, each leg keeps
-  # building its own image exactly as before, so an unadopted repo sees no change
-  # at all (not even a different build ordering).
+  # Only runs on the install path, which is now the default: a repo that has set
+  # install-app-to-tenant: false keeps building its own image per leg exactly as
+  # before, so opting out restores the previous behaviour down to the build
+  # ordering.
   # Two machines pull this image and they are not the same architecture: this
   # runner, which runs the per-leg worker under docker compose, and the TENANT'S
   # cluster node, which serves the app Heracles fetches the DAG from at submit.
@@ -1407,9 +1477,15 @@ jobs:
       # leave prepare-tenant green having done nothing, the tenant on whatever
       # version it happened to be running, and every leg reding on its version
       # check instead — one confusing failure per leg in place of one clear
-      # failure here. `install-app-to-tenant: true` is a deliberate opt-in, and a
-      # caller that has opted in without the tenant matrix cannot install at all,
+      # failure here. A caller without the tenant matrix cannot install at all,
       # so this is a misconfiguration to surface, not a path to degrade into.
+      #
+      # Reachable only via `--clouds none` now that the install path is the
+      # default and the matrix secret is org-wide: FND-203 (#3142) fails the
+      # install path at discovery when no matrix is shared, so the un-onboarded
+      # case no longer arrives here. What still can is an operator dispatching
+      # with e2e_clouds: none, which resolves the single legacy tenant — and that
+      # tenant has no matrix entry to carry a tenant_id.
       #
       # A step-level `if:` on the env context rather than a shell `test`, so the
       # branch lives in the expression layer and the `run:` stays straight-line
@@ -1507,9 +1583,10 @@ jobs:
   e2e:
     name: End-to-end (${{ matrix.name }})
     # The image jobs and prepare-tenant are in `needs` so the legs cannot start
-    # before them, but all are SKIPPED on the default path
-    # (install-app-to-tenant off — every existing caller). That combination needs
-    # `always() &&`:
+    # before them, but all are SKIPPED for a caller that has set
+    # install-app-to-tenant: false. That combination needs `always() &&`, and
+    # still does after FND-128 flipped the default — an opt-out is now the
+    # skipped-needs path this reasoning is about:
     #
     # A job's `needs` gate is evaluated SEPARATELY from its `if:`. Without a
     # status-check function, GitHub applies an implicit success() over every
@@ -1809,9 +1886,9 @@ jobs:
       # (SDK-PR dispatch); the plain-label path (empty ref) otherwise has no uv
       # and fails with `uv: command not found`. Install it unconditionally here.
       - name: Install uv
-        uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.3"
+          version: "0.12.5"
           enable-cache: true
 
       - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main
@@ -2141,9 +2218,9 @@ jobs:
       contents: read
     steps:
       - name: Install uv
-        uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.3"
+          version: "0.12.5"
           enable-cache: true
 
       # Both downloads are best-effort: unit always uploads its artifact, but
