@@ -329,8 +329,6 @@ def test_existing_bot_approval_is_a_no_op():
     assert [o.action for o in outcomes] == [reconcile.SKIPPED]
     assert outcomes[0].reason == "already approved"
     assert gh.called(is_approve) == []
-    # Short-circuits before the comment listing is spent.
-    assert gh.called(lambda a: a[2].endswith(f"issues/{PR}/comments")) == []
 
 
 def test_a_human_approval_does_not_count_as_the_bot_approval():
@@ -405,6 +403,80 @@ def test_dry_run_reports_without_approving():
     assert gh.called(is_approve) == []
 
 
+# --- the two regressions from the first live fire -------------------------
+
+
+def test_a_reconcile_is_reported_even_when_the_listing_has_not_caught_up():
+    """GitHub's reviews listing is read-after-write eventually consistent.
+
+    The first live run of this cron approved PR #3232, re-read the listing, saw
+    nothing, and reported "the stamper declined" — then printed "Nothing to
+    reconcile". A real recovery went unannounced, which is the one thing this
+    workflow exists to announce. The stamper now says what it did, so the
+    listing lagging cannot rewrite history.
+    """
+    gh = base_gh()
+    # Never shows the approval, however many times it is asked.
+    gh.on(is_review_list, ok(json.dumps([[]])))
+    outcomes = run_sweep(gh)
+
+    assert [o.action for o in outcomes] == [reconcile.RECONCILED]
+    assert len(gh.called(is_approve)) == 1
+
+
+def test_an_unreadable_listing_never_approves_blind():
+    """Regression from the 2026-08-17 degradation: `_paginated` returned `[]` on
+    a 404, which reads as "no approval exists" — the precondition for posting
+    one. atlan-ci re-approved the same PR on every tick, silently."""
+    gh = base_gh()
+    gh.on(is_review_list, fail("gh: Not Found (HTTP 404)"))
+    outcomes = run_sweep(gh)
+
+    assert [o.action for o in outcomes] == [reconcile.DEFERRED]
+    assert "unreadable" in outcomes[0].reason
+    assert gh.called(is_approve) == []
+
+
+def test_an_unreadable_listing_is_not_reported_as_a_recovery(capsys):
+    gh = base_gh()
+    gh.on(is_review_list, fail("gh: Not Found (HTTP 404)"))
+    reconcile.report(run_sweep(gh), REPO)
+
+    out = capsys.readouterr().out
+    assert "had lost" not in out, "a blocked sweep is not a recovery"
+    assert "::error::" not in out, "a transient outage is not a human's problem yet"
+
+
+def test_an_outage_outlasting_a_quota_window_stops_being_a_deferral():
+    """Otherwise the reconciler sits in a permanently green skipped loop through
+    an outage, saying nothing — the same silence it exists to break."""
+    gh = base_gh(comments=[comment(created_at="2026-08-17T09:00:00Z")])
+    gh.on(is_review_list, fail("gh: Not Found (HTTP 404)"))
+    outcomes = run_sweep(gh)
+
+    assert [o.action for o in outcomes] == [reconcile.FAILED]
+    assert "outlasted a full quota window" in outcomes[0].reason
+    assert gh.called(is_approve) == []
+
+
+def test_a_listing_that_breaks_mid_stamp_is_a_failure_not_a_silent_approval():
+    """Readable at the prefilter, broken by the time the stamper re-checks."""
+    gh = base_gh()
+    reads = {"n": 0}
+
+    def listing():
+        reads["n"] += 1
+        if reads["n"] == 1:
+            return ok(json.dumps([[]]))
+        return fail("gh: Not Found (HTTP 404)")
+
+    gh.on(is_review_list, listing)
+    outcomes = run_sweep(gh)
+
+    assert [o.action for o in outcomes] == [reconcile.FAILED]
+    assert gh.called(is_approve) == []
+
+
 # --- quota pre-flight -----------------------------------------------------
 
 
@@ -455,7 +527,7 @@ def test_a_verdict_outliving_a_full_quota_window_reds_the_run():
     outcomes = run_sweep(gh)
 
     assert [o.action for o in outcomes] == [reconcile.FAILED]
-    assert "without recovery" in outcomes[0].reason
+    assert "outlasted a full quota window" in outcomes[0].reason
     assert gh.called(is_approve) == []
 
 

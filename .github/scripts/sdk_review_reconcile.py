@@ -270,8 +270,16 @@ def stamp(
     *,
     sleeper: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.time,
-) -> bool:
-    """Invoke the stamper for one PR. True when the approval landed.
+) -> approve.StampOutcome:
+    """Invoke the stamper for one PR and return what it actually did.
+
+    `stamp_verdict` reports its own action rather than the caller inferring one
+    from the exit code, which cannot separate "approved" from "a guard
+    declined". Inferring it from a follow-up read of the reviews listing does
+    not work either — that listing is read-after-write eventually consistent,
+    and the first live run of this cron approved PR #3232, re-read, saw nothing,
+    and reported a decline.
+
 
     The environment matches the slow path (`sdk-review.yml`) — no event payload,
     no commit-status write, label guard on — with only a short retry budget,
@@ -302,33 +310,34 @@ def stamp(
         "APPROVE_MAX_WAIT_SECONDS": "45",
     }
     with stamper_env(env):
-        return approve.main(runner=runner, sleeper=sleeper, now=clock) == 0
+        return approve.stamp_verdict(runner=runner, sleeper=sleeper, now=clock)
 
 
-def _quota_outcome(
-    number: int, quota: Quota, age: timedelta, now: datetime, stale_after: timedelta
+def _blocked_outcome(
+    number: int, blocker: str, age: timedelta, stale_after: timedelta
 ) -> Outcome:
-    """Classify a PR we cannot approve because the approver has no quota left.
+    """Classify a PR that is owed an approval we cannot currently post.
 
-    Deferring is the normal case and must not go red: the quota resets hourly
-    and the next tick after that reset posts the approval, so a red run per tick
-    for an hour would bury the signal it is supposed to raise. But a verdict that
-    has outlived a full window has watched a reset come and go without
-    recovering, which is not self-healing and does need a human.
+    Deferring is the normal case and must not go red. Both blockers this covers
+    — a spent quota, an unreadable review listing — are transient by nature, and
+    a red run per tick while one clears would bury the signal it is supposed to
+    raise.
+
+    But neither is transient forever. A verdict still unapproved past
+    `stale_after` has outlived a full quota window, which means a reset came and
+    went without recovery, or an API degradation has outlasted any reasonable
+    blip. That does need a human, so it reds the run. Without this the reconciler
+    could sit in a permanently green "skipped" loop through an outage, saying
+    nothing — the same silence the whole workflow exists to break.
     """
-    resets_in = quota.resets_in(now)
     if age > stale_after:
         return Outcome(
             number,
             FAILED,
-            f"unapproved for {age.total_seconds() / 60:.0f}min with atlan-ci quota "
-            f"exhausted — a reset has already passed without recovery",
+            f"unapproved for {age.total_seconds() / 60:.0f}min — {blocker}, and "
+            f"that has now outlasted a full quota window",
         )
-    return Outcome(
-        number,
-        DEFERRED,
-        f"atlan-ci quota exhausted; resets in {resets_in // 60}min",
-    )
+    return Outcome(number, DEFERRED, blocker)
 
 
 def sweep(
@@ -343,10 +352,14 @@ def sweep(
 ) -> list[Outcome]:
     """Reconcile every open PR whose standing verdict lost its approval.
 
-    Ordering is by cost: the label check is free (the PR listing carries
-    labels), the review listing short-circuits the healthy majority, and only
-    then is the comment listing spent. The approver's quota is read at most once
-    per run, and only once a PR has actually earned an approval attempt.
+    The label check is free (the PR listing carries labels) and screens out
+    almost everything. The comment listing comes next, then the review listing —
+    deliberately in that order, even though reviews would short-circuit more
+    PRs. The review check needs the verdict's age to decide whether an
+    unreadable listing is a blip to defer or an outage to escalate, and the age
+    comes from the comment. One extra App-token read per labelled PR buys an
+    escalation path that would otherwise not exist. The approver's quota is read
+    at most once per run, and only once a PR has actually earned an attempt.
     """
     now = now or datetime.now(timezone.utc)
     approver_token = os.environ.get("APPROVER_TOKEN", "")
@@ -363,10 +376,6 @@ def sweep(
             continue
 
         client = approve.Client(repo, str(number), runner)
-
-        if client.bot_approval_ids():
-            outcomes.append(Outcome(number, SKIPPED, "already approved"))
-            continue
 
         comment = client.latest_summary_comment()
         if comment is None:
@@ -396,6 +405,26 @@ def sweep(
             outcomes.append(Outcome(number, SKIPPED, "verdict too recent to be lost"))
             continue
 
+        # None is not []: an unreadable listing cannot prove there is no
+        # approval, and treating it as proof is what turned a GitHub degradation
+        # into duplicate approvals on every tick. Checked after `age` so a
+        # listing that stays broken can escalate rather than skip forever.
+        approvals = client.bot_approval_ids()
+        if approvals is None:
+            outcomes.append(
+                _blocked_outcome(
+                    number,
+                    "the review listing is unreadable, so it is unknowable "
+                    "whether an approval already exists",
+                    age,
+                    stale_after,
+                )
+            )
+            continue
+        if approvals:
+            outcomes.append(Outcome(number, SKIPPED, "already approved"))
+            continue
+
         if dry_run:
             outcomes.append(Outcome(number, SKIPPED, "would reconcile (dry run)"))
             continue
@@ -405,7 +434,15 @@ def sweep(
         if not quota_checked:
             quota, quota_checked = approver_quota(runner, approver_token), True
         if quota is not None and quota.exhausted:
-            outcomes.append(_quota_outcome(number, quota, age, now, stale_after))
+            outcomes.append(
+                _blocked_outcome(
+                    number,
+                    f"atlan-ci quota exhausted; resets in "
+                    f"{quota.resets_in(now) // 60}min",
+                    age,
+                    stale_after,
+                )
+            )
             continue
 
         stamped = stamp(
@@ -416,28 +453,33 @@ def sweep(
             sleeper=sleeper,
             clock=now.timestamp,
         )
-        if not stamped:
+        if stamped.action == approve.APPROVED:
+            outcomes.append(Outcome(number, RECONCILED, stamped.detail))
+        elif stamped.action == approve.SKIPPED:
+            # The stamper re-reads the label, head and comments, so a dismissal
+            # landing between this sweep's listing and the stamp is caught
+            # there. It says so itself rather than us inferring it.
+            outcomes.append(
+                Outcome(number, SKIPPED, f"the stamper declined — {stamped.detail}")
+            )
+        else:
             # Re-read the meter rather than parsing the stamper's stderr: the
             # quota can empty between the pre-flight and the POST (other
             # `atlan-ci` workflows share it), and that race is a deferral, not a
             # failure. Free, and only on a path that has already failed.
             quota = approver_quota(runner, approver_token)
             if quota is not None and quota.exhausted:
-                outcomes.append(_quota_outcome(number, quota, age, now, stale_after))
+                outcomes.append(
+                    _blocked_outcome(
+                        number,
+                        f"atlan-ci quota emptied mid-run; resets in "
+                        f"{quota.resets_in(now) // 60}min",
+                        age,
+                        stale_after,
+                    )
+                )
             else:
-                outcomes.append(Outcome(number, FAILED, "approval could not be posted"))
-        elif client.bot_approval_ids():
-            outcomes.append(Outcome(number, RECONCILED, f"approved at {head_sha}"))
-        else:
-            # The stamper exits 0 both when it approved and when one of its own
-            # guards declined — it re-reads the label, head and comments, so a
-            # dismissal landing between this sweep's listing and the stamp is
-            # caught there. Confirming the review exists is what separates the
-            # two, and the whole point of this cron is not to report a recovery
-            # that did not happen.
-            outcomes.append(
-                Outcome(number, SKIPPED, "the stamper declined — verdict invalidated")
-            )
+                outcomes.append(Outcome(number, FAILED, stamped.detail))
 
     return outcomes
 
@@ -471,8 +513,8 @@ def report(outcomes: list[Outcome], repo: str) -> None:
     for outcome in deferred:
         print(
             f"::warning::PR #{outcome.number}: a READY_TO_MERGE verdict is owed an "
-            f"atlan-ci approval but the quota is spent ({outcome.reason}). No "
-            f"request was made. The next run after the reset will post it."
+            f"atlan-ci approval, but {outcome.reason}. No approval was attempted; "
+            f"a later run will post it once that clears."
         )
     for outcome in failed:
         print(

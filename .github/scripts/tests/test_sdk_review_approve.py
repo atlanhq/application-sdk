@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,9 @@ SPEC = importlib.util.spec_from_file_location(
 )
 approve = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
+# Registered before exec: @dataclass resolves annotations through
+# sys.modules[cls.__module__], which is absent for a bare module_from_spec.
+sys.modules["sdk_review_approve"] = approve
 SPEC.loader.exec_module(approve)
 
 
@@ -642,6 +646,88 @@ def test_slow_path_skips_freshness_check_since_it_fetched_the_newest(monkeypatch
     gh = slow_gh(labels=["sdk-review-approved"])
     assert run_main(gh, monkeypatch, **slow_env(), TRIGGERING_COMMENT_ID="0") == 0
     assert len(gh.called(is_approve)) == 1
+
+
+# --- an unreadable review listing must fail CLOSED ------------------------
+#
+# Regression from 2026-08-17: GitHub's reviews endpoint began returning 404 for
+# PRs that plainly had reviews. `_paginated` collapsed that to `[]`, which reads
+# as "no approval exists" — the precondition for posting one — so `atlan-ci`
+# re-approved the same PR on every reconciler tick, silently.
+
+
+def test_bot_approval_ids_is_none_when_the_listing_fails():
+    """None and [] must not be the same value: one means "cannot tell"."""
+    gh = base_gh()
+    gh.on(is_review_list, fail("gh: Not Found (HTTP 404)"))
+    assert approve.Client(REPO, PR, gh).bot_approval_ids() is None
+
+
+def test_bot_approval_ids_is_none_when_the_listing_is_unparseable():
+    gh = base_gh()
+    gh.on(is_review_list, ok("{not json"))
+    assert approve.Client(REPO, PR, gh).bot_approval_ids() is None
+
+
+def test_ready_refuses_to_approve_when_the_listing_is_unreadable(monkeypatch, capsys):
+    gh = base_gh(labels=["sdk-review-approved"])
+    gh.on(is_review_list, fail("gh: Not Found (HTTP 404)"))
+
+    assert run_main(gh, monkeypatch) == 1
+    assert gh.called(is_approve) == [], "approving blind is how outages duplicate"
+    assert gh.called(is_status) == []
+    assert "::error::" in capsys.readouterr().out
+
+
+def test_non_ready_fails_loudly_when_stale_approvals_cannot_be_listed(monkeypatch):
+    """Failing to dismiss leaves the merge gate open on a superseded approval."""
+    gh = base_gh()
+    gh.on(is_review_list, fail("gh: Not Found (HTTP 404)"))
+
+    code = run_main(gh, monkeypatch, COMMENT_BODY=verdict_comment("NEEDS_FIXES"))
+    assert code == 1
+    assert gh.called(lambda a: "dismissals" in a[2]) == []
+
+
+# --- stamp_verdict() reports what it did ----------------------------------
+
+
+def test_stamp_verdict_reports_an_approval(monkeypatch):
+    gh = base_gh(labels=["sdk-review-approved"])
+    for key, value in {
+        "REPO": REPO,
+        "PR_NUMBER": PR,
+        "COMMENT_BODY": verdict_comment(),
+        "TRIGGERING_COMMENT_ID": "5",
+        "APPROVER_TOKEN": "pat-atlan-ci",
+        "GH_TOKEN": "app-token",
+    }.items():
+        monkeypatch.setenv(key, value)
+
+    outcome = approve.stamp_verdict(runner=gh)
+    assert outcome.action == approve.APPROVED
+    assert outcome.exit_code == 0
+
+
+def test_stamp_verdict_distinguishes_a_declining_guard_from_an_approval(monkeypatch):
+    """Both exit 0; only the action separates them. That distinction is what the
+    reconciler reports on, and inferring it from a re-read was racy."""
+    gh = slow_gh(labels=[])
+    for key, value in {
+        "REPO": REPO,
+        "PR_NUMBER": PR,
+        "COMMENT_BODY": "",
+        "EXPECTED_HEAD": HEAD,
+        "REQUIRE_APPROVED_LABEL": "true",
+        "APPROVER_TOKEN": "pat-atlan-ci",
+        "GH_TOKEN": "app-token",
+    }.items():
+        monkeypatch.setenv(key, value)
+
+    outcome = approve.stamp_verdict(runner=gh)
+    assert outcome.action == approve.SKIPPED
+    assert outcome.exit_code == 0
+    assert "label" in outcome.detail
 
 
 def test_label_delete_404_is_tolerated(capsys):

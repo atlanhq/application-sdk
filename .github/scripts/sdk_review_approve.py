@@ -54,10 +54,11 @@ sets REQUIRE_APPROVED_LABEL so it will not approve a verdict something has since
 invalidated.
 
 The reconciler (`sdk_review_reconcile.py`, on a cron) drives this per PR with the
-same environment as the slow path, plus APPROVE_MAX_ATTEMPTS=1: it exists to
-recover approvals the other two paths lost, so retrying in-process would only
-duplicate the loop it already is. That also holds it to exactly one `atlan-ci`
-request per PR it approves.
+same environment as the slow path, on a short retry budget: it exists to recover
+approvals the other two paths lost, so waiting out a long rate-limit window
+in-process would only duplicate the loop it already is. It calls
+`stamp_verdict()` rather than `main()`, because it has to report whether an
+approval was actually posted and an exit code cannot say.
 
 That label guard is the solo-approval safety property. `sdk-review-approved` is
 the one signal every invalidator clears: `dismiss-on-human` strips it (and
@@ -90,9 +91,11 @@ Environment:
     APPROVE_MAX_ATTEMPTS        default 3
     APPROVE_MAX_WAIT_SECONDS    total sleep budget across retries, default 120
 
-Exit status:
+Exit status (`main()`; in-process callers should read `stamp_verdict()`'s action
+instead, which separates "approved" from "a guard declined"):
     0  stamped, or intentionally skipped by a guard
-    1  verdict was READY_TO_MERGE but the approval could not be posted
+    1  the verdict could not be stamped: the approval failed, or the review
+       listing could not be read and approving blind is not an option
 """
 
 from __future__ import annotations
@@ -103,9 +106,37 @@ import re
 import subprocess
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 
 Runner = Callable[..., subprocess.CompletedProcess]
 Sleeper = Callable[[float], None]
+
+APPROVED = "approved"
+SKIPPED = "skipped"
+FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class StampOutcome:
+    """What a stamp run did, for callers that need more than an exit code.
+
+    An exit status cannot separate "posted the approval" from "a guard declined
+    to" — both are a successful run, and `main()` returns 0 for each. The
+    reconciler needs that distinction to report an actual recovery rather than
+    guess at one.
+
+    Recovering it from a follow-up read does not work: GitHub's reviews listing
+    is read-after-write eventually consistent, so an approval posted moments ago
+    can be missing from the very next listing. The reconciler's first live run
+    did exactly that — approved PR #3232, re-read, saw nothing, and reported
+    that the stamper had declined. So the stamper says what it did instead of
+    the caller inferring it.
+    """
+
+    action: str
+    exit_code: int
+    detail: str = ""
+
 
 SUMMARY_MARKERS = ("<!-- SDK_REVIEW -->", "<!-- TEST_SDK_REVIEW -->")
 
@@ -255,17 +286,30 @@ class Client:
             return None
         return result.stdout.strip() or None
 
-    def _paginated(self, path: str) -> list[dict]:
-        """Flatten a `--paginate --slurp` response into a list of objects."""
+    def _paginated(self, path: str) -> list[dict] | None:
+        """Flatten a `--paginate --slurp` response, or None if it could not be read.
+
+        None and `[]` are deliberately different values. They used to be the
+        same one, and that collapsed "the API did not answer" into "there is
+        nothing there" — which is safe for a comment listing (no verdict means
+        do nothing) and dangerous for a review listing, where "no approvals
+        exist" is the precondition for posting one.
+
+        Seen in production on 2026-08-17: GitHub's reviews endpoint began
+        returning `404` (and, to other tokens, truncated JSON) for PRs that
+        plainly had reviews. Every caller read that as an empty list, so the
+        duplicate-approval guard was satisfied by an outage and `atlan-ci`
+        re-approved the same PR once per reconciler tick.
+        """
         result = self.run(["api", f"repos/{self.repo}/{path}", "--paginate", "--slurp"])
         if result.returncode != 0:
             print(f"::warning::could not list {path}: {result.stderr.strip()}")
-            return []
+            return None
         try:
             pages = json.loads(result.stdout or "[]")
         except json.JSONDecodeError as exc:
             print(f"::warning::could not parse {path} ({exc})")
-            return []
+            return None
         items: list[dict] = []
         for page in pages:
             # An un-paginated response is a bare array; --slurp adds one level.
@@ -282,10 +326,13 @@ class Client:
         A marker alone is not proof of authorship, so a forged verdict comment
         from any other login is filtered out here — covering both
         `newest_summary_comment_id()` and `latest_summary_body()` at once.
+
+        An unreadable listing collapses to empty here, which is the safe
+        direction for this one: no verdict found means no stamp is applied.
         """
         return [
             comment
-            for comment in self._paginated(f"issues/{self.pr_number}/comments")
+            for comment in (self._paginated(f"issues/{self.pr_number}/comments") or [])
             if _is_verdict_comment(comment)
         ]
 
@@ -398,11 +445,21 @@ class Client:
         else:
             print(f"Set sdk-review status: {state} ({description})")
 
-    def bot_approval_ids(self) -> list[int]:
-        """Ids of live atlan-ci approvals bearing our signature."""
+    def bot_approval_ids(self) -> list[int] | None:
+        """Ids of live atlan-ci approvals bearing our signature, or None.
+
+        None means the review listing could not be read, which every caller must
+        treat as "cannot prove there is no approval" rather than "there is no
+        approval". Approving on an unreadable listing is how a GitHub
+        degradation turns into a pile of duplicate approvals; dismissing on one
+        would be worse.
+        """
+        reviews = self._paginated(f"pulls/{self.pr_number}/reviews")
+        if reviews is None:
+            return None
         return [
             review.get("id")
-            for review in self._paginated(f"pulls/{self.pr_number}/reviews")
+            for review in reviews
             if review.get("state") == "APPROVED"
             and (review.get("user") or {}).get("login") == "atlan-ci"
             and (review.get("body") or "").startswith(APPROVAL_SIGNATURE)
@@ -520,11 +577,12 @@ def post_approval_with_retry(
     return False
 
 
-def main(
+def stamp_verdict(
     runner: Runner = subprocess.run,
     sleeper: Sleeper = time.sleep,
     now: Callable[[], float] = time.time,
-) -> int:
+) -> StampOutcome:
+    """Apply the verdict's labels, approval and status. See module docstring."""
     repo = os.environ.get("REPO", "")
     pr_number = os.environ.get("PR_NUMBER", "")
     body = os.environ.get("COMMENT_BODY", "")
@@ -549,7 +607,7 @@ def main(
                 f"#{pr_number} — skipping (the sandbox may have errored before "
                 f"posting)."
             )
-            return 0
+            return StampOutcome(SKIPPED, 0, "no summary comment")
 
     verdict = extract_verdict(body)
     if not verdict:
@@ -557,7 +615,7 @@ def main(
             f"::warning::PR #{pr_number}: could not extract a verdict from the "
             f"mothership-ai comment. Skipping."
         )
-        return 0
+        return StampOutcome(SKIPPED, 0, "no verdict in the comment")
     print(f"Detected verdict: '{verdict}'")
 
     # A comment with no REVIEWED_HEAD predates the stamp; its reviewed sha
@@ -568,12 +626,12 @@ def main(
             f"::warning::PR #{pr_number}: verdict comment has no REVIEWED_HEAD "
             f"marker — cannot confirm which sha was reviewed; skipping all stamps."
         )
-        return 0
+        return StampOutcome(SKIPPED, 0, "verdict has no REVIEWED_HEAD")
 
     head_sha = client.head_sha()
     if not head_sha:
         print(f"::warning::PR #{pr_number}: HEAD unresolvable — skipping all stamps.")
-        return 0
+        return StampOutcome(SKIPPED, 0, "head unresolvable")
 
     # The verdict was computed for reviewed_head. A push since then means the
     # current head is unreviewed, and stamping it would bless unreviewed code.
@@ -582,7 +640,7 @@ def main(
             f"::warning::PR #{pr_number}: verdict was computed for {reviewed_head} "
             f"but current head is {head_sha} — skipping all stamps."
         )
-        return 0
+        return StampOutcome(SKIPPED, 0, "head moved past the verdict")
 
     # Belt-and-suspenders for the slow path: the review can take 10–30 minutes,
     # and the sandbox could in principle have reviewed a sha other than the one
@@ -592,7 +650,7 @@ def main(
             f"::warning::PR #{pr_number}: head is {head_sha} but this run was "
             f"dispatched for {expected_head} — skipping all stamps."
         )
-        return 0
+        return StampOutcome(SKIPPED, 0, "head is not the dispatched sha")
 
     # The job's concurrency group serialises runs per PR, but GitHub's queue is
     # not event-time ordered: after waiting, this run may execute after a newer
@@ -606,7 +664,7 @@ def main(
                 f"(id={newest_id}) supersedes this one (id={triggering_id}) — "
                 f"skipping."
             )
-            return 0
+            return StampOutcome(SKIPPED, 0, "superseded by a newer verdict")
 
     # Snapshot BEFORE reconciling: `require_approved_label` asks whether the
     # label was standing when this run started, which the post-reconcile state
@@ -638,7 +696,7 @@ def main(
             f"— skipping approval, and leaving labels untouched so the label is "
             f"not resurrected."
         )
-        return 0
+        return StampOutcome(SKIPPED, 0, "the approved label was already stripped")
 
     to_add, to_remove = label_plan(verdict, labels_before)
     added_ok = client.add_labels(to_add)
@@ -658,13 +716,23 @@ def main(
             f"pending. Without the label a later CI failure could not auto-dismiss "
             f"the approval. Restore `issues: write` for the App token and re-run."
         )
-        return 1
+        return StampOutcome(FAILED, 1, "could not add the approved label")
 
     if verdict != READY:
         # sdk-review-dismiss-on-human.yml only fires on HUMAN activity, so when a
         # newer verdict supersedes a prior READY_TO_MERGE the stale bot approval
         # has to be cleared here or the merge gate stays open on it.
         stale = client.bot_approval_ids()
+        if stale is None:
+            # Cannot see the reviews, so cannot clear a superseded approval. The
+            # merge gate would stay open on it, which is the wrong way to fail —
+            # so leave everything else as-is and fail loudly to be re-driven.
+            print(
+                f"::error::PR #{pr_number}: verdict is {verdict} but the review "
+                f"listing could not be read, so a stale bot approval cannot be "
+                f"dismissed. Re-run once the API recovers."
+            )
+            return StampOutcome(FAILED, 1, "review listing unreadable")
         if stale:
             message = (
                 f"Newer SDK review verdict ({verdict}) supersedes the prior bot "
@@ -676,22 +744,38 @@ def main(
         if write_status:
             client.post_status(head_sha, state, description)
         print(f"Verdict '{verdict}' is not READY TO MERGE — no approval posted.")
-        return 0
+        return StampOutcome(SKIPPED, 0, f"verdict is {verdict}")
 
     # Don't double-approve: sdk-review.yml's slow path runs the same stamp after
-    # the SSE stream closes.
-    if client.bot_approval_ids():
+    # the SSE stream closes, and the reconciler cron runs it again every ten
+    # minutes. This guard is the only thing standing between those three callers
+    # and a pile of identical approvals, so it must fail CLOSED.
+    #
+    # It did not, until 2026-08-17: an unreadable listing came back as `[]`,
+    # which reads as "no approval exists" — the precondition for posting one. A
+    # GitHub degradation returning 404 on the reviews endpoint therefore had
+    # `atlan-ci` re-approve the same PR on every reconciler tick.
+    existing = client.bot_approval_ids()
+    if existing is None:
+        print(
+            f"::error::PR #{pr_number}: the review listing could not be read, so "
+            f"it is unknowable whether atlan-ci has already approved. Refusing to "
+            f"approve blind — that is how an API outage turns into duplicate "
+            f"approvals. The next run will retry."
+        )
+        return StampOutcome(FAILED, 1, "review listing unreadable")
+    if existing:
         print(
             f"atlan-ci has already approved PR #{pr_number} with the bot "
             f"signature — skipping."
         )
         if write_status:
             client.post_status(head_sha, state, description)
-        return 0
+        return StampOutcome(SKIPPED, 0, "already approved")
 
     if not approver_token:
         print("::error::APPROVER_TOKEN is not set — cannot post a codeowner approval.")
-        return 1
+        return StampOutcome(FAILED, 1, "APPROVER_TOKEN is unset")
 
     approved = post_approval_with_retry(
         client,
@@ -711,12 +795,22 @@ def main(
             f"the merge gate stays blocked. Re-run this workflow, or comment "
             f"`@sdk-review`, once quota has recovered."
         )
-        return 1
+        return StampOutcome(FAILED, 1, "approval could not be posted")
 
     print(f"Approved PR #{pr_number} as atlan-ci (commit_id={head_sha}).")
     if write_status:
         client.post_status(head_sha, state, description)
-    return 0
+    return StampOutcome(APPROVED, 0, f"approved at {head_sha}")
+
+
+def main(
+    runner: Runner = subprocess.run,
+    sleeper: Sleeper = time.sleep,
+    now: Callable[[], float] = time.time,
+) -> int:
+    """Exit-code wrapper for the workflow steps. In-process callers that need to
+    know WHAT happened should call `stamp_verdict()` and read its action."""
+    return stamp_verdict(runner=runner, sleeper=sleeper, now=now).exit_code
 
 
 if __name__ == "__main__":
