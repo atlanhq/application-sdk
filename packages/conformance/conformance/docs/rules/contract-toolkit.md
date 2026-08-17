@@ -17,7 +17,7 @@ Suppress a finding on the violating line or the line directly above it:
 |---|---|---|---|---|---|---|
 | [K001](#k001) | `ContractAmendsLegacyModule` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
 | [K002](#k002) | `LegacyContractApi` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
-| [K003](#k003) | `ContractLockDrift` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
+| [K003](#k003) | `ContractLockDrift` | `block` | `app` | `contract-toolkit` | — | 0.9.0 |
 | [K004](#k004) | `MissingGeneratedArtifact` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
 | [K005](#k005) | `GeneratedArtifactBannerStripped` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
 | [K006](#k006) | `ManifestContractFieldMismatch` | `warn` | `app` | `contract-toolkit` | — | 0.13.0 |
@@ -148,7 +148,7 @@ comment-only line directly above it.
 
 ## K003 — `ContractLockDrift` {#k003}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `block` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.9.0
 
 > contract/PklProject pin does not match the resolved version in PklProject.deps.json — re-resolve the lock
 
@@ -161,7 +161,11 @@ claims.  The self-hosted Renovate runner keeps these two in sync on bot bumps
 (regenerating the lock and artifacts in the same PR via postUpgradeTasks), but a manual
 pin edit bypasses it entirely.  Comparing the two files is a pure, deterministic text
 check that needs no pkl toolchain, so it catches the drift the moment it lands
-(BLDX-1414).
+(BLDX-1414). Customer impact: the artifacts the customer installs were generated from a
+toolkit version the contract no longer claims, so the manifest, contract and marketplace
+record they receive can each be a version behind what was reviewed — this is the gap the
+K009 and K011 breakages reach customers through, and it hides them by making the
+committed artifacts look freshly generated.
 
 A dependency pinned in `contract/PklProject` resolves to a different version in
 `contract/PklProject.deps.json` (or the lock file is missing / does not contain the
@@ -387,7 +391,10 @@ wrong on the wire, not merely stylistically stale. Because it is never a false p
 (the {{...}} double-brace runtime tokens are excluded, and the one legitimate
 single-brace token {deployment_name} is not in the flagged set), this is a BLOCK-tier
 rule rather than the usual land-as-WARN default: the only correct resolution is to
-upgrade to the latest app-contract-toolkit and regenerate.
+upgrade to the latest app-contract-toolkit and regenerate. Customer impact: the literal
+template token ships to the tenant on the wire — artifacts get rooted under a path
+segment named '{app_name}' or the marketplace record carries template text, so the
+customer's install or crawl fails on identity plumbing they can neither see nor fix.
 
 A committed generated artifact (`atlan.yaml`, `app.yaml`, or a file under
 `app/generated/`) contains a single-brace scaffold placeholder token — `{app_name}`,
@@ -457,7 +464,9 @@ stays broken across every subsequent release until someone reads the failed publ
 It regressed on a live connector when atlan.yaml became fully pkl-generated and the
 app_id, previously hand-carried in the file, was dropped because the pkl metadata block
 never declared it. BLOCK-tier because the only outcome of shipping without it is a
-broken release.
+broken release. Customer impact: the fix a customer is waiting on looks shipped from the
+inside (tag cut, image pushed) but never appears in the marketplace they install from —
+the customer stays on the broken version while everyone believes the release went out.
 
 The committed `atlan.yaml` has no top-level `app_id:` key. `app_id` is the app's Global
 Marketplace identity; the release publish step POSTs it to the GM, and an empty value
@@ -498,7 +507,9 @@ every marketplace release. Apps whose contract generation lived only in a Makefi
 target (`make generate`) had no poe task of that name, so the check passed locally yet
 the release died in CI. A one-line poe alias mirroring the Makefile target closes the
 gap. BLOCK-tier because, like K011, the only outcome of the missing piece is a broken
-release rather than degraded quality.
+release rather than degraded quality. Customer impact: every marketplace release of the
+app is dead on arrival until someone reads the failed Certify log — including the urgent
+one that carries a fix a customer is actively blocked on.
 
 `pyproject.toml` has a contract (a `contract/` directory exists) but `[tool.poe.tasks]`
 defines no `generate` task. The SDK Certify step (`build-and-publish-app.yaml`) runs `uv

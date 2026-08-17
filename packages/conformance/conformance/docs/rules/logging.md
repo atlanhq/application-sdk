@@ -51,7 +51,11 @@ the values in. Beyond consistency, %-style now carries a real performance guaran
 SDK adapter short-circuits before interpolation when the level is filtered, so __str__
 is never called on the arguments — the same laziness stdlib logging provides for free.
 f-strings always evaluate eagerly at the call site regardless of level, so they pay the
-formatting cost even when the record is never emitted.
+formatting cost even when the record is never emitted. Customer impact: during a tenant
+incident the on-call groups and counts log records by message template; an f-string
+explodes one failure signature into thousands of unique strings, so the signal that
+would localise the customer's outage cannot be found or trended, extending
+time-to-resolution.
 
 Using an f-string creates a unique message string per call, breaking log grouping and
 aggregation in Grafana/ClickHouse.  It also always evaluates eagerly — __str__ /
@@ -76,7 +80,10 @@ through OTel. Direct use of logging.getLogger(), structlog.get_logger(), or logu
 logger bypasses all of this — correlation IDs are lost and records may not reach the
 observability store. Promoted from warn to block (CNCT-108, parent CNCT-93): rolled-own
 loggers strip correlation_id/workflow context/source provenance, making those lines
-unfindable on the tenant UI.
+unfindable on the tenant UI. Customer impact: when a customer's workflow fails, the
+Workflow Center shows 'No error logs available' for the step even though the app logged
+everything — the customer waits while support hunts for records that were never indexed
+under the run.
 
 Every module must obtain its logger via the SDK adapter:
 
@@ -127,7 +134,9 @@ detect the active framework first.
 
 **Rationale:** Same failure as E005 at the logging layer: the message appears in the stream but the
 stack trace is absent, so every postmortem hitting this pattern must reproduce the
-failure to find root cause.
+failure to find root cause. Customer impact: root-causing a customer-reported failure
+now requires reproducing it against their source system — often impossible without their
+data — so the incident stays open for days instead of being read off the trace.
 
 Logging an exception without `exc_info=True` produces a message with no stack trace —
 the root cause is invisible.  Add `exc_info=True` to all `logger.warning()` /
@@ -249,7 +258,10 @@ available to the caller.  Otherwise: just re-raise.
 
 **Rationale:** Log aggregation stores records in plaintext accessible to more people and systems than
 the credential store. A credential value in a log is a persistent exposure that survives
-rotation and is indexed for search.
+rotation and is indexed for search. Customer impact: the value leaked is the customer's
+own source-system credential — one occurrence in a tenant is a reportable security
+incident and can obligate the customer to rotate production database access, regardless
+of whether it was ever exploited.
 
 Credentials in log output are a security vulnerability — logs are often stored in
 plaintext in log aggregation systems, accessible to more people than the credential
@@ -270,7 +282,10 @@ not a value leak.
 
 **Rationale:** Same convention as L001: string concatenation is an ad-hoc alternative to the standard
 %-style message body. It reads worse at the call site and breaks fleet-wide consistency
-for no benefit; rewrite as a %-style message body.
+for no benefit; rewrite as a %-style message body. Customer impact: same failure surface
+as L001 — concatenated values fragment the message template, so the log signature an
+on-call needs to find and count a customer-affecting failure never groups in the
+aggregation store.
 
 Like f-strings (L001), string concatenation embeds values into the message string in a
 way that breaks log grouping.  Rewrite as %-style message body.
@@ -286,6 +301,9 @@ way that breaks log grouping.  Rewrite as %-style message body.
 **Rationale:** stdlib's Logger.makeRecord() raises KeyError when an extra={} key collides with a
 LogRecord attribute, propagating to the caller's logger.info() site and crashing it. The
 22 forbidden keys include natural choices: name, message, module, args, filename.
+Customer impact: the crash detonates on the first code path that logs with the colliding
+key — typically an error path exercised only in production — so a customer run dies with
+a KeyError raised by its own logging call instead of reporting the original problem.
 
 stdlib's `Logger.makeRecord()` raises `KeyError` if any key in `extra={}` matches a
 `LogRecord` attribute.  This crash propagates directly to the caller — NOT caught by
@@ -302,7 +320,10 @@ stdlib's `Logger.makeRecord()` raises `KeyError` if any key in `extra={}` matche
 
 **Rationale:** stdlib logger.info() raises TypeError immediately for any kwarg outside its short
 allowlist. The most common breakage when migrating from structlog (which accepts
-arbitrary kwargs) — call sites look identical but fail at runtime.
+arbitrary kwargs) — call sites look identical but fail at runtime. Customer impact: any
+customer run that reaches the miswritten call site crashes with a TypeError from the
+logging layer — a latent landmine on every code path tests did not execute, detonating
+first in the tenant.
 
 stdlib `logger.info()` only accepts `exc_info`, `extra`, `stack_info`, and `stacklevel`.
 Any other kwarg raises `TypeError` and crashes the caller.  Very common when migrating

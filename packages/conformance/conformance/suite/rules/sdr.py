@@ -94,7 +94,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "if it omits them entirely the agent receives no credentials and "
             "produces zero assets — the MSSQL silent-failure regression "
             "(atlan-mssql-app#177, DISTR-752). Either way the workflow reports "
-            "'success', invisible to status-only test pipelines."
+            "'success', invisible to status-only test pipelines. "
+            "Customer impact: both failure modes land on the customer — an agent crawl "
+            "that hangs against their firewalled source or completes green with zero "
+            "assets in their catalog — and both look like a working product until the "
+            "customer asks where their metadata went."
         ),
         short_description=(
             "SDR agent manifest must surface agent_json + extraction_method at the "
@@ -156,7 +160,7 @@ RULES: tuple[RuleDefinition, ...] = (
         id="P030",
         scope=RuleScope.APP,
         name="SdrUploadNotCalled",
-        tier=EnforcementTier.WARN,
+        tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="sdr-readiness",
         autofixable=False,
@@ -173,7 +177,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "in a customer deployment. Fleet remediation confirmed the finding is "
             "REAL more often than assumed: 4 of 15 swept connectors had a genuine "
             "silent-zero-asset publish behind a P030 finding that had been "
-            "presumed a false positive."
+            "presumed a false positive. "
+            "Customer impact: this is the worst customer-facing failure class — data loss "
+            "disguised as success. The tenant reports a green run while zero assets reach "
+            "the customer's catalog, so it is the customer who discovers the gap, after "
+            "trusting the green status for however long it took them to look."
         ),
         short_description=(
             "SDR app has no self.upload() call in source — ENABLE_ATLAN_UPLOAD path unreachable"
@@ -231,11 +239,38 @@ RULES: tuple[RuleDefinition, ...] = (
             "workflow status is not evidence — every failure mode above reports\n"
             "'success'.  The live e2e's asset-count floor is the arbiter.\n"
             "\n"
-            "This is a WARN (not BLOCK): some apps are legitimately preflight-only\n"
-            "or delegate upload to a base-class method defined in the SDK template.\n"
-            "Review the finding before suppressing — if the app genuinely performs\n"
-            "an extract-and-upload cycle, add ``await self.upload(...)`` to the\n"
-            "``run()`` method or the relevant ``@entrypoint`` method.\n"
+            "This is a BLOCK: the failure it names is a silent zero-asset publish\n"
+            "in a customer tenant, reported to the customer as a successful run.\n"
+            "The two shapes that originally held it at WARN no longer do.\n"
+            "Preflight-only apps are now exempted structurally by the\n"
+            "``pipeline.publish = null`` carve-out below, not by the tier.  And\n"
+            "delegating to a base-class ``upload`` defined in the SDK template does\n"
+            "not clear the finding on purpose — an inherited ``upload`` that nothing\n"
+            "ever calls is exactly the unreachable-gate shape, and the specific case\n"
+            "of deferring to it explicitly (``super().upload(...)``) IS accepted as a\n"
+            "real call.  Fix by adding ``await self.upload(...)`` to the ``run()``\n"
+            "method or the relevant ``@entrypoint`` method.\n"
+            "\n"
+            "One residual false-positive shape remains, and it is a *stub* finding,\n"
+            "not an absence finding: a custom ``upload_to_atlan`` bridge whose\n"
+            "transfer happens inside a helper **inherited from a base class in\n"
+            "another file** cannot be resolved by the checker and reads as a no-op\n"
+            "stub (documented on ``_find_upload_bridges``).  Widening delegation to\n"
+            "any ``self.x(...)`` would reopen the false negative the rule exists to\n"
+            "close.\n"
+            "\n"
+            "**This rule honours no inline suppression.** The SDR checks build their\n"
+            "``Finding`` objects directly and never parse ``# conformance: ignore``\n"
+            "directives, and the absence finding is anchored at line 1 of\n"
+            "``atlan.yaml`` where YAML has no comment the parser reads anyway.  At\n"
+            "BLOCK that means the only exits are real ones: make the transfer\n"
+            "visible where the checker can see it (call ``self.upload(...)``, or\n"
+            "``super().upload(...)``, or keep the delegated helper in the same\n"
+            "class), or declare the app publish-less via ``pipeline.publish = null``\n"
+            "so the structural carve-out below applies.  Deliberately so — every\n"
+            "shape on the not-satisfied list above was a real silent-zero-asset\n"
+            "publish in fleet testing, and an easy opt-out is how this class stayed\n"
+            "invisible.\n"
             "\n"
             "Note: P008 flags ``self.upload()`` *inside* ``@task`` methods (the\n"
             "wrong location); P030 flags the *absence* of any upload call; P042\n"
@@ -324,7 +359,7 @@ RULES: tuple[RuleDefinition, ...] = (
         id="P038",
         scope=RuleScope.APP,
         name="SdrArtifactMisrooted",
-        tier=EnforcementTier.WARN,
+        tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="sdr-readiness",
         autofixable=False,
@@ -340,7 +375,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "'artifacts/apps//workflows/...' (empty app segment). self.upload() then "
             "succeeds but 0 assets publish — P030 passes the app (upload IS called), "
             "so this distinct rule catches the wrong-root case (observed for a "
-            "document-store connector in fleet testing)."
+            "document-store connector in fleet testing). "
+            "Customer impact: the same data loss disguised as success that P030 "
+            "polices, one seam later — the run goes green, the upload reports "
+            "success, and zero assets reach the customer's catalog because the "
+            "publish step reads a prefix nothing was ever written to."
         ),
         short_description=(
             "SDR object-store prefix rooted from the empty-defaulting input "
@@ -370,13 +409,24 @@ RULES: tuple[RuleDefinition, ...] = (
             "*called*; P038 checks that what it uploads is rooted correctly.  An app\n"
             "can pass P030 and still fail P038.\n"
             "\n"
-            "This is a WARN (not BLOCK): the failure is a silent zero-asset publish,\n"
-            "not a hard crash, and the heuristic is deliberately narrow (it keys on\n"
-            "the ``application_name`` input field feeding an ``artifacts/apps``\n"
-            "literal).  It does NOT catch every mis-rooting — an app that forwards an\n"
-            "empty ``output_prefix`` input field without an ``artifacts/apps`` literal\n"
-            "is indistinguishable from a correct app statically and is left to\n"
-            "runtime/e2e detection.\n"
+            "This is a BLOCK, on the same grounds as P030: the failure is a silent\n"
+            "zero-asset publish in a customer tenant, reported as a successful run.\n"
+            "That it is not a hard crash is the reason it blocks rather than a reason\n"
+            "it does not — a crash announces itself, this does not.\n"
+            "\n"
+            "The heuristic is deliberately narrow (it keys on the ``application_name``\n"
+            "input field feeding an ``artifacts/apps`` literal), but narrow here means\n"
+            "**under**-inclusive, not imprecise: it does NOT catch every mis-rooting —\n"
+            "an app that forwards an empty ``output_prefix`` input field without an\n"
+            "``artifacts/apps`` literal is indistinguishable from a correct app\n"
+            "statically and is left to runtime/e2e detection.  A rule that misses\n"
+            "cases can still block the cases it does name; the shape it flags is\n"
+            "wrong on the wire, not a matter of taste.\n"
+            "\n"
+            "Like every SDR check, this rule honours no inline suppression (the SDR\n"
+            "checks build their ``Finding`` objects directly and never parse\n"
+            "``# conformance: ignore`` directives).  The exit is the remediation\n"
+            "below, which is a one-line change to where the prefix is rooted.\n"
             "\n"
             "**Remediation:** root the object-store prefix from ``APPLICATION_NAME`` /\n"
             "``self._app_name`` (or use ``WORKFLOW_OUTPUT_PATH_TEMPLATE.format(\n"
@@ -392,7 +442,7 @@ RULES: tuple[RuleDefinition, ...] = (
         id="P039",
         scope=RuleScope.APP,
         name="SdrAgentJsonDroppedByInputContract",
-        tier=EnforcementTier.WARN,
+        tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="sdr-readiness",
         autofixable=False,
@@ -408,7 +458,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "{{agent-json}}). This is distinct from P029 (manifest side) and P037 "
             "(code resolves by guid only): here the manifest and code are fine but the "
             "typed contract eats the field (observed for a BI connector in fleet "
-            "testing)."
+            "testing). "
+            "Customer impact: in agent mode the extraction never receives the "
+            "customer's credentials, so their crawl either fails outright or completes "
+            "green with zero assets in their catalog — and because the manifest and "
+            "the connector code both look correct, nothing on our side points at the "
+            "cause until the customer asks where their metadata went."
         ),
         short_description=(
             "SDR generated extract-input contract drops the forwarded agent_json "
@@ -439,10 +494,23 @@ RULES: tuple[RuleDefinition, ...] = (
             "This is orthogonal to P029 (which checks the *manifest*) and P037 (which\n"
             "checks that the *code* consumes ``agent_json``): all three must be clean.\n"
             "\n"
-            "This is a WARN (not BLOCK): the heuristic reads the generated contract's\n"
-            "declared bases, fields, and model config; an app that receives\n"
-            "``agent_json`` through a base the heuristic does not recognise could be\n"
-            "flagged.  Review before suppressing.\n"
+            "This is a BLOCK: agent-mode extraction with no credentials is a\n"
+            "zero-asset run in a customer tenant, and all three conditions the check\n"
+            "requires must hold together before it fires — a bare ``Input`` base, no\n"
+            "``agent_json`` field, and extra fields rejected.  Any one of them being\n"
+            "false clears the finding.\n"
+            "\n"
+            "Residual imprecision, stated plainly: the heuristic reads the generated\n"
+            "contract's *declared* bases, fields, and model config, so an app that\n"
+            "receives ``agent_json`` through a custom intermediate base the heuristic\n"
+            "does not resolve would be flagged.  The surface this runs against is\n"
+            "toolkit-**generated** (``AppInputContract`` in a generated ``_input.py``),\n"
+            "where that shape does not arise from the standard templates; and like\n"
+            "every SDR check this rule honours no inline suppression, so the exits are\n"
+            "the three remediations below.  Each of them is correct on its own merits\n"
+            "whether or not the finding was precise: declaring ``agent_json`` on the\n"
+            "contract is what makes the forwarded field part of the app's typed\n"
+            "surface instead of something it happens to tolerate.\n"
             "\n"
             "**Remediation:** declare ``agent_json`` on the extract-input contract in\n"
             "``contract/app.pkl`` and regenerate, subclass the SDK ``ExtractionInput``\n"

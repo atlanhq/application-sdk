@@ -44,7 +44,7 @@ reassigned.
 | [P019](#p019) | `RawHttpToAtlan` | `warn` | `both` | `client-seam` | — | 0.7.0 |
 | [P020](#p020) | `NonDeterministicPrimitiveInWorkflow` | `warn` | `both` | `determinism` | — | 0.8.0 |
 | [P021](#p021) | `SideEffectIoInWorkflow` | `warn` | `both` | `determinism` | — | 0.8.0 |
-| [P022](#p022) | `UnawaitedCoroutine` | `warn` | `both` | `async-correctness` | — | 0.8.0 |
+| [P022](#p022) | `UnawaitedCoroutine` | `block` | `both` | `async-correctness` | — | 0.8.0 |
 | [P023](#p023) | `BlockingCallInAsyncDef` | `warn` | `both` | `async-correctness` | — | 0.8.0 |
 | [P024](#p024) | `SyncAtlanClientInApp` | `warn` | `both` | `async-correctness` | — | 0.8.0 |
 | [P025](#p025) | `AppNameContractCodeDrift` | `block` | `app` | `app-name-alignment` | — | 0.9.0 |
@@ -52,16 +52,16 @@ reassigned.
 | [P027](#p027) | `AppStateAsCrossTaskChannel` | `warn` | `app` | `state-seam` | — | 0.9.0 |
 | [P028](#p028) | `ManualQualifiedNameFString` | `warn` | `app` | `asset-modeling` | — | 0.9.0 |
 | [P029](#p029) | `SdrManifestMissingAgentJson` | `block` | `app` | `sdr-readiness` | — | 0.9.0 |
-| [P030](#p030) | `SdrUploadNotCalled` | `warn` | `app` | `sdr-readiness` | — | 0.9.0 |
+| [P030](#p030) | `SdrUploadNotCalled` | `block` | `app` | `sdr-readiness` | — | 0.9.0 |
 | [P031](#p031) | `SharedDefaultExecutorOffload` | `warn` | `both` | `async-correctness` | — | 0.13.0 |
-| [P032](#p032) | `ReservedPreflightActivityName` | `warn` | `app` | `preflight-gate` | — | 0.15.0 |
+| [P032](#p032) | `ReservedPreflightActivityName` | `block` | `app` | `preflight-gate` | — | 0.15.0 |
 | [P033](#p033) | `DuplicateInWorkflowPreflight` | `warn` | `app` | `preflight-gate` | — | 0.15.0 |
 | [P034](#p034) | `UntypedPreflightCheckFailure` | `warn` | `app` | `preflight-gate` | — | 0.15.0 |
 | [P035](#p035) | `PreflightMetadataContractParity` | `warn` | `app` | `preflight-gate` | — | 0.15.0 |
 | [P036](#p036) | `HandRolledProcessIsolation` | `warn` | `both` | `async-correctness` | — | 0.15.0 |
 | [P037](#p037) | `SdrAgentJsonNotConsumed` | `warn` | `app` | `sdr-readiness` | — | 0.16.0 |
-| [P038](#p038) | `SdrArtifactMisrooted` | `warn` | `app` | `sdr-readiness` | — | 0.16.0 |
-| [P039](#p039) | `SdrAgentJsonDroppedByInputContract` | `warn` | `app` | `sdr-readiness` | — | 0.16.0 |
+| [P038](#p038) | `SdrArtifactMisrooted` | `block` | `app` | `sdr-readiness` | — | 0.16.0 |
+| [P039](#p039) | `SdrAgentJsonDroppedByInputContract` | `block` | `app` | `sdr-readiness` | — | 0.16.0 |
 | [P040](#p040) | `TransformTemplateReservedKeyword` | `warn` | `app` | `transform-templates` | — | 0.18.0 |
 | [P041](#p041) | `SdrHardPreflightGate` | `warn` | `app` | `sdr-readiness` | — | 0.18.0 |
 | [P042](#p042) | `SdrHandRolledUploadBridge` | `warn` | `app` | `sdr-readiness` | — | 0.18.0 |
@@ -77,7 +77,10 @@ reassigned.
 **Rationale:** Temporal enforces a hard 2MB payload limit on workflow/activity I/O (ADR-0008).
 Unbounded fields can silently grow past it in production, failing the workflow with a
 cryptic size error instead of a type error at import time. A justified inline
-suppression keeps every opt-out visible in review and auditable in SARIF.
+suppression keeps every opt-out visible in review and auditable in SARIF. Customer
+impact: payload size scales with the customer's data, so the app that passed every test
+fails only in the tenant with the largest source system — the customer's crawl dies
+mid-run with a serialization error nothing in their configuration explains.
 
 An `Input`/`Output` contract subclass declared with the `allow_unbounded_fields=True`
 class keyword opts out of the SDK's payload-safety enforcement: arbitrary, untyped
@@ -103,6 +106,9 @@ sanctioned use is the justified inline suppression above — see BLDX-1428.
 SLA dashboards, and on-call routing (ADR-0013). A redeclaration either duplicates the
 parent (drifts on rename) or substitutes a different value (splits one failure mode
 across two buckets), corrupting the reporting layer for every downstream consumer.
+Customer impact: a drifted category miscounts or misroutes the customer's failures — an
+incident that should page as an availability breach files under the wrong bucket, so SLA
+reporting understates their outage and on-call responds late or not at all.
 
 `FailureCategory` is the closed, single-axis taxonomy the SDK owns — every value is the
 canonical answer to *what happened* and is consumed as an immutable reporting metric
@@ -133,7 +139,10 @@ sanctioned use is the justified inline suppression `# conformance: ignore[P002]
 **Rationale:** Each categorical leaf owns a prefix that embeds its category into every error code
 (`AUTH_`, `INTERNAL_`, etc.). Without it, the code column is opaque — dashboards must
 join the category column for every query, and subclasses that inherit the bare leaf code
-collapse all their distinct failure modes into one undifferentiated bucket.
+collapse all their distinct failure modes into one undifferentiated bucket. Customer
+impact: when distinct failure modes share one code, support cannot tell a customer's
+credential expiry from a source-system outage without reading raw logs — the customer
+gets a slower, less accurate answer to 'why did my crawl fail'.
 
 Every concrete subclass of an `application_sdk.errors` leaf (`AuthError`,
 `InternalError`, `InvalidInputError`, etc.) must declare its own `code: ClassVar[str]`
@@ -408,7 +417,10 @@ Using a primitive, a container, or a class that does not subclass Input/Output b
 the SDK's payload-safety validation, config-hash computation, and
 backwards-compatibility tracking.  The runtime @entrypoint decorator already rejects
 these at import time, so no conforming running app is untyped today — this rule surfaces
-the violation earlier (PR/CI) and covers pre-decorator code paths.
+the violation earlier (PR/CI) and covers pre-decorator code paths. Customer impact:
+because the runtime rejection fires at import, an untyped entrypoint that reaches a
+release does not degrade gracefully — the app crash-loops at container start in the
+tenant, taking every workflow the customer runs on it down with the one bad method.
 
 A method decorated with `@entrypoint` (or a concrete `run()` override on an `App`
 subclass, which is the implicit single-entrypoint form) must declare:
@@ -439,7 +451,9 @@ deployments.  Using an untyped structure bypasses the SDK's payload-safety enfor
 and makes the task's I/O invisible to dashboards, schema tooling, and the contract
 registry.  The runtime @task decorator already rejects these at import time, so no
 conforming running app is untyped today — this rule surfaces the violation earlier
-(PR/CI).
+(PR/CI). Customer impact: same failure mode as P013 — the import-time rejection means
+one untyped task in a shipped release crash-loops the worker in the tenant, an outage
+the customer discovers before anyone else does.
 
 A method decorated with `@task` must declare:
 
@@ -501,7 +515,10 @@ conformance: ignore[P015] <reason>` when a typed replacement is not feasible.
 (@entrypoint-decorated App methods). poe generate only runs pkl eval and never imports
 app code, so the two can drift silently. When they drift, the HTTP create path fails —
 /manifest?entrypoint=<name> may return 200 while /input-contract?entrypoint=<name>
-returns 404 — with no caller-side workaround (BLDX-1425).
+returns 404 — with no caller-side workaround (BLDX-1425). Customer impact: the customer
+clicks 'create workflow' in their tenant and the setup flow 404s — the app is
+effectively uninstallable from the marketplace, and nothing on the customer's side can
+route around it.
 
 An app's entry-point names are declared in two independent places:
 
@@ -729,7 +746,7 @@ conformance: ignore[P021] <reason>`.
 
 ## P022 — `UnawaitedCoroutine` {#p022}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.8.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.8.0
 
 > A same-class async method is called without await (dropped coroutine)
 
@@ -737,7 +754,10 @@ conformance: ignore[P021] <reason>`.
 coroutine. Calling one like a sync function — 'self.fetch(x)' as a bare statement
 instead of 'await self.fetch(x)' — constructs the coroutine and immediately discards it,
 so the work never runs and the bug is silent (no error, no result). This is the most
-common way apps misuse the SDK's async surface.
+common way apps misuse the SDK's async surface. Customer impact: whatever the dropped
+call did — a fetch, an upload, a state write — simply does not happen, so the customer
+gets a green run with results silently missing from their catalog and no error anywhere
+that explains the gap.
 
 A bare expression statement calls a same-class `async def` method via `self.<name>(...)`
 without `await` and without wrapping it in `asyncio.create_task` / `asyncio.gather`.
@@ -746,8 +766,11 @@ Add `await` (or schedule it explicitly if concurrency is intended).
 
 Scope is intentionally narrow — a bare `self.<async-method>()` statement inside an
 `async def` — so the target is provably a coroutine and the finding is
-false-positive-free.  Land as `WARN`; suppress with `# conformance: ignore[P022]
-<reason>`.
+false-positive-free.  That precision is why this is a `BLOCK`: there is no reading of a
+discarded coroutine under which the work was meant to be skipped, so the only
+resolutions are the real ones — `await` it, or schedule it explicitly if concurrency is
+intended.  Suppress with `# conformance: ignore[P022] <reason>` only where the
+constructed coroutine is deliberately discarded and that is provably harmless.
 
 ---
 
@@ -828,7 +851,9 @@ suppress with `# conformance: ignore[P024] <reason>`.
 atlan.yaml top-level name: (contract), and ATLAN_APPLICATION_NAME in .env.example (env).
 When they diverge, extract and publish write/read at different artifact paths, leaving 0
 files for publish to find and stalling the workflow (BLDX-1491, observed in the MSSQL
-connector).
+connector). Customer impact: the customer's crawl extracts successfully and then
+publishes nothing — zero assets appear in their catalog while the workflow stalls or
+reports progress, the same silent-zero-asset class P030 polices at the upload seam.
 
 Three independent sources declare an app's name:
 
@@ -980,7 +1005,10 @@ the platform can't see them and strands the agent extraction on the cloud queue
 (atlan-tableau-app / atlan-snowflake-app); if it omits them entirely the agent receives
 no credentials and produces zero assets — the MSSQL silent-failure regression
 (atlan-mssql-app#177, DISTR-752). Either way the workflow reports 'success', invisible
-to status-only test pipelines.
+to status-only test pipelines. Customer impact: both failure modes land on the customer
+— an agent crawl that hangs against their firewalled source or completes green with zero
+assets in their catalog — and both look like a working product until the customer asks
+where their metadata went.
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, every *agent
 extraction* `manifest.json` under `app/generated/` must surface both `agent_json` and
@@ -1025,7 +1053,7 @@ alone does not clear the   runtime failure.
 
 ## P030 — `SdrUploadNotCalled` {#p030}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `block` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.9.0
 
 > SDR app has no self.upload() call in source — ENABLE_ATLAN_UPLOAD path unreachable
 
@@ -1037,7 +1065,11 @@ no assets land in the bucket — a regression that slipped through status-only S
 so the regression class is caught at static-analysis time rather than in a customer
 deployment. Fleet remediation confirmed the finding is REAL more often than assumed: 4
 of 15 swept connectors had a genuine silent-zero-asset publish behind a P030 finding
-that had been presumed a false positive.
+that had been presumed a false positive. Customer impact: this is the worst
+customer-facing failure class — data loss disguised as success. The tenant reports a
+green run while zero assets reach the customer's catalog, so it is the customer who
+discovers the gap, after trusting the green status for however long it took them to
+look.
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, at least one Python
 source file (outside `tests/`) must contain a `self.upload(` call.
@@ -1081,10 +1113,31 @@ publish) proving assets actually land in Atlas.  The workflow status is not evid
 every failure mode above reports 'success'.  The live e2e's asset-count floor is the
 arbiter.
 
-This is a WARN (not BLOCK): some apps are legitimately preflight-only or delegate upload
-to a base-class method defined in the SDK template. Review the finding before
-suppressing — if the app genuinely performs an extract-and-upload cycle, add `await
-self.upload(...)` to the `run()` method or the relevant `@entrypoint` method.
+This is a BLOCK: the failure it names is a silent zero-asset publish in a customer
+tenant, reported to the customer as a successful run. The two shapes that originally
+held it at WARN no longer do. Preflight-only apps are now exempted structurally by the
+`pipeline.publish = null` carve-out below, not by the tier.  And delegating to a
+base-class `upload` defined in the SDK template does not clear the finding on purpose —
+an inherited `upload` that nothing ever calls is exactly the unreachable-gate shape, and
+the specific case of deferring to it explicitly (`super().upload(...)`) IS accepted as a
+real call.  Fix by adding `await self.upload(...)` to the `run()` method or the relevant
+`@entrypoint` method.
+
+One residual false-positive shape remains, and it is a *stub* finding, not an absence
+finding: a custom `upload_to_atlan` bridge whose transfer happens inside a helper
+**inherited from a base class in another file** cannot be resolved by the checker and
+reads as a no-op stub (documented on `_find_upload_bridges`).  Widening delegation to
+any `self.x(...)` would reopen the false negative the rule exists to close.
+
+**This rule honours no inline suppression.** The SDR checks build their `Finding`
+objects directly and never parse `# conformance: ignore` directives, and the absence
+finding is anchored at line 1 of `atlan.yaml` where YAML has no comment the parser reads
+anyway.  At BLOCK that means the only exits are real ones: make the transfer visible
+where the checker can see it (call `self.upload(...)`, or `super().upload(...)`, or keep
+the delegated helper in the same class), or declare the app publish-less via
+`pipeline.publish = null` so the structural carve-out below applies.  Deliberately so —
+every shape on the not-satisfied list above was a real silent-zero-asset publish in
+fleet testing, and an easy opt-out is how this class stayed invisible.
 
 Note: P008 flags `self.upload()` *inside* `@task` methods (the wrong location); P030
 flags the *absence* of any upload call; P042 flags a hand-rolled bridge standing in for
@@ -1133,14 +1186,17 @@ Land as `WARN`; suppress a reviewed exception with `# conformance: ignore[P031]
 
 ## P032 — `ReservedPreflightActivityName` {#p032}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.15.0
+**Tier:** `block` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.15.0
 
 > An app @task registers the 'preflight' activity name reserved by the SDK gate
 
 **Rationale:** The SDK injects a mandatory pre-extraction gate as the activity '{app_name}:preflight'.
 An app @task that also registers the 'preflight' activity name collides with it: the
 worker raises WorkerActivityNameCollisionError at boot and never starts. Catching the
-collision statically surfaces it in the PR instead of on the first deploy.
+collision statically surfaces it in the PR instead of on the first deploy. Customer
+impact: the worker never comes up, so every workflow the customer runs on that app is
+down from the moment the release deploys into their tenant — a full-app outage caused by
+a name collision no test exercises and no build gate sees.
 
 The SDK reserves the activity name `{app_name}:preflight` for the injected preflight
 gate and registers it unconditionally on the worker. An app `@task` whose effective
@@ -1316,7 +1372,7 @@ the agent-aware call.
 
 ## P038 — `SdrArtifactMisrooted` {#p038}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
+**Tier:** `block` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
 
 > SDR object-store prefix rooted from the empty-defaulting input application_name field instead of APPLICATION_NAME
 
@@ -1327,7 +1383,10 @@ workflow-input application_name field mis-roots: that field's contract default i
 AE forwards only manifest-declared args, so it stays empty and artifacts land under
 'artifacts/apps//workflows/...' (empty app segment). self.upload() then succeeds but 0
 assets publish — P030 passes the app (upload IS called), so this distinct rule catches
-the wrong-root case (observed for a document-store connector in fleet testing).
+the wrong-root case (observed for a document-store connector in fleet testing). Customer
+impact: the same data loss disguised as success that P030 polices, one seam later — the
+run goes green, the upload reports success, and zero assets reach the customer's catalog
+because the publish step reads a prefix nothing was ever written to.
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, the object-store
 output path/prefix (`artifacts/apps/<identity>/workflows/...`) must be rooted from the
@@ -1346,12 +1405,23 @@ success but the publish app finds 0 assets at the expected prefix.
 This is complementary to P030: P030 checks that `self.upload()` is *called*; P038 checks
 that what it uploads is rooted correctly.  An app can pass P030 and still fail P038.
 
-This is a WARN (not BLOCK): the failure is a silent zero-asset publish, not a hard
-crash, and the heuristic is deliberately narrow (it keys on the `application_name` input
-field feeding an `artifacts/apps` literal).  It does NOT catch every mis-rooting — an
-app that forwards an empty `output_prefix` input field without an `artifacts/apps`
-literal is indistinguishable from a correct app statically and is left to runtime/e2e
-detection.
+This is a BLOCK, on the same grounds as P030: the failure is a silent zero-asset publish
+in a customer tenant, reported as a successful run. That it is not a hard crash is the
+reason it blocks rather than a reason it does not — a crash announces itself, this does
+not.
+
+The heuristic is deliberately narrow (it keys on the `application_name` input field
+feeding an `artifacts/apps` literal), but narrow here means **under**-inclusive, not
+imprecise: it does NOT catch every mis-rooting — an app that forwards an empty
+`output_prefix` input field without an `artifacts/apps` literal is indistinguishable
+from a correct app statically and is left to runtime/e2e detection.  A rule that misses
+cases can still block the cases it does name; the shape it flags is wrong on the wire,
+not a matter of taste.
+
+Like every SDR check, this rule honours no inline suppression (the SDR checks build
+their `Finding` objects directly and never parse `# conformance: ignore` directives).
+The exit is the remediation below, which is a one-line change to where the prefix is
+rooted.
 
 **Remediation:** root the object-store prefix from `APPLICATION_NAME` / `self._app_name`
 (or use `WORKFLOW_OUTPUT_PATH_TEMPLATE.format( application_name=APPLICATION_NAME,
@@ -1362,7 +1432,7 @@ empty-defaulting workflow arg.
 
 ## P039 — `SdrAgentJsonDroppedByInputContract` {#p039}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
+**Tier:** `block` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
 
 > SDR generated extract-input contract drops the forwarded agent_json (bare Input subclass, no agent_json field, extra fields rejected)
 
@@ -1373,7 +1443,11 @@ the extract input's credential_ref is then None and extraction fails with
 PipelineContractError and 0 assets, even though the manifest is P029-clean (declares
 {{agent-json}}). This is distinct from P029 (manifest side) and P037 (code resolves by
 guid only): here the manifest and code are fine but the typed contract eats the field
-(observed for a BI connector in fleet testing).
+(observed for a BI connector in fleet testing). Customer impact: in agent mode the
+extraction never receives the customer's credentials, so their crawl either fails
+outright or completes green with zero assets in their catalog — and because the manifest
+and the connector code both look correct, nothing on our side points at the cause until
+the customer asks where their metadata went.
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml` whose generated
 manifest declares agent routing (the `{{agent-json}}` placeholder at the extract-args
@@ -1396,9 +1470,20 @@ The extract input's `credential_ref` is then `None` and extraction fails with
 This is orthogonal to P029 (which checks the *manifest*) and P037 (which checks that the
 *code* consumes `agent_json`): all three must be clean.
 
-This is a WARN (not BLOCK): the heuristic reads the generated contract's declared bases,
-fields, and model config; an app that receives `agent_json` through a base the heuristic
-does not recognise could be flagged.  Review before suppressing.
+This is a BLOCK: agent-mode extraction with no credentials is a zero-asset run in a
+customer tenant, and all three conditions the check requires must hold together before
+it fires — a bare `Input` base, no `agent_json` field, and extra fields rejected.  Any
+one of them being false clears the finding.
+
+Residual imprecision, stated plainly: the heuristic reads the generated contract's
+*declared* bases, fields, and model config, so an app that receives `agent_json` through
+a custom intermediate base the heuristic does not resolve would be flagged.  The surface
+this runs against is toolkit-**generated** (`AppInputContract` in a generated
+`_input.py`), where that shape does not arise from the standard templates; and like
+every SDR check this rule honours no inline suppression, so the exits are the three
+remediations below.  Each of them is correct on its own merits whether or not the
+finding was precise: declaring `agent_json` on the contract is what makes the forwarded
+field part of the app's typed surface instead of something it happens to tolerate.
 
 **Remediation:** declare `agent_json` on the extract-input contract in
 `contract/app.pkl` and regenerate, subclass the SDK `ExtractionInput` family (which

@@ -192,7 +192,7 @@ def test_p029_rule_metadata() -> None:
 def test_p030_rule_metadata() -> None:
     rule = get_rule("P030")
     assert rule.name == "SdrUploadNotCalled"
-    assert rule.tier == EnforcementTier.WARN
+    assert rule.tier == EnforcementTier.BLOCK
     assert rule.scope == RuleScope.APP
     assert rule.autofixable is False
     assert rule.rationale.strip()
@@ -205,6 +205,18 @@ def test_p030_prose_no_longer_calls_a_working_bridge_a_false_positive() -> None:
     rule = get_rule("P030")
     assert "documented false positive" not in rule.full_description.lower()
     assert "P042" in rule.full_description
+
+
+def test_p030_prose_does_not_contradict_its_block_tier() -> None:
+    """The generated doc renders tier and prose side by side — keep them agreed.
+
+    The rule shipped as WARN and its prose argued for WARN in as many words; the
+    tier flip has to take that paragraph with it or ``gen-rule-docs`` publishes a
+    page whose tier column and body disagree.
+    """
+    rule = get_rule("P030")
+    assert rule.tier == EnforcementTier.BLOCK
+    assert "this is a warn" not in rule.full_description.lower()
 
 
 def test_p042_rule_metadata() -> None:
@@ -796,7 +808,7 @@ _PATH_APP_NAME_NOT_IN_PATH = (
 def test_p038_rule_metadata() -> None:
     rule = get_rule("P038")
     assert rule.name == "SdrArtifactMisrooted"
-    assert rule.tier == EnforcementTier.WARN
+    assert rule.tier == EnforcementTier.BLOCK
     assert rule.scope == RuleScope.APP
     assert rule.autofixable is False
     assert rule.rationale.strip()
@@ -912,7 +924,7 @@ _MANIFEST_AGENT_TOPLEVEL = _MANIFEST_WITH_AGENT_JSON  # carries {{agent-json}}
 def test_p039_rule_metadata() -> None:
     rule = get_rule("P039")
     assert rule.name == "SdrAgentJsonDroppedByInputContract"
-    assert rule.tier == EnforcementTier.WARN
+    assert rule.tier == EnforcementTier.BLOCK
     assert rule.scope == RuleScope.APP
     assert rule.autofixable is False
     assert rule.rationale.strip()

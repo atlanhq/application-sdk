@@ -40,7 +40,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "Temporal enforces a hard 2MB payload limit on workflow/activity I/O (ADR-0008). "
             "Unbounded fields can silently grow past it in production, failing the workflow "
             "with a cryptic size error instead of a type error at import time. A justified "
-            "inline suppression keeps every opt-out visible in review and auditable in SARIF."
+            "inline suppression keeps every opt-out visible in review and auditable in SARIF. "
+            "Customer impact: payload size scales with the customer's data, so the app that "
+            "passed every test fails only in the tenant with the largest source system — the "
+            "customer's crawl dies mid-run with a serialization error nothing in their "
+            "configuration explains."
         ),
         short_description="Input/Output contract declared with allow_unbounded_fields=True — opts out of payload safety",
         full_description=(
@@ -75,7 +79,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "Engine, SLA dashboards, and on-call routing (ADR-0013). A redeclaration either "
             "duplicates the parent (drifts on rename) or substitutes a different value "
             "(splits one failure mode across two buckets), corrupting the reporting layer "
-            "for every downstream consumer."
+            "for every downstream consumer. "
+            "Customer impact: a drifted category miscounts or misroutes the customer's "
+            "failures — an incident that should page as an availability breach files under "
+            "the wrong bucket, so SLA reporting understates their outage and on-call "
+            "responds late or not at all."
         ),
         short_description="AppError subclass redeclares the `category` ClassVar — drifts the canonical taxonomy",
         full_description=(
@@ -116,7 +124,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "Each categorical leaf owns a prefix that embeds its category into every error code "
             "(`AUTH_`, `INTERNAL_`, etc.). Without it, the code column is opaque — dashboards "
             "must join the category column for every query, and subclasses that inherit the bare "
-            "leaf code collapse all their distinct failure modes into one undifferentiated bucket."
+            "leaf code collapse all their distinct failure modes into one undifferentiated bucket. "
+            "Customer impact: when distinct failure modes share one code, support cannot tell a "
+            "customer's credential expiry from a source-system outage without reading raw logs — "
+            "the customer gets a slower, less accurate answer to 'why did my crawl fail'."
         ),
         short_description="AppError subclass code missing or doesn't start with the parent leaf's category prefix",
         full_description=(
@@ -157,7 +168,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "compatibility tracking.  The runtime @entrypoint decorator already "
             "rejects these at import time, so no conforming running app is untyped "
             "today — this rule surfaces the violation earlier (PR/CI) and covers "
-            "pre-decorator code paths."
+            "pre-decorator code paths. "
+            "Customer impact: because the runtime rejection fires at import, an untyped "
+            "entrypoint that reaches a release does not degrade gracefully — the app "
+            "crash-loops at container start in the tenant, taking every workflow the "
+            "customer runs on it down with the one bad method."
         ),
         short_description=(
             "@entrypoint (or implicit run()) input/output is not an SDK Input/Output subclass"
@@ -203,7 +218,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "I/O invisible to dashboards, schema tooling, and the contract registry.  "
             "The runtime @task decorator already rejects these at import time, so "
             "no conforming running app is untyped today — this rule surfaces the "
-            "violation earlier (PR/CI)."
+            "violation earlier (PR/CI). "
+            "Customer impact: same failure mode as P013 — the import-time rejection means "
+            "one untyped task in a shipped release crash-loops the worker in the tenant, "
+            "an outage the customer discovers before anyone else does."
         ),
         short_description="@task input/output is not an SDK Input/Output subclass",
         full_description=(

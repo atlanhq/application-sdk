@@ -23,7 +23,10 @@ RULES: tuple[RuleDefinition, ...] = (
         rationale=(
             "The hardest class of production bug to debug: no stack trace, no log record, "
             "no indication anything failed. Every downstream anomaly (wrong results, missing "
-            "records) is diagnosed with no artifact pointing back to the origin."
+            "records) is diagnosed with no artifact pointing back to the origin. "
+            "Customer impact: the failure surfaces as missing assets or wrong metadata in a "
+            "tenant with nothing in the logs to trace it back — a one-line bug becomes a "
+            "long-running customer escalation that support cannot root-cause."
         ),
         short_description="Bare 'except: pass' silently discards every exception",
         full_description=(
@@ -48,7 +51,10 @@ RULES: tuple[RuleDefinition, ...] = (
         rationale=(
             "A typed catch that discards silently still destroys the event record. Stack "
             "traces at the point of failure are often the only artifact that survives async "
-            "and service boundaries in a distributed system."
+            "and service boundaries in a distributed system. "
+            "Customer impact: a swallowed per-item failure ships an incomplete crawl to the "
+            "tenant as a clean success — the customer discovers the gap in their catalog "
+            "weeks later, and by then no artifact exists to explain which items were lost or why."
         ),
         short_description="Typed 'except SomeError: pass' discards exception silently",
         full_description=(
@@ -155,7 +161,10 @@ RULES: tuple[RuleDefinition, ...] = (
         rationale=(
             "A bare except: absorbs KeyboardInterrupt and SystemExit even with a handler "
             "body. Process-termination signals are silently intercepted and the process may "
-            "continue in an undefined state."
+            "continue in an undefined state. "
+            "Customer impact: a pod that swallows SIGTERM-driven SystemExit cannot drain "
+            "cleanly, so every rolling restart or node upgrade in a tenant risks killing "
+            "in-flight customer workflows mid-run instead of handing them off."
         ),
         short_description="Bare 'except:' (no type) — catches SystemExit and KeyboardInterrupt",
         full_description=(
@@ -329,7 +338,11 @@ RULES: tuple[RuleDefinition, ...] = (
         rationale=(
             "AtlanError subclasses produce no typed wire envelope — they reach AE as opaque "
             "strings and emit DeprecationWarning at construction. Every new raise site "
-            "deepens the migration debt and blocks the v4.0 removal."
+            "deepens the migration debt and blocks the v4.0 removal. "
+            "Customer impact: when the run fails in a tenant, the customer sees a generic "
+            "unclassified error with no category or suggested action, and on-call cannot "
+            "route the incident by failure type — every occurrence needs a human to read the "
+            "raw string."
         ),
         short_description="raise ClientError/ApiError/... (deprecated AtlanError stack)",
         full_description=(
@@ -443,7 +456,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "Evidence fields with secret-bearing suffixes are rejected by the wire layer at "
             "runtime. Static detection catches the pattern before any code runs, eliminating "
             "the window between deploy and first invocation where live credentials could be "
-            "serialised into logs, dashboards, or SARIF."
+            "serialised into logs, dashboards, or SARIF. "
+            "Customer impact: the runtime rejection fires exactly when a customer run is "
+            "already failing, replacing the real error with an opaque secondary crash — and "
+            "the near-miss it guards is the customer's live credential landing in log "
+            "storage, which is a security incident, not a bug."
         ),
         short_description="Error evidence kwarg ending in _secret/_password/_token — rejected by wire layer at runtime",
         full_description=(
