@@ -252,13 +252,14 @@ class TestSha256File:
         SDK also uses for internal scheduling — sharing that pool risks
         exhausting it. Fails if a future edit reverts to ``asyncio.to_thread``.
         """
-        from application_sdk.execution import heartbeat as heartbeat_mod
-
         f = tmp_path / "data.bin"
         f.write_bytes(b"payload")
 
+        # Patched on the *consuming* module: since ADR-0019 ``integrity`` binds
+        # ``run_in_thread`` at module scope, so a patch on the substrate module
+        # would leave this caller's reference untouched.
         with patch.object(
-            heartbeat_mod, "run_in_thread", wraps=heartbeat_mod.run_in_thread
+            integrity, "run_in_thread", wraps=integrity.run_in_thread
         ) as mock_run_in_thread:
             digest = await integrity.sha256_file(f)
 

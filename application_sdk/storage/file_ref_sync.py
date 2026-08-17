@@ -41,8 +41,8 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
+from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.contracts.types import FileReference, Lazy
-from application_sdk.execution.progress import current_progress_tracker
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:

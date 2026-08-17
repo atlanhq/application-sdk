@@ -15,6 +15,7 @@
 - **Use specific exception types** instead of generic `Exception`
 - **Examples**: `ValueError`, `ConnectionError`, `FileNotFoundError`; for SDK-domain errors use the categorical leaf classes (see below)
 - **Create custom exceptions** using the categorical hierarchy in `application_sdk/errors/` — pick the leaf that matches the failure (e.g. `DependencyUnavailableError`, `InvalidInputError`, `AuthError`). The legacy `application_sdk/common/error_codes.py` `AAF-{COMP}-{ID:03d}` format is retained for backward compatibility only — do not use it in new code.
+- **Transient vs terminal dependency failures**: a not-yet-reachable dependency is a transient `ColdStartRaceError` (retry it via `retry_past_dapr_cold_start`); once the cold-start budget is exhausted without a usable answer it becomes the terminal `DaprSidecarUnreachableError` subtype — same `DEPENDENCY_UNAVAILABLE` category and catch sites, distinct type/`code` so a persistent outage is not reported as a blip. See `docs/concepts/common.md` for the taxonomy.
 - **Anti-pattern**: `except Exception:` - Too broad, masks real issues
 
 ## Exception Handling Patterns
@@ -230,6 +231,11 @@ When reviewing code, check for:
       PreconditionError, RateLimitedError, AppTimeoutError,
       ResourceExhaustedError, DataIntegrityError, InternalError,
       UnimplementedError, AppPermissionDeniedError, CancelledError,
+      # Specialized subtypes of the leaves above, e.g. DiskFullError
+      # (ResourceExhaustedError; a local write hit ENOSPC/EDQUOT) and
+      # TaskStalledError (AppTimeoutError) — raise the subtype when it
+      # describes the failure precisely.
+      DiskFullError,
   )
 
   # DependencyUnavailableError — retryable=True, audience=PLATFORM

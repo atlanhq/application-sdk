@@ -129,7 +129,12 @@ def _entry(matrix_json: str, cloud: str) -> dict[str, str]:
         raise TenantMatrixError(
             f"cloud {cloud!r} is not in E2E_TENANT_MATRIX_JSON (available: "
             f"{available}). A cloud named in the workflow's e2e-clouds input "
-            "but missing from the secret is a coverage hole, not a leg to skip."
+            "but missing from the secret is a coverage hole, not a leg to skip. "
+            "Since FND-354 the DEFAULTED cloud list is narrowed to the secret's "
+            "keys at discovery, so reaching this means either that this cloud "
+            "was named explicitly (drop it from e2e-clouds, or add its entry to "
+            "the secret) or that discovery could not read the secret's keys — "
+            "in which case the discover job carries a ::warning:: saying so."
         )
 
     entry = parsed[cloud]

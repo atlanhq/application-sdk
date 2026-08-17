@@ -38,4 +38,5 @@ jobs:
       tenants: ${{ inputs.tenants || '' }}
       release_tag: ${{ github.event_name == 'release' && github.event.release.tag_name || '' }}
       unit_tests_workflow_file: "<< unit_tests_workflow >>"
-    secrets: inherit
+<% if use_ghcr_base == 'true' %>      use_ghcr_base: true
+<% endif %>    secrets: inherit

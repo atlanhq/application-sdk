@@ -54,7 +54,25 @@ The `atlan-application-sdk-conformance bootstrap` command installs a standard se
 workflow shims into `.github/workflows/`. This rule flags any managed file that is
 missing or whose content has diverged from what `bootstrap` would write. Re-run
 `bootstrap` to re-sync; structural drift is flagged while intentional per-repo value
-choices (e.g. `package_name`, `unit_tests_workflow_file`) are preserved.
+choices (e.g. `package_name`, `unit_tests_workflow_file`) are preserved. The exceptions
+are `tests.yaml` and `renovate.json`, write-if-absent scaffolds a bare re-run never
+rewrites — pass `--resync` to pull their structure forward, which likewise preserves
+each file's recognized per-repo values (tests.yaml's app-name, app-image-name,
+enable-e2e, services-script and unit-coverage-fail-under; renovate.json's auto-merge
+mode).
+
+Two recognized values are app-owned opt-*ups*, allowed so an app doing the better thing
+does not report as drifted. `tests.yaml`'s `unit-coverage-fail-under` may raise the
+app's unit-test coverage floor above the floor `tests-reusable.yaml` applies by default,
+on the scaffold and across `--resync` alike; a value *below* the SDK floor is still
+drift (an app may not use its own workflow to duck under a fleet-wide bar), the finding
+names the line, and `--resync` removes it so the app inherits the SDK floor. Whether the
+resulting floor is high enough to ever fail a run is T014's question, not this rule's.
+`build-and-publish.yaml`'s `use_ghcr_base` may self-select the GHCR base-image redirect
+ahead of the SDK-side default flipping; because that shim IS always-overwrite,
+`bootstrap` also reads the opt-in back off the file and re-renders it rather than
+silently reverting the app to Harbor. Set it with `--use-ghcr-base` or by hand; pass
+`--use-ghcr-base false` to remove it.
 
 ---
 
@@ -102,14 +120,10 @@ holding its path), `curl --retry`, and `wget --tries` / `--retry-on-http-error`.
 --retry` WITHOUT `--retry-all-errors` is still flagged: plain `--retry` covers transport
 errors but not an HTTP 503, which is the failure this rule exists for. Tuning-only
 companion flags (`curl --retry-delay` / `--retry-max-time`, `wget --waitretry`) never
-count on their own: they pace a retry but do not enable one — `wget --waitretry=10`
-without `--tries` still makes exactly one attempt.
-
-Flags are evaluated per command segment (the line is split on `&&` / `||` / `;`; a pipe
-does not split — the fetcher and the shell/`tar` it feeds are one command). So a
-complete retry on one `curl` does not excuse an incomplete retry on a sibling `curl` in
-the same logical line, and a wrapper at the head of a compound command does not cover
-fetchers in later segments.
+count on their own: they pace a retry but do not enable one — `wget `--waitretry=10`
+without `--tries` still makes exactly one attempt. Flags are evaluated per command
+segment (split on `&&` / `||` / `;`; a pipe does not split), so one curl's complete
+retry does not excuse a sibling curl's incomplete one.
 
 Not flagged: fetches whose body is read rather than installed (a version lookup, a `-o
 /dev/null` health probe — those sit in their own poll loops), and localhost URLs.

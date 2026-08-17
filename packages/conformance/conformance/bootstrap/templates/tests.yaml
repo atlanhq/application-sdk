@@ -2,8 +2,10 @@
 # and drift-tracked at WARN by conformance check C002.
 #
 # Edit it freely — drift NEVER blocks CI (C002 is WARN-only, not BLOCK).
-# To force-regenerate this file from canonical, delete it and re-run bootstrap:
-#   atlan-application-sdk-conformance bootstrap --app-name <your-app-name>
+# To pull structural updates from canonical, re-run bootstrap with --resync:
+#   atlan-application-sdk-conformance bootstrap --resync
+# (--resync preserves this file's per-repo values; pass --app-name etc. only
+#  to deliberately CHANGE them.)
 name: Tests
 
 # Unified workflow — unit + integration (testcontainers), and full-DAG e2e.
@@ -16,6 +18,14 @@ name: Tests
 #                 Triggered by the 'e2e' PR label or workflow_dispatch.
 #   Tests Gate  — aggregator gate; the single required check for branch
 #                 protection.  tests must pass; e2e can be skipped.
+#                 Make it required as soon as this file is merged — it does not
+#                 wait on a coverage target or on every tier being wired up.
+#                 The exact context string to require is:
+#                   tests / Tests Gate
+#                 i.e. the `tests:` job below (which calls the reusable), then
+#                 the gate's own job name. The workflow name is NOT part of it,
+#                 even though the UI's checks list displays it. Rename the
+#                 `tests:` job and the context changes with it.
 
 on:
   push:
@@ -87,7 +97,8 @@ jobs:
   tests:
     uses: atlanhq/application-sdk/.github/workflows/tests-reusable.yaml@main
     with:
-      app-name: "<< app_name >>"
+<% if unit_coverage_fail_under %>      unit-coverage-fail-under: "<< unit_coverage_fail_under >>"
+<% endif %>      app-name: "<< app_name >>"
       app-image-name: "<< app_image_name >>"
 <% if enable_e2e != 'true' %>
       enable-e2e: << enable_e2e >>

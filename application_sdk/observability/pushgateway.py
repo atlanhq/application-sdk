@@ -35,7 +35,7 @@ from prometheus_client import (
 from prometheus_client.exposition import default_handler
 from prometheus_client.parser import text_string_to_metric_families
 
-from application_sdk.execution.heartbeat import run_in_thread
+from application_sdk._runtime.offload import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.pushgateway_errors import (
     PushGatewayJobRequiredError,

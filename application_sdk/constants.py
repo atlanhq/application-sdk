@@ -379,6 +379,18 @@ WORKFLOW_AUTH_CLIENT_SECRET_KEY = os.getenv(
 # the @task decorator. Per-task overrides still take precedence.
 #   ATLAN_HEARTBEAT_TIMEOUT_SECONDS → default heartbeat_timeout_seconds for @task
 #   ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS → default timeout_seconds for @task
+#   ATLAN_SCHEDULE_TO_CLOSE_TIMEOUT_SECONDS → default schedule_to_close_seconds for
+#     @task: the ceiling on a task's total time across every retry. Unset leaves
+#     the retry product unbounded (ADR-0018 → Bounding total time).
+# The stall watchdog's two fleet-wide settings are read in
+# application_sdk/execution/progress.py, because the activity worker running the
+# watchdog is the side that has to resolve them:
+#   ATLAN_PROGRESS_WATCHDOG → PROGRESS_WATCHDOG_MODE (off/warn/enforce, default warn;
+#     'off' is the kill-switch and beats a per-task declaration)
+#   ATLAN_MAX_NO_PROGRESS_SECONDS → MAX_NO_PROGRESS_SECONDS (default 900)
+# The run-length SLA that alerts on an over-long run — the duration signal that
+# replaces the duration kill — is read in application_sdk/execution/run_length.py:
+#   ATLAN_RUN_LENGTH_SLA_SECONDS → RUN_LENGTH_SLA_SECONDS (default 86400, 0 disables)
 # ExecutionSettings owns the graceful shutdown timeout:
 #   - ExecutionSettings.graceful_shutdown_timeout_seconds (TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT)
 

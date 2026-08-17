@@ -56,8 +56,8 @@ import warnings
 from abc import abstractmethod
 from typing import Any, ClassVar
 
+from application_sdk._runtime.offload import run_in_thread
 from application_sdk.app.task import task
-from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates._template_errors import (
     IncrementalSqlMetadataExtractorNotImplementedError,
@@ -452,7 +452,6 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             get_tables_needing_column_extraction,
         )
         from application_sdk.common.incremental.helpers import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
-            download_s3_prefix_with_structure,
             get_persistent_artifacts_path,
         )
         from application_sdk.execution import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
@@ -477,9 +476,13 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         transformed_dir.mkdir(parents=True, exist_ok=True)
 
         logger.info("Downloading transformed files from S3: %s", transformed_s3_prefix)
+        # strip_prefix: transformed_dir already *is* the run's transformed
+        # directory; without stripping the store prefix reappears inside it and
+        # the <transformed_dir>/table lookup below finds nothing (FND-340).
         await download_prefix(
             prefix=transformed_s3_prefix,
             local_dir=str(transformed_dir),
+            strip_prefix=True,
         )
 
         batch_size = input.column_batch_size
@@ -504,9 +507,10 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                     input.current_state_s3_prefix,
                 )
                 try:
-                    await download_s3_prefix_with_structure(
-                        s3_prefix=input.current_state_s3_prefix,
-                        local_destination=previous_current_state_dir,
+                    await download_prefix(
+                        prefix=input.current_state_s3_prefix,
+                        local_dir=previous_current_state_dir,
+                        strip_prefix=True,
                     )
                     logger.info(
                         "Current-state downloaded: %s", previous_current_state_dir

@@ -224,7 +224,10 @@ async with self.holding_progress("full table scan", timeout=7200):
 
 For opaque *async* calls (the connector's own async client) there is no SDK-owned seam to auto-hold, so wrap those in `holding_progress` directly. Expect to need it: interleaved streaming reads (fetch a page, write a batch, repeat) are already covered by the SDK's own writer and transfer loops, but almost every connector makes at least one genuinely opaque single call — one large metadata query, one slow list/export that returns everything at once.
 
-See [ADR-0018](../adr/0018-progress-aware-heartbeat.md) for the design.
+See [Progress and Stalls](progress-and-stalls.md) for the whole picture — what counts as
+progress, how to size the allowance from your own data, and how to read the report the
+watchdog produces for your app — and [ADR-0018](../adr/0018-progress-aware-heartbeat.md)
+for the design.
 
 ## Lifecycle Hooks
 
@@ -415,7 +418,13 @@ raising a typed error whose category is plumbing-side (`RateLimitedError`,
 makes hard mode fail *closed* on a blip, which is the mirror-image bug.
 
 Two queryable events come out of the gate. The per-run **outcome** event carries `outcome`,
-`gate_mode`, `gate_classification` and the per-check `check_matrix`. A boot-time **posture** event
+`gate_mode`, `gate_classification` and the per-check `check_matrix`. On a `gate_broken` fail-open
+its `reason` names the *underlying* fault — the SDK unwraps Temporal's `ActivityError`/`ApplicationError`
+to the real error type (e.g. `DaprSidecarUnreachableError`), not the wrapper — so a persistent
+platform fault is separable from a transient blip on the dashboard. A deadline overrun carries no
+error type to unwrap, so it reports which deadline fired instead: `Timeout:START_TO_CLOSE` (one
+attempt outran its own budget — what a dependency wait wider than the gate's `start_to_close` looks
+like), `Timeout:SCHEDULE_TO_CLOSE` (the retry window closed), or `Timeout:HEARTBEAT`. A boot-time **posture** event
 (`Preflight gate posture`) is emitted once per gate-registered app — soft ones included — carrying
 `app_name`, `gate_mode` and `gate_timeout_seconds`. The posture event is the denominator the outcome
 events cannot supply: an app that never reaches a verdict emits no outcome row at all, so "which

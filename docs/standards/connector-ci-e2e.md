@@ -174,7 +174,10 @@ One secret rather than four per cloud because a `strategy.matrix` value cannot
 index the `secrets` context, and the reusable workflows declare their
 `workflow_call` secrets explicitly — so per-cloud names would have to be
 re-declared for every cloud ever added. Adding a fourth CSP is a secret edit and
-a one-line change to `DEFAULT_CLOUDS`; no app repo changes at all.
+a one-line change to `DEFAULT_CLOUDS`; no app repo changes at all. Both halves
+are needed to *add* one — the narrowing below is an intersection, never a union,
+so a key appearing in the secret does not widen the fleet's fan-out behind
+`DEFAULT_CLOUDS`'s back. Removing a cloud needs only the secret edit.
 
 `"tenant_id"` is the tenant's **vcluster instance name** (`markeznp37`, `home-mt`)
 — *not* its hostname, which is what `"tenant"` holds. It is required only by the
@@ -250,26 +253,50 @@ on each app's `tests.yaml`:
 
 | Value | Meaning |
 |---|---|
-| `""` (default) | The SDK's current list — `DEFAULT_CLOUDS` in `discover_e2e_suites.py`. Deliberately not "no clouds": an untouched GitHub input arrives as `""`, and that must not silently opt a repo out. |
-| `aws` (or any subset) | Just those clouds. Use this to re-run one cloud, or to keep the fleet moving while one tenant is down. |
+| `""` (default) | The SDK's current list — `DEFAULT_CLOUDS` in `discover_e2e_suites.py` — **intersected with the clouds `E2E_TENANT_MATRIX_JSON` actually carries**. Deliberately not "no clouds": an untouched GitHub input arrives as `""`, and that must not silently opt a repo out. |
+| `aws` (or any subset) | Just those clouds, for re-running one cloud on one repo. Exact, and never narrowed: a named cloud the secret does not carry fails its leg. |
 | `none` | No cloud dimension — one leg against the single fallback tenant. |
 
 Every cloud is a **required** leg: the matrix is `fail-fast: false` and the Tests
 Gate reads `needs.e2e.result`, the matrix aggregate, so any cloud failing reds the
-gate. Narrowing `e2e-clouds` is the escape hatch, and trimming the secret to one
-key is the org-wide one.
+gate.
+
+### Taking a cloud out of the rotation
+
+**Remove its entry from `E2E_TENANT_MATRIX_JSON`.** That is the whole hatch: one
+secret edit, fleet-wide, effective on the next run, no connector PR and no SDK
+PR. The `Discover e2e suites` job reads the secret's *keys* (never its values —
+`e2e_tenant_matrix_clouds.py` emits a key list and nothing else), hands them to
+discovery, and the defaulted fan-out narrows to the intersection with a
+`::warning::` naming every cloud it dropped. A run that got two clouds when the
+SDK ships three says so in its own log.
+
+Defaulted narrows; **named does not**. `e2e-clouds: aws,azure` naming a cloud the
+secret does not carry still reaches `resolve_e2e_tenant.py` and still exits
+non-zero — somebody asserted that cloud should run, and skipping it silently
+would be a coverage hole rather than a narrowing. The asymmetry is deliberate and
+is pinned by `test_a_defaulted_absent_cloud_is_dropped_with_a_warning` /
+`test_a_named_absent_cloud_still_reaches_the_resolver`; it is the kind of
+distinction a later reader flattens on the grounds that both paths "just check
+the cloud list" (FND-354).
+
+Narrowing to *nothing* is an error, not an empty matrix: a secret carrying none
+of `DEFAULT_CLOUDS` fails discovery rather than emitting zero legs, which would
+green the gate having run no e2e at all.
 
 When the secret is not available to a repo, `clouds` is forced to `none` and the
 `Discover e2e suites` job emits a `::warning::` saying so — a run that asked for
-three clouds and got one must not look identical to one that got three.
+three clouds and got one must not look identical to one that got three. The same
+applies when the payload cannot be parsed: the key read degrades to "not known",
+narrowing is skipped, and the per-leg resolver still reports the real defect.
 
 ### Requiring a tenant ID on the install path
 
 That degradation is honest for a repo that only *runs legs against* a tenant, and
 insufficient for one that *installs onto* one. The single-tenant fallback supplies
 `SDR_TEST_TENANT` plus credentials and an API key, and no `tenant_id` — there is no
-matrix entry to carry one. So on `install-app-to-tenant: true` the missing secret
-is fatal, not a warning.
+matrix entry to carry one. So on the install path the missing secret is fatal, not
+a warning.
 
 Failing rather than skipping the install, deliberately. Skipping would leave
 `prepare-tenant` green having done nothing, the tenant on whatever version it was
@@ -278,15 +305,17 @@ confusing failure per leg in place of one clear failure. Heracles re-fetches the
 manifest from the tenant-deployed pod at AE submit, so running the legs against an
 install that did not happen tests the version already on the tenant while
 reporting on the PR's — the exact bug `install-app-to-tenant` exists to remove.
-And since `install-app-to-tenant` is opt-in, a caller that has opted in without a
-`tenant_id` is misconfigured rather than on a supported path.
+A caller on the install path without a resolvable `tenant_id` is misconfigured
+rather than on a supported path, and since FND-128 made the install path the
+default, the supported way to decline it is `install-app-to-tenant: false` — not a
+tenant the install cannot be scoped to.
 
 **The same precondition, checked twice.** "A `tenant_id` can be resolved" is
 knowable in two halves at two different times, so it is checked at both (FND-203):
 
 | Where | Sees | Catches | Costs |
 | --- | --- | --- | --- |
-| `discover-e2e` → *Require the tenant matrix on the install path* | whether `E2E_TENANT_MATRIX_JSON` exists at all | `install-app-to-tenant: true` on a repo the secret was never shared with | seconds |
+| `discover-e2e` → *Require the tenant matrix on the install path* | whether `E2E_TENANT_MATRIX_JSON` exists at all | the install path — the default since FND-128 — on a repo the secret was never shared with | seconds |
 | `prepare-tenant` → *Require a tenant ID before publishing anything* | the resolved `E2E_TENANT_ID` for **this** cloud | matrix present, this cloud's entry missing `tenant_id` | after two per-arch image builds and the manifest merge |
 
 The early check exists because the late one is expensive to reach: the install
@@ -364,7 +393,35 @@ side benefit.
 > is what executes (`processAutomationEngineWorkflow`); the harness's local
 > `manifest_path` seed DAG establishes the workflow record, not the graph. So the
 > DAG contract a full-DAG e2e exercises is whatever version is installed on that
-> tenant. Until FND-31 lands, that is whatever was last hand-deployed there.
+> tenant. With `install-app-to-tenant: false`, that is whatever was last
+> hand-deployed there.
+
+### Adoption: on by default (FND-128)
+
+`install-app-to-tenant` defaults to **true**. No app repo has to opt in, and none
+should need a PR to get the behaviour.
+
+It shipped opt-in under FND-31 for one reason: the install cannot resolve a tenant
+without `E2E_TENANT_MATRIX_JSON`, and that secret was shared with a handful of
+repos. Once it went org-wide, the opt-in stopped protecting anything and started
+costing something — an un-adopted repo still fanned out across every cloud in the
+matrix (the fan-out is gated on the secret, not on this input) and each leg tested
+whatever version that cloud's tenant already served. Three legs of wrong-version
+green in place of one.
+
+**Opting out.** Set `install-app-to-tenant: false` in the app's `tests.yaml` when
+the app genuinely cannot be installed onto the e2e tenants — not published to GM,
+or a tenant carrying an orphan that fails every install (FND-131). Every job on
+the install path is gated on the input, so opting out restores the previous
+behaviour exactly: per-leg builds, no lease, no install, legs against whatever the
+tenant runs. It reinstates the wrong-version risk along with it, so fixing the
+tenant is the better move where there is a choice.
+
+**What a first run tells you.** The install path is a hygiene report for that app's
+footprint on each tenant. `prepare-tenant` names offending images in its log, so a
+dirty tenant produces a precise cleanup list rather than a blanket "install
+failed". Expect the FND-131 shapes: an unpullable orphan, an `Evicted` straggler,
+a TWD version skew.
 
 ### Multi-arch on the install path
 
@@ -524,6 +581,45 @@ Single-pipeline apps invoking the action remotely (`@main`) never hit this code 
 4. **Tests**: unit + integration tests under `tests/unit/` and `tests/integration/`; full-DAG e2e under `tests/e2e/` (`SQLAppE2EFullTest` subclass).
 5. **Repo secrets**: set the 7 entries from the table above.
 6. **SDK matrix**: add `<connector>-app` to the `DEFAULT_MATRIX` in apps-sdk's `matrix-builder` job (`pull_request.yaml`) so `connector-tests` fans out to your connector automatically.
+7. **Required check**: make `tests / Tests Gate` a required, unbypassable status check on the default branch, and remove any stale required checks left over from older workflows (`unit-tests`, `tests-passed`, …). Do this as soon as step 2 is merged — see below.
+
+### The tests gate does not wait on the coverage bar
+
+The exact `required_status_checks` context is **`tests / Tests Gate`** — the
+caller's job **id** (`tests:` in the scaffolded `tests.yaml`), then the gate
+job's name. The workflow name is not part of it, even though the UI's checks
+list displays it as a leading segment; verified against the live `main` rulesets
+on `atlanhq/atlan-mysql-app` (`tests / Tests Gate`, `suite / Conformance Gate`)
+and `atlanhq/application-sdk` (inline jobs are a single segment, e.g. `SDK
+Gate`). A context that matches no check protects nothing, so get this string
+right before rolling it out.
+
+Making it required is its **own** lever, with no prerequisite
+beyond the check running something real. It is **not** gated on the four-tier
+test bar, the 85% coverage target, or every tier being wired up — pytest already
+exits non-zero when it collects nothing, so a vacuous pass is not possible, and
+the gate's verdict comes from a tested driver
+([`verify-test-gate`](../../.github/actions/verify-test-gate/action.yaml)) rather
+than from a job's own exit status. Turn it on with a thin suite and grow the
+suite behind it; a suite nothing enforces has no authority and degrades under
+pressure.
+
+The bar belongs to the *other* lever — **0-touch**, meaning conformance findings
+block CI and Renovate merges its own PRs without a human. That is what
+`atlan-application-sdk-conformance bootstrap --enforce true` sets, and it is the
+one an app graduates to once its tests are meaningful. The two halves of 0-touch
+are separately expressible too, for a repo that wants one without the other:
+
+| Lever | Flag | Prerequisite |
+|---|---|---|
+| `tests / Tests Gate` is a required check | none — a GitHub branch-protection setting; no bootstrap flag governs it | none |
+| Conformance findings block CI | `--conformance-blocking true\|false` | meaningful automated tests (four-tier bar) |
+| Renovate merges without a human | `--renovate-automerge true\|false` | meaningful automated tests (four-tier bar) |
+| Both of the above at once | `--enforce true\|false` (shorthand) | as above |
+
+Coverage stays warn-only at the publish-time certification gate as well — see
+[`app-certification.md`](app-certification.md#enforcement), where unit-test
+pass/fail already blocks publish while the 85% threshold only annotates.
 
 ## Reference
 

@@ -13,6 +13,6 @@
   "devDependencies": {
     "@openprose/reactor": "^0.3.1",
     "@openprose/reactor-cli": "^0.2.2",
-    "@openprose/reactor-devtools": "^0.2.0"
+    "@openprose/reactor-devtools": "^0.3.0"
   }
 }

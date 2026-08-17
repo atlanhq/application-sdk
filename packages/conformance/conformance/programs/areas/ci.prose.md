@@ -10,8 +10,10 @@ description: >
   step — but always routed to residue for mandatory human sign-off afterward,
   since a live-resolved SHA cannot itself be judged trustworthy by any
   recheck; this is assisted, not autonomous, remediation.  C003's
-  missing-entry case, C004, and drifted `tests.yaml`/`renovate.json` still
-  have no authored prescription and route to residue for manual triage.
+  missing-entry case, C004, and drifted `tests.yaml`/`renovate.json` route to
+  residue for manual triage — the two drifted scaffolds with a concrete
+  `--resync` remedy quoted for the human, the rest with no authored
+  prescription at all.
 ---
 
 ### Maintains
@@ -90,10 +92,13 @@ it isn't safe to assume a C002 finding already triggered it:
    `bootstrap` auto-detects every per-repo customization itself — `--app-name`
    and `--package-name` from `atlan.yaml`/an existing
    `docstring-coverage.yaml` (else the repo directory name/`"app"`),
-   `--unit-tests-workflow` from an existing `build-and-publish.yaml` (else
-   `"tests.yaml"`), `--services-script` from an existing
+   `--unit-tests-workflow` and `--use-ghcr-base` from an existing
+   `build-and-publish.yaml` (else `"tests.yaml"` and the SDK default),
+   `--services-script` from an existing
    `.github/test/setup-services.sh`, and `--enforce` from an existing
-   `conformance.yaml`'s `exit-zero` mode (else hard-gate). No extraction step
+   `conformance.yaml`'s `exit-zero` mode (else hard-gate) — which the two
+   granular 0-touch levers (`--conformance-blocking`, `--renovate-automerge`)
+   then inherit, since neither was named on this invocation. No extraction step
    is needed here; re-running with no flags never resets a customized value
    to a default. `--json` doesn't change any of that — it only appends one
    trailing JSON line to stdout, after the normal human-readable output.
@@ -108,8 +113,8 @@ it isn't safe to assume a C002 finding already triggered it:
    CLI's own code decides each entry, not the model reading prefixed prose
    lines) and how it drives `detect-fix-recheck`'s revert scope if this fix
    is later rejected by a gate. This no-flags procedure never produces a
-   `renovate.json.bak` entry itself (that only happens when `--enforce` is
-   passed explicitly), but capture it if present in `touched` rather than
+   `renovate.json.bak` entry itself (that only happens when `--enforce` or
+   `--renovate-automerge` is passed explicitly), but capture it if present in `touched` rather than
    assuming a fixed set of paths is exhaustive here too. `orthogonal_gate =
    "skip"` on both C002 and C003 (set on the rule definitions) — the Python
    test suite is skipped entirely, not just for this fix: a
@@ -133,18 +138,40 @@ it isn't safe to assume a C002 finding already triggered it:
 
 *Not resolved by this procedure — route to residue:*
 
-- **`tests.yaml` drift** (file exists but content diverged from canonical) —
-  `bootstrap` never overwrites an existing `tests.yaml` (write-if-absent
-  scaffold). Regenerating it requires deleting the file first, which would
-  also discard any legitimate app-specific customization outside the
-  recognized param set (app-name, app-image-name, enable-e2e,
-  services-script). `classification = "judgment"` — a human must decide
-  whether the drift is stale structure (safe to delete + regenerate) or an
-  intentional customization worth preserving as-is.
-- **`renovate.json` drift** (file exists but content diverged) — fixing it
-  requires choosing the intended enforcement mode (`--enforce true|false`),
-  a repo-policy decision the model must not make unilaterally.
-  `classification = "judgment"`.
+- **`tests.yaml` / `renovate.json` drift** (file exists but content diverged
+  from canonical) — `bootstrap` never overwrites either on a bare re-run
+  (write-if-absent scaffolds). `classification = "judgment"` for both, but
+  quote the concrete remedy in the residue entry rather than leaving the human
+  to derive it:
+
+  ```
+  atlan-application-sdk-conformance bootstrap --resync
+  ```
+
+  That re-renders both files from their canonicals while reusing the values
+  read back off each existing file — `tests.yaml`'s recognized param set
+  (app-name, app-image-name, enable-e2e, services-script, and a
+  unit-coverage-fail-under at or above the SDK's own floor) and
+  `renovate.json`'s declared auto-merge mode — so the structural catch-up lands
+  without resetting any of them. One exception is worth quoting in the residue
+  entry when it applies, because `--resync` resolves it by *deleting* the app's
+  line: a `unit-coverage-fail-under` BELOW the SDK floor is not preserved (an
+  app may raise its coverage bar, not duck under it), and the C002 message says
+  so and names the value whenever that is the case. Strictly less destructive than the delete-and-regenerate this
+  used to advise for `tests.yaml`, and it does NOT require choosing an
+  enforcement mode for `renovate.json` the way `--enforce` /
+  `--renovate-automerge` do: those two CHANGE the mode (a repo-policy decision
+  the model must not make unilaterally), `--resync` preserves whatever the file
+  already declares.
+
+  Both stay out of the mechanical pass anyway, and the reason is specific: a
+  customization *outside* the recognized values (an extra job, a changed
+  trigger, a repo-local packageRule) is replaced by the re-render, and while
+  the previous content is kept as `<name>.bak`, `*.bak` is in the
+  bootstrap-managed `.gitignore` — so an autonomous fix would drop that
+  customization with no trace in the resulting diff for a reviewer to catch. A
+  human must confirm the drift is stale structure and not something the app
+  meant to keep.
 
 ---
 

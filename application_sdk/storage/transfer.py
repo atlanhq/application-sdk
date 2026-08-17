@@ -41,11 +41,11 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from application_sdk._runtime.offload import run_in_thread
+from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.common._listing import safe_list_directory
 from application_sdk.constants import MAX_CONCURRENT_STORAGE_TRANSFERS
 from application_sdk.contracts.types import FileReference, StorageTier
-from application_sdk.execution.heartbeat import run_in_thread
-from application_sdk.execution.progress import current_progress_tracker
 from application_sdk.observability.logger_adaptor import get_logger
 
 # The batch key listers are imported at top level, unlike the other

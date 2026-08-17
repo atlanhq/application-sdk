@@ -150,6 +150,57 @@ result = requests.get(url)
 result = await self.run_in_thread(requests.get, url)
 ```
 
+## Writing Files
+
+Never write an artifact directly to its final name. Use `application_sdk.common.atomic`:
+
+```python
+from application_sdk.common.atomic import atomic_write
+
+# Wrong — a write that dies part-way leaves a truncated file at the real name.
+# Nothing downstream can tell it from a correct one, so it gets carried forward
+# and uploaded, and the failure surfaces in a consuming app's parser instead.
+Path(out).write_text(payload)
+
+# Right — the final path either does not exist or holds a complete file.
+with atomic_write(out, operation="entity export") as handle:
+    handle.write(payload.encode())
+```
+
+`operation` is a short phrase naming the step; it goes into the failure message and
+its evidence. Two companions:
+
+- `atomic_path(path, operation=...)` for writers that take a filename rather than a
+  handle (`pq.write_table`, `shutil.copy2`), and `atomic_copy(src, dst)` for copies.
+- `disk_full_guard(path, operation=...)` for a write that genuinely cannot be atomic
+  — an append across calls. It types the failure without the atomicity.
+
+A full disk raises `DiskFullError` naming the path and the shortfall, which is the
+signal an operator reads to raise a deployment's ephemeral storage. Pass
+`required_bytes=` when the size is known up front and the check happens before the
+first byte moves. See `docs/concepts/storage.md` → *Atomic artifact writes*.
+
+Every SDK writer already goes through this, so a `Writer`, `FileReference`, or the
+incremental helpers need nothing from you. This rule is for code that opens a file
+itself.
+
+## Long-Running Tasks: Progress and Stalls
+
+A task that goes quiet for longer than `max_no_progress_seconds` (900s) is reported as a
+stall — and failed, in an app that enforces. The SDK covers its own write, transfer and
+page loops, and auto-holds every `run_in_thread` offload; what it cannot see is a custom
+async loop or an opaque single `await` against the connector's own source client. Those
+need one line: `self.heartbeat(...)` in the loop, or
+`async with self.holding_progress(label, timeout=...)` around the opaque call.
+
+`timeout` is *how long you would let this one call run before you would rather it
+failed* — not a prediction of its duration. Err generous; too tight false-kills a
+healthy run, and stall kills retry.
+
+Read [Progress and Stalls](../concepts/progress-and-stalls.md) before writing a
+long-running task, and [ADR-0018](../adr/0018-progress-aware-heartbeat.md) if you need
+the design rationale.
+
 ## Large Payloads and FileReference
 
 Use `FileReference` for any data that cannot fit in Temporal's 2 MB payload limit.

@@ -702,6 +702,16 @@ class TestPrepareColumnExtractionQueriesInlineImports:
         artifacts_dir = tmp_path / "persistent"
         artifacts_dir.mkdir()
 
+        # Both downloads go through download_prefix now, so fail only the
+        # current-state one and let the transformed download succeed.
+        state_downloads = 0
+
+        async def _download(*, prefix: str, **kwargs) -> None:
+            nonlocal state_downloads
+            if prefix == "s3://state":
+                state_downloads += 1
+                raise RuntimeError("S3 failure")
+
         with (
             patch(
                 "application_sdk.execution.get_object_store_prefix",
@@ -709,16 +719,12 @@ class TestPrepareColumnExtractionQueriesInlineImports:
             ),
             patch(
                 "application_sdk.storage.batch.download_prefix",
-                new=AsyncMock(return_value=None),
+                new=AsyncMock(side_effect=_download),
             ),
             patch(
                 "application_sdk.common.incremental.helpers.get_persistent_artifacts_path",
                 return_value=artifacts_dir,
             ),
-            patch(
-                "application_sdk.common.incremental.helpers.download_s3_prefix_with_structure",
-                new=AsyncMock(side_effect=RuntimeError("S3 failure")),
-            ) as mock_dl_state,
             patch(
                 "application_sdk.common.incremental.column_extraction.get_backfill_tables",
                 return_value=set(),
@@ -740,7 +746,7 @@ class TestPrepareColumnExtractionQueriesInlineImports:
             )
         # Failure was swallowed; flow continued with no batches
         assert out.total_batches == 0
-        mock_dl_state.assert_awaited_once()
+        assert state_downloads == 1
 
 
 class TestWriteCurrentStateInlineImports:
