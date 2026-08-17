@@ -285,7 +285,11 @@ bound itself is not lost, because the workflow above applies it instead.
 per-package equivalent of `--exclude-newer-package`, so the retention ceilings
 that stop the uv bound rolling versions backwards cannot be expressed there — a
 plain `npm install --before` is the mass-rollback failure FND-359 corrected before
-merge. `checks/dep-cooldown` can therefore still fail on that one file.
+merge. The `checks/dep-cooldown` check run can therefore still fail on that one
+file. Note that it comes from the org security platform, not from a workflow in
+this repo: `dep-cooldown.yml` was removed in FND-373 because a public repo cannot
+call the private reusable it wired up, so it had never produced a check run at
+all. The platform's check run is a separate thing and was never affected.
 
 ## Reusing scripts from a reusable workflow
 
