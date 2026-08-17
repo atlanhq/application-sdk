@@ -451,8 +451,8 @@ def run_uv_lock(command: list[str], cwd: Path) -> subprocess.CompletedProcess[st
     return subprocess.run(command, cwd=cwd, capture_output=True, text=True)
 
 
-def baseline_lock_text(cwd: Path) -> str | None:
-    """``uv.lock`` as last committed, or None if the repo has no committed copy.
+def baseline_lock_text(cwd: Path, ref: str = "HEAD") -> str | None:
+    """``uv.lock`` at ``ref``, or None if that commit has no copy of it.
 
     Emphatically NOT the working tree. By the time this runs, Renovate has
     already refreshed the lock to latest-of-everything in the working tree — that
@@ -461,28 +461,39 @@ def baseline_lock_text(cwd: Path) -> str | None:
     ago and neutralise the window completely, and comparing against it would
     report a rollback for every package the bound correctly holds back.
 
-    ``HEAD`` is the right baseline in both branch states: a fresh branch has the
-    base-branch commit, and a reused one has its own previous (already bounded)
-    commit, which is the version that actually shipped last.
+    ``HEAD`` is the right baseline in both of Renovate's own branch states, which
+    is why it is the default: under ``postUpgradeTasks`` the refresh is still
+    uncommitted, so a fresh branch has the base-branch commit at HEAD and a
+    reused one has its own previous (already bounded) commit — the version that
+    actually shipped last.
 
-    Returns None only when the path is verifiably absent from HEAD — a lock
+    ``ref`` exists for the one caller where that does not hold: a GitHub Actions
+    workflow triggered by the push Renovate just made (FND-376). There the
+    refresh is *already committed*, so HEAD is the unbounded lock itself and
+    using it would derive every ceiling from the minutes-old versions — the
+    neutralised-window failure described above, arriving from the other
+    direction. That caller passes the base branch instead, which also makes
+    "never roll back relative to what main ships" structural rather than
+    incidental.
+
+    Returns None only when the path is verifiably absent from ``ref`` — a lock
     added in this very branch, which legitimately has no baseline. Anything else
     that goes wrong raises, because silently treating "cannot tell" as "no
     baseline" would drop the ceilings and quietly reintroduce the rollback this
-    exists to prevent. That includes a HEAD that resolves but whose lock blob
+    exists to prevent. That includes a ref that resolves but whose lock blob
     cannot be read: absent is a fact about the tree, not a guess from a failed
     command, so absence is established positively with `git ls-tree` and every
     `git show` failure on a path known to be present is treated as fatal.
     """
     head = subprocess.run(
-        ["git", "rev-parse", "--verify", "HEAD"],
+        ["git", "rev-parse", "--verify", ref],
         cwd=cwd,
         capture_output=True,
         text=True,
     )
     if head.returncode != 0:
         raise RuntimeError(
-            f"cannot resolve HEAD in {cwd}, so the pre-refresh lockfile is "
+            f"cannot resolve {ref} in {cwd}, so the pre-refresh lockfile is "
             f"unavailable: {head.stderr.strip()}"
         )
     # Absence must be established positively, not inferred from a failed read:
@@ -490,27 +501,34 @@ def baseline_lock_text(cwd: Path) -> str | None:
     # so it cannot tell the two apart. `git ls-tree` can — it exits 0 and
     # prints nothing when the path is absent, prints the path when present, and
     # only exits non-zero when git itself is broken.
+    #
+    # Both git invocations are cwd-relative, and that is load-bearing for a
+    # project that is not the repo root. `ls-tree`'s pathspec already resolves
+    # against cwd, but `<rev>:<path>` does NOT — a bare `<rev>:uv.lock` is
+    # repo-root-relative wherever it runs, so from `packages/conformance` it
+    # silently returns the ROOT lock as that project's baseline. The `./` prefix
+    # is what makes `git show` agree with `ls-tree` about which file is meant.
     listing = subprocess.run(
-        ["git", "ls-tree", "-r", "--name-only", "HEAD", "--", "uv.lock"],
+        ["git", "ls-tree", "-r", "--name-only", ref, "--", "uv.lock"],
         cwd=cwd,
         capture_output=True,
         text=True,
     )
     if listing.returncode != 0:
         raise RuntimeError(
-            f"cannot inspect HEAD's tree in {cwd}, so the pre-refresh lockfile "
+            f"cannot inspect {ref}'s tree in {cwd}, so the pre-refresh lockfile "
             f"is unavailable: {listing.stderr.strip()}"
         )
     if "uv.lock" not in listing.stdout.splitlines():
-        # Verifiably absent from HEAD — a lock added in this very branch, which
+        # Verifiably absent from ref — a lock added in this very branch, which
         # legitimately has no baseline.
         return None
     show = subprocess.run(
-        ["git", "show", "HEAD:uv.lock"], cwd=cwd, capture_output=True, text=True
+        ["git", "show", f"{ref}:./uv.lock"], cwd=cwd, capture_output=True, text=True
     )
     if show.returncode != 0:
         raise RuntimeError(
-            f"uv.lock exists in HEAD but cannot be read in {cwd}, so the "
+            f"uv.lock exists in {ref} but cannot be read in {cwd}, so the "
             f"pre-refresh lockfile is unavailable: {show.stderr.strip()}"
         )
     return show.stdout
@@ -541,6 +559,16 @@ def main(argv: list[str] | None = None) -> int:
         "plus anything in their dependency closure that must move with them.",
     )
     parser.add_argument("--project-dir", default=".")
+    parser.add_argument(
+        "--baseline-ref",
+        default="HEAD",
+        help="Git ref whose uv.lock is the PRE-refresh baseline for retention "
+        "ceilings and the rollback gate. Default HEAD, which is correct under "
+        "Renovate's postUpgradeTasks (the refresh is still uncommitted there). A "
+        "caller that runs AFTER the refresh has been committed — a workflow "
+        "triggered by Renovate's own push — must pass the base branch instead, "
+        "or every ceiling is derived from the versions it is meant to bound.",
+    )
     args = parser.parse_args(argv)
 
     project_dir = Path(args.project_dir).resolve()
@@ -575,18 +603,19 @@ def main(argv: list[str] | None = None) -> int:
 
     exempt = list(args.exempt)
 
-    # Baseline = the last COMMITTED lock, never the working tree. See
-    # baseline_lock_text for why that distinction is load-bearing.
+    # Baseline = the lock as COMMITTED at --baseline-ref, never the working tree.
+    # See baseline_lock_text for why that distinction is load-bearing, and why
+    # the right ref depends on whether the refresh has been committed yet.
     try:
-        baseline = baseline_lock_text(project_dir)
+        baseline = baseline_lock_text(project_dir, args.baseline_ref)
     except RuntimeError as error:
         print(str(error), file=sys.stderr)
         return 1
 
     if baseline is None:
         print(
-            "No committed uv.lock at HEAD — treating this as a new lockfile: "
-            "no retention ceilings and no rollback comparison.",
+            f"No committed uv.lock at {args.baseline_ref} — treating this as a new "
+            "lockfile: no retention ceilings and no rollback comparison.",
             file=sys.stderr,
         )
         baseline = ""

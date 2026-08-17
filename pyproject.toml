@@ -227,6 +227,26 @@ cmd = "python -m application_sdk.tools.provision_credentials"
 # the cmp gate exits non-zero if rendering is non-deterministic.
 # interpreter = "bash" is required: poe defaults to /usr/bin/sh (dash on Ubuntu),
 # which does not support `set -o pipefail`.
+#
+# GRIFFE IS PINNED, and the pin is the whole point. griffe renders the field
+# defaults this manifest records, so an unpinned `--with griffe` makes the
+# committed artifact a function of whichever griffe the machine last cached
+# rather than of application_sdk/. That is not theoretical: griffe 2.2.0 shipped
+# on 2026-08-16 and dropped the redundant parentheses around a call in a Field
+# default, so #3169 regenerated on it and rewrote ten committed lines with no
+# source change, after which every PR whose runner still had an older griffe
+# cached reported drift. The cmp gate above cannot catch this — it proves one
+# machine agrees with itself, not that two machines agree with each other.
+#
+# 2.1.0 rather than 2.2.0 deliberately: the org §5 release-age cooldown applies
+# to a tool that rewrites a committed artifact exactly as it applies to anything
+# else, and 2.2.0 was a day old when it was first used here. Bump this
+# deliberately, and regenerate in the same commit.
+#
+# Renovate cannot see this pin — its uv manager reads dependency tables, not an
+# inline `--with` inside a poe shell string — so it will not be bumped for you
+# and will not be cooled down for you either. That is the trade for keeping the
+# tool out of the project environment; revisit if the pin starts rotting.
 [tool.poe.tasks.regen-capabilities]
 interpreter = "bash"
 shell = """
@@ -234,10 +254,11 @@ set -euo pipefail
 mkdir -p /tmp/capability-manifest
 EXTRACTOR=.claude/skills/capability-manifest/references/extractor.py
 PURPOSES=.claude/skills/capability-manifest/references/subpackage-purposes.yaml
-uv run --with griffe python "$EXTRACTOR" dump > /tmp/capability-manifest/raw.json
-uv run --with griffe python "$EXTRACTOR" normalize /tmp/capability-manifest/raw.json > /tmp/capability-manifest/normalized.json
-uv run --with griffe python "$EXTRACTOR" render /tmp/capability-manifest/normalized.json "$PURPOSES" > /tmp/capability-manifest/fresh1.md
-uv run --with griffe python "$EXTRACTOR" render /tmp/capability-manifest/normalized.json "$PURPOSES" > /tmp/capability-manifest/fresh2.md
+GRIFFE=griffe==2.1.0
+uv run --with "$GRIFFE" python "$EXTRACTOR" dump > /tmp/capability-manifest/raw.json
+uv run --with "$GRIFFE" python "$EXTRACTOR" normalize /tmp/capability-manifest/raw.json > /tmp/capability-manifest/normalized.json
+uv run --with "$GRIFFE" python "$EXTRACTOR" render /tmp/capability-manifest/normalized.json "$PURPOSES" > /tmp/capability-manifest/fresh1.md
+uv run --with "$GRIFFE" python "$EXTRACTOR" render /tmp/capability-manifest/normalized.json "$PURPOSES" > /tmp/capability-manifest/fresh2.md
 cmp /tmp/capability-manifest/fresh1.md /tmp/capability-manifest/fresh2.md
 cp /tmp/capability-manifest/fresh1.md docs/agents/sdk-capabilities.md
 uv run pre-commit run --files docs/agents/sdk-capabilities.md || true

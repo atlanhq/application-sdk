@@ -15,6 +15,13 @@ jobs:
   sync-requirements:
     name: Sync requirements.txt
     runs-on: ubuntu-latest
+    # One writer per branch. renovate-lock-cooldown.yaml triggers on the same
+    # push to renovate/lock-file-maintenance and pushes to the same branch, so
+    # both running would leave the loser with a non-fast-forward rejection —
+    # and whichever won would have exported requirements.txt from a lock the
+    # other was about to change. That workflow re-exports this file itself,
+    # from the bound lock, in the same commit (FND-376).
+    if: ${{ github.ref != 'refs/heads/renovate/lock-file-maintenance' }}
     steps:
       - name: Mint fleet App token
         # A real (non-github-actions[bot]) identity is required here: the

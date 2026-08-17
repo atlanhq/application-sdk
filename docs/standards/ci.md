@@ -203,6 +203,94 @@ Dockerfiles. That is what reddened `scan / Build Image` fleet-wide in #3212. The
 bounded driver strips the block; if you add another lock-writing command, check
 what it records.
 
+## The release-age bound on application-sdk's own lock refresh
+
+`postUpgradeTasks` reaches every repo in the fleet except the one that publishes
+the wheel they all install. `allowedCommands` is admin-only, so post-upgrade
+commands exist only on the self-hosted runner, and application-sdk's dependency
+PRs come from Mend. `renovate-lock-cooldown.yaml` closes that gap (FND-376) by
+running the same driver from the other side: triggered by the push Mend makes to
+`renovate/lock-file-maintenance`, correcting the lock in place before the PR
+merges.
+
+Three things about that position differ from the fleet's, and each is a way to
+get it silently wrong:
+
+**The baseline is the base branch, not `HEAD`.** Under `postUpgradeTasks` the
+refresh is still uncommitted, so `HEAD` is the pre-refresh lock — which is why
+that is the driver's default. Here Renovate has already committed it, so `HEAD`
+*is* the unbounded lock, and using it would derive every retention ceiling from
+the releases the bound exists to exclude. The bound would apply, report success,
+and change nothing. Hence `--baseline-ref origin/<default-branch>`, which also
+makes "never roll back what main ships" structural: the driver's rollback gate
+then compares against main by construction.
+
+**Two uv projects, two exempt sets.** `packages/conformance` is a separate uv
+project, and unlike the root it resolves `atlan-application-sdk` from PyPI — so
+its exempt set carries the SDK *and* pyatlan. Exempting the SDK alone does not
+fail; a bounded resolve that cannot see a fresh pyatlan silently backtracks to an
+older SDK instead.
+
+**One writer per branch.** `dependabot-requirements-sync.yaml` also triggers on
+pushes to `renovate/**` and also pushes. On this one branch both would fire on
+the same push and the loser would take a non-fast-forward rejection — so that
+workflow skips this branch, and the bound re-exports `requirements.txt` itself,
+in the same commit. One commit rather than three also matters on its own: each
+push re-fires the PR's entire required-check suite.
+
+The workflow pushes with a minted App token, not `GITHUB_TOKEN`, for the reason
+recorded in `dependabot-requirements-sync.yaml`: a `GITHUB_TOKEN` push does not
+re-trigger the PR's required checks, which would leave the PR green against a
+commit that is no longer its head.
+
+The job runs only for a push made by one of the Renovate identities the approval
+gate also accepts as PR authors (`RENOVATE_AUTHORS`), pinned to that list by a
+drift test rather than copied. Treat it as defence in depth and not as a control:
+it is evaluated from the workflow file at the pushed ref, so it constrains what
+runs by accident, not what runs by intent. Restricting who may push a branch is
+branch configuration and lives outside the repo.
+
+### Any bot commit on a Renovate branch loses `renovate/artifacts`
+
+Commit statuses are per-SHA and Renovate stamps only the commits it authors, so
+the moment an in-repo workflow adds a commit the head moves off the stamped SHA.
+Condition (f) of the approval gate reads an absent `renovate/artifacts` as
+not-green — correctly, since a post-upgrade command that was skipped and one that
+ran clean are otherwise indistinguishable — so approval is withheld and stays
+withheld. This is not new and not hypothetical: on #3216 atlan-ci posted three
+approvals, each dismissed by the next push, and the PR merged on a human's
+approval after the requirements sync added the last commit.
+
+`carry_artifact_status.py` closes it for this lane by republishing the state it
+**reads from our commit's parent**, and only when that state is `success`. A
+`failure`, a `pending`, an absent context, or an unreadable one all publish
+nothing and leave the gate withholding. It waits briefly for an absent context
+before giving up, because Renovate pushes the branch before it sets its statuses
+and "not yet" would otherwise read as "never".
+
+If you add another workflow that commits to a Renovate branch, it inherits this
+problem. Carry the status or accept that the PR needs a human.
+
+### Repo-local `postUpgradeTasks` override
+
+`renovate.json` clears the preset's `lockFileMaintenance.postUpgradeTasks`
+commands for this repo. Mend cannot run post-upgrade commands — `allowedCommands`
+is admin-only — so it publishes `renovate/artifacts: failure` on every lock
+branch, which the gate then withholds on. Measured: the lane read `success` on
+#3216 and `failure` on the first branch Renovate rebased after #3227 merged.
+Clearing the commands removes a signal that can only ever be false here; the
+bound itself is not lost, because the workflow above applies it instead.
+
+**Not covered:** `packages/conformance/conformance/package-lock.json`. npm has no
+per-package equivalent of `--exclude-newer-package`, so the retention ceilings
+that stop the uv bound rolling versions backwards cannot be expressed there — a
+plain `npm install --before` is the mass-rollback failure FND-359 corrected before
+merge. The `checks/dep-cooldown` check run can therefore still fail on that one
+file. Note that it comes from the org security platform, not from a workflow in
+this repo: `dep-cooldown.yml` was removed in FND-373 because a public repo cannot
+call the private reusable it wired up, so it had never produced a check run at
+all. The platform's check run is a separate thing and was never affected.
+
 ## Reusing scripts from a reusable workflow
 
 A `uses:` reusable workflow does **not** bring its own repo's files into the
