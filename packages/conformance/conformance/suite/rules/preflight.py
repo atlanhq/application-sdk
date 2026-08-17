@@ -34,7 +34,7 @@ RULES: tuple[RuleDefinition, ...] = (
         id="P032",
         scope=RuleScope.APP,
         name="ReservedPreflightActivityName",
-        tier=EnforcementTier.WARN,
+        tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="preflight-gate",
         autofixable=False,
@@ -45,7 +45,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "'{app_name}:preflight'. An app @task that also registers the 'preflight' "
             "activity name collides with it: the worker raises "
             "WorkerActivityNameCollisionError at boot and never starts. Catching the "
-            "collision statically surfaces it in the PR instead of on the first deploy."
+            "collision statically surfaces it in the PR instead of on the first deploy. "
+            "Customer impact: the worker never comes up, so every workflow the customer "
+            "runs on that app is down from the moment the release deploys into their "
+            "tenant — a full-app outage caused by a name collision no test exercises "
+            "and no build gate sees."
         ),
         short_description=(
             "An app @task registers the 'preflight' activity name reserved by the SDK gate"

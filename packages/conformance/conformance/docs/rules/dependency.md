@@ -19,12 +19,12 @@ Suppress a finding on the violating line or the line directly above it:
 | [D002](#d002) | `RedeclaredSdkManagedDependency` | `warn` | `app` | `dependency-pinning` | yes | 0.4.0 |
 | [D003](#d003) | `UnusedDependency` | `warn` | `both` | `dependency-hygiene` | — | 0.5.0 |
 | [D004](#d004) | `RedeclaredSdkManagedDependencyInGroups` | `warn` | `app` | `dependency-pinning` | yes | 0.5.0 |
-| [D005](#d005) | `UnknownSdkExtra` | `warn` | `app` | `dependency-pinning` | — | 0.5.0 |
+| [D005](#d005) | `UnknownSdkExtra` | `block` | `app` | `dependency-pinning` | — | 0.5.0 |
 | [D006](#d006) | `IncompatibleRequiresPython` | `warn` | `app` | `python-version` | yes | 0.5.0 |
 | [D007](#d007) | `NonStandardBuildBackend` | `warn` | `app` | `build-system` | yes | 0.5.0 |
 | [D008](#d008) | `WeakenedTypeChecking` | `warn` | `app` | `tooling-baseline` | yes | 0.5.0 |
 | [D009](#d009) | `RemoteDaprComponentFetch` | `block` | `app` | `dapr-components` | yes | 0.12.0 |
-| [D010](#d010) | `QueryTransformerWithoutDuckdb` | `warn` | `app` | `runtime-dependencies` | — | 0.18.0 |
+| [D010](#d010) | `QueryTransformerWithoutDuckdb` | `block` | `app` | `runtime-dependencies` | — | 0.18.0 |
 
 ---
 
@@ -36,7 +36,10 @@ Suppress a finding on the violating line or the line directly above it:
 
 **Rationale:** An unbounded specifier lets an automated tool (Renovate) or a manual bump pull in a
 future SDK major without review. The SDK's versioning discipline only holds if every app
-has a bound that stops automatic upgrades past the reviewed point.
+has a bound that stops automatic upgrades past the reviewed point. Customer impact: an
+unreviewed SDK major rides an automated lockfile bump into the next release, and its
+breaking changes surface as connector failures in customer tenants with no app-code diff
+that explains them — the hardest kind of regression to attribute during an incident.
 
 Every app must declare `atlan-application-sdk` in `[project.dependencies]` with a
 version specifier that has both a lower bound (`>=` or `==`) and an upper bound (`<` or
@@ -125,14 +128,17 @@ this rule is skipped silently. Cite: BLDX-1410.
 
 ## D005 — `UnknownSdkExtra` {#d005}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `dependency-pinning` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `block` · **Scope:** `app` · **Category:** `dependency-pinning` · **Autofixable:** — · **Since:** 0.5.0
 
 > Reference to an atlan-application-sdk extra the SDK does not publish
 
 **Rationale:** uv silently drops an unknown extra, so a typo like `atlan-application-sdk[dapr]` (no
 such extra) installs nothing for that extra and the missing dependencies surface only at
 runtime. Validating the reference against the SDK's published extras catches the
-silent-failure at build time.
+silent-failure at build time. Customer impact: the dependencies the app needs are never
+installed, so the connector raises ImportError on the first real run in the customer's
+tenant — a day-one install failure on an image that passed every build gate, because the
+typo is invisible to the resolver that silently dropped it.
 
 Every `atlan-application-sdk[extra]` reference must name an extra the SDK actually
 publishes (its `Provides-Extra` metadata).  An unknown extra is silently dropped by uv,
@@ -211,6 +217,10 @@ routine builds into flaky 429s across the fleet. The hardcoded SDK ref these fet
 to also drifts from whatever application-sdk version is actually locked in the app's own
 uv.lock. The installed SDK wheel already bundles these files at
 application_sdk/components/, so the network round-trip is both fragile and redundant.
+Customer impact: the flaky 429 blocks the build pipeline exactly when a customer is
+waiting on a hotfix release, and component YAMLs fetched at a drifted ref can ship
+state/queue configuration the locked SDK was never validated against — misbehaving only
+once deployed in the tenant.
 
 No `[tool.poe.tasks.*]` entry (in either the shorthand `task.shell = "..."` form or the
 full `[tool.poe.tasks.task]` table form) may reference `raw.githubusercontent.com` or
@@ -226,7 +236,7 @@ Docker build, where `uv sync` precedes `poe download-components`). Inline suppre
 
 ## D010 — `QueryTransformerWithoutDuckdb` {#d010}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `runtime-dependencies` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `block` · **Scope:** `app` · **Category:** `runtime-dependencies` · **Autofixable:** — · **Since:** 0.18.0
 
 > App imports the SDK query transformer but duckdb is not resolved (no [sql]/[incremental] extra, no direct dependency)
 
@@ -242,6 +252,9 @@ SDK-owned shape: apps pinned to the deprecated [daft] extra, which resolved empt
 an automated upgrade crossed the 3.22 line). That half is fixed at the root — [daft]
 aliases [sql] again from 3.28.0 — so this rule now covers the no-extras case it always
 also covered. Statically checkable: transformer-usage scan + lockfile/pyproject scan.
+Customer impact: every transform in the customer's crawl dies with ImportError, so no
+metadata reaches their catalog at all — and because imports succeed and mocked unit
+tests pass, the first thing that reveals it is the customer's own failed run.
 
 An app whose source imports the SDK query transformer
 (`application_sdk.transformers.query` — the `transform_metadata` /
@@ -285,7 +298,13 @@ the finding, but it duplicates a pin the SDK's extras already manage, so the app
 owns a version range it has to keep in step with the SDK's by hand.  Reach for it only
 where the extra genuinely cannot be used.
 
-This is a WARN (per the new-rule tier policy), but unlike most WARN findings it
-indicates a *guaranteed* runtime failure — treat it as an error.
+This is a `BLOCK`: the finding names a *guaranteed* runtime failure, not a risk of one.
+It landed as `WARN` under the new-rule tier policy with the note "treat it as an error"
+— the tier now says that instead of asking the reader to.
+
+Note for the `[daft]`-pinned population above: with a parseable `uv.lock` the check
+walks what the app's own extras actually resolve, so once the SDK bump to >= 3.28.0 is
+locked (where `[daft]` aliases `[sql]`) `duckdb` is reachable and the finding clears
+with no app-side edit.  Bump the SDK; do not reach for a suppression.
 
 ---

@@ -55,7 +55,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "upstream Python, cgr.dev images, or a stale/dev-branch tag of "
             "app-runtime-base — silently omits one or more of these, producing "
             "a container that passes local CI but fails in prod (missing graceful "
-            "drain, missing Dapr sidecar, wrong user, or broken env)."
+            "drain, missing Dapr sidecar, wrong user, or broken env).  "
+            "Customer impact: without the daprd sidecar the app cannot reach its "
+            "state, secret, or queue components, so the connector bricks on first "
+            "run in the customer's tenant — a day-one install failure discovered "
+            "by the customer, not by CI."
         ),
         short_description=(
             "Final-stage FROM does not use the approved base image "
@@ -99,7 +103,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "clean shutdown.  Overriding CMD or ENTRYPOINT silently bypasses "
             "both: the app boots fine locally (no daprd needed there) but loses "
             "graceful drain in prod, causing in-flight requests to be dropped "
-            "during rolling restarts or scale-down events."
+            "during rolling restarts or scale-down events.  "
+            "Customer impact: every routine tenant operation — a rolling "
+            "restart, a node upgrade, a scale-down — becomes a window where the "
+            "customer's in-flight crawls and requests are dropped mid-run with "
+            "no handoff."
         ),
         short_description=(
             "CMD or ENTRYPOINT is overridden; the base image entrypoint "
@@ -137,7 +145,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "variable will fail to start with a cryptic import error — not a "
             "build error — making the failure invisible until the container is "
             "actually deployed.  Enforcing the variable at lint time closes "
-            "that gap."
+            "that gap.  "
+            "Customer impact: the image ships, deploys into the tenant, and "
+            "crash-loops with an import error — an outage the customer sees "
+            "first, on a release every pre-deploy gate passed."
         ),
         short_description=(
             "ENV ATLAN_APP_MODULE is not set; the runtime needs this to "
@@ -174,7 +185,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "Dockerfile bakes the mode decision into the image, preventing "
             "multi-mode deployments and making it easy to accidentally ship "
             "the wrong mode to prod.  The value must be injected at deploy "
-            "time via the deployment manifest."
+            "time via the deployment manifest.  "
+            "Customer impact: a worker image baked to server mode never polls "
+            "the task queue — the customer's workflows sit queued forever while "
+            "every health check reports the pod as running and healthy."
         ),
         short_description=(
             "ENV ATLAN_APP_MODE is hardcoded in the Dockerfile; runtime mode "
@@ -209,7 +223,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "A USER root (or USER 0) instruction in the final stage reverses "
             "this, running the application process as root and exposing the "
             "container to privilege-escalation risks.  This is the exact pattern "
-            "that turns a container escape into a host root compromise."
+            "that turns a container escape into a host root compromise.  "
+            "Customer impact: the container processes the customer's credentials "
+            "and source data inside their tenant — running it as root converts "
+            "any exploitable app bug into potential host-level access to that "
+            "customer's environment, a direct security exposure for them."
         ),
         short_description=(
             "USER root or USER 0 in the final stage sets the container user "

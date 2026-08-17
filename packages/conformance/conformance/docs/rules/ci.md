@@ -30,7 +30,11 @@ Suppress a finding on the violating line or the line directly above it:
 
 **Rationale:** A mutable tag (@v4) can be silently re-pointed to any commit after review — including
 malicious code — with no notification to the consumer. Pinning to a full commit SHA
-makes the action content immutable: the code reviewed is the code that runs.
+makes the action content immutable: the code reviewed is the code that runs. Customer
+impact: the CI these actions run builds and publishes the images deployed into customer
+tenants — a re-pointed tag is a supply-chain path for unreviewed code to reach every
+customer environment, or to exfiltrate the publishing credentials that sign what
+customers run.
 
 External actions reused via `uses:` must be pinned to a full-length commit SHA (digest),
 never a mutable tag (@v4) or branch (@main). A tag can be re-pointed to malicious code
@@ -120,7 +124,7 @@ holding its path), `curl --retry`, and `wget --tries` / `--retry-on-http-error`.
 --retry` WITHOUT `--retry-all-errors` is still flagged: plain `--retry` covers transport
 errors but not an HTTP 503, which is the failure this rule exists for. Tuning-only
 companion flags (`curl --retry-delay` / `--retry-max-time`, `wget --waitretry`) never
-count on their own: they pace a retry but do not enable one — `wget `--waitretry=10`
+count on their own: they pace a retry but do not enable one — `wget --waitretry=10`
 without `--tries` still makes exactly one attempt. Flags are evaluated per command
 segment (split on `&&` / `||` / `;`; a pipe does not split), so one curl's complete
 retry does not excuse a sibling curl's incomplete one.

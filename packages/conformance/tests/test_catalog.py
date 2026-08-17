@@ -64,6 +64,103 @@ def test_catalog_all_have_rationale() -> None:
     ), f"Rules missing rationale (add a rationale= to each RuleDefinition): {missing}"
 
 
+def test_catalog_block_rules_state_customer_impact() -> None:
+    """Every BLOCK-tier rationale must state its customer failure mode.
+
+    Tier is the criticality model (FND-221): block = customer risk, warn =
+    good-to-have. That semantic only stays auditable if each BLOCK rule's
+    rationale says concretely how the violation becomes a customer issue — a
+    rule that cannot state one does not belong at BLOCK (FND-311).
+    """
+    rules = load_catalog()
+    missing = [
+        rule.id
+        for rule in rules
+        if rule.tier is EnforcementTier.BLOCK
+        and "Customer impact:" not in rule.rationale
+    ]
+    assert not missing, (
+        f"BLOCK rules whose rationale has no 'Customer impact:' line: {missing} — "
+        "state how the violation turns into a customer issue, or keep the rule at WARN"
+    )
+
+
+#: Phrases that *argue for* the WARN tier, as opposed to merely mentioning it.
+#: A BLOCK rule may legitimately say "hence BLOCK, not WARN" or "promoted from
+#: warn to block" — that is a tier reference. These are justifications, and a
+#: BLOCK rule carrying one publishes a doc page whose tier column and body
+#: disagree (``gen-rule-docs`` renders both from the same definition).
+#:
+#: Word-boundary regexes, not bare substrings: ``"this is a warn"`` as a
+#: substring also matches "this is a warn*ing* sign", which never argues for
+#: the WARN tier. ``\b`` keeps the match on the standalone phrase. A boundary
+#: is only added on a side where the phrase actually begins/ends with a word
+#: char — anchoring ``\b`` against a leading/trailing backtick or paren would
+#: force a word char that isn't there and the phrase would never match.
+def _word_boundary(phrase: str) -> re.Pattern[str]:
+    left = r"\b" if phrase[0].isalnum() else ""
+    right = r"\b" if phrase[-1].isalnum() else ""
+    return re.compile(left + re.escape(phrase) + right)
+
+
+_WARN_JUSTIFYING_PHRASES = tuple(
+    _word_boundary(phrase)
+    for phrase in (
+        "this is a warn",
+        "land as ``warn``",
+        "warn (not block)",
+        "warn (new-rule tier policy)",
+        "warn (per the new-rule tier policy)",
+    )
+)
+
+
+def test_catalog_block_rules_carry_no_warn_justifying_prose() -> None:
+    """A BLOCK rule's own prose must not argue for WARN.
+
+    Promotions are easy to do halfway: flip the tier and leave the paragraph
+    that explains why the rule is only a warning. The generated doc renders
+    tier and prose side by side, so the result is a page that contradicts
+    itself — and nothing else catches it. P030 hit exactly this in FND-311;
+    this generalises that rule-specific pin to the whole catalog.
+    """
+    rules = load_catalog()
+    offenders = [
+        (rule.id, phrase.pattern)
+        for rule in rules
+        if rule.tier is EnforcementTier.BLOCK
+        for phrase in _WARN_JUSTIFYING_PHRASES
+        if phrase.search(f"{rule.rationale}\n{rule.full_description}".lower())
+    ]
+    assert not offenders, (
+        "BLOCK rules whose prose still argues for WARN: "
+        f"{offenders} — rewrite the paragraph to say why the rule blocks, or "
+        "return the rule to WARN"
+    )
+
+
+def test_warn_justifying_phrases_do_not_over_match() -> None:
+    """Regression pin for the word-boundary fix.
+
+    "This is a warning sign …" is ordinary English, not a WARN-tier
+    justification — a bare substring match on ``"this is a warn"`` trips it.
+    The word-boundary regexes must not.
+    """
+    prose = "This is a warning sign for operators".lower()
+    assert not any(p.search(prose) for p in _WARN_JUSTIFYING_PHRASES)
+    # Every real justifying phrase still matches its own canonical form — a
+    # boundary fix that silences a true positive would gut the guard.
+    canonical = (
+        "this is a warn, not a block",
+        "should land as ``warn`` here",
+        "tier is warn (not block)",
+        "tier is warn (new-rule tier policy)",
+        "tier is warn (per the new-rule tier policy)",
+    )
+    for phrase, prose in zip(_WARN_JUSTIFYING_PHRASES, canonical):
+        assert phrase.search(prose), f"{phrase.pattern!r} stopped matching {prose!r}"
+
+
 def test_catalog_all_have_scope() -> None:
     """Every rule must declare a valid RuleScope (sdk / app / both)."""
     rules = load_catalog()
