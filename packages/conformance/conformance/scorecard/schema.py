@@ -100,6 +100,40 @@ class RawTests(BaseModel):
         return getattr(self, name)
 
 
+class CrossCloudCoverage(BaseModel):
+    """Which CSPs this repo's e2e is wired for, and which it actually exercised.
+
+    Descriptive, **not scored**: no :class:`Check` and no :class:`Gate` reads
+    these.  Promoting cross-CSP coverage to a scored dimension the moment it
+    ships would move every app's aggregate downward at once, so a rollout would
+    read as a fleet-wide regression (FND-34).  Record first; score once the
+    fleet is onboarded and a low value is actionable.
+
+    The two fields answer different questions and must not be collapsed — an app
+    can be configured for three clouds and have two failing, which is a
+    different problem from an app nobody has onboarded yet.
+
+    Absence is a third state, and load-bearing.  ``exclude_none=True`` drops an
+    unset field entirely, so ``observed`` omitted means "e2e did not run, we know
+    nothing", while ``observed: []`` means "e2e ran with no cloud dimension" —
+    the degraded single-tenant fallback.  A consumer that reads absent as zero
+    shows the whole fleet as failing forever regardless of onboarding.
+    """
+
+    configured: list[str] | None = None
+    """Clouds this repo is *wired* for: the requested fan-out narrowed to what
+    ``E2E_TENANT_MATRIX_JSON`` carries for it.  Derivable without running e2e,
+    so it lands on every scorecard emission — this is the rollout signal.
+    ``[]`` means no cloud dimension (no tenant matrix shared with the repo)."""
+
+    observed: list[str] | None = None
+    """Clouds an e2e run actually exercised.  Present only on runs where the
+    e2e job ran, which is label/dispatch-gated — this is the verification
+    signal, and it is sparse by construction."""
+
+    model_config = _COMMON
+
+
 class RawMetrics(BaseModel):
     """The underlying measured numbers, for dashboard drill-down and recompute."""
 
@@ -110,6 +144,10 @@ class RawMetrics(BaseModel):
     model *fields*, not dict keys, so they stay lowercase on the wire."""
 
     tests: RawTests = Field(default_factory=RawTests)
+
+    cross_cloud: CrossCloudCoverage | None = None
+    """Descriptive cross-CSP e2e coverage; omitted entirely when unknown.
+    Additive and non-breaking — older consumers ignore the key."""
 
     model_config = _COMMON
 

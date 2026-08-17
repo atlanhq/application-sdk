@@ -126,6 +126,43 @@
       "title": "CoverageMetrics",
       "type": "object"
     },
+    "CrossCloudCoverage": {
+      "description": "Which CSPs this repo's e2e is wired for, and which it actually exercised.\n\nDescriptive, **not scored**: no :class:`Check` and no :class:`Gate` reads\nthese.  Promoting cross-CSP coverage to a scored dimension the moment it\nships would move every app's aggregate downward at once, so a rollout would\nread as a fleet-wide regression (FND-34).  Record first; score once the\nfleet is onboarded and a low value is actionable.\n\nThe two fields answer different questions and must not be collapsed \u2014 an app\ncan be configured for three clouds and have two failing, which is a\ndifferent problem from an app nobody has onboarded yet.\n\nAbsence is a third state, and load-bearing.  ``exclude_none=True`` drops an\nunset field entirely, so ``observed`` omitted means \"e2e did not run, we know\nnothing\", while ``observed: []`` means \"e2e ran with no cloud dimension\" \u2014\nthe degraded single-tenant fallback.  A consumer that reads absent as zero\nshows the whole fleet as failing forever regardless of onboarding.",
+      "properties": {
+        "configured": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Configured"
+        },
+        "observed": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed"
+        }
+      },
+      "title": "CrossCloudCoverage",
+      "type": "object"
+    },
     "Gate": {
       "description": "A SonarQube-style quality gate that can cap the grade regardless of score.",
       "properties": {
@@ -174,6 +211,17 @@
         },
         "tests": {
           "$ref": "#/$defs/RawTests"
+        },
+        "crossCloud": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CrossCloudCoverage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "title": "RawMetrics",

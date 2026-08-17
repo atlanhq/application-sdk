@@ -902,6 +902,14 @@ jobs:
       # e2e-full-reusable.yaml's plan-clouds has always guarded on the count for
       # exactly this reason.
       cloud-count: ${{ steps.discover-clouds.outputs.count }}
+      # The resolved cloud list as a flat string, for the scorecard's descriptive
+      # `observed` field (FND-34). Taken from the SAME action call that emitted
+      # the matrix, so "what we recorded as covered" and "what actually ran"
+      # cannot disagree — the failure mode that makes a coverage metric worse
+      # than no metric. Empty means no cloud dimension: the legs ran against the
+      # single legacy tenant. The scorecard records that as `observed: []`, which
+      # is distinct from omitting the field when e2e never ran at all.
+      clouds: ${{ steps.discover.outputs.clouds }}
     env:
       # Job-level so the step-level `if:` below can read it — a step condition
       # cannot reference the `secrets` context directly.
@@ -2112,12 +2120,25 @@ jobs:
           SDK_REF: ${{ inputs.application-sdk-ref }}
         run: echo "::warning::Dispatching application-sdk ref ${SDK_REF} predates the callback scripts; used main's copy instead. Merge main into that SDK branch to silence this."
 
+      # `pattern` + merge-multiple, not the bare `name`. Since FND-6 the e2e
+      # matrix suffixes each leg's artifact with the leg name, so the exact
+      # un-suffixed name matched nothing and this download quietly no-opped
+      # under continue-on-error — build_callback_summary.py then fell back to
+      # its plain body on every cross-CSP run.
+      #
+      # merge-multiple is right HERE and wrong in the scorecard job, for the
+      # same reason in both places: it flattens every leg into one directory, so
+      # same-named files overwrite. What this step wants is exactly one rendered
+      # pr-comment-body.md; what the scorecard wants is every leg's junit kept
+      # apart. The body is one arbitrary leg's, which is why the authoritative
+      # verdict is the gate line appended below rather than anything in it.
       - name: Download connector e2e results
         if: needs.e2e.result != 'skipped'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         continue-on-error: true
         with:
-          name: sdr-integration-tests-${{ inputs.app-name }}-results
+          pattern: sdr-integration-tests-${{ inputs.app-name }}*-results
+          merge-multiple: true
           path: connector-results
 
       # THE verdict. Same action, same inputs as the Tests Gate job below, so
@@ -2200,28 +2221,88 @@ jobs:
             --details-url "$RUN_URL"
 
   # ── Test-readiness scorecard (per-tier aggregation) ──────────────────────
-  # Combines the unit + integration jobs' evidence (junit + coverage.json) into
-  # one quantified scorecard artifact. Non-PR only (push / merge_group), where
-  # both tiers actually ran — on a PR integration is skipped, so a scorecard
-  # would misreport it. Best-effort and NOT part of the Tests Gate: a failure
-  # here (or an older published conformance predating the per-tier CLI) only
-  # warns. e2e is intentionally not fed — it runs label/dispatch-gated via a
-  # non-junit SDR artifact, so the scorecard marks the e2e tier not-applicable
-  # (no grade cap) rather than dragging every run to a capped B.
+  # Combines the unit + integration + e2e jobs' evidence (junit + coverage.json)
+  # into one quantified scorecard artifact. Non-PR only (push / merge_group),
+  # where unit and integration actually ran — on a PR integration is skipped, so
+  # a scorecard would misreport it. Best-effort and NOT part of the Tests Gate: a
+  # failure here (or an older published conformance predating the per-tier CLI)
+  # only warns.
+  #
+  # ── Why e2e evidence is sparse, and why that is the design (FND-33) ──────
+  # This job runs on push/merge_group; discover-e2e/e2e run on
+  # `workflow_dispatch + run_e2e=true` or an `e2e`-labelled PR. The two barely
+  # intersect: only a dispatched run on the default branch carries both. Three
+  # ways out were considered and this is the one that survives contact with how
+  # the artifact is consumed:
+  #
+  #   * Also run on the e2e-labelled PR path — DEAD. update-dashboard.yaml picks
+  #     the newest DEFAULT-BRANCH Tests run carrying a live scorecard artifact,
+  #     so a PR-run scorecard is never ingested. Worse, on a PR the integration
+  #     job is skipped, so such a scorecard would publish a zeroed integration
+  #     tier: a fabricated regression, which is exactly what this job's `if:`
+  #     already exists to prevent.
+  #   * A separate durable e2e record connector-pulse reads independently —
+  #     a larger build, and premature: nothing yet needs e2e evidence at a
+  #     cadence the scorecard cannot supply.
+  #   * Accept sparsity, and make ABSENCE HONEST — this. When e2e did not run,
+  #     the tier stays `applicable: false` and the `e2e-present` gate stays
+  #     `na`: excluded from the aggregate, no grade cap, not scored zero.
+  #
+  # The consequence to hold onto: a routine push emits a scorecard that says
+  # "e2e not measured", never "e2e failing". connector-pulse must render the
+  # e2e tier's absence as unknown, not as a zero.
+  #
+  # The cross-CSP fields are what carry rollout visibility between those sparse
+  # runs (FND-34): `configured` is derivable from the tenant-matrix secret alone
+  # and so lands on EVERY emission, while `observed` rides along only when e2e
+  # ran. Both are descriptive — no Check reads them and no Gate caps on them, so
+  # recording them cannot move any app's grade.
   scorecard:
     name: Test-readiness scorecard
-    needs: [unit, detect-integration, integration]
+    # discover-e2e and e2e join `needs` so their evidence and their resolved
+    # cloud list are reachable. `always()` is already in the `if:` below, which
+    # is what keeps a SKIPPED e2e (the routine case) from skipping this job —
+    # a job's `needs` gate is evaluated separately from its `if:`, and without a
+    # status-check function GitHub applies an implicit success() that a skipped
+    # need does not satisfy.
+    needs: [unit, detect-integration, integration, discover-e2e, e2e]
     if: always() && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
+    env:
+      # Job-level so the step-level `if:` below can read it — a step condition
+      # cannot reference the `secrets` context directly. Same shape as
+      # discover-e2e, deliberately: both answer "is this repo wired for the
+      # cross-CSP matrix", and two different answers would be a bug.
+      HAS_TENANT_MATRIX: ${{ secrets.E2E_TENANT_MATRIX_JSON != '' && 'true' || '' }}
     steps:
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.12.5"
           enable-cache: true
+
+      # The SDK's arg builder and the discovery driver. `ref: job.workflow_sha`
+      # rather than @main for the reason discover-e2e gives at length: a script
+      # pulled at the workflow's own SHA is testable on the branch that changes
+      # it, whereas an action pinned @main cannot see a change until it lands.
+      # `repository:` stays hardcoded so the executed payload's provenance is
+      # pinned; application-sdk is public, so the caller's default token reads it
+      # when ORG_PAT_GITHUB is not shared.
+      - name: Fetch SDK CI scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: |
+            .github/scripts
+            .github/actions/discover-e2e-suites
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+          token: ${{ secrets.ORG_PAT_GITHUB || github.token }}
+          persist-credentials: false
 
       # Both downloads are best-effort: unit always uploads its artifact, but
       # integration is absent when it had no suite / was skipped — the CLI then
@@ -2240,26 +2321,106 @@ jobs:
           name: integration-test-results
           path: integration-evidence
 
+      # `pattern:` with merge-multiple LEFT OFF, and that is the whole point:
+      # the e2e matrix emits one artifact per suite × cloud leg (FND-6) and each
+      # carries a junit at the SAME inner path, so merging would have the legs
+      # overwrite each other and the scorecard would silently score one leg as
+      # if it were the run. Unmerged, each lands under its own artifact-named
+      # directory and the CLI's glob picks up all of them.
+      #
+      # The pattern also matches the legacy un-suffixed name, so a caller still
+      # emitting a single e2e artifact is covered by the same expression.
+      #
+      # Best-effort: no e2e run means no artifacts, `download-artifact` fails,
+      # and the glob below resolves to nothing — which the CLI reads as "e2e not
+      # applicable", never as "e2e scored zero".
+      - name: Download e2e evidence (one artifact per leg)
+        if: needs.e2e.result != 'skipped'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        continue-on-error: true
+        with:
+          pattern: sdr-integration-tests-${{ inputs.app-name }}*-results
+          path: e2e-evidence
+
+      # ── What this repo is WIRED for, whether or not e2e ran (FND-34) ───────
+      # The rollout signal. It needs no e2e run — only the tenant matrix's key
+      # list and the requested fan-out — so it lands on every scorecard emission,
+      # which is what makes an un-onboarded repo distinguishable from a covered
+      # one at the point of central visibility. The `::warning::` in
+      # discover-e2e is the only other signal, and it is per-run, ephemeral, and
+      # buried in one app repo's Actions log.
+      - name: Read the tenant matrix's cloud keys
+        id: matrix-clouds
+        if: inputs.enable-e2e && env.HAS_TENANT_MATRIX != ''
+        env:
+          E2E_TENANT_MATRIX_JSON: ${{ secrets.E2E_TENANT_MATRIX_JSON }}
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/scripts/e2e_tenant_matrix_clouds.py \
+            --matrix-json "$E2E_TENANT_MATRIX_JSON" >> "$GITHUB_OUTPUT"
+
+      # The same driver, the same `clouds` expression and the same narrowing as
+      # discover-e2e — so `configured` is the list discovery WOULD resolve, not
+      # an independent re-derivation that could drift from it. Duplicated
+      # verbatim for the reason the second discover call in discover-e2e gives:
+      # a hand-rolled equivalent is new untested logic doing what the driver
+      # already does.
+      #
+      # continue-on-error because this must never redden a reporting job:
+      # `--clouds-only` exits non-zero when narrowing would leave no clouds at
+      # all, and the step's `outcome` is then the "not known" signal that omits
+      # the field entirely.
+      - name: Resolve the clouds this repo is configured for
+        id: configured-clouds
+        if: inputs.enable-e2e
+        continue-on-error: true
+        env:
+          CLOUDS: ${{ secrets.E2E_TENANT_MATRIX_JSON == '' && 'none' || inputs.e2e-clouds }}
+          AVAILABLE_CLOUDS: ${{ steps.matrix-clouds.outputs.clouds }}
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/actions/discover-e2e-suites/discover_e2e_suites.py \
+            --clouds-only \
+            --clouds "$CLOUDS" \
+            --available-clouds "$AVAILABLE_CLOUDS" >> "$GITHUB_OUTPUT"
+
       - name: Generate test-readiness scorecard
         shell: bash
         env:
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
+          OUT: results/test-readiness.json
+          UNIT_JUNIT: unit-evidence/results/test-results.xml
+          UNIT_COVERAGE: unit-evidence/coverage.json
+          INTEGRATION_JUNIT: integration-evidence/results/test-results.xml
+          INTEGRATION_COVERAGE: integration-evidence/coverage.json
+          # Quoted through to the CLI, which expands it: the legs' artifact
+          # directories are only known at download time, and expanding it in the
+          # shell would need a loop this file is not allowed to contain
+          # (docs/standards/ci.md).
+          E2E_JUNIT_GLOB: e2e-evidence/*/results/sdr-test-results.xml
+          E2E_RESULT: ${{ needs.e2e.result }}
+          CONFIGURED_CLOUDS: ${{ steps.configured-clouds.outputs.clouds }}
+          CONFIGURED_KNOWN: ${{ steps.configured-clouds.outcome == 'success' }}
+          OBSERVED_CLOUDS: ${{ needs.discover-e2e.outputs.clouds }}
         run: |
           [ -f unit-evidence/results/test-results.xml ] || { echo "no unit junit; skipping scorecard"; exit 0; }
           mkdir -p results
-          # Integration flags may point at missing files (no suite / skipped) —
-          # the CLI scores those as an empty integration tier. Trailing `|| echo`
-          # keeps this non-blocking: an older published conformance without the
-          # per-tier CLI must never redden the run (works once 0.17.0 publishes).
-          uvx atlan-application-sdk-conformance scorecard \
-            --unit-junit unit-evidence/results/test-results.xml \
-            --unit-coverage unit-evidence/coverage.json \
-            --integration-junit integration-evidence/results/test-results.xml \
-            --integration-coverage integration-evidence/coverage.json \
-            --repo "$REPO" \
-            --commit "$SHA" \
-            --out results/test-readiness.json \
+          # All conditional argument-building lives in the tested script, so this
+          # block stays straight-line (docs/standards/ci.md).
+          mapfile -t sc_args < <(python3 application-sdk-scripts/.github/scripts/build_scorecard_args.py)
+          # Trailing `|| echo` keeps this non-blocking: an older published
+          # conformance without the per-tier/e2e CLI must never redden the run.
+          #
+          # There IS a window. `uvx` resolves the newest PUBLISHED conformance,
+          # and --cross-cloud-configured / a repeatable --e2e-junit only exist
+          # from 0.21.0; until that publishes, argparse rejects them, this step
+          # warns, and no scorecard artifact is produced for that run. The
+          # dashboard already tolerates that — update-dashboard.yaml walks back
+          # through the last 20 completed runs for one that still carries a live
+          # scorecard — and the same gap was accepted when the per-tier flags
+          # landed ahead of 0.17.0. It closes on the next conformance release.
+          uvx atlan-application-sdk-conformance scorecard "${sc_args[@]}" \
             || echo "::warning::test-readiness scorecard generation failed (skipped)"
 
       # `upload-artifact` classifies the artifact service's finalize 403 as
