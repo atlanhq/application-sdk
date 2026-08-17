@@ -40,6 +40,7 @@ Configuration (all via env, matching the sibling scripts):
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import subprocess
@@ -71,6 +72,17 @@ VALID_REACTIONS = frozenset(
 DEFAULT_REACTION = "eyes"
 DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_BACKOFF_SECONDS = 2.0
+
+# Module-local seams, so a test can replace the sleep or the subprocess call
+# without patching the global `time`/`subprocess` modules out from under
+# everything else in the process.
+#
+# Both are read inside `react()` rather than used as default argument values.
+# A default binds the object at import time, so patching the module attribute
+# afterwards has no effect — and a test that patches `subprocess.run` and then
+# watches the real `gh` fail still sees exit 0, passing for the wrong reason.
+_SLEEP: Callable[[float], None] = time.sleep
+_RUN: Runner = subprocess.run
 
 _HTTP_STATUS = re.compile(r"\(HTTP (\d{3})\)")
 
@@ -124,14 +136,19 @@ def react(
     *,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     backoff_seconds: float = DEFAULT_BACKOFF_SECONDS,
-    runner: Runner = subprocess.run,
-    sleeper: Callable[[float], None] = time.sleep,
+    runner: Runner | None = None,
+    sleeper: Callable[[float], None] | None = None,
 ) -> bool:
     """POST the reaction, retrying transient failures. True iff it landed.
 
-    `sleeper` is injected rather than calling `time.sleep` directly so the
-    tests can assert the backoff schedule without spending it.
+    `runner` and `sleeper` are injectable so tests can drive the retry path
+    and assert the backoff schedule without issuing an API call or spending
+    the wait. See `_RUN`/`_SLEEP` for why they resolve here.
     """
+    if runner is None:
+        runner = _RUN
+    if sleeper is None:
+        sleeper = _SLEEP
     args = [
         "gh",
         "api",
@@ -193,6 +210,14 @@ def _positive_float(name: str, default: float) -> float:
         value = float(raw)
     except ValueError:
         print(f"::warning::{name}={raw!r} is not a number; using {default}")
+        return default
+    # `float()` happily returns inf/nan, and `inf > 0` is True — which would
+    # reach `time.sleep(inf)` and raise OverflowError, failing the step. That
+    # is exactly the always-exit-0 contract this script exists to hold, broken
+    # by its own configuration parsing. `_positive_int` needs no equivalent:
+    # `int('inf')` is a ValueError, already handled above.
+    if not math.isfinite(value):
+        print(f"::warning::{name}={raw!r} is not finite; using {default}")
         return default
     return value if value > 0 else default
 

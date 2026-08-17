@@ -23,6 +23,12 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  # The reactions endpoint is `/issues/comments/{id}/reactions` — a PR comment
+  # is an issue comment, so `pull-requests: write` does not cover it. Without
+  # this the ack 403s on every run; the helper now warns and exits 0 rather
+  # than failing the job, which would make a permanently missing ack the
+  # silent steady state.
+  issues: write
 
 jobs:
   regen:

@@ -37,6 +37,10 @@ permissions:
   contents: write
   pull-requests: write
   actions: read
+  # Same gap as capability-manifest-regen: `/issues/comments/{id}/reactions`
+  # needs `issues: write` even for a PR comment. Fixed here too rather than
+  # only where review caught it — both are 🚀 acks on the same endpoint.
+  issues: write
 
 jobs:
   auto-fix:

@@ -17,6 +17,7 @@ for the reactions API inline again, which is the shape the bug had.
 from __future__ import annotations
 
 import importlib.util
+import math
 import re
 import subprocess
 from pathlib import Path
@@ -205,7 +206,7 @@ def test_main_always_exits_zero_however_the_reaction_fails(
     monkeypatch.setenv("COMMENT_ID", COMMENT_ID)
     monkeypatch.setenv("REACTION", "eyes")
     monkeypatch.setenv("REACT_BACKOFF_SECONDS", "0.001")
-    monkeypatch.setattr(react_mod.subprocess, "run", lambda *a, **k: fail(stderr))
+    monkeypatch.setattr(react_mod, "_RUN", lambda *a, **k: fail(stderr))
 
     assert react_mod.main() == 0
 
@@ -218,7 +219,7 @@ def test_main_no_ops_without_a_comment_id(monkeypatch: pytest.MonkeyPatch) -> No
     def explode(*a, **k):
         raise AssertionError("should not have called gh")
 
-    monkeypatch.setattr(react_mod.subprocess, "run", explode)
+    monkeypatch.setattr(react_mod, "_RUN", explode)
     assert react_mod.main() == 0
 
 
@@ -232,12 +233,12 @@ def test_main_rejects_a_reaction_github_does_not_have(
     def explode(*a, **k):
         raise AssertionError("should not have called gh")
 
-    monkeypatch.setattr(react_mod.subprocess, "run", explode)
+    monkeypatch.setattr(react_mod, "_RUN", explode)
     assert react_mod.main() == 0
 
 
-@pytest.mark.parametrize("raw", ["", "nonsense", "0", "-4"])
-def test_malformed_tuning_env_falls_back_to_the_default(
+@pytest.mark.parametrize("raw", ["", "nonsense", "0", "-4", "inf", "nan"])
+def test_malformed_attempt_count_falls_back_to_the_default(
     monkeypatch: pytest.MonkeyPatch, raw: str
 ) -> None:
     monkeypatch.setenv("REACT_MAX_ATTEMPTS", raw)
@@ -245,6 +246,55 @@ def test_malformed_tuning_env_falls_back_to_the_default(
         react_mod._positive_int("REACT_MAX_ATTEMPTS", react_mod.DEFAULT_MAX_ATTEMPTS)
         == react_mod.DEFAULT_MAX_ATTEMPTS
     )
+
+
+@pytest.mark.parametrize(
+    "raw", ["", "nonsense", "0", "-4", "inf", "-inf", "Infinity", "nan"]
+)
+def test_malformed_backoff_falls_back_to_the_default(
+    monkeypatch: pytest.MonkeyPatch, raw: str
+) -> None:
+    """`float('inf') > 0` is True, so a naive positivity check lets it through.
+
+    It would then reach `time.sleep(inf)`, which raises OverflowError and exits
+    non-zero — the always-exit-0 contract broken by the script's own config
+    parsing, from an env var a caller could set to anything.
+    """
+    monkeypatch.setenv("REACT_BACKOFF_SECONDS", raw)
+    assert (
+        react_mod._positive_float(
+            "REACT_BACKOFF_SECONDS", react_mod.DEFAULT_BACKOFF_SECONDS
+        )
+        == react_mod.DEFAULT_BACKOFF_SECONDS
+    )
+
+
+def test_non_finite_backoff_never_reaches_sleep(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end through `main`, which wires the real `time.sleep`.
+
+    The stand-in raises on a non-finite delay the way `time.sleep` does, so
+    this fails if the guard is removed rather than passing on a mock that
+    tolerates anything.
+    """
+    slept: list[float] = []
+
+    def strict_sleep(seconds: float) -> None:
+        if not math.isfinite(seconds):
+            raise OverflowError("cannot convert float infinity to integer")
+        slept.append(seconds)
+
+    monkeypatch.setenv("REPO", REPO)
+    monkeypatch.setenv("COMMENT_ID", COMMENT_ID)
+    monkeypatch.setenv("REACTION", "eyes")
+    monkeypatch.setenv("REACT_BACKOFF_SECONDS", "inf")
+    monkeypatch.setenv("REACT_MAX_ATTEMPTS", "2")
+    monkeypatch.setattr(react_mod, "_RUN", lambda *a, **k: fail(GH_503))
+    monkeypatch.setattr(react_mod, "_SLEEP", strict_sleep)
+
+    assert react_mod.main() == 0
+    assert slept == [react_mod.DEFAULT_BACKOFF_SECONDS]
 
 
 # --------------------------------------------------------------------------
@@ -313,14 +363,25 @@ def test_every_caller_can_actually_reach_the_script() -> None:
                     )
 
 
-def test_callers_pass_the_env_the_script_reads() -> None:
-    """`REPO` and `COMMENT_ID` are read from env, so a typo is silent.
+# Every bot entry point that acknowledges a comment, as (workflow, job, step).
+#
+# Pinned exactly rather than counted. A `>= 5` lower bound would stay green if
+# one of these lost its ack while an unrelated sixth caller was added
+# elsewhere — the count balances, the entry point goes silent, and the guard
+# that exists to notice says nothing. Adding a genuinely new caller is
+# supposed to require editing this list.
+EXPECTED_CALLERS = {
+    ("sdk-review.yml", "react-on-skip", "React to skipped trigger"),
+    ("sdk-review.yml", "sdk-review-dispatch", "React to comment"),
+    ("sdk-resolve.yml", "sdk-resolve-dispatch", "Acknowledge with a reaction"),
+    ("auto-fix-vulnerabilities.yaml", "auto-fix", "React to comment"),
+    ("capability-manifest-regen.yaml", "regen", "React to comment"),
+}
 
-    Without `REPO` the script warns and no-ops; without `GH_TOKEN` every
-    attempt 401s. Both look like "the emoji just didn't appear".
-    """
-    required = {"GH_TOKEN", "REPO", "COMMENT_ID"}
-    seen_callers = 0
+
+def _caller_steps() -> dict[tuple[str, str, str], dict]:
+    """Every `(workflow, job, step name)` that invokes the helper."""
+    found: dict[tuple[str, str, str], dict] = {}
     for path in _yaml_files():
         text = path.read_text(encoding="utf-8")
         if SCRIPT_NAME not in text:
@@ -328,16 +389,44 @@ def test_callers_pass_the_env_the_script_reads() -> None:
         doc = yaml.safe_load(text)
         for job_name, job in (doc.get("jobs") or {}).items():
             for step in job.get("steps") or []:
-                if SCRIPT_NAME not in str(step.get("run") or ""):
-                    continue
-                seen_callers += 1
-                env = set(step.get("env") or {})
-                missing = required - env
-                assert not missing, (
-                    f"{path.name}:{job_name} step "
-                    f"{step.get('name')!r} is missing env {sorted(missing)}"
-                )
-    assert seen_callers >= 5, (
-        "expected every bot entry point to route through the helper; "
-        f"found only {seen_callers}"
+                if SCRIPT_NAME in str(step.get("run") or ""):
+                    found[(path.name, job_name, str(step.get("name")))] = step
+    return found
+
+
+def test_the_caller_set_is_exactly_what_we_expect() -> None:
+    actual = set(_caller_steps())
+    assert actual == EXPECTED_CALLERS, (
+        f"lost acks: {sorted(EXPECTED_CALLERS - actual)}; "
+        f"new callers to add to EXPECTED_CALLERS: {sorted(actual - EXPECTED_CALLERS)}"
     )
+
+
+def test_callers_pass_the_env_the_script_reads() -> None:
+    """`REPO` and `COMMENT_ID` are read from env, so a typo is silent.
+
+    Without `REPO` the script warns and no-ops; without `GH_TOKEN` every
+    attempt 401s. Both look like "the emoji just didn't appear".
+    """
+    required = {"GH_TOKEN", "REPO", "COMMENT_ID"}
+    for caller, step in _caller_steps().items():
+        missing = required - set(step.get("env") or {})
+        assert not missing, f"{caller} is missing env {sorted(missing)}"
+
+
+def test_every_caller_workflow_grants_issues_write() -> None:
+    """The reactions endpoint needs `issues: write`, even for a PR comment.
+
+    `/issues/comments/{id}/reactions` is not covered by `pull-requests:
+    write`. Two of these workflows were missing it. Now that the helper warns
+    and exits 0 instead of failing the step, a permissions trim here would
+    silence an ack permanently with nothing red to show for it — which is
+    precisely why this is asserted rather than left to be noticed.
+    """
+    for path in {WORKFLOW_DIR / name for name, _, _ in EXPECTED_CALLERS}:
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+        permissions = doc.get("permissions") or {}
+        assert permissions.get("issues") == "write", (
+            f"{path.name} reacts to comments but grants "
+            f"issues={permissions.get('issues')!r}"
+        )
