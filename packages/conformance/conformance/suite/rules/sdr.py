@@ -359,7 +359,7 @@ RULES: tuple[RuleDefinition, ...] = (
         id="P038",
         scope=RuleScope.APP,
         name="SdrArtifactMisrooted",
-        tier=EnforcementTier.WARN,
+        tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="sdr-readiness",
         autofixable=False,
@@ -375,7 +375,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "'artifacts/apps//workflows/...' (empty app segment). self.upload() then "
             "succeeds but 0 assets publish — P030 passes the app (upload IS called), "
             "so this distinct rule catches the wrong-root case (observed for a "
-            "document-store connector in fleet testing)."
+            "document-store connector in fleet testing). "
+            "Customer impact: the same data loss disguised as success that P030 "
+            "polices, one seam later — the run goes green, the upload reports "
+            "success, and zero assets reach the customer's catalog because the "
+            "publish step reads a prefix nothing was ever written to."
         ),
         short_description=(
             "SDR object-store prefix rooted from the empty-defaulting input "
@@ -405,13 +409,24 @@ RULES: tuple[RuleDefinition, ...] = (
             "*called*; P038 checks that what it uploads is rooted correctly.  An app\n"
             "can pass P030 and still fail P038.\n"
             "\n"
-            "This is a WARN (not BLOCK): the failure is a silent zero-asset publish,\n"
-            "not a hard crash, and the heuristic is deliberately narrow (it keys on\n"
-            "the ``application_name`` input field feeding an ``artifacts/apps``\n"
-            "literal).  It does NOT catch every mis-rooting — an app that forwards an\n"
-            "empty ``output_prefix`` input field without an ``artifacts/apps`` literal\n"
-            "is indistinguishable from a correct app statically and is left to\n"
-            "runtime/e2e detection.\n"
+            "This is a BLOCK, on the same grounds as P030: the failure is a silent\n"
+            "zero-asset publish in a customer tenant, reported as a successful run.\n"
+            "That it is not a hard crash is the reason it blocks rather than a reason\n"
+            "it does not — a crash announces itself, this does not.\n"
+            "\n"
+            "The heuristic is deliberately narrow (it keys on the ``application_name``\n"
+            "input field feeding an ``artifacts/apps`` literal), but narrow here means\n"
+            "**under**-inclusive, not imprecise: it does NOT catch every mis-rooting —\n"
+            "an app that forwards an empty ``output_prefix`` input field without an\n"
+            "``artifacts/apps`` literal is indistinguishable from a correct app\n"
+            "statically and is left to runtime/e2e detection.  A rule that misses\n"
+            "cases can still block the cases it does name; the shape it flags is\n"
+            "wrong on the wire, not a matter of taste.\n"
+            "\n"
+            "Like every SDR check, this rule honours no inline suppression (the SDR\n"
+            "checks build their ``Finding`` objects directly and never parse\n"
+            "``# conformance: ignore`` directives).  The exit is the remediation\n"
+            "below, which is a one-line change to where the prefix is rooted.\n"
             "\n"
             "**Remediation:** root the object-store prefix from ``APPLICATION_NAME`` /\n"
             "``self._app_name`` (or use ``WORKFLOW_OUTPUT_PATH_TEMPLATE.format(\n"
@@ -427,7 +442,7 @@ RULES: tuple[RuleDefinition, ...] = (
         id="P039",
         scope=RuleScope.APP,
         name="SdrAgentJsonDroppedByInputContract",
-        tier=EnforcementTier.WARN,
+        tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="sdr-readiness",
         autofixable=False,
@@ -443,7 +458,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "{{agent-json}}). This is distinct from P029 (manifest side) and P037 "
             "(code resolves by guid only): here the manifest and code are fine but the "
             "typed contract eats the field (observed for a BI connector in fleet "
-            "testing)."
+            "testing). "
+            "Customer impact: in agent mode the extraction never receives the "
+            "customer's credentials, so their crawl either fails outright or completes "
+            "green with zero assets in their catalog — and because the manifest and "
+            "the connector code both look correct, nothing on our side points at the "
+            "cause until the customer asks where their metadata went."
         ),
         short_description=(
             "SDR generated extract-input contract drops the forwarded agent_json "
@@ -474,10 +494,23 @@ RULES: tuple[RuleDefinition, ...] = (
             "This is orthogonal to P029 (which checks the *manifest*) and P037 (which\n"
             "checks that the *code* consumes ``agent_json``): all three must be clean.\n"
             "\n"
-            "This is a WARN (not BLOCK): the heuristic reads the generated contract's\n"
-            "declared bases, fields, and model config; an app that receives\n"
-            "``agent_json`` through a base the heuristic does not recognise could be\n"
-            "flagged.  Review before suppressing.\n"
+            "This is a BLOCK: agent-mode extraction with no credentials is a\n"
+            "zero-asset run in a customer tenant, and all three conditions the check\n"
+            "requires must hold together before it fires — a bare ``Input`` base, no\n"
+            "``agent_json`` field, and extra fields rejected.  Any one of them being\n"
+            "false clears the finding.\n"
+            "\n"
+            "Residual imprecision, stated plainly: the heuristic reads the generated\n"
+            "contract's *declared* bases, fields, and model config, so an app that\n"
+            "receives ``agent_json`` through a custom intermediate base the heuristic\n"
+            "does not resolve would be flagged.  The surface this runs against is\n"
+            "toolkit-**generated** (``AppInputContract`` in a generated ``_input.py``),\n"
+            "where that shape does not arise from the standard templates; and like\n"
+            "every SDR check this rule honours no inline suppression, so the exits are\n"
+            "the three remediations below.  Each of them is correct on its own merits\n"
+            "whether or not the finding was precise: declaring ``agent_json`` on the\n"
+            "contract is what makes the forwarded field part of the app's typed\n"
+            "surface instead of something it happens to tolerate.\n"
             "\n"
             "**Remediation:** declare ``agent_json`` on the extract-input contract in\n"
             "``contract/app.pkl`` and regenerate, subclass the SDK ``ExtractionInput``\n"

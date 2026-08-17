@@ -30,7 +30,11 @@ These are deterministic *proxy* signals — a stale lock (K003), a missing outpu
 (K004), or a stripped provenance banner (K005). They cannot prove full content
 freshness (a hand-edit that keeps the banner is invisible to a static scanner);
 that guarantee belongs to the CI regenerate-and-diff freshness gate. All three
-are WARN and APP-scoped, and no-op on any repo without a ``contract/`` directory.
+are APP-scoped and no-op on any repo without a ``contract/`` directory. K003 is
+BLOCK — a pin that disagrees with its lock means the committed artifacts were
+generated from a toolkit version the contract no longer claims, which is the
+route the K009/K011 customer-facing breakages travel; K004 and K005 stay WARN as
+hygiene proxies.
 
 Manifest-vs-contract field validation (BLDX-1527)
 --------------------------------------------------
@@ -273,7 +277,7 @@ RULES: tuple[RuleDefinition, ...] = (
         id="K003",
         scope=RuleScope.APP,
         name="ContractLockDrift",
-        tier=EnforcementTier.WARN,
+        tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         autofixable=False,
@@ -290,7 +294,13 @@ RULES: tuple[RuleDefinition, ...] = (
             "on bot bumps (regenerating the lock and artifacts in the same PR via "
             "postUpgradeTasks), but a manual pin edit bypasses it entirely.  Comparing "
             "the two files is a pure, deterministic text check that needs no pkl "
-            "toolchain, so it catches the drift the moment it lands (BLDX-1414)."
+            "toolchain, so it catches the drift the moment it lands (BLDX-1414). "
+            "Customer impact: the artifacts the customer installs were generated from "
+            "a toolkit version the contract no longer claims, so the manifest, "
+            "contract and marketplace record they receive can each be a version behind "
+            "what was reviewed — this is the gap the K009 and K011 breakages reach "
+            "customers through, and it hides them by making the committed artifacts "
+            "look freshly generated."
         ),
         short_description=(
             "contract/PklProject pin does not match the resolved version in "

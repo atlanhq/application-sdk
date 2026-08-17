@@ -17,7 +17,7 @@ Suppress a finding on the violating line or the line directly above it:
 |---|---|---|---|---|---|---|
 | [K001](#k001) | `ContractAmendsLegacyModule` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
 | [K002](#k002) | `LegacyContractApi` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
-| [K003](#k003) | `ContractLockDrift` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
+| [K003](#k003) | `ContractLockDrift` | `block` | `app` | `contract-toolkit` | — | 0.9.0 |
 | [K004](#k004) | `MissingGeneratedArtifact` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
 | [K005](#k005) | `GeneratedArtifactBannerStripped` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
 | [K006](#k006) | `ManifestContractFieldMismatch` | `warn` | `app` | `contract-toolkit` | — | 0.13.0 |
@@ -148,7 +148,7 @@ comment-only line directly above it.
 
 ## K003 — `ContractLockDrift` {#k003}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `block` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.9.0
 
 > contract/PklProject pin does not match the resolved version in PklProject.deps.json — re-resolve the lock
 
@@ -161,7 +161,11 @@ claims.  The self-hosted Renovate runner keeps these two in sync on bot bumps
 (regenerating the lock and artifacts in the same PR via postUpgradeTasks), but a manual
 pin edit bypasses it entirely.  Comparing the two files is a pure, deterministic text
 check that needs no pkl toolchain, so it catches the drift the moment it lands
-(BLDX-1414).
+(BLDX-1414). Customer impact: the artifacts the customer installs were generated from a
+toolkit version the contract no longer claims, so the manifest, contract and marketplace
+record they receive can each be a version behind what was reviewed — this is the gap the
+K009 and K011 breakages reach customers through, and it hides them by making the
+committed artifacts look freshly generated.
 
 A dependency pinned in `contract/PklProject` resolves to a different version in
 `contract/PklProject.deps.json` (or the lock file is missing / does not contain the

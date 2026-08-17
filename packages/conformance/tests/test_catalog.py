@@ -85,6 +85,44 @@ def test_catalog_block_rules_state_customer_impact() -> None:
     )
 
 
+#: Phrases that *argue for* the WARN tier, as opposed to merely mentioning it.
+#: A BLOCK rule may legitimately say "hence BLOCK, not WARN" or "promoted from
+#: warn to block" — that is a tier reference. These are justifications, and a
+#: BLOCK rule carrying one publishes a doc page whose tier column and body
+#: disagree (``gen-rule-docs`` renders both from the same definition).
+_WARN_JUSTIFYING_PHRASES = (
+    "this is a warn",
+    "land as ``warn``",
+    "warn (not block)",
+    "warn (new-rule tier policy)",
+    "warn (per the new-rule tier policy)",
+)
+
+
+def test_catalog_block_rules_carry_no_warn_justifying_prose() -> None:
+    """A BLOCK rule's own prose must not argue for WARN.
+
+    Promotions are easy to do halfway: flip the tier and leave the paragraph
+    that explains why the rule is only a warning. The generated doc renders
+    tier and prose side by side, so the result is a page that contradicts
+    itself — and nothing else catches it. P030 hit exactly this in FND-311;
+    this generalises that rule-specific pin to the whole catalog.
+    """
+    rules = load_catalog()
+    offenders = [
+        (rule.id, phrase)
+        for rule in rules
+        if rule.tier is EnforcementTier.BLOCK
+        for phrase in _WARN_JUSTIFYING_PHRASES
+        if phrase in f"{rule.rationale}\n{rule.full_description}".lower()
+    ]
+    assert not offenders, (
+        "BLOCK rules whose prose still argues for WARN: "
+        f"{offenders} — rewrite the paragraph to say why the rule blocks, or "
+        "return the rule to WARN"
+    )
+
+
 def test_catalog_all_have_scope() -> None:
     """Every rule must declare a valid RuleScope (sdk / app / both)."""
     rules = load_catalog()

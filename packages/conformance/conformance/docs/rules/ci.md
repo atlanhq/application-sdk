@@ -107,13 +107,9 @@ holding its path), `curl --retry`, and `wget --tries` / `--retry-on-http-error`.
 errors but not an HTTP 503, which is the failure this rule exists for. Tuning-only
 companion flags (`curl --retry-delay` / `--retry-max-time`, `wget --waitretry`) never
 count on their own: they pace a retry but do not enable one — `wget --waitretry=10`
-without `--tries` still makes exactly one attempt.
-
-Flags are evaluated per command segment (the line is split on `&&` / `||` / `;`; a pipe
-does not split — the fetcher and the shell/`tar` it feeds are one command). So a
-complete retry on one `curl` does not excuse an incomplete retry on a sibling `curl` in
-the same logical line, and a wrapper at the head of a compound command does not cover
-fetchers in later segments.
+without `--tries` still makes exactly one attempt. Flags are evaluated per command
+segment (split on `&&` / `||` / `;`; a pipe does not split), so one curl's complete
+retry does not excuse a sibling curl's incomplete one.
 
 Not flagged: fetches whose body is read rather than installed (a version lookup, a `-o
 /dev/null` health probe — those sit in their own poll loops), and localhost URLs.

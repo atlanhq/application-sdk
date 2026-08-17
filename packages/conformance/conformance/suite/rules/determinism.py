@@ -122,7 +122,7 @@ RULES: tuple[RuleDefinition, ...] = (
         id="P022",
         scope=RuleScope.BOTH,
         name="UnawaitedCoroutine",
-        tier=EnforcementTier.WARN,
+        tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="async-correctness",
         autofixable=False,
@@ -134,7 +134,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "'self.fetch(x)' as a bare statement instead of 'await self.fetch(x)' — "
             "constructs the coroutine and immediately discards it, so the work never "
             "runs and the bug is silent (no error, no result). This is the most "
-            "common way apps misuse the SDK's async surface."
+            "common way apps misuse the SDK's async surface. "
+            "Customer impact: whatever the dropped call did — a fetch, an upload, a "
+            "state write — simply does not happen, so the customer gets a green run "
+            "with results silently missing from their catalog and no error anywhere "
+            "that explains the gap."
         ),
         short_description="A same-class async method is called without await (dropped coroutine)",
         full_description=(
@@ -146,8 +150,13 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n"
             "Scope is intentionally narrow — a bare ``self.<async-method>()``\n"
             "statement inside an ``async def`` — so the target is provably a\n"
-            "coroutine and the finding is false-positive-free.  Land as ``WARN``;\n"
-            "suppress with ``# conformance: ignore[P022] <reason>``.\n"
+            "coroutine and the finding is false-positive-free.  That precision is\n"
+            "why this is a ``BLOCK``: there is no reading of a discarded coroutine\n"
+            "under which the work was meant to be skipped, so the only resolutions\n"
+            "are the real ones — ``await`` it, or schedule it explicitly if\n"
+            "concurrency is intended.  Suppress with\n"
+            "``# conformance: ignore[P022] <reason>`` only where the constructed\n"
+            "coroutine is deliberately discarded and that is provably harmless.\n"
         ),
         help_uri=f"{_HELP_BASE}#p022",
     ),

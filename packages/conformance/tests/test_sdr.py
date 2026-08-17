@@ -808,7 +808,7 @@ _PATH_APP_NAME_NOT_IN_PATH = (
 def test_p038_rule_metadata() -> None:
     rule = get_rule("P038")
     assert rule.name == "SdrArtifactMisrooted"
-    assert rule.tier == EnforcementTier.WARN
+    assert rule.tier == EnforcementTier.BLOCK
     assert rule.scope == RuleScope.APP
     assert rule.autofixable is False
     assert rule.rationale.strip()
@@ -924,7 +924,7 @@ _MANIFEST_AGENT_TOPLEVEL = _MANIFEST_WITH_AGENT_JSON  # carries {{agent-json}}
 def test_p039_rule_metadata() -> None:
     rule = get_rule("P039")
     assert rule.name == "SdrAgentJsonDroppedByInputContract"
-    assert rule.tier == EnforcementTier.WARN
+    assert rule.tier == EnforcementTier.BLOCK
     assert rule.scope == RuleScope.APP
     assert rule.autofixable is False
     assert rule.rationale.strip()

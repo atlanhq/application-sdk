@@ -1550,13 +1550,18 @@ def test_d010_suppressed_inline_directive(tmp_path: Path) -> None:
 
 
 def test_d010_rule_metadata() -> None:
-    """WARN is what keeps a new rule off the dogfooded gate — assert it per rule."""
+    """BLOCK since FND-311: the finding names a guaranteed runtime ImportError.
+
+    It landed as WARN under the new-rule tier policy carrying the note "treat it
+    as an error"; the tier now carries that instead of the prose. Pinned per rule
+    because the tier is what decides whether release-certify stops the app.
+    """
     from conformance.suite.rules import get_rule
     from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 
     rule = get_rule("D010")
     assert rule.name == "QueryTransformerWithoutDuckdb"
-    assert rule.tier == EnforcementTier.WARN
+    assert rule.tier == EnforcementTier.BLOCK
     assert rule.scope == RuleScope.APP
     assert rule.rationale.strip()
 

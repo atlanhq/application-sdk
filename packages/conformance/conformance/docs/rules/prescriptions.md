@@ -44,7 +44,7 @@ reassigned.
 | [P019](#p019) | `RawHttpToAtlan` | `warn` | `both` | `client-seam` | — | 0.7.0 |
 | [P020](#p020) | `NonDeterministicPrimitiveInWorkflow` | `warn` | `both` | `determinism` | — | 0.8.0 |
 | [P021](#p021) | `SideEffectIoInWorkflow` | `warn` | `both` | `determinism` | — | 0.8.0 |
-| [P022](#p022) | `UnawaitedCoroutine` | `warn` | `both` | `async-correctness` | — | 0.8.0 |
+| [P022](#p022) | `UnawaitedCoroutine` | `block` | `both` | `async-correctness` | — | 0.8.0 |
 | [P023](#p023) | `BlockingCallInAsyncDef` | `warn` | `both` | `async-correctness` | — | 0.8.0 |
 | [P024](#p024) | `SyncAtlanClientInApp` | `warn` | `both` | `async-correctness` | — | 0.8.0 |
 | [P025](#p025) | `AppNameContractCodeDrift` | `block` | `app` | `app-name-alignment` | — | 0.9.0 |
@@ -54,14 +54,14 @@ reassigned.
 | [P029](#p029) | `SdrManifestMissingAgentJson` | `block` | `app` | `sdr-readiness` | — | 0.9.0 |
 | [P030](#p030) | `SdrUploadNotCalled` | `block` | `app` | `sdr-readiness` | — | 0.9.0 |
 | [P031](#p031) | `SharedDefaultExecutorOffload` | `warn` | `both` | `async-correctness` | — | 0.13.0 |
-| [P032](#p032) | `ReservedPreflightActivityName` | `warn` | `app` | `preflight-gate` | — | 0.15.0 |
+| [P032](#p032) | `ReservedPreflightActivityName` | `block` | `app` | `preflight-gate` | — | 0.15.0 |
 | [P033](#p033) | `DuplicateInWorkflowPreflight` | `warn` | `app` | `preflight-gate` | — | 0.15.0 |
 | [P034](#p034) | `UntypedPreflightCheckFailure` | `warn` | `app` | `preflight-gate` | — | 0.15.0 |
 | [P035](#p035) | `PreflightMetadataContractParity` | `warn` | `app` | `preflight-gate` | — | 0.15.0 |
 | [P036](#p036) | `HandRolledProcessIsolation` | `warn` | `both` | `async-correctness` | — | 0.15.0 |
 | [P037](#p037) | `SdrAgentJsonNotConsumed` | `warn` | `app` | `sdr-readiness` | — | 0.16.0 |
-| [P038](#p038) | `SdrArtifactMisrooted` | `warn` | `app` | `sdr-readiness` | — | 0.16.0 |
-| [P039](#p039) | `SdrAgentJsonDroppedByInputContract` | `warn` | `app` | `sdr-readiness` | — | 0.16.0 |
+| [P038](#p038) | `SdrArtifactMisrooted` | `block` | `app` | `sdr-readiness` | — | 0.16.0 |
+| [P039](#p039) | `SdrAgentJsonDroppedByInputContract` | `block` | `app` | `sdr-readiness` | — | 0.16.0 |
 | [P040](#p040) | `TransformTemplateReservedKeyword` | `warn` | `app` | `transform-templates` | — | 0.18.0 |
 | [P041](#p041) | `SdrHardPreflightGate` | `warn` | `app` | `sdr-readiness` | — | 0.18.0 |
 | [P042](#p042) | `SdrHandRolledUploadBridge` | `warn` | `app` | `sdr-readiness` | — | 0.18.0 |
@@ -746,7 +746,7 @@ conformance: ignore[P021] <reason>`.
 
 ## P022 — `UnawaitedCoroutine` {#p022}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.8.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.8.0
 
 > A same-class async method is called without await (dropped coroutine)
 
@@ -754,7 +754,10 @@ conformance: ignore[P021] <reason>`.
 coroutine. Calling one like a sync function — 'self.fetch(x)' as a bare statement
 instead of 'await self.fetch(x)' — constructs the coroutine and immediately discards it,
 so the work never runs and the bug is silent (no error, no result). This is the most
-common way apps misuse the SDK's async surface.
+common way apps misuse the SDK's async surface. Customer impact: whatever the dropped
+call did — a fetch, an upload, a state write — simply does not happen, so the customer
+gets a green run with results silently missing from their catalog and no error anywhere
+that explains the gap.
 
 A bare expression statement calls a same-class `async def` method via `self.<name>(...)`
 without `await` and without wrapping it in `asyncio.create_task` / `asyncio.gather`.
@@ -763,8 +766,11 @@ Add `await` (or schedule it explicitly if concurrency is intended).
 
 Scope is intentionally narrow — a bare `self.<async-method>()` statement inside an
 `async def` — so the target is provably a coroutine and the finding is
-false-positive-free.  Land as `WARN`; suppress with `# conformance: ignore[P022]
-<reason>`.
+false-positive-free.  That precision is why this is a `BLOCK`: there is no reading of a
+discarded coroutine under which the work was meant to be skipped, so the only
+resolutions are the real ones — `await` it, or schedule it explicitly if concurrency is
+intended.  Suppress with `# conformance: ignore[P022] <reason>` only where the
+constructed coroutine is deliberately discarded and that is provably harmless.
 
 ---
 
@@ -1180,14 +1186,17 @@ Land as `WARN`; suppress a reviewed exception with `# conformance: ignore[P031]
 
 ## P032 — `ReservedPreflightActivityName` {#p032}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.15.0
+**Tier:** `block` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.15.0
 
 > An app @task registers the 'preflight' activity name reserved by the SDK gate
 
 **Rationale:** The SDK injects a mandatory pre-extraction gate as the activity '{app_name}:preflight'.
 An app @task that also registers the 'preflight' activity name collides with it: the
 worker raises WorkerActivityNameCollisionError at boot and never starts. Catching the
-collision statically surfaces it in the PR instead of on the first deploy.
+collision statically surfaces it in the PR instead of on the first deploy. Customer
+impact: the worker never comes up, so every workflow the customer runs on that app is
+down from the moment the release deploys into their tenant — a full-app outage caused by
+a name collision no test exercises and no build gate sees.
 
 The SDK reserves the activity name `{app_name}:preflight` for the injected preflight
 gate and registers it unconditionally on the worker. An app `@task` whose effective
@@ -1363,7 +1372,7 @@ the agent-aware call.
 
 ## P038 — `SdrArtifactMisrooted` {#p038}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
+**Tier:** `block` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
 
 > SDR object-store prefix rooted from the empty-defaulting input application_name field instead of APPLICATION_NAME
 
@@ -1374,7 +1383,10 @@ workflow-input application_name field mis-roots: that field's contract default i
 AE forwards only manifest-declared args, so it stays empty and artifacts land under
 'artifacts/apps//workflows/...' (empty app segment). self.upload() then succeeds but 0
 assets publish — P030 passes the app (upload IS called), so this distinct rule catches
-the wrong-root case (observed for a document-store connector in fleet testing).
+the wrong-root case (observed for a document-store connector in fleet testing). Customer
+impact: the same data loss disguised as success that P030 polices, one seam later — the
+run goes green, the upload reports success, and zero assets reach the customer's catalog
+because the publish step reads a prefix nothing was ever written to.
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, the object-store
 output path/prefix (`artifacts/apps/<identity>/workflows/...`) must be rooted from the
@@ -1393,12 +1405,23 @@ success but the publish app finds 0 assets at the expected prefix.
 This is complementary to P030: P030 checks that `self.upload()` is *called*; P038 checks
 that what it uploads is rooted correctly.  An app can pass P030 and still fail P038.
 
-This is a WARN (not BLOCK): the failure is a silent zero-asset publish, not a hard
-crash, and the heuristic is deliberately narrow (it keys on the `application_name` input
-field feeding an `artifacts/apps` literal).  It does NOT catch every mis-rooting — an
-app that forwards an empty `output_prefix` input field without an `artifacts/apps`
-literal is indistinguishable from a correct app statically and is left to runtime/e2e
-detection.
+This is a BLOCK, on the same grounds as P030: the failure is a silent zero-asset publish
+in a customer tenant, reported as a successful run. That it is not a hard crash is the
+reason it blocks rather than a reason it does not — a crash announces itself, this does
+not.
+
+The heuristic is deliberately narrow (it keys on the `application_name` input field
+feeding an `artifacts/apps` literal), but narrow here means **under**-inclusive, not
+imprecise: it does NOT catch every mis-rooting — an app that forwards an empty
+`output_prefix` input field without an `artifacts/apps` literal is indistinguishable
+from a correct app statically and is left to runtime/e2e detection.  A rule that misses
+cases can still block the cases it does name; the shape it flags is wrong on the wire,
+not a matter of taste.
+
+Like every SDR check, this rule honours no inline suppression (the SDR checks build
+their `Finding` objects directly and never parse `# conformance: ignore` directives).
+The exit is the remediation below, which is a one-line change to where the prefix is
+rooted.
 
 **Remediation:** root the object-store prefix from `APPLICATION_NAME` / `self._app_name`
 (or use `WORKFLOW_OUTPUT_PATH_TEMPLATE.format( application_name=APPLICATION_NAME,
@@ -1409,7 +1432,7 @@ empty-defaulting workflow arg.
 
 ## P039 — `SdrAgentJsonDroppedByInputContract` {#p039}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
+**Tier:** `block` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.16.0
 
 > SDR generated extract-input contract drops the forwarded agent_json (bare Input subclass, no agent_json field, extra fields rejected)
 
@@ -1420,7 +1443,11 @@ the extract input's credential_ref is then None and extraction fails with
 PipelineContractError and 0 assets, even though the manifest is P029-clean (declares
 {{agent-json}}). This is distinct from P029 (manifest side) and P037 (code resolves by
 guid only): here the manifest and code are fine but the typed contract eats the field
-(observed for a BI connector in fleet testing).
+(observed for a BI connector in fleet testing). Customer impact: in agent mode the
+extraction never receives the customer's credentials, so their crawl either fails
+outright or completes green with zero assets in their catalog — and because the manifest
+and the connector code both look correct, nothing on our side points at the cause until
+the customer asks where their metadata went.
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml` whose generated
 manifest declares agent routing (the `{{agent-json}}` placeholder at the extract-args
@@ -1443,9 +1470,20 @@ The extract input's `credential_ref` is then `None` and extraction fails with
 This is orthogonal to P029 (which checks the *manifest*) and P037 (which checks that the
 *code* consumes `agent_json`): all three must be clean.
 
-This is a WARN (not BLOCK): the heuristic reads the generated contract's declared bases,
-fields, and model config; an app that receives `agent_json` through a base the heuristic
-does not recognise could be flagged.  Review before suppressing.
+This is a BLOCK: agent-mode extraction with no credentials is a zero-asset run in a
+customer tenant, and all three conditions the check requires must hold together before
+it fires — a bare `Input` base, no `agent_json` field, and extra fields rejected.  Any
+one of them being false clears the finding.
+
+Residual imprecision, stated plainly: the heuristic reads the generated contract's
+*declared* bases, fields, and model config, so an app that receives `agent_json` through
+a custom intermediate base the heuristic does not resolve would be flagged.  The surface
+this runs against is toolkit-**generated** (`AppInputContract` in a generated
+`_input.py`), where that shape does not arise from the standard templates; and like
+every SDR check this rule honours no inline suppression, so the exits are the three
+remediations below.  Each of them is correct on its own merits whether or not the
+finding was precise: declaring `agent_json` on the contract is what makes the forwarded
+field part of the app's typed surface instead of something it happens to tolerate.
 
 **Remediation:** declare `agent_json` on the extract-input contract in
 `contract/app.pkl` and regenerate, subclass the SDK `ExtractionInput` family (which

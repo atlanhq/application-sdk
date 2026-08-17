@@ -37,13 +37,14 @@ findings in the working tree, classified by disposition and remediability.
 The fingerprint-set of all unsuppressed FAILING/WARNING K-series results in the
 current working tree, as reported by `suite.runner --series K`.
 
-All K-series rules are WARN-tier **except K009, K011, and K012 (BLOCK)**.  So in
-**default** mode this facet is empty *unless* a K009 (unresolved scaffold
-placeholder), K011 (missing `app_id`), or K012 (missing `generate` poe task)
-finding is present — those are FAILING results that fail the gate and must be
-remediated in default mode.  In **strict** mode the fingerprint-set also includes the
-unsuppressed WARNING results (K003/K004/K005/K007/K008/K010/K014), which is where the
-rest of K-series remediation runs.
+All K-series rules are WARN-tier **except K003, K009, K011, and K012 (BLOCK)**.
+So in **default** mode this facet is empty *unless* a K003 (pin/lock drift),
+K009 (unresolved scaffold placeholder), K011 (missing `app_id`), or K012
+(missing `generate` poe task) finding is present — those are FAILING results
+that fail the gate and must be remediated in default mode.  In **strict** mode
+the fingerprint-set also includes the unsuppressed WARNING results
+(K004/K005/K007/K008/K010/K014), which is where the rest of K-series
+remediation runs.
 
 The active scope decides which rules can appear: K001–K014 are all `scope=APP`,
 so they surface only on consumer app repos.  The runner auto-detects scope, so
