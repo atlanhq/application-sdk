@@ -102,38 +102,21 @@ jobs:
           fi
           python3 .github/scripts/sdk_changes_non_md.py
 
-  # Required status check — the JOB has no `if:` so it always runs and always
-  # concludes. The real validation step is gated to PR (non-fork) events: the
-  # webiny action needs ORG_PAT_GITHUB, which fork PRs don't get, and merge_group
-  # entries have no PR commits to inspect. On those paths a no-op success step
-  # keeps the required context green instead of leaving it "skipped" (which would
-  # block fork PRs / the merge queue). The PR title — which becomes the squash
-  # commit subject — is independently enforced by "Validate PR title".
-  commits:
-    name: Conventional Commits
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true
-        with:
-          fetch-depth: 0
-      - name: Mint fleet App token
-        id: app-token
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true
-        continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
-        with:
-          app-id: ${{ secrets.FLEET_APP_ID }}
-          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-          owner: atlanhq
-          repositories: ${{ github.event.repository.name }}
-      - uses: webiny/action-conventional-commits@7f91b1595ca1951cdb671ddc9f07a49081ec5b69 # v1.4.2
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true
-        with:
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
-      - name: Skip on fork PR / merge_group
-        if: github.event_name == 'merge_group' || github.event.pull_request.head.repo.fork == true
-        run: echo "Commit-convention check not applicable here (fork PR or merge_group); PR title is enforced by Validate PR title."
+  # There is deliberately NO per-commit convention check here. This repo is
+  # squash-merge-only (`allow_squash_merge` is the only method enabled) with
+  # `squash_merge_commit_title: PR_TITLE` and `squash_merge_commit_message:
+  # BLANK`, so the branch's individual commit subjects are discarded at merge
+  # and never reach main. A gate on them polices text that cannot appear in the
+  # history, the changelog, or the release-version bump — all three of which
+  # read squash subjects, i.e. PR titles.
+  #
+  # The string that DOES survive is enforced, by two checks:
+  #   * "Validate PR title" (pr-title-convention.yaml) — this repo's own
+  #     path-aware rules, which are stricter than plain conventional commits
+  #     because the title drives which component's release/changelog a merge
+  #     lands in (application_sdk/ vs contract-toolkit/ vs packages/conformance/).
+  #   * the fleet's commits.yaml reusable — the path-agnostic grammar guard the
+  #     connector repos call. Not used here; this repo has the stricter one.
 
   docstr:
     name: Docstring Coverage
@@ -197,7 +180,7 @@ jobs:
 
   # NOTE: SDK unit / integration / storage-emulator tests moved to
   # sdk-tests-reusable.yaml and now run under the composing sdk-gate.yaml.
-  # The orthogonal checks below (commits, docstring coverage, Trivy scans) and
+  # The orthogonal checks below (docstring coverage, Trivy scans) and
   # the connector e2e dispatch stay here.
 
   matrix-builder:

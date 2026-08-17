@@ -235,3 +235,39 @@ def test_fail_step_still_fires_on_a_fork_pr() -> None:
         evaluate(gate, _contexts(event="pull_request", violation="true", fork=True))
         is True
     )
+
+
+# ── This repo polices the PR title, never the branch's commits ───────────────
+#
+# application-sdk is squash-merge-only, with the squash subject taken from the
+# PR title and the squash body left blank, so a branch's individual commit
+# subjects are discarded at merge. A per-commit convention gate here blocks on
+# text that cannot reach main, the changelog, or the version bump — and it did:
+# a correctly-titled PR stayed red on a WIP commit subject. Dropping it is only
+# safe while the title itself is still gated, so both halves of that trade are
+# pinned here rather than left to a comment.
+
+_PR_CHECKS = _REPO_ROOT / ".github/workflows/pull_request.yaml"
+_TITLE_GUARD = _REPO_ROOT / ".github/workflows/pr-title-convention.yaml"
+
+
+def test_pr_checks_does_not_gate_individual_commit_subjects() -> None:
+    body = _PR_CHECKS.read_text(encoding="utf-8")
+    assert "action-conventional-commits" not in body, (
+        "PR Checks gates every commit subject on the branch again. Those "
+        "subjects are dropped by the squash merge, so this can only ever fail "
+        "a PR whose merged history would have been fine. Gate the PR title "
+        "instead — pr-title-convention.yaml already does."
+    )
+
+
+def test_the_pr_title_is_still_gated() -> None:
+    """The removal above is conditional on this check existing."""
+    jobs = _load(_TITLE_GUARD)["jobs"]
+    names = {job.get("name") for job in jobs.values()}
+    assert "Validate PR title" in names, (
+        "pr-title-convention.yaml no longer publishes a 'Validate PR title' "
+        "check. With the per-commit gate gone, nothing validates the string "
+        "that becomes the squash subject — which drives both the changelog "
+        "and the release version bump."
+    )
