@@ -248,30 +248,15 @@ class CredentialRef(BaseModel, frozen=True):
             stacklevel=2,
         )
 
-        from application_sdk.credentials.spec import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
-            AgentCredentialSpec,
+        from application_sdk.credentials.ingress import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+            normalize_agent_json,
         )
 
         method = (workflow_args.get("extraction_method") or "").strip().lower()
-        raw_agent = workflow_args.get("agent_json")
 
-        # Build a spec from whatever shape agent_json arrived in.
-        # AgentCredentialSpec's model_validator handles str, dict, and spec.
-        spec: AgentCredentialSpec | None = None
-        if raw_agent is not None:
-            if isinstance(raw_agent, AgentCredentialSpec):
-                spec = raw_agent
-            else:
-                try:
-                    spec = AgentCredentialSpec.model_validate(raw_agent)
-                # conformance: ignore[E004] probe/feature-detect: parse failure is benign; caller treats unparseable agent_json as absent
-                except Exception:
-                    logger.debug(
-                        "Failed to parse agent_json, treating as unpopulated",
-                        exc_info=True,
-                    )
-                    spec = None
-
+        # Raw workflow args, so agent_json may still be a JSON string, a dict, a
+        # spec, or a placeholder. One ingress normaliser owns all of that.
+        spec = normalize_agent_json(workflow_args.get("agent_json"))
         agent_populated = spec is not None and spec.is_populated()
 
         if method == "agent" and agent_populated:

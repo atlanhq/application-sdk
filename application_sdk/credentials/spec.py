@@ -123,7 +123,15 @@ class AgentCredentialSpec(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _accept_string_or_dict(cls, data: Any) -> Any:
-        """Accept a JSON string, dict, or existing spec instance."""
+        """Accept a JSON string, dict, or existing spec instance.
+
+        The type layer of the field's ingress, and the only one: this is what
+        :func:`application_sdk.credentials.ingress.normalize_agent_json` calls,
+        and that function is the only lenient entry point — it turns the
+        exception raised here into "no agent reference". Readers take the typed
+        field; a reader catching a parse error is a guard that should have been
+        an ingress call.
+        """
         if isinstance(data, str):
             if not data or data.strip() in ("", "{}"):
                 return {"agent-name": ""}
