@@ -490,6 +490,96 @@ def prepare_query(
         return None
 
 
+#: Characters that make a filter key a *pattern* rather than a name. A key
+#: containing any of these outside its anchors cannot be used as a literal
+#: database name, so discovery has to go to SQL instead.
+_REGEX_META_CHARS = frozenset(r"\.^$*+?{}[]()|")
+
+
+def _names_a_single_database_each(filter_keys: list[str]) -> bool:
+    """Whether every include-filter key names one database outright.
+
+    The include-filter's keys are regular expressions. Exactly one shape has
+    itself as its sole match: a **fully anchored** literal, ``^mydb$``, which is
+    what the Atlan UI emits. For that key, using ``mydb`` as a database name
+    directly is equivalent to matching it and saves a round trip.
+
+    Every other shape matches a *set* whose members are only knowable by asking
+    the source, so all of them must fall through to SQL discovery:
+
+    * metacharacters -- ``^bench.*$``, ``^(a|b)$``;
+    * a partial anchor -- ``^bench`` means *starts with*, ``bench$`` means *ends
+      with*;
+    * no anchor at all -- ``bench`` means *contains*.
+
+    The last two are the subtle ones, and getting them wrong is what the
+    phantom-database bug actually was: ``^benchmark_`` carries no
+    metacharacters, so a metacharacter-only check accepts it and hands back the
+    non-existent database ``benchmark_`` -- the same wrong name reached by a
+    different route. The anchors are load-bearing, not decoration.
+
+    (This is the same test as ``_anchored_literal`` in atlan-trino-app's
+    ``app/handlers/trino.py``, which gets it right for building SQL predicates.)
+    """
+    for key in filter_keys:
+        if not (key.startswith("^") and key.endswith("$")):
+            return False
+        core = key[1:-1]
+        if not core or any(char in _REGEX_META_CHARS for char in core):
+            return False
+    return True
+
+
+def _without_include_filter(workflow_args: dict[str, Any]) -> dict[str, Any]:
+    """``workflow_args`` with ``metadata["include-filter"]`` removed.
+
+    Shallow copies both levels so the caller's dict is not mutated -- these args
+    are shared with the rest of the workflow, and stripping a key in place would
+    silently unscope every later query built from them.
+    """
+    metadata = {
+        key: value
+        for key, value in (workflow_args.get("metadata") or {}).items()
+        if key != "include-filter"
+    }
+    return {**workflow_args, "metadata": metadata}
+
+
+def _matches_any_filter_key(database_name: str, filter_keys: list[str]) -> bool:
+    """Whether ``database_name`` matches any include-filter key, as a regex.
+
+    ``re.search`` rather than ``fullmatch``, so the key's own anchors decide the
+    semantics instead of this function imposing them:
+
+    * ``^db$``     -- exactly ``db``
+    * ``^bench``   -- starts with ``bench``, so ``bench_1`` matches
+    * ``bench``    -- contains ``bench``
+    * ``^b.*1$``   -- the pattern, as written
+
+    ``fullmatch`` would silently narrow the middle two to exact matches, which
+    is the same class of mistake as treating a pattern as a name.
+
+    Case-sensitive, matching the ``regexp_like`` predicate this replaces --
+    changing case semantics is a separate decision from fixing the filter.
+
+    A key that is not valid regex falls back to exact comparison against its
+    anchor-stripped form. That is what the caller would previously have received
+    as a literal name, so an unparseable key degrades to the old behaviour
+    rather than dropping the database outright.
+    """
+    for key in filter_keys:
+        try:
+            if re.search(key, database_name):
+                return True
+        except re.error:
+            logger.warning(
+                "Include-filter key is not valid regex; comparing literally: %s", key
+            )
+            if re.sub(r"^[^\w]+|[^\w]+$", "", key) == database_name:
+                return True
+    return False
+
+
 async def get_database_names(
     sql_client, workflow_args, fetch_database_sql
 ) -> list[str] | None:
@@ -514,25 +604,60 @@ async def get_database_names(
         raw_include = normalize_legacy_filter_value(raw_include)
     if isinstance(raw_include, (str, dict)):
         validate_filter_no_sql_injection(raw_include)
-    database_names = parse_filter_input(raw_include)
+    filter_keys = list(parse_filter_input(raw_include))
 
-    database_names = [
-        re.sub(r"^[^\w]+|[^\w]+$", "", database_name)
-        for database_name in database_names
-    ]
-    if not database_names:
-        temp_table_regex_sql = workflow_args.get("metadata", {}).get(
-            "temp-table-regex", ""
-        )
-        prepared_query = prepare_query(
-            query=fetch_database_sql,
-            workflow_args=workflow_args,
-            temp_table_regex_sql=temp_table_regex_sql,
-            use_posix_regex=True,
-        )
-        database_dataframe = await sql_client.get_results(prepared_query)
-        database_names = list(database_dataframe["database_name"])
-    return database_names
+    # Only a key that can match exactly one database may stand in for
+    # discovery. For anything else, stripping the key's non-word characters
+    # yields a string that is neither the pattern nor a database: ``^bench.*$``
+    # becomes ``bench``, which either matches nothing or -- worse -- silently
+    # names a *different*, real database. Discovery would then be skipped
+    # entirely, because the list is non-empty, so the caller crawls that one
+    # made-up name and loses every database the pattern was meant to select.
+    if filter_keys and _names_a_single_database_each(filter_keys):
+        return [
+            re.sub(r"^[^\w]+|[^\w]+$", "", database_name)
+            for database_name in filter_keys
+        ]
+
+    temp_table_regex_sql = workflow_args.get("metadata", {}).get("temp-table-regex", "")
+    # The include-filter is deliberately withheld from the DISCOVERY query and
+    # applied in Python below. It cannot be left in: the SQL builder keeps only
+    # the keys that look like identifiers and drops the rest, so a filter mixing
+    # shapes -- ``{"^prod$": [], "^bench.*$": []}`` -- narrows the predicate to
+    # ``'^(prod)$'`` and the query never returns the ``bench*`` databases at all.
+    # Filtering in Python cannot recover rows the query did not return, so every
+    # database matching a pattern key would be silently lost -- the original
+    # defect again, with a narrower trigger.
+    #
+    # Removing the key leaves the include predicate at its ``'.*'`` default while
+    # the EXCLUDE predicate and temp-table regex are untouched, so exclusion
+    # still happens source-side exactly as before.
+    prepared_query = prepare_query(
+        query=fetch_database_sql,
+        workflow_args=_without_include_filter(workflow_args),
+        temp_table_regex_sql=temp_table_regex_sql,
+        use_posix_regex=True,
+    )
+    database_dataframe = await sql_client.get_results(prepared_query)
+    discovered = list(database_dataframe["database_name"])
+
+    # The prepared query CANNOT be relied on to apply a pattern include-filter.
+    # ``extract_database_names_from_regex_common`` validates each candidate
+    # against an *identifier* pattern and drops anything else, so a key like
+    # ``^bench.*$`` is discarded with a warning and the predicate degrades to
+    # ``'.*'`` -- every database. Handing a pattern to SQL and trusting the
+    # result would turn this function's old failure (crawl one database that
+    # does not exist) into the opposite one (crawl every database, filter
+    # silently ignored), which for a catalog is worse: it collects outside the
+    # scope the caller asked for.
+    #
+    # So the pattern is applied here instead, against the names the source
+    # actually reported. ``atlan-mssql-app`` reached the same conclusion
+    # independently -- its ``get_target_database_names`` falls back to "list all
+    # databases, then filter in Python" for exactly this reason.
+    if not filter_keys:
+        return discovered
+    return [name for name in discovered if _matches_any_filter_key(name, filter_keys)]
 
 
 def parse_filter_input(
