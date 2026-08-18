@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.28.0
-source-sha:    c2d4cc992a0e6aaa5600ff76c3f8bc57b5d0642e
-source-date:   2026-08-17T12:11:56Z
+source-sha:    9a68c70473c847b3e13ae19fb1ed58560828a1a8
+source-date:   2026-08-18T20:07:55+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -23,7 +23,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 11 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 61 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 63 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 21 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
@@ -1029,6 +1029,20 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Import:** `from application_sdk.errors import NotFoundError`
 - **Signature:** `class NotFoundError(*, ...)`
 - **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `ObjectStoreDownloadError`
+
+- **Import:** `from application_sdk.errors import ObjectStoreDownloadError`
+- **Signature:** `class ObjectStoreDownloadError(*, ...)`
+- **Summary:** No local files found and download from object store failed.
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `ObjectStoreReadError`
+
+- **Import:** `from application_sdk.errors import ObjectStoreReadError`
+- **Signature:** `class ObjectStoreReadError(*, ...)`
+- **Summary:** Object store listing returned no files matching the expected extension.
 - **Defined in:** `application_sdk/errors/leaves.py`
 
 #### `PreconditionError`
