@@ -65,7 +65,13 @@ def _run_gh(args: list) -> str:
     on a non-2xx, so the return code — not the presence of output — decides
     whether there is anything worth parsing.
     """
-    result = subprocess.run(["gh", *args], capture_output=True, text=True)
+    try:
+        result = subprocess.run(["gh", *args], capture_output=True, text=True)
+    except OSError as exc:
+        # ``gh`` missing from the PATH (or otherwise unexecutable) must degrade
+        # like every other lookup failure, not crash the step under pipefail.
+        print(f"::warning::gh could not be run: {exc}", file=sys.stderr)
+        return ""
     if result.returncode != 0:
         if result.stderr:
             print(
