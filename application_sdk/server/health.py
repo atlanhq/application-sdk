@@ -145,6 +145,13 @@ class WorkerHealthServer:
         self._started_at: datetime | None = None
         self._last_activity: datetime | None = None
         self._request_count: int = 0
+        # Poll-liveness / recovery state, surfaced in the probe details for
+        # observability (ARUN-1127). These do NOT flip a probe unhealthy: the
+        # restart supervisor self-heals, so we must not let k8s kill a process
+        # that is actively recovering.
+        self._last_poll_ok: datetime | None = None
+        self._reconnecting: bool = False
+        self._consecutive_failures: int = 0
         # Reject non-finite windows to match the env loader
         # (``_load_worker_liveness_max_idle_seconds``): an ``inf`` window is set
         # but can never trip (``idle > inf`` is always False) and ``nan``
@@ -172,6 +179,30 @@ class WorkerHealthServer:
         Call this when the worker processes a task to update liveness tracking.
         """
         self._last_activity = _utc_now()
+
+    def record_poll_ok(self) -> None:
+        """Record that the worker is confirmed to be an active poller.
+
+        Called by the poll-liveness watchdog (``main.py``) on each successful
+        poll check. Unlike ``record_activity`` (which only fires when there is
+        work), this fires even on an idle-but-healthy queue, so it is the true
+        signal that the poll loop is alive. Clears any reconnecting state.
+        """
+        self._last_poll_ok = _utc_now()
+        self._reconnecting = False
+        self._consecutive_failures = 0
+
+    def set_reconnecting(
+        self, reconnecting: bool, consecutive_failures: int = 0
+    ) -> None:
+        """Mark that the poll loop is down and the supervisor is recovering it.
+
+        Surfaced in the ``/live`` and ``/ready`` probe details for
+        observability; deliberately does NOT flip a probe unhealthy — the
+        runtime self-heals, so k8s must not kill a recovering process.
+        """
+        self._reconnecting = reconnecting
+        self._consecutive_failures = consecutive_failures
 
     async def check_health(self) -> HealthStatus:
         """Basic health check - is the process running?
@@ -210,7 +241,14 @@ class WorkerHealthServer:
         return HealthStatus(
             healthy=True,
             message="Worker is ready",
-            details={"identity": self._temporal_client.identity},
+            details={
+                "identity": self._temporal_client.identity,
+                "reconnecting": self._reconnecting,
+                "consecutive_failures": self._consecutive_failures,
+                "last_poll_ok": (
+                    self._last_poll_ok.isoformat() if self._last_poll_ok else None
+                ),
+            },
         )
 
     async def check_live(self) -> HealthStatus:
@@ -247,7 +285,14 @@ class WorkerHealthServer:
         return HealthStatus(
             healthy=True,
             message="Worker is responsive",
-            details={"last_activity": last_activity_iso},
+            details={
+                "last_activity": last_activity_iso,
+                "reconnecting": self._reconnecting,
+                "consecutive_failures": self._consecutive_failures,
+                "last_poll_ok": (
+                    self._last_poll_ok.isoformat() if self._last_poll_ok else None
+                ),
+            },
         )
 
     async def _handle_request(
