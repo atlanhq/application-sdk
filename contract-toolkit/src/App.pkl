@@ -93,6 +93,7 @@ typealias SqlTree = Widgets.SqlTree
 typealias ConditionalInput = Widgets.ConditionalInput
 typealias Condition = Widgets.Condition
 typealias InputRepeater = Widgets.InputRepeater
+typealias Repeater = Widgets.Repeater
 typealias Schedule = Widgets.Schedule
 typealias CustomWidget = Widgets.CustomWidget
 
