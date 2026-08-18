@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**42 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P041), `suite.checks.transform_templates` (P040, scans template YAML) (all AST-based / cross-artifact)
+**43 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P041), `suite.checks.transform_templates` (P040, scans template YAML) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -65,6 +65,7 @@ reassigned.
 | [P040](#p040) | `TransformTemplateReservedKeyword` | `warn` | `app` | `transform-templates` | — | 0.18.0 |
 | [P041](#p041) | `SdrHardPreflightGate` | `warn` | `app` | `sdr-readiness` | — | 0.18.0 |
 | [P042](#p042) | `SdrHandRolledUploadBridge` | `warn` | `app` | `sdr-readiness` | — | 0.18.0 |
+| [P044](#p044) | `DirectStoragePrefixTransfer` | `warn` | `app` | `storage-seam` | — | 0.20.0 |
 
 ---
 
@@ -1706,5 +1707,62 @@ This is a WARN, and deliberately a *lower*-urgency one than P030: the app is wor
 today.  The deadline is v4.0, not the next run — which is why the rule carries
 `superseded_by: sdk>=4.0.0`.  It retires when that removal lands and the shape stops
 being expressible.
+
+---
+
+## P044 — `DirectStoragePrefixTransfer` {#p044}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `storage-seam` · **Autofixable:** — · **Since:** 0.20.0
+
+> App transfers whole prefixes via storage.upload_prefix/download_prefix instead of FileReference + App.upload()/App.download()
+
+**Rationale:** An app moving whole prefixes with storage.upload_prefix/download_prefix is using a
+sanctioned SDK function at the wrong level, which is why no existing rule catches it:
+P009 fires only on apps constructing their own store, and P030/P042 are gated on
+self_deployed_runtime and so never run for a direct-flow app. What the app gives up is
+everything layered above the primitive — App.upload()'s ADR-0014 dual-write routing, the
+canonical artifacts/apps/{app}/workflows/{workflow_id}/{run_id} prefix, @task
+retry/replay, and FileReference's per-file SHA-256 sidecars, whose whole purpose is
+detecting the partial or corrupt file that a per-directory non-emptiness check cannot
+see. Apps that hand-roll this reliably re-derive the missing guards later and get them
+subtly wrong: one connector's wrapper skipped the download whenever the target directory
+was already non-empty, which for a multi-writer fan-out prefix means a co-located reader
+silently sees a subset of the data. Customer impact: a silent subset. Some of the
+customer's metadata is extracted, the run reports success, and the assets that never
+arrived look indistinguishable from assets the source does not have — so it is the
+customer who finds the gap, if anyone does.
+
+App source calls `upload_prefix` / `download_prefix` (or imports them from
+`application_sdk.storage`) to move artifacts itself, rather than declaring the data on
+the contract and letting the SDK move it.
+
+These are real SDK functions, so this is not the build-your-own-store shape **P009**
+describes — it is the sanctioned seam used one level too low. The storage contract in
+this module's docstring names the two supported paths:
+
+* **task-to-task** data → a `FileReference` field on the contract. The   activity
+interceptor persists it after the producing task and   materialises it before the
+consuming one, with a per-file SHA-256   sidecar so a partial or corrupt transfer is
+detected rather than   reused. * **phase/app hand-off** → `App.upload()` /
+`App.download()`, which   add dual-write routing, the canonical artifact prefix, and
+`@task`   retry/replay.
+
+**Fix by hoisting, not by substituting in place.** `App.upload()` is itself a framework
+task, so calling it where the prefix call used to sit — inside a `@task` — trades this
+finding for a **P008** violation. Move the transfer to `run()` / the `@entrypoint`, one
+call per phase, and let the tasks below it read and write local paths.
+
+Not every prefix call is wrong. A genuine bulk transfer with no contract boundary to
+hang a reference on — a state directory synced wholesale, a one-off migration script —
+is a legitimate use. Suppress those with an inline `# conformance: ignore[P044]
+<reason>`, which stays visible in SARIF rather than disappearing.
+
+Tier note: this lands at WARN because the pattern is fleet-wide, not isolated — a sweep
+of `atlanhq` found app-code calls in roughly 34 consumer repos, five of them sharing a
+copied `app/workflow/io.py`. It graduates to BLOCK once that count is falling rather
+than flat. It is deliberately a separate id from **P030** for the same reason P030 and
+P042 are separate: absence of `App.upload()` in SDR mode is a proven customer-data-loss
+class and blocks, while absence in the direct flow is legitimate — `persist_file_refs`
+performs that transfer automatically — so the two shapes cannot share a tier.
 
 ---

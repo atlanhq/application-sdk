@@ -57,7 +57,7 @@ raw type in an opaque SDK type) that no import edit can perform.  All four draft
 proposal for human review and never auto-apply.  (These rules are backed by a
 separate, test-scanning `suite.checks.orchestration` check — see its module docs.)
 
-The storage-seam rules (P008–P012) are also P-series and suggest-only: they
+The storage-seam rules (P008–P012, P044) are also P-series and suggest-only: they
 describe structural workflow refactors (data-flow topology, store-routing
 contracts, durability-field ownership) that no local import rewrite can perform,
 and the orthogonal gate is non-protective for structural regressions not yet
@@ -241,7 +241,8 @@ is always `"judgment"`:
   stop re-exporting it) — a public-contract refactor. Route to residue with that
   guidance. Do not attempt a mechanical edit.
 
-**Storage-seam rules (P008–P012)** — all suggest-only, scope=app, WARN-tier;
+**Storage-seam rules (P008–P012, P044)** — all suggest-only, scope=app,
+WARN-tier;
 `classification` is always `"judgment"`.  Read the full function/class context
 around `finding.line` before drafting any proposal.
 
@@ -300,6 +301,31 @@ around `finding.line` before drafting any proposal.
   propose renaming the field to clarify the semantics (e.g. `storage_uri`) and
   suppressing P012 with justification; state why the value is stable across
   workers.
+
+- **P044 DirectStoragePrefixTransfer** — app code calls
+  `storage.upload_prefix(...)` / `download_prefix(...)`, moving a whole prefix
+  itself instead of declaring the data on the contract.  These are real SDK
+  functions, so this is not P009's build-your-own-store shape; it is the
+  sanctioned seam used one level below the storage contract.  Draft a proposal
+  that names which of the two supported paths applies, because they are not
+  interchangeable:
+  - **task-to-task data** — replace with a `FileReference` field on the contract
+    (same producing/consuming pattern as P011/P012).  The interceptor persists
+    it after the producing task and materialises it before the consuming one,
+    with a per-file SHA-256 sidecar; that is what makes a partial transfer
+    detectable, which a directory-level non-emptiness check cannot do.
+  - **phase or app hand-off** — replace with `App.upload()` / `App.download()`
+    **hoisted to `run()` or the `@entrypoint`**, one call per phase.  State this
+    explicitly in the proposal: leaving the call where the prefix call sat is a
+    `@task` body, and `App.upload`/`download` are themselves framework tasks, so
+    an in-place substitution trades a P044 finding for a P008 one.  Never
+    propose that.
+  If the transfer is a genuine bulk sync with no contract boundary to hang a
+  reference on (a state directory synced wholesale, a one-off migration script),
+  propose an inline `# conformance: ignore[P044] <reason>` instead and say why
+  no contract boundary exists.  Do not propose a fix that merely moves the
+  prefix call to a different module — the finding is about the level of the
+  abstraction, not its location.
 
 **Client-seam rule (P019)** — suggest-only, scope=both, WARN-tier;
 `classification` is always `"judgment"`.  Read the full function/class context
