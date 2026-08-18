@@ -199,3 +199,76 @@ class TestGenerateWorkflowClassBehaviour:
         defn2 = getattr(cls2, "__temporal_workflow_definition")
         assert defn1.name == "two-ep-app:step-one"
         assert defn2.name == "two-ep-app:step-two"
+
+    def test_entrypoint_alias_registers_extra_bare_workflow(self) -> None:
+        """An entry point's aliases each emit an extra workflow class registered
+        under the bare alias name, without becoming separate entry points."""
+        from application_sdk.app.entrypoint import entrypoint
+
+        class AliasApp(App):
+            name = "alias-app"
+
+            @entrypoint(name="crawler", aliases=["alias-app"])
+            async def crawler(self, input: _WfInput) -> _WfOutput:
+                return _WfOutput()
+
+            @entrypoint
+            async def miner(self, input: _WfInput2) -> _WfOutput2:
+                return _WfOutput2()
+
+        meta = AppRegistry.get_instance().get("alias-app")
+        # The alias must NOT leak into entry_points (no form/manifest/default impact).
+        assert set(meta.entry_points) == {"crawler", "miner"}
+
+        names = {
+            getattr(wf, "__temporal_workflow_definition").name
+            for wf in get_all_app_workflows()
+        }
+        # Canonical namespaced names plus the bare alias.
+        assert {"alias-app", "alias-app:crawler", "alias-app:miner"} <= names
+
+    def test_entrypoint_alias_delegates_to_same_method(self) -> None:
+        """The alias workflow class shares the aliased entry point's run body:
+        it is generated from the same ep, only the registered name differs."""
+        from application_sdk.app.base import generate_workflow_class
+        from application_sdk.app.entrypoint import entrypoint
+
+        class AliasMethodApp(App):
+            name = "alias-method-app"
+
+            @entrypoint(name="crawler", aliases=["alias-method-app"])
+            async def crawler(self, input: _WfInput) -> _WfOutput:
+                return _WfOutput()
+
+        meta = AppRegistry.get_instance().get("alias-method-app")
+        ep = meta.entry_points["crawler"]
+        canonical = generate_workflow_class(AliasMethodApp, ep)
+        alias = generate_workflow_class(
+            AliasMethodApp, ep, workflow_name_override="alias-method-app"
+        )
+        assert canonical is not alias
+        assert (
+            getattr(canonical, "__temporal_workflow_definition").name
+            == "alias-method-app:crawler"
+        )
+        assert (
+            getattr(alias, "__temporal_workflow_definition").name == "alias-method-app"
+        )
+
+    def test_invalid_entrypoint_alias_rejected(self) -> None:
+        """A non-identifier alias is rejected at decoration time."""
+        import pytest
+
+        from application_sdk.app.entrypoint import (
+            EntryPointContractError,
+            entrypoint,
+        )
+
+        with pytest.raises(EntryPointContractError):
+
+            class BadAliasApp(App):
+                name = "bad-alias-app"
+
+                @entrypoint(name="crawler", aliases=["not a valid name"])
+                async def crawler(self, input: _WfInput) -> _WfOutput:
+                    return _WfOutput()

@@ -1669,7 +1669,7 @@ class App(ABC):
 # Cache generated workflow classes keyed by (app_cls, entry_point_name) so
 # generate_workflow_class() is idempotent across repeated calls (e.g. tests
 # or worker re-creation) and never registers the same Temporal workflow twice.
-_workflow_class_cache: dict[tuple[type, str], type] = {}
+_workflow_class_cache: dict[tuple[type, str, str | None], type] = {}
 
 
 def _validate_interaction_signature(
@@ -2075,7 +2075,12 @@ def _validate_workflow_input(raw_input: Any, input_type: type[Input]) -> Input:
         ) from e
 
 
-def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> type:
+def generate_workflow_class(
+    app_cls: "type[App]",
+    ep: "EntryPointMetadata",
+    *,
+    workflow_name_override: str | None = None,
+) -> type:
     """Generate a Temporal workflow class for one entry point.
 
     Creates a @workflow.defn-decorated class whose run() sets up App context,
@@ -2084,16 +2089,24 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
     Args:
         app_cls: The App subclass.
         ep: The entry point to generate a workflow class for.
+        workflow_name_override: When set, the generated class registers under
+            this exact Temporal workflow name instead of the canonical
+            ``{app}:{name}`` / bare ``{app}``. Used to emit an entry point's
+            ``aliases`` as additional workflow classes with the same run body;
+            the class body (and thus the entry-point method it invokes) is
+            identical — only the registered name differs.
 
     Returns:
         A Temporal workflow class decorated with @workflow.defn.
     """
-    cache_key = (app_cls, ep.name)
+    cache_key = (app_cls, ep.name, workflow_name_override)
     if cache_key in _workflow_class_cache:
         return _workflow_class_cache[cache_key]
 
     workflow_name = (
-        app_cls._app_name if ep.implicit else f"{app_cls._app_name}:{ep.name}"
+        workflow_name_override
+        if workflow_name_override is not None
+        else (app_cls._app_name if ep.implicit else f"{app_cls._app_name}:{ep.name}")
     )
     entry_method_name = ep.method_name
     entrypoint_name = ep.name

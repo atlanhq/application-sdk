@@ -49,7 +49,7 @@ Usage::
 
 import inspect
 import warnings
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar, TypeVar, get_type_hints
 
@@ -120,6 +120,17 @@ class EntryPointMetadata:
     always treated as the default regardless of this flag; for multi-entry-point
     apps, at most one entry point may set ``default=True`` (validated at
     registration)."""
+
+    aliases: tuple[str, ...] = ()
+    """Extra **bare** Temporal workflow-type names this entry point also
+    registers under, in addition to its canonical name (``{app}:{name}``, or the
+    bare ``{app}`` for the implicit run()). Each alias generates a *second*
+    workflow class with the same run body — it is NOT a separate entry point
+    (``entry_points`` stays unchanged; no form/manifest/default impact), only an
+    additional worker registration. Use for backward-compat when an app splits a
+    single implicit entry point into explicit ones and must keep answering the
+    legacy workflow type (e.g. mssql's ``crawler`` also answering bare
+    ``mssql``). Empty by default."""
 
 
 def _method_name_to_kebab(name: str) -> str:
@@ -227,6 +238,7 @@ def entrypoint(
     *,
     name: str | None = None,
     default: bool = False,
+    aliases: Sequence[str] | None = None,
 ) -> F | Callable[[F], F]:
     """Decorator to mark a method as an independently-triggerable entry point.
 
@@ -268,6 +280,14 @@ def entrypoint(
             caller omits ``?entrypoint=``. At most one entry point per app may set
             this (validated at registration). A single-entry-point app does not
             need it; its only entry point is the default implicitly.
+        aliases: Extra **bare** Temporal workflow-type names this entry point also
+            registers under (besides its canonical ``{app}:{name}``). Each alias
+            becomes an additional worker-registered workflow class with the same
+            run body — NOT a separate entry point, so forms/manifests/default
+            resolution are unaffected. Use to keep answering a legacy workflow
+            type after splitting one implicit entry point into explicit ones
+            (e.g. ``aliases=["mssql"]`` on the crawler so bare ``mssql`` still
+            dispatches to it). Each alias must be a valid identifier.
 
     Raises:
         EntryPointContractError: If the method doesn't follow the contract pattern.
@@ -284,12 +304,22 @@ def entrypoint(
                 "Use only letters, digits, hyphens, and underscores."
             )
         input_type, output_type = _validate_entrypoint_signature(fn)
+        alias_tuple = tuple(aliases or ())
+        for alias in alias_tuple:
+            # Each alias becomes a Temporal workflow name verbatim and part of a
+            # dynamically generated class name — same safety bar as a custom name.
+            if not alias or not entrypoint_module_segment(alias).isidentifier():
+                raise EntryPointContractError(
+                    f"Entry point alias '{alias}' is not a valid identifier. "
+                    "Use only letters, digits, hyphens, and underscores."
+                )
         fn._entrypoint_metadata = EntryPointMetadata(  # type: ignore[attr-defined]
             name=ep_name,
             input_type=input_type,
             output_type=output_type,
             method_name=fn_name,
             default=default,
+            aliases=alias_tuple,
         )
         return fn
 
