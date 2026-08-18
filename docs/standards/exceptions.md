@@ -232,10 +232,13 @@ When reviewing code, check for:
       ResourceExhaustedError, DataIntegrityError, InternalError,
       UnimplementedError, AppPermissionDeniedError, CancelledError,
       # Specialized subtypes of the leaves above, e.g. DiskFullError
-      # (ResourceExhaustedError; a local write hit ENOSPC/EDQUOT) and
-      # TaskStalledError (AppTimeoutError) — raise the subtype when it
-      # describes the failure precisely.
+      # (ResourceExhaustedError; a local write hit ENOSPC/EDQUOT),
+      # TaskStalledError (AppTimeoutError), and the object-store pair
+      # ObjectStoreReadError / ObjectStoreDownloadError
+      # (DependencyUnavailableError; a store listing/download came up empty)
+      # — raise the subtype when it describes the failure precisely.
       DiskFullError,
+      ObjectStoreReadError, ObjectStoreDownloadError,
   )
 
   # DependencyUnavailableError — retryable=True, audience=PLATFORM
