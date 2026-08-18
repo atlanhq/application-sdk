@@ -1534,27 +1534,27 @@ jobs:
 
           # Resolve who to attribute as the release creator.
           #
-          # For `push` events (the squash/merge-to-main auto-publish flow),
-          # github.triggering_actor is whoever clicked "Merge" — not the PR
-          # author — which surfaces the wrong person as "Created by:" in the
-          # GM Slack approval message. Look up the PR for the merge SHA via
-          # /commits/{sha}/pulls and use its author when available. Falls back
-          # to triggering_actor when there's no associated PR (direct push).
+          # For `push` events (the merge-to-main auto-publish flow), attribute
+          # the release to the human who *merged* the version-bump PR. Those PRs
+          # are opened by the Atlan Fleet App bot, so the PR author is the bot —
+          # not the owner of the change. Look up the PR for the merge SHA via
+          # /commits/{sha}/pulls and use its merged_by. Falls back to
+          # triggering_actor when there's no associated PR (direct push).
           #
           # For every other event (workflow_dispatch, release, schedule, …)
           # the trigger is an explicit deliberate action — attribute to whoever
-          # initiated it. This preserves the pre-fix behavior for those paths.
+          # initiated it. This preserves the behavior for those paths.
           #
           # NOTE: `gh api` writes its JSON error body to stdout on non-2xx,
           # so the assignment must be gated on the exit code — otherwise an
-          # error payload would contaminate PR_AUTHOR and break the fallback.
+          # error payload would contaminate PR_MERGER and break the fallback.
           if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
-              PR_AUTHOR=""
+              PR_MERGER=""
               if RAW=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
-                           --jq '.[0].user.login // empty' 2>/dev/null); then
-                  PR_AUTHOR="${RAW}"
+                           --jq '.[0].merged_by.login // empty' 2>/dev/null); then
+                  PR_MERGER="${RAW}"
               fi
-              ACTOR="${PR_AUTHOR:-${GITHUB_ACTOR}}"
+              ACTOR="${PR_MERGER:-${GITHUB_ACTOR}}"
           else
               ACTOR="${GITHUB_ACTOR}"
           fi
