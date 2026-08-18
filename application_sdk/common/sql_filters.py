@@ -530,6 +530,41 @@ def _names_a_single_database_each(filter_keys: list[str]) -> bool:
     return True
 
 
+def _matches_any_filter_key(database_name: str, filter_keys: list[str]) -> bool:
+    """Whether ``database_name`` matches any include-filter key, as a regex.
+
+    ``re.search`` rather than ``fullmatch``, so the key's own anchors decide the
+    semantics instead of this function imposing them:
+
+    * ``^db$``     -- exactly ``db``
+    * ``^bench``   -- starts with ``bench``, so ``bench_1`` matches
+    * ``bench``    -- contains ``bench``
+    * ``^b.*1$``   -- the pattern, as written
+
+    ``fullmatch`` would silently narrow the middle two to exact matches, which
+    is the same class of mistake as treating a pattern as a name.
+
+    Case-sensitive, matching the ``regexp_like`` predicate this replaces --
+    changing case semantics is a separate decision from fixing the filter.
+
+    A key that is not valid regex falls back to exact comparison against its
+    anchor-stripped form. That is what the caller would previously have received
+    as a literal name, so an unparseable key degrades to the old behaviour
+    rather than dropping the database outright.
+    """
+    for key in filter_keys:
+        try:
+            if re.search(key, database_name):
+                return True
+        except re.error:
+            logger.warning(
+                "Include-filter key is not valid regex; comparing literally: %s", key
+            )
+            if re.sub(r"^[^\w]+|[^\w]+$", "", key) == database_name:
+                return True
+    return False
+
+
 async def get_database_names(
     sql_client, workflow_args, fetch_database_sql
 ) -> list[str] | None:
@@ -563,26 +598,39 @@ async def get_database_names(
     # names a *different*, real database. Discovery would then be skipped
     # entirely, because the list is non-empty, so the caller crawls that one
     # made-up name and loses every database the pattern was meant to select.
-    if _names_a_single_database_each(filter_keys):
-        database_names = [
+    if filter_keys and _names_a_single_database_each(filter_keys):
+        return [
             re.sub(r"^[^\w]+|[^\w]+$", "", database_name)
             for database_name in filter_keys
         ]
-    else:
-        database_names = []
-    if not database_names:
-        temp_table_regex_sql = workflow_args.get("metadata", {}).get(
-            "temp-table-regex", ""
-        )
-        prepared_query = prepare_query(
-            query=fetch_database_sql,
-            workflow_args=workflow_args,
-            temp_table_regex_sql=temp_table_regex_sql,
-            use_posix_regex=True,
-        )
-        database_dataframe = await sql_client.get_results(prepared_query)
-        database_names = list(database_dataframe["database_name"])
-    return database_names
+
+    temp_table_regex_sql = workflow_args.get("metadata", {}).get("temp-table-regex", "")
+    prepared_query = prepare_query(
+        query=fetch_database_sql,
+        workflow_args=workflow_args,
+        temp_table_regex_sql=temp_table_regex_sql,
+        use_posix_regex=True,
+    )
+    database_dataframe = await sql_client.get_results(prepared_query)
+    discovered = list(database_dataframe["database_name"])
+
+    # The prepared query CANNOT be relied on to apply a pattern include-filter.
+    # ``extract_database_names_from_regex_common`` validates each candidate
+    # against an *identifier* pattern and drops anything else, so a key like
+    # ``^bench.*$`` is discarded with a warning and the predicate degrades to
+    # ``'.*'`` -- every database. Handing a pattern to SQL and trusting the
+    # result would turn this function's old failure (crawl one database that
+    # does not exist) into the opposite one (crawl every database, filter
+    # silently ignored), which for a catalog is worse: it collects outside the
+    # scope the caller asked for.
+    #
+    # So the pattern is applied here instead, against the names the source
+    # actually reported. ``atlan-mssql-app`` reached the same conclusion
+    # independently -- its ``get_target_database_names`` falls back to "list all
+    # databases, then filter in Python" for exactly this reason.
+    if not filter_keys:
+        return discovered
+    return [name for name in discovered if _matches_any_filter_key(name, filter_keys)]
 
 
 def parse_filter_input(
