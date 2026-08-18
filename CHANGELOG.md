@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.28.1 (August 18, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.28.0...v3.28.1
+
+### Bug Fixes
+
+- bind app instance in tool registration and migrate to fastmcp 3.x API (#3251) (by @jblaze2908 in [c83b493](https://github.com/atlanhq/application-sdk/commit/c83b493))
+- instrument the poll loop to identify a parked worker (ARUN-1127) (#3265) (by @cmgrote in [f3473b1](https://github.com/atlanhq/application-sdk/commit/f3473b1))
+- gate loguru diagnose behind ATLAN_LOG_DIAGNOSE, default off (#3268) (by @cmgrote in [a83ec55](https://github.com/atlanhq/application-sdk/commit/a83ec55))
+- index submodule __all__ re-exports (FND-439) (#3267) (by @cmgrote in [6738307](https://github.com/atlanhq/application-sdk/commit/6738307))
+
+
 ## v3.28.0 (August 14, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.27.2...v3.28.0
