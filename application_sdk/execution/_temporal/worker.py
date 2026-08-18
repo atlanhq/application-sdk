@@ -220,10 +220,15 @@ async def _log_worker_fatal_error(exc: BaseException) -> None:
     no ``poll loop failed`` line never raised at all, which distinguishes a
     swallowed fatal from a poll loop that parked without erroring (ARUN-1127).
     """
+    # exc_info=exc, not True: ``Worker.run`` retrieves the fatal with
+    # ``task.exception()`` and calls this hook outside any ``except`` block, so
+    # no exception is being handled. ``exc_info=True`` would resolve to
+    # ``sys.exc_info()`` — empty here — and render "NoneType: None" instead of
+    # the traceback this log exists to capture.
     logger.error(
         "Temporal worker poll loop failed fatally; cause chain: %s",
         " <- ".join(describe_exception_chain(exc)),
-        exc_info=True,
+        exc_info=exc,
     )
 
 

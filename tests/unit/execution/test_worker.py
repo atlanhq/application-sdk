@@ -26,6 +26,7 @@ from application_sdk.execution._temporal._activity_errors import (
 from application_sdk.execution._temporal.worker import (
     _MAX_FATAL_CHAIN_DEPTH,
     AppWorker,
+    _log_worker_fatal_error,
     _resolve_gate_enforcement,
     create_worker,
     describe_exception_chain,
@@ -1226,6 +1227,29 @@ class TestDescribeExceptionChain:
 
         assert len(chain) == _MAX_FATAL_CHAIN_DEPTH + 1
         assert chain[-1] == "... chain truncated"
+
+
+class TestLogWorkerFatalError:
+    """Tests for the ``on_fatal_error`` diagnostic log."""
+
+    @pytest.mark.asyncio
+    async def test_passes_the_exception_object_as_exc_info(self) -> None:
+        """``exc_info=True`` renders "NoneType: None" on this path.
+
+        ``Worker.run`` retrieves the fatal with ``task.exception()`` and invokes
+        the hook outside any ``except`` block, so ``sys.exc_info()`` is empty and
+        only passing the object itself yields a traceback. Pinning the value
+        keeps a future edit from quietly reverting to ``True`` and dropping the
+        traceback this log exists to capture.
+        """
+        exc = RuntimeError("Activity worker failed")
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.logger"
+        ) as mock_logger:
+            await _log_worker_fatal_error(exc)
+
+        assert mock_logger.error.call_args.kwargs["exc_info"] is exc
 
 
 class TestReadCorePollerCounts:
