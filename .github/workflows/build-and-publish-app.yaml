@@ -1478,6 +1478,40 @@ jobs:
     timeout-minutes: 15
 
     steps:
+      - name: Checkout SDK helper scripts
+        # resolve_release_actor.py lives in the SDK repo, not the caller repo —
+        # this job has no checkout of its own, so pull only ``.github/scripts/``
+        # in before invoking it. Pinned to main for the same reason as the other
+        # two SDK-script checkouts in this workflow: github.workflow_ref and
+        # github.workflow_sha both resolve to the *caller's* ref in a reusable
+        # workflow (GitHub bug), so there is no self-ref to pin to.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          path: .sdk-entrypoint
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
+      # Resolve who GM attributes the release to. Branching logic lives in a
+      # tested script per docs/standards/ci.md — see the module docstring for
+      # why the merger takes two API hops to reach.
+      - name: Resolve release attribution
+        id: release_actor
+        env:
+          # `gh` on a runner is unauthenticated unless a token is in the
+          # environment. Without this every lookup exits non-zero and
+          # attribution collapses to the triggering actor with nothing red.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          python3 .sdk-entrypoint/.github/scripts/resolve_release_actor.py \
+            --event-name "${GITHUB_EVENT_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --sha "${GITHUB_SHA}" \
+            --triggering-actor "${TRIGGERING_ACTOR}" >> "${GITHUB_OUTPUT}"
+
       - name: Publish version
         env:
           BASE_URL: ${{ inputs.base_url }}
@@ -1497,7 +1531,10 @@ jobs:
           RELEASE_MODEL: ${{ needs.prepare.outputs.release_model }}
           APP_CONFIGS: ${{ needs.prepare.outputs.app_configs }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
-          GITHUB_ACTOR: ${{ github.triggering_actor }}
+          # Who GM shows as "Created by:" — resolved by the step above, which
+          # attributes a merge-to-main publish to the human who merged the PR
+          # rather than to the bot that opened it.
+          CREATED_BY: ${{ steps.release_actor.outputs.created_by }}
         run: |
           set -euo pipefail
 
@@ -1531,38 +1568,6 @@ jobs:
             } >> "${GITHUB_STEP_SUMMARY}"
             exit 1
           fi
-
-          # Resolve who to attribute as the release creator.
-          #
-          # For `push` events (the merge-to-main auto-publish flow), attribute
-          # the release to the human who *merged* the version-bump PR. Those PRs
-          # are opened by the Atlan Fleet App bot, so the PR author is the bot —
-          # not the owner of the change. Look up the PR for the merge SHA via
-          # /commits/{sha}/pulls and use its merged_by. Falls back to
-          # triggering_actor when there's no associated PR (direct push).
-          #
-          # For every other event (workflow_dispatch, release, schedule, …)
-          # the trigger is an explicit deliberate action — attribute to whoever
-          # initiated it. This preserves the behavior for those paths.
-          #
-          # NOTE: `gh api` writes its JSON error body to stdout on non-2xx,
-          # so the assignment must be gated on the exit code — otherwise an
-          # error payload would contaminate PR_MERGER and break the fallback.
-          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
-              PR_MERGER=""
-              if RAW=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
-                           --jq '.[0].merged_by.login // empty' 2>/dev/null); then
-                  PR_MERGER="${RAW}"
-              fi
-              ACTOR="${PR_MERGER:-${GITHUB_ACTOR}}"
-          else
-              ACTOR="${GITHUB_ACTOR}"
-          fi
-          GH_EMAIL=""
-          if EMAIL_RAW=$(gh api "users/${ACTOR}" --jq '.email // empty' 2>/dev/null); then
-              GH_EMAIL="${EMAIL_RAW}"
-          fi
-          export CREATED_BY="${GH_EMAIL:-${ACTOR}}"
 
           # Build JSON payload matching the CLI's registerInMarketplace format
           BODY=$(python3 - <<'PYEOF'
