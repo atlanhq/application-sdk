@@ -499,20 +499,32 @@ _REGEX_META_CHARS = frozenset(r"\.^$*+?{}[]()|")
 def _names_a_single_database_each(filter_keys: list[str]) -> bool:
     """Whether every include-filter key names one database outright.
 
-    The include-filter's keys are regular expressions. Two shapes are common:
+    The include-filter's keys are regular expressions. Exactly one shape has
+    itself as its sole match: a **fully anchored** literal, ``^mydb$``, which is
+    what the Atlan UI emits. For that key, using ``mydb`` as a database name
+    directly is equivalent to matching it and saves a round trip.
 
-    * anchored literals, which is what the Atlan UI emits -- ``^mydb$``. Its
-      only match is ``mydb``, so using ``mydb`` as a database name directly is
-      exactly equivalent to matching it, and much cheaper than a round trip.
-    * genuine patterns -- ``^bench.*$``, ``^(a|b)$``. These match a *set* of
-      databases whose members are only knowable by asking the source.
+    Every other shape matches a *set* whose members are only knowable by asking
+    the source, so all of them must fall through to SQL discovery:
 
-    Only the first shape may skip SQL discovery. Returns False for the second,
-    and for an empty key, so the caller falls through to the query.
+    * metacharacters -- ``^bench.*$``, ``^(a|b)$``;
+    * a partial anchor -- ``^bench`` means *starts with*, ``bench$`` means *ends
+      with*;
+    * no anchor at all -- ``bench`` means *contains*.
+
+    The last two are the subtle ones, and getting them wrong is what the
+    phantom-database bug actually was: ``^benchmark_`` carries no
+    metacharacters, so a metacharacter-only check accepts it and hands back the
+    non-existent database ``benchmark_`` -- the same wrong name reached by a
+    different route. The anchors are load-bearing, not decoration.
+
+    (This is the same test as ``_anchored_literal`` in atlan-trino-app's
+    ``app/handlers/trino.py``, which gets it right for building SQL predicates.)
     """
     for key in filter_keys:
-        core = key[1:] if key.startswith("^") else key
-        core = core[:-1] if core.endswith("$") else core
+        if not (key.startswith("^") and key.endswith("$")):
+            return False
+        core = key[1:-1]
         if not core or any(char in _REGEX_META_CHARS for char in core):
             return False
     return True
@@ -544,16 +556,19 @@ async def get_database_names(
         validate_filter_no_sql_injection(raw_include)
     filter_keys = list(parse_filter_input(raw_include))
 
-    database_names = [
-        re.sub(r"^[^\w]+|[^\w]+$", "", database_name) for database_name in filter_keys
-    ]
-    # A key that is a real pattern must not be used as a name. Stripping its
-    # non-word characters yields something that is neither the pattern nor a
-    # database: ``^bench.*$`` becomes ``bench``, which either matches nothing or
-    # -- worse -- silently names a *different*, real database. Discovery is then
-    # skipped entirely, because the list is non-empty, so the caller crawls that
-    # one made-up name and loses every database the pattern was meant to select.
-    if not _names_a_single_database_each(filter_keys):
+    # Only a key that can match exactly one database may stand in for
+    # discovery. For anything else, stripping the key's non-word characters
+    # yields a string that is neither the pattern nor a database: ``^bench.*$``
+    # becomes ``bench``, which either matches nothing or -- worse -- silently
+    # names a *different*, real database. Discovery would then be skipped
+    # entirely, because the list is non-empty, so the caller crawls that one
+    # made-up name and loses every database the pattern was meant to select.
+    if _names_a_single_database_each(filter_keys):
+        database_names = [
+            re.sub(r"^[^\w]+|[^\w]+$", "", database_name)
+            for database_name in filter_keys
+        ]
+    else:
         database_names = []
     if not database_names:
         temp_table_regex_sql = workflow_args.get("metadata", {}).get(
