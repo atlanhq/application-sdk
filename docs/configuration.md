@@ -216,6 +216,7 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ATLAN_LOG_LEVEL` | `INFO` | Log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). **Fallback:** `LOG_LEVEL`. `CRITICAL` is accepted by loguru but prohibited in app code per [ADR-0011](adr/0011-logging-level-guidelines.md). |
+| `ATLAN_LOG_DIAGNOSE` | `false` | Annotate console tracebacks with the **values** of the names on each frame's source line (loguru's `diagnose`). Off by default, unlike loguru's own default: those values print verbatim, so a credential dict passed to a failing call has its contents rendered onto stderr. Useful locally; leave off anywhere real credentials exist. Independent of `ATLAN_LOG_LEVEL` by design — raising verbosity to `DEBUG` does not re-enable it. Traceback frames are unaffected either way. |
 | `ATLAN_LOG_BATCH_SIZE` | `100` | Records buffered before flushing to the object-store sink. |
 | `ATLAN_LOG_FLUSH_INTERVAL_SECONDS` | `10` | Seconds between object-store sink flushes. |
 | `ATLAN_LOG_RETENTION_DAYS` | `30` | Days to retain log files in the object store before cleanup. |
