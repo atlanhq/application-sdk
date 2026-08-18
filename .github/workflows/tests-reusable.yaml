@@ -1110,7 +1110,6 @@ jobs:
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
-          token: ${{ secrets.ORG_PAT_GITHUB || github.token }}
           persist-credentials: false
 
       # The KEY LIST, never the blob: the credentials stay with the per-leg
