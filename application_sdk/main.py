@@ -1008,8 +1008,11 @@ async def _observe_worker_poll_state(
     remedy built on the wrong one either tears down healthy workers or hides the
     outage behind a self-healing loop that cannot heal it.
 
-    Logs a transition (INFO) rather than every reading, so a long-running worker
-    stays quiet until something changes; a zero or unknown reading is a WARNING.
+    Logs a transition rather than every reading, so a long-running worker stays
+    quiet until something changes: an active-pollers reading is an INFO on change,
+    and a zero or unknown reading is a WARNING logged once per transition into
+    that state (not on every interval, so a parked worker does not drown the
+    ``poll loop failed fatally`` line in repeats).
 
     Args:
         shutdown_event: Set on SIGINT/SIGTERM; ends the observer cleanly.
@@ -1050,13 +1053,18 @@ async def _observe_worker_poll_state(
                 state = "zero"
 
             if state == "zero":
-                logger.warning(
-                    "Worker reports 0 active pollers (poller gauge %s) — it is "
-                    "alive but claiming no work from its task queue; check the "
-                    "logs for a 'poll loop failed fatally' line, whose presence "
-                    "or absence identifies the failure mechanism (ARUN-1127)",
-                    counts,
-                )
+                # Transition-gated like "unknown" below: warn once when the
+                # worker parks, not on every interval, so a parked worker does
+                # not bury the "poll loop failed fatally" line this PR exists
+                # to surface. A return to "polling" and back re-arms it.
+                if previous_state != "zero":
+                    logger.warning(
+                        "Worker reports 0 active pollers (poller gauge %s) — it is "
+                        "alive but claiming no work from its task queue; check the "
+                        "logs for a 'poll loop failed fatally' line, whose presence "
+                        "or absence identifies the failure mechanism (ARUN-1127)",
+                        counts,
+                    )
             elif state == "unknown":
                 if previous_state != "unknown":
                     logger.warning(

@@ -113,6 +113,7 @@ async def read_core_poller_counts() -> dict[str, float] | None:
     )
 
     from application_sdk.constants import (  # noqa: PLC0415 — cold path: diagnostics only
+        TEMPORAL_CORE_METRICS_MAX_BYTES,
         TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS,
         TEMPORAL_PROMETHEUS_BIND_ADDRESS,
     )
@@ -122,15 +123,39 @@ async def read_core_poller_counts() -> dict[str, float] | None:
         async with httpx.AsyncClient(
             timeout=TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS
         ) as http_client:
-            response = await http_client.get(url)
-        if response.status_code != 200:
-            logger.debug(
-                "Temporal-core metrics endpoint %s returned HTTP %d; poller count unknown",
-                url,
-                response.status_code,
-            )
-            return None
-        payload = response.text
+            # Stream so the read is genuinely bounded: reject on a declared
+            # oversize Content-Length, else cap the bytes actually read. An
+            # unbounded response.text would let a high-cardinality or
+            # misbehaving local exporter allocate an unbounded string each
+            # interval. Oversize is unknown (None), never zero.
+            async with http_client.stream("GET", url) as response:
+                if response.status_code != 200:
+                    logger.debug(
+                        "Temporal-core metrics endpoint %s returned HTTP %d; poller count unknown",
+                        url,
+                        response.status_code,
+                    )
+                    return None
+                content_length = response.headers.get("content-length")
+                if content_length is not None and int(content_length) > (
+                    TEMPORAL_CORE_METRICS_MAX_BYTES
+                ):
+                    logger.debug(
+                        "Temporal-core metrics endpoint %s declared %s bytes (cap %d); poller count unknown",
+                        url,
+                        content_length,
+                        TEMPORAL_CORE_METRICS_MAX_BYTES,
+                    )
+                    return None
+                body = await response.aread()
+                if len(body) > TEMPORAL_CORE_METRICS_MAX_BYTES:
+                    logger.debug(
+                        "Temporal-core metrics endpoint %s exceeded %d bytes; poller count unknown",
+                        url,
+                        TEMPORAL_CORE_METRICS_MAX_BYTES,
+                    )
+                    return None
+                payload = body.decode("utf-8", errors="replace")
     except Exception:
         logger.debug(
             "Temporal-core metrics endpoint %s unreachable; poller count unknown",

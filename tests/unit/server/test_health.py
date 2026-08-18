@@ -84,6 +84,16 @@ class TestCheckLive:
         assert status.details["last_activity"] == stale.isoformat()
         assert status.details["max_idle_seconds"] == 30
         assert status.message == "No worker activity within liveness window"
+        # The 503 is the probe an operator reaches for first, so it must carry
+        # the same poll-loop evidence the healthy branch serves.
+        for key in (
+            "poller_counts",
+            "poller_counts_read_at",
+            "last_fatal_at",
+            "last_fatal_type",
+            "fatal_count",
+        ):
+            assert key in status.details
 
     @pytest.mark.asyncio
     async def test_idle_window_healthy_at_exact_boundary(self):

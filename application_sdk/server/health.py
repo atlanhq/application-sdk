@@ -291,6 +291,11 @@ class WorkerHealthServer:
                         "last_activity": last_activity_iso,
                         "idle_seconds": idle_seconds,
                         "max_idle_seconds": self._max_idle_seconds,
+                        # The poll-loop evidence matters most on this 503: it is
+                        # the probe an operator reaches for when the worker looks
+                        # stalled, so surface the same diagnostics the healthy
+                        # branch serves.
+                        **self._poll_diagnostics(),
                     },
                 )
 

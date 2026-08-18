@@ -1241,15 +1241,30 @@ class TestReadCorePollerCounts:
         'temporal_request_total{operation="PollActivityTaskQueue"} 41.0\n'
     )
 
-    def _response(self, status_code: int = 200, text: str | None = None) -> mock.Mock:
+    def _response(
+        self,
+        status_code: int = 200,
+        text: str | None = None,
+        content_length: str | None = None,
+    ) -> mock.Mock:
+        body = (self._EXPOSITION if text is None else text).encode()
         response = mock.Mock()
         response.status_code = status_code
-        response.text = self._EXPOSITION if text is None else text
+        headers = {}
+        if content_length is not None:
+            headers["content-length"] = content_length
+        response.headers = headers
+        response.aread = mock.AsyncMock(return_value=body)
+        # ``client.stream`` returns an async context manager yielding the response.
+        stream_ctx = mock.AsyncMock()
+        stream_ctx.__aenter__ = mock.AsyncMock(return_value=response)
+        stream_ctx.__aexit__ = mock.AsyncMock(return_value=False)
+        response._stream_ctx = stream_ctx
         return response
 
     def _patch_client(self, response: mock.Mock) -> mock.patch:
         client = mock.AsyncMock()
-        client.get = mock.AsyncMock(return_value=response)
+        client.stream = mock.Mock(return_value=response._stream_ctx)
         client.__aenter__ = mock.AsyncMock(return_value=client)
         client.__aexit__ = mock.AsyncMock(return_value=False)
         return mock.patch("httpx.AsyncClient", return_value=client)
@@ -1274,9 +1289,22 @@ class TestReadCorePollerCounts:
         assert counts == {"workflow_task": 0.0}
 
     @pytest.mark.asyncio
+    async def test_oversize_content_length_is_unknown_not_zero(self) -> None:
+        """A declared-oversize exposition is unknown, never a zero count."""
+        with self._patch_client(self._response(content_length=str(100 * 1024 * 1024))):
+            assert await read_core_poller_counts() is None
+
+    @pytest.mark.asyncio
+    async def test_oversize_body_is_unknown_not_zero(self) -> None:
+        """An actually-oversize body (no/!accurate Content-Length) is unknown."""
+        body = "x" * (1024 * 1024 + 1)
+        with self._patch_client(self._response(text=body)):
+            assert await read_core_poller_counts() is None
+
+    @pytest.mark.asyncio
     async def test_unreachable_endpoint_is_unknown_not_zero(self) -> None:
         client = mock.AsyncMock()
-        client.get = mock.AsyncMock(side_effect=OSError("connection refused"))
+        client.stream = mock.Mock(side_effect=OSError("connection refused"))
         client.__aenter__ = mock.AsyncMock(return_value=client)
         client.__aexit__ = mock.AsyncMock(return_value=False)
 

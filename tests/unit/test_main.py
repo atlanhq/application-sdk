@@ -2621,6 +2621,43 @@ class TestObserveWorkerPollState:
         assert {"workflow_task": 0.0, "activity_task": 0.0} in health.readings
         assert mock_logger.warning.called
 
+    async def test_zero_pollers_warns_once_per_park_not_per_tick(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A sustained zero state warns on the transition, not every interval.
+
+        A parked worker emitting one WARNING per interval would bury the very
+        ``poll loop failed fatally`` line this instrumentation exists to surface,
+        so the zero branch is transition-gated like the unknown branch.
+        """
+        monkeypatch.setattr(
+            "application_sdk.execution._temporal.worker.read_core_poller_counts",
+            AsyncMock(return_value={"workflow_task": 0.0, "activity_task": 0.0}),
+        )
+        health = _RecordingHealthServer()
+        shutdown = asyncio.Event()
+
+        async def stop_soon() -> None:
+            await asyncio.sleep(0.09)  # several 0.01s ticks, one continuous park
+            shutdown.set()
+
+        stopper = asyncio.create_task(stop_soon())
+        with patch("application_sdk.main.logger") as mock_logger:
+            await asyncio.wait_for(
+                _observe_worker_poll_state(
+                    shutdown_event=shutdown, health_server=health, interval=0.01
+                ),
+                timeout=2.0,
+            )
+        await stopper
+
+        zero_warnings = [
+            call
+            for call in mock_logger.warning.call_args_list
+            if "0 active pollers" in str(call)
+        ]
+        assert len(zero_warnings) == 1
+
     async def test_unknown_reading_is_not_reported_as_zero(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
