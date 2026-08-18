@@ -417,6 +417,7 @@ Used inside `uiConfig.tasks` — reference them as `Widgets.*`:
 | `Widgets.PasswordInput` | `password` | `str` |
 | `Widgets.NumericInput` | `inputNumber` | `int` |
 | `Widgets.InputRepeater` | `inputRepeater` | `list[str]` |
+| `Widgets.Repeater` | `Repeater` | `list[dict]` |
 
 `TextInput` and `TextBoxInput` support an optional `validation` block for opt-in
 JSON or regex validation (`new { type = "json"; formatOnBlur = true }` or

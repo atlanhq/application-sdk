@@ -142,7 +142,7 @@ jobs:
     steps:
       # A `uses:` reusable workflow does NOT bring its own repo's files into the
       # caller's checkout, so the consumer repo has no copy of the gate script.
-      # Same .sdk-scripts pattern as renovate-pkl-sync.yaml / release-version-bump.yaml
+      # Same .sdk-scripts pattern as generated-freshness.yaml / release-version-bump.yaml
       # (docs/standards/ci.md, "Reusing scripts from a reusable workflow").
       # Nothing else is checked out: the gate reads the PR entirely through the
       # API and never touches the consumer's working tree.

@@ -2620,9 +2620,22 @@ def create_app_handler_service(
             asynccontextmanager,
         )
 
-        from application_sdk.server.mcp import (  # noqa: PLC0415 — cold path: only when ENABLE_MCP set
-            MCPServer,
-        )
+        try:
+            from application_sdk.server.mcp import (  # noqa: PLC0415 — cold path: only when ENABLE_MCP set
+                MCPServer,
+            )
+        except ModuleNotFoundError as e:
+            # Only the mcp extra's own dependency (fastmcp) being absent means
+            # "extra not installed". Any other ModuleNotFoundError in the import
+            # chain is an unrelated broken import — re-raise it unchanged so the
+            # user isn't sent to reinstall the extra when the fault is elsewhere.
+            if e.name != "fastmcp" and not (e.name or "").startswith("fastmcp."):
+                raise
+            raise RuntimeError(
+                "ENABLE_MCP is set but the MCP dependencies are not installed. "
+                "Install the SDK with the 'mcp' extra "
+                "(e.g. `uv add 'atlan-application-sdk[mcp]'`) or unset ENABLE_MCP."
+            ) from e
 
         _mcp_server = MCPServer(application_name=app_name)
 

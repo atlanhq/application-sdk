@@ -514,6 +514,21 @@ class Widget {
 
   /// For custom frontend widgets — plural list of connector names.
   connectorNames: List<String>?
+
+  /// For Repeater widgets — number of rows rendered for a brand-new form.
+  defaultItems: Int?
+
+  /// For Repeater widgets — minimum number of rows; row removal is disabled at this count.
+  minItems: Int?
+
+  /// For Repeater widgets — maximum number of rows; row addition is disabled at this count.
+  maxItems: Int?
+
+  /// For Repeater widgets — emit the compiled value as a real JSON array instead of a JSON string.
+  shouldEmitArray: Boolean?
+
+  /// For Repeater widgets — show the bulk "Import JSON" action that replaces the current rows.
+  canImportJson: Boolean?
 }
 
 /// Widget that allows you to enter arbitrary text into a single-line text input field.
@@ -1451,6 +1466,73 @@ class InputRepeater extends UIElement {
     widget = "inputRepeater"
     placeholder = placeholderText
     rules = validationRules
+  }
+}
+
+/// Widget that renders repeatable rows of typed child inputs and compiles them
+/// into a list of row objects (e.g. multi-target credentials: N ports, or N
+/// `{database, port}` pairs under one shared host).
+///
+/// Each row renders every child in [inputs]; the compiled value is a list of
+/// `{key: value}` objects — emitted as a real JSON array when [emitArray] is
+/// true (the default), or as a JSON-stringified array for legacy consumers when
+/// false. Row add/remove is bounded by [minRows]/[maxRows], and
+/// [allowJsonImport] adds a bulk "Import JSON" action that replaces the rows.
+///
+/// Unlike [InputRepeater] (a repeatable list of single text inputs emitting
+/// `list[str]`), each Repeater row is an object with typed child widgets.
+///
+/// Typically nested inside a credential auth pane's `extraFields` via
+/// `NamedWidget` so the compiled value lands under the credential's `extra`
+/// object (e.g. `basic.extra.targets`):
+/// ```
+/// extraFields {
+///   new NamedWidget {
+///     name = "targets"
+///     widget = new Widgets.Repeater {
+///       title = "Ports"
+///       inputs {
+///         ["port"] = new Widgets.TextInput { title = "Port"; required = false }
+///       }
+///       maxRows = 100
+///       allowJsonImport = true
+///     }
+///   }
+/// }
+/// ```
+class Repeater extends UIElement {
+  fixed type = "string"
+  required: Boolean? = false
+
+  /// Child inputs rendered inside every row, keyed by the row-object key each emits.
+  hidden inputs: Mapping<String(lower_snake_case), UIElement>
+
+  /// (Optional) Number of rows rendered for a brand-new form (frontend defaults to 1).
+  hidden defaultRowCount: Int?
+
+  /// Minimum number of rows; row removal is disabled at this count.
+  hidden minRows: Int = 1
+
+  /// (Optional) Maximum number of rows; row addition is disabled at this count.
+  hidden maxRows: Int?
+
+  /// Emit the compiled value as a real JSON array instead of a JSON string.
+  hidden emitArray: Boolean = true
+
+  /// Show the bulk "Import JSON" action that replaces the current rows.
+  hidden allowJsonImport: Boolean = false
+
+  /// (Generated) Details of the child inputs rendered inside every row.
+  fixed properties: Map<String, UIElement> = inputs.toMap()
+
+  /// (Generated) Internal configuration for the UI's rendering.
+  fixed ui {
+    widget = "Repeater"
+    defaultItems = defaultRowCount
+    minItems = minRows
+    maxItems = maxRows
+    shouldEmitArray = emitArray
+    canImportJson = allowJsonImport
   }
 }
 

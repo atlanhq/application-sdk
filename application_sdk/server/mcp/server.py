@@ -6,7 +6,9 @@ activities marked with @mcp_tool decorators and mounts them on FastAPI
 using streamable HTTP transport.
 """
 
-from typing import Optional
+import functools
+import inspect
+from typing import Any, Callable, Optional
 
 from fastmcp import FastMCP
 from fastmcp.server.http import StarletteWithLifespan
@@ -16,9 +18,47 @@ from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.server.mcp.models import MCPMetadata
 
 
+def _bind_task_for_mcp(app_name: str, task_meta: Any) -> Callable[..., Any]:
+    """Return an MCP-callable wrapper around an unbound ``@task`` method.
+
+    ``TaskMetadata.func`` is the original *unbound* method, so handing it to
+    FastMCP directly leaks ``self`` into the tool's JSON schema and every call
+    fails validation. Mirror the Temporal execution path instead: instantiate
+    the owning App class per call (``AppRegistry.get(app_name).app_cls()``) and
+    invoke the original function against that instance. ``self`` is removed
+    from the advertised signature so the schema only carries the task's Input.
+
+    The App class is resolved lazily at call time, not registration time,
+    because MCP registration runs during server startup and must not depend on
+    AppRegistry population order.
+    """
+    func = task_meta.func
+    signature = inspect.signature(func)
+    if "self" not in signature.parameters:
+        return func
+
+    @functools.wraps(func)
+    async def _invoke(*args: Any, **kwargs: Any) -> Any:
+        from application_sdk.app.registry import (  # noqa: PLC0415 — circular: app.registry imports execution-related modules
+            AppRegistry,
+        )
+
+        app_instance = AppRegistry.get_instance().get(app_name).app_cls()
+        return await func(app_instance, *args, **kwargs)
+
+    _invoke.__signature__ = signature.replace(  # type: ignore[attr-defined]
+        parameters=[
+            param
+            for param_name, param in signature.parameters.items()
+            if param_name != "self"
+        ]
+    )
+    return _invoke
+
+
 class MCPServer:
     """
-    MCP Server using FastMCP 2.0 with FastAPI mounting capability.
+    MCP Server using FastMCP with FastAPI mounting capability.
 
     This server automatically discovers activities marked with @mcp_tool
     and creates a FastMCP server that can be mounted on FastAPI.
@@ -40,7 +80,7 @@ class MCPServer:
         self.server = FastMCP(
             name=f"{application_name} MCP",
             instructions=instructions,
-            on_duplicate_tools="error",
+            on_duplicate="error",
         )
 
     async def register_tools_from_registry(self, app_name: str) -> None:
@@ -50,6 +90,11 @@ class MCPServer:
         ``(WorkflowInterface, ActivitiesInterface)`` pairs, it reads
         ``TaskRegistry`` for the given app and checks each ``TaskMetadata.func``
         for the ``MCP_METADATA_KEY`` attribute set by ``@mcp_tool``.
+
+        Tool calls execute in-process in the server (no Temporal hop), against
+        a fresh App instance per call — matching the Temporal activity
+        execution model. ``@task`` timeout/retry semantics do NOT apply on the
+        MCP path.
 
         Args:
             app_name: The app name used to look up tasks in the registry.
@@ -78,7 +123,7 @@ class MCPServer:
                     mcp_metadata.description,
                 )
                 self.server.tool(
-                    task_meta.func,
+                    _bind_task_for_mcp(app_name, task_meta),
                     name=mcp_metadata.name,
                     description=mcp_metadata.description,
                     *mcp_metadata.args,
@@ -91,11 +136,11 @@ class MCPServer:
                     mcp_metadata.name,
                 )
 
-        tools = await self.server.get_tools()
+        tools = await self.server.list_tools()
         self.logger.info(
             "Registered %d MCP tools from registry: %s",
             len(tools),
-            list(tools.keys()),
+            [tool.name for tool in tools],
         )
 
     async def get_http_app(self) -> StarletteWithLifespan:

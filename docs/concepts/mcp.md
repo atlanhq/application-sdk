@@ -10,7 +10,7 @@ MCP integration allows you to expose your application's tasks as AI tools that c
 
 - **Zero-code AI integration**: Simply add the `@mcp_tool` decorator to existing tasks
 - **Automatic parameter flattening**: Pydantic models are automatically expanded into individual parameters for better AI experience
-- **FastMCP 2.0 compatibility**: Uses the latest MCP server implementation with streamable HTTP transport
+- **FastMCP 3.x compatibility**: Uses the latest MCP server implementation with streamable HTTP transport
 - **Hot-pluggable**: Enable/disable MCP without changing your core application logic
 
 ## Installation
