@@ -105,13 +105,25 @@ def normalize_agent_json(
 
     try:
         return spec_type.model_validate(value)
-    except (ValidationError, CredentialError):
+    except (ValidationError, CredentialError) as exc:
+        # Never log exc_info here: pydantic v2 renders the failing field's own
+        # input_value into the traceback, and a spec carries connector
+        # credential extras as flat dotted keys (``basic.password``,
+        # ``api-key``, …) — so a traceback of a rejection lands the raw
+        # rejected value in logs. The sanitised error list (no input, no
+        # context, no URL) keeps the field path and the reason, which is what
+        # a debugger needs.
+        details = (
+            exc.errors(include_url=False, include_input=False, include_context=False)
+            if isinstance(exc, ValidationError)
+            else []
+        )
         logger.debug(
             "agent_json is not a valid %s; treating the request as having no "
             "agent reference (typically a marketplace-package placeholder "
-            "default replayed from the connection record)",
+            "default replayed from the connection record): %s",
             spec_type.__name__,
-            exc_info=True,
+            details or str(exc),
         )
         return None
 
@@ -201,10 +213,16 @@ def _freshness(binding: tuple[str, Any]) -> tuple[int, int]:
     snapshot that lags behind the user's edits. Picking the wrong one silently
     runs against stale credentials. So prefer a parsed object over a
     serialized string (freshness), then the canonical hyphen spelling
-    (tie-break), then discovery order (stable sort).
+    (tie-break), then discovery order (stable sort). A typed
+    :class:`AgentCredentialSpec` counts as parsed — it is the most-processed
+    form, so ranking it with the serialized strings would let a stale string
+    snapshot beat a current typed spec.
     """
     alias, raw = binding
-    return (1 if isinstance(raw, dict) else 0, 1 if alias == "agent-json" else 0)
+    return (
+        1 if isinstance(raw, (dict, AgentCredentialSpec)) else 0,
+        1 if alias == "agent-json" else 0,
+    )
 
 
 def _first_valid(bindings: list[tuple[str, Any]]) -> AgentCredentialSpec | None:
@@ -218,9 +236,11 @@ def _first_valid(bindings: list[tuple[str, Any]]) -> AgentCredentialSpec | None:
         spec = normalize_agent_json(raw)
         if spec is not None:
             return spec
-    logger.debug(
-        "No agent-json binding in this request is a valid AgentCredentialSpec; "
-        "handling it as direct mode"
+    logger.warning(
+        "Discarding %d present-but-invalid agent-json binding(s); handling the "
+        "request as direct mode (usually a marketplace placeholder, but a "
+        "genuinely malformed agent reference downgrades the same way)",
+        len(bindings),
     )
     return None
 

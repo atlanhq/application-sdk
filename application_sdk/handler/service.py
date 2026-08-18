@@ -1216,6 +1216,25 @@ def _register_workflow_routes(
 
         except HTTPException:
             raise
+        except ValidationError as e:
+            # The form endpoints (auth/check/metadata) validate their own body
+            # *outside* any error boundary, so their ValidationError propagates
+            # to the app-level 422 handler. Here the body is validated *inside*
+            # this try, and Starlette's exception middleware routes *any*
+            # exception escaping the route to a registered handler — so a bare
+            # re-raise would still reach the 422 handler. Convert instead:
+            # an internal validation failure on /start is a 500, never "the
+            # request did not fit the contract".
+            # conformance: ignore[L009] boundary handler logs the real exception (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record of the actual failure.
+            logger.error(
+                "Workflow input validation failed for app %s: %s",
+                app_name,
+                e,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=500, detail="Failed to start workflow"
+            ) from None
         except TypeError as e:
             # conformance: ignore[L009] boundary handler logs the real exception (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record of the actual failure.
             logger.error(
@@ -2580,9 +2599,13 @@ def create_app_handler_service(
         opaque JSON-decode failure with no hint of which field was wrong. The
         offending field name is the whole diagnosis, so say it.
 
-        Only ingress validation reaches here — each endpoint wraps its own body
-        in a broad ``except`` that answers 500 — so a 422 always means "the
-        request did not fit the contract", never "the handler failed".
+        Only ingress validation reaches here: the form endpoints (auth /
+        preflight / metadata) validate their body *before* entering their
+        error boundary, so their contract failures propagate to this handler,
+        while ``/start`` validates inside its boundary and explicitly
+        re-raises ``ValidationError`` past this handler — so a 422 always
+        means "the request did not fit the contract", never "the handler
+        failed".
 
         Pydantic's ``input`` and ``ctx`` are omitted: the rejected value can be
         a credential, and the field path plus the reason is what a caller can

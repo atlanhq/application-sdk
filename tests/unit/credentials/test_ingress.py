@@ -193,6 +193,20 @@ class TestLiftAgentJson:
         out = lift_agent_json({"metadata": {"agent_json": self._STALE}})
         assert self._raw(out)["basic.username"] == "username"
 
+    def test_typed_spec_beats_a_stale_serialized_string(self) -> None:
+        """A typed spec is the most-processed form — it must rank as parsed.
+
+        Ranking it with the serialized strings would let a stale string
+        snapshot (which lags the user's edits) beat a current typed spec —
+        the stale-credential selection the freshness ordering exists to
+        prevent.
+        """
+        typed = AgentCredentialSpec.model_validate(self._FRESH)
+        out = lift_agent_json(
+            {"metadata": {"agent_json": self._STALE, "agentJson": typed}}
+        )
+        assert self._raw(out)["basic.username"] == "USERNAME"
+
     def test_top_level_fresh_hyphen_overrides_stale_underscore(self) -> None:
         out = lift_agent_json({"agent_json": self._STALE, "agent-json": self._FRESH})
         assert self._raw(out)["basic.username"] == "USERNAME"

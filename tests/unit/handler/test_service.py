@@ -7082,6 +7082,47 @@ class TestAgentJsonIngressOnTheHandlerPath:
         assert validated.agent_json.agent_name == "acme-agent"
         assert validated.agent_json.is_populated()
 
+    def test_start_internal_validation_failure_stays_a_500(self) -> None:
+        """``/start`` validates its body *inside* its error boundary.
+
+        The app-level 422 handler exists for the form endpoints (auth /
+        preflight / metadata), which validate *outside* any boundary. A
+        ValidationError escaping ``/start``'s boundary is an internal bug, so
+        ``/start`` re-raises it past the 422 handler — it must surface as the
+        sanitized 500 the boundary answers, never as "the request did not fit
+        the contract".
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _StartValidationApp(App):
+            @entrypoint
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        svc = create_app_handler_service(
+            _TestHandler(),
+            app_name="start-validation",
+            app_class=_StartValidationApp,
+            temporal_host="temporal:7233",
+        )
+        patcher = patch(
+            "application_sdk.handler.service._get_temporal_client",
+            new=AsyncMock(return_value=MagicMock()),
+        )
+        patcher.start()
+        try:
+            # Input.correlation_id is a `str`; pydantic v2 rejects an int, so
+            # model_validate raises inside the /start try block.
+            response = TestClient(svc, raise_server_exceptions=False).post(
+                "/workflows/v1/start", json={"correlation_id": 123}
+            )
+            assert response.status_code == 500
+        finally:
+            patcher.stop()
+
 
 class TestManifestPostTransport:
     """``POST /manifest`` — the body transport for ``fe_inputs`` (CSA-539).
