@@ -926,6 +926,17 @@ def test_object_store_download_error_is_same_object_on_both_paths() -> None:
     assert public_cls is private_cls
 
 
+def test_object_store_errors_in_utils_are_the_public_classes() -> None:
+    """``storage/formats/utils.py`` is the internal re-export consumer the PR
+    body names as a keep-working caller — the names it raises must be the very
+    classes the public surface exports, not surviving sibling definitions."""
+    from application_sdk.errors import ObjectStoreDownloadError, ObjectStoreReadError
+    from application_sdk.storage.formats import utils
+
+    assert utils.ObjectStoreReadError is ObjectStoreReadError
+    assert utils.ObjectStoreDownloadError is ObjectStoreDownloadError
+
+
 def test_object_store_errors_are_listed_in_errors_all() -> None:
     import application_sdk.errors as errors_pkg
 

@@ -165,6 +165,19 @@ def test_p043_silent_on_a_promoted_class_imported_publicly() -> None:
     assert scan_text(src, "app/utils/io.py") == []
 
 
+def test_promoted_class_on_the_legacy_path_yields_p044_only() -> None:
+    """Mid-migration state: a promoted class still imported from the internal
+    module is a P044 import-path finding, never a P043 control-flow finding —
+    P043's "not exported" claim would be false for it."""
+    src = (
+        "from application_sdk.storage.formats.format_errors import "
+        "ObjectStoreReadError\n"
+        "try:\n    pass\nexcept ObjectStoreReadError:\n    raise\n"
+    )
+    findings = scan_text(src, "app/utils/io.py")
+    assert [f.rule_id for f in findings] == ["P044"]
+
+
 def test_p043_silent_on_a_non_error_sdk_base_class() -> None:
     """Without the Error-suffix guard this flags every App and Input subclass."""
     src = "from application_sdk.app import App\nclass MyApp(App):\n    pass\n"
@@ -200,7 +213,13 @@ def test_p043_suppressed_inline() -> None:
 
 
 def test_reproduces_the_connect_970_shape() -> None:
-    """The real code from the incident: one import line, one dead guard."""
+    """The real code from the incident: one import line, one dead guard.
+
+    Both imports are one P044 statement.  On the control-flow side,
+    ``FormatReadError`` (still internal) draws a P043, but the promoted
+    ``ObjectStoreReadError`` does not — P043's "not exported" claim would be
+    false for it, and P044 already owns the import-path migration.
+    """
     src = (
         "from application_sdk.storage.formats.format_errors import (\n"
         "    FormatReadError,\n"
@@ -219,7 +238,9 @@ def test_reproduces_the_connect_970_shape() -> None:
         "    return isinstance(exc, ObjectStoreReadError)\n"
     )
     assert len(_rule(src, "P044")) == 1
-    assert len(_rule(src, "P043")) == 2
+    assert len(_rule(src, "P043")) == 1
+    (p043,) = _rule(src, "P043")
+    assert "FormatReadError" in p043.message
 
 
 # ── Discovery ────────────────────────────────────────────────────────────────

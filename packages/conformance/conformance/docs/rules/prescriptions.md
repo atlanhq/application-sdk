@@ -1744,6 +1744,11 @@ app's SDK range spans the change.
 A bare annotation such as `def f() -> X | None` is not flagged here; it changes no
 behaviour, and P044 already covers the import.
 
+Resolution covers the `from X import Y` form only: a qualified- attribute reference such
+as `import ...format_errors as fe` followed by `except fe.FormatReadError` resolves to
+no directly bound name and is a documented non-goal (every real occurrence across the
+app fleet uses the direct form).
+
 Land as `WARN`: a justified inline `# conformance: ignore[P043] <reason>` records any
 unavoidable exception and stays visible in SARIF.
 
@@ -1777,6 +1782,11 @@ Only `Error`-suffixed names are flagged.  These modules also hold helper functio
 apps use legitimately (for example `convert_datetime_to_epoch` and `process_null_fields`
 from `storage.formats.utils`), and those have no public equivalent to move to, so
 flagging them would only farm suppressions.
+
+Resolution covers the `from X import Y` form only: a qualified- attribute reference such
+as `import ...format_errors as fe` followed by `except fe.FormatReadError` resolves to
+no directly bound name and is a documented non-goal (every real occurrence across the
+app fleet uses the direct form).
 
 Land as `WARN`: a justified inline `# conformance: ignore[P044] <reason>` records any
 unavoidable exception and stays visible in SARIF.

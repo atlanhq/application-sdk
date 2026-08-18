@@ -129,11 +129,22 @@ def covered_error_name(origin: str | None) -> str | None:
     error class from the helper functions that share these modules — every one
     of the SDK's 184 error classes ends in ``Error``, and no other SDK class
     does, so ``convert_datetime_to_epoch`` and friends are correctly ignored.
+
+    A name the public surface already exports returns ``None``: P044 alone owns
+    the import-path migration for a promoted class, and P043's "not exported"
+    claim would be false for it.  The drift guard keeps the allowlist current,
+    so a class later removed from ``__all__`` resumes firing here.
     """
     if not origin or not origin.startswith(COVERED_MODULE_PREFIX):
         return None
     name = origin.rsplit(".", 1)[-1]
-    return name if name.endswith("Error") else None
+    if not name.endswith("Error"):
+        return None
+    # Promoted classes: P044 owns the import-path migration; P043's
+    # "not exported" claim would be false for these.
+    if name in load_allowlist():
+        return None
+    return name
 
 
 def remediation(name: str) -> str:
