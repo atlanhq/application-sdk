@@ -1,11 +1,16 @@
-"""Tests for the external-alias runtime-introspection fallback in
+"""Tests for the symbol-discovery and alias-resolution paths in
 .claude/skills/capability-manifest/references/extractor.py.
 
-Griffe only loads the application_sdk package, so it can never resolve an alias
-pointing outside it (e.g. a re-exported temporalio class) -- extractor.py falls
-back to importlib/inspect for those. That fallback has no test coverage of its
-own elsewhere: it is exercised only by eyeballing the regenerated
-docs/agents/sdk-capabilities.md. These tests pin its behavior directly.
+Two things are pinned here, both otherwise checked only by eyeballing the
+regenerated docs/agents/sdk-capabilities.md:
+
+- The external-alias runtime-introspection fallback. Griffe only loads the
+  application_sdk package, so it can never resolve an alias pointing outside it
+  (e.g. a re-exported temporalio class) -- extractor.py falls back to
+  importlib/inspect for those.
+- Which modules the manifest indexes. Every public module declaring __all__ is
+  discovered by walking the tree, submodules included; a hand-maintained list of
+  subpackages is what made `run_in_thread` invisible in the manifest (FND-439).
 
 extractor.py is a standalone script, not a package member, so it is loaded by
 file path (same pattern used for .github/scripts/*.py in
@@ -110,6 +115,13 @@ class _FakeGriffeAlias:
         if self._raise_on_access:
             raise RuntimeError("simulated AliasResolutionError")
         return self._target_path
+
+
+class _FakeGriffeModule:
+    """A node in griffe's member graph, for walking it without loading the SDK."""
+
+    def __init__(self, members: Dict[str, Any]) -> None:
+        self.members = members
 
 
 # ---------------------------------------------------------------------------
@@ -397,3 +409,134 @@ def test_symbol_for_uses_griffe_path_directly_when_not_an_alias() -> None:
     result = extractor._symbol_for("plain_symbol", griffe_obj)
     assert result["name"] == "plain_symbol"
     assert result["kind"] == extractor.KIND_CONSTANT
+
+
+# ---------------------------------------------------------------------------
+# Public-module discovery (FND-439). A hand-maintained list of subpackages read
+# only package __init__ files, so anything a *submodule* declared in __all__ was
+# absent from the manifest -- which is how
+# `from application_sdk.execution.heartbeat import run_in_thread` came to be
+# undiscoverable there while resolving perfectly at runtime.
+# ---------------------------------------------------------------------------
+
+
+def test_discover_public_modules_finds_submodule_all() -> None:
+    found = {dotted for _, dotted, _ in extractor.discover_public_modules()}
+    assert "application_sdk.execution.heartbeat" in found
+    assert "application_sdk.execution" in found
+
+
+def test_discover_public_modules_reports_the_offload_seam() -> None:
+    """The specific regression: run_in_thread is named in a submodule's __all__ and in
+    no package __init__ at all, its implementation having moved to the private
+    _runtime substrate under ADR-0019."""
+    names = {
+        dotted: all_names
+        for _, dotted, all_names in extractor.discover_public_modules()
+    }
+    assert "run_in_thread" in names["application_sdk.execution.heartbeat"]
+    assert "run_in_thread" not in names["application_sdk.execution"]
+
+
+def test_discover_public_modules_skips_private_modules() -> None:
+    found = {dotted for _, dotted, _ in extractor.discover_public_modules()}
+    # The seam's real home is deliberately unpublished: its public path is the
+    # re-export from execution/heartbeat.py.
+    assert "application_sdk._runtime.offload" not in found
+    # Nor any module under a private parent (execution._temporal declares __all__).
+    assert not any("._" in dotted for dotted in found)
+
+
+def test_discover_public_modules_orders_package_before_its_submodules() -> None:
+    """The caller treats the first module to export a name as the canonical import
+    path, so a package __init__ has to be visited before anything beneath it."""
+    execution = [
+        dotted
+        for subpkg, dotted, _ in extractor.discover_public_modules()
+        if subpkg == "execution"
+    ]
+    assert execution[0] == "application_sdk.execution"
+    assert len(execution) > 1
+
+
+def test_discover_public_modules_groups_every_module_under_its_subpackage() -> None:
+    for subpkg, dotted, _ in extractor.discover_public_modules():
+        assert dotted == f"application_sdk.{subpkg}" or dotted.startswith(
+            f"application_sdk.{subpkg}."
+        )
+
+
+def test_discover_public_modules_ignores_modules_without_all() -> None:
+    found = {dotted for _, dotted, _ in extractor.discover_public_modules()}
+    # transformers/ declares no __all__ anywhere: declaring one is how a module
+    # opts into the manifest.
+    assert not any(d.startswith("application_sdk.transformers") for d in found)
+
+
+# ---------------------------------------------------------------------------
+# _rendered_as_contract
+# ---------------------------------------------------------------------------
+
+_CONTRACTS: Dict[str, Any] = {
+    "application_sdk.templates.contracts": [{"name": "UploadInput"}],
+}
+
+
+def test_rendered_as_contract_matches_the_namespace_itself() -> None:
+    assert extractor._rendered_as_contract(
+        "application_sdk.templates.contracts", "UploadInput", _CONTRACTS
+    )
+
+
+def test_rendered_as_contract_matches_a_descendant_module() -> None:
+    """A submodule re-exporting a contract that its parent namespace already renders
+    with full field detail must not be emitted again as a bare class signature."""
+    assert extractor._rendered_as_contract(
+        "application_sdk.templates.contracts.incremental_sql",
+        "UploadInput",
+        _CONTRACTS,
+    )
+
+
+def test_rendered_as_contract_false_for_a_non_contract_name() -> None:
+    """contracts/compat.py exports functions, which the Contracts section -- Pydantic
+    models only -- never renders. Skipping whole modules would have dropped them."""
+    assert not extractor._rendered_as_contract(
+        "application_sdk.contracts.compat", "assert_backwards_compatible", _CONTRACTS
+    )
+
+
+def test_rendered_as_contract_false_for_an_unrelated_module() -> None:
+    assert not extractor._rendered_as_contract(
+        "application_sdk.execution.heartbeat", "UploadInput", _CONTRACTS
+    )
+
+
+def test_rendered_as_contract_does_not_prefix_match_a_sibling_module() -> None:
+    assert not extractor._rendered_as_contract(
+        "application_sdk.templates.contracts_extra", "UploadInput", _CONTRACTS
+    )
+
+
+# ---------------------------------------------------------------------------
+# _navigate_module
+# ---------------------------------------------------------------------------
+
+
+def test_navigate_module_walks_to_a_nested_module() -> None:
+    leaf = _FakeGriffeModule({})
+    tree = _FakeGriffeModule({"execution": _FakeGriffeModule({"heartbeat": leaf})})
+    assert (
+        extractor._navigate_module(tree, "application_sdk.execution.heartbeat") is leaf
+    )
+
+
+def test_navigate_module_returns_none_for_a_missing_module() -> None:
+    """None is the signal that an ancestor directory has no __init__.py, making the
+    module an implicit namespace package that griffe never descends into. cmd_dump
+    treats it as fatal rather than skipping the module silently."""
+    tree = _FakeGriffeModule({"execution": _FakeGriffeModule({})})
+    assert (
+        extractor._navigate_module(tree, "application_sdk.execution.heartbeat") is None
+    )
+    assert extractor._navigate_module(tree, "application_sdk.server.mcp") is None
