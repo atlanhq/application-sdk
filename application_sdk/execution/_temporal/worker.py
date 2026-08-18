@@ -123,12 +123,13 @@ async def read_core_poller_counts() -> dict[str, float] | None:
         async with httpx.AsyncClient(
             timeout=TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS
         ) as http_client:
-            # Stream so the read is genuinely bounded: reject on a declared
-            # oversize Content-Length, else accumulate chunks and bail the
-            # moment the running total crosses the cap — so even a chunked or
-            # under-reported response never allocates more than the cap in
-            # aggregate. Passing chunk_size=cap also bounds each single
-            # allocation, so one oversize chunk cannot be read in full. An
+            # Stream so the read is bounded: reject on a declared oversize
+            # Content-Length, else accumulate chunks and bail the moment the
+            # running total crosses the cap. Passing chunk_size=cap bounds each
+            # chunk yielded to this loop; the running-total check bounds the
+            # retained bytes. (httpx may still buffer an individual raw
+            # transport chunk internally above the cap, so this bounds what the
+            # loop retains rather than every transient allocation.) An
             # unbounded response.text would let a high-cardinality or
             # misbehaving local exporter allocate an unbounded string each
             # interval. Oversize is unknown (None), never zero.
@@ -847,7 +848,9 @@ def create_worker(
         # minimal line that does not render ``exc`` — otherwise the hook
         # propagates and temporalio's own "Fatal error handler failed" wrapper
         # silently swaps in, losing the rich cause-chain log this hook exists
-        # to produce.
+        # to produce. exc_info=True logs the traceback of the *rendering
+        # failure* (the ordinary exception raised while logging), never
+        # ``exc`` — so the original fatal is still not re-rendered on this path.
         try:
             await _log_worker_fatal_error(exc)
         except BaseException:
@@ -855,6 +858,7 @@ def create_worker(
                 "Temporal worker poll loop failed fatally (cause chain "
                 "unavailable: rendering the exception raised %s)",
                 type(exc).__name__,
+                exc_info=True,
             )
         if on_fatal_error is None:
             return
