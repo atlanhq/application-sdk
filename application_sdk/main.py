@@ -1016,14 +1016,27 @@ _RECOVERABLE_POLL_ERROR_MARKERS = (
 def _is_recoverable_poll_failure(exc: BaseException) -> bool:
     """True when ``exc`` is the transient auth-rejection class a restart fixes.
 
-    Matches the fatal's message (lowercased) against the known transient markers.
-    The watchdog's own ``WorkerPollStalledError`` is always recoverable — that is
-    precisely the zombie-poll case the rebuild exists to heal.
+    temporalio wraps the real poll fatal — ``raise RuntimeError("Workflow
+    worker failed") from <rust_error>`` — so the ``PermissionDenied`` /
+    ``Request unauthorized.`` markers live in ``__cause__``/``__context__``, not
+    in ``str(exc)``. Walk the whole chain (cycle-protected) and match each
+    nested message. The watchdog's own ``WorkerPollStalledError`` is always
+    recoverable — that is precisely the zombie-poll case the rebuild exists to
+    heal.
     """
     if isinstance(exc, WorkerPollStalledError):
         return True
-    message = str(exc).lower()
-    return any(marker in message for marker in _RECOVERABLE_POLL_ERROR_MARKERS)
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        message = str(current).lower()
+        if any(marker in message for marker in _RECOVERABLE_POLL_ERROR_MARKERS):
+            return True
+        # __cause__ is the explicit "raise ... from"; fall back to __context__
+        # for an implicit chain during handling.
+        current = current.__cause__ or current.__context__
+    return False
 
 
 async def _worker_is_polling(

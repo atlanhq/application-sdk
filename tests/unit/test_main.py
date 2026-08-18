@@ -2546,6 +2546,52 @@ class TestRunWorkerWithRestart:
 
         assert calls["n"] == 3
 
+    async def test_recovers_wrapped_permission_denied_past_cap(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A marker nested in ``__cause__`` is still classified recoverable.
+
+        temporalio surfaces a poll fatal as a generic wrapper —
+        ``raise RuntimeError("Workflow worker failed") from <rust_error>`` — with
+        ``PermissionDenied`` / ``Request unauthorized.`` in ``__cause__``, not in
+        ``str(exc)`` (see tests/integration/test_temporal_docker_auth.py). The
+        classifier must walk the chain, or it would re-raise on exactly the
+        transient auth rejection this PR exists to survive.
+        """
+        monkeypatch.setattr("application_sdk.main._WORKER_MAX_CONSECUTIVE_RESTARTS", 2)
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_RESTART_BACKOFF_CAP_SECONDS", 0
+        )
+        shutdown = asyncio.Event()
+        calls = {"n": 0}
+
+        class _WrappedAuthWorker:
+            """Wraps a PermissionDenied the way temporalio's Rust bridge does."""
+
+            async def __aenter__(self) -> "_WrappedAuthWorker":
+                try:
+                    raise RuntimeError(
+                        "Poll failure: Unhandled grpc error when polling: "
+                        "PermissionDenied: Request unauthorized."
+                    )
+                except RuntimeError as rust_error:
+                    raise RuntimeError("Workflow worker failed") from rust_error
+
+            async def __aexit__(self, *args: Any) -> bool:
+                return False
+
+        def build() -> Any:
+            calls["n"] += 1
+            if calls["n"] >= 6:
+                return _FakeWorker(fail=False, on_enter=shutdown.set)
+            return _WrappedAuthWorker()
+
+        # Must keep recovering (never re-raise) despite the wrapper hiding the
+        # marker in __cause__, well past the cap of 2.
+        await _run_worker_with_restart(build_worker=build, shutdown_event=shutdown)
+
+        assert calls["n"] == 6
+
     async def test_shutdown_during_backoff_stops_promptly(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -2715,19 +2761,26 @@ class TestPollLivenessWatchdog:
 
 
 class _FakeHealthServer:
-    """Records the recovery-state transitions the supervisor drives."""
+    """Records the recovery-state transitions the supervisor drives.
+
+    Stateful: mirrors the real ``WorkerHealthServer`` so a regression that calls
+    ``record_poll_ok`` without clearing the reconnecting state is caught.
+    """
 
     def __init__(self) -> None:
         self.reconnecting_calls: list[tuple[bool, int]] = []
         self.poll_ok_calls = 0
+        self.reconnecting = False
 
     def set_reconnecting(
         self, reconnecting: bool, consecutive_failures: int = 0
     ) -> None:
         self.reconnecting_calls.append((reconnecting, consecutive_failures))
+        self.reconnecting = reconnecting
 
     def record_poll_ok(self) -> None:
         self.poll_ok_calls += 1
+        self.reconnecting = False
 
 
 class TestSupervisorWatchdogWiring:
@@ -2834,6 +2887,8 @@ class TestSupervisorWatchdogWiring:
         assert any(r for (r, _n) in health.reconnecting_calls)
         # ...and the recovered worker's poll-ok callback fired to clear it.
         assert health.poll_ok_calls >= 1
+        # The reconnecting state itself is cleared, not just the call recorded.
+        assert health.reconnecting is False
 
     async def test_watchdog_disabled_without_task_queue(
         self, monkeypatch: pytest.MonkeyPatch
