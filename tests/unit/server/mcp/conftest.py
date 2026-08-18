@@ -17,6 +17,10 @@ from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.server.mcp.decorators import mcp_tool
+from application_sdk.testing import clean_app_registry, clean_task_registry
+
+# Referenced so the fixture signatures below pick them up as dependencies.
+__all__ = ["clean_app_registry", "clean_task_registry"]
 
 APP_NAME = "mcp-probe-app"
 
@@ -40,15 +44,17 @@ class ProbeApp:
 
 
 @pytest.fixture
-def probe() -> Iterator[ProbeApp]:
+def probe(
+    clean_app_registry: AppRegistry,
+    clean_task_registry: TaskRegistry,
+) -> Iterator[ProbeApp]:
     """Register a real App whose tasks cover every discovery branch.
 
     The registries are process-wide singletons, so they are reset around the
-    fixture and the App class is declared inside it — that keeps registration
-    from leaking into (or being clobbered by) other modules.
+    fixture (via the shared ``clean_*_registry`` fixtures) and the App class is
+    declared inside it — that keeps registration from leaking into (or being
+    clobbered by) other modules.
     """
-    AppRegistry.reset()
-    TaskRegistry.reset()
     instances: list[App] = []
 
     class McpProbeApp(App):
@@ -73,6 +79,3 @@ def probe() -> Iterator[ProbeApp]:
             return ProbeOutput(result="plain")
 
     yield ProbeApp(app_cls=McpProbeApp, instances=instances)
-
-    AppRegistry.reset()
-    TaskRegistry.reset()
