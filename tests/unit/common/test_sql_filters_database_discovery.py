@@ -33,19 +33,13 @@ def _args(include_filter: object) -> dict:
 
 
 class TestAnchoredLiteralKeysSkipDiscovery:
-    """The shortcut itself — an anchored literal is equivalent to its own name."""
+    """The shortcut itself — a fully anchored literal is its own only match."""
 
     async def test_anchored_literal_is_used_without_querying(self) -> None:
         client = _sql_client("should_not_be_consulted")
         names = await get_database_names(
             client, _args({"^mydb$": ["^public$"]}), _FETCH_SQL
         )
-        assert names == ["mydb"]
-        client.get_results.assert_not_called()
-
-    async def test_bare_literal_is_used_without_querying(self) -> None:
-        client = _sql_client("should_not_be_consulted")
-        names = await get_database_names(client, _args({"mydb": ["*"]}), _FETCH_SQL)
         assert names == ["mydb"]
         client.get_results.assert_not_called()
 
@@ -95,6 +89,28 @@ class TestPatternKeysFallThroughToDiscovery:
             client, _args({"^(alpha|beta)$": ["*"]}), _FETCH_SQL
         )
         assert names == ["alpha", "beta"]
+        client.get_results.assert_awaited_once()
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "^benchmark_",  # starts-with — the original bug, reached without metachars
+            "benchmark_$",  # ends-with
+            "benchmark_",  # contains
+        ],
+    )
+    async def test_a_partly_anchored_key_queries_the_source(self, key: str) -> None:
+        """Anchors are load-bearing: without both, the key matches a *set*.
+
+        This is the case a metacharacter-only check misses. ``^benchmark_``
+        contains no metacharacters, so it looks literal — but it means "starts
+        with benchmark_", and treating it as the name ``benchmark_`` reproduces
+        the exact phantom database the fix exists to prevent.
+        """
+        client = _sql_client("benchmark_1", "benchmark_2")
+        names = await get_database_names(client, _args({key: ["*"]}), _FETCH_SQL)
+        assert names == ["benchmark_1", "benchmark_2"]
+        assert "benchmark_" not in names
         client.get_results.assert_awaited_once()
 
     async def test_one_pattern_among_literals_still_queries_the_source(self) -> None:
