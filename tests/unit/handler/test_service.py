@@ -7043,7 +7043,15 @@ class TestAgentJsonIngressOnTheHandlerPath:
         validated = PreflightInput.model_validate(body)  # must not raise
         assert validated.agent_json is None
 
-    def test_malformed_body_is_a_422_naming_the_field(self) -> None:
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            "/workflows/v1/auth",
+            "/workflows/v1/check",
+            "/workflows/v1/metadata",
+        ],
+    )
+    def test_malformed_body_is_a_422_naming_the_field(self, endpoint: str) -> None:
         """A body that does not fit the contract must say which field.
 
         The endpoints validate their own body (they normalise v2 wire shapes
@@ -7051,10 +7059,16 @@ class TestAgentJsonIngressOnTheHandlerPath:
         plain-text 500 — reaching the caller as an opaque JSON-decode error with
         no hint of the offending field. That is why the placeholder bug above
         took a full investigation to pin.
+
+        Parameterized over the three ingress endpoints (auth / check /
+        metadata): all route through the same ``_validate_request`` call and
+        their contracts share ``timeout_seconds: int``, so the same malformed
+        body proves each route answers a field-named 422 (route-drift
+        protection, not just the shared mechanism).
         """
         client = _make_client()
         response = client.post(
-            "/workflows/v1/check",
+            endpoint,
             json={"credentials": [], "timeout_seconds": "not-a-number"},
         )
 
@@ -7116,7 +7130,6 @@ class TestAgentJsonIngressOnTheHandlerPath:
         every internal validation failure — anywhere in the app, including a
         handler's own models — into "the request did not fit the contract".
         """
-        outer = self
 
         class _StrayValidationHandler(_TestHandler):
             async def preflight_check(self, input: PreflightInput) -> PreflightOutput:

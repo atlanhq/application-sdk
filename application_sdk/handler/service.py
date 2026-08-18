@@ -164,8 +164,8 @@ class _RequestContractError(Exception):
 
     def __init__(self, cause: ValidationError) -> None:
         super().__init__(str(cause))
+        # The pydantic failure, kept so the handler can name the fields.
         self.cause = cause
-        """The pydantic failure, kept so the handler can name the fields."""
 
 
 def _validate_request(model: type[ModelT], body: dict[str, Any]) -> ModelT:
