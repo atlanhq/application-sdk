@@ -113,17 +113,22 @@ def normalize_agent_json(
         # rejected value in logs. The sanitised error list (no input, no
         # context, no URL) keeps the field path and the reason, which is what
         # a debugger needs.
+        # Fully resolved before the call, not composed inside it: a log
+        # argument is evaluated eagerly whatever the level, so the sanitising
+        # has to be the only thing that ever runs. A CredentialParseError's own
+        # text names the parse failure without quoting the payload, so it is
+        # safe to pass through.
         details = (
             exc.errors(include_url=False, include_input=False, include_context=False)
             if isinstance(exc, ValidationError)
-            else []
+            else str(exc)
         )
         logger.debug(
             "agent_json is not a valid %s; treating the request as having no "
             "agent reference (typically a marketplace-package placeholder "
             "default replayed from the connection record): %s",
             spec_type.__name__,
-            details or str(exc),
+            details,
         )
         return None
 

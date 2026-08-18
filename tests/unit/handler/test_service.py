@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from application_sdk.contracts.base import Input, Output
 from application_sdk.handler.base import DefaultHandler, Handler, HandlerError
@@ -34,6 +35,8 @@ from application_sdk.handler.service import (
     _flatten_to_pairs,
     _normalize_credentials,
     _normalize_preflight_request,
+    _RequestContractError,
+    _validate_request,
     _wrap_response,
     create_app_handler_service,
 )
@@ -7081,6 +7084,57 @@ class TestAgentJsonIngressOnTheHandlerPath:
         assert validated.agent_json is not None
         assert validated.agent_json.agent_name == "acme-agent"
         assert validated.agent_json.is_populated()
+
+    def test_only_an_explicit_ingress_call_can_answer_422(self) -> None:
+        """The structural half of the rule the docstrings describe.
+
+        A 422 requires ``_validate_request``, which is the only thing that
+        raises the marker the handler is registered on. A bare
+        ``model_validate`` — a future endpoint validating inside its own error
+        boundary, an output contract, a handler's own model — raises plain
+        pydantic and so cannot be reported as the caller's fault. Without this,
+        "which endpoints validate outside their boundary" is a convention held
+        up by prose, and forgetting it silently returns a wrong 422.
+        """
+        bad = {"timeout_seconds": "not-a-number"}
+
+        with pytest.raises(_RequestContractError) as ingress:
+            _validate_request(PreflightInput, bad)
+        # The pydantic failure is carried, not flattened — the handler needs
+        # the field paths.
+        assert ingress.value.cause.errors()[0]["loc"] == ("timeout_seconds",)
+
+        # ...and the bare call is untouched: still plain pydantic.
+        with pytest.raises(ValidationError):
+            PreflightInput.model_validate(bad)
+
+    def test_a_stray_validation_error_is_not_a_422(self) -> None:
+        """A ValidationError escaping a route is a 500, whatever raises it.
+
+        Starlette routes any escaping exception to a registered handler, so
+        registering the 422 on pydantic's ``ValidationError`` would have turned
+        every internal validation failure — anywhere in the app, including a
+        handler's own models — into "the request did not fit the contract".
+        """
+        outer = self
+
+        class _StrayValidationHandler(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                # Business logic validating something of its own, mid-request.
+                outer_model = type(input)
+                outer_model.model_validate({"timeout_seconds": "not-a-number"})
+                raise AssertionError("unreachable")
+
+        client = TestClient(
+            create_app_handler_service(
+                _StrayValidationHandler(), app_name="stray-validation"
+            ),
+            raise_server_exceptions=False,
+        )
+        response = client.post("/workflows/v1/check", json={"credentials": []})
+
+        assert response.status_code == 500
+        assert response.json()["detail"] == "Internal server error"
 
     def test_start_internal_validation_failure_stays_a_500(self) -> None:
         """``/start`` validates its body *inside* its error boundary.

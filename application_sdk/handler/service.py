@@ -41,7 +41,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from types import ModuleType
-from typing import TYPE_CHECKING, Annotated, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, TypeVar, cast
 from uuid import uuid4
 
 import orjson
@@ -140,6 +140,45 @@ def _record_proxy_failure(
     )
     counter.add(1, {"reason": reason})
     logger.warning(log_message, *log_args, exc_info=exc_info)
+
+
+ModelT = TypeVar("ModelT", bound=PydanticBaseModel)
+
+
+class _RequestContractError(Exception):
+    """A request body did not fit its typed contract at ingress → 422.
+
+    The marker *is* the enforcement. The 422 handler is registered on this
+    type, not on pydantic's ``ValidationError``, so an endpoint gets a
+    contract-shaped answer only by validating through
+    :func:`_validate_request` — which is also the only place that decides a
+    failure is the caller's fault. A ``ValidationError`` raised anywhere else
+    (inside an endpoint's error boundary, in handler business logic, in an
+    output contract) keeps that endpoint's own 500 and can never be
+    mistaken for a malformed request.
+
+    Which endpoints answer 422 is therefore visible in the call sites rather
+    than asserted in prose, and the default for a new endpoint is the safe
+    one: a bare ``model_validate`` still yields a 500.
+    """
+
+    def __init__(self, cause: ValidationError) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+        """The pydantic failure, kept so the handler can name the fields."""
+
+
+def _validate_request(model: type[ModelT], body: dict[str, Any]) -> ModelT:
+    """Validate an already-normalised request body into its typed contract.
+
+    Raises :class:`_RequestContractError` so the app-level handler answers 422
+    naming the offending field. Use this for anything a *caller* controls; use
+    ``model_validate`` directly where a failure would be an internal bug.
+    """
+    try:
+        return model.model_validate(body)
+    except ValidationError as exc:
+        raise _RequestContractError(exc) from exc
 
 
 _CREDENTIAL_KEYS = frozenset(
@@ -1217,14 +1256,13 @@ def _register_workflow_routes(
         except HTTPException:
             raise
         except ValidationError as e:
-            # The form endpoints (auth/check/metadata) validate their own body
-            # *outside* any error boundary, so their ValidationError propagates
-            # to the app-level 422 handler. Here the body is validated *inside*
-            # this try, and Starlette's exception middleware routes *any*
-            # exception escaping the route to a registered handler — so a bare
-            # re-raise would still reach the 422 handler. Convert instead:
-            # an internal validation failure on /start is a 500, never "the
-            # request did not fit the contract".
+            # /start validates the app's own input contract, which the caller
+            # does not own — so this is an internal failure, not a malformed
+            # request, and it answers a sanitized 500 with the real cause in
+            # the log. It cannot reach the 422 handler (that one is registered
+            # on _RequestContractError, which only _validate_request raises);
+            # catching here is what turns Starlette's plain-text 500 into the
+            # boundary's own logged, sanitized one.
             # conformance: ignore[L009] boundary handler logs the real exception (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record of the actual failure.
             logger.error(
                 "Workflow input validation failed for app %s: %s",
@@ -2586,11 +2624,11 @@ def create_app_handler_service(
     )
     app.add_middleware(LogMiddleware)
 
-    @app.exception_handler(ValidationError)
-    async def _handle_request_validation_error(
+    @app.exception_handler(_RequestContractError)
+    async def _handle_request_contract_error(
         request: Request, exc: Exception
     ) -> JSONResponse:
-        """Turn a request-body validation failure into a 422 naming the field.
+        """Turn a request-body contract failure into a 422 naming the field.
 
         The form endpoints validate their own body (they have to normalise v2
         wire shapes first), so FastAPI's own ``RequestValidationError`` handling
@@ -2599,21 +2637,21 @@ def create_app_handler_service(
         opaque JSON-decode failure with no hint of which field was wrong. The
         offending field name is the whole diagnosis, so say it.
 
-        Only ingress validation reaches here: the form endpoints (auth /
-        preflight / metadata) validate their body *before* entering their
-        error boundary, so their contract failures propagate to this handler,
-        while ``/start`` validates inside its boundary and explicitly
-        re-raises ``ValidationError`` past this handler — so a 422 always
-        means "the request did not fit the contract", never "the handler
-        failed".
+        Registered on :class:`_RequestContractError`, never on pydantic's
+        ``ValidationError``: reaching here takes an explicit
+        :func:`_validate_request` call, so a 422 always means "the request did
+        not fit the contract" and no other validation failure in the process
+        can be reported as the caller's fault. See the marker's docstring.
 
         Pydantic's ``input`` and ``ctx`` are omitted: the rejected value can be
         a credential, and the field path plus the reason is what a caller can
         act on.
         """
         errors = (
-            exc.errors(include_url=False, include_input=False, include_context=False)
-            if isinstance(exc, ValidationError)
+            exc.cause.errors(
+                include_url=False, include_input=False, include_context=False
+            )
+            if isinstance(exc, _RequestContractError)
             else []
         )
         detail = [
@@ -2656,7 +2694,7 @@ def create_app_handler_service(
     @app.post("/workflows/v1/auth")
     async def test_auth(request: Request) -> JSONResponse:
         body = _normalize_credentials(lift_agent_json(await request.json()))
-        auth_input = AuthInput.model_validate(body)
+        auth_input = _validate_request(AuthInput, body)
         credentials = [
             HandlerCredential(key=c.key, value=c.value) for c in auth_input.credentials
         ]
@@ -2753,7 +2791,7 @@ def create_app_handler_service(
     @app.post("/workflows/v1/check")
     async def preflight_check(request: Request) -> JSONResponse:
         body = _normalize_preflight_request(await request.json())
-        preflight_input = PreflightInput.model_validate(body)
+        preflight_input = _validate_request(PreflightInput, body)
         credentials = [
             HandlerCredential(key=c.key, value=c.value)
             for c in preflight_input.credentials
@@ -2884,7 +2922,7 @@ def create_app_handler_service(
     @app.post("/workflows/v1/metadata")
     async def fetch_metadata(request: Request) -> JSONResponse:
         body = _normalize_credentials(lift_agent_json(await request.json()))
-        metadata_input = MetadataInput.model_validate(body)
+        metadata_input = _validate_request(MetadataInput, body)
         # The widget routing key (``metadataTemplateKey`` / ``type`` on the
         # wire) now lands in its documented home, ``metadata_template_key``,
         # via the field's validation alias. Mirror it onto ``object_filter``
