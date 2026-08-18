@@ -270,11 +270,13 @@ on:
           exports every raw field VERBATIM as E2E_<DATASOURCE>_<FIELD> env
           before the secrets bundle is written (no canonical shape imposed:
           the connector's own secrets script maps fields onto its config,
-          whatever its auth variant). DATAFORGE-FIRST with automatic fallback:
-          the fetch runs AFTER the E2E_SOURCE_ENV_JSON export and overwrites
-          it on success; the whole dataforge chain (VPN, fetch) is
-          continue-on-error, so when dataforge is unavailable the repo's own
-          creds — or the connector's hermetic source — carry the run.
+          whatever its auth variant). REPO-CREDS-FIRST: the fetch runs ONLY when
+          no E2E_SOURCE_ENV_JSON was provided (every dataforge step gates on it),
+          so a connector with repo creds never dials the VPN — dataforge is the
+          fallback for connectors that have no repo creds, not the primary. The
+          whole dataforge chain (VPN, fetch) is continue-on-error, so when
+          dataforge is unavailable the connector's hermetic source carries the
+          run.
           READ-ONLY against the source: the job only fetches credentials —
           it never seeds, curates, or mutates the instance. Curating the
           dataset is the instance owner's one-time setup (see the
@@ -309,15 +311,26 @@ on:
         type: string
         default: "true"
         description: |
-          Whether this connector can run its e2e suite against a local
+          Whether this connector can run its suite against a local
           hermetic source (a seeded sibling container) when neither the
           dataforge fetch nor E2E_SOURCE_ENV_JSON produced credentials.
           Set "false" for SaaS-style connectors with no hermetic option:
           the source-resolution step then FAILS FAST with an explicit
           "no e2e source available" error instead of letting the leg limp
           to the extract node and die minutes later on a cryptic
-          empty-credential auth failure. Only consulted when
-          dataforge-datasource is set.
+          empty-credential auth failure. Only consulted when neither
+          credential path resolved (a dataforge fetch or E2E_SOURCE_ENV_JSON
+          short-circuits ahead of it).
+          ONE input, BOTH tiers — e2e and integration read this same value, so
+          a connector cannot be fatal in one tier and forgiving in the other.
+          Note the consequence of the "true" default on the INTEGRATION tier,
+          which is the merge gate: a connector with no hermetic source that
+          leaves this at the default turns an unresolved source into a green
+          job rather than a failure. Connectors that cannot seed a local
+          source — every SaaS-style one — should set "false" when they opt into
+          dataforge-datasource. The default stays "true" because the majority
+          of callers are containerizable and must not be reddened by a
+          dataforge/VPN outage; opting out is the control for the rest.
       private-git-deps:
         required: false
         type: boolean
@@ -742,6 +755,11 @@ jobs:
     permissions:
       pull-requests: write
       contents: read
+      # For the dataforge fetch's OIDC path (no stored dataforge secret): the
+      # runner mints a per-run identity token the fetch script exchanges for a
+      # 1h credentials:read token. Harmless when the dataforge inputs are unset.
+      # Mirrors the e2e job — both tiers resolve the SAME pinned instance.
+      id-token: write
     outputs:
       summary: ${{ steps.integration.outputs.summary }}
     env:
@@ -749,6 +767,11 @@ jobs:
       # Surfaced as env because a step-level `if:` cannot read the secrets
       # context, and the export steps below are gated on it being set.
       E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
+      # Pinned dataforge instance UUID (dataforge-mode "resource"). The e2e job
+      # reads the same secret, so pinning it makes both tiers fetch byte-identical
+      # source credentials from one locked instance, never two. Empty when the
+      # caller does not use dataforge; the fetch chain below then self-skips.
+      DATAFORGE_RESOURCE_ID: ${{ secrets.DATAFORGE_RESOURCE_ID }}
       # Same reason: the rewrite step gates on the credential, not the flag.
       GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
     steps:
@@ -782,12 +805,15 @@ jobs:
           git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
           git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
 
-      # Connector SOURCE credentials (E2E_SOURCE_ENV_JSON). Exported here rather
-      # than passed to the composite action below, because every action this
-      # workflow calls is pinned @main: an input added on a feature branch is
-      # silently ignored until it lands. Sparse-checks-out only .github/scripts.
-      - name: Fetch SDK CI scripts (source-credential export)
-        if: env.E2E_SOURCE_ENV_JSON != ''
+      # Connector SOURCE credentials (E2E_SOURCE_ENV_JSON) and, when the caller
+      # sets dataforge-datasource, the dataforge fetch scripts + the VPN action.
+      # Exported/run here rather than passed to the composite action below,
+      # because every action this workflow calls is pinned @main: an input added
+      # on a feature branch is silently ignored until it lands. Sparse-checks-out
+      # .github/scripts and globalprotect-connect (the latter needed only on the
+      # dataforge path — a couple of extra files otherwise).
+      - name: Fetch SDK CI scripts (source-credential export + dataforge fetch)
+        if: env.E2E_SOURCE_ENV_JSON != '' || inputs.dataforge-datasource != ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
@@ -801,10 +827,16 @@ jobs:
           # Enterprise Server (no effect on github.com callers), and actionlint
           # <=1.7.7 predates them, so it reports a false "property not defined".
           ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/scripts
+            .github/actions/globalprotect-connect
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          # No `token:` here: application-sdk is public, so the run's own
+          # github.token reads it regardless of whether the caller supplies
+          # ORG_PAT_GITHUB — preferring the org-wide PAT for a same-repo,
+          # public checkout would only burn its shared rate limit for no
+          # benefit. Matches the e2e job's equivalent checkout.
           persist-credentials: false
 
       # Two invocations, and the order is the security property. `E2E_SOURCE_ENV_JSON`
@@ -827,6 +859,108 @@ jobs:
             --json "$E2E_SOURCE_ENV_JSON" --mask-only
           python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
             --json "$E2E_SOURCE_ENV_JSON" >> "$GITHUB_ENV"
+
+      # ── source resolution (FND-205), integration tier ───────────────────
+      # Precedence is REPO-CREDS-FIRST, to keep the VPN off the hot path: when
+      # the caller provides E2E_SOURCE_ENV_JSON (repo creds, exported above), the
+      # whole dataforge chain below self-skips — every fetch step gates on
+      # `E2E_SOURCE_ENV_JSON == ''` — so no VPN is dialled. Only when there are
+      # NO repo creds does an opted-in connector (dataforge-datasource set) fetch
+      # from dataforge over the VPN. Mirrors the e2e job step-for-step and reads
+      # the SAME dataforge-datasource + DATAFORGE_RESOURCE_ID, so the two tiers
+      # resolve the identical pinned instance whenever they do reach dataforge.
+      #
+      # The fetch steps are continue-on-error so a transient dataforge/VPN blip
+      # (the VPN connect already retries 3x) doesn't redden the job by itself.
+      # The "Resolve source" step below is the compensating control: it FAILS the
+      # job when a source was expected but NONE resolved — no repo creds, no
+      # dataforge creds, and the connector declared no hermetic container
+      # (dataforge-hermetic-fallback: false). A connector that CAN seed one and
+      # left the input at its "true" default degrades to that seeded source
+      # instead — the fetch was still attempted, so the VPN was dialled, but a
+      # blip there no longer decides the job. Apps that set neither
+      # dataforge-datasource nor E2E_SOURCE_ENV_JSON self-skip the whole chain,
+      # fail-fast included.
+      # READ-ONLY: the job only fetches credentials; it never seeds or mutates
+      # the instance (curation is the instance owner's one-time setup).
+      #
+      # Atlan's internal ELBs share Docker's default 172.17/16 bridge subnet;
+      # re-subnet Docker BEFORE the tunnel so containers keep working while
+      # 172.17/16 routes via tun0.
+      - name: Move docker networks off Atlan's 172.17/16 (dataforge path)
+        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == ''
+        continue-on-error: true
+        run: |
+          set -e
+          sudo mkdir -p /etc/docker
+          echo '{"bip": "192.168.49.1/24", "default-address-pools": [{"base": "192.168.128.0/17", "size": 24}]}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+
+      # dataforge's api host and the provisioned sources admit only the VPN
+      # egress IPs. This repo's own globalprotect-connect action (unmodified),
+      # from the job.workflow_sha sparse checkout — same provenance pinning as
+      # the scripts above.
+      - name: Connect to GlobalProtect VPN (dataforge path)
+        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == ''
+        continue-on-error: true
+        uses: ./application-sdk-scripts/.github/actions/globalprotect-connect
+        with:
+          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+          mothership-url: https://api.dataforge.atlan.dev
+
+      # Dataforge-sourced connector credentials. The fetch's stdout is captured
+      # into a shell variable — values never reach the log — and handed to
+      # export_extra_env.py, whose mask-first two-pass protocol is the audited
+      # path into $GITHUB_ENV. One fetch feeds both passes, so the masked strings
+      # and the written strings can never diverge. Auth is the run's GitHub OIDC
+      # token exchanged at dataforge — no stored dataforge secret (needs the
+      # job's id-token permission, added above, and a dataforge workload binding
+      # for the repo).
+      - name: Fetch connector source credentials from dataforge
+        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == ''
+        continue-on-error: true
+        env:
+          DF_DATASOURCE: ${{ inputs.dataforge-datasource }}
+          DF_MODE: ${{ inputs.dataforge-mode }}
+          DF_ENV_TIER: ${{ inputs.dataforge-env-tier }}
+          DF_OUTPUT_PREFIX: ${{ inputs.dataforge-output-prefix }}
+        run: |
+          set -euo pipefail
+          DF_ENV_JSON="$(python3 application-sdk-scripts/.github/scripts/fetch_dataforge_source.py \
+            --datasource "$DF_DATASOURCE" \
+            --mode "$DF_MODE" \
+            --resource-id "$DATAFORGE_RESOURCE_ID" \
+            --env-tier "$DF_ENV_TIER" \
+            --output-prefix "$DF_OUTPUT_PREFIX")"
+          python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
+            --json "$DF_ENV_JSON" --mask-only
+          python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
+            --json "$DF_ENV_JSON" >> "$GITHUB_ENV"
+
+      # The compensating control for the continue-on-error fetch above: this step
+      # has no continue-on-error, so it reports the resolved source and — when
+      # nothing resolved (E2E_SOURCE_DATASOURCE breadcrumb absent AND no
+      # E2E_SOURCE_ENV_JSON) — fails the job one minute in, with the fix in the
+      # message, instead of letting the leg limp on empty credentials.
+      #
+      # Whether "nothing resolved" is fatal is the CALLER's declaration, exactly
+      # as in the e2e job: hermetic-fallback is wired to
+      # dataforge-hermetic-fallback (default "true"), so a connector that can run
+      # its suite against a locally seeded source degrades to it, and a connector
+      # that cannot MUST set "false" to get the hard error. That default is
+      # deliberate — the two tiers read one input, so a connector cannot be fatal
+      # in one and forgiving in the other — but it does mean a source-less
+      # connector left on the default greens this merge-gating job on code it
+      # never exercised against a real source. The opt-out is the control; see the
+      # dataforge-hermetic-fallback input description. Reuses the e2e job's
+      # script verbatim.
+      - name: Resolve integration source
+        if: inputs.dataforge-datasource != '' || env.E2E_SOURCE_ENV_JSON != ''
+        env:
+          DF_HERMETIC_FALLBACK: ${{ inputs.dataforge-hermetic-fallback }}
+        run: python3 application-sdk-scripts/.github/scripts/resolve_e2e_source.py
 
       # Unit runs in its own job; integration defaults to tests/integration/.
       # A caller test-paths override scopes THIS job only. The ternary is a
@@ -984,7 +1118,6 @@ jobs:
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
-          token: ${{ secrets.ORG_PAT_GITHUB || github.token }}
           persist-credentials: false
 
       # The KEY LIST, never the blob: the credentials stay with the per-leg
@@ -1792,20 +1925,22 @@ jobs:
           python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
             --json "$E2E_SOURCE_ENV_JSON" >> "$GITHUB_ENV"
 
-      # ── dataforge-first source resolution (FND-205) ───────────────────────
-      # Order = precedence: the explicit E2E_SOURCE_ENV_JSON exported above is
-      # the FALLBACK; a successful dataforge fetch below overwrites it (the
-      # later $GITHUB_ENV write wins). Every dataforge step here is
-      # continue-on-error — when the fetch cannot complete (VPN, binding,
-      # dataforge down), the repo's own creds or the connector's hermetic
-      # source carry the run instead of failing it.
+      # ── source resolution (FND-205) ───────────────────────────────────────
+      # Precedence is REPO-CREDS-FIRST, to keep the VPN off the hot path: when
+      # the caller provides E2E_SOURCE_ENV_JSON (repo creds, exported above),
+      # the whole dataforge chain self-skips — every step gates on
+      # `E2E_SOURCE_ENV_JSON == ''` — so no VPN is dialled. Only with NO repo
+      # creds does an opted-in leg (dataforge-datasource set) fetch from
+      # dataforge over the VPN. Every dataforge step is continue-on-error — when
+      # the fetch cannot complete (VPN, binding, dataforge down), the connector's
+      # hermetic source carries the run instead of failing it.
       #
       # Atlan's internal ELBs share Docker's default 172.17/16 bridge subnet;
       # re-subnet Docker BEFORE the tunnel so containers keep working while
       # 172.17/16 routes via tun0 (deleting the docker0 route instead breaks
       # buildx — atlan-postgres-app run 31571886125).
       - name: Move docker networks off Atlan's 172.17/16 (dataforge path)
-        if: inputs.dataforge-datasource != ''
+        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == ''
         continue-on-error: true
         run: |
           set -e
@@ -1823,7 +1958,7 @@ jobs:
       # displace each other's sessions — the fetch then falls back to repo
       # creds by design. A better run strategy is tracked on FND-279.
       - name: Connect to GlobalProtect VPN (dataforge path)
-        if: inputs.dataforge-datasource != ''
+        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == ''
         continue-on-error: true
         uses: ./application-sdk-scripts/.github/actions/globalprotect-connect
         with:
@@ -1841,7 +1976,7 @@ jobs:
       # dataforge secret (needs the job's id-token permission and a
       # dataforge workload binding for the repo).
       - name: Fetch connector source credentials from dataforge
-        if: inputs.dataforge-datasource != ''
+        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == ''
         continue-on-error: true
         env:
           DF_DATASOURCE: ${{ inputs.dataforge-datasource }}
