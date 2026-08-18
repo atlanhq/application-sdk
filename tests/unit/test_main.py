@@ -15,6 +15,8 @@ import pytest
 
 from application_sdk.main import (
     AppConfig,
+    WorkerPollStalledError,
+    _assert_polling_or_raise,
     _create_infrastructure,
     _derive_service_name,
     _flush_observability,
@@ -2361,15 +2363,22 @@ class _FakeWorker:
     shutdown event so the supervisor's ``await shutdown_event.wait()`` returns).
     """
 
-    def __init__(self, *, fail: bool, on_enter: Any = None) -> None:
+    def __init__(
+        self,
+        *,
+        fail: bool,
+        on_enter: Any = None,
+        message: str = "Activity worker failed",
+    ) -> None:
         self.fail = fail
         self.on_enter = on_enter
+        self.message = message
 
     async def __aenter__(self) -> _FakeWorker:
         if self.on_enter is not None:
             self.on_enter()
         if self.fail:
-            raise RuntimeError("Activity worker failed")
+            raise RuntimeError(self.message)
         return self
 
     async def __aexit__(self, *args: Any) -> bool:
@@ -2479,10 +2488,16 @@ class TestRunWorkerWithRestart:
 
         assert calls["n"] == 2
 
-    async def test_gives_up_after_cap_and_reraises(
+    async def test_recovers_forever_past_cap_never_exits(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A persistent failure fails loud once the restart cap is exceeded."""
+        """A persistent *recoverable* failure must NOT exit (ARUN-1127).
+
+        This failure class (transient Temporal frontend auth rejection, matched
+        here by the ``PermissionDenied`` marker) is fixed by a restart, so the
+        supervisor recovers indefinitely — only escalating log severity past the
+        soft cap, never re-raising or exiting.
+        """
         monkeypatch.setattr("application_sdk.main._WORKER_MAX_CONSECUTIVE_RESTARTS", 2)
         monkeypatch.setattr(
             "application_sdk.main._WORKER_RESTART_BACKOFF_CAP_SECONDS", 0
@@ -2492,13 +2507,129 @@ class TestRunWorkerWithRestart:
 
         def build() -> _FakeWorker:
             calls["n"] += 1
-            return _FakeWorker(fail=True)
+            # Keep failing well past the cap (2); the supervisor must keep
+            # rebuilding instead of raising. Stop the test on the 6th build.
+            if calls["n"] >= 6:
+                return _FakeWorker(fail=False, on_enter=shutdown.set)
+            return _FakeWorker(fail=True, message="Poll failed: PermissionDenied")
 
+        # Must return normally despite 5 failures past a cap of 2.
+        await _run_worker_with_restart(build_worker=build, shutdown_event=shutdown)
+
+        assert calls["n"] == 6
+
+    async def test_gives_up_past_cap_on_non_recoverable_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A permanent failure keeps the bounded give-up and fails loud.
+
+        A non-recoverable error (no transient-auth marker — e.g. bad
+        credentials, a misconfigured task queue) must re-raise once the streak
+        passes the cap, so a persistent misconfiguration never presents as a
+        ready, alive pod that never polls.
+        """
+        monkeypatch.setattr("application_sdk.main._WORKER_MAX_CONSECUTIVE_RESTARTS", 2)
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_RESTART_BACKOFF_CAP_SECONDS", 0
+        )
+        shutdown = asyncio.Event()
+        calls = {"n": 0}
+
+        def build() -> _FakeWorker:
+            calls["n"] += 1
+            return _FakeWorker(fail=True)  # default message: no recoverable marker
+
+        # attempts 1 and 2 restart; the 3rd pushes the streak past the cap and
+        # the non-recoverable failure re-raises.
         with pytest.raises(RuntimeError, match="Activity worker failed"):
             await _run_worker_with_restart(build_worker=build, shutdown_event=shutdown)
 
-        # attempts 1 and 2 restart; the 3rd pushes the streak past the cap.
         assert calls["n"] == 3
+
+    async def test_backoff_exponent_clamped_at_boundary(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The backoff exponent is clamped (``2 ** min(n-1, 16)``) so an
+        indefinite recoverable loop can't overflow the jitter bound.
+
+        Drives the streak past the 16-step boundary with a recoverable failure
+        and asserts the ``random.uniform`` upper bound stays ``2**16`` (well
+        under the configured cap) at and beyond the boundary.
+        """
+        # A high cap so the exponent, not the cap, is the binding constraint.
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_RESTART_BACKOFF_CAP_SECONDS", 10**9
+        )
+        shutdown = asyncio.Event()
+        calls = {"n": 0}
+        bounds: list[float] = []
+
+        def fake_uniform(low: float, high: float) -> float:
+            bounds.append(high)
+            return 0.0  # no real sleep — recover immediately
+
+        monkeypatch.setattr("application_sdk.main.random.uniform", fake_uniform)
+
+        def build() -> _FakeWorker:
+            calls["n"] += 1
+            # 18 recoverable failures drives the exponent to 2**17 unclamped;
+            # the clamp must pin it at 2**16. Stop on the 19th build.
+            if calls["n"] >= 19:
+                return _FakeWorker(fail=False, on_enter=shutdown.set)
+            return _FakeWorker(fail=True, message="Poll failed: PermissionDenied")
+
+        await _run_worker_with_restart(build_worker=build, shutdown_event=shutdown)
+
+        assert calls["n"] == 19
+        # Every observed upper bound is the clamped value, never past 2**16.
+        assert bounds, "expected at least one backoff to be observed"
+        assert max(bounds) == float(2**16)
+
+    async def test_recovers_wrapped_permission_denied_past_cap(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A marker nested in ``__cause__`` is still classified recoverable.
+
+        temporalio surfaces a poll fatal as a generic wrapper —
+        ``raise RuntimeError("Workflow worker failed") from <rust_error>`` — with
+        ``PermissionDenied`` / ``Request unauthorized.`` in ``__cause__``, not in
+        ``str(exc)`` (see tests/integration/test_temporal_docker_auth.py). The
+        classifier must walk the chain, or it would re-raise on exactly the
+        transient auth rejection this PR exists to survive.
+        """
+        monkeypatch.setattr("application_sdk.main._WORKER_MAX_CONSECUTIVE_RESTARTS", 2)
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_RESTART_BACKOFF_CAP_SECONDS", 0
+        )
+        shutdown = asyncio.Event()
+        calls = {"n": 0}
+
+        class _WrappedAuthWorker:
+            """Wraps a PermissionDenied the way temporalio's Rust bridge does."""
+
+            async def __aenter__(self) -> "_WrappedAuthWorker":
+                try:
+                    raise RuntimeError(
+                        "Poll failure: Unhandled grpc error when polling: "
+                        "PermissionDenied: Request unauthorized."
+                    )
+                except RuntimeError as rust_error:
+                    raise RuntimeError("Workflow worker failed") from rust_error
+
+            async def __aexit__(self, *args: Any) -> bool:
+                return False
+
+        def build() -> Any:
+            calls["n"] += 1
+            if calls["n"] >= 6:
+                return _FakeWorker(fail=False, on_enter=shutdown.set)
+            return _WrappedAuthWorker()
+
+        # Must keep recovering (never re-raise) despite the wrapper hiding the
+        # marker in __cause__, well past the cap of 2.
+        await _run_worker_with_restart(build_worker=build, shutdown_event=shutdown)
+
+        assert calls["n"] == 6
 
     async def test_shutdown_during_backoff_stops_promptly(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2558,3 +2689,297 @@ class TestRunWorkerWithRestart:
         await _run_worker_with_restart(build_worker=build, shutdown_event=shutdown)
 
         assert calls["n"] == 5
+
+
+class _FakePoller:
+    def __init__(self, identity: str) -> None:
+        self.identity = identity
+
+
+class _FakeDescribeResp:
+    def __init__(self, identities: list[str]) -> None:
+        self.pollers = [_FakePoller(i) for i in identities]
+
+
+class _FakeWorkflowService:
+    """Stands in for ``client.workflow_service`` for the poll-liveness watchdog."""
+
+    def __init__(self, identities: list[str], raises: bool = False) -> None:
+        self._identities = identities
+        self._raises = raises
+        self.calls = 0
+
+    async def describe_task_queue(self, _req: Any) -> Any:
+        self.calls += 1
+        if self._raises:
+            raise RuntimeError("Request unauthorized.")
+        return _FakeDescribeResp(self._identities)
+
+
+class _FakeClient:
+    def __init__(
+        self,
+        identity: str = "1@host",
+        identities: list[str] | None = None,
+        raises: bool = False,
+    ) -> None:
+        self.identity = identity
+        self.namespace = "default"
+        self.workflow_service = _FakeWorkflowService(
+            identities if identities is not None else [identity], raises=raises
+        )
+
+
+class TestPollLivenessWatchdog:
+    """Tests for ``_assert_polling_or_raise`` (the zombie-poller detector)."""
+
+    async def test_absent_poller_raises(self) -> None:
+        """Sustained poller-absence raises WorkerPollStalledError."""
+        client = _FakeClient(identity="1@host", identities=["other@host"])
+        shutdown = asyncio.Event()
+
+        with pytest.raises(WorkerPollStalledError):
+            await asyncio.wait_for(
+                _assert_polling_or_raise(
+                    client=client,
+                    task_queue="q",
+                    shutdown_event=shutdown,
+                    grace=0.02,
+                    interval=0.01,
+                ),
+                timeout=2.0,
+            )
+
+    async def test_present_poller_does_not_raise_and_records(self) -> None:
+        """When the worker's identity is in the pollers, no raise; on_poll_ok fires."""
+        client = _FakeClient(identity="1@host", identities=["1@host"])
+        shutdown = asyncio.Event()
+        ok = {"n": 0}
+
+        async def stop_soon() -> None:
+            await asyncio.sleep(0.05)
+            shutdown.set()
+
+        stopper = asyncio.create_task(stop_soon())
+        await asyncio.wait_for(
+            _assert_polling_or_raise(
+                client=client,
+                task_queue="q",
+                shutdown_event=shutdown,
+                on_poll_ok=lambda: ok.__setitem__("n", ok["n"] + 1),
+                grace=0.0,
+                interval=0.01,
+            ),
+            timeout=2.0,
+        )
+        await stopper
+        assert ok["n"] >= 1
+
+    async def test_transient_describe_failure_does_not_raise(self) -> None:
+        """A frontend that keeps rejecting (unknown) must NOT be treated as a stall."""
+        client = _FakeClient(identity="1@host", raises=True)
+        shutdown = asyncio.Event()
+
+        async def stop_soon() -> None:
+            await asyncio.sleep(0.05)
+            shutdown.set()
+
+        stopper = asyncio.create_task(stop_soon())
+        # Must return on shutdown without raising, despite every describe failing.
+        await asyncio.wait_for(
+            _assert_polling_or_raise(
+                client=client,
+                task_queue="q",
+                shutdown_event=shutdown,
+                grace=0.0,
+                interval=0.01,
+            ),
+            timeout=2.0,
+        )
+        await stopper
+
+
+class _FakeHealthServer:
+    """Records the recovery-state transitions the supervisor drives.
+
+    Stateful: mirrors the real ``WorkerHealthServer`` so a regression that calls
+    ``record_poll_ok`` without clearing the reconnecting state is caught.
+    """
+
+    def __init__(self) -> None:
+        self.reconnecting_calls: list[tuple[bool, int]] = []
+        self.poll_ok_calls = 0
+        self.reconnecting = False
+
+    def set_reconnecting(
+        self, reconnecting: bool, consecutive_failures: int = 0
+    ) -> None:
+        self.reconnecting_calls.append((reconnecting, consecutive_failures))
+        self.reconnecting = reconnecting
+
+    def record_poll_ok(self) -> None:
+        self.poll_ok_calls += 1
+        self.reconnecting = False
+
+
+class TestSupervisorWatchdogWiring:
+    """The supervisor<->watchdog/health wiring itself (ARUN-1127).
+
+    The watchdog unit tests exercise ``_assert_polling_or_raise`` directly and
+    the supervisor tests never pass ``task_queue``/``health_server``, so these
+    cover the racing layer: arming the watchdog, a ``WorkerPollStalledError``
+    driving a rebuild, and the health-server transitions.
+    """
+
+    async def test_absent_poller_drives_rebuild_and_recovers(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A parked worker (watchdog armed, poller absent) is rebuilt, then recovers.
+
+        First build parks (never sets shutdown); the watchdog sees the worker's
+        identity absent for a sustained window and raises WorkerPollStalledError,
+        which the supervisor treats as recoverable and rebuilds. The second build
+        shuts down cleanly.
+        """
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_RESTART_BACKOFF_CAP_SECONDS", 0
+        )
+        # Tighten the watchdog timings so the test runs fast.
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_POLL_LIVENESS_GRACE_SECONDS", 0.02
+        )
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_POLL_LIVENESS_INTERVAL_SECONDS", 0.01
+        )
+        shutdown = asyncio.Event()
+        # The worker's own identity is never among the pollers → always absent.
+        client = _FakeClient(identity="1@host", identities=["other@host"])
+        calls = {"n": 0}
+
+        def build() -> _FakeWorker:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                # Parks: enters but never signals shutdown — the watchdog must
+                # be what tears it down.
+                return _FakeWorker(fail=False)
+            return _FakeWorker(fail=False, on_enter=shutdown.set)
+
+        await asyncio.wait_for(
+            _run_worker_with_restart(
+                build_worker=build,
+                shutdown_event=shutdown,
+                client=client,
+                task_queue="q",
+            ),
+            timeout=5.0,
+        )
+
+        # The watchdog drove a rebuild after the first parked worker.
+        assert calls["n"] == 2
+
+    async def test_health_server_reconnecting_then_cleared(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """set_reconnecting(True) fires on a watchdog rebuild; poll_ok clears it."""
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_RESTART_BACKOFF_CAP_SECONDS", 0
+        )
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_POLL_LIVENESS_GRACE_SECONDS", 0.02
+        )
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_POLL_LIVENESS_INTERVAL_SECONDS", 0.01
+        )
+        shutdown = asyncio.Event()
+        # Absent on the first (parked) worker, present once the good worker runs.
+        client = _FakeClient(identity="1@host", identities=["other@host"])
+        health = _FakeHealthServer()
+        calls = {"n": 0}
+
+        def build() -> _FakeWorker:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return _FakeWorker(fail=False)  # parks → watchdog rebuilds
+            # Good worker: make the poller visible, then shut down shortly so
+            # record_poll_ok fires and clears the reconnecting state.
+            client.workflow_service._identities = ["1@host"]
+
+            async def stop_soon() -> None:
+                await asyncio.sleep(0.05)
+                shutdown.set()
+
+            asyncio.get_running_loop().create_task(stop_soon())
+            return _FakeWorker(fail=False)
+
+        await asyncio.wait_for(
+            _run_worker_with_restart(
+                build_worker=build,
+                shutdown_event=shutdown,
+                client=client,
+                task_queue="q",
+                health_server=health,
+            ),
+            timeout=5.0,
+        )
+
+        # The watchdog stall marked the supervisor reconnecting...
+        assert any(r for (r, _n) in health.reconnecting_calls)
+        # ...and the recovered worker's poll-ok callback fired to clear it.
+        assert health.poll_ok_calls >= 1
+        # The reconnecting state itself is cleared, not just the call recorded.
+        assert health.reconnecting is False
+
+    async def test_watchdog_disabled_without_task_queue(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without a task_queue the watchdog stays off; the worker still runs clean."""
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_RESTART_BACKOFF_CAP_SECONDS", 0
+        )
+        shutdown = asyncio.Event()
+        calls = {"n": 0}
+
+        def build() -> _FakeWorker:
+            calls["n"] += 1
+            return _FakeWorker(fail=False, on_enter=shutdown.set)
+
+        # No task_queue → watchdog not armed; clean shutdown on the first worker.
+        await _run_worker_with_restart(build_worker=build, shutdown_event=shutdown)
+
+        assert calls["n"] == 1
+
+
+class TestIsTaskQueuePollerActive:
+    """Direct tests for the adapter probe ``is_task_queue_poller_active``."""
+
+    async def test_none_identity_is_unknown_never_matched(self) -> None:
+        """A ``None`` identity must yield unknown (``None``), not a wildcard match.
+
+        Matching any poller regardless of identity would mask a dead worker
+        behind a healthy sibling polling the same task queue.
+        """
+        from application_sdk.execution._temporal.worker import (
+            is_task_queue_poller_active,
+        )
+
+        client = _FakeClient(identity="1@host", identities=["other@host"])
+        result = await is_task_queue_poller_active(client, "q", None, "default")
+        assert result is None
+
+    async def test_matching_identity_is_true(self) -> None:
+        from application_sdk.execution._temporal.worker import (
+            is_task_queue_poller_active,
+        )
+
+        client = _FakeClient(identity="1@host", identities=["1@host"])
+        result = await is_task_queue_poller_active(client, "q", "1@host", "default")
+        assert result is True
+
+    async def test_absent_identity_is_false(self) -> None:
+        from application_sdk.execution._temporal.worker import (
+            is_task_queue_poller_active,
+        )
+
+        client = _FakeClient(identity="1@host", identities=["other@host"])
+        result = await is_task_queue_poller_active(client, "q", "1@host", "default")
+        assert result is False

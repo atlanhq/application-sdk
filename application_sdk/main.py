@@ -972,6 +972,152 @@ _WORKER_RESTART_BACKOFF_CAP_SECONDS = _env_int(
     "ATLAN_WORKER_RESTART_BACKOFF_CAP_SECONDS", 30
 )
 _WORKER_HEALTHY_RUN_SECONDS = _env_int("ATLAN_WORKER_HEALTHY_RUN_SECONDS", 300)
+# Poll-liveness watchdog (ARUN-1127). A rebuilt worker can enter its
+# ``async with worker`` block yet never start polling — a silent "zombie" the
+# restart supervisor cannot see, because ``run()`` neither returns nor raises.
+# The watchdog asks the Temporal frontend whether this worker is actually an
+# active poller on its own task queue: the one signal that separates a
+# legitimately-idle worker (still long-polling) from a dead poll loop.
+_WORKER_POLL_LIVENESS_GRACE_SECONDS = _env_int(
+    "ATLAN_WORKER_POLL_LIVENESS_GRACE_SECONDS", 90
+)
+_WORKER_POLL_LIVENESS_INTERVAL_SECONDS = _env_int(
+    "ATLAN_WORKER_POLL_LIVENESS_INTERVAL_SECONDS", 30
+)
+
+
+class WorkerPollStalledError(RuntimeError):
+    """The worker is running but is not an active poller on its task queue.
+
+    Raised by the poll-liveness watchdog when a (rebuilt) worker parks without
+    polling — the silent "zombie" poll loop (ARUN-1127 / BLDX-1552). The restart
+    supervisor treats it as a recoverable fatal and rebuilds the worker.
+    """
+
+
+# Failure classification (ARUN-1127). The supervisor recovers indefinitely only
+# from the *recoverable* class this feature targets — a transient Temporal
+# frontend auth rejection (a JWKS signing-key cache skew, ARUN-1128) that a
+# rebuild-and-token-refresh fixes. A *permanent* failure (bad credentials, a
+# misconfigured task queue) is not in this class: it keeps the bounded give-up
+# so it still fails loud rather than presenting as a ready, alive pod that never
+# polls.
+#
+# The temporalio worker's poll loop is driven by the Rust bridge, which surfaces
+# a poll auth rejection as a plain error whose message names the gRPC status —
+# e.g. ``Poll failure: Unhandled grpc error when polling: PermissionDenied:
+# Request unauthorized.`` — with no typed ``.status`` reachable at this seam
+# (the typed ``temporalio.service.RPCError`` only wraps service-client calls,
+# not the worker's poll). So the durable signal available here is the specific
+# ``PermissionDenied`` gRPC *status name* in the message. We deliberately do NOT
+# match the generic ``unauthorized``/``unauthenticated`` detail strings: a
+# steady bad-credential 401/403 carries those words too, and treating them as
+# recoverable would retry a permanent misconfiguration forever — the exact
+# ready-but-dead outage this feature exists to kill.
+_RECOVERABLE_POLL_ERROR_MARKERS = (
+    # The gRPC PERMISSION_DENIED status name — the transient auth-rejection
+    # signature the Temporal frontend emits when its JWKS cache briefly rejects
+    # an otherwise-valid token. Specific enough that a permanent bad-credential
+    # failure (whose message is the generic "unauthorized", not the status name)
+    # does NOT match.
+    "permissiondenied",
+    # An explicit JWKS mention — the key-cache skew this feature targets.
+    "jwks",
+)
+
+
+def _is_recoverable_poll_failure(exc: BaseException) -> bool:
+    """True when ``exc`` is the transient auth-rejection class a restart fixes.
+
+    temporalio wraps the real poll fatal — ``raise RuntimeError("Workflow
+    worker failed") from <rust_error>`` — so the ``PermissionDenied`` marker
+    lives in ``__cause__``/``__context__``, not in ``str(exc)``. Walk the whole
+    chain (cycle-protected) and match each nested message. The watchdog's own
+    ``WorkerPollStalledError`` is always recoverable — that is precisely the
+    zombie-poll case the rebuild exists to heal.
+    """
+    if isinstance(exc, WorkerPollStalledError):
+        return True
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        message = str(current).lower()
+        if any(marker in message for marker in _RECOVERABLE_POLL_ERROR_MARKERS):
+            return True
+        # __cause__ is the explicit "raise ... from"; fall back to __context__
+        # for an implicit chain during handling.
+        current = current.__cause__ or current.__context__
+    return False
+
+
+async def _worker_is_polling(
+    client: Any, task_queue: str, identity: Any, namespace: str
+) -> "bool | None":
+    """Is ``identity`` an active poller on ``task_queue``?
+
+    Thin wrapper over the ``execution/_temporal`` adapter so the raw
+    ``temporalio.api.*`` ``DescribeTaskQueue`` call stays behind the seam
+    (P006). Returns ``True`` if the worker's identity appears in the task
+    queue's pollers on the workflow or activity queue, ``False`` if it is
+    definitively absent, and ``None`` if the frontend could not be queried
+    (transient — e.g. the same auth-skew window that triggers the incident).
+    ``None`` must never be treated as a stall.
+    """
+    from application_sdk.execution._temporal.worker import (  # noqa: PLC0415 — cold path: watchdog only
+        is_task_queue_poller_active,
+    )
+
+    return await is_task_queue_poller_active(client, task_queue, identity, namespace)
+
+
+async def _assert_polling_or_raise(
+    *,
+    client: Any,
+    task_queue: str,
+    shutdown_event: asyncio.Event,
+    on_poll_ok: Any = None,
+    grace: float = _WORKER_POLL_LIVENESS_GRACE_SECONDS,
+    interval: float = _WORKER_POLL_LIVENESS_INTERVAL_SECONDS,
+) -> None:
+    """Watch that the worker keeps polling; raise if it silently parks.
+
+    Sleeps ``grace`` seconds first (pollers take a moment to register after a
+    (re)build), then probes every ``interval`` seconds. Raises
+    ``WorkerPollStalledError`` only after a *sustained* ``grace`` window of
+    definitive poller-absence, so a single transient describe failure (or the
+    auth-skew window itself) never trips it. Returns cleanly on shutdown.
+    """
+    try:
+        await asyncio.wait_for(shutdown_event.wait(), timeout=grace)
+        return
+    except TimeoutError:  # conformance: ignore[E002] grace window elapsed without shutdown — start probing; TimeoutError is the expected wait_for outcome, not an error
+        pass
+
+    identity = getattr(client, "identity", None)
+    namespace = getattr(client, "namespace", None) or "default"
+    last_ok = time.monotonic()
+
+    while not shutdown_event.is_set():
+        polling = await _worker_is_polling(client, task_queue, identity, namespace)
+        if polling is True:
+            last_ok = time.monotonic()
+            if on_poll_ok is not None:
+                try:
+                    on_poll_ok()
+                except Exception:
+                    logger.debug("on_poll_ok callback failed", exc_info=True)
+        elif polling is False and (time.monotonic() - last_ok) > grace:
+            raise WorkerPollStalledError(
+                f"worker identity {identity!r} absent from pollers on task "
+                f"queue {task_queue!r} for over {grace:.0f}s — poll loop is dead"
+            )
+        # polling is None → unknown; keep last_ok and retry next interval.
+        try:
+            await asyncio.wait_for(shutdown_event.wait(), timeout=interval)
+            return
+        except TimeoutError:
+            continue
 
 
 async def _run_worker_with_restart(
@@ -980,72 +1126,148 @@ async def _run_worker_with_restart(
     shutdown_event: asyncio.Event,
     auth_manager: Any = None,
     client: Any = None,
+    task_queue: "str | None" = None,
+    health_server: Any = None,
 ) -> None:
-    """Run a Temporal worker under a bounded restart supervisor.
+    """Run a Temporal worker under a self-healing restart supervisor.
 
     temporalio treats a poll ``PermissionDenied`` (and other non-retryable gRPC
     errors) as fatal: the worker shuts down and re-raises out of the
     ``async with worker`` block. A ``Worker`` is single-use, so each restart
     rebuilds one via ``build_worker``.
 
-    Restart-on-fatal with a cap: any worker-fatal error triggers a rebuild after
-    a full-jitter backoff, unless a shutdown was requested. The consecutive
-    counter resets once a worker runs healthily for ``_WORKER_HEALTHY_RUN_SECONDS``;
-    if the worker keeps failing without ever staying up, the supervisor gives up
-    after ``_WORKER_MAX_CONSECUTIVE_RESTARTS`` and re-raises so a persistent
-    misconfiguration still fails loud rather than hot-looping forever.
+    Recovery is **classified** (``_is_recoverable_poll_failure``). The
+    recoverable class this feature targets — a transient Temporal frontend auth
+    rejection (e.g. a JWKS signing-key cache skew, ARUN-1128) and the watchdog's
+    own ``WorkerPollStalledError`` — is fixed by a restart, so the supervisor
+    recovers it **indefinitely** rather than exiting: a dead poller must never
+    become a silent outage, and a self-healing runtime must never crash-loop the
+    pod. Past ``_WORKER_MAX_CONSECUTIVE_RESTARTS`` consecutive recoverable
+    failures the supervisor escalates log severity to ERROR (so a genuinely
+    stuck worker is loud in monitoring) but keeps recovering. The consecutive
+    counter resets once a worker runs healthily for
+    ``_WORKER_HEALTHY_RUN_SECONDS``.
+
+    A failure *outside* the recoverable class (bad credentials, a misconfigured
+    task queue — a permanent misconfiguration a restart cannot fix) keeps the
+    bounded give-up: past ``_WORKER_MAX_CONSECUTIVE_RESTARTS`` it re-raises, so
+    it fails loud instead of presenting as a ready, alive pod that never polls.
+
+    When ``task_queue`` and ``client`` are supplied, a poll-liveness watchdog
+    (``_assert_polling_or_raise``) runs alongside the worker and converts the
+    silent "zombie" — a rebuilt worker that parks in ``async with worker``
+    without ever polling (ARUN-1127) — into a recoverable fatal the supervisor
+    acts on. This is the case the bare ``async with worker: await
+    shutdown_event.wait()`` cannot observe.
 
     Args:
         build_worker: Builds a fresh worker (an ``AppWorker``) to run.
         shutdown_event: Set on SIGINT/SIGTERM; a clean shutdown stops the loop.
         auth_manager: Optional; when present its token is force-refreshed before
             each restart to recover from stale/expired tokens.
-        client: The Temporal client passed to ``auth_manager.force_refresh``.
+        client: The Temporal client passed to ``auth_manager.force_refresh`` and
+            probed by the poll-liveness watchdog.
+        task_queue: The worker's task queue; arms the poll-liveness watchdog.
+        health_server: Optional ``WorkerHealthServer`` whose ``record_poll_ok``
+            / ``set_reconnecting`` surface recovery state in the probes.
     """
     consecutive_failures = 0
+    # Arm the poll-liveness watchdog only when we have a client + task queue to
+    # probe (production). Without them the supervisor still recovers on any
+    # run()-surfaced fatal — it just can't see a silent park.
+    watchdog_enabled = bool(task_queue) and client is not None
 
     while not shutdown_event.is_set():
         worker = build_worker()
         started_at = time.monotonic()
-        try:
+
+        async def _run_once(worker: Any = worker) -> None:
             async with worker:
                 await shutdown_event.wait()
-            # Body returned normally — a shutdown signal, not a failure. Stop.
-            return
-        except Exception:
-            # temporalio surfaces a worker-fatal error by cancelling this task
-            # and re-raising the error from Worker.__aexit__. Clear the residual
-            # cancellation so the backoff below (asyncio.wait_for) isn't torn
-            # down by the leftover cancel count on Python 3.11+.
+
+        run_task = asyncio.ensure_future(_run_once())
+        racers = {run_task}
+        if watchdog_enabled:
+            racers.add(
+                asyncio.ensure_future(
+                    _assert_polling_or_raise(
+                        client=client,
+                        task_queue=task_queue,  # type: ignore[arg-type]
+                        shutdown_event=shutdown_event,
+                        on_poll_ok=(
+                            health_server.record_poll_ok
+                            if health_server is not None
+                            else None
+                        ),
+                        # Read the module globals at call time so env overrides
+                        # (and tests) take effect rather than the def-time default.
+                        grace=_WORKER_POLL_LIVENESS_GRACE_SECONDS,
+                        interval=_WORKER_POLL_LIVENESS_INTERVAL_SECONDS,
+                    )
+                )
+            )
+        try:
+            done, pending = await asyncio.wait(
+                racers, return_when=asyncio.FIRST_COMPLETED
+            )
+            for pending_task in pending:
+                pending_task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            # Surface the first fatal: a worker run() failure OR a watchdog
+            # WorkerPollStalledError. A clean run_task return means shutdown.
+            for done_task in done:
+                done_task.result()
+            # Nothing raised → the worker returned on its own. That is expected
+            # only on shutdown; otherwise treat it as a failure to recover from.
+            if shutdown_event.is_set():
+                return
+            raise RuntimeError("worker run returned without a shutdown request")
+        except Exception as exception:
+            # Clear any residual cancellation so the backoff wait_for below is
+            # not torn down by a leftover cancel count on Python 3.11+.
             current = asyncio.current_task()
             if current is not None and hasattr(current, "uncancel"):
                 current.uncancel()
 
             if shutdown_event.is_set():
-                # Failure raced with an in-flight shutdown — treat as clean.
                 logger.info("Worker exited during shutdown; not restarting")
                 return
 
             ran_seconds = time.monotonic() - started_at
             if ran_seconds >= _WORKER_HEALTHY_RUN_SECONDS:
-                # Ran healthily for a while before failing — a fresh incident,
-                # not a restart storm, so reset the streak.
+                # Ran healthily before failing — a fresh incident, not a restart
+                # storm, so reset the streak.
                 consecutive_failures = 0
             consecutive_failures += 1
 
-            if consecutive_failures > _WORKER_MAX_CONSECUTIVE_RESTARTS:
+            # Classify the failure. Only the transient auth-rejection class (and
+            # the watchdog's WorkerPollStalledError) recovers indefinitely. A
+            # non-recoverable failure keeps the bounded give-up: past the cap,
+            # re-raise so a permanent misconfiguration fails loud.
+            recoverable = _is_recoverable_poll_failure(exception)
+            if (
+                not recoverable
+                and consecutive_failures > _WORKER_MAX_CONSECUTIVE_RESTARTS
+            ):
                 logger.error(
-                    "Worker failed %d times without staying healthy for %ds; "
-                    "giving up and exiting",
+                    "Worker failed %d times with a non-recoverable error "
+                    "without staying healthy for %ds; giving up and exiting",
                     consecutive_failures,
                     _WORKER_HEALTHY_RUN_SECONDS,
                     exc_info=True,
                 )
                 raise
 
-            # Force a fresh token before restarting — recovers stale/expired
-            # token cases; harmless for a transient frontend key-cache skew
-            # (the backoff itself gives the frontend time to refresh its JWKS).
+            if health_server is not None:
+                try:
+                    health_server.set_reconnecting(True, consecutive_failures)
+                except Exception:
+                    logger.debug("health set_reconnecting failed", exc_info=True)
+
+            # Force a fresh token before rebuilding — recovers stale/expired
+            # tokens; harmless for a transient frontend key-cache skew (the
+            # backoff gives the frontend time to refresh its JWKS).
             if auth_manager is not None:
                 try:
                     await auth_manager.force_refresh(client)
@@ -1056,20 +1278,32 @@ async def _run_worker_with_restart(
                         exc_info=True,
                     )
 
-            # Full-jitter exponential backoff (matches create_temporal_client),
-            # raced against shutdown so SIGTERM stays responsive during backoff.
+            # Full-jitter exponential backoff, raced against shutdown so SIGTERM
+            # stays responsive during backoff.
             cap_at_attempt = min(
-                2 ** (consecutive_failures - 1),
+                2 ** min(consecutive_failures - 1, 16),
                 _WORKER_RESTART_BACKOFF_CAP_SECONDS,
             )
             delay = random.uniform(0, cap_at_attempt)
-            logger.warning(
-                "Worker exited with a fatal error (attempt %d/%d, ran %.0fs); "
-                "restarting in %.1fs",
+            # A recoverable failure is fixed by a restart, so recover
+            # indefinitely — never exit. Past the soft threshold, escalate to
+            # ERROR so a genuinely stuck worker is loud in monitoring while we
+            # keep trying. (Non-recoverable failures already re-raised above.)
+            sustained = consecutive_failures > _WORKER_MAX_CONSECUTIVE_RESTARTS
+            emit = logger.error if sustained else logger.warning
+            emit(
+                "Worker poll loop went down (attempt %d, ran %.0fs); "
+                "recovering in %.1fs%s",
                 consecutive_failures,
-                _WORKER_MAX_CONSECUTIVE_RESTARTS,
                 ran_seconds,
                 delay,
+                (
+                    " — SUSTAINED: worker still not polling after "
+                    f"{consecutive_failures} attempts; check Temporal frontend "
+                    "auth / worker credentials"
+                    if sustained
+                    else ""
+                ),
                 exc_info=True,
             )
             try:
@@ -1079,7 +1313,7 @@ async def _run_worker_with_restart(
             except TimeoutError:
                 # Backoff elapsed without a shutdown request — the expected
                 # path; fall through to rebuild and restart the worker.
-                logger.debug("Restart backoff elapsed; rebuilding worker")
+                logger.debug("Recovery backoff elapsed; rebuilding worker")
 
 
 async def run_worker_mode(config: AppConfig) -> None:
@@ -1247,6 +1481,8 @@ async def run_worker_mode(config: AppConfig) -> None:
             shutdown_event=shutdown_event,
             auth_manager=auth_manager,
             client=client,
+            task_queue=config.task_queue,
+            health_server=health_server,
         )
 
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
@@ -1573,6 +1809,8 @@ async def run_combined_mode(config: AppConfig) -> None:
                 shutdown_event=shutdown_event,
                 auth_manager=auth_manager,
                 client=client,
+                task_queue=config.task_queue,
+                health_server=health_server,
             ),
         )
 

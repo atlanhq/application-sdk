@@ -49,6 +49,21 @@ healthy activity is not mistaken for a parked poll loop. The probe never fails
 before the first activity is recorded, so it does not kill a worker during
 startup. See the env var in `docs/concepts/common.md`.
 
+### Recovery state in probe details
+
+The `WorkerHealthServer` also surfaces the restart supervisor's recovery state
+(see `docs/concepts/apps.md`) in the `/ready` and `/live` probe *details*:
+
+- `reconnecting` — `true` while the supervisor is rebuilding the worker after a
+  fatal poll error or a watchdog-detected stall.
+- `consecutive_failures` — the current consecutive-failure streak.
+- `last_poll_ok` — ISO timestamp of the last confirmed active-poll, or `null`.
+
+These fields are observability only: they never flip `/ready`, `/live`, or
+`/health` unhealthy. The supervisor self-heals in process, so Kubernetes must
+not kill a pod that is actively recovering — `reconnecting: true` is a signal
+to watch in logs/monitoring, not a probe failure.
+
 ## Handler Method Routing
 
 The service maps your `Handler` methods to HTTP endpoints:

@@ -131,3 +131,63 @@ class TestCheckLive:
         assert server._max_idle_seconds is None
         server._last_activity = _utc_now() - timedelta(hours=1)
         assert (await server.check_live()).healthy is True
+
+
+class _StubTemporalClient:
+    """Minimal ``TemporalClientProtocol`` stand-in (identity only)."""
+
+    @property
+    def identity(self) -> str:
+        return "1@host"
+
+
+class TestWorkerRecoveryState:
+    """The real ``WorkerHealthServer`` recovery-state surface (ARUN-1127).
+
+    ``tests/unit/test_main.py`` exercises the supervisor<->health *wiring* via a
+    fake; these verify the real class's own state transitions and what the
+    ``/ready`` + ``/live`` probe details expose.
+    """
+
+    @pytest.mark.asyncio
+    async def test_set_reconnecting_exposed_in_ready_and_live(self):
+        server = WorkerHealthServer(host="127.0.0.1", port=0)
+        server.set_temporal_client(_StubTemporalClient())
+
+        server.set_reconnecting(True, 2)
+
+        ready = await server.check_ready()
+        assert ready.details["reconnecting"] is True
+        assert ready.details["consecutive_failures"] == 2
+        live = await server.check_live()
+        assert live.details["reconnecting"] is True
+        assert live.details["consecutive_failures"] == 2
+        # Recovery state must never flip a probe unhealthy (a recovering pod
+        # must not be killed).
+        assert ready.healthy is True
+        assert live.healthy is True
+
+    @pytest.mark.asyncio
+    async def test_record_poll_ok_clears_reconnecting_state(self):
+        server = WorkerHealthServer(host="127.0.0.1", port=0)
+        server.set_temporal_client(_StubTemporalClient())
+        server.set_reconnecting(True, 3)
+
+        server.record_poll_ok()
+
+        assert server._reconnecting is False
+        assert server._consecutive_failures == 0
+        assert server._last_poll_ok is not None
+        ready = await server.check_ready()
+        assert ready.details["reconnecting"] is False
+        assert ready.details["consecutive_failures"] == 0
+        assert ready.details["last_poll_ok"] is not None
+
+    @pytest.mark.asyncio
+    async def test_default_state_is_not_reconnecting(self):
+        server = WorkerHealthServer(host="127.0.0.1", port=0)
+        server.set_temporal_client(_StubTemporalClient())
+        ready = await server.check_ready()
+        assert ready.details["reconnecting"] is False
+        assert ready.details["consecutive_failures"] == 0
+        assert ready.details["last_poll_ok"] is None
