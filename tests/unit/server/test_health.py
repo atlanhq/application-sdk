@@ -7,6 +7,7 @@ tests/integration/server/test_health.py.
 """
 
 import math
+from dataclasses import dataclass
 from datetime import timedelta
 from unittest.mock import patch
 
@@ -131,3 +132,73 @@ class TestCheckLive:
         assert server._max_idle_seconds is None
         server._last_activity = _utc_now() - timedelta(hours=1)
         assert (await server.check_live()).healthy is True
+
+
+@dataclass(frozen=True)
+class _StubTemporalClient:
+    """Satisfies ``TemporalClientProtocol`` for readiness checks."""
+
+    identity: str
+
+
+class TestPollDiagnostics:
+    """Poll-loop diagnostics are observational only (ARUN-1127).
+
+    The mechanism behind a parked poll loop is not established yet, so none of
+    these fields may flip a probe — a probe acting on a guess kills healthy
+    workers.
+    """
+
+    @pytest.mark.asyncio
+    async def test_fatal_and_poller_counts_surface_in_live_details(self):
+        server = WorkerHealthServer(host="127.0.0.1", port=0)
+        server.record_worker_fatal(RuntimeError("Activity worker failed"))
+        server.record_poller_counts({"workflow_task": 0.0})
+
+        status = await server.check_live()
+
+        assert status.details["last_fatal_type"] == "RuntimeError"
+        assert status.details["fatal_count"] == 1
+        assert status.details["poller_counts"] == {"workflow_task": 0.0}
+        assert status.details["poller_counts_read_at"] is not None
+
+    @pytest.mark.asyncio
+    async def test_fatal_message_is_not_exposed_over_http(self):
+        """Only the exception type is retained; the chain goes to the logs.
+
+        The probe payload is served over HTTP and a gRPC status repr can carry
+        response metadata, so the message must not land in it.
+        """
+        server = WorkerHealthServer(host="127.0.0.1", port=0)
+        server.record_worker_fatal(RuntimeError("Poll failure: token abcdef123"))
+
+        details = (await server.check_live()).details
+
+        assert "abcdef123" not in str(details)
+
+    @pytest.mark.asyncio
+    async def test_zero_pollers_does_not_flip_live_unhealthy(self):
+        server = WorkerHealthServer(host="127.0.0.1", port=0)
+        server.record_poller_counts({"workflow_task": 0.0, "activity_task": 0.0})
+        server.record_worker_fatal(RuntimeError("Workflow worker failed"))
+
+        assert (await server.check_live()).healthy is True
+
+    @pytest.mark.asyncio
+    async def test_unknown_reading_stays_none_not_zero(self):
+        """An unreadable gauge is recorded as unknown, never as a zero count."""
+        server = WorkerHealthServer(host="127.0.0.1", port=0)
+        server.record_poller_counts(None)
+
+        assert (await server.check_live()).details["poller_counts"] is None
+
+    @pytest.mark.asyncio
+    async def test_ready_details_carry_the_same_diagnostics(self):
+        server = WorkerHealthServer(host="127.0.0.1", port=0)
+        server.set_temporal_client(_StubTemporalClient(identity="1@host"))
+        server.record_poller_counts({"activity_task": 4.0})
+
+        details = (await server.check_ready()).details
+
+        assert details["identity"] == "1@host"
+        assert details["poller_counts"] == {"activity_task": 4.0}

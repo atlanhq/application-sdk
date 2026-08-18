@@ -24,9 +24,12 @@ from application_sdk.execution._temporal._activity_errors import (
     WorkerInterceptorDuplicateError,
 )
 from application_sdk.execution._temporal.worker import (
+    _MAX_FATAL_CHAIN_DEPTH,
     AppWorker,
     _resolve_gate_enforcement,
     create_worker,
+    describe_exception_chain,
+    read_core_poller_counts,
 )
 
 DRAIN_DELAY_PATCH = (
@@ -1160,3 +1163,136 @@ class TestWorkflowFailureExceptionTypes:
         declared = self._declared_types()
         assert not issubclass(asyncio.CancelledError, declared)
         assert not issubclass(ActivityError, declared)
+
+
+class TestDescribeExceptionChain:
+    """Tests for ``describe_exception_chain`` (ARUN-1127 instrumentation)."""
+
+    def test_renders_the_real_shape_of_a_temporal_poll_fatal(self) -> None:
+        """The gRPC status only exists below the wrapper, so the chain must be walked.
+
+        This is the exact shape temporalio produces: the Rust bridge raises
+        ``RuntimeError("Poll failure: ... Status { code: PermissionDenied ... }")``
+        and ``temporalio.worker`` re-wraps it as ``RuntimeError("Activity worker
+        failed") from err``. ``str(exc)`` alone therefore carries no diagnosis at
+        all — which is why classifying on it cannot work.
+        """
+        bridge_error = RuntimeError(
+            "Poll failure: Unhandled grpc error when polling: "
+            'Status { code: PermissionDenied, message: "Request unauthorized." }'
+        )
+        try:
+            try:
+                raise bridge_error
+            except RuntimeError as err:
+                raise RuntimeError("Activity worker failed") from err
+        except RuntimeError as top:
+            chain = describe_exception_chain(top)
+
+        assert chain[0] == "RuntimeError: Activity worker failed"
+        assert "PermissionDenied" in chain[1]
+        assert "PermissionDenied" not in chain[0]
+
+    def test_follows_context_when_there_is_no_explicit_cause(self) -> None:
+        try:
+            try:
+                raise ValueError("inner")
+            except ValueError:
+                raise RuntimeError("outer")  # noqa: B904 — implicit chain is the point
+        except RuntimeError as top:
+            chain = describe_exception_chain(top)
+
+        assert chain == ["RuntimeError: outer", "ValueError: inner"]
+
+    def test_cycle_does_not_hang(self) -> None:
+        first = RuntimeError("first")
+        second = RuntimeError("second")
+        first.__cause__ = second
+        second.__cause__ = first
+
+        chain = describe_exception_chain(first)
+
+        assert chain == ["RuntimeError: first", "RuntimeError: second"]
+
+    def test_depth_is_capped(self) -> None:
+        head = RuntimeError("link-0")
+        current = head
+        for index in range(1, 30):
+            nxt = RuntimeError(f"link-{index}")
+            current.__cause__ = nxt
+            current = nxt
+
+        chain = describe_exception_chain(head)
+
+        assert len(chain) == _MAX_FATAL_CHAIN_DEPTH + 1
+        assert chain[-1] == "... chain truncated"
+
+
+class TestReadCorePollerCounts:
+    """Tests for ``read_core_poller_counts`` (the in-process poll-liveness read)."""
+
+    _EXPOSITION = (
+        "# HELP temporal_num_pollers Current number of pollers\n"
+        "# TYPE temporal_num_pollers gauge\n"
+        'temporal_num_pollers{poller_type="workflow_task",task_queue="q"} 2.0\n'
+        'temporal_num_pollers{poller_type="activity_task",task_queue="q"} 3.0\n'
+        "# HELP temporal_request_total Requests\n"
+        "# TYPE temporal_request_total counter\n"
+        'temporal_request_total{operation="PollActivityTaskQueue"} 41.0\n'
+    )
+
+    def _response(self, status_code: int = 200, text: str | None = None) -> mock.Mock:
+        response = mock.Mock()
+        response.status_code = status_code
+        response.text = self._EXPOSITION if text is None else text
+        return response
+
+    def _patch_client(self, response: mock.Mock) -> mock.patch:
+        client = mock.AsyncMock()
+        client.get = mock.AsyncMock(return_value=response)
+        client.__aenter__ = mock.AsyncMock(return_value=client)
+        client.__aexit__ = mock.AsyncMock(return_value=False)
+        return mock.patch("httpx.AsyncClient", return_value=client)
+
+    @pytest.mark.asyncio
+    async def test_sums_the_gauge_by_poller_type(self) -> None:
+        with self._patch_client(self._response()):
+            counts = await read_core_poller_counts()
+
+        assert counts == {"workflow_task": 2.0, "activity_task": 3.0}
+
+    @pytest.mark.asyncio
+    async def test_zero_pollers_reads_as_zero_not_unknown(self) -> None:
+        """A dead poll loop must be distinguishable from an unreadable endpoint."""
+        exposition = (
+            "# TYPE temporal_num_pollers gauge\n"
+            'temporal_num_pollers{poller_type="workflow_task"} 0.0\n'
+        )
+        with self._patch_client(self._response(text=exposition)):
+            counts = await read_core_poller_counts()
+
+        assert counts == {"workflow_task": 0.0}
+
+    @pytest.mark.asyncio
+    async def test_unreachable_endpoint_is_unknown_not_zero(self) -> None:
+        client = mock.AsyncMock()
+        client.get = mock.AsyncMock(side_effect=OSError("connection refused"))
+        client.__aenter__ = mock.AsyncMock(return_value=client)
+        client.__aexit__ = mock.AsyncMock(return_value=False)
+
+        with mock.patch("httpx.AsyncClient", return_value=client):
+            assert await read_core_poller_counts() is None
+
+    @pytest.mark.asyncio
+    async def test_non_200_is_unknown(self) -> None:
+        with self._patch_client(self._response(status_code=503)):
+            assert await read_core_poller_counts() is None
+
+    @pytest.mark.asyncio
+    async def test_absent_gauge_family_is_unknown(self) -> None:
+        """Core registers the gauge only once polling starts; absent != zero."""
+        exposition = (
+            "# TYPE temporal_request_total counter\ntemporal_request_total 1.0\n"
+        )
+        with self._patch_client(self._response(text=exposition)):
+            assert await read_core_poller_counts() is None

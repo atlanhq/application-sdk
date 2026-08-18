@@ -85,6 +85,11 @@ Bounds the restart supervisor that rebuilds the worker after a fatal poll error 
 | `ATLAN_WORKER_MAX_CONSECUTIVE_RESTARTS` | `10` | Consecutive worker-fatal failures tolerated before the supervisor gives up and re-raises, so a persistent misconfiguration still fails loud instead of hot-looping. The counter resets after a healthy run window. |
 | `ATLAN_WORKER_RESTART_BACKOFF_CAP_SECONDS` | `30` | Upper bound (seconds) for the full-jitter exponential backoff between worker restarts. The backoff is raced against shutdown so SIGTERM stays responsive. |
 | `ATLAN_WORKER_HEALTHY_RUN_SECONDS` | `300` | A worker that ran at least this long (seconds) before failing is treated as a fresh incident, resetting the consecutive-failure streak. |
+| `ATLAN_WORKER_POLL_DIAGNOSTIC_INTERVAL_SECONDS` | `60` | How often (seconds) to read Temporal core's live poller gauge and log a state transition, so a worker that is alive but claiming no work is visible in logs and in the `/live` / `/ready` probe details. Purely observational — it never restarts the worker and never flips a probe. Set to `0` to disable. |
+
+Reading the poller gauge requires Temporal core's Prometheus exporter, bound by
+`ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` (default `127.0.0.1:9464`). When it is
+unavailable the poll state is reported as *unknown*, never as zero.
 
 ### TLS
 
