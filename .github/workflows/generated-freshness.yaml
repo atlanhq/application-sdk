@@ -76,10 +76,11 @@ jobs:
           # attacker-controlled module URI, which `pkl eval` (below) then
           # fetches and evaluates. This is accepted rather than allowlisted:
           # pkl is a config DSL with no I/O primitives, permissions here are
-          # contents:read + pull-requests:write (no secrets exposed), and the
-          # same posture already exists on renovate-pkl-sync.yaml. A
-          # PklProject module-URI allowlist, if ever added, should cover all
-          # such pkl-eval-on-PR-head workflows at once, not just this one.
+          # contents:read + pull-requests:write (no secrets exposed), and this is
+          # now the only pkl-eval-on-untrusted-ref workflow left — the
+          # renovate-pkl-sync.yaml reusable that shared the posture was retired
+          # in FND-395. A PklProject module-URI allowlist, if ever added, should
+          # still be written to cover every such workflow rather than this one.
           ref: ${{ github.event.pull_request.head.sha }}
 
       # Provides `uvx ruff`, used by the driver to format generated Python so the
@@ -99,7 +100,7 @@ jobs:
       # A `uses:` reusable workflow does NOT bring its repo's files into the
       # caller's checkout, so the consumer repo has no copy of the driver. Sparse
       # -checkout the SDK scripts into .sdk-scripts (same pattern as
-      # renovate-pkl-sync.yaml). The driver runs against the consumer's working
+      # release-version-bump.yaml). The driver runs against the consumer's working
       # tree (CWD) and only reads .sdk-scripts for its own code — never staged,
       # and outside OUTPUT_PATHS so it can't register as drift.
       - name: Fetch freshness driver
