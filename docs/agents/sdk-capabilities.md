@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.28.0
-source-sha:    c2d4cc992a0e6aaa5600ff76c3f8bc57b5d0642e
-source-date:   2026-08-17T12:11:56Z
+source-sha:    5b5599430dacc5b98e1f0d8758b66be8d6a8acad
+source-date:   2026-08-18T07:47:50Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -22,7 +22,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 11 |
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 11 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
-| `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
+| `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 45 |
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 61 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 21 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
@@ -829,6 +829,13 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 - **Summary:** Create a pyatlan_v9 AsyncAtlanClient from a resolved Atlan credential.
 - **Defined in:** `application_sdk/credentials/atlan_client.py`
 
+#### `declared_agent_spec_type`
+
+- **Import:** `from application_sdk.credentials import declared_agent_spec_type`
+- **Signature:** `declared_agent_spec_type(model_cls: type[BaseModel])`
+- **Summary:** The spec class *model_cls* declares for its ``agent_json`` field.
+- **Defined in:** `application_sdk/credentials/ingress.py`
+
 #### `expand_dotted_keys`
 
 - **Import:** `from application_sdk.credentials import expand_dotted_keys`
@@ -871,6 +878,20 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 - **Summary:** Create a CredentialRef from a platform-issued credential GUID.
 - **Defined in:** `application_sdk/credentials/ref.py`
 
+#### `lift_agent_json`
+
+- **Import:** `from application_sdk.credentials import lift_agent_json`
+- **Signature:** `lift_agent_json(body: dict[str, Any])`
+- **Summary:** Promote the freshest ``agent_json`` binding in *body* to a typed field.
+- **Defined in:** `application_sdk/credentials/ingress.py`
+
+#### `normalize_agent_json`
+
+- **Import:** `from application_sdk.credentials import normalize_agent_json`
+- **Signature:** `normalize_agent_json(value: Any, *, spec_type: type[SpecT] = AgentCredentialSpec)`
+- **Summary:** Canonicalise one ``agent_json`` value to a typed spec, or ``None``.
+- **Defined in:** `application_sdk/credentials/ingress.py`
+
 #### `oauth_client_ref`
 
 - **Import:** `from application_sdk.credentials import oauth_client_ref`
@@ -898,6 +919,15 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 - **Signature:** `transform_agent_credentials(agent_json: dict[str, Any])`
 - **Summary:** Transform raw agent JSON into the format connectors expect.
 - **Defined in:** `application_sdk/common/transforms.py`
+
+### Constants and Enums
+
+#### `AGENT_JSON_ALIASES`
+
+- **Import:** `from application_sdk.credentials import AGENT_JSON_ALIASES`
+- **Signature:** `AGENT_JSON_ALIASES: Final[tuple[str, ...]]`
+- **Summary:** Every spelling the field arrives under, in discovery order.
+- **Defined in:** `application_sdk/credentials/ingress.py`
 
 ## `application_sdk.errors`
 

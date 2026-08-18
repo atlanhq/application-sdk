@@ -32,9 +32,8 @@ from application_sdk.handler.contracts import (
 )
 from application_sdk.handler.service import (
     _flatten_to_pairs,
-    _lift_agent_json,
     _normalize_credentials,
-    _rank_agent_json,
+    _normalize_preflight_request,
     _wrap_response,
     create_app_handler_service,
 )
@@ -7000,83 +6999,88 @@ class TestDefaultEntrypoint:
             patcher.stop()
 
 
-class TestAgentJsonLift:
-    """`_lift_agent_json` / `_rank_agent_json`: surface the freshest agent-json.
+class TestAgentJsonIngressOnTheHandlerPath:
+    """The handler path's end of the ``agent_json`` ingress normaliser.
 
-    Heracles forwards the FE payload verbatim, so the agent-json binding can
-    arrive nested (metadata / connection_config / credentials) and in several
-    competing copies at once — a live hyphen `agent-json` object next to a stale
-    underscore `agent_json` serialized string. The lift must surface the freshest
-    copy at the canonical top-level ``agent_json`` key for downstream consumers.
+    The normaliser itself is pinned in
+    ``tests/unit/credentials/test_ingress.py``; this covers what the request
+    path adds — the normalized body must be accepted by the typed input, and a
+    body that is genuinely malformed must come back as a 422 naming the field
+    rather than a plain-text 500.
     """
 
-    _FRESH = {"agent-name": "acme", "basic.username": "USERNAME", "host": "h"}
-    _STALE = '{"agent-name": "acme", "basic.username": "username", "host": "h"}'
+    _PLACEHOLDER = {
+        "agent-name": "agent-name",
+        "aws-auth-method": "aws-auth-method",
+        "host": "host",
+        "port": "port",
+        "secret-manager": "secret-manager",
+    }
 
-    def test_rank_prefers_object_over_string_and_hyphen_over_underscore(self) -> None:
-        assert _rank_agent_json({}, "agent-json") > _rank_agent_json({}, "agent_json")
-        assert _rank_agent_json({}, "agent_json") > _rank_agent_json("{}", "agent-json")
-        # object beats string even when the string uses the canonical hyphen key
-        assert _rank_agent_json({}, "agent_json") > _rank_agent_json("{}", "agent_json")
+    def test_placeholder_widget_body_still_validates(self) -> None:
+        """The regression: the normalized body must be accepted by the typed input.
 
-    def test_sage_shape_picks_fresh_object_over_stale_string(self) -> None:
-        # /sage: heracles forwards formData -> metadata carrying BOTH copies.
-        body = {
-            "credentials": {"connectorConfigName": "atlan-connectors-mssql"},
-            "metadata": {
-                "agent_json": self._STALE,
-                "agent-json": self._FRESH,
-                "extraction-method": "agent",
-            },
-        }
-        out = _lift_agent_json(body)
-        assert out["agent_json"] == self._FRESH
-        assert out["agent_json"]["basic.username"] == "USERNAME"
-        # both agent-json keys stripped from the container
-        assert "agent_json" not in out["metadata"]
-        assert "agent-json" not in out["metadata"]
-        assert out["metadata"]["extraction-method"] == "agent"
-
-    def test_serialized_string_used_as_fallback_when_no_object(self) -> None:
-        out = _lift_agent_json({"metadata": {"agent_json": self._STALE}})
-        assert out["agent_json"]["basic.username"] == "username"
-
-    def test_top_level_fresh_hyphen_overrides_stale_underscore(self) -> None:
-        out = _lift_agent_json({"agent_json": self._STALE, "agent-json": self._FRESH})
-        assert out["agent_json"] == self._FRESH
-        # stale aliases are dropped; only the canonical top-level key remains
-        assert "agent-json" not in out
-
-    def test_agent_json_inside_credentials_dict(self) -> None:
-        out = _lift_agent_json(
-            {"credentials": {"agent-json": self._FRESH, "connectorConfigName": "x"}}
-        )
-        assert out["agent_json"] == self._FRESH
-        assert "agent-json" not in out["credentials"]
-        assert out["credentials"]["connectorConfigName"] == "x"
-
-    def test_agent_json_inside_v3_credentials_list(self) -> None:
-        out = _lift_agent_json(
+        A rendered-but-unfilled agent widget submits every field name as its own
+        value. ``port`` is ``AgentCredentialSpec``'s only non-str field, so the
+        payload coerces to a dict but fails typed validation — promoting it made
+        every direct-mode request whose form renders the widget 500.
+        """
+        body = _normalize_preflight_request(
             {
-                "credentials": [
-                    {"key": "agent-json", "value": self._FRESH},
-                    {"key": "connectorConfigName", "value": "x"},
-                ]
+                "connector": "oracle",
+                "entrypoint": "miner",
+                "credentials": {"extra": {}},
+                "metadata": {
+                    "agent_json": json.dumps(self._PLACEHOLDER),
+                    "agent-json": json.dumps(self._PLACEHOLDER),
+                    "extraction_method": "query_history",
+                },
             }
         )
-        assert out["agent_json"] == self._FRESH
-        assert all(c["key"] != "agent-json" for c in out["credentials"])
+        validated = PreflightInput.model_validate(body)  # must not raise
+        assert validated.agent_json is None
 
-    def test_direct_mode_body_unchanged(self) -> None:
-        body = {"credentials": {"host": "h", "username": "u"}}
-        assert _lift_agent_json(body) == body
+    def test_malformed_body_is_a_422_naming_the_field(self) -> None:
+        """A body that does not fit the contract must say which field.
 
-    def test_empty_agent_json_ignored(self) -> None:
-        assert "agent_json" not in _lift_agent_json({"metadata": {"agent-json": {}}})
-        assert "agent_json" not in _lift_agent_json({"metadata": {"agent_json": ""}})
+        The endpoints validate their own body (they normalise v2 wire shapes
+        first), so an unhandled ValidationError used to become Starlette's
+        plain-text 500 — reaching the caller as an opaque JSON-decode error with
+        no hint of the offending field. That is why the placeholder bug above
+        took a full investigation to pin.
+        """
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/check",
+            json={"credentials": [], "timeout_seconds": "not-a-number"},
+        )
 
-    def test_unparseable_string_ignored(self) -> None:
-        assert "agent_json" not in _lift_agent_json({"metadata": {"agent_json": "{"}})
+        assert response.status_code == 422
+        body = response.json()
+        assert body["success"] is False
+        assert "timeout_seconds" in body["message"]
+        assert body["detail"][0]["field"] == "timeout_seconds"
+        # The rejected value may be a credential — never echo it back.
+        assert "not-a-number" not in json.dumps(body)
+
+    def test_real_spec_reaches_the_typed_input(self) -> None:
+        body = _normalize_preflight_request(
+            {
+                "credentials": {"extra": {}},
+                "metadata": {
+                    "agent-json": {
+                        "agent-name": "acme-agent",
+                        "secret-path": "arn:aws:secretsmanager:us-east-1:1:secret:x",
+                        "host": "db.example.com",
+                        "port": 1521,
+                    }
+                },
+            }
+        )
+        validated = PreflightInput.model_validate(body)
+        assert validated.agent_json is not None
+        assert validated.agent_json.agent_name == "acme-agent"
+        assert validated.agent_json.is_populated()
 
 
 class TestManifestPostTransport:
