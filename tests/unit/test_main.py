@@ -15,6 +15,8 @@ import pytest
 
 from application_sdk.main import (
     AppConfig,
+    WorkerPollStalledError,
+    _assert_polling_or_raise,
     _create_infrastructure,
     _derive_service_name,
     _flush_observability,
@@ -25,9 +27,7 @@ from application_sdk.main import (
     _loop_exception_handler,
     _parse_all_component_yamls,
     _parse_workflow_max_timeout_hours,
-    _assert_polling_or_raise,
     _run_worker_with_restart,
-    WorkerPollStalledError,
     main,
     parse_args,
     run_combined_mode,

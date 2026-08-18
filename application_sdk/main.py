@@ -1061,7 +1061,7 @@ async def _assert_polling_or_raise(
     try:
         await asyncio.wait_for(shutdown_event.wait(), timeout=grace)
         return
-    except TimeoutError:
+    except TimeoutError:  # conformance: ignore[E002] grace window elapsed without shutdown — start probing; TimeoutError is the expected wait_for outcome, not an error
         pass
 
     identity = getattr(client, "identity", None)
