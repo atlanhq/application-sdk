@@ -1,4 +1,4 @@
-"""Drift guard for the public-error allowlist — the forcing function for P043/P044.
+"""Drift guard for the public-error allowlist — the forcing function for P043/P045.
 
 The committed ``conformance/data/public_errors.json`` is what lets the error-seam
 rules name the right remediation offline inside a consumer app repo, which never

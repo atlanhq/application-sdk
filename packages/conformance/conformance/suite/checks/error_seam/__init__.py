@@ -9,7 +9,7 @@ module that can be reorganised without a deprecation cycle:
   export.  This is the defect: when the SDK changes which class a boundary
   surfaces, a sibling class silently stops matching and the guard becomes dead
   code.
-* ``P044`` PrivateErrorClassImport (app) — importing such a class at all.  This
+* ``P045`` PrivateErrorClassImport (app) — importing such a class at all.  This
   is the coupling that makes P043 possible.
 
 Scoped to ``application_sdk.storage.formats.*`` for now; see
@@ -28,7 +28,7 @@ tests would have missed it.
 
 Inline suppression
 ------------------
-Add ``# conformance: ignore[P043] <reason>`` (or ``P044``) on the offending line,
+Add ``# conformance: ignore[P043] <reason>`` (or ``P045``) on the offending line,
 or on the comment-only line directly above it.
 """
 
@@ -76,7 +76,7 @@ def discover(root: Path) -> list[Path]:
 
 
 def scan_text(text: str, file: str) -> list[Finding]:
-    """Scan a single Python source *text* for the error-seam findings (P043, P044)."""
+    """Scan a single Python source *text* for the error-seam findings (P043, P045)."""
     try:
         tree = ast.parse(text, filename=file)
     except SyntaxError:
@@ -103,7 +103,7 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
 
 main = make_cli_main(
     scan_text,
-    description="Error-seam P-series checks (P043-P044): scan Python files.",
+    description="Error-seam P-series checks (P043/P045): scan Python files.",
     discover=discover,
 )
 

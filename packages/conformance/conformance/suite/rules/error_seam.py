@@ -1,4 +1,4 @@
-"""Error-seam rule definitions (P043–P044, CONNECT-970).
+"""Error-seam rule definitions (P043/P045, CONNECT-970).
 
 The SDK owns the **error seam**: ``application_sdk.errors.__all__`` is the public
 error contract, and every other module that defines error classes is internal.
@@ -87,7 +87,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "matters whenever an app's SDK range spans the change.\n"
             "\n"
             "A bare annotation such as ``def f() -> X | None`` is not flagged here;\n"
-            "it changes no behaviour, and P044 already covers the import.\n"
+            "it changes no behaviour, and P045 already covers the import.\n"
             "\n"
             "Resolution covers the ``from X import Y`` form only: a qualified-\n"
             "attribute reference such as ``import ...format_errors as fe`` followed\n"
@@ -101,7 +101,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p043",
     ),
     RuleDefinition(
-        id="P044",
+        id="P045",
         scope=RuleScope.APP,
         name="PrivateErrorClassImport",
         tier=EnforcementTier.WARN,
@@ -146,9 +146,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "is a documented non-goal (every real occurrence across the app fleet\n"
             "uses the direct form).\n"
             "\n"
-            "Land as ``WARN``: a justified inline ``# conformance: ignore[P044]\n"
+            "Land as ``WARN``: a justified inline ``# conformance: ignore[P045]\n"
             "<reason>`` records any unavoidable exception and stays visible in SARIF.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p044",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p045",
     ),
 )

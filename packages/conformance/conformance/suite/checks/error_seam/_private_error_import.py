@@ -1,4 +1,4 @@
-"""P044 PrivateErrorClassImport — ban importing SDK-internal error classes.
+"""P045 PrivateErrorClassImport — ban importing SDK-internal error classes.
 
 An error class outside ``application_sdk.errors.__all__`` is not a contract.
 Importing one couples the app to a module layout the SDK can change in a minor
@@ -22,7 +22,7 @@ from ._public_error_surface import (
 def check_p044(
     tree: ast.AST, filename: str, directives: dict[int, _IgnoreDirective]
 ) -> list[Finding]:
-    """Emit one P044 finding per import statement that binds an internal error class."""
+    """Emit one P045 finding per import statement that binds an internal error class."""
     findings: list[Finding] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.ImportFrom):
@@ -39,7 +39,7 @@ def check_p044(
         findings.append(
             make_finding(
                 filename=filename,
-                rule_id="P044",
+                rule_id="P045",
                 node=node,
                 message=(
                     f"Imports SDK-internal error class(es) {listed} from "
@@ -47,7 +47,7 @@ def check_p044(
                     f"error contract; classes elsewhere can move or change which "
                     f"boundary surfaces them in a minor release, with no "
                     f"deprecation cycle. {remediation(names[0])} Suppress with "
-                    f"'# conformance: ignore[P044] <reason>'."
+                    f"'# conformance: ignore[P045] <reason>'."
                 ),
                 directives=directives,
             )

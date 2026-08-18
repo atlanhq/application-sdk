@@ -1,6 +1,6 @@
-"""Meta-tests for the P-series error-seam checks (P043-P044, CONNECT-970).
+"""Meta-tests for the P-series error-seam checks (P043/P045, CONNECT-970).
 
-P044 flags importing an SDK error class from an internal module; P043 flags
+P045 flags importing an SDK error class from an internal module; P043 flags
 making one load-bearing in control flow.  ``application_sdk.errors.__all__`` is
 the public error contract, and a class outside it can move — or stop being the
 one a boundary raises — in a minor release.  That is what happened: an app's
@@ -34,11 +34,11 @@ def test_series_letter() -> None:
     assert SERIES == "P"
 
 
-# ── P044 PrivateErrorClassImport — fires ─────────────────────────────────────
+# ── P045 PrivateErrorClassImport — fires ─────────────────────────────────────
 
 
 def test_p044_fires_on_private_error_import() -> None:
-    fs = _rule(_PRIVATE_IMPORT, "P044")
+    fs = _rule(_PRIVATE_IMPORT, "P045")
     assert len(fs) == 1 and fs[0].line == 1
 
 
@@ -49,12 +49,12 @@ def test_p044_emits_one_finding_per_statement_not_per_name() -> None:
         "    ObjectStoreReadError,\n"
         ")\n"
     )
-    assert len(_rule(src, "P044")) == 1
+    assert len(_rule(src, "P045")) == 1
 
 
 def test_p044_fires_on_lazy_in_function_import() -> None:
     src = "def f():\n    " + _PRIVATE_IMPORT + "    return FormatReadError\n"
-    assert len(_rule(src, "P044")) == 1
+    assert len(_rule(src, "P045")) == 1
 
 
 def test_p044_message_points_at_the_public_module_for_a_promoted_class() -> None:
@@ -62,17 +62,17 @@ def test_p044_message_points_at_the_public_module_for_a_promoted_class() -> None
         "from application_sdk.storage.formats.format_errors import "
         "ObjectStoreReadError\n"
     )
-    (finding,) = _rule(src, "P044")
+    (finding,) = _rule(src, "P045")
     assert "application_sdk.errors" in finding.message
     assert "Import it from" in finding.message
 
 
 def test_p044_message_points_at_the_code_branch_when_no_public_class_exists() -> None:
-    (finding,) = _rule(_PRIVATE_IMPORT, "P044")
+    (finding,) = _rule(_PRIVATE_IMPORT, "P045")
     assert ".code" in finding.message
 
 
-# ── P044 — stays silent ──────────────────────────────────────────────────────
+# ── P045 — stays silent ──────────────────────────────────────────────────────
 
 
 def test_p044_silent_on_helper_function_imports() -> None:
@@ -97,8 +97,8 @@ def test_p044_silent_on_a_relative_import_of_a_similar_name() -> None:
 
 
 def test_p044_suppressed_inline() -> None:
-    src = _PRIVATE_IMPORT.rstrip("\n") + "  # conformance: ignore[P044] reviewed\n"
-    fs = _rule(src, "P044")
+    src = _PRIVATE_IMPORT.rstrip("\n") + "  # conformance: ignore[P045] reviewed\n"
+    fs = _rule(src, "P045")
     assert len(fs) == 1 and fs[0].suppressed
     assert fs[0].suppression_justification == "reviewed"
 
@@ -167,7 +167,7 @@ def test_p043_silent_on_a_promoted_class_imported_publicly() -> None:
 
 def test_promoted_class_on_the_legacy_path_yields_p044_only() -> None:
     """Mid-migration state: a promoted class still imported from the internal
-    module is a P044 import-path finding, never a P043 control-flow finding —
+    module is a P045 import-path finding, never a P043 control-flow finding —
     P043's "not exported" claim would be false for it."""
     src = (
         "from application_sdk.storage.formats.format_errors import "
@@ -175,7 +175,7 @@ def test_promoted_class_on_the_legacy_path_yields_p044_only() -> None:
         "try:\n    pass\nexcept ObjectStoreReadError:\n    raise\n"
     )
     findings = scan_text(src, "app/utils/io.py")
-    assert [f.rule_id for f in findings] == ["P044"]
+    assert [f.rule_id for f in findings] == ["P045"]
 
 
 def test_p043_silent_on_a_non_error_sdk_base_class() -> None:
@@ -185,7 +185,7 @@ def test_p043_silent_on_a_non_error_sdk_base_class() -> None:
 
 
 def test_p043_silent_on_a_bare_annotation() -> None:
-    """An annotation changes no behaviour; P044 already covers the import."""
+    """An annotation changes no behaviour; P045 already covers the import."""
     src = _PRIVATE_IMPORT + "def f() -> FormatReadError | None:\n    return None\n"
     assert _rule(src, "P043") == []
 
@@ -215,10 +215,10 @@ def test_p043_suppressed_inline() -> None:
 def test_reproduces_the_connect_970_shape() -> None:
     """The real code from the incident: one import line, one dead guard.
 
-    Both imports are one P044 statement.  On the control-flow side,
+    Both imports are one P045 statement.  On the control-flow side,
     ``FormatReadError`` (still internal) draws a P043, but the promoted
     ``ObjectStoreReadError`` does not — P043's "not exported" claim would be
-    false for it, and P044 already owns the import-path migration.
+    false for it, and P045 already owns the import-path migration.
     """
     src = (
         "from application_sdk.storage.formats.format_errors import (\n"
@@ -237,7 +237,7 @@ def test_reproduces_the_connect_970_shape() -> None:
         "def is_empty_prefix_error(exc):\n"
         "    return isinstance(exc, ObjectStoreReadError)\n"
     )
-    assert len(_rule(src, "P044")) == 1
+    assert len(_rule(src, "P045")) == 1
     assert len(_rule(src, "P043")) == 1
     (p043,) = _rule(src, "P043")
     assert "FormatReadError" in p043.message
@@ -275,7 +275,7 @@ def test_rules_are_registered_as_app_scoped_warnings() -> None:
     from conformance.suite.rules import CATALOG
     from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 
-    for rule_id in ("P043", "P044"):
+    for rule_id in ("P043", "P045"):
         rule = CATALOG[rule_id]
         assert rule.scope is RuleScope.APP
         assert rule.tier is EnforcementTier.WARN

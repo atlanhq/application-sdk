@@ -1,4 +1,4 @@
-"""Shared helpers for the error-seam prescription rules (P043/P044, CONNECT-970).
+"""Shared helpers for the error-seam prescription rules (P043/P045, CONNECT-970).
 
 The SDK's public error contract is ``application_sdk.errors.__all__``.  Every
 other module that defines error classes is internal: it can be reorganised, and
@@ -130,7 +130,7 @@ def covered_error_name(origin: str | None) -> str | None:
     of the SDK's 184 error classes ends in ``Error``, and no other SDK class
     does, so ``convert_datetime_to_epoch`` and friends are correctly ignored.
 
-    A name the public surface already exports returns ``None``: P044 alone owns
+    A name the public surface already exports returns ``None``: P045 alone owns
     the import-path migration for a promoted class, and P043's "not exported"
     claim would be false for it.  The drift guard keeps the allowlist current,
     so a class later removed from ``__all__`` resumes firing here.
@@ -140,7 +140,7 @@ def covered_error_name(origin: str | None) -> str | None:
     name = origin.rsplit(".", 1)[-1]
     if not name.endswith("Error"):
         return None
-    # Promoted classes: P044 owns the import-path migration; P043's
+    # Promoted classes: P045 owns the import-path migration; P043's
     # "not exported" claim would be false for these.
     if name in load_allowlist():
         return None

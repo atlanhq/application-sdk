@@ -13,7 +13,7 @@ Check whether the committed allowlist is up-to-date (CI gate / drift test):
 Design
 ------
 Reads the ``__all__`` of ``application_sdk/errors/__init__.py`` at SDK-dev time
-and writes the committed JSON that P043/P044 read at scan time.  The suite runs
+and writes the committed JSON that P043/P045 read at scan time.  The suite runs
 inside consumer app repos, where no SDK source and no network are available, so
 the data must ship baked into the wheel — the same mechanism as the B-series
 deprecation manifest and the contract-toolkit baseline.

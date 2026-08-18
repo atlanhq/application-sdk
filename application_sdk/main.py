@@ -26,6 +26,7 @@ __all__ = [
 
 import argparse
 import asyncio
+import contextlib
 import faulthandler
 import os
 import random
@@ -972,6 +973,113 @@ _WORKER_RESTART_BACKOFF_CAP_SECONDS = _env_int(
     "ATLAN_WORKER_RESTART_BACKOFF_CAP_SECONDS", 30
 )
 _WORKER_HEALTHY_RUN_SECONDS = _env_int("ATLAN_WORKER_HEALTHY_RUN_SECONDS", 300)
+# Poll-state diagnostics (ARUN-1127). How often to read sdk-core's live poller
+# gauge and log a transition. Purely observational — set to 0 to disable.
+_WORKER_POLL_DIAGNOSTIC_INTERVAL_SECONDS = _env_int(
+    "ATLAN_WORKER_POLL_DIAGNOSTIC_INTERVAL_SECONDS", 60
+)
+
+
+async def _observe_worker_poll_state(
+    *,
+    shutdown_event: asyncio.Event,
+    health_server: Any = None,
+    interval: float = 0,
+) -> None:
+    """Log whether this worker is actually polling, and never act on it.
+
+    A worker can be alive, healthy on every probe, refreshing its Temporal token
+    — and have zero pollers on its task queue, doing no work until a human
+    restarts the pod (ARUN-1127 / BLDX-1552). Two candidate mechanisms produce
+    that shape and they need opposite fixes:
+
+    1. A fatal that was raised and then swallowed. ``Worker.__aexit__`` re-raises
+       a captured fatal only when the body exits via ``CancelledError``, so a
+       fatal racing a shutdown is dropped. Temporal's ``on_fatal_error`` hook
+       (wired in ``create_worker``) always sees it, so this case leaves a
+       ``poll loop failed fatally`` line in the logs.
+    2. A poll loop that stopped without ever raising. No exception exists, so
+       nothing in-process can be made to observe it after the fact.
+
+    This observer records the evidence that tells them apart — sdk-core's live
+    poller gauge alongside the fatal count — and deliberately draws no
+    conclusion: it never raises, never restarts the worker, and never flips a
+    probe. The mechanism has not been established on a live tenant yet, and a
+    remedy built on the wrong one either tears down healthy workers or hides the
+    outage behind a self-healing loop that cannot heal it.
+
+    Logs a transition rather than every reading, so a long-running worker stays
+    quiet until something changes: an active-pollers reading is an INFO on change,
+    and a zero or unknown reading is a WARNING logged once per transition into
+    that state (not on every interval, so a parked worker does not drown the
+    ``poll loop failed fatally`` line in repeats).
+
+    Args:
+        shutdown_event: Set on SIGINT/SIGTERM; ends the observer cleanly.
+        health_server: Optional ``WorkerHealthServer`` to record readings on, so
+            the counts are also reachable over ``/live`` and ``/ready``.
+        interval: Seconds between readings. Non-positive disables the observer.
+    """
+    if interval <= 0:
+        logger.debug("Worker poll-state diagnostics disabled (interval=%s)", interval)
+        return
+
+    from application_sdk.execution._temporal.worker import (  # noqa: PLC0415 — cold path: diagnostics only
+        read_core_poller_counts,
+    )
+
+    # Sentinel distinct from every real state, so the first reading always logs.
+    previous_state: str | None = None
+
+    while not shutdown_event.is_set():
+        # Wait first: core registers the gauge only once a worker has polled at
+        # least once, so a reading taken at t=0 always reports "unknown".
+        try:
+            await asyncio.wait_for(shutdown_event.wait(), timeout=interval)
+            return
+        except TimeoutError:  # conformance: ignore[E002] the interval elapsing without a shutdown is the expected path, not an error
+            pass
+
+        try:
+            counts = await read_core_poller_counts()
+            if health_server is not None:
+                health_server.record_poller_counts(counts)
+
+            if counts is None:
+                state = "unknown"
+            elif sum(counts.values()) > 0:
+                state = "polling"
+            else:
+                state = "zero"
+
+            if state == "zero":
+                # Transition-gated like "unknown" below: warn once when the
+                # worker parks, not on every interval, so a parked worker does
+                # not bury the "poll loop failed fatally" line this PR exists
+                # to surface. A return to "polling" and back re-arms it.
+                if previous_state != "zero":
+                    logger.warning(
+                        "Worker reports 0 active pollers (poller gauge %s) — it is "
+                        "alive but claiming no work from its task queue; check the "
+                        "logs for a 'poll loop failed fatally' line, whose presence "
+                        "or absence identifies the failure mechanism (ARUN-1127)",
+                        counts,
+                    )
+            elif state == "unknown":
+                if previous_state != "unknown":
+                    logger.warning(
+                        "Worker poll-state unknown: sdk-core's poller gauge could "
+                        "not be read, so a parked poll loop would be invisible. "
+                        "Check that core's Prometheus exporter is enabled "
+                        "(ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS)"
+                    )
+            elif state != previous_state:
+                logger.info("Worker poll state: active pollers %s", counts)
+
+            previous_state = state
+        except Exception:
+            # An observer must never take the worker down with it.
+            logger.warning("Worker poll-state observation failed", exc_info=True)
 
 
 async def _run_worker_with_restart(
@@ -980,6 +1088,7 @@ async def _run_worker_with_restart(
     shutdown_event: asyncio.Event,
     auth_manager: Any = None,
     client: Any = None,
+    health_server: Any = None,
 ) -> None:
     """Run a Temporal worker under a bounded restart supervisor.
 
@@ -1001,7 +1110,41 @@ async def _run_worker_with_restart(
         auth_manager: Optional; when present its token is force-refreshed before
             each restart to recover from stale/expired tokens.
         client: The Temporal client passed to ``auth_manager.force_refresh``.
+        health_server: Optional ``WorkerHealthServer``; receives the poll-state
+            observer's readings so they are also reachable over the probes.
     """
+    # Runs for the whole supervised lifetime, across worker rebuilds, so a
+    # rebuilt worker that comes back without pollers is still observed. Purely
+    # observational — it never raises and never restarts anything, so it is not
+    # raced against the worker.
+    observer = asyncio.ensure_future(
+        _observe_worker_poll_state(
+            shutdown_event=shutdown_event,
+            health_server=health_server,
+            interval=_WORKER_POLL_DIAGNOSTIC_INTERVAL_SECONDS,
+        )
+    )
+    try:
+        await _supervise_worker(
+            build_worker=build_worker,
+            shutdown_event=shutdown_event,
+            auth_manager=auth_manager,
+            client=client,
+        )
+    finally:
+        observer.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await observer
+
+
+async def _supervise_worker(
+    *,
+    build_worker: Callable[[], Any],
+    shutdown_event: asyncio.Event,
+    auth_manager: Any = None,
+    client: Any = None,
+) -> None:
+    """The restart loop itself; see ``_run_worker_with_restart`` for the contract."""
     consecutive_failures = 0
 
     while not shutdown_event.is_set():
@@ -1058,8 +1201,11 @@ async def _run_worker_with_restart(
 
             # Full-jitter exponential backoff (matches create_temporal_client),
             # raced against shutdown so SIGTERM stays responsive during backoff.
+            # Clamp the exponent: the cap already bounds the result, but a raised
+            # ATLAN_WORKER_MAX_CONSECUTIVE_RESTARTS would otherwise compute an
+            # arbitrarily large power of two just to throw it away.
             cap_at_attempt = min(
-                2 ** (consecutive_failures - 1),
+                2 ** min(consecutive_failures - 1, 16),
                 _WORKER_RESTART_BACKOFF_CAP_SECONDS,
             )
             delay = random.uniform(0, cap_at_attempt)
@@ -1212,6 +1358,7 @@ async def run_worker_mode(config: AppConfig) -> None:
             handler=handler_for_sdr,
             enable_pushgateway=True,
             on_activity=health_server.record_activity,
+            on_fatal_error=health_server.record_worker_fatal,
         )
 
     # Log registrations
@@ -1247,6 +1394,7 @@ async def run_worker_mode(config: AppConfig) -> None:
             shutdown_event=shutdown_event,
             auth_manager=auth_manager,
             client=client,
+            health_server=health_server,
         )
 
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
@@ -1491,6 +1639,7 @@ async def run_combined_mode(config: AppConfig) -> None:
             task_queue=config.task_queue,
             handler=handler,
             on_activity=health_server.record_activity,
+            on_fatal_error=health_server.record_worker_fatal,
         )
 
     for registered_app in AppRegistry.get_instance().list_apps():
@@ -1573,6 +1722,7 @@ async def run_combined_mode(config: AppConfig) -> None:
                 shutdown_event=shutdown_event,
                 auth_manager=auth_manager,
                 client=client,
+                health_server=health_server,
             ),
         )
 

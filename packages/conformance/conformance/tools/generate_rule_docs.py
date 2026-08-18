@@ -78,6 +78,27 @@ _ID_STABILITY_NOTE = (
 )
 
 
+# Not every rule about exceptions is an E-series rule, and the split is not
+# obvious from either series title.  The E-series grades the handling code
+# itself and needs nothing but the AST; the error-seam rules grade *which class*
+# an app couples to and need the SDK's published error surface as input data, so
+# they sit with the other seam rules in the P-series.  Someone opening
+# error-handling.md to find "the error rules" would otherwise never learn the
+# error-seam rules exist.
+_E_SERIES_SEAM_CROSSREF = (
+    "**See also — error-seam rules live in the P-series:** the E-series grades "
+    "*how* an app handles an exception, decidable from the AST alone, and most of "
+    "it applies to the SDK and consumer apps alike.  Rules about *which* error "
+    "class an app is allowed to couple to — ``P043`` "
+    "``NonPublicErrorControlFlow`` and ``P045`` ``PrivateErrorClassImport`` — are "
+    "seam rules: they grade a consumer app against "
+    "``application_sdk.errors.__all__``, the SDK's published error contract, and "
+    "so are app-scoped and require that surface as input data.  They are "
+    "documented alongside the orchestration, storage and client seam rules in "
+    "[prescriptions.md](prescriptions.md#p043)."
+)
+
+
 _SERIES_META: list[SeriesMeta] = [
     SeriesMeta(
         title="Error-Handling Rules (E-series)",
@@ -86,6 +107,7 @@ _SERIES_META: list[SeriesMeta] = [
         output_filename="error-handling.md",
         checker="`suite.checks.error_handling` (AST-based)",
         suppression_example="# conformance: ignore[E012] intentional: stdlib interop",
+        stability_note=_E_SERIES_SEAM_CROSSREF,
     ),
     SeriesMeta(
         title="Logging Rules (L-series)",
@@ -135,7 +157,7 @@ _SERIES_META: list[SeriesMeta] = [
             "`suite.checks.entrypoint_alignment` (P016), "
             "`suite.checks.entrypoint` (P017–P018, scans test files too), "
             "`suite.checks.client_seam` (P019), "
-            "`suite.checks.error_seam` (P043–P044, scans test files too), "
+            "`suite.checks.error_seam` (P043/P045, scans test files too), "
             "`suite.checks.determinism` (P020–P024, P031), "
             "`suite.checks.app_name_alignment` (P025), "
             "`suite.checks.sdr` (P029/P030, P037/P038/P039, P041), "

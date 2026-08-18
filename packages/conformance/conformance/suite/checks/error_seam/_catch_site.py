@@ -11,7 +11,7 @@ Five shapes make a class's identity load-bearing:
 * ``isinstance(e, X)`` and ``issubclass(t, X)``
 * ``class Y(X)``
 
-A bare annotation is not flagged: it does not change behaviour, and P044 already
+A bare annotation is not flagged: it does not change behaviour, and P045 already
 covers the import that made it possible.
 """
 
