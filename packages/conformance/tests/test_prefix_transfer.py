@@ -11,8 +11,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from conformance.suite.checks.prescriptions import check_p044, scan_path
 from conformance.suite.checks._ast_common import _parse_directives
+from conformance.suite.checks.prescriptions import check_p044, scan_path
 
 
 def _check(src: str, filename: str = "app/io.py") -> list:

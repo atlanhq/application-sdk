@@ -67,7 +67,10 @@ def _sdk_storage_bindings(tree: ast.AST) -> tuple[set[str], set[str]]:
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             module = node.module or ""
-            if not (module == _SDK_STORAGE_ROOT or module.startswith(f"{_SDK_STORAGE_ROOT}.")):
+            if not (
+                module == _SDK_STORAGE_ROOT
+                or module.startswith(f"{_SDK_STORAGE_ROOT}.")
+            ):
                 continue
             for alias in node.names:
                 bound = alias.asname or alias.name
