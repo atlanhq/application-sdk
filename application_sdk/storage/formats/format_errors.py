@@ -5,13 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
+from application_sdk.errors.leaves import InternalError, InvalidInputError
 from application_sdk.errors.leaves import (
-    DependencyUnavailableError,
-    InternalError,
-    InvalidInputError,
-    PreconditionError,
-    UnimplementedError,
+    ObjectStoreDownloadError as ObjectStoreDownloadError,
 )
+from application_sdk.errors.leaves import ObjectStoreReadError as ObjectStoreReadError
+from application_sdk.errors.leaves import PreconditionError, UnimplementedError
 
 
 @dataclass(kw_only=True)
@@ -84,37 +83,6 @@ class UnsupportedFileExtensionError(InvalidInputError):
     message: str = "Unsupported file extension"
     field: str | None = "file_extension"
     observed_extension: str | None = None
-
-
-@dataclass(kw_only=True)
-class ObjectStoreReadError(DependencyUnavailableError):
-    """Object store listing returned no files matching the expected extension.
-
-    Surfaces the prefix that was searched so operators can immediately tell
-    whether the upstream task wrote to the wrong path, was skipped entirely,
-    or if the configured prefix on this read side is wrong.
-    """
-
-    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_OBJECT_STORE_READ"
-    message: str = "No matching files found in object store."
-    suggested_action: str | None = (
-        "Verify the upstream task wrote to this prefix and that the "
-        "configured prefix is correct."
-    )
-    service: str | None = "object_store"
-    path: str | None = None
-    file_extension: str | None = None
-
-
-@dataclass(kw_only=True)
-class ObjectStoreDownloadError(DependencyUnavailableError):
-    """No local files found and download from object store failed."""
-
-    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_OBJECT_STORE_DOWNLOAD"
-    message: str = "No files found locally and failed to download from object store"
-    service: str | None = "object_store"
-    path: str | None = None
-    file_extension: str | None = None
 
 
 @dataclass(kw_only=True)
