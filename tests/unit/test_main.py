@@ -2630,9 +2630,10 @@ class TestObserveWorkerPollState:
         ``poll loop failed fatally`` line this instrumentation exists to surface,
         so the zero branch is transition-gated like the unknown branch.
         """
+        reader = AsyncMock(return_value={"workflow_task": 0.0, "activity_task": 0.0})
         monkeypatch.setattr(
             "application_sdk.execution._temporal.worker.read_core_poller_counts",
-            AsyncMock(return_value={"workflow_task": 0.0, "activity_task": 0.0}),
+            reader,
         )
         health = _RecordingHealthServer()
         shutdown = asyncio.Event()
@@ -2651,6 +2652,10 @@ class TestObserveWorkerPollState:
             )
         await stopper
 
+        # Prove multiple ticks actually ran during the sustained park — otherwise
+        # a single tick before shutdown would also satisfy the count assertion and
+        # leave the transition-gating unproven.
+        assert reader.await_count >= 2
         zero_warnings = [
             call
             for call in mock_logger.warning.call_args_list

@@ -124,7 +124,9 @@ async def read_core_poller_counts() -> dict[str, float] | None:
             timeout=TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS
         ) as http_client:
             # Stream so the read is genuinely bounded: reject on a declared
-            # oversize Content-Length, else cap the bytes actually read. An
+            # oversize Content-Length, else accumulate chunks and bail the
+            # moment the running total crosses the cap — so even a chunked or
+            # under-reported response never allocates more than the cap. An
             # unbounded response.text would let a high-cardinality or
             # misbehaving local exporter allocate an unbounded string each
             # interval. Oversize is unknown (None), never zero.
@@ -147,15 +149,23 @@ async def read_core_poller_counts() -> dict[str, float] | None:
                         TEMPORAL_CORE_METRICS_MAX_BYTES,
                     )
                     return None
-                body = await response.aread()
-                if len(body) > TEMPORAL_CORE_METRICS_MAX_BYTES:
+                chunks: list[bytes] = []
+                received = 0
+                oversize = False
+                async for chunk in response.aiter_bytes():
+                    received += len(chunk)
+                    if received > TEMPORAL_CORE_METRICS_MAX_BYTES:
+                        oversize = True
+                        break
+                    chunks.append(chunk)
+                if oversize:
                     logger.debug(
                         "Temporal-core metrics endpoint %s exceeded %d bytes; poller count unknown",
                         url,
                         TEMPORAL_CORE_METRICS_MAX_BYTES,
                     )
                     return None
-                payload = body.decode("utf-8", errors="replace")
+                payload = b"".join(chunks).decode("utf-8", errors="replace")
     except Exception:
         logger.debug(
             "Temporal-core metrics endpoint %s unreachable; poller count unknown",

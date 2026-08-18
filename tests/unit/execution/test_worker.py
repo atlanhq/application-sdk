@@ -1246,6 +1246,7 @@ class TestReadCorePollerCounts:
         status_code: int = 200,
         text: str | None = None,
         content_length: str | None = None,
+        chunk_size: int | None = None,
     ) -> mock.Mock:
         body = (self._EXPOSITION if text is None else text).encode()
         response = mock.Mock()
@@ -1254,7 +1255,15 @@ class TestReadCorePollerCounts:
         if content_length is not None:
             headers["content-length"] = content_length
         response.headers = headers
-        response.aread = mock.AsyncMock(return_value=body)
+
+        # ``aiter_bytes`` yields the body in chunks so the incremental,
+        # byte-capped accumulation path is exercised (not a single bulk read).
+        async def _aiter():
+            step = chunk_size if chunk_size else len(body) or 1
+            for offset in range(0, len(body), step):
+                yield body[offset : offset + step]
+
+        response.aiter_bytes = lambda: _aiter()
         # ``client.stream`` returns an async context manager yielding the response.
         stream_ctx = mock.AsyncMock()
         stream_ctx.__aenter__ = mock.AsyncMock(return_value=response)
@@ -1299,6 +1308,16 @@ class TestReadCorePollerCounts:
         """An actually-oversize body (no/!accurate Content-Length) is unknown."""
         body = "x" * (1024 * 1024 + 1)
         with self._patch_client(self._response(text=body)):
+            assert await read_core_poller_counts() is None
+
+    @pytest.mark.asyncio
+    async def test_oversize_chunked_stream_is_bounded(self) -> None:
+        """A chunked response with no Content-Length must bail on the running
+        byte total, not after an unbounded bulk read of the full body."""
+        # 1 MiB + 1 byte, delivered as many small chunks: the cap must trip on
+        # the accumulated total, proving the read is genuinely bounded.
+        body = "x" * (1024 * 1024 + 1)
+        with self._patch_client(self._response(text=body, chunk_size=4096)):
             assert await read_core_poller_counts() is None
 
     @pytest.mark.asyncio
