@@ -853,9 +853,13 @@ def create_worker(
         # minimal line that does not render ``exc`` — otherwise the hook
         # propagates and temporalio's own "Fatal error handler failed" wrapper
         # silently swaps in, losing the rich cause-chain log this hook exists
-        # to produce. exc_info=True logs the traceback of the *rendering
-        # failure* (the ordinary exception raised while logging), never
-        # ``exc`` — so the original fatal is still not re-rendered on this path.
+        # to produce. exc_info=True here logs the traceback of the *rendering
+        # failure*, not of ``exc``. That masks the link whose rendering failed
+        # (it appears as a ``<exception str() failed>`` placeholder); chain links
+        # that rendered before the failure may still appear, so this bounds which
+        # link is lost, not what the log can contain. No new exposure either way:
+        # those same messages reach the logs on the primary path whenever
+        # rendering succeeds.
         try:
             await _log_worker_fatal_error(exc)
         except BaseException:
