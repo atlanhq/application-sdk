@@ -178,15 +178,6 @@ def apply_bootstrap_autodetection(kwargs: dict[str, str], root: pathlib.Path) ->
     re-running ``bootstrap`` with no explicit flags reuses a repo's current
     customization instead of resetting it to the hardcoded default.
     """
-    # package-name: existing docstring-coverage.yaml, else "app".
-    if not kwargs["package_name"]:
-        kwargs["package_name"] = (
-            _read_workflow_field(
-                root / ".github" / "workflows" / "docstring-coverage.yaml",
-                "package_name",
-            )
-            or "app"
-        )
     # unit-tests-workflow: existing build-and-publish.yaml, else "tests.yaml".
     if not kwargs["unit_tests_workflow"]:
         kwargs["unit_tests_workflow"] = (

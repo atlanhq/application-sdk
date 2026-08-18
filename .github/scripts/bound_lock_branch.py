@@ -1,0 +1,227 @@
+#!/usr/bin/env python3
+"""Apply the release-age bound to a Renovate lock-refresh branch in THIS repo.
+
+application-sdk is the one repo the fleet's cooldown cannot reach (FND-376).
+The fleet bound (FND-359) runs as a Renovate ``postUpgradeTasks`` command, and
+``allowedCommands`` is an admin-only option — so it only exists on the
+self-hosted runner. application-sdk's dependency PRs come from Mend, which has
+no such hook, leaving the repo that *publishes the wheel ~100 repos install*
+as the only one still adopting minutes-old transitive releases unattended.
+
+This closes that gap without changing where the PR comes from: Mend still raises
+``renovate/lock-file-maintenance`` exactly as it does today, and a workflow
+triggered by Mend's push corrects the lock in place before the PR merges. The
+PR stays authored by ``renovate[bot]`` and ``renovate/artifacts`` stays
+Renovate's own status, so both conditions in ``renovate-auto-approve-reusable.yml``
+hold unchanged and no fleet-wide gate has to be widened for one repo.
+
+What runs here that does not run in the fleet
+---------------------------------------------
+The bound itself is the shipped, tested driver — ``renovate_uv_lock_bounded``,
+unchanged in behaviour. This script is the part that is specific to running
+*after* the refresh has been committed rather than before it, and to this repo's
+shape:
+
+1. **The baseline is the base branch, not HEAD.** Under ``postUpgradeTasks`` the
+   refresh is still uncommitted, so ``HEAD`` is the pre-refresh lock. Here
+   Renovate has already committed it, so ``HEAD`` *is* the unbounded lock —
+   deriving retention ceilings from that would pin every package to the release
+   Renovate pulled seconds ago and neutralise the window completely. Passing the
+   base branch also makes "no rollback against what main ships" structural: the
+   driver's rollback gate then compares against main by construction.
+
+2. **Two uv projects, with different exempt sets.** ``packages/conformance`` is a
+   separate uv project with its own lock, and unlike the root project it resolves
+   ``atlan-application-sdk`` from PyPI. Its exempt set therefore has to carry the
+   SDK *and* pyatlan, for the reason recorded in the preset's
+   ``lockFileMaintenance`` description: with the SDK exempt but pyatlan not, a
+   bounded resolve does not fail — it silently backtracks to an older SDK.
+
+3. **One commit, not three.** Each push to the branch re-fires the PR's entire
+   required-check suite. Bounding both locks and re-exporting ``requirements.txt``
+   in a single commit costs one CI wave instead of three.
+
+4. **``requirements.txt`` is re-exported here.** It is derived from the root lock,
+   and ``dependabot-requirements-sync.yaml`` normally regenerates it on any push
+   to a ``renovate/**`` branch. On *this* branch both workflows would fire on the
+   same push and both would push to the same branch, so the loser takes a
+   non-fast-forward rejection. That workflow skips this branch and hands the file
+   over here, keeping a single writer per branch.
+
+Fail-closed, like the driver it wraps. If any project's bound cannot be applied,
+this exits non-zero having committed nothing — a red check on the PR, which the
+auto-approve gate then declines to approve. A control whose failure mode is a log
+line is not a control (FND-367).
+"""
+
+from __future__ import annotations
+
+import argparse
+import subprocess
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+import renovate_uv_lock_bounded as bounded
+
+COMMIT_MESSAGE = "chore(deps): bound the refreshed locks to the release-age window"
+
+
+@dataclass(frozen=True)
+class Project:
+    """A uv project in this repo whose lock the refresh lane rewrites."""
+
+    directory: str
+    exempt: tuple[str, ...] = field(default_factory=tuple)
+
+
+# The repo's uv projects and their exempt sets. Hard-coded rather than passed in
+# because these are facts about application-sdk's own layout, not policy a caller
+# should be choosing — and keeping them here keeps each exemption next to the
+# reason it exists.
+PROJECTS: tuple[Project, ...] = (
+    # Root. The SDK does not consume itself, and atlan-application-sdk-conformance
+    # is path-sourced from packages/conformance via [tool.uv.sources], so it never
+    # resolves from PyPI and the bound never sees it. pyatlan is exempt because it
+    # is Atlan-published: a week's hold on pyatlan is a week's hold on the SDK,
+    # whose own `pyatlan>=N,<N+1` cap is what gates a pyatlan major reaching the
+    # fleet at all.
+    Project(directory=".", exempt=("pyatlan",)),
+    # The conformance package resolves atlan-application-sdk from PyPI (it declares
+    # it as a test extra), so both first-party names must be admitted. Dropping
+    # pyatlan here would reproduce the silent-backtrack failure exactly: SDK 3.28.0
+    # requires pyatlan>=10, so a bound that hides a fresh pyatlan 10 makes the
+    # newest SDK unreachable and uv resolves an older one without erroring.
+    Project(
+        directory="packages/conformance",
+        exempt=("atlan-application-sdk", "pyatlan"),
+    ),
+)
+
+# Regenerated from the ROOT lock. Flags match dependabot-requirements-sync.yaml
+# byte for byte so the file this produces is the same file that workflow produces
+# — deliberately not --all-extras, which would widen what the export pins.
+REQUIREMENTS_PATH = "requirements.txt"
+REQUIREMENTS_EXPORT = ["uv", "export", "--no-hashes", "--frozen"]
+
+
+def bound_project(project: Project, window: str, baseline_ref: str, root: Path) -> int:
+    """Run the shipped driver over one project. Returns its exit code."""
+    argv = [
+        "--window",
+        window,
+        "--baseline-ref",
+        baseline_ref,
+        "--project-dir",
+        str(root / project.directory),
+    ]
+    for name in project.exempt:
+        argv += ["--exempt", name]
+    return bounded.main(argv)
+
+
+def export_requirements(root: Path) -> None:
+    """Re-derive requirements.txt from the freshly bounded root lock.
+
+    ``--frozen`` is what makes this a projection rather than a second resolve: it
+    exports what the lock says and fails if the lock does not satisfy
+    ``pyproject.toml``, so this can never quietly introduce a version the bound
+    just excluded. A missing requirements.txt is not this script's business to
+    create, so the export is skipped rather than inventing the file.
+    """
+    target = root / REQUIREMENTS_PATH
+    if not target.exists():
+        print(f"No {REQUIREMENTS_PATH} — nothing to re-export.", file=sys.stderr)
+        return
+    result = subprocess.run(
+        REQUIREMENTS_EXPORT, cwd=root, capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"`{' '.join(REQUIREMENTS_EXPORT)}` failed, so {REQUIREMENTS_PATH} "
+            f"would be left describing the pre-bound lock:\n{result.stderr}"
+        )
+    target.write_text(result.stdout)
+
+
+def stage_and_commit(root: Path, paths: list[str]) -> bool:
+    """Stage the bound outputs and commit iff something changed.
+
+    Returns True when a commit was made. Stages explicit paths only, so nothing
+    incidental in the working tree (a uv cache, a stray artefact) can ride along
+    into a branch that auto-merges.
+    """
+    subprocess.run(
+        ["git", "config", "user.name", "github-actions[bot]"], cwd=root, check=True
+    )
+    subprocess.run(
+        [
+            "git",
+            "config",
+            "user.email",
+            "github-actions[bot]@users.noreply.github.com",
+        ],
+        cwd=root,
+        check=True,
+    )
+    for path in paths:
+        if (root / path).exists():
+            subprocess.run(["git", "add", "--", path], cwd=root, check=True)
+
+    staged = subprocess.run(
+        ["git", "diff", "--cached", "--quiet"], cwd=root, capture_output=True
+    )
+    if staged.returncode == 0:
+        print("Locks were already within the window — nothing to commit.")
+        return False
+
+    subprocess.run(["git", "commit", "-m", COMMIT_MESSAGE], cwd=root, check=True)
+    return True
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--window",
+        required=True,
+        help="Release-age bound as an ISO 8601 duration, e.g. P7D. Match the "
+        "fleet's: a repo-specific window reintroduces the SDK/connector "
+        "dependency-set divergence this exists to remove.",
+    )
+    parser.add_argument(
+        "--baseline-ref",
+        required=True,
+        help="Git ref whose locks are the pre-refresh baseline — the PR's base "
+        "branch, e.g. origin/main. Required rather than defaulted: this runs "
+        "after Renovate has committed the refresh, so the driver's HEAD default "
+        "would silently make the bound a no-op.",
+    )
+    args = parser.parse_args(argv)
+
+    root = Path.cwd()
+    for project in PROJECTS:
+        code = bound_project(project, args.window, args.baseline_ref, root)
+        if code != 0:
+            print(
+                f"Bound failed for {project.directory!r}; committing nothing so "
+                "the unbounded lock cannot merge.",
+                file=sys.stderr,
+            )
+            return code
+
+    try:
+        export_requirements(root)
+    except RuntimeError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+
+    paths = [f"{p.directory}/uv.lock".removeprefix("./") for p in PROJECTS]
+    paths.append(REQUIREMENTS_PATH)
+    stage_and_commit(root, paths)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

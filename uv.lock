@@ -442,7 +442,7 @@ test = [
 
 [[package]]
 name = "atlan-application-sdk-conformance"
-version = "0.19.1"
+version = "0.20.1"
 source = { directory = "packages/conformance" }
 dependencies = [
     { name = "jinja2" },

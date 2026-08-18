@@ -677,3 +677,166 @@ class TestMain:
             ]
         )
         assert exit_code == 1
+
+
+class TestBaselineRef:
+    """`--baseline-ref`, and the sub-project path fix beside it (FND-376).
+
+    Under Renovate's postUpgradeTasks the refresh is still uncommitted, so HEAD
+    is the pre-refresh lock and the default is right. application-sdk's own lane
+    runs from a workflow triggered by the push Renovate already made, so HEAD
+    there IS the unbounded lock — the baseline has to come from the base branch,
+    or the window is worth nothing while every check still passes.
+    """
+
+    GIT_ENV = {
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@t",
+        "PATH": os.environ.get("PATH", ""),
+    }
+
+    def _git(self, cwd: Path, *args: str) -> None:
+        subprocess.run(["git", *args], cwd=cwd, check=True, env=self.GIT_ENV)
+
+    def _package(self, name: str, version: str, uploaded: str) -> str:
+        return (
+            f'\n[[package]]\nname = "{name}"\nversion = "{version}"\n'
+            'source = { registry = "https://pypi.org/simple" }\n'
+            f'sdist = {{ url = "https://x/{name}-{version}.tar.gz", '
+            f'upload-time = "{uploaded}" }}\n'
+        )
+
+    def _stamp(self, **delta: int) -> str:
+        moment = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+            **delta
+        )
+        return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def test_head_as_baseline_neutralises_the_window_and_the_base_ref_does_not(
+        self, monkeypatch, tmp_path
+    ):
+        """The property the flag exists for, asserted against its own control.
+
+        Two commits: the base locks a 2020 boto3, then the branch commits the
+        refreshed lock holding an hour-old one. Read from HEAD, that fresh
+        release looks *already adopted* and earns a retention ceiling — the bound
+        pinning in place the very release it exists to exclude. Read from the base
+        branch, it earns nothing.
+        """
+        old = "version = 1\n" + self._package("boto3", "1.0.0", "2020-01-01T00:00:00Z")
+        fresh = "version = 1\n" + self._package("boto3", "9.9.9", self._stamp(hours=1))
+
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'app'\n")
+        (tmp_path / "uv.lock").write_text(old)
+        self._git(tmp_path, "init", "-q")
+        self._git(tmp_path, "add", "-A")
+        self._git(tmp_path, "commit", "-qm", "base")
+        self._git(tmp_path, "branch", "base")
+
+        # Renovate's commit: the unbounded refresh is now IN history, not merely
+        # in the working tree. That is what makes this lane different.
+        (tmp_path / "uv.lock").write_text(fresh)
+        self._git(tmp_path, "add", "-A")
+        self._git(tmp_path, "commit", "-qm", "chore(deps): lock file maintenance")
+
+        seen: list[list[str]] = []
+        # What the stubbed resolve leaves behind. Set per run to whatever that
+        # run's baseline already holds, so the rollback gate stays out of the way
+        # and the assertion is about the ceilings alone.
+        resolved = old
+
+        def fake_run(command, cwd):
+            seen.append(command)
+            (Path(cwd) / "uv.lock").write_text(resolved)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+
+        argv = ["--window", "P7D", "--project-dir", str(tmp_path)]
+        assert bounded.main([*argv, "--baseline-ref", "base"]) == 0
+        ceilings = [a for a in seen[0] if a.startswith("boto3=")]
+        assert ceilings == [], (
+            "the base branch locks a 2020 boto3, so nothing needs a ceiling; one "
+            f"here means the fresh 9.9.9 was read as already adopted: {ceilings}"
+        )
+
+        # The control: the same tree on the default HEAD baseline DOES emit one.
+        # Without this half the assertion above could pass for the wrong reason.
+        seen.clear()
+        resolved = fresh
+        assert bounded.main(argv) == 0
+        assert any(a.startswith("boto3=2") for a in seen[0]), seen[0]
+
+    def test_a_subproject_baseline_is_its_own_lock_not_the_repo_roots(
+        self, monkeypatch, tmp_path
+    ):
+        """`<rev>:uv.lock` is repo-root-relative wherever it runs.
+
+        So a run against `packages/conformance` took the ROOT lock as that
+        project's baseline — silently, with unrelated retention ceilings and a
+        rollback comparison against the wrong file. `<rev>:./uv.lock` is what makes
+        `git show` agree with the `git ls-tree` probe beside it. Both locks name
+        the same package at different ages, so a leak between them cannot pass
+        unnoticed.
+        """
+        root_lock = "version = 1\n" + self._package(
+            "boto3", "1.0.0", "2020-01-01T00:00:00Z"
+        )
+        # The sub-project's boto3 is recent, so it — and only it — earns a ceiling.
+        sub_lock = "version = 1\n" + self._package(
+            "boto3", "5.5.5", self._stamp(days=2)
+        )
+
+        sub = tmp_path / "packages" / "conformance"
+        sub.mkdir(parents=True)
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'app'\n")
+        (tmp_path / "uv.lock").write_text(root_lock)
+        (sub / "pyproject.toml").write_text("[project]\nname = 'sub'\n")
+        (sub / "uv.lock").write_text(sub_lock)
+        self._git(tmp_path, "init", "-q")
+        self._git(tmp_path, "add", "-A")
+        self._git(tmp_path, "commit", "-qm", "base")
+
+        assert bounded.baseline_lock_text(sub) == sub_lock
+        assert bounded.baseline_lock_text(tmp_path) == root_lock
+
+        seen: list[list[str]] = []
+
+        def fake_run(command, cwd):
+            seen.append(command)
+            (Path(cwd) / "uv.lock").write_text(sub_lock)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        assert bounded.main(["--window", "P7D", "--project-dir", str(sub)]) == 0
+        assert any(a.startswith("boto3=2") for a in seen[0]), (
+            "the sub-project's boto3 is 2 days old and needs a ceiling; its "
+            f"absence means the 2020 ROOT lock was read as the baseline: {seen[0]}"
+        )
+
+    def test_an_unresolvable_baseline_ref_fails_closed(self, monkeypatch, tmp_path):
+        # A misspelled or unfetched base branch must not degrade to "no baseline",
+        # which would drop the retention ceilings and the rollback gate together.
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'app'\n")
+        (tmp_path / "uv.lock").write_text(lock(boto3="1.43.72"))
+        self._git(tmp_path, "init", "-q")
+        self._git(tmp_path, "add", "-A")
+        self._git(tmp_path, "commit", "-qm", "base")
+
+        def fail_if_called(command, cwd):
+            raise AssertionError("uv must not run without a resolvable baseline")
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fail_if_called)
+        exit_code = bounded.main(
+            [
+                "--window",
+                "P7D",
+                "--project-dir",
+                str(tmp_path),
+                "--baseline-ref",
+                "origin/nope",
+            ]
+        )
+        assert exit_code == 1

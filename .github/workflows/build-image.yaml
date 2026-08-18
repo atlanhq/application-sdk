@@ -39,11 +39,41 @@ jobs:
         shell: bash
         run: echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
+  # ONE ARCHITECTURE PER JOB, EACH ON A RUNNER NATIVE TO IT.
+  #
+  # This job used to be a single `ubuntu-latest` build with
+  # `platforms: linux/amd64,linux/arm64`, which builds the arm64 half under
+  # QEMU — measured across the org at 5-10x native, and already designed
+  # against on this repo's other image paths (pull_request.yaml's
+  # build-sdk-base-image, tests-reusable.yaml's build-e2e-image). Two native
+  # jobs in parallel cost about one build; one job emulating costs several.
+  #
+  # The emulated leg never fails, it is only slow, so nothing here reports the
+  # regression if a future edit collapses the matrix back onto ubuntu-latest.
+  # test_base_image_native_builds pins the pairing instead.
   push-to-ghcr:
-    runs-on: ubuntu-latest
+    name: Build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     needs: prepare
+    strategy:
+      # Knowing whether ONE arch or BOTH failed is the diagnosis when a build
+      # breaks on an architecture rather than in general.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            # NOT ubuntu-latest — see the note above the job.
+            runner: ubuntu-24.04-arm
     concurrency:
-      group: ${{ github.workflow }}-${{ github.ref }}-ghcr
+      # The arch is part of the group on purpose. A job-level `concurrency` on a
+      # matrix job resolves to the SAME group for every leg unless the matrix
+      # context is in the key, so without `${{ matrix.arch }}` the two legs
+      # would cancel each other and only one arch would ever be pushed.
+      group: ${{ github.workflow }}-${{ github.ref }}-ghcr-${{ matrix.arch }}
       cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
     timeout-minutes: 20
     steps:
@@ -77,9 +107,18 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
+          # The action defaults to an UNSCOPED `type=gha`. With one job that was
+          # fine; with two, both legs would write the same cache manifest, each
+          # overwriting the other, and both would go cold on every later run —
+          # silently, since a cache miss only costs time. `mode=min` matches the
+          # action's own default: this change is about where the build runs, not
+          # about how much of it is cached.
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=min,scope=${{ matrix.platform }}
+          # Arch-suffixed — merged into the real tag by merge-ghcr below.
           tags: |
-            ghcr.io/atlanhq/app-runtime-base-${{ needs.prepare.outputs.lowercase_branch }}:sha-${{ needs.prepare.outputs.sha }}
+            ghcr.io/atlanhq/app-runtime-base-${{ needs.prepare.outputs.lowercase_branch }}:sha-${{ needs.prepare.outputs.sha }}-${{ matrix.arch }}
           build-args: |
             ACCESS_TOKEN_USR=$GITHUB_ACTOR
             ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
@@ -90,3 +129,34 @@ jobs:
         env:
           DOCKER_CLIENT_TIMEOUT: 600
           COMPOSE_HTTP_TIMEOUT: 600
+
+  # Combines the two arch images into the manifest list consumers actually pull.
+  # Until this job runs, `:sha-<sha>` does not exist — only `:sha-<sha>-amd64`
+  # and `:sha-<sha>-arm64` do.
+  merge-ghcr:
+    name: Merge & Push Manifest
+    runs-on: ubuntu-latest
+    needs: [prepare, push-to-ghcr]
+    timeout-minutes: 10
+    steps:
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Login to GitHub Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.ORG_PAT_GITHUB }}
+
+      - name: Create and push multi-arch manifest
+        env:
+          IMAGE: ghcr.io/atlanhq/app-runtime-base-${{ needs.prepare.outputs.lowercase_branch }}:sha-${{ needs.prepare.outputs.sha }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            --tag "${IMAGE}" \
+            "${IMAGE}-amd64" \
+            "${IMAGE}-arm64"
+          echo "Multi-arch manifest pushed: ${IMAGE}"
+          docker buildx imagetools inspect "${IMAGE}"

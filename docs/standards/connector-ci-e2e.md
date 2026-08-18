@@ -290,6 +290,61 @@ three clouds and got one must not look identical to one that got three. The same
 applies when the payload cannot be parsed: the key read degrades to "not known",
 narrowing is skipped, and the per-leg resolver still reports the real defect.
 
+### Reporting coverage to the test-readiness scorecard
+
+The `::warning::` above is per-run, ephemeral and buried in one app repo's
+Actions log, and nothing fails either way — so at any point of *central*
+visibility a repo running degraded looks identical to a fully covered one. The
+`scorecard` job closes that (FND-33, FND-34): it feeds the e2e tier's evidence
+and records cross-CSP coverage into `results/test-readiness.json`, which
+`update-dashboard.yaml` publishes and connector-pulse ingests as the
+`test_readiness` metric.
+
+**Two facts, kept apart.** `raw.crossCloud.configured` is what this repo is
+*wired* for — the requested fan-out narrowed exactly as discovery would narrow
+it, resolved from the tenant matrix's key list with no e2e run required.
+`raw.crossCloud.observed` is what a run actually *exercised*, from the
+`clouds` output of the same discovery call that built the matrix. Collapsing
+them would make "not rolled out" indistinguishable from "rolled out and
+broken", which is a state apps really are in.
+
+**Absent is not zero.** Three states have to stay distinguishable, and the wire
+format carries all three because `exclude_none=True` drops an unset field:
+
+| Wire | Meaning |
+|---|---|
+| `crossCloud` absent, or `observed` absent | e2e did not run — nothing is known |
+| `observed: []` | e2e ran with no cloud dimension: the degraded single-tenant fallback |
+| `observed: ["aws","azure"]` | e2e ran on those clouds |
+
+The same rule governs the tier itself: when e2e did not run the `e2e` tier stays
+`applicable: false` and the `e2e-present` gate stays `na` — excluded from the
+aggregate, no grade cap. Scoring absent evidence as zero would drag every app's
+grade on every routine push.
+
+**Neither field is scored.** No `Check` reads them and no `Gate` caps on them.
+Promoting cross-CSP to a scored dimension before the fleet is onboarded would
+move every app's aggregate down at once, so a rollout would read as a fleet-wide
+regression. Record first; score once a low value is actionable.
+
+**`observed` is sparse, and that is structural.** The `scorecard` job runs on
+push/merge_group; e2e runs on `workflow_dispatch + run_e2e=true` or an
+`e2e`-labelled PR. Only a dispatched run on the default branch carries both, so
+`observed` appears on those runs and not the rest. It cannot be fixed by also
+running the scorecard on the PR path: `update-dashboard.yaml` only ingests
+default-branch runs, and on a PR the integration job is skipped, so such a
+scorecard would publish a zeroed integration tier — a fabricated regression.
+This is precisely why `configured`, which needs no e2e run, is the field that
+carries rollout visibility.
+
+**Per-leg junits are merged worst-case per test.** Each leg uploads a junit at
+the same inner path, so the scorecard downloads them unmerged (`pattern:`
+without `merge-multiple`) and folds them on `(classname, name)`, taking the
+worst outcome across legs. Summing would make the denominator a function of how
+many clouds a repo has onboarded — a failure on one of three clouds would score
+better than the same failure on the only cloud, so onboarding a cloud would
+*raise* the score by diluting an existing failure.
+
 ### Requiring a tenant ID on the install path
 
 That degradation is honest for a repo that only *runs legs against* a tenant, and

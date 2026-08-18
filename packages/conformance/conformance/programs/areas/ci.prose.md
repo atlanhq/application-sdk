@@ -90,8 +90,7 @@ it isn't safe to assume a C002 finding already triggered it:
    atlan-application-sdk-conformance bootstrap --json
    ```
    `bootstrap` auto-detects every per-repo customization itself — `--app-name`
-   and `--package-name` from `atlan.yaml`/an existing
-   `docstring-coverage.yaml` (else the repo directory name/`"app"`),
+   from `atlan.yaml` (else the repo directory name),
    `--unit-tests-workflow` and `--use-ghcr-base` from an existing
    `build-and-publish.yaml` (else `"tests.yaml"` and the SDK default),
    `--services-script` from an existing
@@ -103,9 +102,10 @@ it isn't safe to assume a C002 finding already triggered it:
    to a default. `--json` doesn't change any of that — it only appends one
    trailing JSON line to stdout, after the normal human-readable output.
 2. This single command resolves, in one pass: every absent/drifted managed
-   workflow shim, every absent/drifted vendored action file, an absent
-   `.gitignore` (C003's absent-file case — see below), an absent
-   `renovate.json`, and an absent `tests.yaml`.
+   workflow shim, every *retired* shim still on disk (deleted, and reported
+   in `touched` like any other write), every absent/drifted vendored action
+   file, an absent `.gitignore` (C003's absent-file case — see below), an
+   absent `renovate.json`, and an absent `tests.yaml`.
 3. `outcome = "fix"`. Parse the invocation's last stdout line as JSON
    (`json.loads(stdout.strip().splitlines()[-1])`) and set `touched_files` to
    its `touched` array — see the write-scope note in

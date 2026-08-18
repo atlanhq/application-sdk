@@ -111,6 +111,28 @@ This reverts commit abc123def456.
 - **Review the diff**: Always review your changes before committing
 - **Scan before pushing**: For Dockerfile or dependency changes, run security scans before pushing (see [build-security.md](build-security.md))
 
+## What CI enforces
+
+CI gates the **PR title**, not the individual commits on your branch.
+
+This repo is squash-merge-only, and the squash subject is the PR title (the
+squash body is left blank), so your branch's commit subjects are discarded at
+merge. The PR title is the only string that reaches `main` — and the only one
+`update_changelog.py` and `release.py` read. Gate it, and the history, the
+changelog, and the version bump all follow.
+
+- **`Validate PR title`** (`.github/workflows/pr-title-convention.yaml`) is the
+  required check. Its rules are stricter than plain conventional commits: the
+  allowed type depends on which component the PR touches, because the title
+  decides which changelog and which release a merge lands in. The rules are
+  documented at the top of that workflow.
+- Connector and app repos get the general, path-agnostic grammar guard instead,
+  via the `.github/workflows/commits.yaml` reusable in this repo.
+
+The format above still applies to your commits — it keeps `git log` on a branch
+readable and makes a commit easy to lift into a title — but nothing fails a
+build over it.
+
 ## Tools
 
 Consider using tools to help enforce conventional commits:

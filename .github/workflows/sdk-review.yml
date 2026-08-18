@@ -197,21 +197,26 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - name: React to skipped trigger
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+      # Sparse: this job exists only to leave a reaction, so it pulls the one
+      # file it needs rather than the tree.
+      - name: Checkout reaction helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          script: |
-            // React with 'confused' (😕) to signal "seen, consciously declined".
-            // The dispatch job uses 'eyes' (👀) for proceed — keeping distinct
-            // reactions means a user can tell "seen and running" (👀) from "seen
-            // and skipped" (😕) without reading the workflow log.
-            // No new PR comment — that would be noise the resolver may re-read.
-            await github.rest.reactions.createForIssueComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              comment_id: context.payload.comment.id,
-              content: 'confused',
-            });
+          sparse-checkout: .github/scripts/react_to_comment.py
+          sparse-checkout-cone-mode: false
+
+      # React with 'confused' (😕) to signal "seen, consciously declined".
+      # The dispatch job uses 'eyes' (👀) for proceed — keeping distinct
+      # reactions means a user can tell "seen and running" (👀) from "seen
+      # and skipped" (😕) without reading the workflow log.
+      # No new PR comment — that would be noise the resolver may re-read.
+      - name: React to skipped trigger
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          REACTION: confused
+        run: python3 .github/scripts/react_to_comment.py
 
   sdk-review-dispatch:
     needs: gate
@@ -270,21 +275,23 @@ jobs:
             core.setOutput('pr_number', prNumber);
             core.setOutput('commenter_intent', intent);
 
-      - name: React to comment + ensure labels exist
+      # Best-effort, never fatal. This used to be the opening lines of the
+      # step below, unguarded — and a transient HTTP 503 from the reactions
+      # API killed the whole dispatch job before it reached the mothership
+      # call, losing the review request entirely. The script always exits 0.
+      # `COMMENT_ID` is blank on workflow_dispatch, which the script no-ops on.
+      - name: React to comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          COMMENT_ID: ${{ steps.parse.outputs.comment_id }}
+          REACTION: eyes
+        run: python3 .github/scripts/react_to_comment.py
+
+      - name: Ensure labels exist
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
-            // Only react when triggered by a real comment (workflow_dispatch
-            // has no comment to react to).
-            if (context.eventName === 'issue_comment') {
-              await github.rest.reactions.createForIssueComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: context.payload.comment.id,
-                content: 'eyes',
-              });
-            }
-
             const labels = [
               { name: 'sdk-review-approved', color: '0e8a16', description: 'SDK review (mothership) approved' },
               { name: 'sdk-review-needs-human', color: 'd93f0b', description: 'SDK review (mothership) needs human decision' },

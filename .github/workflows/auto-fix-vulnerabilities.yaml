@@ -37,6 +37,10 @@ permissions:
   contents: write
   pull-requests: write
   actions: read
+  # Same gap as capability-manifest-regen: `/issues/comments/{id}/reactions`
+  # needs `issues: write` even for a PR comment. Fixed here too rather than
+  # only where review caught it — both are 🚀 acks on the same endpoint.
+  issues: write
 
 jobs:
   auto-fix:
@@ -57,16 +61,24 @@ jobs:
             core.setOutput('branch', pr.data.head.ref);
             core.setOutput('number', context.issue.number);
 
-      - name: React to comment
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+      # Sparse, and ahead of the full checkout below, so the ack stays the
+      # first thing the requester sees.
+      - name: Checkout reaction helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          script: |
-            await github.rest.reactions.createForIssueComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              comment_id: context.payload.comment.id,
-              content: 'rocket',
-            });
+          sparse-checkout: .github/scripts/react_to_comment.py
+          sparse-checkout-cone-mode: false
+
+      # Best-effort: the reaction is cosmetic, so a transient reactions-API
+      # failure must not take the fix run down with it. The script exits 0
+      # whatever happens.
+      - name: React to comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          REACTION: rocket
+        run: python3 .github/scripts/react_to_comment.py
 
       - name: Mint fleet App token
         id: app-token

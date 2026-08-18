@@ -7,9 +7,9 @@ Three subcommands:
   render     -- Render markdown manifest from normalized JSON + purposes YAML
 
 Usage (from repo root):
-  uv run --with griffe python .claude/skills/capability-manifest/references/extractor.py dump
-  uv run --with griffe python .claude/skills/capability-manifest/references/extractor.py normalize /tmp/capability-manifest/raw.json
-  uv run --with griffe python .claude/skills/capability-manifest/references/extractor.py render /tmp/capability-manifest/normalized.json .claude/skills/capability-manifest/references/subpackage-purposes.yaml
+  uv run --with griffe==2.1.0 python .claude/skills/capability-manifest/references/extractor.py dump
+  uv run --with griffe==2.1.0 python .claude/skills/capability-manifest/references/extractor.py normalize /tmp/capability-manifest/raw.json
+  uv run --with griffe==2.1.0 python .claude/skills/capability-manifest/references/extractor.py render /tmp/capability-manifest/normalized.json .claude/skills/capability-manifest/references/subpackage-purposes.yaml
 """
 
 from __future__ import annotations
