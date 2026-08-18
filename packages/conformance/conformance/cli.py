@@ -49,6 +49,16 @@ def _cmd_gen_deprecations(argv: list[str]) -> int:
         return int(e.code) if e.code is not None else 0
 
 
+def _cmd_gen_public_errors(argv: list[str]) -> int:
+    from conformance.tools.generate_public_errors import main
+
+    try:
+        main(argv)
+        return 0
+    except SystemExit as e:
+        return int(e.code) if e.code is not None else 0
+
+
 def _cmd_gen_toolkit_baseline(argv: list[str]) -> int:
     from conformance.tools.generate_toolkit_baseline import main
 
@@ -116,6 +126,7 @@ _COMMANDS = {
     "gen-deprecations": _cmd_gen_deprecations,
     "gen-contract-ledger": _cmd_gen_contract_ledger,
     "gen-toolkit-baseline": _cmd_gen_toolkit_baseline,
+    "gen-public-errors": _cmd_gen_public_errors,
     "ledger-guard": _cmd_ledger_guard,
     "remediate": _cmd_remediate,
     "bootstrap": _cmd_bootstrap,
@@ -138,6 +149,9 @@ commands:
   gen-toolkit-baseline Regenerate data/toolkit_baseline.json from contract-toolkit/src/PklProject
                        --sdk-root DIR  repo root to read (default: auto-detected)
                        --check       verify baseline is current; exit 1 if stale
+  gen-public-errors    Regenerate data/public_errors.json from application_sdk.errors.__all__
+                       --sdk-root DIR  repo root to read (default: auto-detected)
+                       --check       verify allowlist is current; exit 1 if stale
   ledger-guard         CI append-only guard: block ledger deletions and type changes between
                        base ref and HEAD (run after fetch-depth: 0 checkout)
                          --base-ref REF      git ref for the base (default: origin/main)

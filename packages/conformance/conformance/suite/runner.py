@@ -45,6 +45,7 @@ from conformance.suite.checks import (
     e2e_workflow_shape,
     entrypoint_alignment,
     error_handling,
+    error_seam,
     generated_freshness,
     gitignore_entries,
     integration_deselect,
@@ -115,6 +116,11 @@ _CHECKS: list[CheckRegistration] = [
         series=error_handling.SERIES,
         discover=error_handling.discover,
         scan_path=error_handling.scan_path,
+    ),
+    CheckRegistration(
+        series=error_seam.SERIES,
+        discover=error_seam.discover,
+        scan_path=error_seam.scan_path,
     ),
     CheckRegistration(
         series=dependency_conformance.SERIES,
