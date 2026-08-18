@@ -50,6 +50,187 @@ logger = get_logger(__name__)
 # type, so only never-retryable types belong here.
 _WORKFLOW_FAILURE_EXCEPTION_TYPES: tuple[type[BaseException], ...] = (ValidationError,)
 
+# Depth cap for rendering an exception's cause chain. temporalio's poll fatal is
+# two links deep; anything much longer is a runaway chain, not diagnostics.
+_MAX_FATAL_CHAIN_DEPTH = 10
+
+# sdk-core publishes its poller gauge under this family name (the ``temporal_``
+# prefix is core's default). Both spellings are accepted so a future prefix
+# change does not silently zero the reading.
+_CORE_POLLER_GAUGE_NAMES = ("temporal_num_pollers", "num_pollers")
+# Preferred label to key the gauge by; core sets ``poller_type``
+# (``workflow_task`` / ``activity_task`` / ``sticky_workflow_task`` / ...).
+_CORE_POLLER_TYPE_LABELS = ("poller_type", "worker_type")
+
+
+def describe_exception_chain(exc: BaseException) -> list[str]:
+    """Render an exception and its ``__cause__``/``__context__`` chain.
+
+    A Temporal poll fatal reaches Python wrapped twice — the Rust bridge raises
+    ``RuntimeError("Poll failure: Unhandled grpc error when polling: Status {
+    code: PermissionDenied, ... }")`` and ``temporalio.worker`` re-wraps that as
+    ``RuntimeError("Activity worker failed") from err``. So ``str(exc)`` says
+    nothing at all about *why* the poll died: the gRPC status name only exists
+    further down the chain. Each link is rendered ``ClassName: message`` so the
+    status reaches the logs.
+
+    Cycle-protected and capped at ``_MAX_FATAL_CHAIN_DEPTH`` links.
+    """
+    chain: list[str] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        if len(chain) >= _MAX_FATAL_CHAIN_DEPTH:
+            chain.append("... chain truncated")
+            break
+        seen.add(id(current))
+        chain.append(f"{type(current).__name__}: {current}")
+        # __cause__ is the explicit ``raise ... from``; __context__ covers an
+        # implicit chain raised while handling another error.
+        current = current.__cause__ or current.__context__
+    return chain
+
+
+async def read_core_poller_counts() -> dict[str, float] | None:
+    """Read sdk-core's live poller gauge from its local Prometheus endpoint.
+
+    This is the in-process answer to "is this worker actually polling?".
+    sdk-core maintains ``temporal_num_pollers`` as a gauge, labelled by poller
+    type, so a worker whose poll loop has died reads ``0`` while a
+    legitimately-idle worker still reads its configured poller count. Unlike
+    asking the Temporal frontend (``DescribeTaskQueue``), it needs no network
+    call, no task-queue read permission, and cannot go blind during the very
+    auth outage that kills the poll loop.
+
+    Returns a ``{poller_type: count}`` mapping, or ``None`` when the endpoint
+    could not be read — which means *unknown*, never zero. ``None`` is expected
+    when core's Prometheus exporter is disabled
+    (``ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS``).
+    """
+    import httpx  # noqa: PLC0415 — cold path: diagnostics only
+    from prometheus_client.parser import (  # noqa: PLC0415 — cold path: diagnostics only
+        text_string_to_metric_families,
+    )
+
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: diagnostics only
+        TEMPORAL_CORE_METRICS_MAX_BYTES,
+        TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS,
+        TEMPORAL_PROMETHEUS_BIND_ADDRESS,
+    )
+
+    url = f"http://{TEMPORAL_PROMETHEUS_BIND_ADDRESS}/metrics"
+    try:
+        async with httpx.AsyncClient(
+            timeout=TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS
+        ) as http_client:
+            # Stream so the read is bounded: reject on a declared oversize
+            # Content-Length, else accumulate chunks and bail the moment the
+            # running total crosses the cap. Passing chunk_size=cap bounds each
+            # chunk yielded to this loop; the running-total check bounds the
+            # retained bytes. (httpx may still buffer an individual raw
+            # transport chunk internally above the cap, so this bounds what the
+            # loop retains rather than every transient allocation.) An
+            # unbounded response.text would let a high-cardinality or
+            # misbehaving local exporter allocate an unbounded string each
+            # interval. Oversize is unknown (None), never zero.
+            async with http_client.stream("GET", url) as response:
+                if response.status_code != 200:
+                    logger.debug(
+                        "Temporal-core metrics endpoint %s returned HTTP %d; poller count unknown",
+                        url,
+                        response.status_code,
+                    )
+                    return None
+                content_length = response.headers.get("content-length")
+                if content_length is not None and int(content_length) > (
+                    TEMPORAL_CORE_METRICS_MAX_BYTES
+                ):
+                    logger.debug(
+                        "Temporal-core metrics endpoint %s declared %s bytes (cap %d); poller count unknown",
+                        url,
+                        content_length,
+                        TEMPORAL_CORE_METRICS_MAX_BYTES,
+                    )
+                    return None
+                chunks: list[bytes] = []
+                received = 0
+                oversize = False
+                async for chunk in response.aiter_bytes(
+                    chunk_size=TEMPORAL_CORE_METRICS_MAX_BYTES
+                ):
+                    received += len(chunk)
+                    if received > TEMPORAL_CORE_METRICS_MAX_BYTES:
+                        oversize = True
+                        break
+                    chunks.append(chunk)
+                if oversize:
+                    logger.debug(
+                        "Temporal-core metrics endpoint %s exceeded %d bytes; poller count unknown",
+                        url,
+                        TEMPORAL_CORE_METRICS_MAX_BYTES,
+                    )
+                    return None
+                payload = b"".join(chunks).decode("utf-8", errors="replace")
+    except Exception:
+        logger.debug(
+            "Temporal-core metrics endpoint %s unreachable; poller count unknown",
+            url,
+            exc_info=True,
+        )
+        return None
+
+    counts: dict[str, float] = {}
+    try:
+        for family in text_string_to_metric_families(payload):
+            if family.name not in _CORE_POLLER_GAUGE_NAMES:
+                continue
+            for sample in family.samples:
+                key = next(
+                    (
+                        sample.labels[label]
+                        for label in _CORE_POLLER_TYPE_LABELS
+                        if label in sample.labels
+                    ),
+                    "unlabelled",
+                )
+                counts[key] = counts.get(key, 0.0) + sample.value
+    except Exception:
+        logger.debug(
+            "Could not parse Temporal-core metrics from %s; poller count unknown",
+            url,
+            exc_info=True,
+        )
+        return None
+
+    # The family being absent entirely is not the same as a zero reading: core
+    # only registers the gauge once a worker has started polling at least once.
+    return counts or None
+
+
+async def _log_worker_fatal_error(exc: BaseException) -> None:
+    """``on_fatal_error`` hook — log the fatal that took the poll loop down.
+
+    ``Worker.run`` invokes this the moment any poll task raises, *before* the
+    ``async with`` teardown runs. That matters: ``Worker.__aexit__`` re-raises a
+    captured fatal only when the body exits via ``CancelledError``, so a fatal
+    that races a shutdown is otherwise dropped silently. This hook always sees
+    it.
+
+    Its *absence* is a signal in its own right. A worker with zero pollers and
+    no ``poll loop failed`` line never raised at all, which distinguishes a
+    swallowed fatal from a poll loop that parked without erroring (ARUN-1127).
+    """
+    # exc_info=exc, not True: ``Worker.run`` retrieves the fatal with
+    # ``task.exception()`` and calls this hook outside any ``except`` block, so
+    # no exception is being handled. ``exc_info=True`` would resolve to
+    # ``sys.exc_info()`` — empty here — and render "NoneType: None" instead of
+    # the traceback this log exists to capture.
+    logger.error(
+        "Temporal worker poll loop failed fatally; cause chain: %s",
+        " <- ".join(describe_exception_chain(exc)),
+        exc_info=exc,
+    )
+
 
 def _resolve_gate_enforcement(app_cls: type | None) -> bool:
     """Resolve the preflight gate's posture for one app.
@@ -315,6 +496,7 @@ def create_worker(
     interceptors: list[TemporalInterceptor] | None = None,
     enable_pushgateway: bool = False,
     on_activity: Callable[[], None] | None = None,
+    on_fatal_error: Callable[[BaseException], None] | None = None,
 ) -> AppWorker:
     """Create a Temporal worker for registered Apps.
 
@@ -363,6 +545,11 @@ def create_worker(
             heartbeat. The main entry point wires this to
             ``WorkerHealthServer.record_activity`` so the ``/live`` probe can
             reflect real worker progress.
+        on_fatal_error: Optional callback fired when a poll loop dies fatally.
+            The SDK always logs the fatal's full cause chain first (that hook is
+            the only place a fatal is guaranteed to be observed — see
+            ``_log_worker_fatal_error``); this callback is additive, and the main
+            entry point wires it to ``WorkerHealthServer.record_worker_fatal``.
 
     Returns:
         AppWorker wrapping a configured Temporal Worker (not yet started).
@@ -659,10 +846,44 @@ def create_worker(
             versioning_behavior.name,
         )
 
+    async def _fatal_error_hook(exc: BaseException) -> None:
+        # Always log — the diagnostic must not depend on a caller opting in.
+        # Guard even this mandatory path: if rendering the cause chain itself
+        # raises (e.g. an exception whose ``__str__`` blows up), fall back to a
+        # minimal line that does not render ``exc`` — otherwise the hook
+        # propagates and temporalio's own "Fatal error handler failed" wrapper
+        # silently swaps in, losing the rich cause-chain log this hook exists
+        # to produce. exc_info=True here logs the traceback of the *rendering
+        # failure*, not of ``exc``. That masks the link whose rendering failed
+        # (it appears as a ``<exception str() failed>`` placeholder); chain links
+        # that rendered before the failure may still appear, so this bounds which
+        # link is lost, not what the log can contain. No new exposure either way:
+        # those same messages reach the logs on the primary path whenever
+        # rendering succeeds.
+        try:
+            await _log_worker_fatal_error(exc)
+        except BaseException:
+            logger.error(
+                "Temporal worker poll loop failed fatally (cause chain "
+                "unavailable: rendering the exception raised %s)",
+                type(exc).__name__,
+                exc_info=True,
+            )
+        if on_fatal_error is None:
+            return
+        try:
+            on_fatal_error(exc)
+        except Exception:
+            logger.warning(
+                "on_fatal_error callback failed; the fatal itself is already logged",
+                exc_info=True,
+            )
+
     worker_kwargs: dict = dict(
         task_queue=task_queue,
         workflows=app_workflows,
         activities=task_activities,
+        on_fatal_error=_fatal_error_hook,
         workflow_runner=workflow_runner,
         interceptors=all_interceptors,
         max_concurrent_activities=max_concurrent_activities,

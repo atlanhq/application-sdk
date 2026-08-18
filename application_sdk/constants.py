@@ -174,6 +174,16 @@ TEMPORAL_PROMETHEUS_BIND_ADDRESS = os.getenv(
 TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS: float = float(
     os.getenv("ATLAN_TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS", "5.0")
 )
+#: Upper bound on the bytes read from the loopback metrics endpoint when
+#: reading sdk-core's poller gauge for diagnostics. The endpoint is local and
+#: diagnostics-only, but a high-cardinality or misbehaving exporter could
+#: otherwise make the observer allocate an unbounded string every interval.
+#: Oversize is treated as unknown (``None``), never as zero. ~1 MiB is far
+#: above a healthy exposition (~460 series) and far below anything that could
+#: pressure the worker.
+TEMPORAL_CORE_METRICS_MAX_BYTES: int = int(
+    os.getenv("ATLAN_TEMPORAL_CORE_METRICS_MAX_BYTES", str(1024 * 1024))
+)
 
 # Prometheus Pushgateway (worker-only deployments)
 #: Pushgateway URL workers push to. Empty disables push (combined-mode
