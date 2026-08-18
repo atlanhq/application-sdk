@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import timedelta
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from pydantic import ValidationError
 from temporalio.client import Client
@@ -706,3 +706,54 @@ def create_worker(
         primary_app_name=primary_app_name,
         task_queue=task_queue,
     )
+
+
+async def is_task_queue_poller_active(
+    client: Any, task_queue: str, identity: Any, namespace: str
+) -> "bool | None":
+    """Is ``identity`` an active poller on ``task_queue``?
+
+    The raw ``temporalio.api.*`` ``DescribeTaskQueue`` call lives here, behind
+    the ``execution/_temporal`` adapter seam (P006), so ``main.py`` never
+    imports the engine protos directly and a future Temporal upgrade touches
+    one file.
+
+    Returns ``True`` if the worker's identity appears among the task queue's
+    pollers on the workflow or activity queue, ``False`` if it is definitively
+    absent, and ``None`` if the frontend could not be queried (transient — e.g.
+    the same auth-skew window that triggers the incident). ``None`` must never
+    be treated as a stall.
+    """
+    try:
+        from temporalio.api.enums.v1 import (  # noqa: PLC0415 — cold path: watchdog only
+            TaskQueueType,
+        )
+        from temporalio.api.taskqueue.v1 import (  # noqa: PLC0415 — cold path: watchdog only
+            TaskQueue,
+        )
+        from temporalio.api.workflowservice.v1 import (  # noqa: PLC0415 — cold path: watchdog only
+            DescribeTaskQueueRequest,
+        )
+    except Exception:  # pragma: no cover - temporalio always present in worker mode
+        return None
+
+    for tq_type in (
+        TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW,
+        TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY,
+    ):
+        try:
+            resp = await client.workflow_service.describe_task_queue(
+                DescribeTaskQueueRequest(
+                    namespace=namespace,
+                    task_queue=TaskQueue(name=task_queue),
+                    task_queue_type=tq_type,
+                )
+            )
+        except Exception:
+            # Frontend unreachable / rejecting (incl. the transient skew that
+            # this whole feature exists to survive) — unknown, not a stall.
+            return None
+        for poller in getattr(resp, "pollers", None) or []:
+            if identity is None or getattr(poller, "identity", None) == identity:
+                return True
+    return False

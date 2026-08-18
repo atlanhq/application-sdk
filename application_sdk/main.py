@@ -995,50 +995,55 @@ class WorkerPollStalledError(RuntimeError):
     """
 
 
+# Failure classification (ARUN-1127). The supervisor recovers indefinitely only
+# from the *recoverable* class this feature targets — a transient Temporal
+# frontend auth rejection (a JWKS signing-key cache skew, ARUN-1128) that a
+# rebuild-and-token-refresh fixes. A *permanent* failure (bad credentials, a
+# misconfigured task queue) is not in this class: it keeps the bounded give-up
+# so it still fails loud rather than presenting as a ready, alive pod that never
+# polls. Classification is by the fatal error's message — temporalio surfaces a
+# poll ``PermissionDenied`` as a plain ``RuntimeError`` out of the ``async with``
+# block, so there is no stable exception type to match on.
+_RECOVERABLE_POLL_ERROR_MARKERS = (
+    "permissiondenied",
+    "permission denied",
+    "unauthorized",
+    "unauthenticated",
+    "jwks",
+)
+
+
+def _is_recoverable_poll_failure(exc: BaseException) -> bool:
+    """True when ``exc`` is the transient auth-rejection class a restart fixes.
+
+    Matches the fatal's message (lowercased) against the known transient markers.
+    The watchdog's own ``WorkerPollStalledError`` is always recoverable — that is
+    precisely the zombie-poll case the rebuild exists to heal.
+    """
+    if isinstance(exc, WorkerPollStalledError):
+        return True
+    message = str(exc).lower()
+    return any(marker in message for marker in _RECOVERABLE_POLL_ERROR_MARKERS)
+
+
 async def _worker_is_polling(
     client: Any, task_queue: str, identity: Any, namespace: str
 ) -> "bool | None":
     """Is ``identity`` an active poller on ``task_queue``?
 
-    Returns ``True`` if the worker's identity appears in the task queue's
-    pollers on the workflow or activity queue, ``False`` if it is definitively
-    absent, and ``None`` if the frontend could not be queried (transient — e.g.
-    the same auth-skew window that triggers the incident). ``None`` must never
-    be treated as a stall.
+    Thin wrapper over the ``execution/_temporal`` adapter so the raw
+    ``temporalio.api.*`` ``DescribeTaskQueue`` call stays behind the seam
+    (P006). Returns ``True`` if the worker's identity appears in the task
+    queue's pollers on the workflow or activity queue, ``False`` if it is
+    definitively absent, and ``None`` if the frontend could not be queried
+    (transient — e.g. the same auth-skew window that triggers the incident).
+    ``None`` must never be treated as a stall.
     """
-    try:
-        from temporalio.api.enums.v1 import (  # noqa: PLC0415 — cold path: watchdog only
-            TaskQueueType,
-        )
-        from temporalio.api.taskqueue.v1 import (  # noqa: PLC0415 — cold path: watchdog only
-            TaskQueue,
-        )
-        from temporalio.api.workflowservice.v1 import (  # noqa: PLC0415 — cold path: watchdog only
-            DescribeTaskQueueRequest,
-        )
-    except Exception:  # pragma: no cover - temporalio always present in worker mode
-        return None
+    from application_sdk.execution._temporal.worker import (  # noqa: PLC0415 — cold path: watchdog only
+        is_task_queue_poller_active,
+    )
 
-    for tq_type in (
-        TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW,
-        TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY,
-    ):
-        try:
-            resp = await client.workflow_service.describe_task_queue(
-                DescribeTaskQueueRequest(
-                    namespace=namespace,
-                    task_queue=TaskQueue(name=task_queue),
-                    task_queue_type=tq_type,
-                )
-            )
-        except Exception:
-            # Frontend unreachable / rejecting (incl. the transient skew that
-            # this whole feature exists to survive) — unknown, not a stall.
-            return None
-        for poller in getattr(resp, "pollers", None) or []:
-            if identity is None or getattr(poller, "identity", None) == identity:
-                return True
-    return False
+    return await is_task_queue_poller_active(client, task_queue, identity, namespace)
 
 
 async def _assert_polling_or_raise(
@@ -1106,15 +1111,22 @@ async def _run_worker_with_restart(
     ``async with worker`` block. A ``Worker`` is single-use, so each restart
     rebuilds one via ``build_worker``.
 
-    This class of failure — a transient Temporal frontend auth rejection (e.g. a
-    JWKS signing-key cache skew, ARUN-1128) — is recoverable by a restart, so
-    the supervisor **recovers indefinitely** rather than exiting: a dead poller
-    must never become a silent outage, and a self-healing runtime must never
-    crash-loop the pod. Past ``_WORKER_MAX_CONSECUTIVE_RESTARTS`` consecutive
+    Recovery is **classified** (``_is_recoverable_poll_failure``). The
+    recoverable class this feature targets — a transient Temporal frontend auth
+    rejection (e.g. a JWKS signing-key cache skew, ARUN-1128) and the watchdog's
+    own ``WorkerPollStalledError`` — is fixed by a restart, so the supervisor
+    recovers it **indefinitely** rather than exiting: a dead poller must never
+    become a silent outage, and a self-healing runtime must never crash-loop the
+    pod. Past ``_WORKER_MAX_CONSECUTIVE_RESTARTS`` consecutive recoverable
     failures the supervisor escalates log severity to ERROR (so a genuinely
     stuck worker is loud in monitoring) but keeps recovering. The consecutive
     counter resets once a worker runs healthily for
     ``_WORKER_HEALTHY_RUN_SECONDS``.
+
+    A failure *outside* the recoverable class (bad credentials, a misconfigured
+    task queue — a permanent misconfiguration a restart cannot fix) keeps the
+    bounded give-up: past ``_WORKER_MAX_CONSECUTIVE_RESTARTS`` it re-raises, so
+    it fails loud instead of presenting as a ready, alive pod that never polls.
 
     When ``task_queue`` and ``client`` are supplied, a poll-liveness watchdog
     (``_assert_polling_or_raise``) runs alongside the worker and converts the
@@ -1186,7 +1198,7 @@ async def _run_worker_with_restart(
             if shutdown_event.is_set():
                 return
             raise RuntimeError("worker run returned without a shutdown request")
-        except Exception:
+        except Exception as exception:
             # Clear any residual cancellation so the backoff wait_for below is
             # not torn down by a leftover cancel count on Python 3.11+.
             current = asyncio.current_task()
@@ -1203,6 +1215,24 @@ async def _run_worker_with_restart(
                 # storm, so reset the streak.
                 consecutive_failures = 0
             consecutive_failures += 1
+
+            # Classify the failure. Only the transient auth-rejection class (and
+            # the watchdog's WorkerPollStalledError) recovers indefinitely. A
+            # non-recoverable failure keeps the bounded give-up: past the cap,
+            # re-raise so a permanent misconfiguration fails loud.
+            recoverable = _is_recoverable_poll_failure(exception)
+            if (
+                not recoverable
+                and consecutive_failures > _WORKER_MAX_CONSECUTIVE_RESTARTS
+            ):
+                logger.error(
+                    "Worker failed %d times with a non-recoverable error "
+                    "without staying healthy for %ds; giving up and exiting",
+                    consecutive_failures,
+                    _WORKER_HEALTHY_RUN_SECONDS,
+                    exc_info=True,
+                )
+                raise
 
             if health_server is not None:
                 try:
@@ -1230,9 +1260,10 @@ async def _run_worker_with_restart(
                 _WORKER_RESTART_BACKOFF_CAP_SECONDS,
             )
             delay = random.uniform(0, cap_at_attempt)
-            # Recover indefinitely (this failure class is fixed by a restart);
-            # never exit. Past the soft threshold, escalate to ERROR so a
-            # genuinely stuck worker is loud in monitoring while we keep trying.
+            # A recoverable failure is fixed by a restart, so recover
+            # indefinitely — never exit. Past the soft threshold, escalate to
+            # ERROR so a genuinely stuck worker is loud in monitoring while we
+            # keep trying. (Non-recoverable failures already re-raised above.)
             sustained = consecutive_failures > _WORKER_MAX_CONSECUTIVE_RESTARTS
             emit = logger.error if sustained else logger.warning
             emit(
