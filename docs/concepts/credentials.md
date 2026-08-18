@@ -191,6 +191,49 @@ See [Testing Apps](apps.md#testing-apps) and [Integration Testing](../guides/int
 
 ---
 
+## agent_json ingress
+
+`agent_json` names an agent-shape credential *reference* used by SDR
+(customer-infra) runs. It reaches the SDK in an arbitrary combination of three
+alias spellings (`agent_json`, `agentJson`, `agent-json`), four container
+positions (top level, `metadata`, `connection_config`, `credentials` — the last
+in both the v2 dict and the v3 `list[{key, value}]` shape) and three types (JSON
+string, dict, `AgentCredentialSpec`). It may also carry a meaningless
+placeholder: eleven marketplace packages default the Argo `agent-json` param to
+a blob whose values are the key names (`{"port": "port", ...}`), that blob is
+persisted on the connection record, and it is replayed verbatim into v3 typed
+requests.
+
+`application_sdk.credentials.ingress` is the only place that tolerates any of
+that. **Every reader takes the typed field.** Do not add a guard of your own.
+
+```python
+from application_sdk.credentials import lift_agent_json, normalize_agent_json
+
+# One value -> a typed spec, or None. None means "no agent reference here":
+# absent, empty, unparseable, or a placeholder that fails typed validation.
+spec = normalize_agent_json(raw_value)
+
+# A whole request body -> the same body with every agent-json key stripped from
+# every container and the typed spec promoted to `body["agent_json"]`.
+body = lift_agent_json(await request.json())
+```
+
+Two things stay outside the normaliser:
+
+- **`is_populated()` is the consumers' call.** A spec that validates but carries
+  no fetch anchor (a name with no `secret-path`) is a real reference as far as
+  ingress is concerned; whoever resolves it decides whether that is usable.
+- **Connector subclasses.** Pass `spec_type=` (or use
+  `declared_agent_spec_type(MyInput)`) when the reader's field narrows
+  `agent_json` to an `AgentCredentialSpec` subclass, so validation uses that
+  subclass's rules and the reader gets the type it declared.
+
+A malformed body reaching a handler endpoint is answered with **422** naming the
+offending field, not a plain-text 500.
+
+---
+
 ## Utility: parse_credentials_extra
 
 For connectors that receive credentials as a flat dict (e.g. from Heracles), use `parse_credentials_extra` to extract nested fields:
