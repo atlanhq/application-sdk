@@ -172,11 +172,44 @@ class TestMissingExtra:
     ) -> None:
         """ENABLE_MCP without the extra installed must say what to install.
 
-        ``None`` in sys.modules makes the import raise ImportError, which is
-        what a missing ``mcp`` extra looks like from inside the lifespan.
+        ``None`` in sys.modules makes ``import fastmcp`` raise a
+        ``ModuleNotFoundError`` named ``fastmcp`` — the real signal that the
+        ``mcp`` extra is not installed. The lifespan catches that specific case
+        and rewrites it with install instructions; an unrelated broken import
+        inside the chain is re-raised unchanged (see the sibling test).
+        """
+        monkeypatch.setattr(constants, "ENABLE_MCP", True)
+        # Evict every cached application_sdk.server.mcp* and fastmcp* module so
+        # the `from fastmcp import FastMCP` at the top of server.py re-runs and
+        # hits the nulled fastmcp below — earlier tests in this module import
+        # the real chain and leave it in sys.modules.
+        for mod in [
+            m
+            for m in sys.modules
+            if m == "fastmcp"
+            or m.startswith("fastmcp.")
+            or m == "application_sdk.server.mcp"
+            or m.startswith("application_sdk.server.mcp.")
+        ]:
+            monkeypatch.delitem(sys.modules, mod, raising=False)
+        monkeypatch.setitem(sys.modules, "fastmcp", None)
+
+        with pytest.raises(RuntimeError, match="'mcp' extra"):
+            create_app_handler_service(DefaultHandler(), app_name=APP_NAME)
+
+    def test_unrelated_import_error_is_reraised_unchanged(
+        self, probe: ProbeApp, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A broken import *inside* the MCP chain must not be misreported.
+
+        If ``application_sdk.server.mcp`` itself fails to import for a reason
+        other than the extra being absent (an SDK-internal bug, a broken
+        transitive dep), the broad "install the mcp extra" message would send
+        the user to reinstall when the fault is elsewhere. The lifespan must
+        re-raise that ``ModuleNotFoundError`` unchanged instead.
         """
         monkeypatch.setattr(constants, "ENABLE_MCP", True)
         monkeypatch.setitem(sys.modules, "application_sdk.server.mcp", None)
 
-        with pytest.raises(RuntimeError, match="'mcp' extra"):
+        with pytest.raises(ModuleNotFoundError):
             create_app_handler_service(DefaultHandler(), app_name=APP_NAME)
