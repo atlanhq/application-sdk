@@ -47,6 +47,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="dockerfile-base",
         autofixable=True,
+        orthogonal_gate="docker-build",
         since="0.5.0",
         rationale=(
             "Only registry.atlan.com/public/app-runtime-base:3 carries the "
@@ -95,6 +96,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="dockerfile-entrypoint",
         autofixable=True,
+        orthogonal_gate="docker-build",
         since="0.5.0",
         rationale=(
             "The base image entrypoint script co-launches the Dapr sidecar "
@@ -138,6 +140,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="dockerfile-env",
         autofixable=False,
+        orthogonal_gate="docker-build",
         since="0.5.0",
         rationale=(
             "The platform runtime discovers the application class via "
@@ -178,6 +181,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="dockerfile-env",
         autofixable=True,
+        orthogonal_gate="docker-build",
         since="0.5.0",
         rationale=(
             "The same image may be deployed as a worker or a server depending "
@@ -217,6 +221,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="dockerfile-security",
         autofixable=True,
+        orthogonal_gate="docker-build",
         since="0.5.0",
         rationale=(
             "The base image already establishes appuser as the container user.  "

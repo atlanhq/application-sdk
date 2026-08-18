@@ -101,6 +101,11 @@ human review and never auto-apply.  (These rules are backed by
 
 - `scope` — repository root path.
 - `mode` — `"default"` or `"strict"`.
+- `apply_unverifiable` — boolean, default `false`.  When `false`, behaviour is
+  byte-identical to before this parameter existed: propose, never apply.  When
+  `true`, the caller has accepted that **no gate can validate a P-series fix** and
+  has taken responsibility for reviewing the result; see below for the two
+  conditions that responsibility comes with.
 
 ### Continuity
 
@@ -109,24 +114,51 @@ Input-driven: re-render when any `*.py` file under `scope` changes.
 ### Execution
 
 ```prose
-# Suggest-only: detect, draft a fix per finding, route to residue WITHOUT
-# applying.  No gate can validate a P-series fix, so the human is the gate —
-# this area never mutates the working tree (contrast detect-fix-recheck, which
-# applies and keeps edits that pass their gates).
-let violations = call detect-violations
-  scope: scope
-  series: "P"
-  target: if mode == "strict" then "failing+warning" else "failing"
-
-for each finding in violations:
-  let proposal = call remediate-finding
-    finding: finding
+if apply_unverifiable:
+  # Caller-accepted unverifiable mode.  The loop still runs both gates, but the
+  # gates are BLIND here (see the note below), so passing them proves nothing.
+  # Two conditions make this honest rather than a false green:
+  #   1. every result is reported with classification = "unverifiable" (never
+  #      "mechanical"), so no downstream consumer can mistake it for gate-verified;
+  #   2. remediate-finding must attach cited evidence for the chosen value — a
+  #      bound taken from the contract schema or a documented upstream limit.
+  #      An arbitrary bound is NOT a fix; abstain and residue instead.
+  call detect-fix-recheck
+    scope: scope
+    series: "P"
     mode: mode
+    max_attempts: 5
+    classification_override: "unverifiable"
+    require_cited_evidence: true
 
-  # The proposal is recorded, never applied.  classification is always
-  # "judgment" for P-series, so it lands in the human-review residue.
-  add { finding, proposal } to residue with note "P-series suggest-only: proposed fix drafted for human review; NOT applied (no orthogonal gate validates a MaxItems bound or suppression)"
+else:
+  # Suggest-only: detect, draft a fix per finding, route to residue WITHOUT
+  # applying.  No gate can validate a P-series fix, so the human is the gate —
+  # this area never mutates the working tree (contrast detect-fix-recheck, which
+  # applies and keeps edits that pass their gates).
+  let violations = call detect-violations
+    scope: scope
+    series: "P"
+    target: if mode == "strict" then "failing+warning" else "failing"
+
+  for each finding in violations:
+    let proposal = call remediate-finding
+      finding: finding
+      mode: mode
+
+    # The proposal is recorded, never applied.  classification is always
+    # "judgment" for P-series, so it lands in the human-review residue.
+    add { finding, proposal } to residue with note "P-series suggest-only: proposed fix drafted for human review; NOT applied (no orthogonal gate validates a MaxItems bound or suppression)"
 ```
+
+**The gates are blind here — this is why `apply_unverifiable` must be opt-in.**
+P001's `orthogonal_gate` is `"tests"`, and `MaxItems` is a declarative marker that
+is not runtime-enforced, so no behaviour changes with the bound: `recheck-narrowest`
+is satisfied by *any* bound including an absurd one, and the test suite cannot
+observe the difference.  A fix here therefore passes both gates whatever value it
+picks.  Applying it is defensible only because the two conditions above replace the
+gate with something a reviewer can actually check — a stated number and the source
+it came from.  Never let a P-series result be reported as `"mechanical"`.
 
 ### Fix Prescription
 

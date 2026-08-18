@@ -996,3 +996,96 @@ def test_validate_catalog_raises_on_duplicate() -> None:
     )
     with pytest.raises(ValueError, match="duplicate rule ID"):
         validate_catalog([r1, r2])
+
+
+# ── orthogonal_gate wiring ────────────────────────────────────────────────
+#
+# A gate name is only useful if something implements it. Declaring
+# ``orthogonal_gate="docker-buidl"`` on a rule, or adding a new gate name without
+# a matching prose contract, otherwise fails *silently at remediation time*:
+# ``orthogonal-gate.prose.md`` fails closed on an unknown value, so every fix for
+# that rule reverts and residues with nothing to distinguish it from a genuinely
+# un-fixable finding. These tests move that failure to CI.
+
+
+def _gate_dispatch_prose() -> str:
+    from importlib.resources import files
+
+    return (
+        files("conformance")
+        .joinpath("programs/functions/orthogonal-gate.prose.md")
+        .read_text()
+    )
+
+
+def test_every_declared_gate_is_dispatched_by_the_prose() -> None:
+    """Each distinct orthogonal_gate value appears in the dispatch contract."""
+    dispatch = _gate_dispatch_prose()
+    declared = {r.orthogonal_gate for r in load_catalog() if r.orthogonal_gate}
+    missing = sorted(g for g in declared if f'"{g}"' not in dispatch)
+    assert not missing, (
+        f"orthogonal_gate value(s) {missing} are declared on rules but never "
+        "dispatched in programs/functions/orthogonal-gate.prose.md — the "
+        "dispatcher fails closed, so every fix for those rules would revert"
+    )
+
+
+def test_delegating_gates_have_a_prose_contract() -> None:
+    """A gate that delegates has a functions/<gate>-gate.prose.md to delegate to."""
+    from importlib.resources import files
+
+    # "tests" and "skip" are handled inline by the dispatcher; the rest delegate.
+    inline = {"tests", "skip"}
+    declared = {r.orthogonal_gate for r in load_catalog() if r.orthogonal_gate}
+    for gate in sorted(declared - inline):
+        contract = files("conformance").joinpath(
+            f"programs/functions/{gate}-gate.prose.md"
+        )
+        assert contract.is_file(), (
+            f"orthogonal_gate={gate!r} delegates, but "
+            f"programs/functions/{gate}-gate.prose.md does not exist"
+        )
+
+
+def test_i_series_uses_the_docker_build_gate() -> None:
+    """Every I-series rule is gated by an actual image build.
+
+    The dockerfile area was propose-only precisely because no gate validated a
+    Dockerfile change: ``"tests"`` is blind there (a Dockerfile edit cannot move
+    the Python suite) and ``"skip"``'s parse check has no Dockerfile parser. If any
+    I rule loses this gate, the area silently returns to accepting unverified
+    fixes under ``--apply-unverifiable``.
+    """
+    i_rules = [r for r in load_catalog() if r.id.startswith("I")]
+    assert i_rules, "no I-series rules found — the guard below would be vacuous"
+    wrong = {
+        r.id: r.orthogonal_gate for r in i_rules if r.orthogonal_gate != "docker-build"
+    }
+    assert not wrong, f"I-series rules not gated by docker-build: {wrong}"
+
+
+def test_docker_build_is_accepted_by_the_model() -> None:
+    """The Literal admits the gate name, and a typo fails at definition time."""
+    rule = RuleDefinition(
+        id="I999",
+        name="Probe",
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.STATIC,
+        scope=RuleScope.APP,
+        category="dockerfile-probe",
+        orthogonal_gate="docker-build",
+    )
+    assert rule.orthogonal_gate == "docker-build"
+    props = rule.to_reporting_descriptor().properties
+    assert props["atlan/orthogonalGate"] == "docker-build"
+
+    with pytest.raises(ValidationError):
+        RuleDefinition(
+            id="I998",
+            name="Typo",
+            tier=EnforcementTier.BLOCK,
+            mechanism=RuleMechanism.STATIC,
+            scope=RuleScope.APP,
+            category="dockerfile-probe",
+            orthogonal_gate="docker-buidl",
+        )

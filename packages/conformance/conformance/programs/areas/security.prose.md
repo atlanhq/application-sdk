@@ -45,6 +45,10 @@ correct disposition, again a human call.
 
 - `scope` — repository root path.
 - `mode` — `"default"` or `"strict"`.
+- `apply_unverifiable` — boolean, default `false`.  When `false`, behaviour is
+  byte-identical to before this parameter existed: propose, never apply.  When
+  `true`, the caller has accepted that no gate can prove the replacement resolves
+  the same credential, and accepts the three conditions below.
 
 ### Continuity
 
@@ -53,23 +57,51 @@ Input-driven: re-render when any `*.py` file under `scope` changes.
 ### Execution
 
 ```prose
-# Suggest-only: detect, draft a fix per finding, route to residue WITHOUT
-# applying.  No orthogonal gate can validate an S-series fix, so the human is
-# the gate — this area never mutates the working tree.
-let violations = call detect-violations
-  scope: scope
-  series: "S"
-  target: if mode == "strict" then "failing+warning" else "failing"
-
-for each finding in violations:
-  let proposal = call remediate-finding
-    finding: finding
+if apply_unverifiable:
+  # Caller-accepted unverifiable mode.  S-series carries the highest cost of a
+  # wrong fix in the whole suite: a credential that no longer resolves fails at
+  # run time, in a tenant, with an auth error — not in any gate here.  Three
+  # conditions, all mandatory:
+  #   1. classification = "unverifiable" on every result — never "mechanical";
+  #   2. the delivered change must be marked DRAFT with a named reviewer, so it
+  #      cannot merge on a green check alone;
+  #   3. the relocation target must be cited (the secret-store path or env-var
+  #      NAME it now reads).  Never inline a value; never guess a key name.
+  #      If the correct target cannot be established from the repo, abstain —
+  #      residue is the right answer, a guessed key name is not.
+  call detect-fix-recheck
+    scope: scope
+    series: "S"
     mode: mode
+    max_attempts: 5
+    classification_override: "unverifiable"
+    require_cited_evidence: true
+    deliver_as_draft: true
 
-  # The proposal is recorded, never applied.  classification is always
-  # "judgment" for S-series, so it lands in the human-review residue.
-  add { finding, proposal } to residue with note "S-series suggest-only: proposed fix drafted for human review; NOT applied (no orthogonal gate validates that the replacement resolves the same secret)"
+else:
+  # Suggest-only: detect, draft a fix per finding, route to residue WITHOUT
+  # applying.  No orthogonal gate can validate an S-series fix, so the human is
+  # the gate — this area never mutates the working tree.
+  let violations = call detect-violations
+    scope: scope
+    series: "S"
+    target: if mode == "strict" then "failing+warning" else "failing"
+
+  for each finding in violations:
+    let proposal = call remediate-finding
+      finding: finding
+      mode: mode
+
+    # The proposal is recorded, never applied.  classification is always
+    # "judgment" for S-series, so it lands in the human-review residue.
+    add { finding, proposal } to residue with note "S-series suggest-only: proposed fix drafted for human review; NOT applied (no orthogonal gate validates that the replacement resolves the same secret)"
 ```
+
+**Never move a secret value.** Whichever mode is active, a fix may only change
+*how* a credential is referenced — to an approved secret-store path or an
+environment-variable **name**.  The value itself is never read into the edit, never
+written to a comment, a test fixture, a commit message, or a PR body.  A finding
+whose only clearing fix would require handling the value is `not_remediable`.
 
 ### Fix Prescription
 

@@ -70,12 +70,15 @@ class RuleDefinition(BaseModel):
     short_description: str = ""
     full_description: str = ""
     help_uri: str | None = None
-    orthogonal_gate: Literal["tests", "pkl-eval", "skip"] | None = None
+    orthogonal_gate: Literal["tests", "pkl-eval", "skip", "docker-build"] | None = None
     """Named gate to run after a source-code fix.  ``None`` or ``"tests"`` runs
     the repository's standard test suite; ``"pkl-eval"`` runs the pkl-eval gate;
-    ``"skip"`` skips gating entirely — for fixes that cannot affect Python or
-    contract behaviour (e.g. a deterministic re-sync of a managed CI/scaffold
-    file) so running the test suite would only add cost with no signal.
+    ``"docker-build"`` builds the app's Dockerfile (the I-series gate — a
+    container-image edit cannot move the Python test suite, so ``"tests"`` there
+    would pass on any edit at all, and ``"skip"``'s parse check has no parser for
+    Dockerfile syntax); ``"skip"`` skips gating entirely — for fixes that cannot
+    affect Python or contract behaviour (e.g. a deterministic re-sync of a managed
+    CI/scaffold file) so running the test suite would only add cost with no signal.
     Named ``"skip"`` rather than a bare ``"none"`` string so it cannot be
     confused with this field's own ``None`` default, which means the opposite
     thing (run the standard test suite).

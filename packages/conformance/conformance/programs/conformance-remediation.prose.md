@@ -50,6 +50,32 @@ the reason each was routed here:
 - `not-remediable` — no prescription exists for this area yet.
 - `oscillation` — the loop detected a repeating violation-set and froze.
 - `max-attempts` — the cap was reached with violations remaining.
+- `unverifiable` — the fix was applied and both gates passed, but for this area
+  the gates are structurally blind (P- and S-series under
+  `apply_unverifiable`), so passing them proved nothing.  Always routed here;
+  the human review *is* the gate.  Distinct from `judgment`, which means the fix
+  was verified but non-trivial.
+- `no-cited-evidence` — a blind-gate area proposed a fix without citing a source
+  for the value it chose, so it was never applied.
+
+### Inputs
+
+- `scope` — repository root path.
+- `mode` — `"default"` (FAILING only) or `"strict"` (FAILING + WARNING).
+- `rule_ids` — optional list of exact rule IDs to restrict this run to, e.g.
+  `["L004"]`.  Forwarded to every area and through to `detect-violations` (the
+  runner has no `--rule` flag; scoping is a post-filter — see
+  `functions/detect-violations.prose.md`).  Omitted ⇒ every rule in the enabled
+  series.  This is what lets a caller remediate exactly one rule per run, which
+  is also the only way to express "blocking tier first": tier is a **per-rule**
+  property, so it cannot be selected through `series`.
+- `apply_unverifiable` — boolean, default `false`.  When `false`, the P-, I- and
+  S-series areas behave exactly as before: propose, never apply.  When `true`,
+  they apply through the full gated loop.  For the I-series that is now a
+  genuinely verified fix (the `docker-build` gate exists); for P and S the gates
+  remain blind, so those results are force-classified `"unverifiable"` and always
+  land in residue.  Opt-in precisely because the caller is accepting review
+  responsibility that a gate cannot discharge.
 
 ### Requires
 
@@ -82,36 +108,50 @@ parallel:
   call error-handling-area
     scope: scope
     mode: mode
+    rule_ids: rule_ids
   call logging-area
     scope: scope
     mode: mode
+    rule_ids: rule_ids
   call ci-area
     scope: scope
     mode: mode
+    rule_ids: rule_ids
   call prescriptions-area
     scope: scope
     mode: mode
+    rule_ids: rule_ids
+    apply_unverifiable: apply_unverifiable
   call optimizations-area
     scope: scope
     mode: mode
+    rule_ids: rule_ids
   call dependency-area
     scope: scope
     mode: mode
+    rule_ids: rule_ids
   call deprecation-area
     scope: scope
     mode: mode
+    rule_ids: rule_ids
   call dockerfile-area
     scope: scope
     mode: mode
+    rule_ids: rule_ids
+    apply_unverifiable: apply_unverifiable
   call tests-area
     scope: scope
     mode: mode
+    rule_ids: rule_ids
   call contract-toolkit-area
     scope: scope
     mode: mode
+    rule_ids: rule_ids
   call security-area
     scope: scope
     mode: mode
+    rule_ids: rule_ids
+    apply_unverifiable: apply_unverifiable
 
 # Collect residue from all areas and emit the unified report.
 emit violations-summary and residue

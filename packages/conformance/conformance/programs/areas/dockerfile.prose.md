@@ -25,16 +25,35 @@ This facet's fingerprint moves when any I-series finding is resolved (fixed or
 the Dockerfile is corrected by a human acting on a drafted proposal).  An
 unchanged fingerprint-set across loop iterations is the oscillation signal.
 
-Postcondition (suggest-only — the loop proposes but does not apply):
+Postcondition — depends on `apply_unverifiable`:
 
-> Every I-series finding routes to the residue report with a drafted edit
-> attached.  The working tree is left unchanged by this area; a human reviews
-> each proposal and applies it (or rejects it) manually.
+> **`apply_unverifiable = false` (default, unchanged behaviour):** every I-series
+> finding routes to the residue report with a drafted edit attached.  The working
+> tree is left unchanged by this area; a human reviews each proposal and applies
+> it (or rejects it) manually.
+>
+> **`apply_unverifiable = true`:** `suite.runner --series I` exits 0, because
+> fixes are applied through the full `detect-fix-recheck` loop — gated by
+> `recheck-narrowest` **and** the `docker-build` orthogonal gate.
 
-**Why suggest-only:** Dockerfile edits carry structural side-effects that
+**Why this used to be suggest-only, and what changed.** The original reason was
+specific and correct: *"Dockerfile edits carry structural side-effects that
 behavioural tests cannot fully cover (layer ordering, entrypoint interactions,
 build-time vs. run-time env separation).  The safe form is propose-don't-apply
-until a Dockerfile linting gate is wired in.
+until a Dockerfile linting gate is wired in."*
+
+That gate now exists.  Every I-series rule carries
+`orthogonal_gate = "docker-build"` (`functions/docker-build-gate.prose.md`), which
+performs a real `docker build` of the touched Dockerfile — and the three failure
+modes named above are all build-time-visible, which is why building is sufficient
+here specifically.  So under `apply_unverifiable = true` this area is **not**
+applying an unverified fix; it is applying a fix verified by a gate purpose-built
+for it, and the "unverifiable" label no longer applies to the I-series.
+
+The gate refuses to pass when docker is unavailable (`docker info` fails ⇒
+`passed = false`, reason `cannot-verify`), so an environment without a daemon
+degrades to exactly the old propose-don't-apply outcome rather than to a false
+green.
 
 ### Requires
 
@@ -42,6 +61,10 @@ until a Dockerfile linting gate is wired in.
   expansion time).
 - `mode` — `"default"` or `"strict"` (propagated from the top-level entry).
   Strict mode has no additional effect here (all I-series rules are BLOCK-tier).
+- `apply_unverifiable` — boolean, default `false` (propagated from the top-level
+  entry).  When `false`, behaviour is byte-identical to before this parameter
+  existed.  When `true`, run the full `detect-fix-recheck` loop instead of the
+  propose-only pass.
 
 ### Continuity
 
@@ -51,19 +74,29 @@ In the Claude Code skill path the skill caller re-invokes on demand.
 ### Execution
 
 ```prose
-# Suggest-only: detect, draft a fix per finding, route to residue WITHOUT
-# applying.  All I-series rules are BLOCK-tier; no suppress path exists.
-let violations = call detect-violations
-  scope: scope
-  series: "I"
-  target: "failing"
-
-for each finding in violations:
-  let proposal = call remediate-finding
-    finding: finding
+if apply_unverifiable:
+  # The docker-build gate exists, so I-series fixes are verifiable and go
+  # through the same bounded, doubly-gated loop as every other applying area.
+  call detect-fix-recheck
+    scope: scope
+    series: "I"
     mode: mode
+    max_attempts: 5
 
-  add { finding, proposal } to residue with note "I-series suggest-only: proposed Dockerfile edit drafted for human review; NOT applied (no Dockerfile gate validates structural changes)"
+else:
+  # Suggest-only: detect, draft a fix per finding, route to residue WITHOUT
+  # applying.  All I-series rules are BLOCK-tier; no suppress path exists.
+  let violations = call detect-violations
+    scope: scope
+    series: "I"
+    target: "failing"
+
+  for each finding in violations:
+    let proposal = call remediate-finding
+      finding: finding
+      mode: mode
+
+    add { finding, proposal } to residue with note "I-series suggest-only: proposed Dockerfile edit drafted for human review; NOT applied (no Dockerfile gate validates structural changes)"
 ```
 
 ### Fix Prescription
