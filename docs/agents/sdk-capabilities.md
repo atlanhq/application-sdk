@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.28.0
-source-sha:    679db4aa4717bf030b8b495168ba40efe051d92e
-source-date:   2026-08-18T20:58:23+01:00
+source-sha:    d5548eae3d88e678a476d4e0894cc4d1e7442006
+source-date:   2026-08-18T22:22:15+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -24,7 +24,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 34 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 45 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 61 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 63 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 45 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
@@ -1335,6 +1335,20 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Import:** `from application_sdk.errors import NotFoundError`
 - **Signature:** `class NotFoundError(*, ...)`
 - **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `ObjectStoreDownloadError`
+
+- **Import:** `from application_sdk.errors import ObjectStoreDownloadError`
+- **Signature:** `class ObjectStoreDownloadError(*, ...)`
+- **Summary:** No local files found and download from object store failed.
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `ObjectStoreReadError`
+
+- **Import:** `from application_sdk.errors import ObjectStoreReadError`
+- **Signature:** `class ObjectStoreReadError(*, ...)`
+- **Summary:** Object store listing returned no files matching the expected extension.
 - **Defined in:** `application_sdk/errors/leaves.py`
 
 #### `PreconditionError`
