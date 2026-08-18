@@ -3218,6 +3218,18 @@ class TestDiagnoseGating:
             "ENABLE_OBSERVABILITY_STORE_SINK": "false",
         }
         env.pop("ATLAN_LOG_DIAGNOSE", None)
+        # Pin the log level, or an ambient one decides whether the probe logs at all:
+        # the stderr sink sits at ``max(LOG_LEVEL, ERROR)``, so a shell or image
+        # carrying ``LOG_LEVEL=CRITICAL`` filters out the probe's ``logger.error`` and
+        # every assertion below fails for a reason unrelated to diagnose.
+        #
+        # Both names are popped before the default is applied, because a bare
+        # ``setdefault`` would not dislodge an ambient ``ATLAN_LOG_LEVEL=CRITICAL`` —
+        # the key is already present, so the default never lands. ``env_overrides`` is
+        # applied afterwards, so the log-level test still controls its own override.
+        env.pop("LOG_LEVEL", None)  # the fallback that ATLAN_LOG_LEVEL supersedes
+        env.pop("ATLAN_LOG_LEVEL", None)
+        env["ATLAN_LOG_LEVEL"] = "ERROR"
         env.update(env_overrides)
         result = subprocess.run(
             [sys.executable, str(probe)],
