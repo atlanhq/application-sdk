@@ -18,20 +18,21 @@ file path (same pattern used for .github/scripts/*.py in
 """
 
 import inspect
+import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict
 
-sys.path.insert(
-    0,
-    str(
-        Path(__file__).resolve().parents[3]
-        / ".claude"
-        / "skills"
-        / "capability-manifest"
-        / "references"
-    ),
+_EXTRACTOR_DIR = (
+    Path(__file__).resolve().parents[3]
+    / ".claude"
+    / "skills"
+    / "capability-manifest"
+    / "references"
 )
+
+sys.path.insert(0, str(_EXTRACTOR_DIR))
 
 import extractor  # noqa: E402
 
@@ -540,3 +541,46 @@ def test_navigate_module_returns_none_for_a_missing_module() -> None:
         extractor._navigate_module(tree, "application_sdk.execution.heartbeat") is None
     )
     assert extractor._navigate_module(tree, "application_sdk.server.mcp") is None
+
+
+# ---------------------------------------------------------------------------
+# Source encoding
+# ---------------------------------------------------------------------------
+
+
+def test_extract_all_from_init_reads_utf8_regardless_of_ambient_encoding(
+    tmp_path: Path,
+) -> None:
+    """SDK source is UTF-8; reading it through the *ambient* encoding fails wherever
+    that isn't UTF-8. On Windows it is cp1252, and one em dash in a docstring was
+    enough: `UnicodeDecodeError: 'charmap' codec can't decode byte 0x90`.
+
+    Run in a subprocess under an ASCII locale, since the ambient encoding is read by
+    CPython's C-level io machinery and cannot be monkeypatched from inside the test.
+    That reproduces the Windows failure on Linux and macOS too, so this pins the fix
+    on every platform rather than only on the one that happened to expose it.
+    """
+    module = tmp_path / "sample_module.py"
+    module.write_text(
+        '"""A docstring — with an em dash."""\n__all__ = ["thing"]\nthing = 1\n',
+        encoding="utf-8",
+    )
+    probe = (
+        "import sys;"
+        f"sys.path.insert(0, {str(_EXTRACTOR_DIR)!r});"
+        "import extractor;"
+        f"print(extractor.extract_all_from_init(__import__('pathlib').Path({str(module)!r})))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "LC_ALL": "C",
+            "PYTHONUTF8": "0",
+            "PYTHONCOERCECLOCALE": "0",
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "['thing']"

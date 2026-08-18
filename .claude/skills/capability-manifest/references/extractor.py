@@ -85,7 +85,7 @@ def get_source_date(sha: str) -> str:
 def get_sdk_version() -> str:
     """Read __version__ from application_sdk/version.py (no import needed)."""
     version_file = PKG_ROOT / "version.py"
-    for line in version_file.read_text().splitlines():
+    for line in version_file.read_text(encoding="utf-8").splitlines():
         if line.startswith("__version__"):
             return line.split("=")[1].strip().strip('"').strip("'")
     return "unknown"
@@ -117,7 +117,12 @@ def extract_all_from_init(pkg_path: Path) -> list[str]:
 
     if not source_file.exists():
         return []
-    tree = ast.parse(source_file.read_text())
+    # Explicit UTF-8: without it Windows reads source through cp1252 and any
+    # non-Latin-1 character in the file — an em dash in a docstring is enough —
+    # raises UnicodeDecodeError. Latent while only a handful of __init__ files
+    # were parsed on Linux; every public module is parsed now, on every platform
+    # the unit suite runs (FND-439).
+    tree = ast.parse(source_file.read_text(encoding="utf-8"))
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
             for target in node.targets:
@@ -820,7 +825,7 @@ def cmd_dump() -> None:
 def cmd_normalize(raw_json_path: str) -> None:
     """Filter/sort the raw dump, print normalized JSON to stdout."""
     eprint(f"Normalizing {raw_json_path}...")
-    with open(raw_json_path) as f:
+    with open(raw_json_path, encoding="utf-8") as f:
         raw = json.load(f)
 
     # Meta passes through unchanged
@@ -862,7 +867,7 @@ def cmd_normalize(raw_json_path: str) -> None:
 def _load_purposes(yaml_path: str) -> dict[str, str]:
     """Load subpackage purposes from YAML (simple hand-rolled parser — avoids PyYAML dep)."""
     purposes: dict[str, str] = {}
-    with open(yaml_path) as f:
+    with open(yaml_path, encoding="utf-8") as f:
         for line in f:
             line = line.rstrip()
             if not line or line.startswith("#"):
@@ -878,7 +883,7 @@ def _load_purposes(yaml_path: str) -> dict[str, str]:
 def cmd_render(normalized_json_path: str, purposes_yaml_path: str) -> None:
     """Render the markdown manifest from normalized JSON + purposes YAML, print to stdout."""
     eprint(f"Rendering from {normalized_json_path}...")
-    with open(normalized_json_path) as f:
+    with open(normalized_json_path, encoding="utf-8") as f:
         data = json.load(f)
 
     purposes = _load_purposes(purposes_yaml_path)
