@@ -490,6 +490,34 @@ def prepare_query(
         return None
 
 
+#: Characters that make a filter key a *pattern* rather than a name. A key
+#: containing any of these outside its anchors cannot be used as a literal
+#: database name, so discovery has to go to SQL instead.
+_REGEX_META_CHARS = frozenset(r"\.^$*+?{}[]()|")
+
+
+def _names_a_single_database_each(filter_keys: list[str]) -> bool:
+    """Whether every include-filter key names one database outright.
+
+    The include-filter's keys are regular expressions. Two shapes are common:
+
+    * anchored literals, which is what the Atlan UI emits -- ``^mydb$``. Its
+      only match is ``mydb``, so using ``mydb`` as a database name directly is
+      exactly equivalent to matching it, and much cheaper than a round trip.
+    * genuine patterns -- ``^bench.*$``, ``^(a|b)$``. These match a *set* of
+      databases whose members are only knowable by asking the source.
+
+    Only the first shape may skip SQL discovery. Returns False for the second,
+    and for an empty key, so the caller falls through to the query.
+    """
+    for key in filter_keys:
+        core = key[1:] if key.startswith("^") else key
+        core = core[:-1] if core.endswith("$") else core
+        if not core or any(char in _REGEX_META_CHARS for char in core):
+            return False
+    return True
+
+
 async def get_database_names(
     sql_client, workflow_args, fetch_database_sql
 ) -> list[str] | None:
@@ -514,12 +542,19 @@ async def get_database_names(
         raw_include = normalize_legacy_filter_value(raw_include)
     if isinstance(raw_include, (str, dict)):
         validate_filter_no_sql_injection(raw_include)
-    database_names = parse_filter_input(raw_include)
+    filter_keys = list(parse_filter_input(raw_include))
 
     database_names = [
-        re.sub(r"^[^\w]+|[^\w]+$", "", database_name)
-        for database_name in database_names
+        re.sub(r"^[^\w]+|[^\w]+$", "", database_name) for database_name in filter_keys
     ]
+    # A key that is a real pattern must not be used as a name. Stripping its
+    # non-word characters yields something that is neither the pattern nor a
+    # database: ``^bench.*$`` becomes ``bench``, which either matches nothing or
+    # -- worse -- silently names a *different*, real database. Discovery is then
+    # skipped entirely, because the list is non-empty, so the caller crawls that
+    # one made-up name and loses every database the pattern was meant to select.
+    if not _names_a_single_database_each(filter_keys):
+        database_names = []
     if not database_names:
         temp_table_regex_sql = workflow_args.get("metadata", {}).get(
             "temp-table-regex", ""
