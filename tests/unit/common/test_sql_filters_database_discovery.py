@@ -106,10 +106,15 @@ class TestPatternKeysFallThroughToDiscovery:
         contains no metacharacters, so it looks literal — but it means "starts
         with benchmark_", and treating it as the name ``benchmark_`` reproduces
         the exact phantom database the fix exists to prevent.
+
+        Asserts only that the source was consulted and that the phantom name is
+        never invented. What each key then *selects* differs by key — ``^x``
+        starts-with vs ``x$`` ends-with vs ``x`` contains — and that belongs in
+        ``TestDiscoveredNamesAreFilteredInPython``, which gives each shape
+        fixture data appropriate to its semantics.
         """
         client = _sql_client("benchmark_1", "benchmark_2")
         names = await get_database_names(client, _args({key: ["*"]}), _FETCH_SQL)
-        assert names == ["benchmark_1", "benchmark_2"]
         assert "benchmark_" not in names
         client.get_results.assert_awaited_once()
 
@@ -126,6 +131,68 @@ class TestPatternKeysFallThroughToDiscovery:
         )
         assert names == ["alpha", "benchmark_1"]
         client.get_results.assert_awaited_once()
+
+
+class TestDiscoveredNamesAreFilteredInPython:
+    """The half that SQL cannot do.
+
+    ``extract_database_names_from_regex_common`` validates filter keys against an
+    identifier pattern and drops anything else, degrading the predicate to
+    ``'.*'``. So the discovery query returns *everything* and the pattern has to
+    be applied to its results here.
+
+    Every test in this class supplies at least one database the filter must
+    **reject**. Without that, a filter that is silently ignored still looks
+    correct — which is exactly how this defect survived its first fix attempt
+    and would have false-passed atlan-trino-app#118.
+    """
+
+    async def test_regex_key_excludes_non_matching_databases(self) -> None:
+        client = _sql_client("benchmark_1", "benchmark_2", "production", "staging")
+        names = await get_database_names(
+            client, _args({"^benchmark_.*$": ["^tiny$"]}), _FETCH_SQL
+        )
+        assert names == ["benchmark_1", "benchmark_2"]
+        assert "production" not in names and "staging" not in names
+
+    async def test_starts_with_key_keeps_prefix_semantics(self) -> None:
+        """``^bench`` means starts-with, so it must keep ``bench_1``, not demand equality."""
+        client = _sql_client("bench_1", "bench_2", "notbench", "production")
+        names = await get_database_names(client, _args({"^bench": ["*"]}), _FETCH_SQL)
+        assert names == ["bench_1", "bench_2"]
+
+    async def test_unanchored_key_keeps_contains_semantics(self) -> None:
+        client = _sql_client("my_bench_db", "bench", "production")
+        names = await get_database_names(client, _args({"bench": ["*"]}), _FETCH_SQL)
+        assert names == ["my_bench_db", "bench"]
+
+    async def test_alternation_key_selects_both_and_rejects_others(self) -> None:
+        client = _sql_client("alpha", "beta", "gamma")
+        names = await get_database_names(
+            client, _args({"^(alpha|beta)$": ["*"]}), _FETCH_SQL
+        )
+        assert names == ["alpha", "beta"]
+
+    async def test_several_pattern_keys_union(self) -> None:
+        client = _sql_client("alpha_1", "beta_1", "gamma_1")
+        names = await get_database_names(
+            client, _args({"^alpha.*$": ["*"], "^beta.*$": ["*"]}), _FETCH_SQL
+        )
+        assert names == ["alpha_1", "beta_1"]
+
+    async def test_pattern_matching_nothing_returns_empty_not_everything(self) -> None:
+        """A filter that matches no database must yield none — not fall open."""
+        client = _sql_client("production", "staging")
+        names = await get_database_names(
+            client, _args({"^benchmark_.*$": ["*"]}), _FETCH_SQL
+        )
+        assert names == []
+
+    async def test_unparseable_key_degrades_to_literal_comparison(self) -> None:
+        """An invalid regex compares literally rather than dropping the database."""
+        client = _sql_client("db[1", "other")
+        names = await get_database_names(client, _args({"^db[1$": ["*"]}), _FETCH_SQL)
+        assert names == ["db[1"]
 
 
 class TestNoFilterFallsThroughToDiscovery:
