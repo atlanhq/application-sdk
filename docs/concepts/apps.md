@@ -712,6 +712,51 @@ policy = RetryPolicy().with_max_attempts(5).with_non_retryable(ValueError)
 
 ---
 
+## Worker Supervision: Restart + Poll-Liveness Watchdog
+
+In worker and combined mode the SDK runs the Temporal worker under a
+self-healing restart supervisor. A transient Temporal frontend auth rejection —
+e.g. a JWKS signing-key cache skew that briefly rejects an otherwise-valid token
+— makes temporalio treat the poll as fatal and raise out of the worker, which
+would otherwise take the whole runtime down until a manual restart. The
+supervisor rebuilds the worker (a `Worker` is single-use) and refreshes the auth
+token before each restart, with a full-jitter exponential backoff raced against
+shutdown so SIGTERM stays responsive.
+
+**Classified recovery.** Recovery is classified by the failure:
+
+- *Recoverable* — the transient auth-rejection signature (the gRPC
+  `PermissionDenied` status name, or an explicit JWKS mention), and the
+  watchdog's own stall signal. These are fixed by a restart, so the supervisor
+  recovers **indefinitely** (never exits). Past
+  `ATLAN_WORKER_MAX_CONSECUTIVE_RESTARTS` consecutive failures it escalates log
+  severity to ERROR so a genuinely stuck worker is loud in monitoring while it
+  keeps recovering.
+- *Non-recoverable* — anything else (bad credentials, a misconfigured task
+  queue). A restart cannot fix these, so past
+  `ATLAN_WORKER_MAX_CONSECUTIVE_RESTARTS` the supervisor **re-raises and exits**
+  rather than presenting as a ready, alive pod that never polls.
+
+A worker that runs healthily for `ATLAN_WORKER_HEALTHY_RUN_SECONDS` before
+failing is treated as a fresh incident and resets the consecutive-failure
+streak.
+
+**Poll-liveness watchdog.** A rebuilt worker can enter its run block yet never
+start polling — a silent "zombie" the supervisor cannot see, because `run()`
+neither returns nor raises. When a task queue and client are available (the
+production path), a watchdog periodically asks the Temporal frontend whether
+this worker's identity is an active poller on its own task queue — the one
+signal that separates a legitimately-idle worker (still long-polling) from a
+dead poll loop. After a grace window for pollers to register, a *sustained*
+window of definitive poller-absence raises a recoverable fatal so the supervisor
+rebuilds. A frontend that cannot be queried (the same transient skew) is treated
+as *unknown*, never a stall, so the auth-skew window itself cannot trip the
+watchdog. See `ATLAN_WORKER_POLL_LIVENESS_*` in `docs/configuration.md`. The
+recovery state (`reconnecting`, `consecutive_failures`, `last_poll_ok`) is
+surfaced in the health probes — see `docs/concepts/server.md`.
+
+---
+
 ## Catching Client-Side Workflow Failures
 
 Code that calls `TemporalClient.execute_workflow(...)` or waits on a workflow handle

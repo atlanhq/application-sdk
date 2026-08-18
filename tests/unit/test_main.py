@@ -2546,6 +2546,45 @@ class TestRunWorkerWithRestart:
 
         assert calls["n"] == 3
 
+    async def test_backoff_exponent_clamped_at_boundary(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The backoff exponent is clamped (``2 ** min(n-1, 16)``) so an
+        indefinite recoverable loop can't overflow the jitter bound.
+
+        Drives the streak past the 16-step boundary with a recoverable failure
+        and asserts the ``random.uniform`` upper bound stays ``2**16`` (well
+        under the configured cap) at and beyond the boundary.
+        """
+        # A high cap so the exponent, not the cap, is the binding constraint.
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_RESTART_BACKOFF_CAP_SECONDS", 10**9
+        )
+        shutdown = asyncio.Event()
+        calls = {"n": 0}
+        bounds: list[float] = []
+
+        def fake_uniform(low: float, high: float) -> float:
+            bounds.append(high)
+            return 0.0  # no real sleep — recover immediately
+
+        monkeypatch.setattr("application_sdk.main.random.uniform", fake_uniform)
+
+        def build() -> _FakeWorker:
+            calls["n"] += 1
+            # 18 recoverable failures drives the exponent to 2**17 unclamped;
+            # the clamp must pin it at 2**16. Stop on the 19th build.
+            if calls["n"] >= 19:
+                return _FakeWorker(fail=False, on_enter=shutdown.set)
+            return _FakeWorker(fail=True, message="Poll failed: PermissionDenied")
+
+        await _run_worker_with_restart(build_worker=build, shutdown_event=shutdown)
+
+        assert calls["n"] == 19
+        # Every observed upper bound is the clamped value, never past 2**16.
+        assert bounds, "expected at least one backoff to be observed"
+        assert max(bounds) == float(2**16)
+
     async def test_recovers_wrapped_permission_denied_past_cap(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -2908,3 +2947,39 @@ class TestSupervisorWatchdogWiring:
         await _run_worker_with_restart(build_worker=build, shutdown_event=shutdown)
 
         assert calls["n"] == 1
+
+
+class TestIsTaskQueuePollerActive:
+    """Direct tests for the adapter probe ``is_task_queue_poller_active``."""
+
+    async def test_none_identity_is_unknown_never_matched(self) -> None:
+        """A ``None`` identity must yield unknown (``None``), not a wildcard match.
+
+        Matching any poller regardless of identity would mask a dead worker
+        behind a healthy sibling polling the same task queue.
+        """
+        from application_sdk.execution._temporal.worker import (
+            is_task_queue_poller_active,
+        )
+
+        client = _FakeClient(identity="1@host", identities=["other@host"])
+        result = await is_task_queue_poller_active(client, "q", None, "default")
+        assert result is None
+
+    async def test_matching_identity_is_true(self) -> None:
+        from application_sdk.execution._temporal.worker import (
+            is_task_queue_poller_active,
+        )
+
+        client = _FakeClient(identity="1@host", identities=["1@host"])
+        result = await is_task_queue_poller_active(client, "q", "1@host", "default")
+        assert result is True
+
+    async def test_absent_identity_is_false(self) -> None:
+        from application_sdk.execution._temporal.worker import (
+            is_task_queue_poller_active,
+        )
+
+        client = _FakeClient(identity="1@host", identities=["other@host"])
+        result = await is_task_queue_poller_active(client, "q", "1@host", "default")
+        assert result is False

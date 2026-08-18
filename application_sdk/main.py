@@ -1001,14 +1001,27 @@ class WorkerPollStalledError(RuntimeError):
 # rebuild-and-token-refresh fixes. A *permanent* failure (bad credentials, a
 # misconfigured task queue) is not in this class: it keeps the bounded give-up
 # so it still fails loud rather than presenting as a ready, alive pod that never
-# polls. Classification is by the fatal error's message — temporalio surfaces a
-# poll ``PermissionDenied`` as a plain ``RuntimeError`` out of the ``async with``
-# block, so there is no stable exception type to match on.
+# polls.
+#
+# The temporalio worker's poll loop is driven by the Rust bridge, which surfaces
+# a poll auth rejection as a plain error whose message names the gRPC status —
+# e.g. ``Poll failure: Unhandled grpc error when polling: PermissionDenied:
+# Request unauthorized.`` — with no typed ``.status`` reachable at this seam
+# (the typed ``temporalio.service.RPCError`` only wraps service-client calls,
+# not the worker's poll). So the durable signal available here is the specific
+# ``PermissionDenied`` gRPC *status name* in the message. We deliberately do NOT
+# match the generic ``unauthorized``/``unauthenticated`` detail strings: a
+# steady bad-credential 401/403 carries those words too, and treating them as
+# recoverable would retry a permanent misconfiguration forever — the exact
+# ready-but-dead outage this feature exists to kill.
 _RECOVERABLE_POLL_ERROR_MARKERS = (
+    # The gRPC PERMISSION_DENIED status name — the transient auth-rejection
+    # signature the Temporal frontend emits when its JWKS cache briefly rejects
+    # an otherwise-valid token. Specific enough that a permanent bad-credential
+    # failure (whose message is the generic "unauthorized", not the status name)
+    # does NOT match.
     "permissiondenied",
-    "permission denied",
-    "unauthorized",
-    "unauthenticated",
+    # An explicit JWKS mention — the key-cache skew this feature targets.
     "jwks",
 )
 
@@ -1017,12 +1030,11 @@ def _is_recoverable_poll_failure(exc: BaseException) -> bool:
     """True when ``exc`` is the transient auth-rejection class a restart fixes.
 
     temporalio wraps the real poll fatal — ``raise RuntimeError("Workflow
-    worker failed") from <rust_error>`` — so the ``PermissionDenied`` /
-    ``Request unauthorized.`` markers live in ``__cause__``/``__context__``, not
-    in ``str(exc)``. Walk the whole chain (cycle-protected) and match each
-    nested message. The watchdog's own ``WorkerPollStalledError`` is always
-    recoverable — that is precisely the zombie-poll case the rebuild exists to
-    heal.
+    worker failed") from <rust_error>`` — so the ``PermissionDenied`` marker
+    lives in ``__cause__``/``__context__``, not in ``str(exc)``. Walk the whole
+    chain (cycle-protected) and match each nested message. The watchdog's own
+    ``WorkerPollStalledError`` is always recoverable — that is precisely the
+    zombie-poll case the rebuild exists to heal.
     """
     if isinstance(exc, WorkerPollStalledError):
         return True

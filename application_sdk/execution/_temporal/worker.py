@@ -723,7 +723,14 @@ async def is_task_queue_poller_active(
     absent, and ``None`` if the frontend could not be queried (transient — e.g.
     the same auth-skew window that triggers the incident). ``None`` must never
     be treated as a stall.
+
+    A ``None`` ``identity`` means we cannot attribute any poller to *this*
+    worker, so it returns ``None`` (unknown) — never ``True``: matching any
+    poller regardless of identity would mask a dead worker behind a healthy
+    sibling polling the same task queue.
     """
+    if identity is None:
+        return None
     try:
         from temporalio.api.enums.v1 import (  # noqa: PLC0415 — cold path: watchdog only
             TaskQueueType,
@@ -754,6 +761,8 @@ async def is_task_queue_poller_active(
             # this whole feature exists to survive) — unknown, not a stall.
             return None
         for poller in getattr(resp, "pollers", None) or []:
-            if identity is None or getattr(poller, "identity", None) == identity:
+            poller_identity = getattr(poller, "identity", None)
+            # Match only on a concrete identity equality — never a None poller.
+            if poller_identity is not None and poller_identity == identity:
                 return True
     return False
