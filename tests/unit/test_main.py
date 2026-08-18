@@ -2630,19 +2630,28 @@ class TestObserveWorkerPollState:
         ``poll loop failed fatally`` line this instrumentation exists to surface,
         so the zero branch is transition-gated like the unknown branch.
         """
-        reader = AsyncMock(return_value={"workflow_task": 0.0, "activity_task": 0.0})
+        health = _RecordingHealthServer()
+        shutdown = asyncio.Event()
+        zero = {"workflow_task": 0.0, "activity_task": 0.0}
+
+        # Event-driven, not wall-clock: the mocked reader itself sets shutdown
+        # once it has been awaited twice, so the sustained park spans multiple
+        # ticks by construction and the test cannot race a slow CI runner.
+        calls = 0
+
+        async def _read_then_stop():
+            nonlocal calls
+            calls += 1
+            if calls >= 2:
+                shutdown.set()
+            return zero
+
+        reader = AsyncMock(side_effect=_read_then_stop)
         monkeypatch.setattr(
             "application_sdk.execution._temporal.worker.read_core_poller_counts",
             reader,
         )
-        health = _RecordingHealthServer()
-        shutdown = asyncio.Event()
 
-        async def stop_soon() -> None:
-            await asyncio.sleep(0.09)  # several 0.01s ticks, one continuous park
-            shutdown.set()
-
-        stopper = asyncio.create_task(stop_soon())
         with patch("application_sdk.main.logger") as mock_logger:
             await asyncio.wait_for(
                 _observe_worker_poll_state(
@@ -2650,11 +2659,10 @@ class TestObserveWorkerPollState:
                 ),
                 timeout=2.0,
             )
-        await stopper
 
-        # Prove multiple ticks actually ran during the sustained park — otherwise
-        # a single tick before shutdown would also satisfy the count assertion and
-        # leave the transition-gating unproven.
+        # Multiple ticks ran during the sustained park (the reader drove shutdown
+        # only after its second call), so a single tick could not have produced
+        # the count below — the transition-gating is genuinely exercised.
         assert reader.await_count >= 2
         zero_warnings = [
             call

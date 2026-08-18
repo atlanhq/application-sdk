@@ -126,7 +126,9 @@ async def read_core_poller_counts() -> dict[str, float] | None:
             # Stream so the read is genuinely bounded: reject on a declared
             # oversize Content-Length, else accumulate chunks and bail the
             # moment the running total crosses the cap — so even a chunked or
-            # under-reported response never allocates more than the cap. An
+            # under-reported response never allocates more than the cap in
+            # aggregate. Passing chunk_size=cap also bounds each single
+            # allocation, so one oversize chunk cannot be read in full. An
             # unbounded response.text would let a high-cardinality or
             # misbehaving local exporter allocate an unbounded string each
             # interval. Oversize is unknown (None), never zero.
@@ -152,7 +154,9 @@ async def read_core_poller_counts() -> dict[str, float] | None:
                 chunks: list[bytes] = []
                 received = 0
                 oversize = False
-                async for chunk in response.aiter_bytes():
+                async for chunk in response.aiter_bytes(
+                    chunk_size=TEMPORAL_CORE_METRICS_MAX_BYTES
+                ):
                     received += len(chunk)
                     if received > TEMPORAL_CORE_METRICS_MAX_BYTES:
                         oversize = True
@@ -838,7 +842,20 @@ def create_worker(
 
     async def _fatal_error_hook(exc: BaseException) -> None:
         # Always log — the diagnostic must not depend on a caller opting in.
-        await _log_worker_fatal_error(exc)
+        # Guard even this mandatory path: if rendering the cause chain itself
+        # raises (e.g. an exception whose ``__str__`` blows up), fall back to a
+        # minimal line that does not render ``exc`` — otherwise the hook
+        # propagates and temporalio's own "Fatal error handler failed" wrapper
+        # silently swaps in, losing the rich cause-chain log this hook exists
+        # to produce.
+        try:
+            await _log_worker_fatal_error(exc)
+        except BaseException:
+            logger.error(
+                "Temporal worker poll loop failed fatally (cause chain "
+                "unavailable: rendering the exception raised %s)",
+                type(exc).__name__,
+            )
         if on_fatal_error is None:
             return
         try:
