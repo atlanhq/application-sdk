@@ -2,6 +2,21 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.21.0] - 2026-08-18
+
+### Features
+
+- make application_sdk.errors the enforced public error contract (CONNECT-970) (#3266) ([0e8508e](https://github.com/atlanhq/application-sdk/commit/0e8508e))
+- add P044 for app-level prefix transfers (FND-433) (#3263) ([bf1287e](https://github.com/atlanhq/application-sdk/commit/bf1287e))
+
+### Bug fixes
+
+- resolve D003 import names from the target repo's env (FND-433) (#3260) ([a290191](https://github.com/atlanhq/application-sdk/commit/a290191))
+
+### Other changes
+
+- chore(contract-toolkit): release v0.22.0 (#3261) ([9a5bf21](https://github.com/atlanhq/application-sdk/commit/9a5bf21))
+
 ## [0.20.1] - 2026-08-17
 
 ### Bug fixes
