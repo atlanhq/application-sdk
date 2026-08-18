@@ -38,6 +38,7 @@ from temporalio.exceptions import TimeoutType
 
 with workflow.unsafe.imports_passed_through():
     from application_sdk.credentials.errors import CredentialNotFoundError
+    from application_sdk.credentials.ingress import normalize_agent_json
     from application_sdk.credentials.ref import CredentialRef, CredentialResolvable
     from application_sdk.credentials.resolver import CredentialResolver
     from application_sdk.credentials.spec import AgentCredentialSpec
@@ -276,7 +277,13 @@ class PreflightGateInput(BaseModel):
         base_kw: dict[str, Any] = dict(
             extraction_method=getattr(input_data, "extraction_method", "") or "",
             credential_guid=getattr(input_data, "credential_guid", "") or "",
-            agent_json=getattr(input_data, "agent_json", None),
+            # Normalised, not passed through: a custom input may still carry the
+            # raw wire value (a JSON string, or the marketplace-package
+            # placeholder that fails typed validation). Before this, such a value
+            # failed the construction below and cost the gate its
+            # extraction_method and credential_guid too — degrading credential
+            # resolution silently instead of just having no agent reference.
+            agent_json=normalize_agent_json(getattr(input_data, "agent_json", None)),
             credential_ref=getattr(input_data, "credential_ref", None),
             entrypoint=entrypoint,
             credential_ref_fields=credential_ref_fields,
@@ -284,13 +291,29 @@ class PreflightGateInput(BaseModel):
         )
         try:
             return cls(**base_kw)
-        except ValidationError:
+        except ValidationError as exc:
+            # Drop only the fields that actually failed, so one oddly-shaped
+            # field cannot cost the gate its routing triple (extraction_method /
+            # credential_guid / entrypoint) — without those the gate resolves the
+            # wrong credential, or none, and reports a fail-open verdict nobody
+            # can trace back to this line.
+            rejected = {str(error["loc"][0]) for error in exc.errors() if error["loc"]}
             logger.warning(
-                "Extraction input did not fit PreflightGateInput; using a minimal "
-                "gate input so the gate still runs",
+                "Extraction input did not fit PreflightGateInput; dropping the "
+                "rejected field(s) %s and keeping the rest",
+                sorted(rejected),
                 exc_info=True,
             )
-            return cls(entrypoint=entrypoint)
+            kept = {k: v for k, v in base_kw.items() if k not in rejected}
+            try:
+                return cls(**kept)
+            except ValidationError:
+                logger.warning(
+                    "Extraction input still did not fit PreflightGateInput; using "
+                    "a minimal gate input so the gate still runs",
+                    exc_info=True,
+                )
+                return cls(entrypoint=entrypoint)
 
 
 def preflight_gate_activity_name(app_name: str) -> str:

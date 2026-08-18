@@ -18,6 +18,10 @@ from application_sdk.common.sql_filters import (
 )
 from application_sdk.contracts.base import Input, Output, PublishInputMixin
 from application_sdk.contracts.types import ConnectionRef, FileReference, MaxItems
+from application_sdk.credentials.ingress import (
+    declared_agent_spec_type,
+    normalize_agent_json,
+)
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.credentials.spec import AgentCredentialSpec
 from application_sdk.errors.wire import FailureDetails
@@ -145,6 +149,35 @@ class ExtractionInput(Input):
     the spec's model validator normalises all three forms.
     """
 
+    # Declared *before* ``_normalize_ae_payload`` so it runs *after* it:
+    # pydantic applies ``mode="before"`` model validators in reverse definition
+    # order, and this one must see the ``agent_json`` that validator lifts out
+    # of a nested AE ``metadata`` block.
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_agent_json(cls, data: Any) -> Any:
+        """Canonicalise ``agent_json`` to the declared spec type, or ``None``.
+
+        AE replays whatever the connection record carries, which for eleven
+        marketplace packages is a placeholder blob that coerces to a dict but
+        fails typed validation. One ingress normaliser decides that for every
+        reader (see :mod:`application_sdk.credentials.ingress`); this contract
+        just applies it, so a placeholder lands as ``None`` instead of failing
+        the whole extraction input.
+
+        Validated against the *declared* field type, so a connector that
+        narrows ``agent_json`` to its own :class:`AgentCredentialSpec` subclass
+        gets that subclass — and its stricter validation.
+        """
+        if not isinstance(data, dict) or "agent_json" not in data:
+            return data
+        return {
+            **data,
+            "agent_json": normalize_agent_json(
+                data["agent_json"], spec_type=declared_agent_spec_type(cls)
+            ),
+        }
+
     @model_validator(mode="before")
     @classmethod
     def _normalize_ae_payload(cls, data: Any) -> Any:
@@ -189,22 +222,6 @@ class ExtractionInput(Input):
 
         if updates:
             data = {**data, **updates}
-        return data
-
-    @model_validator(mode="before")
-    @classmethod
-    def _skip_agent_json_for_direct(cls, data: Any) -> Any:
-        """Null out agent_json when extraction_method is direct.
-
-        In direct mode, agent_json may contain placeholder values (e.g.
-        ``"port": "port"``) that fail AgentCredentialSpec validation.
-        Since agent_json is only used for agent-based extraction, we
-        discard it for direct mode.
-        """
-        if isinstance(data, dict):
-            method = data.get("extraction_method", "")
-            if method != "agent" and "agent_json" in data:
-                data = {**data, "agent_json": None}
         return data
 
     output_prefix: str = ""

@@ -155,7 +155,15 @@ class TestTypedTaskInputs:
 
 
 class TestExtractionInputAgentJsonValidation:
-    """Tests for _skip_agent_json_for_direct model validator."""
+    """``agent_json`` normalisation on the AE / workflow-args path.
+
+    AE replays whatever the connection record carries, so the field arrives as a
+    JSON string, a dict, or the marketplace-package placeholder blob. The
+    contract delegates to the one ingress normaliser
+    (:mod:`application_sdk.credentials.ingress`, pinned in
+    ``tests/unit/credentials/test_ingress.py``) rather than tolerating any of
+    that itself; these cases pin that it is wired up, in both nesting positions.
+    """
 
     def test_direct_mode_nulls_invalid_agent_json(self) -> None:
         """agent_json with placeholder values (port='port') is accepted in direct mode."""
@@ -204,6 +212,41 @@ class TestExtractionInputAgentJsonValidation:
             }
         )
         assert inp.agent_json is None
+
+    def test_placeholder_nested_in_ae_metadata_is_nulled(self) -> None:
+        """The nesting the old direct-mode guard could not see: pydantic applies
+        before-validators in reverse definition order, so the guard ran before
+        ``_normalize_ae_payload`` lifted ``agent-json`` out of ``metadata`` and
+        the placeholder failed the whole input."""
+        inp = ExtractionInput.model_validate(
+            {
+                "extraction_method": "direct",
+                "credential_guid": "test-guid",
+                "metadata": {
+                    "agent-json": {
+                        "agent-name": "agent-name",
+                        "host": "host",
+                        "port": "port",
+                    }
+                },
+            }
+        )
+        assert inp.agent_json is None
+        assert inp.credential_guid == "test-guid"
+
+    def test_valid_spec_survives_direct_mode(self) -> None:
+        """A real spec is no longer discarded just because the run is direct:
+        routing is ``extraction_method``'s job, and the readers already check it.
+        """
+        inp = ExtractionInput.model_validate(
+            {
+                "extraction_method": "direct",
+                "credential_guid": "test-guid",
+                "agent_json": {"agent-name": "acme", "secret-path": "arn:x"},
+            }
+        )
+        assert inp.agent_json is not None
+        assert inp.agent_json.agent_name == "acme"
 
     def test_no_agent_json_still_works(self) -> None:
         """ExtractionInput without agent_json works for both direct and agent."""

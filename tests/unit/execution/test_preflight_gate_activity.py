@@ -506,7 +506,10 @@ class TestPreflightGateActivity:
     ) -> None:
         # An input field that won't fit PreflightGateInput (e.g. credential_ref
         # as a plain string rather than a CredentialRef) triggers ValidationError.
-        # The gate must degrade to a minimal input, never raise.
+        # The gate must degrade, never raise — and degrade *only* the rejected
+        # field: dropping the routing triple with it makes the gate resolve the
+        # wrong credential, or none, and report a fail-open verdict nobody can
+        # trace back to the offending field.
         class _Inp:
             extraction_method = "direct"
             credential_guid = "g-9"
@@ -515,8 +518,49 @@ class TestPreflightGateActivity:
 
         gate_input = PreflightGateInput.from_extraction_input(_Inp(), "crawl")
         assert gate_input.entrypoint == "crawl"  # built, did not raise
-        # Minimal fallback: routing fields from the bad input are not present
-        assert gate_input.credential_guid == ""
+        assert gate_input.credential_ref is None  # the rejected field, dropped
+        assert gate_input.extraction_method == "direct"  # routing survives
+        assert gate_input.credential_guid == "g-9"
+
+    def test_from_extraction_input_keeps_routing_past_a_placeholder_agent_json(
+        self,
+    ) -> None:
+        # The live shape of this bug: AE replays the marketplace-package
+        # placeholder blob onto a direct-mode run. It is not an agent reference
+        # (``port`` is the spec's only non-str field), and it used to fail the
+        # whole gate input — silently costing the gate its extraction_method and
+        # credential_guid, so credential resolution degraded with no report.
+        class _Inp:
+            extraction_method = "direct"
+            credential_guid = "g-9"
+            agent_json = {
+                "agent-name": "agent-name",
+                "host": "host",
+                "port": "port",
+                "secret-manager": "secret-manager",
+            }
+            credential_ref = None
+
+        gate_input = PreflightGateInput.from_extraction_input(_Inp(), "crawl")
+        assert gate_input.agent_json is None  # placeholder is not a reference
+        assert gate_input.extraction_method == "direct"
+        assert gate_input.credential_guid == "g-9"
+
+    def test_from_extraction_input_normalizes_a_serialized_agent_json(self) -> None:
+        # A custom input may still carry the raw wire value; the gate's field is
+        # typed, so ingress normalisation happens here rather than at each reader.
+        class _Inp:
+            extraction_method = "agent"
+            credential_guid = ""
+            agent_json = json.dumps(
+                {"agent-name": "acme", "secret-path": "arn:x", "port": 1521}
+            )
+            credential_ref = None
+
+        gate_input = PreflightGateInput.from_extraction_input(_Inp(), "crawl")
+        assert gate_input.agent_json is not None
+        assert gate_input.agent_json.agent_name == "acme"
+        assert gate_input.agent_json.port == 1521
 
     async def test_gate_mirrors_config_into_metadata_and_connection_config(
         self,
