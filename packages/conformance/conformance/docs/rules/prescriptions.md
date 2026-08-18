@@ -65,7 +65,7 @@ reassigned.
 | [P040](#p040) | `TransformTemplateReservedKeyword` | `warn` | `app` | `transform-templates` | — | 0.18.0 |
 | [P041](#p041) | `SdrHardPreflightGate` | `warn` | `app` | `sdr-readiness` | — | 0.18.0 |
 | [P042](#p042) | `SdrHandRolledUploadBridge` | `warn` | `app` | `sdr-readiness` | — | 0.18.0 |
-| [P044](#p044) | `DirectStoragePrefixTransfer` | `warn` | `app` | `storage-seam` | — | 0.20.0 |
+| [P044](#p044) | `DirectStoragePrefixTransfer` | `warn` | `app` | `storage-seam` | — | 0.21.0 |
 
 ---
 
@@ -1712,7 +1712,7 @@ being expressible.
 
 ## P044 — `DirectStoragePrefixTransfer` {#p044}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `storage-seam` · **Autofixable:** — · **Since:** 0.20.0
+**Tier:** `warn` · **Scope:** `app` · **Category:** `storage-seam` · **Autofixable:** — · **Since:** 0.21.0
 
 > App transfers whole prefixes via storage.upload_prefix/download_prefix instead of FileReference + App.upload()/App.download()
 
@@ -1740,12 +1740,13 @@ These are real SDK functions, so this is not the build-your-own-store shape **P0
 describes — it is the sanctioned seam used one level too low. The storage contract in
 this module's docstring names the two supported paths:
 
-* **task-to-task** data → a `FileReference` field on the contract. The   activity
-interceptor persists it after the producing task and   materialises it before the
-consuming one, with a per-file SHA-256   sidecar so a partial or corrupt transfer is
-detected rather than   reused. * **phase/app hand-off** → `App.upload()` /
-`App.download()`, which   add dual-write routing, the canonical artifact prefix, and
-`@task`   retry/replay.
+* **task-to-task** data → a `FileReference` field on the contract. The activity
+interceptor persists it after the producing task and materialises it before the
+consuming one, with a per-file SHA-256 sidecar so a partial or corrupt transfer is
+detected rather than reused.
+
+* **phase/app hand-off** → `App.upload()` / `App.download()`, which add dual-write
+routing, the canonical artifact prefix, and `@task` retry/replay.
 
 **Fix by hoisting, not by substituting in place.** `App.upload()` is itself a framework
 task, so calling it where the prefix call used to sit — inside a `@task` — trades this

@@ -243,7 +243,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="storage-seam",
         autofixable=False,
         orthogonal_gate="tests",
-        since="0.20.0",
+        since="0.21.0",
         rationale=(
             "An app moving whole prefixes with storage.upload_prefix/download_prefix is "
             "using a sanctioned SDK function at the wrong level, which is why no existing "
@@ -278,14 +278,15 @@ RULES: tuple[RuleDefinition, ...] = (
             "used one level too low. The storage contract in this module's docstring\n"
             "names the two supported paths:\n"
             "\n"
-            "* **task-to-task** data → a ``FileReference`` field on the contract. The\n"
-            "  activity interceptor persists it after the producing task and\n"
-            "  materialises it before the consuming one, with a per-file SHA-256\n"
-            "  sidecar so a partial or corrupt transfer is detected rather than\n"
-            "  reused.\n"
-            "* **phase/app hand-off** → ``App.upload()`` / ``App.download()``, which\n"
-            "  add dual-write routing, the canonical artifact prefix, and ``@task``\n"
-            "  retry/replay.\n"
+            "* **task-to-task** data → a ``FileReference`` field on the contract."
+            " The activity interceptor persists it after the producing task and"
+            " materialises it before the consuming one, with a per-file SHA-256"
+            " sidecar so a partial or corrupt transfer is detected rather than"
+            " reused.\n"
+            "\n"
+            "* **phase/app hand-off** → ``App.upload()`` / ``App.download()``, which"
+            " add dual-write routing, the canonical artifact prefix, and ``@task``"
+            " retry/replay.\n"
             "\n"
             "**Fix by hoisting, not by substituting in place.** ``App.upload()`` is\n"
             "itself a framework task, so calling it where the prefix call used to sit\n"

@@ -31,8 +31,15 @@ import that brought it in. Single-object helpers (``upload_file``,
 a caller genuinely holds one file and no contract boundary to hang a reference
 on. Both the ``from application_sdk.storage import upload_prefix`` form and the
 attribute form (``storage.upload_prefix(...)``, ``ops.download_prefix(...)``)
-are matched; a same-named local helper is not, because the name must resolve to
-an ``application_sdk`` import in the same file.
+are matched.
+
+The gate is the *import path*, not the ``application_sdk`` prefix: the name has
+to come from one of the two modules that actually expose the prefix helpers —
+``application_sdk.storage``, or ``application_sdk.storage.batch`` where they are
+defined. Anything else is a different function that happens to share a name and
+is left alone: a same-named local helper, a same-named symbol imported from
+another ``application_sdk`` subpackage, or an attribute call through an alias
+bound to an unrelated ``application_sdk`` module.
 """
 
 from __future__ import annotations
@@ -45,82 +52,88 @@ from conformance.suite.schema.findings import Finding
 #: The prefix-level transfer helpers. Single-object transfers are out of scope.
 _PREFIX_TRANSFERS: frozenset[str] = frozenset({"upload_prefix", "download_prefix"})
 
-_SDK_STORAGE_ROOT = "application_sdk"
+#: The only import paths that expose the prefix helpers. ``batch`` defines them;
+#: ``storage`` (the package) re-exports them. Matching the full dotted path
+#: rather than an ``application_sdk`` prefix is what keeps unrelated
+#: ``application_sdk.*`` sources — which cannot supply these names — out.
+_PREFIX_MODULE_PATHS: frozenset[str] = frozenset(
+    {"application_sdk.storage", "application_sdk.storage.batch"}
+)
 
-#: Submodules of ``application_sdk`` whose attribute namespace exposes the
-#: prefix helpers. ``batch`` defines them; ``storage`` (the package) re-exports
-#: them. Keyed by the final module segment as written in the import.
-_STORAGE_MODULES_WITH_PREFIX: frozenset[str] = frozenset({"batch", "storage"})
+
+def _dotted_name(node: ast.expr) -> str | None:
+    """Flatten ``a.b.c`` to ``"a.b.c"``; ``None`` if the chain is not all names."""
+    parts: list[str] = []
+    current: ast.expr = node
+    while isinstance(current, ast.Attribute):
+        parts.append(current.attr)
+        current = current.value
+    if not isinstance(current, ast.Name):
+        return None
+    parts.append(current.id)
+    return ".".join(reversed(parts))
 
 
 def _sdk_storage_bindings(tree: ast.AST) -> tuple[set[str], set[str]]:
-    """Return ``(direct_names, module_aliases)`` bound to SDK storage in this file.
+    """Return ``(direct_names, receivers)`` bound to SDK storage in this file.
 
     ``direct_names`` are prefix helpers pulled in by
     ``from application_sdk.storage import upload_prefix`` (honouring ``as``
-    aliases). ``module_aliases`` are names bound to an SDK storage *module* that
-    exposes the prefix helpers, so an attribute call through them can be
-    resolved.
+    aliases). ``receivers`` are dotted receiver strings that resolve to a module
+    exposing the prefix helpers, so an attribute call through one can be
+    resolved: ``storage`` for ``from application_sdk import storage``, ``ops``
+    for ``import application_sdk.storage.batch as ops``, and
+    ``application_sdk.storage`` for a plain ``import application_sdk.storage``.
 
-    The module gate keys on the import *source*, not the local alias text: any
-    ``from application_sdk.storage import <module>`` /
-    ``import application_sdk.storage.<module>`` that names a module exposing
-    ``upload_prefix``/``download_prefix`` (``batch`` — where they are defined —
-    or the ``storage`` package that re-exports them) registers its bound name.
-    That is what matches ``from application_sdk.storage import batch`` and
-    ``from application_sdk.storage import batch as ops``; keying on the alias
-    text (``storage`` / ``*ops``) instead would miss both.
-
-    Anything not traceable to an ``application_sdk`` import is left alone: a
-    local ``upload_prefix`` helper is a different function that happens to share
-    a name.
+    Both gates key on the import *path*, not the local alias text: any import
+    naming ``application_sdk.storage`` or ``application_sdk.storage.batch``
+    registers its bound name, whatever that name is. That is what matches
+    ``from application_sdk.storage import batch as ops`` while leaving
+    ``from application_sdk.contracts import storage`` alone — the alias text is
+    the same shape in both, the import source is not.
     """
     direct: set[str] = set()
-    aliases: set[str] = set()
+    receivers: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             module = node.module or ""
-            if not (
-                module == _SDK_STORAGE_ROOT
-                or module.startswith(f"{_SDK_STORAGE_ROOT}.")
-            ):
-                continue
             for alias in node.names:
                 bound = alias.asname or alias.name
-                if alias.name in _PREFIX_TRANSFERS:
+                if alias.name in _PREFIX_TRANSFERS and module in _PREFIX_MODULE_PATHS:
                     direct.add(bound)
-                elif alias.name in _STORAGE_MODULES_WITH_PREFIX:
+                elif f"{module}.{alias.name}" in _PREFIX_MODULE_PATHS:
                     # `from application_sdk import storage`,
-                    # `from application_sdk.storage import batch[ as ops]`, etc.
-                    # Resolved by import source, so the alias text is free.
-                    aliases.add(bound)
+                    # `from application_sdk.storage import batch[ as ops]`.
+                    receivers.add(bound)
         elif isinstance(node, ast.Import):
             for alias in node.names:
-                if not alias.name.startswith(f"{_SDK_STORAGE_ROOT}."):
+                if alias.name not in _PREFIX_MODULE_PATHS:
                     continue
                 if alias.asname:
-                    aliases.add(alias.asname)
+                    receivers.add(alias.asname)
                 else:
-                    # `import application_sdk.storage` binds the root package;
-                    # the call site then reads application_sdk.storage.x(...).
-                    aliases.add(alias.name.split(".")[0])
-    return direct, aliases
+                    # `import application_sdk.storage[.batch]` binds the root
+                    # package; the call site reads the full dotted path back,
+                    # and every ancestor package is bound along with it.
+                    segments = alias.name.split(".")
+                    for end in range(1, len(segments) + 1):
+                        path = ".".join(segments[:end])
+                        if path in _PREFIX_MODULE_PATHS:
+                            receivers.add(path)
+    return direct, receivers
 
 
 def _called_prefix_helper(
-    node: ast.Call, direct: set[str], aliases: set[str]
+    node: ast.Call, direct: set[str], receivers: set[str]
 ) -> str | None:
     """Name of the prefix helper *node* calls, or ``None``."""
     func = node.func
     if isinstance(func, ast.Name):
         return func.id if func.id in direct else None
     if isinstance(func, ast.Attribute) and func.attr in _PREFIX_TRANSFERS:
-        # Resolve the receiver chain's root: storage.upload_prefix(...) or
-        # application_sdk.storage.upload_prefix(...).
-        receiver: ast.expr = func.value
-        while isinstance(receiver, ast.Attribute):
-            receiver = receiver.value
-        if isinstance(receiver, ast.Name) and receiver.id in aliases:
+        # storage.upload_prefix(...) or application_sdk.storage.upload_prefix(...)
+        receiver = _dotted_name(func.value)
+        if receiver is not None and receiver in receivers:
             return func.attr
     return None
 
@@ -131,15 +144,15 @@ def check_p044(
     directives: dict[int, _IgnoreDirective],
 ) -> list[Finding]:
     """Emit P044 for each prefix-level transfer the app performs itself."""
-    direct, aliases = _sdk_storage_bindings(tree)
-    if not direct and not aliases:
+    direct, receivers = _sdk_storage_bindings(tree)
+    if not direct and not receivers:
         return []
 
     findings: list[Finding] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        helper = _called_prefix_helper(node, direct, aliases)
+        helper = _called_prefix_helper(node, direct, receivers)
         if helper is None:
             continue
         direction = "upload" if helper.startswith("upload") else "download"

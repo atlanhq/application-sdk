@@ -93,6 +93,31 @@ def test_flags_dotted_import_form() -> None:
     assert len(findings) == 1
 
 
+def test_flags_dotted_batch_import_aliased() -> None:
+    """``import application_sdk.storage.batch as ops`` binds the defining module
+    under a free name — the Import branch has to resolve it by path, exactly as
+    the ImportFrom branch does."""
+    findings = _check(
+        "import application_sdk.storage.batch as ops\n"
+        "\n"
+        "async def go(local, prefix):\n"
+        "    await ops.upload_prefix(local, prefix)\n"
+    )
+    assert len(findings) == 1
+
+
+def test_flags_dotted_batch_import_plain() -> None:
+    """The plain dotted form binds the root package, so the call site spells the
+    whole path back out."""
+    findings = _check(
+        "import application_sdk.storage.batch\n"
+        "\n"
+        "async def go(prefix, d):\n"
+        "    await application_sdk.storage.batch.download_prefix(prefix, d)\n"
+    )
+    assert len(findings) == 1
+
+
 def test_flags_aliased_import() -> None:
     findings = _check(
         "from application_sdk.storage import upload_prefix as push\n"
@@ -165,6 +190,56 @@ def test_app_upload_is_not_flagged() -> None:
         "class App:\n"
         "    async def run(self, d):\n"
         "        await self.upload(UploadInput(local_path=d))\n"
+    )
+    assert findings == []
+
+
+def test_same_named_helper_from_another_sdk_subpackage_is_not_flagged() -> None:
+    """The gate is the import *path*, not the ``application_sdk`` prefix: only
+    ``application_sdk.storage`` and ``application_sdk.storage.batch`` expose these
+    helpers, so a same-named symbol from anywhere else in the SDK is a different
+    function."""
+    findings = _check(
+        "from application_sdk.contracts.types import upload_prefix\n"
+        "\n"
+        "async def go(x, y):\n"
+        "    await upload_prefix(x, y)\n"
+    )
+    assert findings == []
+
+
+def test_same_named_module_from_another_sdk_subpackage_is_not_flagged() -> None:
+    """``from application_sdk.contracts import storage`` binds the alias text the
+    attribute form looks for, from a module that does not have the helpers."""
+    findings = _check(
+        "from application_sdk.contracts import storage\n"
+        "\n"
+        "async def go(x, y):\n"
+        "    await storage.upload_prefix(x, y)\n"
+    )
+    assert findings == []
+
+
+def test_unrelated_storage_submodule_alias_is_not_flagged() -> None:
+    """``application_sdk.storage.formats.parquet`` is under the storage package
+    but is not one of the two modules that re-export or define the helpers."""
+    findings = _check(
+        "import application_sdk.storage.formats.parquet as pq\n"
+        "\n"
+        "async def go(x, y):\n"
+        "    await pq.upload_prefix(x, y)\n"
+    )
+    assert findings == []
+
+
+def test_unrelated_sdk_import_does_not_license_a_dotted_call() -> None:
+    """Importing some other part of the SDK must not register the root package as
+    a receiver — otherwise any ``application_sdk.*.upload_prefix(...)`` matches."""
+    findings = _check(
+        "import application_sdk.contracts\n"
+        "\n"
+        "async def go(x, y):\n"
+        "    await application_sdk.storage.upload_prefix(x, y)\n"
     )
     assert findings == []
 
