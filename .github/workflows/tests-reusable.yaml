@@ -832,12 +832,11 @@ jobs:
             .github/actions/globalprotect-connect
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
-          # Falls back to the run's own token: application-sdk is public, so
-          # github.token suffices, and the dataforge path can be exercised by a
-          # caller that has no ORG_PAT. Matches the e2e job. `token: ''` would
-          # override checkout's default and 403 on the clone, so the fallback is
-          # explicit rather than omitted.
-          token: ${{ secrets.ORG_PAT_GITHUB || github.token }}
+          # No `token:` here: application-sdk is public, so the run's own
+          # github.token reads it regardless of whether the caller supplies
+          # ORG_PAT_GITHUB — preferring the org-wide PAT for a same-repo,
+          # public checkout would only burn its shared rate limit for no
+          # benefit. Matches the e2e job's equivalent checkout.
           persist-credentials: false
 
       # Two invocations, and the order is the security property. `E2E_SOURCE_ENV_JSON`
