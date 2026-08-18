@@ -115,6 +115,52 @@ local appEventsOnly = (App) {
   }
 }
 
+// Firehose-sourced entrypoint with ingest filters (DISTR-502). Unlike the dedicated
+// `*.cdc.*` topics above, ATLAS_ENTITIES carries the whole fleet's entity traffic, so
+// the trigger MUST declare filter_rules or the workflow's Iceberg events table buffers
+// the entire topic. Paths are rooted at `message.*` — Atlas wraps each record in an
+// EntityNotification envelope and AE stores the CloudEvent data unmodified.
+local appFirehoseFilter = (App) {
+  name = "app-firehose-filter"
+  displayName = "App Firehose Filter"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  uiConfig = appUiConfig
+  pipeline {
+    publish = null
+  }
+
+  events {
+    new App.EventTriggerSpec {
+      name = "atlas-query-entities"
+      source = new App.EventSource {
+        name = "atlan-kafka"
+        topic = "ATLAS_ENTITIES"
+      }
+      filterRules {
+        new App.FilterRuleSpec {
+          field = "message.entity.typeName"
+          operator = "in"
+          value = new Listing { "Query" }
+        }
+        new App.FilterRuleSpec {
+          field = "message.operationType"
+          operator = "in"
+          value = new Listing { "ENTITY_CREATE"; "ENTITY_UPDATE"; "ENTITY_DELETE" }
+        }
+        new App.FilterRuleSpec {
+          field = "message.entity.guid"
+          operator = "exists"
+        }
+      }
+      triggerConfig = new App.EventTriggerConfig {
+        maxRetries = 5
+        ackPaths { "$.enrich.outputs.ack_path" }
+      }
+    }
+  }
+}
+
 local appManifest = parser.parse(
   appWithSchedules.output.files["app/generated/manifest.json"].text
 )
@@ -123,6 +169,9 @@ local appNoSchedManifest = parser.parse(
 )
 local appEventsOnlyManifest = parser.parse(
   appEventsOnly.output.files["app/generated/manifest.json"].text
+)
+local appFirehoseFilterManifest = parser.parse(
+  appFirehoseFilter.output.files["app/generated/manifest.json"].text
 )
 
 // ── NativeApp.pkl ───────────────────────────────────────────────────────────
@@ -197,8 +246,46 @@ local nativeManifest = parser.parse(
 local nativeNoSchedManifest = parser.parse(
   nativeNoSchedules.output.files["manifest.json"].text
 )
+// NativeApp firehose equivalent — same DISTR-502 case as appFirehoseFilter.
+local nativeFirehoseFilter = (NativeApp) {
+  name = "native-firehose-filter"
+  displayName = "Native Firehose Filter"
+  connector = Connectors.API
+  icon = "https://example.com/icon.svg"
+  workflowType = "NativeFirehoseFilterWorkflow"
+  hasPublishStep = false
+  hasPublishInputFields = false
+
+  events {
+    new NativeApp.EventTriggerSpec {
+      name = "atlas-query-entities"
+      source = new NativeApp.EventSource {
+        name = "atlan-kafka"
+        topic = "ATLAS_ENTITIES"
+      }
+      filterRules {
+        new NativeApp.FilterRuleSpec {
+          field = "message.entity.typeName"
+          operator = "eq"
+          value = "Query"
+        }
+        new NativeApp.FilterRuleSpec {
+          field = "message.entity.guid"
+          operator = "exists"
+        }
+      }
+      triggerConfig = new NativeApp.EventTriggerConfig {
+        ackPaths { "$.enrich.outputs.ack_path" }
+      }
+    }
+  }
+}
+
 local nativeEventsOnlyManifest = parser.parse(
   nativeEventsOnly.output.files["manifest.json"].text
+)
+local nativeFirehoseFilterManifest = parser.parse(
+  nativeFirehoseFilter.output.files["manifest.json"].text
 )
 
 facts {
@@ -253,6 +340,26 @@ facts {
     !appNoSchedManifest.containsKey("triggers")
   }
 
+  ["App renders filter_rules in AE FilterRule shape (field/operator/value)"] {
+    appFirehoseFilterManifest["triggers"]["events"][0]["filter_rules"].length == 3
+    appFirehoseFilterManifest["triggers"]["events"][0]["filter_rules"][0]["field"] == "message.entity.typeName"
+    appFirehoseFilterManifest["triggers"]["events"][0]["filter_rules"][0]["operator"] == "in"
+    appFirehoseFilterManifest["triggers"]["events"][0]["filter_rules"][0]["value"][0] == "Query"
+    // `in` values OR within the rule; rules AND across the list.
+    appFirehoseFilterManifest["triggers"]["events"][0]["filter_rules"][1]["value"].length == 3
+    appFirehoseFilterManifest["triggers"]["events"][0]["filter_rules"][1]["value"][2] == "ENTITY_DELETE"
+  }
+
+  ["App omits value for exists/not_exists rather than sending null"] {
+    appFirehoseFilterManifest["triggers"]["events"][0]["filter_rules"][2]["operator"] == "exists"
+    !appFirehoseFilterManifest["triggers"]["events"][0]["filter_rules"][2].containsKey("value")
+  }
+
+  ["App omits filter_rules entirely when none declared (existing manifests unchanged)"] {
+    !appEventsOnlyManifest["triggers"]["events"][0].containsKey("filter_rules")
+    !appManifest["triggers"]["events"][0].containsKey("filter_rules")
+  }
+
   // ── NativeApp.pkl ───────────────────────────────────────────────────────────
   ["NativeApp renders triggers.schedules from declared schedules"] {
     nativeManifest["triggers"]["schedules"].length == 1
@@ -282,5 +389,16 @@ facts {
 
   ["NativeApp omits triggers when neither schedules nor events are declared"] {
     !nativeNoSchedManifest.containsKey("triggers")
+  }
+
+  ["NativeApp renders filter_rules, scalar value inline, exists without value"] {
+    nativeFirehoseFilterManifest["triggers"]["events"][0]["filter_rules"].length == 2
+    nativeFirehoseFilterManifest["triggers"]["events"][0]["filter_rules"][0]["operator"] == "eq"
+    nativeFirehoseFilterManifest["triggers"]["events"][0]["filter_rules"][0]["value"] == "Query"
+    !nativeFirehoseFilterManifest["triggers"]["events"][0]["filter_rules"][1].containsKey("value")
+  }
+
+  ["NativeApp omits filter_rules entirely when none declared"] {
+    !nativeEventsOnlyManifest["triggers"]["events"][0].containsKey("filter_rules")
   }
 }
