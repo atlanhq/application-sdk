@@ -18,7 +18,14 @@ import pytest
 
 from application_sdk.common.sql_filters import get_database_names
 
-_FETCH_SQL = "SELECT table_cat AS database_name FROM system.jdbc.catalogs"
+#: Shaped like a real connector's discovery query — both filter placeholders
+#: present. A placeholder-free string would let ``prepare_query`` no-op, so the
+#: tests that assert on the SQL actually sent would pass vacuously.
+#: Mirrors ``atlan-trino-app``'s ``app/sql/extract_database.sql``.
+_FETCH_SQL = """SELECT catalogs.table_cat AS database_name
+FROM system.jdbc.catalogs AS catalogs
+WHERE regexp_like(catalogs.table_cat, {include_databases})
+    AND NOT regexp_like(catalogs.table_cat, {exclude_databases})"""
 
 
 def _sql_client(*database_names: str) -> MagicMock:
@@ -193,6 +200,55 @@ class TestDiscoveredNamesAreFilteredInPython:
         client = _sql_client("db[1", "other")
         names = await get_database_names(client, _args({"^db[1$": ["*"]}), _FETCH_SQL)
         assert names == ["db[1"]
+
+
+class TestDiscoveryQueryIsNotNarrowedByTheBrokenPredicate:
+    """Assertions on the SQL *sent*, not just on the mocked rows returned.
+
+    Every other test here mocks ``get_results``, so it cannot see what the query
+    asked for — and that blind spot hid a real defect. The SQL builder keeps only
+    include-filter keys that look like identifiers and drops the rest, so a
+    filter mixing shapes narrowed the predicate to the literal alone and the
+    pattern's databases were never returned. Python filtering cannot recover
+    rows the query never produced.
+    """
+
+    async def test_include_filter_is_withheld_from_the_discovery_query(self) -> None:
+        client = _sql_client("prod", "bench_1")
+        await get_database_names(
+            client, _args({"^prod$": [], "^bench.*$": []}), _FETCH_SQL
+        )
+        sent = client.get_results.await_args.args[0]
+        assert "'^(prod)$'" not in sent, (
+            "discovery query was narrowed to the literal key only, so databases "
+            f"matching '^bench.*$' can never be returned:\n{sent}"
+        )
+        assert "'.*'" in sent
+
+    async def test_mixed_literal_and_pattern_keys_return_both(self) -> None:
+        """The end-to-end consequence of the above."""
+        client = _sql_client("prod", "bench_1", "bench_2", "unrelated")
+        names = await get_database_names(
+            client, _args({"^prod$": [], "^bench.*$": []}), _FETCH_SQL
+        )
+        assert names == ["prod", "bench_1", "bench_2"]
+        assert "unrelated" not in names
+
+    async def test_exclude_filter_still_reaches_the_query(self) -> None:
+        """Withholding the include filter must not take the exclude with it."""
+        client = _sql_client("bench_1")
+        args = _args({"^bench.*$": []})
+        args["metadata"]["exclude-filter"] = '{"^secret$": []}'
+        await get_database_names(client, args, _FETCH_SQL)
+        sent = client.get_results.await_args.args[0]
+        assert "'^(secret)$'" in sent, f"exclude predicate was lost:\n{sent}"
+
+    async def test_callers_workflow_args_are_not_mutated(self) -> None:
+        """These args are shared with the rest of the workflow."""
+        client = _sql_client("bench_1")
+        args = _args({"^bench.*$": []})
+        await get_database_names(client, args, _FETCH_SQL)
+        assert args["metadata"]["include-filter"] == {"^bench.*$": []}
 
 
 class TestNoFilterFallsThroughToDiscovery:

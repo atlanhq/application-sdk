@@ -530,6 +530,21 @@ def _names_a_single_database_each(filter_keys: list[str]) -> bool:
     return True
 
 
+def _without_include_filter(workflow_args: dict[str, Any]) -> dict[str, Any]:
+    """``workflow_args`` with ``metadata["include-filter"]`` removed.
+
+    Shallow copies both levels so the caller's dict is not mutated -- these args
+    are shared with the rest of the workflow, and stripping a key in place would
+    silently unscope every later query built from them.
+    """
+    metadata = {
+        key: value
+        for key, value in (workflow_args.get("metadata") or {}).items()
+        if key != "include-filter"
+    }
+    return {**workflow_args, "metadata": metadata}
+
+
 def _matches_any_filter_key(database_name: str, filter_keys: list[str]) -> bool:
     """Whether ``database_name`` matches any include-filter key, as a regex.
 
@@ -605,9 +620,21 @@ async def get_database_names(
         ]
 
     temp_table_regex_sql = workflow_args.get("metadata", {}).get("temp-table-regex", "")
+    # The include-filter is deliberately withheld from the DISCOVERY query and
+    # applied in Python below. It cannot be left in: the SQL builder keeps only
+    # the keys that look like identifiers and drops the rest, so a filter mixing
+    # shapes -- ``{"^prod$": [], "^bench.*$": []}`` -- narrows the predicate to
+    # ``'^(prod)$'`` and the query never returns the ``bench*`` databases at all.
+    # Filtering in Python cannot recover rows the query did not return, so every
+    # database matching a pattern key would be silently lost -- the original
+    # defect again, with a narrower trigger.
+    #
+    # Removing the key leaves the include predicate at its ``'.*'`` default while
+    # the EXCLUDE predicate and temp-table regex are untouched, so exclusion
+    # still happens source-side exactly as before.
     prepared_query = prepare_query(
         query=fetch_database_sql,
-        workflow_args=workflow_args,
+        workflow_args=_without_include_filter(workflow_args),
         temp_table_regex_sql=temp_table_regex_sql,
         use_posix_regex=True,
     )
