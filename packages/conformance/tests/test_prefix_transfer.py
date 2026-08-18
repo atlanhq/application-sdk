@@ -56,6 +56,33 @@ def test_flags_module_attribute_form() -> None:
     assert len(findings) == 1
 
 
+def test_flags_batch_module_plain_import() -> None:
+    """The prefix helpers live in ``application_sdk/storage/batch.py``, so this
+    is the most natural module form — the gate resolves the import *source*, so
+    a ``batch`` binding must register even though its name is neither ``storage``
+    nor ``*ops``."""
+    findings = _check(
+        "from application_sdk.storage import batch\n"
+        "\n"
+        "async def go(local, prefix):\n"
+        "    await batch.upload_prefix(local, prefix)\n"
+    )
+    assert len(findings) == 1
+
+
+def test_flags_batch_module_aliased_as_ops() -> None:
+    """``batch as ops`` reaches the same helpers through a renamed module
+    binding; the docstring's attribute form (``ops.download_prefix(...)``) only
+    holds if the gate keys on the import source rather than the alias text."""
+    findings = _check(
+        "from application_sdk.storage import batch as ops\n"
+        "\n"
+        "async def go(prefix, d):\n"
+        "    await ops.download_prefix(prefix, d)\n"
+    )
+    assert len(findings) == 1
+
+
 def test_flags_dotted_import_form() -> None:
     findings = _check(
         "import application_sdk.storage\n"

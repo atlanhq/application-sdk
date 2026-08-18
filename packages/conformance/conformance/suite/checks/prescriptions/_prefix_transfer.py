@@ -47,16 +47,29 @@ _PREFIX_TRANSFERS: frozenset[str] = frozenset({"upload_prefix", "download_prefix
 
 _SDK_STORAGE_ROOT = "application_sdk"
 
+#: Submodules of ``application_sdk`` whose attribute namespace exposes the
+#: prefix helpers. ``batch`` defines them; ``storage`` (the package) re-exports
+#: them. Keyed by the final module segment as written in the import.
+_STORAGE_MODULES_WITH_PREFIX: frozenset[str] = frozenset({"batch", "storage"})
+
 
 def _sdk_storage_bindings(tree: ast.AST) -> tuple[set[str], set[str]]:
     """Return ``(direct_names, module_aliases)`` bound to SDK storage in this file.
 
     ``direct_names`` are prefix helpers pulled in by
     ``from application_sdk.storage import upload_prefix`` (honouring ``as``
-    aliases). ``module_aliases`` are names bound to an SDK storage *module* by
-    ``import application_sdk.storage as storage`` or
-    ``from application_sdk import storage``, so an attribute call through them
-    can be resolved.
+    aliases). ``module_aliases`` are names bound to an SDK storage *module* that
+    exposes the prefix helpers, so an attribute call through them can be
+    resolved.
+
+    The module gate keys on the import *source*, not the local alias text: any
+    ``from application_sdk.storage import <module>`` /
+    ``import application_sdk.storage.<module>`` that names a module exposing
+    ``upload_prefix``/``download_prefix`` (``batch`` — where they are defined —
+    or the ``storage`` package that re-exports them) registers its bound name.
+    That is what matches ``from application_sdk.storage import batch`` and
+    ``from application_sdk.storage import batch as ops``; keying on the alias
+    text (``storage`` / ``*ops``) instead would miss both.
 
     Anything not traceable to an ``application_sdk`` import is left alone: a
     local ``upload_prefix`` helper is a different function that happens to share
@@ -76,8 +89,10 @@ def _sdk_storage_bindings(tree: ast.AST) -> tuple[set[str], set[str]]:
                 bound = alias.asname or alias.name
                 if alias.name in _PREFIX_TRANSFERS:
                     direct.add(bound)
-                elif alias.name == "storage" or alias.name.endswith("ops"):
-                    # `from application_sdk import storage`
+                elif alias.name in _STORAGE_MODULES_WITH_PREFIX:
+                    # `from application_sdk import storage`,
+                    # `from application_sdk.storage import batch[ as ops]`, etc.
+                    # Resolved by import source, so the alias text is free.
                     aliases.add(bound)
         elif isinstance(node, ast.Import):
             for alias in node.names:
