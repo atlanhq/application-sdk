@@ -32,6 +32,13 @@ New invariants added for BLDX-1464 (artifact dual-write):
 (i_fail_hard) Deployment write fails + required mode → upstream still written
     first, then run fails with the deployment exception.
 
+New invariants added for FND-536 (ref-only / deployment→deployment copy):
+
+(j) A ref-only upload (bytes already in the deployment store, no local copy)
+    satisfies the deployment leg instead of failing it: key-preserving is a
+    silent no-op, and an unpinned destination lands the identical key in both
+    stores.
+
 See:
   docs/concepts/file-reference.md   (decision matrix and lifecycle)
   docs/adr/0014-two-store-storage-architecture.md   (full rationale)
@@ -708,6 +715,141 @@ async def test_app_upload_dual_write_failure_required_raises_after_upstream(
         f"Upstream write did not complete before the required-mode exception. "
         f"upstream_keys={upstream_keys}"
     )
+
+
+# ---------------------------------------------------------------------------
+# (j) FND-536: a ref-only upload (local absent) satisfies the deployment leg
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_app_upload_ref_only_key_preserving_satisfies_deployment_leg(
+    tmp_path, monkeypatch, dual_write_required
+):
+    """The P042 bridge shape — bytes already in the deployment store, no local
+    copy, destination pinned to the ref's own prefix — must satisfy the
+    deployment leg of the dual write rather than failing it.
+
+    Before FND-536 the deployment leg was handed no fallback source, so
+    ``transfer.upload`` fell through to "local_path does not exist": a spurious
+    WARNING under ``best_effort`` and, as pinned here, a failed run under
+    ``required``.  The deployment leg is asserted silent (no warning, no error)
+    *and* the run is asserted to reach the upstream keys — an empty-log assertion
+    alone would also pass if the upload had been skipped wholesale.
+    """
+    from application_sdk.storage.ops import upload_file
+
+    deployment_store = create_local_store(tmp_path / "deployment")
+    upstream_root = tmp_path / "upstream"
+    upstream_store = create_local_store(upstream_root)
+
+    # Pod A wrote the transformed tree to the deployment store; this pod never
+    # held it locally.
+    src_prefix = "artifacts/apps/test-app/workflows/wf-p042/run-p042/transformed"
+    src_file = tmp_path / "entities.json"
+    for entity_type in ("table", "column"):
+        src_file.write_bytes(b'{"typeName": "%s"}\n' % entity_type.encode())
+        await upload_file(
+            f"{src_prefix}/{entity_type}/entities.json",
+            src_file,
+            deployment_store,
+            normalize=False,
+        )
+    src_file.unlink()
+
+    missing_local = str(tmp_path / "never-created" / "transformed")
+    ref = FileReference(local_path=missing_local, storage_path=src_prefix)
+
+    app = _make_app(deployment_store, upstream_store=upstream_store, run_id="run-p042")
+
+    # Spy on the fan-out's own failure reporting: any deployment-leg failure —
+    # fatal or not — goes through one of these two calls.
+    import application_sdk.app.base as _base_mod
+
+    warnings: list[tuple] = []
+    errors: list[tuple] = []
+    monkeypatch.setattr(
+        _base_mod._task_logger,
+        "warning",
+        lambda *a, **kw: warnings.append(a),
+    )
+    monkeypatch.setattr(
+        _base_mod._task_logger,
+        "error",
+        lambda *a, **kw: errors.append(a),
+    )
+
+    # required mode: any deployment-leg failure would raise here.
+    result = await app.upload(
+        UploadInput(ref=ref, storage_path=src_prefix, tier=StorageTier.RETAINED)
+    )
+
+    assert not warnings, f"deployment leg logged a spurious WARNING: {warnings}"
+    assert not errors, f"deployment leg logged an ERROR: {errors}"
+
+    # The upstream leg did the real work, key-preserving.
+    upstream_keys = {
+        k
+        for k in await list_keys("", store=upstream_store)
+        if not k.endswith(".sha256")
+    }
+    assert upstream_keys == {
+        f"{src_prefix}/table/entities.json",
+        f"{src_prefix}/column/entities.json",
+    }
+    assert result.ref.file_count == 2
+
+
+@pytest.mark.integration
+async def test_app_upload_ref_only_lands_identical_keys_in_both_stores(
+    tmp_path, dual_write_enabled
+):
+    """Ref-only upload with no pinned ``storage_path``: the deployment leg now
+    copies within the deployment store to the canonical run prefix, so ADR-0014's
+    "identical key in both stores" invariant holds for the cross-pod case too.
+    """
+    from application_sdk.storage.ops import upload_file
+
+    deployment_root = tmp_path / "deployment"
+    deployment_store = create_local_store(deployment_root)
+    upstream_store = create_local_store(tmp_path / "upstream")
+
+    src_prefix = "artifacts/apps/test-app/workflows/wf-xpod/run-xpod/transformed"
+    src_file = tmp_path / "entities.json"
+    src_file.write_bytes(b'{"typeName": "Table"}\n')
+    await upload_file(
+        f"{src_prefix}/table/entities.json", src_file, deployment_store, normalize=False
+    )
+    src_file.unlink()
+
+    missing_local = str(tmp_path / "never-created" / "transformed")
+    app = _make_app(deployment_store, upstream_store=upstream_store, run_id="run-xpod")
+
+    result = await app.upload(
+        UploadInput(
+            ref=FileReference(local_path=missing_local, storage_path=src_prefix),
+            tier=StorageTier.RETAINED,
+        )
+    )
+
+    # A directory upload's ref carries the canonical trailing-slash prefix.
+    target_prefix = (result.ref.storage_path or "").rstrip("/")
+    assert target_prefix and target_prefix != src_prefix, (
+        "test premise: with no pinned storage_path the destination must be the "
+        f"derived run prefix, not the ref's own ({target_prefix!r})"
+    )
+
+    def _data_keys(keys):
+        return {k for k in keys if not k.endswith(".sha256")}
+
+    upstream_keys = _data_keys(await list_keys("", store=upstream_store))
+    deployment_keys = _data_keys(await list_keys("", store=deployment_store))
+
+    expected = f"{target_prefix}/table/entities.json"
+    assert upstream_keys == {expected}
+    # Deployment store holds both its original ref copy and the mirror at the
+    # identical key the upstream write used.
+    assert deployment_keys == {f"{src_prefix}/table/entities.json", expected}
 
 
 # ---------------------------------------------------------------------------

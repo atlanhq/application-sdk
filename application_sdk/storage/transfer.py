@@ -138,6 +138,11 @@ async def _upload_from_store(
 
     Implements steps 1 and 3 of the three-step upload strategy:
 
+    * Step 0 — same-object guard: when *source_store* and *target_store* are the
+      same store and the keys are identical, the object already is its own
+      destination.  Returns immediately, without even the two sidecar GETs the
+      SHA-256 dedup would cost.  This is the key-preserving
+      deployment→deployment leg of the ADR-0014 dual write (FND-536).
     * Step 1 — cross-store SHA-256 dedup: skips the transfer when both stores
       already hold the same content at their respective keys.
     * Step 3 — deployment-store fallback: downloads to a temporary local file
@@ -151,6 +156,12 @@ async def _upload_from_store(
         download_file_chunked,
         upload_file,
     )
+
+    if source_store is target_store and source_key == target_key:
+        # Copying an object onto itself: no bytes to move and no sidecar to
+        # compare. Still progress for the heartbeat — one key resolved.
+        current_progress_tracker().mark_progress("storage.copy_file")
+        return False, "skipped:same_object"
 
     if await _cross_store_sha256_match(
         source_store, source_key, target_store, target_key

@@ -119,6 +119,30 @@ The deployment-write failure is **never** allowed to suppress the upstream
 write — the upstream write (Atlan handoff) always runs even if the customer-bucket
 mirror failed, so a copy lands somewhere regardless.
 
+#### Ref-only uploads: the deployment leg copies within its own store (FND-536)
+
+When the artifacts are **already in the deployment store** and no local copy
+exists on the uploading pod — a cross-pod / KEDA-scaled hand-off, or a caller
+passing only `UploadInput.ref` — both legs take `transfer.upload`'s
+deployment-store fallback branch. Every leg is therefore handed
+`_source_store=self.context.storage`, including the deployment leg itself, so
+the deployment write is a copy *within* the deployment store from the ref's
+prefix to the destination key. Two shapes follow:
+
+- **destination pinned to the ref's own prefix** (key-preserving, as the
+  hand-rolled `upload_to_atlan` bridges do): source and target key are the same
+  object, so `_upload_from_store` returns immediately with
+  `reason="skipped:same_object"` — no bytes, and not even the two sidecar GETs
+  the cross-store SHA-256 dedup would cost;
+- **destination not pinned**: a real copy runs, which is what keeps the
+  identical-key invariant above true for the ref-only case.
+
+Withholding the source store from the deployment leg (pre-FND-536) made a
+deployment→deployment copy inexpressible: the leg fell through to `StorageError
+("local_path does not exist …")`, which is a spurious `WARNING` under
+`best_effort` and a **failed run** under `required`, even though the upstream
+leg had done its job.
+
 ### Connector responsibility
 
 Connectors that hand artifacts to Atlan system apps **must** call `App.upload()`
