@@ -3,6 +3,15 @@ name: Conformance Remediate
 # Invoked by commenting `/remediate` (optionally `/remediate L004`) on a PR.
 # There is no automatic trigger: no PR receives a bot commit its author did not
 # ask for. All logic lives in the reusable workflow in application-sdk.
+#
+# Commenter gate: OWNER/MEMBER/COLLABORATOR only — the run pushes commits to
+# the PR's branch, so an unauthenticated drive-by comment must not be able to
+# dispatch it (same clause the @sdk-review / @sdk-resolve lanes use).
+#
+# Command filter: exactly `/remediate` or `/remediate <args>` — a bare
+# startsWith would also fire on `/remediate-all` (or any future
+# `/remediate-<x>` command), start a runner, and burn a VPN attach for a run
+# the dispatch script then rejects.
 
 on:
   issue_comment:
@@ -10,6 +19,16 @@ on:
 
 jobs:
   remediate:
-    if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/remediate')
+    if: >-
+      github.event.issue.pull_request
+      && (
+        github.event.comment.body == '/remediate'
+        || startsWith(github.event.comment.body, '/remediate ')
+      )
+      && (
+        github.event.comment.author_association == 'OWNER'
+        || github.event.comment.author_association == 'MEMBER'
+        || github.event.comment.author_association == 'COLLABORATOR'
+      )
     uses: atlanhq/application-sdk/.github/workflows/conformance-remediate-reusable.yaml@main
     secrets: inherit

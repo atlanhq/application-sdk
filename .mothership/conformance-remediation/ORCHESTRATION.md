@@ -245,6 +245,8 @@ Otherwise:
 5. Push and open the PR:
    ```bash
    git push origin "$RULE_BRANCH"
+   gh label create conformance-rule-fix --repo atlanhq/application-sdk \
+     --color 5319E7 --description "Narrows a conformance rule (remediation rule-review path)" || true
    gh pr create --repo atlanhq/application-sdk --base main \
      --title "fix(conformance): $RULE_ID no longer fires on <the shape>" \
      --label conformance-rule-fix \
@@ -283,13 +285,20 @@ leaves artefacts and a stray file in the diff fails the shape gate.
 git add <the exact paths you edited>
 git commit -m "fix(conformance): resolve $RULE_ID <RuleName> ($RULE_ID)"
 git push origin "$BRANCH"
+# Labels first, idempotently: `gh pr create` exits non-zero on an unknown
+# label, and most consumer repos have never seen these. `|| true` because a
+# pre-existing label also exits non-zero, and either way the create below is
+# what must not fail.
+gh label create conformance-remediation --repo "$REPO" \
+  --color 1D76DB --description "Opened by the conformance remediation lane (FND-18)" || true
 gh pr create --repo "$REPO" --base "$BASE_REF" --head "$BRANCH" \
   --title "fix(conformance): resolve $RULE_ID <RuleName>" \
   --label conformance-remediation \
   --body-file /tmp/remediation/pr_body.md
 ```
 Add `--label conformance-remediation:unverified` when any delivered finding was
-classified `unverifiable`, and `--draft` for S-series.
+classified `unverifiable` (lazy-create that label the same way), and `--draft`
+for S-series.
 
 **`push_to_pr_branch`:** re-read the PR head first — a developer may have pushed
 while you worked:

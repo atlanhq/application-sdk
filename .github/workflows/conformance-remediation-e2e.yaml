@@ -69,8 +69,11 @@ jobs:
     concurrency:
       # One e2e unit at a time per (repo, rule) — the rover's own idempotency
       # guard makes a duplicate a cheap `exists:`, but there is no reason to pay
-      # for two sandboxes.
-      group: conformance-remediation-e2e-${{ inputs.repo }}-${{ inputs.rule }}
+      # for two sandboxes. On the push trigger `inputs.*` are empty, so fall
+      # back to the ref name (which encodes the unit) — otherwise every
+      # push-triggered run would share one group and unrelated units would
+      # serialise behind a 100-minute run.
+      group: conformance-remediation-e2e-${{ inputs.repo || github.ref_name }}-${{ inputs.rule }}
       cancel-in-progress: false
     steps:
       - name: Checkout (this branch carries the playbook)

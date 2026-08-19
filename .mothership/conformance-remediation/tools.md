@@ -161,7 +161,7 @@ shape is a change nobody can defend later.
 
 ## Reporting
 
-Both blocks in Stage 7 are machine-parsed by the orchestrator, which persists the
+Both blocks in Stage 8 are machine-parsed by the orchestrator, which persists the
 decision log and completes the GitHub check run. Emit them verbatim, including the
 `=== END … ===` markers, and emit `DECISIONS` even when it is empty — an absent
 block is indistinguishable from a crashed run.
