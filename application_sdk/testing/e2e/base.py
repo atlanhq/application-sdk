@@ -63,6 +63,7 @@ from application_sdk.testing.e2e.client import (
     AEWorkflowClient,
     DAGNodeStatus,
     DAGRunResult,
+    cold_start_submit_kwargs,
 )
 from application_sdk.testing.e2e.credential import CredentialBody
 from application_sdk.testing.e2e.payload import (
@@ -1013,45 +1014,19 @@ class BaseE2ETest:
     def _submit_retry_kwargs(self) -> dict[str, int]:
         """Re-size ``submit_workflow``'s retry to the tenant-app cold-start budget.
 
-        A refused dial to a still-booting tenant app pod arrives as a generic
-        retryable 5xx, so ``submit_workflow`` already retries it (see
-        :func:`~application_sdk.testing.e2e.client._is_app_not_ready`) — only its
-        default 4x5s budget was too short for a pod cold start. Widening that
-        existing loop keeps ONE retry path for the submit, which matters because
-        the submit is non-idempotent: a second loop wrapped around it would
-        re-enter the inner retry per outer attempt (5x the POSTs it reports) and
-        would bypass ``retry_after`` honouring and the credential-name rotation
-        that make each re-POST safe.
-
-        ``app_ready_timeout_seconds`` of 0 returns no overrides, leaving
-        ``submit_workflow``'s own defaults in place. See that class attr for the
-        budget rationale.
+        Thin binding of this harness' ``app_ready_*`` class attrs onto
+        :func:`~application_sdk.testing.e2e.client.cold_start_submit_kwargs`,
+        which carries the rationale and the validation. See
+        ``app_ready_timeout_seconds`` for the budget rationale.
 
         Raises:
             MissingHarnessClassAttrError: when ``app_ready_timeout_seconds`` is
-                positive but ``app_ready_poll_interval_seconds`` is not — the
-                retry count integer-divides by the interval, so a zero or
-                negative interval would crash with ``ZeroDivisionError`` rather
-                than gate the submit.
+                positive but ``app_ready_poll_interval_seconds`` is not.
         """
-        if self.app_ready_timeout_seconds <= 0:
-            return {}
-        if self.app_ready_poll_interval_seconds <= 0:
-            raise MissingHarnessClassAttrError(
-                message=(
-                    "app_ready_poll_interval_seconds must be > 0 when "
-                    f"app_ready_timeout_seconds={self.app_ready_timeout_seconds} "
-                    "is set; got "
-                    f"app_ready_poll_interval_seconds={self.app_ready_poll_interval_seconds}"
-                ),
-                field="app_ready_poll_interval_seconds",
-            )
-        return {
-            "retries": (
-                self.app_ready_timeout_seconds // self.app_ready_poll_interval_seconds
-            ),
-            "retry_sleep_seconds": self.app_ready_poll_interval_seconds,
-        }
+        return cold_start_submit_kwargs(
+            self.app_ready_timeout_seconds,
+            self.app_ready_poll_interval_seconds,
+        )
 
     def run_full_dag(self) -> FullDAGOutcome:
         """Submit, poll AE, poll Atlas, return the combined outcome."""

@@ -1037,6 +1037,16 @@ class TestAppNotReadyDetection:
         assert _is_app_not_ready(500, _MASKED_409_BODY) is False
         assert _is_app_not_ready(200, {"run_id": "r"}) is False
 
+    def test_4xx_carrying_the_markers_is_not_app_not_ready(self):
+        # The status gate is 5xx-only, so a request-side rejection AE decided
+        # without dialling the pod stays a terminal AtlanApiHttpError even when
+        # its body happens to carry all three markers (e.g. an echoed-back
+        # payload). Heracles reports the real refused dial as a 500.
+        assert _is_app_not_ready(400, _REFUSED_BODY) is False
+        assert _is_app_not_ready(404, _REFUSED_BODY) is False
+        assert _is_app_not_ready(499, _REFUSED_BODY) is False
+        assert _is_app_not_ready(500, _REFUSED_BODY) is True
+
 
 class TestSubmitWorkflowAppColdStart:
     """A cold-starting tenant app pod: retried by the existing loop, then named."""

@@ -58,6 +58,7 @@ from application_sdk.testing.e2e._errors import (
     AtlanApiResponseInvariantError,
     AtlanApiTimeoutError,
     DAGProgressStalledError,
+    MissingHarnessClassAttrError,
     NoWorkerOnTaskQueueError,
 )
 
@@ -365,11 +366,68 @@ def _is_app_not_ready(status: int, body: Any) -> bool:
     start. A genuine 5xx, a 4xx, the already-active conflict, or a 5xx that only
     mentions a refused connection in passing must not read as this.
     """
-    if status < 400:
+    # 5xx only. Heracles reports the refused dial as a 500, and a 4xx is a
+    # request-side rejection AE decided without dialling the pod — so a 4xx
+    # whose body happens to carry the markers (e.g. echoed-back config) is a
+    # terminal AtlanApiHttpError, not this race.
+    if status < 500:
         return False
     haystack = body if isinstance(body, str) else repr(body)
     haystack = haystack.casefold()
     return all(marker in haystack for marker in _APP_NOT_READY_MARKERS)
+
+
+def cold_start_submit_kwargs(
+    timeout_seconds: int,
+    poll_interval_seconds: int,
+) -> dict[str, int]:
+    """Re-size :meth:`AEWorkflowClient.submit_workflow`'s retry to a cold start.
+
+    Shared by both full-DAG harnesses (``BaseE2ETest.run_full_dag`` and the
+    deprecated ``BaseFullDAGE2ETest.run_full_dag``) so a DIRECT-mode submit
+    against a freshly-installed tenant app gets the same budget in either.
+
+    A refused dial to a still-booting tenant app pod arrives as a generic
+    retryable 5xx, so ``submit_workflow`` already retries it (see
+    :func:`_is_app_not_ready`) — only its default 4x5s budget is too short for a
+    pod cold start. Widening that existing loop keeps ONE retry path for the
+    submit, which matters because the submit is non-idempotent: a second loop
+    wrapped around it would re-enter the inner retry per outer attempt (5x the
+    POSTs it reports) and would bypass ``retry_after`` honouring and the
+    credential-name rotation that make each re-POST safe.
+
+    Args:
+        timeout_seconds: Total cold-start budget (the harness'
+            ``app_ready_timeout_seconds``). 0 or negative returns no overrides,
+            leaving ``submit_workflow``'s own defaults in place.
+        poll_interval_seconds: Gap between submit attempts (the harness'
+            ``app_ready_poll_interval_seconds``).
+
+    Returns:
+        ``retries`` / ``retry_sleep_seconds`` kwargs for ``submit_workflow``,
+        or an empty dict when the budget is disabled.
+
+    Raises:
+        MissingHarnessClassAttrError: when ``timeout_seconds`` is positive but
+            ``poll_interval_seconds`` is not — the retry count integer-divides
+            by the interval, so a zero or negative interval would crash with
+            ``ZeroDivisionError`` rather than gate the submit.
+    """
+    if timeout_seconds <= 0:
+        return {}
+    if poll_interval_seconds <= 0:
+        raise MissingHarnessClassAttrError(
+            message=(
+                "app_ready_poll_interval_seconds must be > 0 when "
+                f"app_ready_timeout_seconds={timeout_seconds} is set; got "
+                f"app_ready_poll_interval_seconds={poll_interval_seconds}"
+            ),
+            field="app_ready_poll_interval_seconds",
+        )
+    return {
+        "retries": timeout_seconds // poll_interval_seconds,
+        "retry_sleep_seconds": poll_interval_seconds,
+    }
 
 
 class DAGNodeStatus(str, Enum):
@@ -877,8 +935,9 @@ class AEWorkflowClient:
         retryable 5xx (see :func:`_is_app_not_ready`), so the retry above
         already covers it — but the default 4x5s budget expires long before a
         pod boots. Callers that submit against a freshly-installed tenant app
-        (``BaseE2ETest.run_full_dag``) therefore pass a cold-start-sized
-        ``retries`` / ``retry_sleep_seconds``; on exhaustion, a last response
+        (both harnesses' ``run_full_dag``) therefore pass a cold-start-sized
+        ``retries`` / ``retry_sleep_seconds``, built by
+        :func:`cold_start_submit_kwargs`; on exhaustion, a last response
         that still reads as connection-refused is surfaced as
         :class:`AppNotReadyError` rather than an opaque
         :class:`AtlanApiHttpError`, so the failure names the cause. FND-402.
