@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from application_sdk.execution._temporal.interceptors.sizing import (
+    WILDCARD,
     SizingTelemetryInterceptor,
     _SizingActivityInboundInterceptor,
 )
@@ -243,7 +244,9 @@ class TestSizingInterceptor:
         return n
 
     async def test_returns_the_activity_result(self, mock_next):
-        interceptor = _SizingActivityInboundInterceptor(mock_next, 1.0)
+        interceptor = _SizingActivityInboundInterceptor(
+            mock_next, 1.0, frozenset({"merge"})
+        )
         with (
             patch(_ACTIVITY_TARGET) as mock_act,
             patch(_TRACKER_TARGET, _tracker(ContainerTrace())),
@@ -285,7 +288,9 @@ class TestSizingInterceptor:
     async def test_tags_a_failure_as_error_and_still_records(self, mock_next):
         """A failed activity is the most sizing-relevant sample there is."""
         mock_next.execute_activity = AsyncMock(side_effect=ValueError("boom"))
-        interceptor = _SizingActivityInboundInterceptor(mock_next, 1.0)
+        interceptor = _SizingActivityInboundInterceptor(
+            mock_next, 1.0, frozenset({"merge"})
+        )
         trace = ContainerTrace(peak_memory_bytes=1024, peak_source="poll")
         with (
             patch(_ACTIVITY_TARGET) as mock_act,
@@ -301,12 +306,15 @@ class TestSizingInterceptor:
         assert obs.peak_memory_bytes == 1024
 
     async def test_carries_the_activity_identity(self, mock_next):
-        interceptor = _SizingActivityInboundInterceptor(mock_next, 1.0)
+        interceptor = _SizingActivityInboundInterceptor(
+            mock_next, 1.0, frozenset({"merge"})
+        )
         with (
             patch(_ACTIVITY_TARGET) as mock_act,
             patch(_TRACKER_TARGET, _tracker(ContainerTrace(peak_memory_bytes=1))),
             patch(_RECORD_TARGET) as mock_record,
         ):
+            interceptor._activities = frozenset({"fetch_entities"})
             mock_act.info.return_value = MockActivityInfo(
                 activity_type="fetch_entities", task_queue="heavy", attempt=3
             )
@@ -329,7 +337,7 @@ class TestSizingInterceptor:
             yield ContainerTrace()
 
         interceptor = SizingTelemetryInterceptor(
-            poll_interval_seconds=0.25
+            poll_interval_seconds=0.25, activities=frozenset({"merge"})
         ).intercept_activity(mock_next)
         with (
             patch(_ACTIVITY_TARGET) as mock_act,
@@ -370,7 +378,7 @@ class TestAgainstTheRealTracker:
 
         nxt = AsyncMock()
         nxt.execute_activity = _work
-        interceptor = _SizingActivityInboundInterceptor(nxt, 0)
+        interceptor = _SizingActivityInboundInterceptor(nxt, 0, frozenset({"merge"}))
 
         with (
             patch(_ACTIVITY_TARGET) as mock_act,
@@ -401,7 +409,7 @@ class TestAgainstTheRealTracker:
 
         nxt = AsyncMock()
         nxt.execute_activity = AsyncMock(return_value="ok")
-        interceptor = _SizingActivityInboundInterceptor(nxt, 1.0)
+        interceptor = _SizingActivityInboundInterceptor(nxt, 1.0, frozenset({"merge"}))
 
         with (
             patch(_ACTIVITY_TARGET) as mock_act,
@@ -416,8 +424,91 @@ class TestAgainstTheRealTracker:
 
 
 async def interceptor_execute(mock_next):
-    interceptor = _SizingActivityInboundInterceptor(mock_next, 1.0)
+    interceptor = _SizingActivityInboundInterceptor(
+        mock_next, 1.0, frozenset({"merge"})
+    )
     return await interceptor.execute_activity(MockExecuteActivityInput())
+
+
+class TestActivityAllowList:
+    """Only the activities a dev names get measured."""
+
+    @pytest.fixture
+    def mock_next(self):
+        n = AsyncMock()
+        n.execute_activity = AsyncMock(return_value="ok")
+        return n
+
+    async def test_unselected_activity_is_never_measured(self, mock_next):
+        interceptor = _SizingActivityInboundInterceptor(
+            mock_next, 1.0, frozenset({"merge"})
+        )
+        with (
+            patch(_ACTIVITY_TARGET) as mock_act,
+            patch(_TRACKER_TARGET) as mock_tracker,
+            patch(_RECORD_TARGET) as mock_record,
+        ):
+            mock_act.info.return_value = MockActivityInfo(activity_type="write_state")
+            assert (
+                await interceptor.execute_activity(MockExecuteActivityInput()) == "ok"
+            )
+
+        # The tracker is never even constructed: an unselected activity must cost a
+        # set lookup, not a cgroup probe. Asserting on the tracker rather than on
+        # the record is what pins that — filtering later would still record nothing
+        # while paying the setup on every activity in the app.
+        mock_tracker.assert_not_called()
+        mock_record.assert_not_called()
+
+    async def test_selected_activity_is_measured(self, mock_next):
+        interceptor = _SizingActivityInboundInterceptor(
+            mock_next, 1.0, frozenset({"merge", "fetch_entities"})
+        )
+        with (
+            patch(_ACTIVITY_TARGET) as mock_act,
+            patch(_TRACKER_TARGET, _tracker(ContainerTrace(peak_memory_bytes=1))),
+            patch(_RECORD_TARGET) as mock_record,
+        ):
+            mock_act.info.return_value = MockActivityInfo(activity_type="merge")
+            await interceptor.execute_activity(MockExecuteActivityInput())
+        mock_record.assert_called_once()
+
+    async def test_empty_allow_list_measures_nothing(self, mock_next):
+        """Fails closed: attached but empty must be inert."""
+        interceptor = _SizingActivityInboundInterceptor(mock_next, 1.0, frozenset())
+        with (
+            patch(_ACTIVITY_TARGET) as mock_act,
+            patch(_TRACKER_TARGET) as mock_tracker,
+            patch(_RECORD_TARGET) as mock_record,
+        ):
+            mock_act.info.return_value = MockActivityInfo(activity_type="merge")
+            await interceptor.execute_activity(MockExecuteActivityInput())
+        mock_tracker.assert_not_called()
+        mock_record.assert_not_called()
+
+    async def test_wildcard_measures_everything(self, mock_next):
+        interceptor = _SizingActivityInboundInterceptor(
+            mock_next, 1.0, frozenset({WILDCARD})
+        )
+        with (
+            patch(_ACTIVITY_TARGET) as mock_act,
+            patch(_TRACKER_TARGET, _tracker(ContainerTrace(peak_memory_bytes=1))),
+            patch(_RECORD_TARGET) as mock_record,
+        ):
+            mock_act.info.return_value = MockActivityInfo(activity_type="anything")
+            await interceptor.execute_activity(MockExecuteActivityInput())
+        mock_record.assert_called_once()
+
+    async def test_a_failing_unselected_activity_still_propagates(self, mock_next):
+        """The passthrough path must not change failure behaviour either."""
+        mock_next.execute_activity = AsyncMock(side_effect=ValueError("boom"))
+        interceptor = _SizingActivityInboundInterceptor(
+            mock_next, 1.0, frozenset({"merge"})
+        )
+        with patch(_ACTIVITY_TARGET) as mock_act:
+            mock_act.info.return_value = MockActivityInfo(activity_type="other")
+            with pytest.raises(ValueError, match="boom"):
+                await interceptor.execute_activity(MockExecuteActivityInput())
 
 
 class TestSizingSettings:
@@ -448,3 +539,31 @@ class TestSizingSettings:
     def test_negative_poll_seconds_is_clamped(self, monkeypatch):
         monkeypatch.setenv("APPLICATION_SDK_SIZING_TELEMETRY_POLL_SECONDS", "-5")
         assert load_interceptor_settings().sizing_telemetry_poll_seconds == 0.0
+
+    def test_activities_default_to_empty(self, monkeypatch):
+        """Unset must mean nothing measured, never everything measured."""
+        monkeypatch.delenv("APPLICATION_SDK_SIZING_TELEMETRY_ACTIVITIES", raising=False)
+        assert load_interceptor_settings().sizing_telemetry_activities == frozenset()
+
+    def test_activities_are_parsed(self, monkeypatch):
+        monkeypatch.setenv(
+            "APPLICATION_SDK_SIZING_TELEMETRY_ACTIVITIES", "merge,fetch_entities"
+        )
+        assert load_interceptor_settings().sizing_telemetry_activities == frozenset(
+            {"merge", "fetch_entities"}
+        )
+
+    def test_activities_tolerate_helm_whitespace_and_empty_entries(self, monkeypatch):
+        """Hand-edited in a values file, so ' merge , , transform ' has to work."""
+        monkeypatch.setenv(
+            "APPLICATION_SDK_SIZING_TELEMETRY_ACTIVITIES", " merge , , transform ,"
+        )
+        assert load_interceptor_settings().sizing_telemetry_activities == frozenset(
+            {"merge", "transform"}
+        )
+
+    def test_wildcard_is_parsed(self, monkeypatch):
+        monkeypatch.setenv("APPLICATION_SDK_SIZING_TELEMETRY_ACTIVITIES", "*")
+        assert load_interceptor_settings().sizing_telemetry_activities == frozenset(
+            {"*"}
+        )

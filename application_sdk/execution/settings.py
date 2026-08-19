@@ -49,6 +49,27 @@ class InterceptorSettings:
     Off by default, so an SDK version bump alone changes nothing and collection
     is a per-tenant decision. This is the "collect data" stage of collect →
     classify → productionise; it only measures, and never routes.
+
+    A master kill switch, independent of the allow-list below: flipping this to
+    false stops collection without anyone having to edit per-tenant lists.
+    """
+
+    sizing_telemetry_activities: frozenset[str] = frozenset()
+    """Activity names to collect sizing telemetry for. **Empty collects nothing.**
+
+    Sizing data is only worth collecting for activities whose resource use varies
+    with the data they process — a merge, a transform, an extract. Most activities
+    are fixed-cost bookkeeping, and measuring them adds rows to the dataset that
+    the tier table is fitted from without adding information.
+
+    So this is an allow-list an app author opts into by name, not a default-on
+    sweep. Empty means nothing is collected, which is the fail-closed direction:
+    a tenant that sets the enable flag and forgets the list gets no telemetry
+    rather than telemetry on everything.
+
+    ``"*"`` collects every activity. That is the discovery case — worth running on
+    a test tenant to find out *which* activities vary before choosing names, and
+    not something to ship fleet-wide.
     """
 
     sizing_telemetry_poll_seconds: float = 1.0
@@ -121,11 +142,24 @@ def load_interceptor_settings() -> InterceptorSettings:
         # value on one tenant must not stop its workers from starting.
         return max(0.0, value)
 
+    def _name_set(env_var: str) -> frozenset[str]:
+        """Parse a comma-separated activity-name allow-list.
+
+        Tolerant of stray whitespace and empty entries, because this is hand-edited
+        in a Helm values file. Anything unparseable yields an empty set, i.e. no
+        collection — never accidental collection on everything.
+        """
+        raw = os.environ.get(env_var, "")
+        return frozenset(name.strip() for name in raw.split(",") if name.strip())
+
     return InterceptorSettings(
         enable_event_interceptor=_bool("APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR"),
         enable_output_interceptor=_bool("APPLICATION_SDK_ENABLE_OUTPUT_INTERCEPTOR"),
         enable_sizing_telemetry=_bool(
             "APPLICATION_SDK_ENABLE_SIZING_TELEMETRY", default=False
+        ),
+        sizing_telemetry_activities=_name_set(
+            "APPLICATION_SDK_SIZING_TELEMETRY_ACTIVITIES"
         ),
         sizing_telemetry_poll_seconds=_float(
             "APPLICATION_SDK_SIZING_TELEMETRY_POLL_SECONDS", 1.0
