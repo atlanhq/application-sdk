@@ -391,6 +391,26 @@ def create_worker(
         MetricsInterceptor(),
         TraceInterceptor(),
     ]
+
+    # Sizing telemetry sits before the user-supplied interceptors so its measured
+    # window covers them: anything they do on the way into the activity (a lock
+    # wait, an output buffer) is memory this activity's pod had to hold.
+    if interceptor_settings.enable_sizing_telemetry:
+        from application_sdk.execution._temporal.interceptors.sizing import (  # noqa: PLC0415 — cold path: only when sizing collection is enabled
+            SizingTelemetryInterceptor,
+        )
+
+        all_interceptors.append(
+            SizingTelemetryInterceptor(
+                poll_interval_seconds=interceptor_settings.sizing_telemetry_poll_seconds
+            )
+        )
+        logger.info(
+            "Activity sizing telemetry enabled (poll interval %ss). Measurement "
+            "only — no routing decisions are made from it.",
+            interceptor_settings.sizing_telemetry_poll_seconds,
+        )
+
     all_interceptors.extend(interceptors or [])
 
     if interceptor_settings.enable_output_interceptor:

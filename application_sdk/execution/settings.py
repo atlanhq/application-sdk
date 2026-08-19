@@ -43,6 +43,22 @@ class InterceptorSettings:
     enable_output_interceptor: bool = True
     """Enable structured output collection interceptor (metrics/artifacts)."""
 
+    enable_sizing_telemetry: bool = False
+    """Collect per-activity peak memory and CPU throttling for tier sizing.
+
+    Off by default, so an SDK version bump alone changes nothing and collection
+    is a per-tenant decision. This is the "collect data" stage of collect →
+    classify → productionise; it only measures, and never routes.
+    """
+
+    sizing_telemetry_poll_seconds: float = 1.0
+    """Peak-memory poll interval when the kernel watermark is not resettable.
+
+    Two file reads per tick with no RPC. ``0`` disables polling, which leaves
+    peak memory uncollected on any host whose ``memory.peak`` cannot be reset —
+    i.e. most kernels before 6.8 — so only set it to 0 to prove a cost concern.
+    """
+
     enable_cleanup_interceptor: bool = False
     """Enable temp-directory cleanup interceptor.
 
@@ -86,8 +102,33 @@ def load_interceptor_settings() -> InterceptorSettings:
             return True
         return default
 
+    def _float(env_var: str, default: float) -> float:
+        raw = os.environ.get(env_var, "").strip()
+        if not raw:
+            return default
+        try:
+            value = float(raw)
+        except ValueError:
+            logger.warning(
+                "%s=%r is not a number; using %s",
+                env_var,
+                raw,
+                default,
+                exc_info=True,
+            )
+            return default
+        # Negative would mean "poll in the past". Clamp rather than raise: a bad
+        # value on one tenant must not stop its workers from starting.
+        return max(0.0, value)
+
     return InterceptorSettings(
         enable_event_interceptor=_bool("APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR"),
         enable_output_interceptor=_bool("APPLICATION_SDK_ENABLE_OUTPUT_INTERCEPTOR"),
+        enable_sizing_telemetry=_bool(
+            "APPLICATION_SDK_ENABLE_SIZING_TELEMETRY", default=False
+        ),
+        sizing_telemetry_poll_seconds=_float(
+            "APPLICATION_SDK_SIZING_TELEMETRY_POLL_SECONDS", 1.0
+        ),
         enable_cleanup_interceptor=_bool("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR"),
     )
