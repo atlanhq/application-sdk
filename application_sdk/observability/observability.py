@@ -23,6 +23,7 @@ from application_sdk.constants import (
     ENABLE_OBSERVABILITY_STORE_SINK,
     LOG_FILE_NAME,
     METRICS_FILE_NAME,
+    SIZING_FILE_NAME,
     TRACES_FILE_NAME,
     UPSTREAM_OBJECT_STORE_NAME,
 )
@@ -38,6 +39,10 @@ LOCAL_OBS_SUBDIR_MAP = {
     "logs": f"{_OBS_MODE}/logs",
     "metrics": f"{_OBS_MODE}/metrics",
     "traces": f"{_OBS_MODE}/traces",
+    # Must be added alongside the S3 prefix below, not just there: the local dir and
+    # the remote key are derived from two different maps, and a signal present in
+    # only one writes to ``other/`` locally while uploading to ``sizing/``.
+    "sizing": f"{_OBS_MODE}/sizing",
 }
 
 # Map of signal type → S3 remote key prefix
@@ -45,6 +50,10 @@ OBSERVABILITY_S3_PREFIX_MAP = {
     "logs": f"artifacts/apps/observability/{_OBS_MODE}/logs",
     "metrics": f"artifacts/apps/observability/{_OBS_MODE}/metrics",
     "traces": f"artifacts/apps/observability/{_OBS_MODE}/traces",
+    # Its own prefix rather than the "other" fallback: this is the dataset tier
+    # envelopes get fitted from, and it has to be selectable across tenants without
+    # first filtering out whatever else lands in "other".
+    "sizing": f"artifacts/apps/observability/{_OBS_MODE}/sizing",
 }
 
 
@@ -180,7 +189,7 @@ class AtlanObservability(Generic[T], ABC):
         cls._upstream_store = None
 
     def _get_signal_type(self) -> str:
-        """Map file_name to signal type (logs, metrics, traces).
+        """Map file_name to signal type (logs, metrics, traces, sizing).
 
         Returns:
             str: The signal type based on self.file_name
@@ -191,6 +200,8 @@ class AtlanObservability(Generic[T], ABC):
             return "metrics"
         elif self.file_name == TRACES_FILE_NAME:
             return "traces"
+        elif self.file_name == SIZING_FILE_NAME:
+            return "sizing"
         return "other"
 
     def _get_partition_path(self, timestamp: datetime) -> str:
