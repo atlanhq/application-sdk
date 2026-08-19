@@ -47,26 +47,59 @@ Print: `[Stage 0/8 complete] repo=$REPO rule=$RULE_ID delivery=$DELIVERY`
 
 ---
 
-## Stage 1: Idempotency guard — before any work
+## Stage 1: Reconcile — never duplicate, refresh what has gone stale
 
-Cheapest possible exit. Do this before detection, not after.
+Before any work, establish what already exists for this unit and act on it.
+A second PR for the same rule is noise; an open PR that no longer clears the
+rule is worse than noise — it reads as "handled" while the gap regrows.
 
 **`one_pr_per_rule`:**
 
 ```bash
 BRANCH="conformance/$(echo "$RULE_ID" | tr '[:upper:]' '[:lower:]')"
-git ls-remote --exit-code --heads origin "$BRANCH" && echo "branch exists"
-gh pr list --repo "$REPO" --head "$BRANCH" --state all --json url,state
+gh pr list --repo "$REPO" --head "$BRANCH" --state all \
+  --json url,state,mergeable,updatedAt,mergedAt
 ```
 
-If either shows a hit, emit `RESULT: exists:<url>` and go straight to Stage 8.
-Do **not** reopen, rebase or amend someone else's branch.
+Route on what you find:
+
+| Prior PR state | Action |
+|---|---|
+| **None** (no branch, no PR) | proceed to Stage 2 — fresh unit |
+| **MERGED** | the fix landed. Run Stage 3's detect anyway: if the rule is clean → `RESULT: no-op: fixed by <url>`; if NEW findings appeared since the merge → proceed as a fresh unit. The old branch is gone with the merge; if a stale branch somehow remains, suffix yours `-r<YYYYMMDD>` — never force-push over history |
+| **OPEN, still adequate** | `RESULT: exists:<url>` — nothing to do. "Adequate" is checked, not assumed: see below |
+| **OPEN, not doing justice** | **refresh it in place** — see the refresh procedure |
+| **CLOSED without merge** | a human looked at this and said no. **Respect that**: `RESULT: exists:<url> (closed unmerged — human decision; not recreating)`. Only a human (`/remediate`) reopens this conversation |
+
+**"Adequate" is a measurement.** Check both, cheaply, before deciding:
+
+1. `mergeable != CONFLICTING` — a conflicted PR cannot land, so it is not doing
+   its job whatever its diff says.
+2. Coverage: fetch the PR branch, run the pinned detect **on the PR branch**
+   filtered to `RULE_ID`. Zero findings there AND the PR branch contains every
+   finding location currently failing on `main` → adequate. If `main` has grown
+   NEW findings for this rule since the PR was cut, the PR under-covers → refresh.
+
+**The refresh procedure** (open PR, conflicted or under-covering):
+
+```bash
+git fetch origin "$BRANCH" && git switch "$BRANCH"
+git merge origin/main          # resolve conflicts favouring main's structure
+# then run Stages 3-5 as normal ON THIS BRANCH for the remaining findings
+git push origin "$BRANCH"      # plain push — NEVER --force; history is shared
+```
+
+Update the PR body: keep the original table, append a `### Refreshed <date>`
+section stating what changed and the new N of M. Emit
+`RESULT: pushed:<sha> (refreshed <url>)`. The PR keeps its number, its
+reviewers, and its discussion — a refresh is a new commit on a shared branch,
+never a rewrite of one.
 
 **`push_to_pr_branch`:** check whether a prior run already landed this rule on
 this PR — look for a commit on the branch whose subject ends `($RULE_ID)`. If
 found and the rule now detects clean, that is `no-op: already fixed on this branch`.
 
-Print: `[Stage 1/8 complete] <exists|proceeding>`
+Print: `[Stage 1/8 complete] <fresh|exists|refresh|declined|merged-clean>`
 
 ---
 
