@@ -62,9 +62,22 @@ class _SizingActivityInboundInterceptor(ActivityInboundInterceptor):
         self._activities = activities
 
     def _selected(self, activity_type: str) -> bool:
+        """Whether this activity is on the allow-list.
+
+        Matches the **bare task name as well as the qualified one**. A v3 activity
+        registers with Temporal as ``"{app_name}:{task_name}"`` (see
+        ``execution._temporal.activities``), so ``activity_type`` is
+        ``"automation-engine:merge"`` — but an app author reading their own source
+        sees ``@task async def merge`` and will write ``merge``. Requiring the
+        qualified form would silently collect nothing, which is the worst outcome
+        available: the config looks right, the worker logs success, and the dataset
+        is empty. Both forms are accepted, so either spelling works.
+        """
         if WILDCARD in self._activities:
             return True
-        return activity_type in self._activities
+        if activity_type in self._activities:
+            return True
+        return activity_type.rpartition(":")[2] in self._activities
 
     async def execute_activity(self, input: ExecuteActivityInput) -> Any:
         info = activity.info()
