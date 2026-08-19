@@ -366,9 +366,30 @@ def check_health(base_url: str) -> bool:
     return False
 
 
+def unit_from_ref(ref_name: str) -> tuple[str, str]:
+    """Derive ``(repo, rule)`` from an e2e branch name.
+
+    ``workflow_dispatch`` only works once the workflow file is on the default
+    branch, which defeats the whole point of a pre-merge e2e. The push-trigger
+    escape hatch encodes the unit in the branch name instead::
+
+        e2e/conformance-remediation/<app-repo-name>/<RULE>
+        e.g. e2e/conformance-remediation/atlan-netsuite-app/L011
+
+    Returns ``("", "")`` when the ref is not in that namespace, so callers can
+    fall back to the explicit env inputs.
+    """
+    parts = (ref_name or "").split("/")
+    if len(parts) != 4 or parts[0] != "e2e" or parts[1] != "conformance-remediation":
+        return "", ""
+    return f"atlanhq/{parts[2]}", parts[3].strip().upper()
+
+
 def main() -> int:
     repo = os.environ.get("TARGET_REPO", "")
     rule_id = os.environ.get("RULE_ID", "").strip().upper()
+    if not repo and not rule_id:
+        repo, rule_id = unit_from_ref(os.environ.get("GITHUB_REF_NAME", ""))
     suite_version = os.environ.get("SUITE_VERSION") or DEFAULT_SUITE_VERSION
     gha_run_url = os.environ.get("GHA_RUN_URL", "")
 

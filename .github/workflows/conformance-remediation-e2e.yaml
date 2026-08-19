@@ -26,6 +26,14 @@
 name: Conformance Remediation E2E
 
 on:
+  # Pre-merge escape hatch: workflow_dispatch only resolves workflows on the
+  # default branch, which would defeat a pre-merge e2e. Pushing a branch named
+  #   e2e/conformance-remediation/<app-repo-name>/<RULE>
+  # (e.g. e2e/conformance-remediation/atlan-netsuite-app/L011) fires this
+  # workflow from that ref; the script derives the unit from GITHUB_REF_NAME.
+  push:
+    branches:
+      - 'e2e/conformance-remediation/**'
   workflow_dispatch:
     inputs:
       repo:

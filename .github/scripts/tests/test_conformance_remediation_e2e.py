@@ -257,3 +257,60 @@ def test_step_summary_carries_the_proof_fields() -> None:
     )
     for needle in ("pushed", "kimi-k3", "gpt-5.6-luna", "pull/99", "0.42"):
         assert needle in text
+
+
+# ── the push-trigger escape hatch ─────────────────────────────────────────
+
+
+def test_unit_is_derived_from_the_e2e_branch_name() -> None:
+    assert mod.unit_from_ref("e2e/conformance-remediation/atlan-netsuite-app/L011") == (
+        "atlanhq/atlan-netsuite-app",
+        "L011",
+    )
+    assert mod.unit_from_ref("e2e/conformance-remediation/atlan-glue-app/l004") == (
+        "atlanhq/atlan-glue-app",
+        "L004",
+    )
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "main",
+        "vaibhavchopra/fnd-18-remediation-lane",
+        "e2e/conformance-remediation",  # no unit
+        "e2e/other/atlan-x-app/L011",
+        "e2e/conformance-remediation/a/b/c",  # too deep
+        "",
+    ],
+)
+def test_non_e2e_refs_do_not_yield_a_unit(ref: str) -> None:
+    assert mod.unit_from_ref(ref) == ("", "")
+
+
+def test_explicit_inputs_beat_the_ref(monkeypatch: pytest.MonkeyPatch) -> None:
+    """workflow_dispatch inputs, when present, always win over the branch name."""
+    monkeypatch.chdir(REPO_ROOT)
+    monkeypatch.setenv("TARGET_REPO", "atlanhq/atlan-netsuite-app")
+    monkeypatch.setenv("RULE_ID", "L011")
+    monkeypatch.setenv(
+        "GITHUB_REF_NAME", "e2e/conformance-remediation/atlan-glue-app/L004"
+    )
+    monkeypatch.setenv("DRY_RUN", "1")
+    assert mod.main() == 0
+
+
+def test_the_ref_fallback_drives_a_dry_run(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(REPO_ROOT)
+    monkeypatch.delenv("TARGET_REPO", raising=False)
+    monkeypatch.setenv("RULE_ID", "")
+    monkeypatch.setenv(
+        "GITHUB_REF_NAME", "e2e/conformance-remediation/atlan-netsuite-app/L011"
+    )
+    monkeypatch.setenv("DRY_RUN", "1")
+    assert mod.main() == 0
+    preview = json.loads(capsys.readouterr().out)
+    assert preview["repositories"] == ["atlanhq/atlan-netsuite-app"]
+    assert preview["metadata"]["rule"] == "L011"
