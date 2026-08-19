@@ -297,6 +297,41 @@ def test_gate_precedes_the_approval_so_a_silent_run_cannot_be_stamped():
     assert steps[approve]["if"].startswith("success()")
 
 
+def test_stamp_step_consumes_the_gate_output():
+    """The gate's output only reaches the PR through this env line. Drop it and
+    a completed-but-silent run stamps '✅ Completed' again — the exact
+    reassurance this change exists to remove."""
+    stamp = next(
+        s
+        for s in dispatch_job()["steps"]
+        if s.get("name") == "Stamp cost + status onto starter comment"
+    )
+
+    assert (
+        stamp["env"]["VERDICT_DELIVERED"]
+        == "${{ steps.verdict.outputs.verdict_delivered }}"
+    )
+
+
+def test_stamp_step_switches_wording_on_the_exact_gate_string():
+    """'false' is the only value the gate emits for a silent run — 'unknown'
+    and '' mean it fell open or never ran. An inverted or loosened comparison
+    would either re-hide the failure or red-flag every healthy review."""
+    stamp = next(
+        s
+        for s in dispatch_job()["steps"]
+        if s.get("name") == "Stamp cost + status onto starter comment"
+    )
+    script = stamp["with"]["script"]
+
+    assert "const noVerdict = process.env.VERDICT_DELIVERED === 'false';" in script
+    # The no-verdict verb must be chosen ahead of the two '✅ Completed'
+    # branches, which both match a completed-but-silent run.
+    assert script.index("noVerdict ? '🟥") < script.index("'✅ **Completed**'")
+    assert "posted no verdict" in script
+    assert "Re-tag" in script
+
+
 def test_soft_success_rule_is_still_intact():
     """The delivered-then-dropped case (run 29001242204) must keep passing:
     `fail_or_warn` still downgrades to a warning when a verdict was posted."""
