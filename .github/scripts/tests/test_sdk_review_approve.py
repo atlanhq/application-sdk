@@ -127,6 +127,51 @@ def is_rate_limit_probe(argv) -> bool:
     return argv[1] == "api" and argv[2] == "rate_limit"
 
 
+def is_comment_post(argv) -> bool:
+    return (
+        argv[1] == "api"
+        and argv[2] == f"repos/{REPO}/issues/{PR}/comments"
+        and "POST" in argv
+    )
+
+
+def posted_comment_body(gh: FakeGH) -> str:
+    """The body of the single comment POST `gh` recorded."""
+    (argv,) = gh.called(is_comment_post)
+    return next(arg[len("body=") :] for arg in argv if arg.startswith("body="))
+
+
+def starter_comment(
+    head: str = HEAD, run_id: str = "99", finished: bool = False
+) -> dict:
+    """The "review starting" comment `sdk-review.yml` posts, as the API returns it.
+
+    Kept in the shape `sdk_review_gate.inflight_sibling_run` parses, since that
+    is the function the stale-head re-review defers to.
+    """
+    body = (
+        "<!-- SDK_REVIEW_STARTED -->\n"
+        f"<!-- SDK_REVIEW_STARTED_HEAD: {head} -->\n"
+        f"<!-- SDK_REVIEW_STARTED_RUN: {run_id} -->\n"
+        "SDK review starting."
+    )
+    if finished:
+        body += "\n\n\u2014 status `success`"
+    return {"id": 4, "body": body, "user": {"login": "atlan-ci"}}
+
+
+def retrigger_comment(head: str = HEAD) -> dict:
+    return {
+        "id": 6,
+        "body": approve.retrigger_body(OTHER, head),
+        "user": {"login": "atlan-ci"},
+    }
+
+
+def comments(*bodies: dict) -> str:
+    return json.dumps([list(bodies)])
+
+
 def base_gh(
     labels: list[str] | None = None, reviews: list[dict] | None = None
 ) -> FakeGH:
@@ -423,12 +468,153 @@ def test_superseded_ready_verdict_dismisses_the_stale_bot_approval(monkeypatch):
     assert gh.called(lambda a: "dismissals" in a[2])
 
 
+# --- the stale-head branch (FND-638) -------------------------------------
+#
+# The refusal to stamp is correct and pinned below; what these add is that the
+# refusal no longer ends the story. Six of sixteen completed runs on one day had
+# their verdict discarded here with only a warning, and the loop then waited on
+# a human who was never told.
+
+
+def stale_head_env() -> dict:
+    """Env for a run whose verdict describes OTHER while the live head is HEAD."""
+    return {"COMMENT_BODY": verdict_comment(head=OTHER)}
+
+
 def test_head_moved_since_review_skips_every_stamp(monkeypatch):
     gh = base_gh()
-    assert run_main(gh, monkeypatch, COMMENT_BODY=verdict_comment(head=OTHER)) == 0
+    assert run_main(gh, monkeypatch, **stale_head_env()) == 0
     assert gh.called(is_approve) == []
     assert gh.called(is_status) == []
     assert gh.called(is_label_add) == []
+
+
+def test_head_moved_requests_a_review_of_the_current_head(monkeypatch):
+    gh = base_gh()
+    assert run_main(gh, monkeypatch, **stale_head_env()) == 0
+    body = posted_comment_body(gh)
+    # `sdk-review.yml`'s job-level `if:` is a startsWith, so the mention has to
+    # be the first thing in the body — markers go at the bottom.
+    assert body.startswith("@sdk-review")
+    assert approve.RETRIGGER_MARKER in body
+    assert f"<!-- SDK_REVIEW_RETRIGGER_HEAD: {HEAD} -->" in body
+
+
+def test_the_review_request_is_posted_as_atlan_ci(monkeypatch):
+    """Not under GH_TOKEN: the reviewer's `if:` admits no identity we hold.
+
+    `sdk-review.yml` accepts `atlan-ci`, `mothership-ai[bot]` and human
+    collaborators; a trigger from the fleet App would be silently ignored. And
+    `sdk-review-dismiss-on-human.yml` excludes `atlan-ci` by name, so this
+    comment cannot be mistaken for the human activity that dismisses approvals.
+    """
+    gh = base_gh()
+    assert run_main(gh, monkeypatch, **stale_head_env()) == 0
+    index = gh.calls.index(gh.called(is_comment_post)[0])
+    assert gh.tokens[index] == "pat-atlan-ci"
+
+
+def test_the_review_request_is_posted_once_per_sha(monkeypatch):
+    """The once-per-sha key is what stops fix->review->fix becoming a loop."""
+    gh = base_gh()
+    gh.on(
+        lambda a: a[2] == f"repos/{REPO}/issues/{PR}/comments",
+        ok(comments(summary_comment(5), retrigger_comment(head=HEAD))),
+    )
+    assert run_main(gh, monkeypatch, **stale_head_env()) == 0
+    assert gh.called(is_comment_post) == []
+
+
+def test_a_request_for_a_different_sha_does_not_block_this_one(monkeypatch):
+    """Keyed on the head, not on "a request was made once on this PR"."""
+    gh = base_gh()
+    gh.on(
+        lambda a: a[2] == f"repos/{REPO}/issues/{PR}/comments",
+        ok(comments(summary_comment(5), retrigger_comment(head=OTHER))),
+    )
+    assert run_main(gh, monkeypatch, **stale_head_env()) == 0
+    assert f"<!-- SDK_REVIEW_RETRIGGER_HEAD: {HEAD} -->" in posted_comment_body(gh)
+
+
+def test_no_request_while_a_run_is_already_reviewing_that_head(monkeypatch):
+    gh = base_gh()
+    gh.on(
+        lambda a: a[2] == f"repos/{REPO}/issues/{PR}/comments",
+        ok(comments(summary_comment(5), starter_comment(head=HEAD))),
+    )
+    assert run_main(gh, monkeypatch, **stale_head_env()) == 0
+    assert gh.called(is_comment_post) == []
+
+
+def test_a_finished_run_on_that_head_does_not_count_as_in_flight(monkeypatch):
+    """A stamped starter means that run reached its end — it will post nothing more."""
+    gh = base_gh()
+    gh.on(
+        lambda a: a[2] == f"repos/{REPO}/issues/{PR}/comments",
+        ok(comments(summary_comment(5), starter_comment(head=HEAD, finished=True))),
+    )
+    assert run_main(gh, monkeypatch, **stale_head_env()) == 0
+    assert gh.called(is_comment_post) != []
+
+
+def test_no_request_when_the_current_head_already_has_a_verdict(monkeypatch):
+    """The fast path can be driven by an older verdict than the PR's newest."""
+    gh = base_gh()
+    gh.on(
+        lambda a: a[2] == f"repos/{REPO}/issues/{PR}/comments",
+        ok(comments(summary_comment(9, body=verdict_comment(head=HEAD)))),
+    )
+    assert run_main(gh, monkeypatch, **stale_head_env()) == 0
+    assert gh.called(is_comment_post) == []
+
+
+def test_no_request_when_the_comment_listing_cannot_be_read(monkeypatch):
+    """Fails closed: an unreadable listing cannot prove a request is absent.
+
+    A duplicate `@sdk-review` costs a full sandbox run; a lost one costs a human
+    typing the mention.
+    """
+    gh = base_gh()
+    gh.on(
+        lambda a: a[2] == f"repos/{REPO}/issues/{PR}/comments",
+        fail("gh: Bad gateway (HTTP 502)"),
+    )
+    assert run_main(gh, monkeypatch, **stale_head_env()) == 0
+    assert gh.called(is_comment_post) == []
+
+
+def test_no_request_without_an_approver_token(monkeypatch):
+    gh = base_gh()
+    assert run_main(gh, monkeypatch, APPROVER_TOKEN="", **stale_head_env()) == 0
+    assert gh.called(is_comment_post) == []
+
+
+def test_a_verdict_without_a_reviewed_head_marker_requests_nothing(monkeypatch):
+    """A different fault: no sha is established, so there is none to review."""
+    gh = base_gh()
+    body = "<!-- SDK_REVIEW -->\n<!-- VERDICT: READY_TO_MERGE -->\n"
+    assert run_main(gh, monkeypatch, COMMENT_BODY=body) == 0
+    assert gh.called(is_comment_post) == []
+
+
+def test_an_unresolvable_head_requests_nothing(monkeypatch):
+    """Also a different fault — and the sha to review is exactly what is missing."""
+    gh = base_gh()
+    gh.on(is_head_lookup, fail("gh: Bad gateway (HTTP 502)"))
+    assert run_main(gh, monkeypatch, **stale_head_env()) == 0
+    assert gh.called(is_comment_post) == []
+
+
+# --- request helpers in isolation ----------------------------------------
+
+
+def test_retrigger_posted_for_ignores_a_marker_without_a_head_stamp():
+    assert not approve.retrigger_posted_for([{"body": approve.RETRIGGER_MARKER}], HEAD)
+
+
+def test_reviewed_at_ignores_a_forged_verdict_from_another_author():
+    forged = summary_comment(11, login="attacker", body=verdict_comment(head=HEAD))
+    assert not approve.reviewed_at([forged], HEAD)
 
 
 def test_newer_verdict_comment_supersedes_this_run(monkeypatch):
