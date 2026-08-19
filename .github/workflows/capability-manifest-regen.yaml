@@ -89,10 +89,22 @@ jobs:
 
       # Sparse, and ahead of the full checkout below, so the ack stays the
       # first thing the requester sees.
+      #
+      # `path:` is load-bearing — this MUST NOT share a git dir with the full
+      # checkout below. actions/checkout writes `core.sparseCheckout=true` into
+      # `.git/config` (local scope), then the next checkout runs
+      # `git sparse-checkout disable` (which parks `false` in the *worktree*
+      # config) followed by `git config --local --unset-all
+      # extensions.worktreeConfig` — that unset makes the worktree config inert,
+      # so `core.sparseCheckout` reverts to true from local config and the
+      # narrow pattern is re-applied by the subsequent `git checkout --force`.
+      # Net effect: the workspace stays sparse, `pyproject.toml` is absent, and
+      # `uv run poe` fails with "Failed to spawn: poe" (FND-637).
       - name: Checkout reaction helper
         if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          path: .ack
           sparse-checkout: .github/scripts/react_to_comment.py
           sparse-checkout-cone-mode: false
 
@@ -106,7 +118,7 @@ jobs:
           REPO: ${{ github.repository }}
           COMMENT_ID: ${{ github.event.comment.id }}
           REACTION: rocket
-        run: python3 .github/scripts/react_to_comment.py
+        run: python3 .ack/.github/scripts/react_to_comment.py
 
       - name: Mint fleet App token
         id: app-token
