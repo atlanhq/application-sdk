@@ -77,8 +77,7 @@ def _read_first(paths: tuple[str, ...]) -> str | None:
         try:
             with open(path) as fh:
                 return fh.read().strip()
-        # conformance: ignore[E004] a missing cgroup file is the expected case off
-        # Linux and under partial hierarchies; None is the meaningful answer.
+        # conformance: ignore[E014] a missing cgroup file is the expected case off Linux and under partial hierarchies; None is the meaningful answer, and logging per read would fire on every call
         except OSError:
             continue
     return None
@@ -90,14 +89,13 @@ def _read_int(paths: tuple[str, ...]) -> int | None:
         try:
             with open(path) as fh:
                 raw = fh.read().strip()
-        # conformance: ignore[E004] see _read_first; a partial hierarchy must not raise.
+        # conformance: ignore[E014] see _read_first; a partial hierarchy must not raise and must not log per read
         except OSError:
             continue
         try:
             value = int(raw)
+        # conformance: ignore[E014] "max" (v2 unlimited) and an empty file both land here; both mean "no usable number" and must let a later path be tried
         except ValueError:
-            # "max" (v2 unlimited) lands here, as does an empty file. Both mean
-            # "no usable number", and both should let a later path be tried.
             continue
         if value >= 0:
             return value
@@ -182,8 +180,7 @@ def reset_memory_peak() -> bool:
         try:
             with open(path, "w") as fh:
                 fh.write("0")
-        # conformance: ignore[E004] read-only on <6.8 and absent off Linux; both
-        # are expected and mean "fall back to polling".
+        # conformance: ignore[E014] read-only before Linux 6.8 and absent off Linux; both are expected and mean "fall back to polling"
         except OSError:
             continue
         after = memory_peak_bytes()
@@ -268,9 +265,10 @@ def cpu_quota_cores() -> float | None:
             try:
                 quota, period = float(parts[0]), float(parts[1])
             except ValueError:
-                quota = period = 0.0
-            if quota > 0 and period > 0:
-                return quota / period
+                _logger.debug("unparseable cpu.max: %r", raw, exc_info=True)
+            else:
+                if quota > 0 and period > 0:
+                    return quota / period
 
     quota_us = _read_int((_CPU_QUOTA_V1,))
     period_us = _read_int((_CPU_PERIOD_V1,))
@@ -380,6 +378,7 @@ async def track_container_usage(
             task = asyncio.create_task(_poll())
         else:
             trace.peak_source = "unavailable"
+    # conformance: ignore[E004] telemetry setup; an instrument must never fail the block it measures
     except Exception:
         _logger.debug("container usage setup failed", exc_info=True)
 
@@ -391,8 +390,7 @@ async def track_container_usage(
             # Suppresses Exception too, not just CancelledError: if a cgroup read
             # blew up inside the poller, ``await task`` re-raises it here — on the
             # exit path of an activity that may well have succeeded.
-            # conformance: ignore[E004] deliberate; the poller's failure is
-            # telemetry loss and must not become the activity's failure.
+            # conformance: ignore[E003] deliberate; the poller's failure is telemetry loss and must not become the activity's failure
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
         _finalise(trace, start_cpu)
@@ -425,5 +423,6 @@ def _finalise(trace: ContainerTrace, start_cpu: CpuStat | None) -> None:
                 0, end_cpu.nr_throttled - start_cpu.nr_throttled
             )
             trace.cpu_periods = max(0, end_cpu.nr_periods - start_cpu.nr_periods)
+    # conformance: ignore[E004] telemetry finalisation; runs after a successful activity and must not turn it into a failure
     except Exception:
         _logger.debug("container usage finalisation failed", exc_info=True)
