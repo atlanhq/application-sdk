@@ -25,18 +25,45 @@ push, which is what this script does.
 What counts as "in flight"
 --------------------------
 Comment state on the PR, read fresh from the API. A review is in flight when the
-newest `@sdk-review` trigger comment is *unanswered*:
+newest `@sdk-review` **round** is unanswered and still plausibly alive:
 
-* no `<!-- SDK_REVIEW -->` verdict comment from the reviewer bot has been posted
-  since that trigger, and
-* the trigger carries no `confused` reaction — `sdk-review.yml`'s gate job
-  reacts 😕 to a trigger it consciously declines (an unchanged-HEAD bot
-  re-trigger), and deliberately posts no comment. Without reading that reaction
-  a declined trigger would look unanswered forever, and
-* the trigger is younger than `--max-inflight-seconds`. A reviewer sandbox that
-  died mid-run must not wedge the resolver; the default matches the resolver's
-  own Phase 3b wait, so this guard can never block longer than the wait the
-  resolver already tolerates.
+* the round carries no `confused` reaction — `sdk-review.yml`'s gate job reacts
+  😕 to a trigger it consciously declines (an unchanged-HEAD bot re-trigger), and
+  deliberately posts no comment. Without reading that reaction a declined
+  trigger would look unanswered forever, and
+* no verdict comment *answers* it (below), and
+* it is younger than `--max-inflight-seconds`. A reviewer sandbox that died
+  mid-run must not wedge the resolver; the default matches the resolver's own
+  Phase 3b wait, so this guard can never block longer than the wait the resolver
+  already tolerates.
+
+A **round** is one or more trigger comments posted within
+`--burst-window-seconds` of each other, collapsed. Duplicate `@sdk-review` bursts
+seconds apart are one logical request, and the reviewer's own dedupe guard
+answers such a burst with a single verdict — counting them as two rounds would
+leave one permanently unanswered and hold every later push for the full stale
+window.
+
+Answered, and why a timestamp alone cannot decide it
+----------------------------------------------------
+"A verdict landed after the trigger" is not sufficient. A reviewer sandbox runs
+for up to 2h while the resolver's per-round wait is 40 min, and a human can
+re-tag mid-review — so two reviews can be outstanding at once. The older one's
+verdict then lands *after* the newer trigger, and a timestamp rule reads it as
+the newer round's answer: the guard clears, the push lands, and the review that
+is still running has its verdict stranded as stale. That is the same bug this
+script exists to prevent, one round further along.
+
+So the reviewer echoes the trigger it is answering as
+`<!-- ANSWERS_TRIGGER: <comment id> -->` (`.mothership/pr-review/ORCHESTRATION.md`
+§3e), and a round counts as answered when a verdict either:
+
+* echoes one of that round's trigger comment ids — precise, or
+* carries no `ANSWERS_TRIGGER` stamp at all and is newer than the round —
+  the timestamp fallback, for verdicts predating the stamp, `workflow_dispatch`
+  reviews that have no trigger comment, and the case where the reviewer simply
+  omits the marker. Degrading to the old rule exactly where correlation is
+  missing keeps a missing stamp from turning into a 40-minute false hold.
 
 Fail-open, deliberately
 -----------------------
@@ -74,6 +101,7 @@ import re
 import subprocess
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 DEFAULT_REPO = "atlanhq/application-sdk"
@@ -95,6 +123,16 @@ TRIGGER_RE = re.compile(r"^\s*@sdk-review\b", re.IGNORECASE)
 
 # The reaction `sdk-review.yml`'s gate leaves on a trigger it declined.
 DECLINED_REACTION = "confused"
+
+# The reviewer's echo of the trigger comment id its verdict answers. Written by
+# .mothership/pr-review/ORCHESTRATION.md §3e; absent on verdicts that predate it
+# and on workflow_dispatch reviews, which have no trigger comment.
+ANSWERS_TRIGGER_RE = re.compile(r"<!--\s*ANSWERS_TRIGGER:\s*(\d+)\s*-->")
+
+# Triggers this close together are one logical request, not two rounds. The
+# duplicate bursts seen in practice land ~11s apart; the reviewer answers such a
+# burst once, so treating them as two rounds would leave one unanswerable.
+DEFAULT_BURST_WINDOW_SECONDS = 120
 
 # Slightly past the reviewer's typical 5–15 min, and equal to the resolver's own
 # Phase 3b per-round wait: a review that has not answered in this long is not
@@ -206,42 +244,113 @@ def was_declined(comment: dict) -> bool:
         return False
 
 
-def _newest(comments: list[dict], predicate: Callable[[dict], bool]) -> dict | None:
-    """The last comment satisfying `predicate`, by created_at.
+def extract_answers_trigger(body: str) -> str | None:
+    """The trigger comment id a verdict says it answers, if it stamps one."""
+    match = ANSWERS_TRIGGER_RE.search(body)
+    return match.group(1) if match else None
+
+
+def _dated(
+    comments: list[dict], predicate: Callable[[dict], bool]
+) -> list[tuple[datetime, dict]]:
+    """Matching comments as (timestamp, comment), oldest first.
 
     The API returns comments oldest-first, but sorting on the timestamp rather
     than trusting the order keeps this correct if that ever changes — and a
-    comment with an unparseable timestamp is skipped rather than silently
+    comment whose timestamp will not parse is dropped rather than silently
     sorting to the front.
     """
-    dated = [
-        (stamp, comment)
-        for comment in comments
-        if predicate(comment)
-        and (stamp := parse_timestamp(comment.get("created_at"))) is not None
-    ]
-    if not dated:
-        return None
-    return max(dated, key=lambda pair: pair[0])[1]
+    dated: list[tuple[datetime, dict]] = []
+    for comment in comments:
+        if not predicate(comment):
+            continue
+        stamp = parse_timestamp(comment.get("created_at"))
+        if stamp is not None:
+            dated.append((stamp, comment))
+    dated.sort(key=lambda pair: pair[0])
+    return dated
+
+
+@dataclass(frozen=True)
+class Round:
+    """One logical `@sdk-review` request: a burst of triggers, collapsed."""
+
+    ids: frozenset[str]
+    first_at: datetime
+    last_at: datetime
+    declined: bool
+
+
+def logical_rounds(
+    comments: list[dict],
+    burst_window_seconds: float = DEFAULT_BURST_WINDOW_SECONDS,
+) -> list[Round]:
+    """Trigger comments grouped into rounds, oldest round first.
+
+    A round is declined only when *every* trigger in it was declined: if the gate
+    let any of them through, a review ran.
+    """
+    rounds: list[Round] = []
+    group: list[tuple[datetime, dict]] = []
+
+    def flush() -> None:
+        if not group:
+            return
+        rounds.append(
+            Round(
+                ids=frozenset(
+                    str(comment["id"]) for _, comment in group if comment.get("id")
+                ),
+                first_at=group[0][0],
+                last_at=group[-1][0],
+                declined=all(was_declined(comment) for _, comment in group),
+            )
+        )
+        group.clear()
+
+    for stamp, comment in _dated(comments, is_trigger):
+        if group and (stamp - group[-1][0]).total_seconds() > burst_window_seconds:
+            flush()
+        group.append((stamp, comment))
+    flush()
+    return rounds
+
+
+def answering_verdict(
+    round_: Round, verdicts: list[tuple[datetime, dict]]
+) -> tuple[datetime, dict] | None:
+    """The verdict that answers `round_`, or None.
+
+    Newest first, so a correlated answer wins over an older fallback match.
+    """
+    for stamp, comment in reversed(verdicts):
+        echoed = extract_answers_trigger(comment.get("body") or "")
+        if echoed is not None:
+            # Stamped verdicts are self-describing: one that names a different
+            # round is NOT this round's answer, however recent it is. That is the
+            # whole point — an earlier round's late verdict must not clear a
+            # review that is still running.
+            if echoed in round_.ids:
+                return stamp, comment
+            continue
+        if stamp > round_.last_at:
+            return stamp, comment
+    return None
 
 
 def assess(
     comments: list[dict],
     now: datetime,
     max_inflight_seconds: float = DEFAULT_MAX_INFLIGHT_SECONDS,
+    burst_window_seconds: float = DEFAULT_BURST_WINDOW_SECONDS,
 ) -> tuple[bool, str, str]:
     """Return (in_flight, reason, message) for the PR's comment state."""
-    trigger = _newest(comments, is_trigger)
-    if trigger is None:
+    rounds = logical_rounds(comments, burst_window_seconds)
+    if not rounds:
         return False, "no-trigger", "No `@sdk-review` trigger on this PR."
 
-    trigger_at = parse_timestamp(trigger.get("created_at"))
-    # _newest only returns comments whose timestamp parsed, so this holds; the
-    # assert-free re-check keeps the type checker honest without a cast.
-    if trigger_at is None:  # pragma: no cover - unreachable via _newest
-        return False, "trigger-undated", "Newest trigger has no usable timestamp."
-
-    if was_declined(trigger):
+    current = rounds[-1]
+    if current.declined:
         return (
             False,
             "trigger-declined",
@@ -249,32 +358,33 @@ def assess(
             "(😕) — no review is running for it.",
         )
 
-    verdict = _newest(comments, is_verdict)
-    verdict_at = parse_timestamp(verdict.get("created_at")) if verdict else None
-    if verdict_at is not None and verdict_at > trigger_at:
+    answer = answering_verdict(current, _dated(comments, is_verdict))
+    if answer is not None:
+        stamp, comment = answer
+        correlated = extract_answers_trigger(comment.get("body") or "") is not None
         return (
             False,
             "verdict-answered",
-            f"The newest `@sdk-review` trigger was answered at "
-            f"{verdict_at.isoformat()} — clear to push.",
+            f"The newest `@sdk-review` round was answered at {stamp.isoformat()} "
+            f"({'correlated' if correlated else 'by timestamp'}) — clear to push.",
         )
 
-    waited = (now - trigger_at).total_seconds()
+    waited = (now - current.last_at).total_seconds()
     if waited >= max_inflight_seconds:
         return (
             False,
             "trigger-stale",
-            f"The newest `@sdk-review` trigger is {int(waited)}s old with no "
-            f"verdict (cap {int(max_inflight_seconds)}s) — treating the review "
-            f"as dead rather than holding the push further.",
+            f"The newest `@sdk-review` round is {int(waited)}s old with no "
+            f"verdict of its own (cap {int(max_inflight_seconds)}s) — treating "
+            f"the review as dead rather than holding the push further.",
         )
 
     return (
         True,
         "review-in-flight",
         f"An `@sdk-review` review has been in flight for {int(waited)}s with no "
-        f"verdict yet. Pushing now would move HEAD out from under it and the "
-        f"verdict would be discarded as stale.",
+        f"verdict of its own yet. Pushing now would move HEAD out from under it "
+        f"and the verdict would be discarded as stale.",
     )
 
 
@@ -284,12 +394,13 @@ def check(
     runner: Runner = subprocess.run,
     now: Clock = _utcnow,
     max_inflight_seconds: float = DEFAULT_MAX_INFLIGHT_SECONDS,
+    burst_window_seconds: float = DEFAULT_BURST_WINDOW_SECONDS,
 ) -> tuple[bool, str, str]:
     """One assessment against live comment state. Fails open."""
     comments = fetch_comments(repo, pr_number, runner)
     if comments is None:
         return False, "state-unreadable", "Could not read PR comments — failing open."
-    return assess(comments, now(), max_inflight_seconds)
+    return assess(comments, now(), max_inflight_seconds, burst_window_seconds)
 
 
 def wait_until_clear(
@@ -301,6 +412,7 @@ def wait_until_clear(
     max_inflight_seconds: float = DEFAULT_MAX_INFLIGHT_SECONDS,
     deadline_seconds: float = DEFAULT_DEADLINE_SECONDS,
     interval_seconds: float = DEFAULT_INTERVAL_SECONDS,
+    burst_window_seconds: float = DEFAULT_BURST_WINDOW_SECONDS,
 ) -> tuple[bool, str, str]:
     """Poll until no review is in flight, or the deadline elapses.
 
@@ -322,7 +434,7 @@ def wait_until_clear(
     )
     while True:
         in_flight, reason, message = check(
-            repo, pr_number, runner, now, max_inflight_seconds
+            repo, pr_number, runner, now, max_inflight_seconds, burst_window_seconds
         )
         if not in_flight:
             return in_flight, reason, message
@@ -376,6 +488,15 @@ def build_parser() -> argparse.ArgumentParser:
             f"(default {DEFAULT_MAX_INFLIGHT_SECONDS})"
         ),
     )
+    parser.add_argument(
+        "--burst-window-seconds",
+        type=float,
+        default=DEFAULT_BURST_WINDOW_SECONDS,
+        help=(
+            "triggers this close together count as one round "
+            f"(default {DEFAULT_BURST_WINDOW_SECONDS})"
+        ),
+    )
     return parser
 
 
@@ -398,10 +519,16 @@ def main(
             args.max_inflight_seconds,
             args.deadline_seconds,
             args.interval_seconds,
+            args.burst_window_seconds,
         )
     else:
         in_flight, reason, message = check(
-            repo, args.pr, runner, now, args.max_inflight_seconds
+            repo,
+            args.pr,
+            runner,
+            now,
+            args.max_inflight_seconds,
+            args.burst_window_seconds,
         )
 
     if in_flight:

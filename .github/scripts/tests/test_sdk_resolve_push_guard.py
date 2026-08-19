@@ -70,9 +70,14 @@ class FakeTime:
 
 
 def trigger(
-    created_at: str, *, declined: bool = False, login: str = "atlan-ci"
+    created_at: str,
+    *,
+    declined: bool = False,
+    login: str = "atlan-ci",
+    comment_id: int = 1,
 ) -> dict:
     return {
+        "id": comment_id,
         "body": "@sdk-review",
         "created_at": created_at,
         "user": {"login": login},
@@ -85,9 +90,13 @@ def verdict(
     *,
     login: str = "mothership-ai[bot]",
     marker: str = "<!-- SDK_REVIEW -->",
+    answers: int | None = None,
 ) -> dict:
+    """A verdict comment. `answers` stamps the trigger id it correlates to."""
+    stamp = f"<!-- ANSWERS_TRIGGER: {answers} -->\n" if answers is not None else ""
     return {
-        "body": f"{marker}\n<!-- VERDICT: READY_TO_MERGE -->\n## SDK Review\n",
+        "id": 900 + (answers or 0),
+        "body": f"{marker}\n<!-- VERDICT: READY_TO_MERGE -->\n{stamp}## SDK Review\n",
         "created_at": created_at,
         "user": {"login": login},
         "reactions": {},
@@ -178,6 +187,176 @@ def test_stale_cap_is_configurable():
     )
 
 
+# --- round correlation ----------------------------------------------------
+
+
+def test_older_rounds_late_verdict_does_not_clear_the_new_round():
+    """The regression this correlation exists for.
+
+    Round 1 triggers, the resolver's 40-min wait elapses, a new round triggers
+    (a human re-tag, or a reviewer sandbox that outlived the wait — it runs up
+    to 2h). Round 1's verdict then lands AFTER round 2's trigger. By timestamp
+    alone it reads as round 2's answer, the guard clears, the push lands, and
+    the review still running has its verdict stranded as stale — the exact bug
+    this script exists to prevent, one round further along.
+    """
+    comments = [
+        trigger(at(minutes=-50), comment_id=1),
+        trigger(at(minutes=-5), comment_id=2),
+        verdict(at(minutes=-1), answers=1),
+    ]
+    in_flight, reason, _ = guard.assess(comments, NOW)
+    assert in_flight
+    assert reason == "review-in-flight"
+
+
+def test_correlated_verdict_for_the_current_round_clears():
+    comments = [
+        trigger(at(minutes=-50), comment_id=1),
+        trigger(at(minutes=-5), comment_id=2),
+        verdict(at(minutes=-30), answers=1),
+        verdict(at(minutes=-1), answers=2),
+    ]
+    in_flight, reason, message = guard.assess(comments, NOW)
+    assert not in_flight
+    assert reason == "verdict-answered"
+    assert "correlated" in message
+
+
+def test_unstamped_verdict_still_answers_by_timestamp():
+    """Verdicts predating the marker, and workflow_dispatch reviews, keep working.
+
+    A missing stamp must degrade to the old rule, not to a 40-minute false hold.
+    """
+    comments = [trigger(at(minutes=-20), comment_id=7), verdict(at(minutes=-1))]
+    in_flight, reason, message = guard.assess(comments, NOW)
+    assert not in_flight
+    assert reason == "verdict-answered"
+    assert "by timestamp" in message
+
+
+def test_a_stamped_verdict_for_another_round_does_not_block_an_unstamped_answer():
+    """Mixed state: the reviewer stamped one round and omitted it on the next."""
+    comments = [
+        trigger(at(minutes=-50), comment_id=1),
+        trigger(at(minutes=-5), comment_id=2),
+        verdict(at(minutes=-30), answers=1),
+        verdict(at(minutes=-1)),
+    ]
+    in_flight, reason, _ = guard.assess(comments, NOW)
+    assert not in_flight
+    assert reason == "verdict-answered"
+
+
+def test_stamped_verdict_older_than_the_round_it_names_still_answers_it():
+    """Correlation beats ordering: the id match is authoritative, not the clock."""
+    comments = [
+        trigger(at(minutes=-5), comment_id=2),
+        verdict(at(minutes=-4), answers=2),
+    ]
+    in_flight, reason, _ = guard.assess(comments, NOW)
+    assert not in_flight
+    assert reason == "verdict-answered"
+
+
+def test_answers_trigger_is_extracted():
+    body = "<!-- SDK_REVIEW -->\n<!-- ANSWERS_TRIGGER: 3312445566 -->\n"
+    assert guard.extract_answers_trigger(body) == "3312445566"
+
+
+def test_missing_answers_trigger_returns_none():
+    assert guard.extract_answers_trigger("<!-- SDK_REVIEW -->") is None
+
+
+def test_empty_answers_trigger_is_not_a_correlation():
+    """The reviewer's sed deletes an empty marker; if one slips through, ignore it.
+
+    Reading `ANSWERS_TRIGGER:` with no digits as "names a round, not yours" would
+    hold every push for the full stale window on a marker that says nothing.
+    """
+    assert guard.extract_answers_trigger("<!-- ANSWERS_TRIGGER:  -->") is None
+    comments = [trigger(at(minutes=-20), comment_id=7)]
+    comments.append(verdict(at(minutes=-1)))
+    comments[-1]["body"] = "<!-- SDK_REVIEW -->\n<!-- ANSWERS_TRIGGER:  -->\n"
+    in_flight, reason, _ = guard.assess(comments, NOW)
+    assert not in_flight
+    assert reason == "verdict-answered"
+
+
+# --- burst collapsing -----------------------------------------------------
+
+
+def test_a_duplicate_burst_is_one_round():
+    """Two triggers seconds apart get ONE verdict; two rounds would never clear.
+
+    The reviewer's dedupe guard answers a burst once, stamping whichever comment
+    id won. Counting the burst as two rounds would leave one permanently
+    unanswered and hold every later push for the full stale window.
+    """
+    comments = [
+        trigger(at(minutes=-20), comment_id=1),
+        trigger(at(minutes=-20, seconds=11), comment_id=2),
+        verdict(at(minutes=-1), answers=1),
+    ]
+    assert len(guard.logical_rounds(comments)) == 1
+    in_flight, reason, _ = guard.assess(comments, NOW)
+    assert not in_flight
+    assert reason == "verdict-answered"
+
+
+def test_triggers_beyond_the_burst_window_are_separate_rounds():
+    comments = [
+        trigger(at(minutes=-20), comment_id=1),
+        trigger(at(minutes=-5), comment_id=2),
+    ]
+    assert len(guard.logical_rounds(comments)) == 2
+
+
+def test_burst_window_is_configurable():
+    comments = [
+        trigger(at(minutes=-20), comment_id=1),
+        trigger(at(minutes=-19), comment_id=2),
+    ]
+    assert len(guard.logical_rounds(comments, burst_window_seconds=30)) == 2
+    assert len(guard.logical_rounds(comments, burst_window_seconds=120)) == 1
+
+
+def test_a_burst_is_declined_only_when_every_trigger_was():
+    """One accepted trigger in the burst means a review ran."""
+    mixed = [
+        trigger(at(minutes=-5), comment_id=1, declined=True),
+        trigger(at(minutes=-5, seconds=11), comment_id=2),
+    ]
+    assert not guard.logical_rounds(mixed)[0].declined
+    assert guard.assess(mixed, NOW)[0]
+
+    both = [
+        trigger(at(minutes=-5), comment_id=1, declined=True),
+        trigger(at(minutes=-5, seconds=11), comment_id=2, declined=True),
+    ]
+    assert guard.logical_rounds(both)[0].declined
+    assert guard.assess(both, NOW)[1] == "trigger-declined"
+
+
+def test_round_age_is_measured_from_its_last_trigger():
+    comments = [
+        trigger(at(minutes=-41), comment_id=1),
+        trigger(at(minutes=-40, seconds=-30), comment_id=2),
+    ]
+    # One round (30s apart); its last trigger is 2430s old, past the 2400 cap.
+    assert len(guard.logical_rounds(comments)) == 1
+    assert guard.assess(comments, NOW)[1] == "trigger-stale"
+
+
+def test_a_trigger_without_an_id_does_not_break_the_round():
+    """Defensive: a comment payload missing `id` still forms a usable round."""
+    comment = trigger(at(minutes=-5))
+    del comment["id"]
+    rounds = guard.logical_rounds([comment])
+    assert rounds[0].ids == frozenset()
+    assert guard.assess([comment], NOW)[0]
+
+
 # --- comment classification ----------------------------------------------
 
 
@@ -216,9 +395,9 @@ def test_verdict_from_a_non_reviewer_login_is_not_an_answer():
 
 def test_newest_trigger_wins_over_an_older_answered_one():
     comments = [
-        trigger(at(minutes=-40)),
-        verdict(at(minutes=-25)),
-        trigger(at(minutes=-3)),
+        trigger(at(minutes=-40), comment_id=1),
+        verdict(at(minutes=-25), answers=1),
+        trigger(at(minutes=-3), comment_id=2),
     ]
     in_flight, reason, _ = guard.assess(comments, NOW)
     assert in_flight
@@ -227,16 +406,19 @@ def test_newest_trigger_wins_over_an_older_answered_one():
 
 def test_out_of_order_listing_is_sorted_by_timestamp():
     """Correct even if the API stops returning comments oldest-first."""
-    comments = [trigger(at(minutes=-3)), trigger(at(minutes=-40))]
+    comments = [
+        trigger(at(minutes=-3), comment_id=2),
+        trigger(at(minutes=-40), comment_id=1),
+    ]
     in_flight, reason, _ = guard.assess(comments, NOW)
     assert in_flight
     assert reason == "review-in-flight"
 
 
 def test_undated_comments_are_skipped_not_sorted_first():
-    undated = trigger(at(minutes=-3))
+    undated = trigger(at(minutes=-3), comment_id=2)
     undated["created_at"] = "not-a-timestamp"
-    comments = [undated, trigger(at(minutes=-41))]
+    comments = [undated, trigger(at(minutes=-41), comment_id=1)]
     in_flight, reason, _ = guard.assess(comments, NOW)
     assert not in_flight
     assert reason == "trigger-stale"

@@ -37,7 +37,9 @@ git push
 ```
 
 `--wait` blocks (printing a heartbeat) until the in-flight review answers, then
-exits 0. Exit **10** means it gave up: either the trigger has gone 40 min
+exits 0. "Answers" means the same thing it means in 3b — the reviewer's
+`ANSWERS_TRIGGER` echo of *your* trigger, not merely a verdict with a later
+timestamp. Exit **10** means it gave up: either the trigger has gone 40 min
 unanswered (reviewer sandbox died) or the 30-min wait budget elapsed. On exit 10
 do **not** push — carry the change into the next round and push it once the
 verdict has been consumed. Never `git push` without the guard in front of it,
@@ -167,15 +169,32 @@ REPLY=""
 deadline=$(( $(date +%s) + 2400 ))
 while [ "$(date +%s)" -lt "$deadline" ]; do
   REPLY=$(gh pr view "$PR_NUMBER" --json comments --jq \
-    "[.comments[] | select(.createdAt > \"$TRIGGER_TIME\")
+    "[.comments[]
        | select(.author.login | test(\"mothership\"))
-       | select(.body | contains(\"<!-- SDK_REVIEW -->\"))] | last | .url // empty")
+       | select(.body | contains(\"<!-- SDK_REVIEW -->\"))
+       | select(
+           (.body | contains(\"<!-- ANSWERS_TRIGGER: $TRIGGER_ID -->\"))
+           or ((.body | test(\"<!-- ANSWERS_TRIGGER: [0-9]+ -->\") | not)
+               and (.createdAt > \"$TRIGGER_TIME\"))
+         )] | last | .url // empty")
   [ -n "$REPLY" ] && break
   echo "[3b] waiting for @sdk-review reply … $(date -u +%H:%M:%S)"
   sleep 30
 done
 [ -z "$REPLY" ] && echo "[3b] no reply after 40 min — stopped_reason=review-timeout"
 ```
+
+**Why the filter is not just `createdAt > TRIGGER_TIME`.** Two reviews can be
+outstanding on one PR at once — the reviewer's sandbox runs up to 2h while this
+wait is 40 min, and a human can tag `@sdk-review` mid-review. An earlier round's
+verdict then lands *after* your trigger, and a timestamp-only filter latches it:
+you act on a verdict computed for a HEAD that is no longer current, and the
+review actually running has its verdict stranded. So match on the reviewer's
+`<!-- ANSWERS_TRIGGER: <comment id> -->` echo of the trigger it answers
+(`.mothership/pr-review/ORCHESTRATION.md` §3e), and fall back to the timestamp
+only for a verdict that carries no such stamp — a `workflow_dispatch` review, or
+one predating the marker. `sdk_resolve_push_guard.py` applies the same rule; keep
+the two in step.
 
 Take the **last** matching comment (never a CI comment, a human comment, the
 `@sdk-review` trigger you just posted, or an older review). If the wait elapses
