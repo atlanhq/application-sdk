@@ -96,7 +96,24 @@ class Scenario:
         connection: Optional connection override. If not provided, uses class defaults.
         args: Full args override for backward compatibility. Takes precedence over
               credentials/metadata/connection if provided.
-        endpoint: Optional override for the workflow endpoint (dynamic).
+        endpoint: Optional override for the workflow endpoint (dynamic). A FULL
+            override — it replaces the path outright, query string included, so a
+            scenario using it opts out of ``entrypoint`` resolution entirely.
+        entrypoint: Which ``@entrypoint`` of a multi-entrypoint app this workflow
+            scenario starts, e.g. ``"miner"``. Appended to the suite's
+            ``workflow_endpoint`` as ``?entrypoint=<name>`` — the canonical
+            selector on ``POST /workflows/v1/start``.
+
+            Without it, a workflow scenario against a multi-entrypoint app starts
+            whichever entrypoint the app resolves as its default (the one marked
+            ``default=True``, else the alphabetically first). A suite that believes
+            it exercises the miner may in fact be running the crawler, and
+            passing, with nothing to surface the mismatch. Declaring it also makes
+            "which product workflow does this scenario cover" machine-readable
+            instead of recoverable only by reading the source.
+
+            Single-entrypoint apps can leave it unset: the target is unambiguous
+            and the emitted endpoint is byte-identical to before.
         description: Optional human-readable description of what this tests.
         skip: If True, this scenario will be skipped during test execution.
         skip_reason: Reason for skipping (shown in test output).
@@ -146,6 +163,7 @@ class Scenario:
     connection: dict[str, Any] | None = None
     args: dict[str, Any] | LazyValue | None = None
     endpoint: str | None = None
+    entrypoint: str | None = None
     description: str = ""
     skip: bool = False
     skip_reason: str = ""
