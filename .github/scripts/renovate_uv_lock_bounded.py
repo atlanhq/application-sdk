@@ -237,21 +237,52 @@ def retention_ceilings(
     return ceilings
 
 
-def restore(lock_path: Path, baseline: str) -> None:
-    """Put the committed lock back, for every path that refuses to bound.
+def withhold(lock_path: Path, baseline: str, window: str) -> bool:
+    """Refuse in a way a REQUIRED check can see. Returns whether it wrote.
 
-    The driver does not own the commit. Under Renovate's ``postUpgradeTasks`` the
-    working tree is committed once the command returns, pass or fail, so a guard
-    that only returns non-zero does not actually withhold the resolve it just
-    rejected — it ships it with ``[options]`` still in place, and ``uv sync
-    --locked`` then fails in the image build (FND-367). Five fleet lock branches
-    were stranded exactly that way before this existed.
+    The driver cannot stop Renovate committing, and it cannot abstain either.
+    Renovate captures its own unbounded ``uv lock --upgrade`` as an artifact
+    *before* this command runs, commits the working tree afterwards whatever the
+    exit code, and falls back to that captured artifact whenever the tree matches
+    HEAD. So the two obvious refusals both ship something unwanted: leaving the
+    rejected resolve in place ships the rejected resolve, and restoring the
+    baseline exactly ships Renovate's *unbounded* copy instead — silently, since
+    a valid-but-unbounded lock passes every check.
 
-    An empty baseline means the ref had no committed ``uv.lock`` at all; there is
-    nothing to restore and truncating the file would be worse than leaving it.
+    Nor does exiting non-zero withhold anything on its own. It reds
+    ``renovate/artifacts``, which is an advisory status: it is not a required
+    check in any lock-lane repo, those repos require zero approving reviews, and
+    Renovate re-arms GitHub-native automerge in the same pass that records the
+    failure. Observed 2026-08-19: six of the day's eight auto-merged fleet lock
+    PRs carried a third-party release between 21 minutes and 3 hours old.
+
+    The one lever the driver does hold over a *required* check is the lock's own
+    validity. So a refusal writes the baseline's versions — never the rejected
+    resolve, never an unbounded one — and adds an ``[options]`` table the repo's
+    ``pyproject.toml`` does not declare. That is exactly what ``uv sync --locked``
+    rejects in the image build, and ``scan / Build Image`` is required in every
+    lock-lane repo, so the branch cannot merge until a human looks at it.
+
+    Deliberate, documented, and meant to be temporary: the durable fix is a
+    required age check that fails on its own evidence rather than on a lock the
+    build cannot install (FND-379).
+
+    A branch that *adds* a brand-new ``uv.lock`` has no committed baseline to
+    write back. The tripwire still goes on, over whatever the resolve left: there
+    is no safer content to choose, and leaving a valid-but-unbounded lock in place
+    is the one refusal that lands on no required check at all. ``strip_options``
+    recovers whatever was there in both cases.
     """
-    if baseline:
-        lock_path.write_text(baseline)
+    base = baseline or lock_path.read_text()
+    if not base:
+        return False
+    base = strip_options(base)
+    tripwire = f'\n[options]\nexclude-newer-span = "{window}"\n'
+    anchor = base.find("\n[[package]]")
+    lock_path.write_text(
+        base[:anchor] + tripwire + base[anchor:] if anchor != -1 else base + tripwire
+    )
+    return True
 
 
 def strip_options(lock_text: str) -> str:
@@ -641,6 +672,11 @@ def main(argv: list[str] | None = None) -> int:
     cutoff = dt.datetime.now(dt.timezone.utc) - window
     ceilings = retention_ceilings(lock_upload_times(baseline), cutoff)
 
+    # What Renovate resolved unbounded, and has already captured as the artifact
+    # it will commit if this command leaves the tree looking untouched. Read it
+    # now: the bounded resolve below overwrites it.
+    renovate_versions = lock_versions(lock_path.read_text())
+
     result = run_uv_lock(build_uv_command(args.window, exempt, ceilings), project_dir)
     admitted_early: list[str] = []
 
@@ -652,12 +688,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         admitted_early = blocked_by_floor(result.stderr, floors)
         if not admitted_early:
-            restore(lock_path, baseline)
+            withhold(lock_path, baseline, args.window)
             print(
                 "Bounded `uv lock` failed and no deliberately-floored package was "
                 "named in the error, so there is nothing safe to admit early. "
-                "Refusing to fall back to an unbounded resolve. The committed "
-                "lock has been restored.\n" + result.stderr,
+                "Refusing to fall back to an unbounded resolve. The lock is left "
+                "deliberately un-installable — baseline versions plus a tripwire "
+                "`[options]` table — so a required check holds the branch.\n"
+                + result.stderr,
                 file=sys.stderr,
             )
             return 1
@@ -666,11 +704,12 @@ def main(argv: list[str] | None = None) -> int:
             project_dir,
         )
         if result.returncode != 0:
-            restore(lock_path, baseline)
+            withhold(lock_path, baseline, args.window)
             print(
                 "Bounded `uv lock` still failed after admitting "
-                f"{', '.join(admitted_early)}. The committed lock has been "
-                "restored.\n" + result.stderr,
+                f"{', '.join(admitted_early)}. The lock is left deliberately "
+                "un-installable — baseline versions plus a tripwire `[options]` "
+                "table — so a required check holds the branch.\n" + result.stderr,
                 file=sys.stderr,
             )
             return 1
@@ -682,7 +721,7 @@ def main(argv: list[str] | None = None) -> int:
         detail = ", ".join(
             f"{n} {old} -> {new}" for n, (old, new) in sorted(regressed.items())
         )
-        restore(lock_path, baseline)
+        withhold(lock_path, baseline, args.window)
         print(
             f"Bounded resolve moved {len(regressed)} package(s) BACKWARDS from the "
             f"last committed lock: {detail}. Retention ceilings make an age-driven "
@@ -692,8 +731,28 @@ def main(argv: list[str] | None = None) -> int:
             "API will say — because no resolve can keep a yanked pin and every "
             "one of them will land here until the base branch moves off it. A "
             "changed constraint is the other candidate. Either way it wants a "
-            "human, so the committed lock has been restored and this run bounds "
-            "nothing.",
+            "human, so this run bounds nothing and leaves the lock deliberately "
+            "un-installable — baseline versions plus a tripwire `[options]` "
+            "table — for a required check to hold the branch on.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if after == before and renovate_versions != before:
+        moved = ", ".join(
+            f"{name} {before.get(name, 'absent')} -> {version}"
+            for name, version in sorted(renovate_versions.items())
+            if before.get(name) != version
+        )
+        withhold(lock_path, baseline, args.window)
+        print(
+            f"The bound admits nothing today, but Renovate's own unbounded "
+            f"resolve moved: {moved}. Leaving the tree matching HEAD would hand "
+            "Renovate's copy straight to the branch — a valid lock that passes "
+            "every check while carrying releases minutes old — so the lock is "
+            "left deliberately un-installable instead and this run fails. "
+            "Nothing needs fixing in the repo: the window will admit these "
+            f"versions once they are `{args.window}` old.",
             file=sys.stderr,
         )
         return 1
