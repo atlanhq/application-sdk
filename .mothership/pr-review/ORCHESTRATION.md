@@ -1275,7 +1275,19 @@ SHA from the prompt header — write the raw hex characters, never the
 literal placeholder text `<HEAD_SHA>`.** The §3f submit step adds a
 shell-level safety net (`sed`) in case the LLM writes the placeholder,
 but the correct value must come from the reviewed HEAD, not a live
-re-fetch. For toolkit scopes, the fourth marker
+re-fetch. The fourth marker `<!-- ANSWERS_TRIGGER: <comment id> -->`
+records **which** `@sdk-review` comment this verdict answers — write
+`COMMENT_ID` from the prompt header verbatim, raw digits only. On a
+`workflow_dispatch` run `COMMENT_ID` is blank; **omit the whole line**
+rather than writing an empty or placeholder value. Two reviews can be
+outstanding on one PR at once (this sandbox runs up to 2h while the
+resolver's per-round wait is 40 min, and a human can re-tag mid-review),
+so a verdict's timestamp alone cannot say which request it answers. The
+resolver's push guard reads this marker to tell "the round I am waiting
+on has answered" from "an earlier round's verdict landed late"; without
+it, it falls back to comparing timestamps and can clear a push while
+this review is still running — stranding the verdict you are about to
+post. For toolkit scopes, the fifth marker
 `<!-- TOOLKIT_ARTIFACT_HASH: <sha256> -->` records the PR-generated
 artifact hash from Phase 1b-toolkit so the next round can carry
 consumer validation forward; omit the line entirely for non-toolkit
@@ -1285,6 +1297,7 @@ scopes.
 <!-- SDK_REVIEW -->
 <!-- VERDICT: READY_TO_MERGE | NEEDS_FIXES | BLOCKED | NEEDS_HUMAN | NEEDS_REBASE -->
 <!-- REVIEWED_HEAD: <HEAD_SHA> -->
+<!-- ANSWERS_TRIGGER: <COMMENT_ID> -->            <!-- omit on workflow_dispatch -->
 <!-- TOOLKIT_ARTIFACT_HASH: <ARTIFACT_HASH> -->   <!-- toolkit scopes only -->
 ## SDK <Review | Re-review> (mothership): PR #<number> — <title>
 <!-- For review_scope=contract-toolkit, write this heading as:
@@ -1444,6 +1457,16 @@ gh api "repos/$REPO/statuses/$HEAD_SHA" \
 # pattern finds no match and the file is unchanged.
 HEAD_SHA_STAMPED=$(jq -r '.headRefOid' /tmp/PR.json)
 sed -i "s|<!-- REVIEWED_HEAD: <HEAD_SHA> -->|<!-- REVIEWED_HEAD: ${HEAD_SHA_STAMPED} -->|" /tmp/review-summary.md
+
+# Same safety net for ANSWERS_TRIGGER. COMMENT_ID is from the prompt
+# header (set it as a shell var, as Phase 0 step 6b does) and is blank
+# on workflow_dispatch — so stamp it, then delete the line outright if
+# the value came out empty. An empty marker is worse than none: the
+# push guard would read it as "this verdict names a round, and it is not
+# yours" and hold the resolver's push for the full stale window.
+# Both seds are idempotent — a correctly-written line matches neither.
+sed -i "s|<!-- ANSWERS_TRIGGER: <COMMENT_ID> -->|<!-- ANSWERS_TRIGGER: ${COMMENT_ID} -->|" /tmp/review-summary.md
+sed -i '/<!-- ANSWERS_TRIGGER: *-->/d' /tmp/review-summary.md
 
 # Summary comment (the body built in 3a, including the
 # <!-- SDK_REVIEW --> marker and the <!-- REVIEW_DATA --> JSON) — LAST:
