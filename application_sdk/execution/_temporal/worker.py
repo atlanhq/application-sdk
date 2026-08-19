@@ -737,20 +737,35 @@ def create_worker(
     # window covers them: anything they do on the way into the activity (a lock
     # wait, an output buffer) is memory this activity's pod had to hold.
     if interceptor_settings.enable_sizing_telemetry:
-        from application_sdk.execution._temporal.interceptors.sizing import (  # noqa: PLC0415 — cold path: only when sizing collection is enabled
-            SizingTelemetryInterceptor,
-        )
-
-        all_interceptors.append(
-            SizingTelemetryInterceptor(
-                poll_interval_seconds=interceptor_settings.sizing_telemetry_poll_seconds
+        _sizing_activities = interceptor_settings.sizing_telemetry_activities
+        if not _sizing_activities:
+            # Enabled with no allow-list is almost certainly a half-finished
+            # config change, and the fail-closed answer (measure nothing) is
+            # silent — so say so at startup rather than leaving someone to wonder
+            # why no rows arrived.
+            logger.warning(
+                "APPLICATION_SDK_ENABLE_SIZING_TELEMETRY is on but "
+                "APPLICATION_SDK_SIZING_TELEMETRY_ACTIVITIES is empty, so nothing "
+                "will be collected. Name the activities to measure, or set '*' to "
+                "measure all of them."
             )
-        )
-        logger.info(
-            "Activity sizing telemetry enabled (poll interval %ss). Measurement "
-            "only — no routing decisions are made from it.",
-            interceptor_settings.sizing_telemetry_poll_seconds,
-        )
+        else:
+            from application_sdk.execution._temporal.interceptors.sizing import (  # noqa: PLC0415 — cold path: only when sizing collection is enabled
+                SizingTelemetryInterceptor,
+            )
+
+            all_interceptors.append(
+                SizingTelemetryInterceptor(
+                    poll_interval_seconds=interceptor_settings.sizing_telemetry_poll_seconds,
+                    activities=_sizing_activities,
+                )
+            )
+            logger.info(
+                "Activity sizing telemetry enabled for %s (poll interval %ss). "
+                "Measurement only — no routing decisions are made from it.",
+                sorted(_sizing_activities),
+                interceptor_settings.sizing_telemetry_poll_seconds,
+            )
 
     all_interceptors.extend(interceptors or [])
 
