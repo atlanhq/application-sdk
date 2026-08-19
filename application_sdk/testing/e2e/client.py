@@ -52,6 +52,7 @@ if TYPE_CHECKING:
 from application_sdk.errors.base import AppError
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.e2e._errors import (
+    AppNotReadyError,
     AtlanAEWorkflowAlreadyActiveError,
     AtlanApiHttpError,
     AtlanApiResponseInvariantError,
@@ -324,6 +325,42 @@ def _is_already_active_run(status: int, body: Any) -> bool:
         return False
     haystack = body if isinstance(body, str) else repr(body)
     return _ALREADY_ACTIVE_CODE.casefold() in haystack.casefold()
+
+
+# A tenant app pod that LM reports as reconciled can still be tens of seconds
+# from serving HTTP on :8000. At submit, Heracles POSTs the credential config to
+# http://<conn>.<conn>-app.svc.cluster.local:8000/workflows/v1/config/... against
+# that pod and echoes a refused dial back as an HTTP 500 carrying the Go net
+# error — e.g. "dial tcp 10.x.x.x:8000: connect: connection refused" (FND-402:
+# s3/gcs/mongodbatlas failed this way while cloudsql/iceberg passed in the same
+# window).
+#
+# Unlike _ALREADY_ACTIVE_CODE this has no stable error code to match — the
+# string originates in Go's net package, passes through Heracles unstructured,
+# and never acquires one — so this is necessarily a prose match. Same caveat as
+# _is_credential_name_conflict: if the wire text changes the match silently
+# stops firing and the race resurfaces as a generic retryable 5xx, which is the
+# pre-FND-402 behaviour (safe, just slower to diagnose) rather than a new
+# failure mode.
+#
+# This does NOT gate whether the submit is retried — submit_workflow's
+# `retryable` predicate already retries any non-already-active 5xx, this shape
+# included. It exists only to (a) justify the long cold-start budget and (b)
+# name the terminal failure AppNotReadyError instead of a bare 500.
+_APP_NOT_READY_MARKER = "connection refused"
+
+
+def _is_app_not_ready(status: int, body: Any) -> bool:
+    """True when a submit response reads as a not-yet-serving tenant app pod.
+
+    Deliberately narrow (connection-refused only): a refused dial never reached
+    the pod, so no run was created and the wait is unambiguously a cold start.
+    A genuine 5xx, a 4xx, or the already-active conflict must not read as this.
+    """
+    if status < 400:
+        return False
+    haystack = body if isinstance(body, str) else repr(body)
+    return _APP_NOT_READY_MARKER in haystack.casefold()
 
 
 class DAGNodeStatus(str, Enum):
@@ -826,7 +863,18 @@ class AEWorkflowClient:
           :class:`AtlanAEWorkflowAlreadyActiveError`.
 
         Genuine 5xx that are *not* the already-active conflict remain retryable.
+
+        A tenant app pod that is still cold-starting also answers as a generic
+        retryable 5xx (see :func:`_is_app_not_ready`), so the retry above
+        already covers it — but the default 4x5s budget expires long before a
+        pod boots. Callers that submit against a freshly-installed tenant app
+        (``BaseE2ETest.run_full_dag``) therefore pass a cold-start-sized
+        ``retries`` / ``retry_sleep_seconds``; on exhaustion, a last response
+        that still reads as connection-refused is surfaced as
+        :class:`AppNotReadyError` rather than an opaque
+        :class:`AtlanApiHttpError`, so the failure names the cause. FND-402.
         """
+        started = time.monotonic()
         status, body = self._post_with_retry(
             "/api/service/package-workflows?submit=true",
             body=payload,
@@ -869,6 +917,21 @@ class AEWorkflowClient:
             raise AtlanApiResponseInvariantError(
                 message=f"AE submit returned no run_id\nresponse={body!r}",
                 expectation="run_id present in submit response",
+            )
+        if _is_app_not_ready(status, body):
+            elapsed = time.monotonic() - started
+            raise AppNotReadyError(
+                message=(
+                    "the tenant app pod never accepted connections on :8000 "
+                    f"across {retries + 1} submit attempt(s) over {elapsed:.0f}s. "
+                    "Heracles POSTs the credential config to the tenant-deployed "
+                    "pod at AE submit and it kept refusing the connection ('dial "
+                    "tcp :8000: connect: connection refused'). The deployment "
+                    "reconciled (prepare-tenant went green) but the pod never "
+                    f"started serving HTTP in time.\nresponse={body!r}"
+                ),
+                attempts=retries + 1,
+                elapsed_seconds=elapsed,
             )
         raise AtlanApiHttpError(
             message=f"AE submit failed: HTTP {status}\nresponse={body!r}",

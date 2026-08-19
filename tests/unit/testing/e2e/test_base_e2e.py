@@ -18,8 +18,6 @@ import pytest
 
 from application_sdk.contracts.types import ConnectionRef
 from application_sdk.testing.e2e._errors import (
-    AppNotReadyError,
-    AtlanApiHttpError,
     ManifestDagMissingError,
     ManifestFileNotFoundError,
     MissingHarnessEnvError,
@@ -894,84 +892,56 @@ class TestAgentJsonOverrideReachesPayload:
 
 
 # ---------------------------------------------------------------------------
-# _submit_when_app_ready — tenant-app readiness gate (FND-402)
+# _submit_retry_kwargs — tenant-app cold-start budget (FND-402)
 # ---------------------------------------------------------------------------
 
 
-def _refused_error() -> AtlanApiHttpError:
-    """A submit failure shaped like a not-yet-serving tenant pod."""
-    return AtlanApiHttpError(
-        message=(
-            "AE submit failed: HTTP 500\n"
-            'response="dial tcp 10.0.0.5:8000: connect: connection refused"'
-        ),
-    )
+class TestSubmitRetryKwargs:
+    """The cold-start budget handed to submit_workflow's existing retry loop."""
 
+    def test_budget_is_expressed_as_retries_times_interval(self) -> None:
+        """300s / 5s → 60 retries at 5s, so the loop spans the pod cold start."""
+        harness = _ConcreteE2ETest()
+        assert harness._submit_retry_kwargs() == {
+            "retries": 60,
+            "retry_sleep_seconds": 5,
+        }
 
-class TestSubmitWhenAppReady:
-    """The pre-submit readiness gate that fixes the connection-refused 500s."""
+    def test_overridden_budget_is_honoured(self) -> None:
+        """A connector may shrink the budget per-repo."""
+        harness = _ConcreteE2ETest()
+        harness.app_ready_timeout_seconds = 90
+        harness.app_ready_poll_interval_seconds = 10
+        assert harness._submit_retry_kwargs() == {
+            "retries": 9,
+            "retry_sleep_seconds": 10,
+        }
 
-    def _harness(self) -> _ConcreteE2ETest:
+    def test_zero_budget_defers_to_submit_workflow_defaults(self) -> None:
+        """0 passes no overrides at all, rather than retries=0."""
+        harness = _ConcreteE2ETest()
+        harness.app_ready_timeout_seconds = 0
+        assert harness._submit_retry_kwargs() == {}
+
+    def test_run_full_dag_passes_the_budget_to_submit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The budget actually reaches the submit — not just computed and dropped."""
         harness = _ConcreteE2ETest()
         harness.client = MagicMock()
-        # No real sleeping in the poll loop.
-        harness.app_ready_poll_interval_seconds = 0
-        return harness
-
-    def test_polls_until_the_pod_accepts_the_connection(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A refused submit is retried until the pod serves, then the run_id."""
+        harness.client.submit_workflow.return_value = "run-1"
+        harness.connection_qualified_name = "default/test/1234567890"
         monkeypatch.setattr(
-            "application_sdk.testing.e2e.base.time.sleep", lambda _s: None
+            _ConcreteE2ETest, "_bootstrap_workflow", lambda self: "slug"
         )
-        harness = self._harness()
-        harness.client.submit_workflow.side_effect = [
-            _refused_error(),
-            _refused_error(),
-            "run-ready",
-        ]
-        assert harness._submit_when_app_ready({"any": "payload"}) == "run-ready"
-        assert harness.client.submit_workflow.call_count == 3
-
-    def test_raises_app_not_ready_after_timeout(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Exhausting the budget fails with a clear AppNotReadyError, not a 500."""
         monkeypatch.setattr(
-            "application_sdk.testing.e2e.base.time.sleep", lambda _s: None
+            _ConcreteE2ETest, "_build_ae_payload", lambda self, slug: {"slug": slug}
         )
-        # Deterministic clock: first read arms the deadline, later reads cross it.
-        ticks = iter([0.0, 1.0, 999.0, 999.0])
-        monkeypatch.setattr(
-            "application_sdk.testing.e2e.base.time.monotonic", lambda: next(ticks)
+        # Stop right after the submit — the polls beyond it are covered elsewhere.
+        harness.client.poll_native_status.side_effect = RuntimeError(
+            "stop after submit"
         )
-        harness = self._harness()
-        harness.app_ready_timeout_seconds = 10
-        refused = _refused_error()
-        harness.client.submit_workflow.side_effect = refused
-        with pytest.raises(AppNotReadyError) as excinfo:
-            harness._submit_when_app_ready({})
-        # The originating 500 is chained so the operator still sees the raw error.
-        assert excinfo.value.__cause__ is refused
-        assert "did not accept connections on :8000" in str(excinfo.value)
-
-    def test_non_refused_error_is_reraised_immediately(self) -> None:
-        """A genuine AE error is never swallowed by the readiness gate."""
-        harness = self._harness()
-        genuine = AtlanApiHttpError(
-            message='AE submit failed: HTTP 500\nresponse="internal error"'
-        )
-        harness.client.submit_workflow.side_effect = genuine
-        with pytest.raises(AtlanApiHttpError) as excinfo:
-            harness._submit_when_app_ready({})
-        assert excinfo.value is genuine
-        assert harness.client.submit_workflow.call_count == 1
-
-    def test_timeout_zero_disables_the_gate(self) -> None:
-        """A 0 budget falls back to a single plain submit."""
-        harness = self._harness()
-        harness.app_ready_timeout_seconds = 0
-        harness.client.submit_workflow.return_value = "run-direct"
-        assert harness._submit_when_app_ready({}) == "run-direct"
-        assert harness.client.submit_workflow.call_count == 1
+        with pytest.raises(RuntimeError, match="stop after submit"):
+            harness.run_full_dag()
+        _, kwargs = harness.client.submit_workflow.call_args
+        assert kwargs == {"retries": 60, "retry_sleep_seconds": 5}
