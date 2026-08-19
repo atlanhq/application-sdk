@@ -30,7 +30,11 @@ from temporalio.worker import (
 from application_sdk.observability.cgroup import track_container_usage
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.sizing import SizingObservation, record_observation
-from application_sdk.observability.sizing_inputs import describe_inputs
+from application_sdk.observability.sizing_inputs import (
+    begin_collection,
+    describe_inputs,
+    end_collection,
+)
 
 logger = get_logger(__name__)
 
@@ -73,6 +77,10 @@ class _SizingActivityInboundInterceptor(ActivityInboundInterceptor):
 
         start_ns = time.monotonic_ns()
         outcome = "OK"
+        # Created here so the activity's reads accumulate into it. Reporting is a
+        # no-op for any activity that never got a collector, which is what keeps
+        # report_input_bytes() free to call from a hot read path.
+        begin_collection()
         # Bound first so the outer ``finally`` cannot NameError if the tracker
         # never yields.
         trace = None
@@ -91,12 +99,11 @@ class _SizingActivityInboundInterceptor(ActivityInboundInterceptor):
             # deltas in its own ``finally``, so reading inside would record nothing.
             if trace is not None:
                 duration_s = (time.monotonic_ns() - start_ns) / 1_000_000_000
-                # Sized here, not at entry: the SDK materialises durable
-                # FileReferences at the top of the activity, so the bytes are only
-                # on local disk by now — which turns this into a stat instead of an
-                # object-store call. args[1] is the Input (args[0] is TaskContext).
-                input_size = (
-                    describe_inputs(input.args[1]) if len(input.args) > 1 else None
+                # Read after the activity: by now the readers have reported what
+                # they pulled, and any FileReference the interceptor materialised is
+                # on local disk. args[1] is the Input (args[0] is TaskContext).
+                input_size = describe_inputs(
+                    input.args[1] if len(input.args) > 1 else None
                 )
                 record_observation(
                     SizingObservation.from_trace(
@@ -110,6 +117,7 @@ class _SizingActivityInboundInterceptor(ActivityInboundInterceptor):
                         input_size=input_size,
                     )
                 )
+            end_collection()
 
 
 class SizingTelemetryInterceptor(Interceptor):
