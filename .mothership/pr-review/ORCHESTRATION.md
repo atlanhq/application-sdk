@@ -237,7 +237,10 @@ BUDGET
     re-read — that is how #3276 collected the identical summary five times.
     Nothing you can write here prevents it, so the workflow cleans up after
     it: `sdk_review_dedupe_verdicts.py` runs once the stream closes, keeps the
-    newest summary this run posted and minimizes the rest (FND-636).
+    newest summary this run posted and minimizes the rest (FND-636). It
+    identifies "this run's" summaries by the `<GHA_RUN_URL>` in the §3e
+    footer, the same key this guard greps — which is another reason that line
+    is not optional. Drop it and the collapse silently stops working.
 
     **Bot-trigger dedupe guard — run immediately after the replay guard.**
     This is now a *backstop*, not the authority. Since FND-636 the

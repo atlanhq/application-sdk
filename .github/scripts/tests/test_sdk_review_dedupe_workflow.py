@@ -166,3 +166,22 @@ def test_the_dispatch_step_collapses_duplicate_verdicts():
     assert "sdk_review_dedupe_verdicts.py" in run
     assert 'SINCE="${STARTER_STARTED_AT:-}"' in run
     assert "verdict_posted" in run
+
+
+def test_the_dispatch_step_supplies_the_ownership_key():
+    """Attribution is by run URL; HEAD_SHA and SINCE only feed the fallback."""
+    env = step("Dispatch to mothership Rover Direct API")["env"]
+    assert env["GHA_RUN_URL"].endswith("/actions/runs/${{ github.run_id }}")
+    assert env["HEAD_SHA"] == "${{ steps.pr.outputs.head_sha }}"
+    assert env["STARTER_STARTED_AT"] == "${{ steps.starter.outputs.started_at }}"
+
+
+def test_the_summary_template_still_carries_the_run_url():
+    """The ownership key only works because §3e mandates this footer line.
+
+    If the template ever drops it, every run falls back to window attribution
+    and stops collapsing duplicates — silently. Fail here instead.
+    """
+    orchestration = (REPO_ROOT / ".mothership/pr-review/ORCHESTRATION.md").read_text()
+    assert "**Run:** [view workflow logs + cost](<GHA_RUN_URL>)" in orchestration
+    assert "The trailing **Run:** line is required on every summary." in orchestration

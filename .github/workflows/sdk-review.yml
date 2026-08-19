@@ -1002,6 +1002,13 @@ jobs:
           # every copy but the newest when a replayed sandbox turn posted the
           # summary more than once. It always exits 0 — a tidy-up failure must
           # not turn a delivered review into a red check.
+          #
+          # GHA_RUN_URL is the ownership key, not the timestamp: every summary
+          # carries it (ORCHESTRATION.md §3e), so it distinguishes our replayed
+          # duplicate from a zombie sandbox's or a concurrent human-triggered
+          # run's summary landing in the same window. SINCE and HEAD_SHA only
+          # feed the fallback used when no summary carries our URL. All three
+          # are already in this step's env.
           DEDUPE_OUT="$(mktemp)"
           SINCE="${STARTER_STARTED_AT:-}" DEDUPE_OUTPUT="$DEDUPE_OUT" \
             REPO="${REPO_FULL_NAME}" \
