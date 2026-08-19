@@ -2,6 +2,16 @@
 #
 # Triggered by `@sdk-resolve` on a PR (OWNER/MEMBER/COLLABORATOR only), or
 # manually via workflow_dispatch with a PR number. Dispatches a Cloudflare
+#
+# Two bot logins are allowlisted alongside human associations, because a GitHub
+# App's comments carry author_association NONE and would otherwise never fire:
+#   * atlan-ci             — the CI identity.
+#   * mothership-ai[bot]   — the rover identity. The conformance-remediation lane
+#     ends a `rule-review` outcome by opening a rule-fix PR against this repo and
+#     commenting `@sdk-resolve` on it, so the fix is driven to merge-ready instead
+#     of waiting for someone to notice a ticket. The resolver's own boundary still
+#     holds: it stops at merge-ready and a human merges, which matters more here
+#     than usual — a conformance rule change lands fleet-wide.
 # sandbox that drives the PR to MERGE-READY: fixes CI + every @sdk-review
 # finding (nits included, unless proven false), looping review->fix->push until
 # zero findings + green CI + READY_TO_MERGE — then STOPS. It never merges; a
@@ -60,6 +70,7 @@ jobs:
           || github.event.comment.author_association == 'MEMBER'
           || github.event.comment.author_association == 'COLLABORATOR'
           || github.event.comment.user.login == 'atlan-ci'
+          || github.event.comment.user.login == 'mothership-ai[bot]'
         )
       )
     runs-on: ubuntu-latest

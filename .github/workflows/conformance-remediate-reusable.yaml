@@ -1,0 +1,149 @@
+# Conformance Remediate — reusable workflow, invoked by `/remediate` on a PR.
+#
+# The PR-surface adapter for the conformance-remediation lane. Its whole job is to
+# turn "a human typed /remediate" into one well-formed RemediationRequest, POST it to
+# mothership, and exit. Everything about *how* remediation behaves lives in
+# .mothership/conformance-remediation/ORCHESTRATION.md (fetched by the orchestrator at
+# dispatch time), so changing behaviour is a PR to this repo with no mothership deploy.
+#
+# Fire-and-forget by design. The job does NOT stream or poll: mothership owns the
+# check run from the 202 onward, because it holds the GitHub App and it is the thing
+# that learns the outcome. So a runner is held for ~1 minute rather than for the
+# sandbox's 15-30 minute life — across a fleet sweep that is hundreds of
+# runner-hours, and it is why this lane can also be driven at scale by a cron.
+#
+# There is deliberately NO automatic trigger. `/remediate` is the only way in, so no
+# PR ever receives a bot commit its author did not ask for. (A `workflow_run` trigger
+# was considered and dropped: the conformance leg renders `exit-zero` from a per-repo
+# flag, so in most repos a "failing check" does not exist to trigger on.)
+#
+# Usage in each app repo (.github/workflows/conformance-remediate.yml) — shipped by
+# `atlan-application-sdk-conformance bootstrap`:
+#
+#   on:
+#     issue_comment:
+#       types: [created]
+#   jobs:
+#     remediate:
+#       if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/remediate')
+#       uses: atlanhq/application-sdk/.github/workflows/conformance-remediate-reusable.yaml@main
+#       secrets: inherit
+#
+# Required configuration (shared with vuln-triage-cron.yml):
+#   secrets.HARNESS_TOKEN           Bearer for the conformance-remediation API.
+#   secrets.GLOBALPROTECT_USERNAME  VPN auth.
+#   secrets.GLOBALPROTECT_PASSWORD  VPN auth.
+#   vars.GLOBALPROTECT_PORTAL_URL   VPN portal URL.
+#   vars.MOTHERSHIP_URL             e.g. https://mothership.atlan.dev
+
+name: Conformance Remediate
+
+on:
+  workflow_call:
+    inputs:
+      suite-version:
+        description: 'Pinned conformance suite version. Never "latest" — the fleet spans 0.13.0-0.20.1, so an unpinned run fixes findings a differently-versioned CI leg re-raises.'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      HARNESS_TOKEN:
+        required: true
+        description: Bearer token for POST /api/conformance-remediation/remediations.
+      GLOBALPROTECT_USERNAME:
+        required: false
+        description: "VPN service account. Auto-available via `secrets: inherit`."
+      GLOBALPROTECT_PASSWORD:
+        required: false
+        description: "VPN password. Auto-available via `secrets: inherit`."
+
+permissions:
+  contents: read
+  # `gh pr view` for the head ref/SHA. Read is enough: this workflow never writes
+  # to the PR — mothership's own App posts the comment and completes the check run.
+  pull-requests: read
+  # Comment reactions live on the issues API, so the 🚀 ack needs issues: write
+  # even though the comment is on a pull request.
+  issues: write
+
+jobs:
+  dispatch:
+    name: Dispatch remediation
+    runs-on: ubuntu-latest
+    # The sandbox runs for up to ~75 minutes, but this job only dispatches and
+    # exits, so it needs minutes, not hours. A generous cap still frees the runner
+    # long before GitHub's 6h default if the VPN or the POST hangs.
+    timeout-minutes: 15
+    concurrency:
+      # One dispatch per PR at a time; queue rather than cancel, so a second
+      # `/remediate` for a different rule is not silently dropped.
+      group: conformance-remediate-${{ github.event.issue.number }}
+      cancel-in-progress: false
+    steps:
+      # Checked out for the local globalprotect-connect action, the reaction
+      # helper, and the dispatch script. Shallow: nothing here needs history.
+      - name: Checkout application-sdk
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          fetch-depth: 1
+
+      # Best-effort acknowledgement so the author sees the ask registered before
+      # any real output exists. Routed through the shared script rather than an
+      # inline `github-script` call, which is mandatory here: an unhandled
+      # rejection in github-script fails the step, and a transient 503 from the
+      # reactions API once killed an entire sdk-review dispatch before it reached
+      # the load-bearing work. react_to_comment.py retries and always exits 0.
+      - name: React to the comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          REACTION: rocket
+        run: python3 .github/scripts/react_to_comment.py
+
+      # mothership.atlan.dev sits behind a WAF that only trusts corp-network
+      # egress. Three attempts because a single GlobalProtect login fails often
+      # enough to matter (same ladder as vuln-triage-cron.yml).
+      - name: Connect to VPN (attempt 1/3)
+        id: vpn1
+        uses: ./.github/actions/globalprotect-connect
+        continue-on-error: true
+        with:
+          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+
+      - name: Connect to VPN (attempt 2/3)
+        if: steps.vpn1.outcome == 'failure'
+        id: vpn2
+        uses: ./.github/actions/globalprotect-connect
+        continue-on-error: true
+        with:
+          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+
+      - name: Connect to VPN (attempt 3/3)
+        if: steps.vpn2.outcome == 'failure'
+        uses: ./.github/actions/globalprotect-connect
+        with:
+          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+
+      # All parsing / validation / exit decisions live in the tested script, not
+      # here, per docs/standards/ci.md. This step is one straight-line command.
+      - name: Build and POST the RemediationRequest
+        env:
+          MOTHERSHIP_URL: ${{ vars.MOTHERSHIP_URL }}
+          HARNESS_TOKEN: ${{ secrets.HARNESS_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENTER: ${{ github.event.comment.user.login }}
+          SUITE_VERSION: ${{ inputs.suite-version }}
+          GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python3 .github/scripts/conformance_remediate_request.py

@@ -1,0 +1,15 @@
+name: Conformance Remediate
+
+# Invoked by commenting `/remediate` (optionally `/remediate L004`) on a PR.
+# There is no automatic trigger: no PR receives a bot commit its author did not
+# ask for. All logic lives in the reusable workflow in application-sdk.
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  remediate:
+    if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/remediate')
+    uses: atlanhq/application-sdk/.github/workflows/conformance-remediate-reusable.yaml@main
+    secrets: inherit
