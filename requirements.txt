@@ -51,7 +51,7 @@ cffi==2.1.1 ; platform_python_implementation != 'PyPy'
     # via cryptography
 cfgv==3.5.0
     # via pre-commit
-charset-normalizer==3.5.0
+charset-normalizer==3.5.1
     # via requests
 click==8.4.2
     # via
@@ -127,7 +127,7 @@ httpx-retries==0.6.0
     # via
     #   atlan-application-sdk
     #   pyatlan
-hypothesis==6.165.8
+hypothesis==6.165.9
 identify==2.6.19
     # via pre-commit
 idna==3.18
@@ -380,7 +380,7 @@ typer==0.27.1
     # via
     #   fastapi-cli
     #   fastapi-cloud-cli
-types-protobuf==7.34.1.20260518
+types-protobuf==7.34.1.20260816
     # via temporalio
 types-s3transfer==0.16.0
     # via boto3-stubs
