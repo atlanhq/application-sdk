@@ -733,15 +733,12 @@ def create_worker(
 
         all_interceptors.append(LivenessInterceptor(on_activity))
 
-    # Sizing telemetry sits before the user-supplied interceptors so its measured
-    # window covers them: anything they do on the way into the activity (a lock
-    # wait, an output buffer) is memory this activity's pod had to hold.
+    # Before the user-supplied interceptors, so the measured window covers them —
+    # what they hold on the way in is memory this pod had to carry.
     if interceptor_settings.enable_sizing_telemetry:
         _sizing_activities = interceptor_settings.sizing_telemetry_activities
         if not _sizing_activities:
-            # Enabled with no allow-list is almost certainly a half-finished
-            # config change, and the fail-closed answer (measure nothing) is
-            # silent — so say so at startup rather than leaving someone to wonder
+            # Fail-closed is silent, so say so rather than leave someone wondering
             # why no rows arrived.
             logger.warning(
                 "APPLICATION_SDK_ENABLE_SIZING_TELEMETRY is on but "

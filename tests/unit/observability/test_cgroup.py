@@ -1,10 +1,8 @@
 """Unit tests for container-level (cgroup) sizing telemetry.
 
-These build a real fake cgroup hierarchy on disk and repoint the module's path
-constants at it, rather than mocking ``open``. The parsing quirks that matter
-here are all *file-shaped* — v2's literal ``max``, v1's near-2**63 sentinel, a
-read-only ``memory.peak``, a v1 host with no ``cpuacct`` mount — and a mocked
-``open`` would let the code pass while getting every one of them wrong.
+Builds a fake cgroup hierarchy on disk rather than mocking ``open``: the quirks
+that matter are file-shaped (v2's literal ``max``, v1's 2**63 sentinel, a
+read-only ``memory.peak``, a missing ``cpuacct`` mount).
 """
 
 import asyncio
@@ -44,12 +42,7 @@ class TestMemoryUsage:
         assert cgroup.memory_usage_bytes() is None
 
     def test_malformed_file_falls_through_to_the_next_path(self, tmp_path, monkeypatch):
-        """A garbage v2 file must not shadow a good v1 one.
-
-        Some runtimes present an empty ``memory.current``. Returning None there
-        would report "no data" while a perfectly readable v1 value sat one path
-        away.
-        """
+        """A garbage v2 file must not shadow a readable v1 one."""
         bad = _write(tmp_path, "memory.current", "not-a-number")
         good = _write(tmp_path, "usage_in_bytes", "777")
         monkeypatch.setattr(cgroup, "_MEMORY_CURRENT_PATHS", (bad, good))
@@ -58,12 +51,7 @@ class TestMemoryUsage:
 
 class TestMemoryLimit:
     def test_cgroup_wins_over_env(self, tmp_path, monkeypatch):
-        """The kernel's enforced limit beats the manifest's requested one.
-
-        They diverge whenever a mutating admission controller or a VPA has
-        rewritten the pod spec, and the enforced number is the one an OOM will
-        actually happen at.
-        """
+        """The enforced limit beats the requested one — they diverge under a VPA."""
         p = _write(tmp_path, "memory.max", str(2 * 1024**3))
         monkeypatch.setattr(cgroup, "_MEMORY_LIMIT_PATHS", (p,))
         monkeypatch.setenv("K8S_POD_MEMORY_LIMIT", "16Gi")
@@ -76,11 +64,7 @@ class TestMemoryLimit:
         assert cgroup.memory_limit_bytes() == 4 * 1024**3
 
     def test_v1_unlimited_sentinel_falls_back_to_env(self, tmp_path, monkeypatch):
-        """v1 spells unlimited as a huge number, not a word.
-
-        Taking it literally would make every fraction ~0.0 and every activity
-        look like it fits in the smallest tier.
-        """
+        """Taken literally, v1's sentinel makes every activity look tiny."""
         p = _write(tmp_path, "limit_in_bytes", str(9223372036854771712))
         monkeypatch.setattr(cgroup, "_MEMORY_LIMIT_PATHS", (p,))
         monkeypatch.setenv("K8S_POD_MEMORY_LIMIT", "1Gi")
@@ -131,9 +115,7 @@ class TestResetMemoryPeak:
     ):
         """No headroom to observe a drop means the reset cannot be proven.
 
-        Returning True here would be a guess, and the cost of a wrong guess is
-        reporting the pod's lifetime watermark as this activity's peak — which
-        silently over-sizes every tier derived from it.
+        Guessing True would report the pod's lifetime watermark as this peak.
         """
         monkeypatch.setattr(
             cgroup, "_MEMORY_PEAK_PATHS", (_write(tmp_path, "memory.peak", "1000"),)
@@ -181,11 +163,7 @@ class TestCpuStat:
         assert stat.throttled_seconds == pytest.approx(0.75)
 
     def test_v1_uses_nanoseconds(self, tmp_path, monkeypatch):
-        """v1 counts in ns and names the field ``throttled_time``.
-
-        Reading it with the v2 microsecond divisor would understate throttling
-        by 1000x, i.e. report a starved activity as perfectly sized.
-        """
+        """v1 counts ns; the v2 divisor would understate throttling 1000x."""
         monkeypatch.setattr(cgroup, "_CPU_STAT_V2", str(tmp_path / "nope"))
         monkeypatch.setattr(
             cgroup,
@@ -208,7 +186,7 @@ class TestCpuStat:
         assert stat.nr_throttled == 40
 
     def test_v1_without_cpuacct_still_returns_throttling(self, tmp_path, monkeypatch):
-        """The throttling half is the sizing signal; don't lose it to a missing mount."""
+        """Throttling is the sizing signal; don't lose it to a missing mount."""
         monkeypatch.setattr(cgroup, "_CPU_STAT_V2", str(tmp_path / "nope"))
         monkeypatch.setattr(
             cgroup,
@@ -275,7 +253,7 @@ class TestContainerTrace:
         assert trace.throttled_fraction == pytest.approx(0.25)
 
     def test_throttled_fraction_none_without_periods(self):
-        """Zero periods means the activity was too short to schedule, not 0% throttled."""
+        """Zero periods means too short to schedule, not 0% throttled."""
         assert cgroup.ContainerTrace(cpu_periods=0).throttled_fraction is None
         assert cgroup.ContainerTrace().throttled_fraction is None
 
@@ -285,11 +263,9 @@ class TestTrackContainerUsage:
     async def test_watermark_mode_catches_a_spike_that_ended(
         self, tmp_path, monkeypatch
     ):
-        """The whole point of the watermark: a spike that has already been freed.
+        """A spike already freed by the time the block exits.
 
-        Current usage is back to 1000 by the time the block exits, so an
-        endpoint-only sampler reports 1000 and would size the tier at a tenth of
-        what the activity actually needed.
+        An endpoint-only sampler would read 1000 and size the tier 10x too small.
         """
         peak = tmp_path / "memory.peak"
         peak.write_text("5000")
@@ -348,7 +324,7 @@ class TestTrackContainerUsage:
 
     @pytest.mark.asyncio
     async def test_unavailable_when_there_is_no_cgroup(self, tmp_path, monkeypatch):
-        """macOS and most local dev. Must be None, never 0."""
+        """macOS and local dev. Must be None, never 0."""
         monkeypatch.setattr(cgroup, "_MEMORY_CURRENT_PATHS", _missing(tmp_path))
         monkeypatch.setattr(cgroup, "_MEMORY_PEAK_PATHS", _missing(tmp_path))
         monkeypatch.setattr(cgroup, "_CPU_STAT_V2", str(tmp_path / "nope"))
@@ -386,7 +362,7 @@ class TestTrackContainerUsage:
 
     @pytest.mark.asyncio
     async def test_never_fails_a_successful_block(self, tmp_path, monkeypatch):
-        """An instrument that can fail the thing it measures is worse than none."""
+        """An instrument must not fail the thing it measures."""
         monkeypatch.setattr(cgroup, "_MEMORY_CURRENT_PATHS", _missing(tmp_path))
         monkeypatch.setattr(cgroup, "_MEMORY_PEAK_PATHS", _missing(tmp_path))
         monkeypatch.setattr(
@@ -403,11 +379,8 @@ class TestTrackContainerUsage:
     async def test_a_poller_that_raises_does_not_fail_the_block(
         self, tmp_path, monkeypatch
     ):
-        """``await task`` on the exit path re-raises whatever the poller hit.
-
-        The cgroup can genuinely disappear mid-activity (a remount, a vcluster
-        hiccup), and that must cost telemetry, not the activity's result.
-        """
+        """``await task`` on exit re-raises what the poller hit; that must cost
+        telemetry, not the activity's result."""
         current = tmp_path / "memory.current"
         current.write_text("1000")
         monkeypatch.setattr(cgroup, "_MEMORY_PEAK_PATHS", _missing(tmp_path))
@@ -443,7 +416,7 @@ class TestTrackContainerUsage:
 
     @pytest.mark.asyncio
     async def test_poll_task_is_cancelled_on_exit(self, tmp_path, monkeypatch):
-        """A leaked poller per activity would accumulate for the pod's lifetime."""
+        """A leaked poller per activity accumulates for the pod's lifetime."""
         monkeypatch.setattr(cgroup, "_MEMORY_PEAK_PATHS", _missing(tmp_path))
         monkeypatch.setattr(
             cgroup,
