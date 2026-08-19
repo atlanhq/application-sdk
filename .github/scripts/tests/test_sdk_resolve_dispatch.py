@@ -572,12 +572,28 @@ def test_provider_faults_are_retryable():
 
 
 def test_provider_text_is_matched_when_the_code_is_flattened():
-    # mothership flattens an absent `complete` error code to `none` while still
-    # forwarding the provider's text, so code alone is not enough.
-    st = sr.SSEState()
-    st.errored, st.err_code = True, "none"
-    st.err_msg = "upstream provider returned an unexpected payload"
-    assert sr.is_retryable_fault(st) is True
+    # mothership flattens an absent `complete` error code to `none` (and a
+    # standalone `error` event defaults it to `unknown`) while still forwarding
+    # the provider's text, so code alone is not enough — for THOSE codes.
+    for code in ("none", "unknown", ""):
+        st = sr.SSEState()
+        st.errored, st.err_code = True, code
+        st.err_msg = "upstream provider returned an unexpected payload"
+        assert sr.is_retryable_fault(st) is True, code
+
+
+def test_message_patterns_never_override_an_informative_code():
+    # Regression: the pattern fallback used to match "<code> <message>" for ANY
+    # code, so a permanent fault whose text happened to mention "upstream" was
+    # classified retryable and bought a second sandbox that failed identically.
+    for code, msg in (
+        ("401", "upstream auth failed"),
+        ("403", "upstream permission denied"),
+        ("422", "prompt is overloaded with tokens"),
+    ):
+        st = sr.SSEState()
+        st.errored, st.err_code, st.err_msg = True, code, msg
+        assert sr.is_retryable_fault(st) is False, code
 
 
 def test_fixed_faults_are_not_retryable():

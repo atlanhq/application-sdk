@@ -86,9 +86,8 @@ RETRY_MAIN_MODEL = "claude-opus-5"
 # Retry only a fault a different model can plausibly survive. This is an
 # allowlist, not a denylist: a wrong retry burns a second sandbox boot — up to
 # an hour of the job's 130-min budget plus a real bill — so an unrecognised
-# cause stays fail-fast. Codes match exactly; patterns match as lowercase
-# substrings of "<code> <message>", because mothership passes provider text
-# through with the code sometimes flattened to `none`.
+# cause stays fail-fast. A recognised code decides on its own; the message is
+# consulted ONLY when the code carries no information at all.
 RETRYABLE_ERR_CODES = frozenset(
     {
         "400",
@@ -104,6 +103,12 @@ RETRYABLE_ERR_CODES = frozenset(
         "sandbox_error",
     }
 )
+# Message substrings that identify a model/provider fault. These are a fallback
+# for one specific case: a `complete` event flattens an absent error code to
+# `none`, and a standalone `error` event defaults it to `unknown`, while both
+# still forward the provider's own text. They must NEVER override a code that
+# does carry information — "401 upstream auth failed" mentions upstream and is
+# nonetheless a permanent fault that would fail identically on any model.
 RETRYABLE_ERR_PATTERNS = (
     "must not be empty",  # the kimi-k3 empty-assistant-turn fault
     "rate-limited",
@@ -112,6 +117,7 @@ RETRYABLE_ERR_PATTERNS = (
     "temporarily unavailable",
     "upstream",
 )
+UNINFORMATIVE_ERR_CODES = frozenset({"", "none", "unknown"})
 # Causes that fail identically on any model — never spend a second sandbox:
 #   elicitation   the sandbox wants interactive input, which GHA can never give.
 #   stream_error  OUR urlopen died, not the sandbox. The resolver is probably
@@ -728,16 +734,20 @@ def oob_poll_budget(st: SSEState) -> int:
 def is_retryable_fault(st: SSEState) -> bool:
     """True when the cause looks like a model/provider fault, not a fixed one.
 
-    Allowlist by code, then by substring of "<code> <message>" — mothership
-    forwards the provider's own text, and the code that carries it is not always
-    the numeric one (`complete` events flatten an absent code to `none`).
+    The code decides whenever it carries information: a recognised retryable one
+    retries, and anything else — 401, 403, a prompt fault — does not. The message
+    patterns are consulted only for a code of `none`/`unknown`/empty, which is
+    the flattened-code case they exist for. Letting them speak for a known code
+    would classify "401 upstream auth failed" as retryable and buy a second
+    sandbox that fails identically.
     """
     if st.err_code in NEVER_RETRY_ERR_CODES:
         return False
     if st.err_code in RETRYABLE_ERR_CODES:
         return True
-    blob = f"{st.err_code} {st.err_msg}".lower()
-    return any(pattern in blob for pattern in RETRYABLE_ERR_PATTERNS)
+    if st.err_code not in UNINFORMATIVE_ERR_CODES:
+        return False
+    return any(p in st.err_msg.lower() for p in RETRYABLE_ERR_PATTERNS)
 
 
 def retry_decision(st: SSEState, attempt: int, seconds_left: float) -> tuple[bool, str]:
