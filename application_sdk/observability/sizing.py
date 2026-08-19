@@ -17,6 +17,7 @@ from opentelemetry import metrics as _otel_metrics
 
 from application_sdk.observability.cgroup import ContainerTrace
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.sizing_inputs import InputSize
 
 _logger = get_logger(__name__)
 
@@ -52,6 +53,10 @@ class SizingObservation:
     cpu_throttled_fraction: float | None = None
     cpu_quota_cores: float | None = None
 
+    input_bytes: int | None = None
+    input_file_count: int | None = None
+    input_basis: str | None = None
+
     @property
     def mean_cpu_cores(self) -> float | None:
         """CPU consumed per wall-clock second.
@@ -62,6 +67,17 @@ class SizingObservation:
         if self.cpu_seconds is None or self.duration_seconds <= 0:
             return None
         return self.cpu_seconds / self.duration_seconds
+
+    @property
+    def peak_per_input_byte(self) -> float | None:
+        """Peak memory per input byte — the ratio a memory tier is fitted from.
+
+        ``None`` without an input size: a peak with no driver variable can size one
+        envelope but cannot key a rule.
+        """
+        if not self.input_bytes or self.peak_memory_bytes is None:
+            return None
+        return self.peak_memory_bytes / self.input_bytes
 
     @classmethod
     def from_trace(
@@ -74,6 +90,7 @@ class SizingObservation:
         attempt: int,
         outcome: str,
         duration_seconds: float,
+        input_size: InputSize | None = None,
     ) -> SizingObservation:
         return cls(
             activity_type=activity_type,
@@ -90,6 +107,9 @@ class SizingObservation:
             cpu_throttled_seconds=trace.cpu_throttled_seconds,
             cpu_throttled_fraction=trace.throttled_fraction,
             cpu_quota_cores=trace.cpu_quota_cores,
+            input_bytes=input_size.bytes if input_size else None,
+            input_file_count=input_size.file_count if input_size else None,
+            input_basis=input_size.basis if input_size else None,
         )
 
     def has_data(self) -> bool:
@@ -99,6 +119,20 @@ class SizingObservation:
         fitted from, where a null read as a zero picks the smallest tier.
         """
         return self.peak_memory_bytes is not None or self.cpu_seconds is not None
+
+
+def _input_mib():
+    if "input_mib" not in _INSTRUMENTS:
+        _INSTRUMENTS["input_mib"] = _meter().create_histogram(
+            "activity.sizing.input_mib",
+            unit="MiBy",
+            description=(
+                "Bytes of data handed to one activity execution. The driver "
+                "variable: peak memory alone says a tier is wrong, this says what "
+                "to key it on."
+            ),
+        )
+    return _INSTRUMENTS["input_mib"]
 
 
 def _meter():
@@ -175,6 +209,11 @@ def record_observation(observation: SizingObservation) -> None:
             "outcome": observation.outcome,
             "peak.source": observation.peak_source,
         }
+        if observation.input_bytes is not None:
+            _input_mib().record(
+                observation.input_bytes / _MIB,
+                {**attrs, "input.basis": observation.input_basis or "unknown"},
+            )
         if observation.peak_memory_bytes is not None:
             _peak_memory_mib().record(observation.peak_memory_bytes / _MIB, attrs)
         if observation.peak_memory_fraction is not None:

@@ -30,6 +30,7 @@ from temporalio.worker import (
 from application_sdk.observability.cgroup import track_container_usage
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.sizing import SizingObservation, record_observation
+from application_sdk.observability.sizing_inputs import describe_inputs
 
 logger = get_logger(__name__)
 
@@ -90,6 +91,13 @@ class _SizingActivityInboundInterceptor(ActivityInboundInterceptor):
             # deltas in its own ``finally``, so reading inside would record nothing.
             if trace is not None:
                 duration_s = (time.monotonic_ns() - start_ns) / 1_000_000_000
+                # Sized here, not at entry: the SDK materialises durable
+                # FileReferences at the top of the activity, so the bytes are only
+                # on local disk by now — which turns this into a stat instead of an
+                # object-store call. args[1] is the Input (args[0] is TaskContext).
+                input_size = (
+                    describe_inputs(input.args[1]) if len(input.args) > 1 else None
+                )
                 record_observation(
                     SizingObservation.from_trace(
                         trace,
@@ -99,6 +107,7 @@ class _SizingActivityInboundInterceptor(ActivityInboundInterceptor):
                         attempt=info.attempt,
                         outcome=outcome,
                         duration_seconds=duration_s,
+                        input_size=input_size,
                     )
                 )
 
