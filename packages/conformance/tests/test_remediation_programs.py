@@ -162,9 +162,26 @@ def test_docker_build_gate_fails_closed_when_no_dockerfile_is_found() -> None:
     assert "nothing to build" not in text
 
 
-def test_deliver_as_draft_names_its_consumer(loop: str) -> None:
+def test_deliver_as_draft_is_stamped_in_the_loop_body_not_just_documented(
+    loop: str,
+) -> None:
     """The flag must be stamped onto the loop's outputs, or the S-series draft
-    guarantee silently becomes unenforceable downstream (sdk-review, F3)."""
+    guarantee silently becomes unenforceable downstream (sdk-review, F3 — the
+    first fix documented the stamp without performing it, so this test reads
+    the DELEGATION BODY, not the parameter prose)."""
+    body = loop.split("### Delegation")[1]
+    # Surviving results are stamped where classification_override lands...
+    assert "let result.deliver_as_draft = true" in body
+    # ...residue items are stamped before the report is emitted...
+    assert "let item.deliver_as_draft = true" in body
+    # ...and the emitted report carries the promised column.
+    emit = body.split("emit residue as structured report")[1]
+    assert "deliver_as_draft" in emit
+
+
+def test_deliver_as_draft_names_its_consumer(loop: str) -> None:
+    """Stamping is only half the contract — the prose must say who reads it
+    (the playbook's delivery stage and the /remediate residue phase)."""
     assert "residue report" in loop.split("`deliver_as_draft`")[1][:900]
 
 

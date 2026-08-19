@@ -124,6 +124,14 @@ loop until violations is empty or attempts >= max_attempts:
       if classification_override:
         let result.classification = classification_override
 
+      # The draft requirement is stamped HERE, on the surviving result itself —
+      # not implied by which area ran. Downstream consumers (the remediation
+      # playbook's delivery stage, the /remediate residue phase) see only
+      # results, so a flag that lived only in the area's call site would be
+      # invisible exactly where the --draft decision is made.
+      if deliver_as_draft:
+        let result.deliver_as_draft = true
+
       # finding.forces_external_influence is the structural, rule-level
       # guarantee (e.g. C001, always true); result.external_influence is
       # remediate-finding's own per-invocation report. ORing both means a
@@ -155,11 +163,17 @@ loop until violations is empty or attempts >= max_attempts:
 if violations is not empty:
   escalate "max attempts reached with %d violations remaining" % len(violations)
 
+if deliver_as_draft:
+  for each item in residue:
+    let item.deliver_as_draft = true
+
 emit residue as structured report
   for each item in residue:
     - rule_id, file, line, fingerprint
     - proposed edit (if any)
     - classification and outcome
+    - deliver_as_draft (own column — a human applying proposals must see that
+      anything delivered from this area ships as a draft with a named reviewer)
     - reason the item is in residue (judgment / suppression / recheck-failed / not-remediable)
 ```
 

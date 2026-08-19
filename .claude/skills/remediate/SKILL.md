@@ -102,7 +102,10 @@ outputs:
   - name: residue_report
     description: >
       Structured markdown report of findings that need human review, written
-      to remediation/runs/residue.md.
+      to remediation/runs/residue.md.  Items from an area that requires draft
+      delivery (S-series under --apply-unverifiable) carry deliver_as_draft in
+      their own column, so a human applying proposals sees that anything
+      delivered from them ships as a draft PR with a named reviewer.
 
 gates:
   - deterministic_recheck: >
