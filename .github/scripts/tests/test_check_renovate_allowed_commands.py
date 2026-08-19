@@ -34,6 +34,17 @@ SELF_HOSTED_WITHOUT_BOUND = (
     "};\n"
 )
 
+WORKFLOW_WITH_INSTALL = (
+    "jobs:\n"
+    "  renovate:\n"
+    "    steps:\n"
+    "      - name: Install driver on PATH\n"
+    "        run: sudo install -m 0755 .github/scripts/fleet_tool.py "
+    "/usr/local/bin/fleet-tool\n"
+)
+
+WORKFLOW_NO_INSTALL = "jobs:\n  renovate:\n    steps:\n      - run: renovate\n"
+
 
 def preset(*commands: str, nest: str = "lockFileMaintenance") -> str:
     """A minimal preset declaring *commands* under *nest*."""
@@ -155,6 +166,42 @@ class TestUnauthorizedCommands:
         )
 
 
+class TestUninstalledCommands:
+    """A command can be authorized and still not exist on the runner (FND-607)."""
+
+    def test_flags_a_command_with_no_install_step(self):
+        assert guard.uninstalled_commands(
+            preset(SECOND_COMMAND), WORKFLOW_NO_INSTALL
+        ) == [SECOND_COMMAND]
+
+    def test_clean_when_the_runner_installs_the_command(self):
+        assert (
+            guard.uninstalled_commands(preset(SECOND_COMMAND), WORKFLOW_WITH_INSTALL)
+            == []
+        )
+
+    def test_matches_on_the_executable_not_the_whole_command(self):
+        """Args are the preset's business; only the PATH name has to exist."""
+        other_args = SECOND_COMMAND.replace("--window P7D", "--window P3D")
+        assert (
+            guard.uninstalled_commands(preset(other_args), WORKFLOW_WITH_INSTALL) == []
+        )
+
+    def test_flags_a_renamed_install_target(self):
+        renamed = WORKFLOW_WITH_INSTALL.replace("fleet-tool", "fleet-tool-v2")
+        assert guard.uninstalled_commands(preset(SECOND_COMMAND), renamed) == [
+            SECOND_COMMAND
+        ]
+
+    def test_clean_against_the_real_preset_and_runner_workflow(self):
+        assert (
+            guard.uninstalled_commands(
+                guard.PRESET.read_text(), guard.RUNNER_WORKFLOW.read_text()
+            )
+            == []
+        )
+
+
 class TestMain:
     def test_exits_zero_against_the_real_repo_state(self):
         assert guard.main() == 0
@@ -164,8 +211,25 @@ class TestMain:
         preset_path.write_text(preset(SECOND_COMMAND))
         admin_path = tmp_path / "self-hosted.js"
         admin_path.write_text(SELF_HOSTED_WITHOUT_BOUND)
+        workflow_path = tmp_path / "renovate.yaml"
+        workflow_path.write_text(WORKFLOW_WITH_INSTALL)
 
         monkeypatch.setattr(guard, "PRESET", preset_path)
         monkeypatch.setattr(guard, "SELF_HOSTED", admin_path)
+        monkeypatch.setattr(guard, "RUNNER_WORKFLOW", workflow_path)
+
+        assert guard.main() == 1
+
+    def test_exits_nonzero_when_a_command_is_not_installed(self, monkeypatch, tmp_path):
+        preset_path = tmp_path / "default.json"
+        preset_path.write_text(preset(SECOND_COMMAND))
+        admin_path = tmp_path / "self-hosted.js"
+        admin_path.write_text(SELF_HOSTED_WITH_BOUND)
+        workflow_path = tmp_path / "renovate.yaml"
+        workflow_path.write_text(WORKFLOW_NO_INSTALL)
+
+        monkeypatch.setattr(guard, "PRESET", preset_path)
+        monkeypatch.setattr(guard, "SELF_HOSTED", admin_path)
+        monkeypatch.setattr(guard, "RUNNER_WORKFLOW", workflow_path)
 
         assert guard.main() == 1

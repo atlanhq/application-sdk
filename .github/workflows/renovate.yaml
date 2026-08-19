@@ -137,6 +137,20 @@ jobs:
       - name: Install release-age lock driver on PATH
         run: sudo install -m 0755 .github/scripts/renovate_uv_lock_bounded.py /usr/local/bin/renovate-uv-lock-bounded
 
+      # The contract-ledger driver (FND-607), installed the same way. It runs on
+      # the conformance-package lane and after the bounded resolve on the
+      # lock-refresh lane, regenerating contract_schema.lock.json at the version
+      # the branch just locked — the ledger is a generated artifact whose content
+      # depends on the generating version, while CI checks it with an unpinned
+      # `uvx` install, so without this a conformance release that adds an SDK
+      # contract-base field reds B006 on every repo that has not yet adopted it,
+      # the adopting PR included. Single-file with no sibling imports. If this
+      # step is dropped the command 404s, Renovate reports an artifact error, and
+      # the auto-approve gate withholds approval — the bump does not silently
+      # merge with a stale ledger.
+      - name: Install contract-ledger driver on PATH
+        run: sudo install -m 0755 .github/scripts/renovate_contract_ledger.py /usr/local/bin/renovate-contract-ledger
+
       # Provides `uv`/`uvx` — used by Renovate's native uv manager to refresh
       # uv.lock AND by the driver's `uvx ruff` formatting of generated Python.
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
