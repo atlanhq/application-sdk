@@ -24,8 +24,8 @@ from pathlib import Path
 
 import pytest
 import trustme
-from dateutil.tz import tzutc
 from cryptography.hazmat.primitives import serialization
+from dateutil.tz import tzutc
 from obstore.auth.azure import AzureCredentialProvider
 from obstore.auth.boto3 import StsCredentialProvider
 

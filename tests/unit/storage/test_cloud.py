@@ -154,7 +154,9 @@ class TestFromCredentials:
         )
         assert store.provider == "s3"
 
-    @patch("application_sdk.storage._credential_providers._UtcExpiryStsCredentialProvider")
+    @patch(
+        "application_sdk.storage._credential_providers._UtcExpiryStsCredentialProvider"
+    )
     @patch("boto3.Session")
     @patch("obstore.store.S3Store")
     def test_s3_role_arn_wires_assume_role_provider(
