@@ -131,7 +131,7 @@ jobs:
         with:
           version: "0.12.5"
 
-      # P7D matches the fleet. A shorter window here would put application-sdk's
+      # P3D matches the fleet. A shorter window here would put application-sdk's
       # CI on a different dependency set from the connectors again, which is half
       # of what FND-376 exists to fix.
       - name: Bound the refreshed locks
@@ -139,7 +139,7 @@ jobs:
           BASE_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           python3 .github/scripts/bound_lock_branch.py \
-            --window P7D \
+            --window P3D \
             --baseline-ref "origin/$BASE_BRANCH"
 
       # No-op when the locks were already inside the window (the driver commits
