@@ -1018,9 +1018,26 @@ class BaseE2ETest:
         ``app_ready_timeout_seconds`` of 0 returns no overrides, leaving
         ``submit_workflow``'s own defaults in place. See that class attr for the
         budget rationale.
+
+        Raises:
+            MissingHarnessClassAttrError: when ``app_ready_timeout_seconds`` is
+                positive but ``app_ready_poll_interval_seconds`` is not — the
+                retry count integer-divides by the interval, so a zero or
+                negative interval would crash with ``ZeroDivisionError`` rather
+                than gate the submit.
         """
         if self.app_ready_timeout_seconds <= 0:
             return {}
+        if self.app_ready_poll_interval_seconds <= 0:
+            raise MissingHarnessClassAttrError(
+                message=(
+                    "app_ready_poll_interval_seconds must be > 0 when "
+                    f"app_ready_timeout_seconds={self.app_ready_timeout_seconds} "
+                    "is set; got "
+                    f"app_ready_poll_interval_seconds={self.app_ready_poll_interval_seconds}"
+                ),
+                field="app_ready_poll_interval_seconds",
+            )
         return {
             "retries": (
                 self.app_ready_timeout_seconds // self.app_ready_poll_interval_seconds

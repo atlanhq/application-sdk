@@ -20,6 +20,7 @@ from application_sdk.contracts.types import ConnectionRef
 from application_sdk.testing.e2e._errors import (
     ManifestDagMissingError,
     ManifestFileNotFoundError,
+    MissingHarnessClassAttrError,
     MissingHarnessEnvError,
 )
 from application_sdk.testing.e2e.base import BaseE2ETest
@@ -922,6 +923,26 @@ class TestSubmitRetryKwargs:
         harness = _ConcreteE2ETest()
         harness.app_ready_timeout_seconds = 0
         assert harness._submit_retry_kwargs() == {}
+
+    def test_zero_poll_interval_raises_a_typed_error(self) -> None:
+        """A positive timeout with a 0 poll interval must not ZeroDivisionError."""
+        harness = _ConcreteE2ETest()
+        harness.app_ready_timeout_seconds = 300
+        harness.app_ready_poll_interval_seconds = 0
+        with pytest.raises(
+            MissingHarnessClassAttrError, match="app_ready_poll_interval_seconds"
+        ):
+            harness._submit_retry_kwargs()
+
+    def test_negative_poll_interval_raises_a_typed_error(self) -> None:
+        """A negative poll interval is rejected the same way as 0."""
+        harness = _ConcreteE2ETest()
+        harness.app_ready_timeout_seconds = 300
+        harness.app_ready_poll_interval_seconds = -5
+        with pytest.raises(
+            MissingHarnessClassAttrError, match="app_ready_poll_interval_seconds"
+        ):
+            harness._submit_retry_kwargs()
 
     def test_run_full_dag_passes_the_budget_to_submit(
         self, monkeypatch: pytest.MonkeyPatch
