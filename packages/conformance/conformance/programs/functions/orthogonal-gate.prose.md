@@ -44,9 +44,10 @@ of the finding as returned by `detect-violations`):
 - `"pkl-eval"` → delegate to `pkl-eval-gate` with `scope = scope`.  Return its
   `passed`, `exit_code`, and `summary` directly.
 
-- `"docker-build"` → delegate to `docker-build-gate` with `scope = scope` and
-  `touched_files = touched_files`.  Return its `passed`, `exit_code`, and
-  `summary` directly.  Used by the I-series: a Dockerfile change cannot affect
+- `"docker-build"` → delegate to `docker-build-gate` with `scope = scope`,
+  `finding = finding` (its `finding.file` is the authoritative Dockerfile — the
+  file the rule graded) and `touched_files = touched_files`.  Return its
+  `passed`, `exit_code`, and `summary` directly.  Used by the I-series: a Dockerfile change cannot affect
   the Python test suite, so `"tests"` would be a blind gate that passes on any
   edit, and `"skip"` would only parse-check a file format that has no parser.
   Building the image is the narrowest check that actually exercises what was

@@ -61,6 +61,11 @@ green.
   expansion time).
 - `mode` — `"default"` or `"strict"` (propagated from the top-level entry).
   Strict mode has no additional effect here (all I-series rules are BLOCK-tier).
+- `rule_ids` — optional list of exact rule IDs (propagated from the
+  top-level entry). Forwarded verbatim into every runner invocation this
+  area makes — the loop's detect calls and the suggest-only
+  `detect-violations` calls alike — so a `--rule`-scoped run stays scoped
+  here rather than silently widening to the whole series at this hop.
 - `apply_unverifiable` — boolean, default `false` (propagated from the top-level
   entry).  When `false`, behaviour is byte-identical to before this parameter
   existed.  When `true`, run the full `detect-fix-recheck` loop instead of the
@@ -80,6 +85,7 @@ if apply_unverifiable:
   call detect-fix-recheck
     scope: scope
     series: "I"
+    rule_ids: rule_ids
     mode: mode
     max_attempts: 5
 
@@ -89,6 +95,7 @@ else:
   let violations = call detect-violations
     scope: scope
     series: "I"
+    rule_ids: rule_ids
     target: "failing"
 
   for each finding in violations:

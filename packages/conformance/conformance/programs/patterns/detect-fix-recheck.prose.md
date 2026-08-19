@@ -39,9 +39,16 @@ description: >
   `"no cited evidence for the chosen value"` — for a blind-gate area an
   uncited value is a guess, and a guess that passes a blind gate is precisely
   the failure mode the gate cannot catch.
-- `deliver_as_draft` — boolean, default `false`.  Recorded on every result so the
-  delivery step marks the PR draft and requests a named reviewer.  Does not
-  change the loop's own behaviour; it is carried, not acted on, here.
+- `deliver_as_draft` — boolean, default `false`.  Stamped onto **every surviving
+  result and every residue item** this loop emits, as `deliver_as_draft = true`,
+  and surfaced as its own column in the residue report.  The consumer is the
+  delivering caller — the remediation playbook's delivery stage passes
+  `--draft` and requests a named reviewer whenever any delivered result carries
+  the flag; the `/remediate` skill's residue phase prints it so a human
+  applying proposals sees the requirement.  The loop itself never opens PRs, so
+  carrying the flag on its outputs *is* the implementation at this layer: if it
+  were dropped here, the guarantee "S-series ships as draft" would silently
+  become unenforceable downstream.
 
 ### Delegation
 

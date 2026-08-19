@@ -45,6 +45,11 @@ correct disposition, again a human call.
 
 - `scope` — repository root path.
 - `mode` — `"default"` or `"strict"`.
+- `rule_ids` — optional list of exact rule IDs (propagated from the
+  top-level entry). Forwarded verbatim into every runner invocation this
+  area makes — the loop's detect calls and the suggest-only
+  `detect-violations` calls alike — so a `--rule`-scoped run stays scoped
+  here rather than silently widening to the whole series at this hop.
 - `apply_unverifiable` — boolean, default `false`.  When `false`, behaviour is
   byte-identical to before this parameter existed: propose, never apply.  When
   `true`, the caller has accepted that no gate can prove the replacement resolves
@@ -65,13 +70,16 @@ if apply_unverifiable:
   #   1. classification = "unverifiable" on every result — never "mechanical";
   #   2. the delivered change must be marked DRAFT with a named reviewer, so it
   #      cannot merge on a green check alone;
-  #   3. the relocation target must be cited (the secret-store path or env-var
-  #      NAME it now reads).  Never inline a value; never guess a key name.
+  #   3. the relocation target must be cited in `result.evidence` (see
+  #      remediate-finding's Returns contract): the secret-store path or
+  #      env-var NAME it now reads.  Never inline a value; never guess a key
+  #      name — empty evidence means the loop rejects the fix un-applied.
   #      If the correct target cannot be established from the repo, abstain —
   #      residue is the right answer, a guessed key name is not.
   call detect-fix-recheck
     scope: scope
     series: "S"
+    rule_ids: rule_ids
     mode: mode
     max_attempts: 5
     classification_override: "unverifiable"
@@ -85,6 +93,7 @@ else:
   let violations = call detect-violations
     scope: scope
     series: "S"
+    rule_ids: rule_ids
     target: if mode == "strict" then "failing+warning" else "failing"
 
   for each finding in violations:

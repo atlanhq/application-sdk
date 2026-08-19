@@ -101,6 +101,11 @@ human review and never auto-apply.  (These rules are backed by
 
 - `scope` — repository root path.
 - `mode` — `"default"` or `"strict"`.
+- `rule_ids` — optional list of exact rule IDs (propagated from the
+  top-level entry). Forwarded verbatim into every runner invocation this
+  area makes — the loop's detect calls and the suggest-only
+  `detect-violations` calls alike — so a `--rule`-scoped run stays scoped
+  here rather than silently widening to the whole series at this hop.
 - `apply_unverifiable` — boolean, default `false`.  When `false`, behaviour is
   byte-identical to before this parameter existed: propose, never apply.  When
   `true`, the caller has accepted that **no gate can validate a P-series fix** and
@@ -120,12 +125,15 @@ if apply_unverifiable:
   # Two conditions make this honest rather than a false green:
   #   1. every result is reported with classification = "unverifiable" (never
   #      "mechanical"), so no downstream consumer can mistake it for gate-verified;
-  #   2. remediate-finding must attach cited evidence for the chosen value — a
-  #      bound taken from the contract schema or a documented upstream limit.
-  #      An arbitrary bound is NOT a fix; abstain and residue instead.
+  #   2. remediate-finding must populate `result.evidence` (see its Returns
+  #      contract) with the source of the chosen value — a bound taken from
+  #      the contract schema or a documented upstream limit, cited as a
+  #      checkable path/identifier. An arbitrary bound is NOT a fix; return
+  #      empty evidence and let the loop residue it un-applied.
   call detect-fix-recheck
     scope: scope
     series: "P"
+    rule_ids: rule_ids
     mode: mode
     max_attempts: 5
     classification_override: "unverifiable"
@@ -139,6 +147,7 @@ else:
   let violations = call detect-violations
     scope: scope
     series: "P"
+    rule_ids: rule_ids
     target: if mode == "strict" then "failing+warning" else "failing"
 
   for each finding in violations:

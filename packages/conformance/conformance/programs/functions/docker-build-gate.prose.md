@@ -18,8 +18,14 @@ description: >
 ### Parameters
 
 - `scope` (string, required) — repository root path.
-- `touched_files` (list of string, required) — every path the fix wrote.  Used to
-  locate the Dockerfile that was edited, and to bound the revert on failure.
+- `finding` (object, required) — the I-series finding under repair; its
+  `finding.file` is the authoritative Dockerfile path (the file the rule
+  graded), which is why resolution starts there rather than with anything
+  model-reported.
+- `touched_files` (list of string, required) — every path the fix wrote.
+  Bounds the revert on failure, and serves only as the *last* fallback for
+  Dockerfile resolution: it is model-reported and unvalidated, so it must
+  never be the thing that decides whether this gate has work to do.
 
 ### Returns
 
@@ -50,12 +56,26 @@ immediately.  The loop then reverts the edit and routes the finding to residue w
 reason `cannot-verify` — the same outcome the area had before this gate existed, so
 an environment without docker degrades to the old behaviour rather than to a lie.
 
-Otherwise, resolve which Dockerfile to build.  Take the first entry in
-`touched_files` whose basename is `Dockerfile` or which matches `Dockerfile.*`; if
-none of the touched files is a Dockerfile, the fix did not change the image and
-this gate has nothing to verify — return `passed = true`, `exit_code = 0`,
-`summary = "docker-build gate: no Dockerfile among touched files; nothing to
-build"`.
+Otherwise, resolve which Dockerfile to build — from the strongest source first,
+never from `touched_files` alone:
+
+1. **The finding itself.** Every I-series finding's `finding.file` *is* the
+   Dockerfile the rule graded.  Use it when it exists in the working tree.
+2. **The working-tree diff.** `git diff --name-only` filtered to
+   `Dockerfile` / `Dockerfile.*` — what actually changed, as git saw it.
+3. `touched_files` filtered the same way — last, because it is model-reported
+   and unvalidated.
+
+If none of the three yields a Dockerfile that exists on disk, **fail closed**:
+return `passed = false`, `exit_code = 1`, and a summary naming what was looked
+for.  Never return a pass here.  An I-series fix by definition changed the
+image definition; "no Dockerfile found to build" therefore means the fix's own
+reporting is wrong, and a gate that passes on its subject going missing is an
+always-pass path — a fix could simply omit the Dockerfile from `touched_files`
+and sail through the exact check this gate exists to perform.  (This gate is
+wired only to I-series rules, so there is no legitimate "non-image edit"
+caller to fast-pass for; if a future non-I rule adopts it, that rule must
+provide its own subject resolution rather than weakening this one.)
 
 Build it, from the repository root so the build context matches CI:
 

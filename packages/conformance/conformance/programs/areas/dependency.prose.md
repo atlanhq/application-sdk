@@ -59,6 +59,11 @@ backstop.
 
 - `scope` — repository root path.
 - `mode` — `"default"` or `"strict"`.
+- `rule_ids` — optional list of exact rule IDs (propagated from the
+  top-level entry). Forwarded verbatim into every runner invocation this
+  area makes — the loop's detect calls and the suggest-only
+  `detect-violations` calls alike — so a `--rule`-scoped run stays scoped
+  here rather than silently widening to the whole series at this hop.
 
 ### Continuity
 
@@ -72,6 +77,7 @@ than watching the filesystem.
 call detect-fix-recheck
   scope: scope
   series: "D"
+  rule_ids: rule_ids
   mode: mode
   max_attempts: 5
 ```

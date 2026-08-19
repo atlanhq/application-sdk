@@ -58,6 +58,116 @@ def test_detect_violations_documents_rule_ids_as_a_post_filter() -> None:
     assert "--series L004" in text or "--series <rule>" in text
 
 
+def _call_blocks(text: str, callee: str) -> list[str]:
+    """Every `call <callee>` block in a prose file, as its parameter lines.
+
+    Structural, not a single regex over the whole file: a block ends where the
+    parameter indentation does, so an assertion against one block can't be
+    satisfied by a parameter that actually belongs to a different call — which
+    is exactly how the original tests passed while the area→loop hop dropped
+    `rule_ids`.
+    """
+    blocks: list[str] = []
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if stripped == f"call {callee}" or stripped.endswith(f"= call {callee}"):
+            indent = len(lines[i]) - len(lines[i].lstrip())
+            j = i + 1
+            body: list[str] = []
+            while j < len(lines):
+                nxt = lines[j]
+                if not nxt.strip():
+                    break
+                nxt_indent = len(nxt) - len(nxt.lstrip())
+                if nxt_indent <= indent or nxt.lstrip().startswith("#"):
+                    if nxt.lstrip().startswith("#"):
+                        j += 1
+                        continue
+                    break
+                body.append(nxt)
+                j += 1
+            blocks.append("\n".join(body))
+            i = j
+        else:
+            i += 1
+    return blocks
+
+
+ALL_AREAS = [
+    "ci",
+    "contract-toolkit",
+    "dependency",
+    "deprecation",
+    "dockerfile",
+    "error-handling",
+    "logging",
+    "optimizations",
+    "prescriptions",
+    "security",
+    "tests",
+]
+
+
+@pytest.mark.parametrize("area", ALL_AREAS)
+def test_every_area_forwards_rule_ids_into_every_runner_call(area: str) -> None:
+    """THE hop that was actually broken (sdk-review on this PR, F1): the
+    dispatcher threaded `rule_ids` to every area and every area then dropped it,
+    so `--rule L004` silently widened to the whole series. Assert the area→loop
+    hop and the suggest-only detect calls — every place an area invokes the
+    runner."""
+    text = _read(f"areas/{area}.prose.md")
+    blocks = _call_blocks(text, "detect-fix-recheck") + _call_blocks(
+        text, "detect-violations"
+    )
+    assert blocks, f"{area} makes no runner calls — the test would be vacuous"
+    missing = [b for b in blocks if "rule_ids: rule_ids" not in b]
+    assert not missing, (
+        f"{area}: {len(missing)} runner call(s) do not forward rule_ids — "
+        f"a --rule-scoped run widens to the whole series at this hop:\n"
+        + "\n---\n".join(missing)
+    )
+
+
+@pytest.mark.parametrize("area", ALL_AREAS)
+def test_every_area_declares_rule_ids(area: str) -> None:
+    assert "`rule_ids`" in _read(
+        f"areas/{area}.prose.md"
+    ), f"{area} forwards rule_ids but never declares it as a parameter"
+
+
+def test_remediate_finding_declares_the_evidence_field() -> None:
+    """`require_cited_evidence` gates on `result.evidence`; the producer contract
+    must declare it or the blind-gate areas key off an unspecified model field
+    (sdk-review on this PR, F2)."""
+    text = _read("functions/remediate-finding.prose.md")
+    assert "`evidence`" in text
+    assert "require_cited_evidence" in text
+
+
+@pytest.mark.parametrize("area", ["prescriptions", "security"])
+def test_blind_gate_prescriptions_point_at_result_evidence(area: str) -> None:
+    assert "result.evidence" in _read(f"areas/{area}.prose.md")
+
+
+def test_docker_build_gate_fails_closed_when_no_dockerfile_is_found() -> None:
+    """A gate that passes when its subject goes missing is an always-pass path
+    (sdk-review on this PR, F4): a fix could omit the Dockerfile from
+    model-reported touched_files and sail through."""
+    text = _read("functions/docker-build-gate.prose.md")
+    assert "fail closed" in text
+    assert "finding.file" in text
+    # The old fast-pass must be gone.
+    assert "nothing to build" not in text
+
+
+def test_deliver_as_draft_names_its_consumer(loop: str) -> None:
+    """The flag must be stamped onto the loop's outputs, or the S-series draft
+    guarantee silently becomes unenforceable downstream (sdk-review, F3)."""
+    assert "residue report" in loop.split("`deliver_as_draft`")[1][:900]
+
+
 def test_every_detect_call_in_the_loop_threads_rule_ids(loop: str) -> None:
     """Both detect-violations calls in the loop forward rule_ids.
 
