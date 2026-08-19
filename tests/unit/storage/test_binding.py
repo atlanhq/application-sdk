@@ -551,7 +551,7 @@ class TestS3BehaviorKnobs:
 
 
 class TestS3AssumeRole:
-    @patch("application_sdk.storage._credential_providers.StsCredentialProvider")
+    @patch("application_sdk.storage._credential_providers._UtcExpiryStsCredentialProvider")
     @patch("boto3.Session")
     @patch("obstore.store.S3Store")
     def test_assume_role_sets_credential_provider(
@@ -598,7 +598,7 @@ class TestS3AssumeRole:
         with pytest.raises(StorageConfigError, match="IAM Roles Anywhere"):
             create_store_from_binding("objectstore", components_dir=components_dir)
 
-    @patch("application_sdk.storage._credential_providers.StsCredentialProvider")
+    @patch("application_sdk.storage._credential_providers._UtcExpiryStsCredentialProvider")
     @patch("boto3.Session")
     @patch("obstore.store.S3Store")
     def test_partial_base_creds_warns_and_ignores(
@@ -641,7 +641,7 @@ class TestS3AssumeRole:
         assert "aws_session_token" not in session_kwargs
 
     @patch.dict(os.environ, {"AWS_REGION": "ap-south-1"}, clear=False)
-    @patch("application_sdk.storage._credential_providers.StsCredentialProvider")
+    @patch("application_sdk.storage._credential_providers._UtcExpiryStsCredentialProvider")
     @patch("boto3.Session")
     @patch("obstore.store.S3Store")
     def test_assume_role_region_not_scoped_to_sts_session(
