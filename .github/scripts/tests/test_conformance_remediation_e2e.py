@@ -314,3 +314,57 @@ def test_the_ref_fallback_drives_a_dry_run(
     preview = json.loads(capsys.readouterr().out)
     assert preview["repositories"] == ["atlanhq/atlan-netsuite-app"]
     assert preview["metadata"]["rule"] == "L011"
+
+
+# ── regression: the first live run's text-capture failure ─────────────────
+#
+# Run 32222863347: the rover completed, opened its PR, and reported RESULT —
+# but the step failed with "no RESULT line" because the text rode an event /
+# field this parser did not read. Capture is now event-agnostic with the same
+# field fallback sdk_evolution_dispatch.py uses.
+
+
+def test_text_is_captured_regardless_of_event_name() -> None:
+    st = mod.process_stream(
+        _sse(
+            [
+                ("agent_message", {"message": "RESULT: pushed:via-message-field"}),
+                ("complete", {"status": "completed"}),
+            ]
+        )
+    )
+    _, kind, detail = mod.mine_summary(st.mined_text())
+    assert (kind, detail) == ("pushed", "via-message-field")
+
+
+@pytest.mark.parametrize(
+    "field", ["text", "content", "message", "response", "delta", "output"]
+)
+def test_every_known_text_field_is_read(field: str) -> None:
+    st = mod.process_stream(
+        _sse(
+            [
+                ("response", {field: "RESULT: no-op: clean"}),
+                ("complete", {"status": "completed"}),
+            ]
+        )
+    )
+    _, kind, _ = mod.mine_summary(st.mined_text())
+    assert kind == "no-op"
+
+
+def test_bare_string_and_non_json_payloads_are_captured() -> None:
+    lines = [
+        "event: response",
+        'data: "RESULT: exists:https://x/pull/1"',  # JSON string payload
+        "",
+        "event: log",
+        "data: RESULT-ish non-json noise",  # not JSON at all — kept verbatim
+        "",
+        "event: complete",
+        'data: {"status": "completed"}',
+        "",
+    ]
+    st = mod.process_stream(lines)
+    _, kind, detail = mod.mine_summary(st.mined_text())
+    assert (kind, detail) == ("exists", "https://x/pull/1")

@@ -185,7 +185,14 @@ class StreamState:
         self.cost = ""
         self.err_code = ""
         self.err_msg = ""
+        # Two buffers, on purpose (same split sdk_evolution_dispatch.py uses):
+        # `buffer` concatenates thought/response payloads with NO separator,
+        # because those may stream as deltas and a separator would split a
+        # summary line across fragments; `raw` newline-joins every other
+        # event's payload, because those are discrete messages and joining
+        # them separator-less would fuse two unrelated lines into one.
         self.buffer = ""
+        self.raw = ""
 
     def append_text(self, text: str) -> None:
         if not text:
@@ -193,6 +200,41 @@ class StreamState:
         self.buffer += text
         if len(self.buffer) > BUFFER_CAP_BYTES:
             self.buffer = self.buffer[-BUFFER_CAP_BYTES:]
+
+    def append_raw(self, text: str) -> None:
+        if not text:
+            return
+        self.raw += text + "\n"
+        if len(self.raw) > BUFFER_CAP_BYTES:
+            self.raw = self.raw[-BUFFER_CAP_BYTES:]
+
+    def mined_text(self) -> str:
+        """Everything the stream carried, delta-safe part first."""
+        return self.buffer + "\n" + self.raw
+
+
+def _payload_text(data: str) -> str:
+    """Best-effort human text from one SSE data payload.
+
+    Ported from ``sdk_evolution_dispatch.py``, which learned this the same way
+    this script did: the summary block does not reliably arrive on a
+    ``response`` event with a ``text`` field. The first live run here proved it
+    — the rover completed, opened its PR, and reported RESULT, but the buffer
+    was empty because the text rode a field this parser did not read. So:
+    accept bare strings, non-JSON payloads, and every known text-ish key.
+    """
+    try:
+        obj = json.loads(data)
+    except json.JSONDecodeError:
+        return data
+    if isinstance(obj, str):
+        return obj
+    if isinstance(obj, dict):
+        for key in ("text", "content", "message", "response", "delta", "output"):
+            val = obj.get(key)
+            if isinstance(val, str) and val:
+                return val
+    return ""
 
 
 def _jget(data: str, *keys: str, default: str = "") -> str:
@@ -230,11 +272,13 @@ def process_line(line: str, st: StreamState) -> str | None:
     if st.event == "action":
         name = _jget(data, "action_name")
         return f"[action]    {name}" if name else None
+    # Event-agnostic capture: the summary block and RESULT line are mined from
+    # whatever event happens to carry them, because the event vocabulary is the
+    # part of this API that has already surprised us once (run 32222863347).
     if st.event in ("thought", "response"):
-        # Buffered, not printed: this is where the REMEDIATION SUMMARY block and
-        # the RESULT line arrive.
-        st.append_text(_jget(data, "text") or _jget(data, "content"))
+        st.append_text(_payload_text(data))
         return None
+    st.append_raw(_payload_text(data))
     if st.event == "elicitation":
         st.errored = True
         st.err_code = "elicitation"
@@ -438,7 +482,7 @@ def main() -> int:
         print(f"::error::Sandbox dispatch HTTP error: {e}")
         return 1
 
-    fields, kind, detail = mine_summary(st.buffer)
+    fields, kind, detail = mine_summary(st.mined_text())
     summary = render_step_summary(st, fields, kind, detail)
     print(summary)
     step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
