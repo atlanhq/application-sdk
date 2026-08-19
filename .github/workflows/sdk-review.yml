@@ -34,6 +34,9 @@
 #                            <!-- TEST_SDK_REVIEW --> marker is also
 #                            accepted for in-flight PRs that pre-date the
 #                            promotion)
+#   comment marker         = <!-- SDK_REVIEW_NO_VERDICT --> (posted only when
+#                            a completed run delivered no summary at all; see
+#                            the `verdict` step)
 #
 # Required configuration:
 #   secrets.HARNESS_TOKEN              Bearer token for /api/sandbox/execute.
@@ -1079,6 +1082,32 @@ jobs:
 
           echo "SDK Review (mothership) completed successfully (cost=${FINAL_COST})."
 
+      # A run that reaches `status=completed`, bills a real cost and posts
+      # nothing to the PR is a defect, not a no-op. `sdk_review_approve.py`
+      # treats "no summary comment" as SKIPPED (a legitimate no-op for its
+      # other decline reasons), so without this step the workflow exits 0 on
+      # a review that delivered nothing — green check, silent bot, warning
+      # annotation nobody reads.
+      #
+      # Additive on purpose: the soft-success rule inside `dispatch` covers
+      # the disjoint case (verdict posted, stream broke afterwards), so this
+      # is a separate check rather than an edit to `fail_or_warn`. The gate
+      # fails open whenever it cannot establish the count — a false red on a
+      # delivered review is the failure mode the run-29001242204 RCA was
+      # written about.
+      - name: Verify the review delivered a verdict
+        id: verdict
+        if: success() && steps.parse.outputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
+          FINAL_STATUS: ${{ steps.dispatch.outputs.final_status }}
+          FINAL_COST: ${{ steps.dispatch.outputs.final_cost }}
+          STARTER_STARTED_AT: ${{ steps.starter.outputs.started_at }}
+          GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python3 .github/scripts/sdk_review_verdict_gate.py
+
       # Cancelling this job does NOT stop the sandbox.
       #
       # mothership runs the sandbox on a thread-pool executor with a
@@ -1127,6 +1156,10 @@ jobs:
           FINAL_ERR_CODE: ${{ steps.dispatch.outputs.final_err_code }}
           FINAL_ERR_MSG: ${{ steps.dispatch.outputs.final_err_msg }}
           DISPATCH_OUTCOME: ${{ steps.dispatch.outcome }}
+          # 'false' only when the verdict gate positively established that a
+          # completed run posted nothing. 'unknown'/'' means it fell open or
+          # never ran, and the stamp keeps its usual wording.
+          VERDICT_DELIVERED: ${{ steps.verdict.outputs.verdict_delivered }}
         with:
           script: |
             const commentId = parseInt(process.env.STARTER_COMMENT_ID, 10);
@@ -1155,11 +1188,19 @@ jobs:
             // lie. Give cancels their own verb and say what we did about
             // the sandbox.
             const cancelled = process.env.DISPATCH_OUTCOME === 'cancelled';
-            const verb = finalStatus === 'completed' ? '✅ **Completed**' :
+            // A completed run that posted no verdict must not read as
+            // "✅ Completed" here — that stamp is exactly the reassurance
+            // that made this failure mode invisible.
+            const noVerdict = process.env.VERDICT_DELIVERED === 'false';
+            const verb = noVerdict ? '🟥 **Completed but posted no verdict**' :
+                         finalStatus === 'completed' ? '✅ **Completed**' :
                          process.env.DISPATCH_OUTCOME === 'success' ? '✅ **Completed**' :
                          cancelled ? '🟡 **Cancelled**' :
                          '🟥 **Run ended without a clean completion**';
             let footer = `\n\n---\n${verb} — status \`${finalStatus}\`, cost \`$${finalCost}\`, duration ${durationTxt}.`;
+            if (noVerdict) {
+              footer += `\nThe run finished and billed, but no review summary reached this PR. Re-tag \`@sdk-review\` to retry.`;
+            }
             if (cancelled) {
               footer += `\nThe sandbox was asked to stop (\`DELETE /api/sandbox/session\`). If that request did not land, a review comment may still arrive from the in-flight run — check the workflow log for a termination warning.`;
             }

@@ -122,8 +122,48 @@ def test_successful_complete_stream():
 
 def test_error_event_fails():
     st = _stream("event: error", 'data: {"code": "boom", "message": "kaboom"}')
+    assert st.errored is True
     code, msg = sr.decide_exit(st)
-    assert code == 1 and "boom" in msg
+    assert code == 1 and "boom" in msg and "kaboom" in msg
+    assert "`boom` kaboom" in sr.render_step_summary(st, "1234", "http://run")
+
+
+def test_complete_with_error_status_surfaces_code_and_message():
+    # Regression: a `complete` carrying status=error used to leave st.errored
+    # False, so both consumers dropped the parsed reason and the log showed only
+    # "final status=error" with no code/message.
+    st = _stream(
+        "event: complete",
+        'data: {"status": "error", "cost_usd": "1.75", '
+        '"error": {"code": "upstream_error", "message": "provider returned 400"}}',
+    )
+    assert st.errored is True
+    code, msg = sr.decide_exit(st)
+    assert code == 1
+    assert "upstream_error" in msg and "provider returned 400" in msg
+    out = sr.render_step_summary(st, "1234", "http://run")
+    assert "`upstream_error` provider returned 400" in out
+
+
+def test_complete_with_error_status_and_no_detail_keeps_status_message():
+    # Empty error object: there is nothing to surface, so stay on the bare
+    # status message rather than reporting a content-free `code=none`.
+    st = _stream("event: complete", 'data: {"status": "error"}')
+    assert st.errored is False
+    code, msg = sr.decide_exit(st)
+    assert code == 1 and "final status=error" in msg
+
+
+def test_complete_with_error_status_does_not_mask_oob_handoff():
+    # A hard error still yields to the out-of-band hand-off row when one is
+    # found, exactly as the standalone-`error` path does.
+    st = _stream(
+        "event: complete",
+        'data: {"status": "error", "error": {"code": "c", "message": "m"}}',
+    )
+    out = sr.render_step_summary(st, "1234", "http://run", "http://comment")
+    assert "out-of-band" in out
+    assert "**Error:**" not in out
 
 
 def test_no_events_fails():
