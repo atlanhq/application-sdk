@@ -628,12 +628,80 @@ When the SDR composite is invoked via local path (`./.application-sdk/.github/ac
 
 Single-pipeline apps invoking the action remotely (`@main`) never hit this code path.
 
+## Multi-entrypoint (bundle) apps: one suite per entrypoint
+
+An app whose contract declares `entrypoints` generates one manifest per
+entrypoint — `app/generated/<ep>/manifest.json` — and each entrypoint is its own
+Automation Engine submit, against its own DAG, its own task queue, and its own
+served manifest. **A green crawler leg is no evidence about the miner.** So the
+"one representative run" rule (see `T012`) means one run *per entrypoint* here,
+and `T025 EntrypointWithoutE2ECoverage` reports any entrypoint without one.
+
+This is only about **bundle mode**. An app that keeps a single marketplace card
+and invokes secondary entrypoints as DAG nodes (`workflow_type: "<app>:<wire>"`
+— the route/card split) has those executed inside the parent's own full-DAG run,
+so they are covered transitively and `T025` never fires for them.
+
+### Add a file per entrypoint
+
+The e2e matrix fans out **one leg per `tests/e2e/test_*.py` file**, so a second
+entrypoint needs a second file and no workflow change at all:
+
+```
+tests/e2e/test_myconn_crawler_e2e.py    → leg "myconn-crawler-e2e" × each cloud
+tests/e2e/test_myconn_miner_e2e.py      → leg "myconn-miner-e2e"   × each cloud
+```
+
+Each subclasses that entrypoint's generated base:
+
+```python
+# tests/e2e/test_myconn_miner_e2e.py
+from app.generated.miner._e2e_base import MinerGeneratedE2EBase
+from application_sdk.testing.e2e import RunMode
+
+
+@pytest.mark.e2e
+class TestMyConnMinerE2E(MinerGeneratedE2EBase):
+    mode = RunMode.AGENT
+```
+
+The generated base already carries this entrypoint's `manifest_path` and
+`entrypoint` (without which AE fetches the bare manifest and 404s "No manifest
+available"), the bundle's own identity fields, and expectations derived from that
+entrypoint's `pipeline` — `expect_connection`, `require_nonempty_assets`,
+`expect_lineage`, `required_dag_nodes`. A miner therefore is not graded against
+crawler-shaped assertions: with no `publish` step its pass criterion is its DAG.
+
+### Seeding state a dependent entrypoint consumes
+
+A miner enriches a connection it does **not** create. The harness mints an
+ephemeral qualified name but no Connection entity, so a miner run bare has
+nothing to enrich. Create it in `seed_prerequisites()`, which runs immediately
+before the DAG:
+
+```python
+class TestMyConnMinerE2E(MinerGeneratedE2EBase):
+    mode = RunMode.AGENT
+
+    def seed_prerequisites(self) -> None:
+        # Creates the Connection under this test's own ephemeral QN, waits until
+        # it is searchable, and retries the probe write until the connection's
+        # access policies go live (a fresh connection 403s child writes).
+        self.seed_connection(probe=self._write_a_table)
+```
+
+Seed under the harness's **own** `self.connection_qualified_name` — which
+`seed_connection` handles — so `teardown_method` purges it with everything
+beneath it. Never point a suite at a long-lived shared connection to skip the
+seeding work: a left-over, half-set-up connection is exactly what greens a later
+run that should have failed.
+
 ## Onboarding checklist for a new connector
 
 1. **Action manifest**: `app.yaml` at repo root (3 lines).
 2. **Unified workflow**: copy `.github/workflows/tests.yaml` from mysql-app; swap connector references. This single file covers unit + integration tests (always) and full-DAG e2e (on the `e2e` label or `run_e2e=true` dispatch input).
 3. **Config dir**: create `.github/sdr-e2e/` (new) or `.github/e2e/` (legacy). Files: `docker-compose.ci.yml`, `e2e-full-docker-compose.yaml`, `e2e-full-components/`, `seed.sql`, `make-secrets.py`, `make-secrets-e2e-full.py`.
-4. **Tests**: unit + integration tests under `tests/unit/` and `tests/integration/`; full-DAG e2e under `tests/e2e/` (`SQLAppE2EFullTest` subclass).
+4. **Tests**: unit + integration tests under `tests/unit/` and `tests/integration/`; full-DAG e2e under `tests/e2e/` (`SQLAppE2EFullTest` subclass). On a bundle app, one `tests/e2e/test_*.py` **per entrypoint** — see [Multi-entrypoint (bundle) apps](#multi-entrypoint-bundle-apps-one-suite-per-entrypoint).
 5. **Repo secrets**: set the 7 entries from the table above.
 6. **SDK matrix**: add `<connector>-app` to the `DEFAULT_MATRIX` in apps-sdk's `matrix-builder` job (`pull_request.yaml`) so `connector-tests` fans out to your connector automatically.
 7. **Required check**: make `tests / Tests Gate` a required, unbypassable status check on the default branch, and remove any stale required checks left over from older workflows (`unit-tests`, `tests-passed`, …). Do this as soon as step 2 is merged — see below.
