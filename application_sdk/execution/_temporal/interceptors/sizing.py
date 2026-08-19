@@ -44,15 +44,37 @@ from application_sdk.observability.sizing import SizingObservation, record_obser
 logger = get_logger(__name__)
 
 
+#: Allow-list value that selects every activity. The discovery case — run it on a
+#: test tenant to find out which activities actually vary with their data, then
+#: replace it with those names.
+WILDCARD = "*"
+
+
 class _SizingActivityInboundInterceptor(ActivityInboundInterceptor):
     def __init__(
-        self, next: ActivityInboundInterceptor, poll_interval_seconds: float
+        self,
+        next: ActivityInboundInterceptor,
+        poll_interval_seconds: float,
+        activities: frozenset[str],
     ) -> None:
         super().__init__(next)
         self._poll_interval_seconds = poll_interval_seconds
+        self._activities = activities
+
+    def _selected(self, activity_type: str) -> bool:
+        if WILDCARD in self._activities:
+            return True
+        return activity_type in self._activities
 
     async def execute_activity(self, input: ExecuteActivityInput) -> Any:
         info = activity.info()
+        # Filter FIRST, before the tracker. A worker polls one queue for many
+        # activities, so an unselected one has to be a bare set lookup — no cgroup
+        # reads and no poller. Deciding inside the tracker would pay the setup cost
+        # for every activity in the app just to throw the reading away.
+        if not self._selected(info.activity_type or ""):
+            return await self.next.execute_activity(input)
+
         start_ns = time.monotonic_ns()
         outcome = "OK"
         # Bound before the ``async with`` so the outer ``finally`` cannot raise
@@ -101,6 +123,10 @@ class SizingTelemetryInterceptor(Interceptor):
     plus one structured ``activity_sizing_observation`` log line carrying the
     full record for offline tier fitting.
 
+    ``activities`` is an opt-in allow-list of activity names. Empty measures
+    nothing, so this interceptor being attached is never on its own enough to
+    make it do work.
+
     Not exported from the ``interceptors`` package and not accepted via
     ``create_worker(interceptors=...)``: it is wired only by ``create_worker``
     when collection is enabled. Keeping it un-exported is what makes
@@ -108,10 +134,17 @@ class SizingTelemetryInterceptor(Interceptor):
     construction rather than by a guard list.
     """
 
-    def __init__(self, poll_interval_seconds: float = 1.0) -> None:
+    def __init__(
+        self,
+        poll_interval_seconds: float = 1.0,
+        activities: frozenset[str] = frozenset(),
+    ) -> None:
         self._poll_interval_seconds = poll_interval_seconds
+        self._activities = activities
 
     def intercept_activity(
         self, next: ActivityInboundInterceptor
     ) -> ActivityInboundInterceptor:
-        return _SizingActivityInboundInterceptor(next, self._poll_interval_seconds)
+        return _SizingActivityInboundInterceptor(
+            next, self._poll_interval_seconds, self._activities
+        )
