@@ -7,8 +7,13 @@ from typing import Any
 import httpx
 
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.testing.e2e._poll import until_deadline_async
 
 logger = get_logger(__name__)
+
+# Tight cadence: the port opens within a few hundred ms once kubectl's tunnel is
+# up, and every attempt already carries its own 1s connect timeout.
+_PORT_POLL_INTERVAL_SECONDS = 0.1
 
 
 def _find_free_port() -> int:
@@ -22,10 +27,14 @@ async def _wait_for_port(
     port: int, host: str = "127.0.0.1", timeout: float = 10.0
 ) -> None:
     """Poll until TCP port accepts connections or timeout."""
-    import time  # noqa: PLC0415 — stdlib time; lazy use only
-
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+    async for attempt in until_deadline_async(
+        timeout,
+        _PORT_POLL_INTERVAL_SECONDS,
+        label=f"tcp://{host}:{port}",
+        # A 10s budget never reaches the 30s heartbeat cadence, and the caller
+        # already logs the port-forward it is waiting on.
+        heartbeat_seconds=0,
+    ):
         try:
             _reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(host, port), timeout=1.0
@@ -33,9 +42,12 @@ async def _wait_for_port(
             writer.close()
             await writer.wait_closed()
             return
-        except (ConnectionRefusedError, OSError, asyncio.TimeoutError):
-            await asyncio.sleep(0.1)
-    raise TimeoutError(f"Port {port} did not become ready within {timeout}s")
+        except (ConnectionRefusedError, OSError, asyncio.TimeoutError) as exc:
+            if attempt.is_last:
+                raise TimeoutError(
+                    f"Port {port} did not become ready within {timeout}s "
+                    f"({attempt.number} attempts)"
+                ) from exc
 
 
 async def kube_http_call(

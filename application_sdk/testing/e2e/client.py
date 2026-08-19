@@ -59,6 +59,7 @@ from application_sdk.testing.e2e._errors import (
     DAGProgressStalledError,
     NoWorkerOnTaskQueueError,
 )
+from application_sdk.testing.e2e._poll import _HEARTBEAT_SECONDS, until_deadline
 
 logger = get_logger(__name__)
 
@@ -108,12 +109,12 @@ _REQUEST_BACKOFF_SECONDS = 3
 _MAX_RETRY_AFTER_SECONDS = 120
 _RETRY_AFTER_BUDGET_SECONDS = 300
 
-# Cadence for "still polling" heartbeat log lines in
-# ``poll_native_status`` — lineage stages take 2-5 min on small
-# datasets and the status string doesn't change during that time, so
-# the loop would otherwise look wedged in CI output. Long enough that
-# we don't drown the log on a fast happy-path run.
-_HEARTBEAT_SECONDS = 30
+# ``_HEARTBEAT_SECONDS`` (imported from ``_poll``) is the cadence for "still
+# polling" heartbeat log lines in ``poll_native_status`` — lineage stages take
+# 2-5 min on small datasets and the status string doesn't change during that
+# time, so the loop would otherwise look wedged in CI output. That loop throttles
+# its own richer progress line to the same cadence and disables the generic
+# heartbeat, rather than emitting two "still waiting" lines.
 
 # Per-status glyphs for the poll-loop log line — gives the operator a
 # quick visual scan of "what's done / what's running" without parsing
@@ -970,20 +971,27 @@ class AEWorkflowClient:
         it exists to turn an indefinite hang into a fast, self-terminating
         failure with the last-seen node states, instead of a manual cancel.
         """
-        elapsed = 0
         last_summary: str | None = None
         last_result: DAGRunResult | None = None
         transient_streak = 0
         # Seconds spent waiting *beyond* the poll interval because the origin
         # asked for longer — same accounting ``_post_with_retry`` keeps, so
         # both retry loops bound honoured backoff at _RETRY_AFTER_BUDGET_SECONDS.
-        honoured_seconds = 0
-        last_log_elapsed = 0  # seconds since the last info log fired
+        honoured_seconds = 0.0
+        last_log_elapsed = 0.0  # seconds since the last info log fired
         any_node_started = False  # any node reached Running/terminal (stall guard)
         last_progress_elapsed = (
-            0  # elapsed at the last node-state transition (progress watchdog)
+            0.0  # elapsed at the last node-state transition (progress watchdog)
         )
-        while elapsed < timeout_seconds:
+        for attempt in until_deadline(
+            timeout_seconds,
+            interval_seconds,
+            label=f"AE run {run_id}",
+            # This loop emits its own richer progress line (per node-state change
+            # plus a heartbeat at the same cadence); the generic one would double it.
+            heartbeat_seconds=0,
+        ):
+            elapsed = attempt.elapsed
             try:
                 result = self.get_native_status(run_id)
             except AppError as e:
@@ -1001,18 +1009,19 @@ class AEWorkflowClient:
                 # rather than the poll cadence: an overloaded tenant answering
                 # "retry_after: 120" would otherwise burn the whole
                 # max_transient_failures streak inside its own wait window.
-                # ``elapsed`` advances by the real wait, so timeout_seconds
-                # still bounds the loop.
+                # The loop's own clock advances by the real wait, so
+                # timeout_seconds still bounds it.
                 gap = _retry_gap(
                     e.retry_after_seconds if isinstance(e, AtlanApiHttpError) else None,
                     default_seconds=interval_seconds,
                     budget_left=_RETRY_AFTER_BUDGET_SECONDS - honoured_seconds,
                 )
                 honoured_seconds += gap.seconds - interval_seconds
-                # Never sleep past the deadline: a 120s honoured wait against
-                # a 50s remaining budget must not block the full 120s before
-                # the timeout is re-checked.
-                sleep_for = min(gap.seconds, max(timeout_seconds - elapsed, 0))
+                # ``sleep_next`` clamps to the residual budget, so a 120s
+                # honoured wait against a 50s remaining budget does not block
+                # the full 120s before the timeout is re-checked — and it
+                # reports back the gap actually taken, for the log below.
+                sleep_for = attempt.sleep_next(gap.seconds)
                 logger.warning(
                     "native-status transient error (streak %d/%d): %s — sleeping %ds%s and retrying",
                     transient_streak,
@@ -1022,8 +1031,6 @@ class AEWorkflowClient:
                     gap.origin_note,
                     exc_info=True,
                 )
-                time.sleep(sleep_for)
-                elapsed += sleep_for
                 continue
             transient_streak = 0
             last_result = result
@@ -1055,7 +1062,7 @@ class AEWorkflowClient:
                 logger.info(
                     "%s AE run [%3ds] %s — %s",
                     run_glyph,
-                    elapsed,
+                    int(elapsed),
                     result.status.value,
                     summary,
                 )
@@ -1114,8 +1121,6 @@ class AEWorkflowClient:
                         f"{timeout_seconds}s."
                     ),
                 )
-            time.sleep(interval_seconds)
-            elapsed += interval_seconds
         # Timeout: return the last observation so callers can include
         # node-level state in the failure message rather than just
         # "timed out after Xs".
@@ -1219,24 +1224,30 @@ class AEWorkflowClient:
         """
         if max_not_found_attempts_override is not None:
             max_not_found_attempts = max_not_found_attempts_override
-        elapsed = 0
-        not_found_streak = 0
         # `max_forbidden_attempts` kept on the signature for back-compat
         # but unused now that the search path doesn't surface 403.
         del max_forbidden_attempts
-        while elapsed < timeout_seconds:
+        for attempt in until_deadline(
+            timeout_seconds,
+            interval_seconds,
+            label=f"Atlas Connection {qualified_name}",
+            # The per-poll probe line below already reports progress every
+            # iteration; a heartbeat would duplicate it.
+            heartbeat_seconds=0,
+        ):
             found = self.connection_exists_in_atlas_via_search(qualified_name)
             # conformance: ignore[L006] short, bounded poll (timeout_seconds) with modest iteration count, not a hot loop; the per-iteration probe result is the primary diagnostic signal when an E2E run fails to converge
             logger.info(
                 "Atlas Connection probe [%ds] qn=%s exists=%s",
-                elapsed,
+                int(attempt.elapsed),
                 qualified_name,
                 found,
             )
             if found:
                 return True
-            not_found_streak += 1
-            if not_found_streak >= max_not_found_attempts:
+            # A found probe returns immediately, so every attempt reached here is
+            # an empty search and the attempt number *is* the consecutive streak.
+            if attempt.number >= max_not_found_attempts:
                 logger.error(
                     "Atlas Connection probe found nothing %d times in a row "
                     "(%ds elapsed) — stopping early. The Connection never "
@@ -1244,12 +1255,10 @@ class AEWorkflowClient:
                     "but the entities did not reach the asset server. Check "
                     "publish metrics vs the storage bucket the worker wrote "
                     "to and the one publish reads from.",
-                    not_found_streak,
-                    elapsed,
+                    attempt.number,
+                    int(attempt.elapsed),
                 )
                 return False
-            time.sleep(interval_seconds)
-            elapsed += interval_seconds
         return False
 
     def count_assets_under_connection(
