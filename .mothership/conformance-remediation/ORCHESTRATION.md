@@ -405,8 +405,18 @@ gh pr create --repo "$REPO" --base "$BASE_REF" --head "$BRANCH" \
   --body-file /tmp/remediation/pr_body.md
 ```
 Add `--label conformance-remediation:unverified` when any delivered finding was
-classified `unverifiable` (lazy-create that label the same way), and `--draft`
-for S-series.
+classified `unverifiable` (lazy-create that label the same way).
+
+**Draft delivery is keyed off the results, not the series letter:** when any
+delivered result carries `deliver_as_draft: true` (the loop stamps it — today
+that is the S-series under `--apply-unverifiable`), add `--draft` to
+`gh pr create` AND request a named reviewer
+(`gh pr edit <url> --add-reviewer "$(gh repo view "$REPO" --json owner -q .owner.login 2>/dev/null || true)"`
+is NOT it — use the repo's CODEOWNERS entry for the touched paths, falling back
+to the most recent human committer of the touched files:
+`git log -1 --format='%ae' -- <path>`). No gate can confirm a credential
+relocation resolves the same credential, so a human must press the button —
+the draft state is what makes that structural rather than optional.
 
 **`push_to_pr_branch`:** re-read the PR head first — a developer may have pushed
 while you worked:
