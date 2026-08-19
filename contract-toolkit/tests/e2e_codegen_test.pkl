@@ -323,6 +323,110 @@ local conditionalEnumApp = (App) {
 
 // ── Capture output text ────────────────────────────────────────────────────────
 
+// ── Bundle (multi-entrypoint) fixtures ────────────────────────────────────────
+//
+// A bundle renders each entrypoint's contract as a standalone App and re-roots its
+// files under `app/generated/<ep>/`. The sub-contract cannot see that relocation,
+// so its own `_e2e_base.py` would name the ENTRYPOINT as the connector, point at a
+// manifest path that does not exist in a bundle, and declare no entrypoint at all.
+// The bundle-scoped generator replaces it; these fixtures pin that replacement.
+
+// Crawler leg: full pipeline (extract + publish), so it publishes inventory.
+local bundleCrawlerContract = (App) {
+  name = "crawler"
+  displayName = "Crawler"
+  icon = "https://assets.atlan.com/assets/snowflake.svg"
+  hasCredentialConfig = false
+  uiConfig = minimalUiConfig
+}
+
+// Miner leg: no publish node, so it lands no connection and no assets.
+local bundleMinerContract = (App) {
+  name = "miner"
+  displayName = "Query Miner"
+  icon = "https://assets.atlan.com/assets/snowflake.svg"
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  uiConfig = minimalUiConfig
+}
+
+// Leaf-name package mapping: "@atlan/crawler" / "@atlan/miner" match by leaf == name.
+local bundleApp = (App) {
+  name = "bundle-app"
+  displayName = "Bundle App"
+  icon = "https://assets.atlan.com/assets/snowflake.svg"
+  hasCredentialConfig = false
+  connectorConfigName = "atlan-connectors-shared"
+  argoPackageNames { "@atlan/crawler"; "@atlan/miner" }
+  entrypoints {
+    new App.Entrypoint {
+      name = "crawler"
+      displayName = "Crawler"
+      source = "snowflake"
+      sourceCategory = "database"
+      contract = bundleCrawlerContract
+    }
+    new App.Entrypoint {
+      name = "miner"
+      displayName = "Query Miner"
+      source = "snowflake"
+      sourceCategory = "database"
+      contract = bundleMinerContract
+    }
+  }
+}
+
+// Suffixed package mapping, the teradata shape: the primary card is the bare
+// "@atlan/teradata" (matches NO entrypoint name), the miner is "-miner"-suffixed.
+local suffixBundleApp = (App) {
+  name = "teradata"
+  displayName = "Teradata"
+  icon = "https://assets.atlan.com/assets/snowflake.svg"
+  hasCredentialConfig = false
+  argoPackageNames { "@atlan/teradata"; "@atlan/teradata-miner" }
+  entrypoints {
+    new App.Entrypoint {
+      name = "crawler"
+      source = "teradata"
+      sourceCategory = "database"
+      contract = bundleCrawlerContract
+    }
+    new App.Entrypoint {
+      name = "miner"
+      source = "teradata"
+      sourceCategory = "database"
+      contract = bundleMinerContract
+    }
+  }
+}
+
+// Non-SQL bundle entrypoint — base-class routing must follow sourceCategory.
+local apiBundleApp = (App) {
+  name = "api-bundle"
+  displayName = "API Bundle"
+  icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+  hasCredentialConfig = false
+  entrypoints {
+    new App.Entrypoint {
+      name = "fetch"
+      source = "api"
+      sourceCategory = "API"
+      contract = bundleMinerContract
+    }
+  }
+}
+
+local bundleCrawlerBase: String =
+  bundleApp.output.files["app/generated/crawler/_e2e_base.py"].text
+local bundleMinerBase: String =
+  bundleApp.output.files["app/generated/miner/_e2e_base.py"].text
+local suffixCrawlerBase: String =
+  suffixBundleApp.output.files["app/generated/crawler/_e2e_base.py"].text
+local suffixMinerBase: String =
+  suffixBundleApp.output.files["app/generated/miner/_e2e_base.py"].text
+local apiBundleBase: String =
+  apiBundleApp.output.files["app/generated/fetch/_e2e_base.py"].text
+
 local apiBase: String = apiApp.output.files["app/generated/_e2e_base.py"].text
 local postgresBase: String = postgresApp.output.files["app/generated/_e2e_base.py"].text
 local warehouseBase: String = warehouseApp.output.files["app/generated/_e2e_base.py"].text
@@ -676,6 +780,109 @@ facts {
 
   ["ConditionalInput Literal default falls back to first base value"] {
     condEnumSubs.contains("default=\"direct\"")
+  }
+
+  // ── Bundle _e2e_base.py: identity is the BUNDLE's, not the entrypoint's ───────
+
+  ["bundle base names the bundle as the connector, not the entrypoint"] {
+    // The pre-fix output said connector_short_name = "miner". It drives the DAG's
+    // app_name, the QI vendor_name, and the default connector_config_name, all of
+    // which belong to the bundle.
+    bundleCrawlerBase.contains("connector_short_name = \"bundle-app\"")
+    bundleMinerBase.contains("connector_short_name = \"bundle-app\"")
+    !bundleMinerBase.contains("connector_short_name = \"miner\"")
+  }
+
+  ["bundle base uses the bundle's single app service URL"] {
+    // One bundle deploys one service; the pre-fix output invented
+    // "http://miner.miner-app.svc.cluster.local".
+    bundleMinerBase.contains("app_service_url = \"http://bundle-app.bundle-app-app.svc.cluster.local\"")
+    !bundleMinerBase.contains("miner-app.svc")
+  }
+
+  ["bundle base carries the bundle's shared credential config name"] {
+    // Defaulting from connector_short_name would give atlan-connectors-miner,
+    // which no bundle generates.
+    bundleMinerBase.contains("connector_config_name = \"atlan-connectors-shared\"")
+  }
+
+  // ── Bundle _e2e_base.py: the entrypoint selector and its manifest ─────────────
+
+  ["bundle base points at THIS entrypoint's manifest"] {
+    bundleCrawlerBase.contains("manifest_path = \"app/generated/crawler/manifest.json\"")
+    bundleMinerBase.contains("manifest_path = \"app/generated/miner/manifest.json\"")
+    // The single-entrypoint default does not exist in a bundle.
+    !bundleMinerBase.contains("manifest_path = \"app/generated/manifest.json\"")
+  }
+
+  ["bundle base declares its entrypoint explicitly"] {
+    // Without this AE fetches the bare manifest and 404s "No manifest available".
+    bundleCrawlerBase.contains("entrypoint = \"crawler\"")
+    bundleMinerBase.contains("entrypoint = \"miner\"")
+  }
+
+  // ── Bundle _e2e_base.py: per-entrypoint package / template resolution ─────────
+
+  ["leaf-matched packages give each entrypoint its own package and template"] {
+    bundleCrawlerBase.contains("argo_package_name = \"@atlan/crawler\"")
+    bundleCrawlerBase.contains("argo_template_name = \"atlan-crawler\"")
+    bundleMinerBase.contains("argo_package_name = \"@atlan/miner\"")
+    bundleMinerBase.contains("argo_template_name = \"atlan-miner\"")
+  }
+
+  ["suffix-matched miner package is preferred over the first list entry"] {
+    // The teradata shape. Taking argoPackageNames.first would submit the miner
+    // leg against the crawler's package — running the wrong workflow, and passing.
+    suffixMinerBase.contains("argo_package_name = \"@atlan/teradata-miner\"")
+    suffixMinerBase.contains("argo_template_name = \"atlan-teradata-miner\"")
+  }
+
+  ["an unmatched entrypoint falls back to the bundle's own package and template"] {
+    // "@atlan/teradata" matches neither "crawler" nor "-crawler", and the card
+    // that carries no suffix is the bundle's primary one.
+    suffixCrawlerBase.contains("argo_package_name = \"@atlan/teradata\"")
+    suffixCrawlerBase.contains("argo_template_name = \"atlan-teradata\"")
+  }
+
+  // ── Bundle _e2e_base.py: harness expectations derived from the pipeline ───────
+
+  ["a publishing entrypoint keeps the inventory expectations"] {
+    bundleCrawlerBase.contains("required_dag_nodes = (\"extract\", \"publish\")")
+    bundleCrawlerBase.contains("expect_connection = True")
+    bundleCrawlerBase.contains("require_nonempty_assets = True")
+  }
+
+  ["a non-publishing entrypoint drops the inventory expectations"] {
+    // A miner lands no connection and no assets, so the crawler-shaped SDK
+    // defaults would fail it on every run.
+    bundleMinerBase.contains("required_dag_nodes = (\"extract\",)")
+    bundleMinerBase.contains("expect_connection = False")
+    bundleMinerBase.contains("require_nonempty_assets = False")
+  }
+
+  ["lineage is expected only when the pipeline declares a lineage step"] {
+    bundleCrawlerBase.contains("expect_lineage = False")
+    bundleMinerBase.contains("expect_lineage = False")
+  }
+
+  // ── Bundle _e2e_base.py: base-class and connection routing ───────────────────
+
+  ["bundle base class follows the entrypoint's sourceCategory"] {
+    bundleMinerBase.contains("class MinerGeneratedE2EBase(SQLAppE2ETest):")
+    apiBundleBase.contains("class FetchGeneratedE2EBase(BaseE2ETest):")
+  }
+
+  ["bundle base emits connection_type from the entrypoint's source"] {
+    // connector_short_name is now the BUNDLE name, so the SDK's fallback would be
+    // wrong for every bundle whose source differs from it.
+    bundleMinerBase.contains("connection_type = \"snowflake\"")
+    bundleMinerBase.contains("connection_category = \"database\"")
+    apiBundleBase.contains("connection_category = \"API\"")
+  }
+
+  ["a warehouse category is omitted (it is the SDK default)"] {
+    // Matches the single-entrypoint generator's behaviour.
+    !bundleMinerBase.contains("connection_category = \"warehouse\"")
   }
 
 }
