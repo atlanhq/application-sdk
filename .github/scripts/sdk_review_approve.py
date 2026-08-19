@@ -281,14 +281,29 @@ def retrigger_body(stale_head: str, head_sha: str) -> str:
     )
 
 
+# The re-review trigger is posted as `atlan-ci` (see `request_rereview`), so a
+# marker from any other author is not a request this loop made. Trusting one
+# would let a forged marker for the current head — anyone can comment on a
+# public-repo PR — read as `already-requested` and silently suppress the fresh
+# review the stale-head refusal exists to ask for. Same fail-closed authorship
+# rule `reviewed_at()` applies to verdicts.
+RETRIGGER_AUTHOR = "atlan-ci"
+
+
 def retrigger_posted_for(comments: list[dict], head_sha: str) -> bool:
     """Whether a re-review has already been requested for `head_sha`.
 
     Keyed on the sha rather than counted, so a fix->review->fix->review chain
     gets one request per distinct head and cannot feed itself: a second request
     for a sha that already has one is the loop, and this is where it stops.
+
+    Only an `atlan-ci` marker counts: the request is only ever posted under
+    that identity, so any other author's marker is either a human quoting one
+    or a forgery, and neither proves the loop already asked.
     """
     for comment in comments:
+        if (comment.get("user") or {}).get("login") != RETRIGGER_AUTHOR:
+            continue
         body = comment.get("body") or ""
         if RETRIGGER_MARKER not in body:
             continue
@@ -665,6 +680,19 @@ def request_rereview(client: Client, stale_head: str, head_sha: str) -> str:
     refusals — a verdict with no `REVIEWED_HEAD`, and an unresolvable head — are
     different faults: neither establishes a sha to review, so both keep failing
     closed rather than guessing one.
+
+    The check-then-post below is not atomic across the two concurrency groups
+    this can race with: the fast path (`sdk-review-approve-on-verdict.yml`,
+    group `sdk-review-approve-<PR>`) and the slow path (`sdk-review.yml`, group
+    `sdk-review-<PR>`) hold different per-PR locks, so two runs could both see
+    no marker and both post `@sdk-review` for the same head. That is accepted,
+    dedupe-covered behavior: the authoritative `Dedupe check` inside the
+    dispatch lock re-resolves HEAD and declines the second trigger, so the
+    residue is one duplicate comment plus a self-declining run — never a
+    duplicate review. Closing the race outright would mean serializing every
+    `stamp_verdict` caller under one per-PR group, which would make a 10–30 min
+    review hold the lock while approval runs queue behind it; that cost is not
+    worth eliminating a comment the dispatcher already drops.
     """
     # Posted as `atlan-ci` rather than under GH_TOKEN. Two hard requirements,
     # not a preference: `sdk-review.yml`'s job-level `if:` admits `atlan-ci`,

@@ -160,11 +160,11 @@ def starter_comment(
     return {"id": 4, "body": body, "user": {"login": "atlan-ci"}}
 
 
-def retrigger_comment(head: str = HEAD) -> dict:
+def retrigger_comment(head: str = HEAD, login: str = "atlan-ci") -> dict:
     return {
         "id": 6,
         "body": approve.retrigger_body(OTHER, head),
-        "user": {"login": "atlan-ci"},
+        "user": {"login": login},
     }
 
 
@@ -523,6 +523,27 @@ def test_the_review_request_is_posted_once_per_sha(monkeypatch):
     )
     assert run_main(gh, monkeypatch, **stale_head_env()) == 0
     assert gh.called(is_comment_post) == []
+
+
+def test_a_forged_retrigger_marker_does_not_suppress_the_request(monkeypatch):
+    """A marker from a non-`atlan-ci` author is not a request this loop made.
+
+    Anyone can comment on a public-repo PR. Without the author check, a forged
+    `SDK_REVIEW_RETRIGGER` marker for the current head would read as
+    `already-requested` and silently suppress the fresh review the stale-head
+    refusal exists to ask for — the exact failure FND-638 was fixing.
+    """
+    gh = base_gh()
+    gh.on(
+        lambda a: a[2] == f"repos/{REPO}/issues/{PR}/comments",
+        ok(
+            comments(
+                summary_comment(5), retrigger_comment(head=HEAD, login="evil-doer")
+            )
+        ),
+    )
+    assert run_main(gh, monkeypatch, **stale_head_env()) == 0
+    assert f"<!-- SDK_REVIEW_RETRIGGER_HEAD: {HEAD} -->" in posted_comment_body(gh)
 
 
 def test_a_request_for_a_different_sha_does_not_block_this_one(monkeypatch):
