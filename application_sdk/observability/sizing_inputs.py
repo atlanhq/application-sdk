@@ -6,29 +6,28 @@ activity runs.
 
 Two sources, in order:
 
-1. **``FileReference`` fields on the Input.** Zero config, and the bytes are
-   already on local disk: the SDK materialises durable refs at the top of the
-   activity, inside the window the sizing interceptor measures, so this is a
-   local ``stat`` rather than an object-store call.
-2. **``sizing_input_bytes()`` on the Input.** The escape hatch for apps that pass
-   raw object-store paths instead of ``FileReference`` — AE's ``merge`` takes
-   ``input_prefixes: list[str]`` and would otherwise report nothing.
+1. **Reported bytes** — what the activity actually read, via
+   :func:`report_input_bytes`. The SDK's own file readers call it, so any app going
+   through them is covered without writing code; an app fetching data its own way
+   calls it directly.
+2. **``FileReference`` fields on the Input** — a fallback disk walk, for inputs the
+   interceptor materialised rather than a reader pulling them.
 
-``None`` means unknown, never 0 — a zero would fit a rule to inputs nobody sized.
+Reported wins: it is what the activity read, where a ref only says what it was
+handed. ``None`` means unknown, never 0 — a zero would fit a rule to inputs nobody
+sized.
 """
 
 from __future__ import annotations
 
 import os
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
 from application_sdk.observability.logger_adaptor import get_logger
 
 _logger = get_logger(__name__)
-
-#: Optional method an Input may define to report its own size in bytes.
-SIZING_HOOK = "sizing_input_bytes"
 
 # A stat per file, so a pathological ref would walk a whole tree at activity end.
 # Bounded here rather than trusted: the number is telemetry, and a partial count
@@ -39,11 +38,11 @@ _MAX_FILES_WALKED = 10_000
 
 @dataclass(frozen=True)
 class InputSize:
-    """Bytes an activity was handed, and where the number came from.
+    """Bytes an activity read, and where the number came from.
 
-    ``basis`` segments the data: ``file_reference`` is measured, ``hook`` is
-    whatever the app chose to report, and mixing them silently would fit one rule
-    to two different definitions of "input".
+    ``basis`` segments the data: ``reported`` is what the activity read,
+    ``file_reference`` is what it was handed. Mixing them silently would fit one
+    rule to two different definitions of "input".
     """
 
     bytes: int
@@ -52,16 +51,96 @@ class InputSize:
     truncated: bool = False
 
 
+class InputCollector:
+    """Accumulates bytes read during one activity execution.
+
+    Created by the sizing interceptor and mutated in place, following
+    ``OutputInterceptor``'s collector pattern. Mutation rather than reassignment is
+    deliberate: a ContextVar *set* inside the activity may not be visible to the
+    interceptor across a thread or context boundary, whereas a shared object is.
+    """
+
+    __slots__ = ("bytes", "file_count")
+
+    def __init__(self) -> None:
+        self.bytes = 0
+        self.file_count = 0
+
+    def add(self, num_bytes: int, file_count: int = 1) -> None:
+        self.bytes += num_bytes
+        self.file_count += file_count
+
+    def has_data(self) -> bool:
+        return self.file_count > 0
+
+
+_current_inputs: ContextVar[InputCollector | None] = ContextVar(
+    "sizing_input_collector", default=None
+)
+
+
+def begin_collection() -> InputCollector:
+    """Start collecting for one activity. Called by the sizing interceptor."""
+    collector = InputCollector()
+    _current_inputs.set(collector)
+    return collector
+
+
+def end_collection() -> None:
+    """Stop collecting, so a finished activity cannot leak into the next one."""
+    _current_inputs.set(None)
+
+
+def report_input_bytes(num_bytes: int, file_count: int = 1) -> None:
+    """Report bytes this activity read, for tier-sizing telemetry.
+
+    A no-op unless sizing collection is enabled, so it is safe to call
+    unconditionally from a read path. Never raises.
+
+    The SDK's own file readers call this, so most apps need not. Call it directly
+    when an app fetches data the SDK cannot see — a driver query, a vendor client,
+    or object-store reads it issues itself.
+    """
+    try:
+        collector = _current_inputs.get()
+        if collector is None or num_bytes < 0:
+            return
+        collector.add(num_bytes, file_count)
+    # conformance: ignore[E004] telemetry on a read path; must never affect the read
+    except Exception:
+        _logger.debug("input byte reporting failed", exc_info=True)
+
+
+def report_local_paths(paths: list[str]) -> None:
+    """Report the on-disk size of files this activity read. Never raises."""
+    try:
+        if _current_inputs.get() is None:
+            return
+        for path in paths:
+            try:
+                report_input_bytes(os.path.getsize(path), 1)
+            # conformance: ignore[E014] a file removed between read and stat; skip it
+            except OSError:
+                continue
+    # conformance: ignore[E004] telemetry on a read path; must never affect the read
+    except Exception:
+        _logger.debug("input path reporting failed", exc_info=True)
+
+
 def describe_inputs(input_data: Any) -> InputSize | None:
     """Size an activity's input, or ``None`` if it cannot be determined.
 
     Never raises: this runs beside a real activity and must not affect it.
     """
     try:
-        from_refs = _size_from_file_refs(input_data)
-        if from_refs is not None:
-            return from_refs
-        return _size_from_hook(input_data)
+        collector = _current_inputs.get()
+        if collector is not None and collector.has_data():
+            return InputSize(
+                bytes=collector.bytes,
+                file_count=collector.file_count,
+                basis="reported",
+            )
+        return _size_from_file_refs(input_data)
     # conformance: ignore[E004] telemetry; an unsizeable input is "unknown", not a failure
     except Exception:
         _logger.debug("input sizing failed", exc_info=True)
@@ -84,8 +163,8 @@ def _size_from_file_refs(input_data: Any) -> InputSize | None:
     for ref in refs:
         if not ref.local_path:
             # Durable but not materialised (``auto_materialize=False``). Sizing it
-            # would need an object-store call per activity, so it is left to the
-            # hook — the app that opted out already knows its own sizes.
+            # would cost an object-store call per activity, so the app that opted
+            # out reports its own bytes instead.
             continue
         size, count, hit_cap = _walk(ref.local_path)
         total += size
@@ -117,27 +196,3 @@ def _walk(path: str) -> tuple[int, int, bool]:
             except OSError:
                 continue
     return total, files, False
-
-
-def _size_from_hook(input_data: Any) -> InputSize | None:
-    """Call the Input's own ``sizing_input_bytes()``, if it defines one.
-
-    The contract is deliberately minimal — return bytes, or ``None`` if unknown —
-    so an app can reuse a number it already computed rather than being pushed into
-    the SDK's file model.
-    """
-    hook = getattr(input_data, SIZING_HOOK, None)
-    if not callable(hook):
-        return None
-    value = hook()
-    if value is None:
-        return None
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        _logger.debug("%s returned %r; expected a non-negative int", SIZING_HOOK, value)
-        return None
-    file_count = getattr(input_data, "sizing_input_file_count", None)
-    return InputSize(
-        bytes=value,
-        file_count=file_count if isinstance(file_count, int) else 0,
-        basis="hook",
-    )
