@@ -840,3 +840,123 @@ class TestBaselineRef:
             ]
         )
         assert exit_code == 1
+
+
+class TestFailsClean:
+    """Refusing to bound has to withhold the resolve, not merely exit non-zero.
+
+    The driver does not own the commit. Under `postUpgradeTasks` Renovate commits
+    the working tree once the command returns, pass or fail — so every refusal
+    path has to put the committed lock back, or the rejected resolve reaches the
+    branch anyway carrying `[options]`, and `uv sync --locked` fails in the image
+    build (FND-367). Five fleet lock branches were stranded that way, three of
+    them by the same yanked release.
+    """
+
+    GIT_ENV = {
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@t",
+        "PATH": os.environ.get("PATH", ""),
+    }
+
+    def _repo(self, tmp_path: Path, lock_text: str, pyproject: str = "") -> Path:
+        (tmp_path / "uv.lock").write_text(lock_text)
+        (tmp_path / "pyproject.toml").write_text(
+            pyproject or "[project]\nname = 'app'\n"
+        )
+        for command in (
+            ["git", "init", "-q"],
+            ["git", "add", "-A"],
+            ["git", "commit", "-qm", "baseline"],
+        ):
+            subprocess.run(command, cwd=tmp_path, check=True, env=self.GIT_ENV)
+        return tmp_path
+
+    def test_a_rejected_downgrade_restores_the_committed_lock(
+        self, monkeypatch, tmp_path
+    ):
+        """The production case, in the shape it actually happened.
+
+        A base branch pinning a release upstream later yanked: no resolve can keep
+        it, so every bounded run comes back a version lower and trips the rollback
+        gate. Exit 1 was already right; what was missing is that the working tree
+        still held the rejected lock, `[options]` and all, for Renovate to commit.
+        """
+        committed = lock(pytest_timeout="2.5.0")
+        project = self._repo(tmp_path, committed)
+
+        # One document, not two concatenated ones: a lock whose TOML does not
+        # parse would read as "no versions at all" and pass this test for the
+        # wrong reason.
+        resolved = LOCK_WITH_OPTIONS + (
+            '\n[[package]]\nname = "pytest-timeout"\nversion = "2.4.0"\n'
+            'source = { registry = "https://pypi.org/simple" }\n'
+        )
+        assert bounded.lock_versions(resolved)["pytest-timeout"] == "2.4.0"
+
+        def fake_run(command, cwd):
+            (Path(cwd) / "uv.lock").write_text(resolved)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        assert bounded.main(["--window", "P3D", "--project-dir", str(project)]) == 1
+        on_disk = (project / "uv.lock").read_text()
+        assert on_disk == committed, "the rejected resolve must not survive on disk"
+        assert "[options]" not in on_disk
+        assert '"2.4.0"' not in on_disk
+
+    def test_a_failed_resolve_restores_the_committed_lock(self, monkeypatch, tmp_path):
+        # uv can rewrite the lock and *then* fail. Same exposure: whatever it left
+        # behind is what Renovate would commit.
+        committed = lock(boto3="1.43.72")
+        project = self._repo(tmp_path, committed)
+
+        def fake_run(command, cwd):
+            (Path(cwd) / "uv.lock").write_text(LOCK_WITH_OPTIONS)
+            return subprocess.CompletedProcess(
+                command, 1, "", "error: something else entirely"
+            )
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        assert bounded.main(["--window", "P3D", "--project-dir", str(project)]) == 1
+        assert (project / "uv.lock").read_text() == committed
+
+    def test_a_failed_retry_restores_the_committed_lock(self, monkeypatch, tmp_path):
+        # The floored-package retry path: admitting the floor early does not help,
+        # and the second failure has to clean up after itself too.
+        committed = lock(cryptography="46.0.5")
+        project = self._repo(
+            tmp_path,
+            committed,
+            "[project]\nname = 'app'\n\n[tool.uv]\n"
+            'constraint-dependencies = ["cryptography>=46.0.5"]\n',
+        )
+        calls: list[list[str]] = []
+
+        def fake_run(command, cwd):
+            calls.append(command)
+            (Path(cwd) / "uv.lock").write_text(LOCK_WITH_OPTIONS)
+            return subprocess.CompletedProcess(
+                command, 1, "", "error: No solution found ... cryptography>=46.0.5 ..."
+            )
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        assert bounded.main(["--window", "P3D", "--project-dir", str(project)]) == 1
+        assert len(calls) == 2, "the floor should have earned exactly one retry"
+        assert (project / "uv.lock").read_text() == committed
+
+    def test_restore_leaves_a_lock_with_no_baseline_alone(self, tmp_path):
+        # A lock added in this very branch has no committed copy to restore. An
+        # empty baseline must be a no-op, never a truncation.
+        target = tmp_path / "uv.lock"
+        target.write_text(LOCK_WITH_OPTIONS)
+        bounded.restore(target, "")
+        assert target.read_text() == LOCK_WITH_OPTIONS
+
+    def test_restore_writes_the_baseline_back(self, tmp_path):
+        target = tmp_path / "uv.lock"
+        target.write_text(LOCK_WITH_OPTIONS)
+        bounded.restore(target, lock(boto3="1.43.72"))
+        assert target.read_text() == lock(boto3="1.43.72")

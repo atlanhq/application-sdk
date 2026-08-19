@@ -237,6 +237,23 @@ def retention_ceilings(
     return ceilings
 
 
+def restore(lock_path: Path, baseline: str) -> None:
+    """Put the committed lock back, for every path that refuses to bound.
+
+    The driver does not own the commit. Under Renovate's ``postUpgradeTasks`` the
+    working tree is committed once the command returns, pass or fail, so a guard
+    that only returns non-zero does not actually withhold the resolve it just
+    rejected — it ships it with ``[options]`` still in place, and ``uv sync
+    --locked`` then fails in the image build (FND-367). Five fleet lock branches
+    were stranded exactly that way before this existed.
+
+    An empty baseline means the ref had no committed ``uv.lock`` at all; there is
+    nothing to restore and truncating the file would be worse than leaving it.
+    """
+    if baseline:
+        lock_path.write_text(baseline)
+
+
 def strip_options(lock_text: str) -> str:
     """Remove the ``[options]`` table and any ``[options.*]`` subtable.
 
@@ -635,10 +652,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         admitted_early = blocked_by_floor(result.stderr, floors)
         if not admitted_early:
+            restore(lock_path, baseline)
             print(
                 "Bounded `uv lock` failed and no deliberately-floored package was "
                 "named in the error, so there is nothing safe to admit early. "
-                "Refusing to fall back to an unbounded resolve.\n" + result.stderr,
+                "Refusing to fall back to an unbounded resolve. The committed "
+                "lock has been restored.\n" + result.stderr,
                 file=sys.stderr,
             )
             return 1
@@ -647,9 +666,11 @@ def main(argv: list[str] | None = None) -> int:
             project_dir,
         )
         if result.returncode != 0:
+            restore(lock_path, baseline)
             print(
                 "Bounded `uv lock` still failed after admitting "
-                f"{', '.join(admitted_early)}.\n" + result.stderr,
+                f"{', '.join(admitted_early)}. The committed lock has been "
+                "restored.\n" + result.stderr,
                 file=sys.stderr,
             )
             return 1
@@ -661,13 +682,18 @@ def main(argv: list[str] | None = None) -> int:
         detail = ", ".join(
             f"{n} {old} -> {new}" for n, (old, new) in sorted(regressed.items())
         )
+        restore(lock_path, baseline)
         print(
             f"Bounded resolve moved {len(regressed)} package(s) BACKWARDS from the "
-            f"last committed lock: {detail}. Retention ceilings should make an "
-            "age-driven downgrade impossible, so this means something else forced "
-            "a different solution — most often a yanked release, sometimes a "
-            "changed constraint. Both are worth a human and neither is worth "
-            "auto-merging, so nothing is committed.",
+            f"last committed lock: {detail}. Retention ceilings make an age-driven "
+            "downgrade impossible, so something else forced a different solution. "
+            "Check first whether the base branch pins a release that has since "
+            "been YANKED upstream — `pip index versions <name>` or the PyPI JSON "
+            "API will say — because no resolve can keep a yanked pin and every "
+            "one of them will land here until the base branch moves off it. A "
+            "changed constraint is the other candidate. Either way it wants a "
+            "human, so the committed lock has been restored and this run bounds "
+            "nothing.",
             file=sys.stderr,
         )
         return 1
