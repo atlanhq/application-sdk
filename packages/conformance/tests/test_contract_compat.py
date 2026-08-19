@@ -20,10 +20,11 @@ from conformance.suite.checks.deprecation._contract_compat import scan_contract_
 from conformance.suite.checks.deprecation._ledger_schema import (
     ContractField,
     ContractLedger,
+    regen_command,
     serialize,
 )
 from conformance.suite.rules import get_rule
-from conformance.suite.schema.disposition import EnforcementTier
+from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -36,6 +37,7 @@ def _scan(
     tmp_path: Path,
     files: dict[str, str],
     ledger: ContractLedger | None = None,
+    scope: RuleScope | None = None,
 ) -> list:
     """Write *files* to *tmp_path* and run scan_contract_compat."""
     paths: list[Path] = []
@@ -46,7 +48,7 @@ def _scan(
         paths.append(p)
     if ledger is None:
         ledger = ContractLedger(version=1, fields=[])
-    return scan_contract_compat(paths, tmp_path, ledger)
+    return scan_contract_compat(paths, tmp_path, ledger, scope)
 
 
 def _ids(findings: list) -> list[str]:
@@ -590,6 +592,64 @@ def test_b006_sdk_mixin_field_not_yet_in_ledger_fires_and_notes_inherited(
     assert mixin_findings, "expected B006 for the untracked mixin field"
     assert "inherited" in mixin_findings[0].message
     assert mixin_findings[0].file == "app.py"
+
+
+# ── FND-607: the prescribed remedy must be version-pinned ────────────────────
+#
+# CI runs `detect` from an unpinned `uvx atlan-application-sdk-conformance`
+# install, so the checker is always the LATEST published version.  A bare
+# `uv run atlan-application-sdk-conformance gen-contract-ledger` in a consumer
+# app resolves that repo's LOCKED conformance dev dependency instead.  The
+# generator's output is version-dependent (SDK_CONTRACT_BASE_FIELDS grows as the
+# SDK gains fields), so when the lock lags the release, the prescribed remedy
+# rewrites the ledger byte-identically and the BLOCK-tier finding survives with
+# no diff to commit.  These tests pin the prescription, not the mechanism.
+
+
+def test_regen_command_is_version_pinned_for_apps() -> None:
+    """A consumer app is told to run the checker's OWN version, via uvx."""
+    from conformance import __version__
+
+    cmd = regen_command()
+
+    assert cmd == (
+        f"uvx atlan-application-sdk-conformance=={__version__} gen-contract-ledger"
+    )
+    assert "uv run" not in cmd
+
+
+def test_regen_command_uses_in_tree_suite_for_the_sdk_repo() -> None:
+    """In the SDK repo the suite is in-tree, so a published-wheel pin is wrong."""
+    cmd = regen_command(RuleScope.SDK)
+
+    assert cmd == "uv run atlan-application-sdk-conformance gen-contract-ledger"
+    assert "uvx" not in cmd
+
+
+def test_b006_message_prescribes_the_pinned_command(tmp_path: Path) -> None:
+    """The B006 remedy an app developer reads must carry the version pin.
+
+    The message is the only guidance the developer gets; an unpinned command
+    there is what sent FND-607 to a dead end on a BLOCK-tier rule.
+    """
+    findings = _scan(tmp_path, {"app.py": _EP_MIXIN_OUTPUT}, scope=RuleScope.APP)
+    b006 = [f for f in findings if f.rule_id == "B006"]
+    assert b006, "expected at least one B006 for the untracked mixin fields"
+
+    message = b006[0].message
+    assert regen_command(RuleScope.APP) in message
+    assert "uv run atlan-application-sdk-conformance gen-contract-ledger" not in message
+
+
+def test_b006_message_prescribes_uv_run_in_the_sdk_repo(tmp_path: Path) -> None:
+    """SDK-scope findings prescribe the in-tree command, not a published pin."""
+    findings = _scan(tmp_path, {"app.py": _EP_MIXIN_OUTPUT}, scope=RuleScope.SDK)
+    b006 = [f for f in findings if f.rule_id == "B006"]
+    assert b006
+
+    message = b006[0].message
+    assert "uv run atlan-application-sdk-conformance gen-contract-ledger" in message
+    assert "uvx" not in message
 
 
 # ── End-to-end via full B-series scan_all ─────────────────────────────────────
