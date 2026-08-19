@@ -1765,4 +1765,102 @@ RULES: tuple[RuleDefinition, ...] = (
             "packages/conformance/conformance/docs/rules/tests.md#t024"
         ),
     ),
+    RuleDefinition(
+        id="T025",
+        scope=RuleScope.APP,
+        name="EntrypointWithoutE2ECoverage",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="test-tier-coverage",
+        autofixable=False,
+        since="0.22.0",
+        rationale=(
+            "T012 asks only that tests/e2e/ hold one collectable test, on the agreed "
+            "reasoning that e2e needs one representative run rather than "
+            "scenario-level coverage. On a bundle app that reads as 'the crawler "
+            "suite is enough', and across the fleet it has meant exactly that: every "
+            "AE-driven full-DAG e2e exercises the metadata-extraction entrypoint and "
+            "the second one — typically a query-history miner — is never run against "
+            "a tenant by anything. Each bundle entrypoint is its own Automation "
+            "Engine submit, against its own DAG, its own task queue, and its own "
+            "served manifest, so a green crawler leg is no evidence about the "
+            "miner's dispatch path. 'One representative run' therefore has to mean "
+            "one per entrypoint. The gap is also invisible: nothing in CI, "
+            "conformance, or the scorecard distinguishes an app whose entrypoints are "
+            "all covered from one where only the default is. "
+            "Customer impact: a miner that regressed ships, because the only thing "
+            "that would have run it in CI does not exist."
+        ),
+        short_description=(
+            "A bundle (multi-entrypoint) contract entrypoint has no e2e suite"
+        ),
+        full_description=(
+            "The app is in **bundle mode** — ``app/generated/`` holds one\n"
+            "``<name>/manifest.json`` subdir per entrypoint — and at least one of\n"
+            "those entrypoints is not exercised by any collectable test class under\n"
+            "``tests/e2e/``.\n"
+            "\n"
+            "**Scope: bundle mode only.** Two shapes are both called\n"
+            "multi-entrypoint, and only one has a gap:\n"
+            "\n"
+            "* ``app/generated/<ep>/manifest.json`` subdirs — each entrypoint is\n"
+            "  submitted to Automation Engine independently, with its own DAG and\n"
+            "  task queue. **This rule's scope.**\n"
+            "* One marketplace card whose secondary entrypoints are invoked as DAG\n"
+            '  nodes via ``workflow_type: "<app>:<wire>"`` (the BLDX-1342 route/card\n'
+            "  split). The parent's own full-DAG run executes them, so they are\n"
+            "  covered transitively and are never flagged — see ``atlan-metabase-app``,\n"
+            "  whose ``extract-lineage`` runs as a DAG node.\n"
+            "\n"
+            "Single-entrypoint apps never see this rule.\n"
+            "\n"
+            "**An entrypoint counts as covered** when some collectable class under\n"
+            "``tests/e2e/`` resolves to it by any of the three forms the harness\n"
+            "itself accepts:\n"
+            "\n"
+            "1. inheriting the generated base for it (``<Ep>GeneratedE2EBase``),\n"
+            '2. a class-level ``entrypoint = "<ep>"``,\n'
+            "3. a class-level ``manifest_path`` containing ``/generated/<ep>/``.\n"
+            "\n"
+            "Resolution is syntactic and deliberately generous — the miss direction\n"
+            "is a false negative, never a false positive.\n"
+            "\n"
+            "**Remediation:** add one suite per entrypoint, in its own file::\n"
+            "\n"
+            "    # tests/e2e/test_myconn_miner_e2e.py\n"
+            "    from app.generated.miner._e2e_base import MinerGeneratedE2EBase\n"
+            "\n"
+            "    @pytest.mark.e2e\n"
+            "    class TestMyConnMinerE2E(MinerGeneratedE2EBase):\n"
+            "        mode = RunMode.AGENT\n"
+            "\n"
+            "The CI matrix fans out one leg per ``tests/e2e/test_*.py`` file, so a\n"
+            "second file is a second leg with no workflow change needed. The\n"
+            "toolkit-generated base already carries this entrypoint's\n"
+            "``manifest_path``, ``entrypoint``, and pipeline-derived expectations\n"
+            "(``expect_connection``, ``required_dag_nodes``), so a non-publishing\n"
+            "entrypoint is not graded against crawler-shaped assertions.\n"
+            "\n"
+            "An entrypoint that consumes state rather than creating it (a miner\n"
+            "enriches a connection it does not create) seeds that state by overriding\n"
+            "``seed_prerequisites()`` — under the harness's own ephemeral qualified\n"
+            "name, so ``teardown_method`` purges it and runs stay isolated.\n"
+            "\n"
+            "**Exemption:** an app with no e2e tier at all is already covered by\n"
+            "T012's exemption and is not asked for per-entrypoint suites:\n"
+            "\n"
+            ".. code-block:: toml\n"
+            "\n"
+            "    [tool.conformance]\n"
+            '    exempt_test_tiers = ["e2e"]\n'
+            "\n"
+            "Suppress a single entrypoint instead with\n"
+            "``# conformance: ignore[T025] <reason>`` on the first line of\n"
+            "``pyproject.toml``.\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/tests.md#t025"
+        ),
+    ),
 )

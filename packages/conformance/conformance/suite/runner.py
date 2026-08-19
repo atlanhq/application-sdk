@@ -44,6 +44,7 @@ from conformance.suite.checks import (
     e2e_generated_harness,
     e2e_workflow_shape,
     entrypoint_alignment,
+    entrypoint_e2e_coverage,
     error_handling,
     error_seam,
     generated_freshness,
@@ -213,6 +214,12 @@ _CHECKS: list[CheckRegistration] = [
         discover=e2e_generated_harness.discover,
         scan_path=e2e_generated_harness.scan_path,
         scan_all=e2e_generated_harness.scan_all,
+    ),
+    CheckRegistration(
+        series=entrypoint_e2e_coverage.SERIES,
+        discover=entrypoint_e2e_coverage.discover,
+        scan_path=entrypoint_e2e_coverage.scan_path,
+        scan_all=entrypoint_e2e_coverage.scan_all,
     ),
     CheckRegistration(
         series=dockerfile_conformance.SERIES,
