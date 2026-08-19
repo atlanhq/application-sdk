@@ -56,6 +56,16 @@ on:
         required: false
         default: 'false'
         type: string
+      main_model:
+        description: 'Main-loop model (A/B lever; default kimi-k3)'
+        required: false
+        default: ''
+        type: string
+      subagent_model:
+        description: 'Task sub-agent model (default gpt-5.6-luna)'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -114,6 +124,8 @@ jobs:
           TARGET_REPO: ${{ inputs.repo }}
           RULE_ID: ${{ inputs.rule }}
           SUITE_VERSION: ${{ inputs.suite_version }}
+          MAIN_MODEL: ${{ inputs.main_model }}
+          SUBAGENT_MODEL: ${{ inputs.subagent_model }}
           DRY_RUN: ${{ inputs.dry_run == 'true' && '1' || '0' }}
           GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: python3 .github/scripts/conformance_remediation_e2e.py

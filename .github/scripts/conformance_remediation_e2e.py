@@ -47,11 +47,16 @@ STREAM_TIMEOUT_SECONDS = 5700
 SANDBOX_MAX_TIMEOUT_SECONDS = 5400
 SANDBOX_IDLE_TIMEOUT_SECONDS = 1800
 
-# The production pair shipped by sdk-review.yml. small_fast_model must be
-# explicit: mothership computes `fast = small_fast_model or model`, so pinning
-# `model` alone would put the background lane on the main model.
-MAIN_MODEL = "kimi-k3"
-SUBAGENT_MODEL = "gpt-5.6-luna"
+# Defaults are the production pair shipped by sdk-review.yml; both are
+# overridable via env (MAIN_MODEL / SUBAGENT_MODEL) so candidate models can be
+# A/B-raced on identical units with real cost numbers instead of index scores
+# (e.g. z-ai/glm-5.2 — the one alias verified end-to-end driving Claude Code
+# tools in the sandbox image — or gpt-5.6-terra, which runs two production
+# lanes). small_fast_model must be explicit either way: mothership computes
+# `fast = small_fast_model or model`, so pinning `model` alone would put the
+# background lane on the main model.
+MAIN_MODEL = os.environ.get("MAIN_MODEL") or "kimi-k3"
+SUBAGENT_MODEL = os.environ.get("SUBAGENT_MODEL") or "gpt-5.6-luna"
 AI_GATEWAY_KEY_NAME = "sdk_review"
 DEFAULT_SUITE_VERSION = "0.20.1"
 
