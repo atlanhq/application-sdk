@@ -11,13 +11,19 @@ import pytest
 from conformance.bootstrap import extract as extract_mod
 from conformance.bootstrap.extract import (
     EXIT_ZERO_RE,
+    declared_keys,
     extract_apt_packages,
     extract_declared_unit_coverage_fail_under,
     extract_field,
+    extract_force_external_runtime,
     extract_renovate_automerge,
+    extract_secrets_block,
     extract_tests_yaml_params,
     extract_use_ghcr_base,
+    format_dropped_declarations,
     resolve_renovate_fallback_exit_zero,
+    unpreserved_declarations,
+    unpreserved_tests_yaml_declarations,
 )
 from conformance.bootstrap.render import render
 
@@ -346,3 +352,239 @@ def test_extract_use_ghcr_base_empty_for_explicit_false() -> None:
 def test_extract_use_ghcr_base_ignores_commented_opt_in() -> None:
     text = "jobs:\n  build:\n    with:\n      # use_ghcr_base: true\n"
     assert extract_use_ghcr_base(text) == ""
+
+
+# ---------------------------------------------------------------------------
+# FND-604: the two tests.yaml values --resync used to delete, and the
+# generalised guard for whatever the next one turns out to be.
+# ---------------------------------------------------------------------------
+
+
+# The caller shape the wave-D repos hand-wrote: an explicit `secrets:` mapping
+# composing E2E_SOURCE_ENV_JSON out of per-connector credential names, under the
+# comment recording why `inherit` was dropped. Synthetic names, real shape —
+# `inherit` can neither compose nor rename, so it cannot populate this at all.
+_EXPLICIT_SECRETS = """\
+    # Mapped explicitly instead of `secrets: inherit`: inherit cannot compose.
+    secrets:
+      SDR_TEST_TENANT: ${{ secrets.SDR_TEST_TENANT }}
+      E2E_SOURCE_ENV_JSON: |
+        {"ATLAN_APP_MODULE": "app.widget:WidgetApp",
+         "E2E_WIDGET_HOST": ${{ toJSON(secrets.E2E_WIDGET_HOST) }}}"""
+
+
+def test_extract_force_external_runtime_round_trips_through_render() -> None:
+    """The write side and the read side must agree, or --resync deletes the line
+    and the connector's main.py boots into DaprNotDetectedError (FND-65)."""
+    rendered = render("tests.yaml", app_name="widget", force_external_runtime="true")
+    assert extract_force_external_runtime(rendered) == "true"
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["      force-external-runtime: true", '  force-external-runtime: "true"'],
+)
+def test_extract_force_external_runtime_reads_both_spellings(line: str) -> None:
+    """The fleet hand-wrote it bare *and* quoted, at two different positions."""
+    text = f"jobs:\n  tests:\n    with:\n{line}\n"
+    assert extract_force_external_runtime(text) == "true"
+
+
+def test_extract_force_external_runtime_empty_when_absent() -> None:
+    assert extract_force_external_runtime(render("tests.yaml")) == ""
+
+
+def test_extract_force_external_runtime_empty_for_explicit_false() -> None:
+    """Same reason as ``use_ghcr_base``: an explicit ``false`` is a second
+    spelling of the input default and would read as drift fleet-wide."""
+    assert extract_force_external_runtime("      force-external-runtime: false\n") == ""
+
+
+def test_extract_force_external_runtime_ignores_a_commented_line() -> None:
+    text = "      # force-external-runtime: true\n"
+    assert extract_force_external_runtime(text) == ""
+
+
+def test_extract_secrets_block_captures_the_mapping_and_its_comments() -> None:
+    """Spliced verbatim: the mapping's contents are per-connector, and the
+    comments above it are the only record of why ``inherit`` was dropped."""
+    text = render("tests.yaml", app_name="widget").replace(
+        "    secrets: inherit", _EXPLICIT_SECRETS
+    )
+    assert extract_secrets_block(text) == _EXPLICIT_SECRETS
+
+
+def test_extract_secrets_block_round_trips_through_render() -> None:
+    """The property --resync depends on: rendering an extracted block reads back
+    as the same block, so a resynced file resyncs again unchanged."""
+    once = render("tests.yaml", app_name="widget", secrets_block=_EXPLICIT_SECRETS)
+    assert extract_secrets_block(once) == _EXPLICIT_SECRETS
+    assert render("tests.yaml", **extract_tests_yaml_params(once)) == once
+
+
+def test_extract_secrets_block_empty_for_inherit() -> None:
+    """``inherit`` is the canonical default, so it must render from the template
+    rather than from a captured block."""
+    assert extract_secrets_block(render("tests.yaml")) == ""
+
+
+def test_extract_secrets_block_empty_for_a_childless_secrets_line() -> None:
+    """A bare ``secrets:`` with nothing under it is YAML null, not a mapping.
+
+    Capturing it would replace the working ``inherit`` default with a line that
+    passes no secrets at all — the very failure this extractor exists to prevent.
+    """
+    text = "jobs:\n  tests:\n    uses: x\n    secrets:\n\nother: 1\n"
+    assert extract_secrets_block(text) == ""
+
+
+def test_extract_secrets_block_stops_at_the_next_sibling_key() -> None:
+    text = (
+        "jobs:\n  tests:\n    secrets:\n      A: ${{ secrets.A }}\n\n"
+        "  other-job:\n    runs-on: ubuntu-latest\n"
+    )
+    assert extract_secrets_block(text) == "    secrets:\n      A: ${{ secrets.A }}"
+
+
+def test_extract_tests_yaml_params_carries_both_fnd604_values() -> None:
+    text = render(
+        "tests.yaml",
+        app_name="widget",
+        force_external_runtime="true",
+        secrets_block=_EXPLICIT_SECRETS,
+    )
+    params = extract_tests_yaml_params(text)
+    assert params["force_external_runtime"] == "true"
+    assert params["secrets_block"] == _EXPLICIT_SECRETS
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        '      services-script: ".github/test/setup-services.sh"',
+        "      services-script: .github/test/setup-services.sh",
+    ],
+)
+def test_extract_services_script_reads_quoted_and_bare(line: str) -> None:
+    """Bare is not hypothetical: the only two repos that run a services script
+    hand-wrote it unquoted, and a quoted-only read-back deleted their active line
+    on every --resync — FND-604's class again, caught by the guard added for it."""
+    text = f"jobs:\n  tests:\n    with:\n{line}\n"
+    params = extract_tests_yaml_params(text)
+    assert params["services_script"] == ".github/test/setup-services.sh"
+
+
+def test_extract_services_script_ignores_the_commented_placeholder() -> None:
+    """The canonical renders the line commented out when no script is set.
+
+    Reading it back would activate a hook the repo deliberately left off.
+    """
+    assert "services_script" not in extract_tests_yaml_params(render("tests.yaml"))
+
+
+def test_declared_keys_skips_comments_and_block_scalar_bodies() -> None:
+    """A hand-written ``run:`` step's shell is content, not structure.
+
+    Mining it for keys would make the guard refuse over lines that are not
+    declarations at all.
+    """
+    text = (
+        "jobs:\n"
+        "  gate:\n"
+        "    # commented-out: value\n"
+        "    run: |\n"
+        "      not-a-key: still-not\n"
+        "      echo done\n"
+        "    shell: bash\n"
+    )
+    assert declared_keys(text) == ["jobs", "gate", "run", "shell"]
+
+
+def test_declared_keys_counts_a_sequence_item_mapping() -> None:
+    assert declared_keys("steps:\n  - uses: actions/checkout\n") == ["steps", "uses"]
+
+
+def test_unpreserved_declarations_empty_for_a_canonical_round_trip() -> None:
+    """The premise of the guard: a file bootstrap itself wrote must never be
+    refused, or --resync stops working for every repo at once."""
+    canonical = render("tests.yaml", app_name="widget")
+    assert unpreserved_declarations(canonical, canonical) == []
+
+
+def test_unpreserved_declarations_reports_an_extra_job() -> None:
+    """The real remaining case once both FND-604 values are carried forward: a
+    repo keeping an extra job whose name its branch protection still requires."""
+    canonical = render("tests.yaml", app_name="widget")
+    extended = canonical + (
+        "\n  tests-passed:\n"
+        "    needs: [tests]\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - run: echo ok\n"
+    )
+    dropped = unpreserved_declarations(extended, canonical)
+    assert "tests-passed" in dropped
+    assert "needs" in dropped
+
+
+def test_unpreserved_declarations_treats_a_moved_line_as_preserved() -> None:
+    """The repair trap FND-604 names.
+
+    The audit script that first caught this reported a merely *moved* line as a
+    removal, and reapplying on that reading duplicates a YAML key so only the
+    last copy survives. A key present on both sides is preserved, wherever it
+    sits — which is why this compares key sets rather than lines.
+    """
+    canonical = render("tests.yaml", app_name="widget", force_external_runtime="true")
+    moved = canonical.replace("      force-external-runtime: true\n", "").replace(
+        '      app-image-name: "atlan-widget-app"\n',
+        '      app-image-name: "atlan-widget-app"\n'
+        "      force-external-runtime: true\n",
+    )
+    assert moved != canonical, "fixture did not actually move the line"
+    assert unpreserved_declarations(moved, canonical) == []
+
+
+def test_unpreserved_tests_yaml_declarations_allows_the_sub_floor_drop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A sub-floor coverage line is the one drop that is policy, not loss.
+
+    Letting it reach the generalised guard would invert the coverage rule: the
+    resync would refuse, and the sub-floor line would survive every run.
+    """
+    _raise_floor(monkeypatch, 40)
+    canonical = render("tests.yaml", app_name="widget")
+    sub_floor = canonical.replace(
+        '      app-name: "widget"',
+        '      unit-coverage-fail-under: "20"\n      app-name: "widget"',
+    )
+    assert unpreserved_declarations(sub_floor, canonical) == [
+        "unit-coverage-fail-under"
+    ]
+    assert unpreserved_tests_yaml_declarations(sub_floor, canonical) == []
+
+
+def test_unpreserved_tests_yaml_declarations_still_stops_an_unparseable_floor() -> None:
+    """An unreadable spelling is not a decision anyone made, so it still counts.
+
+    Carving out the key *name* rather than the recognised sub-floor *value*
+    would let a typo be deleted silently — the same class of loss as FND-604.
+    """
+    canonical = render("tests.yaml", app_name="widget")
+    bad = canonical.replace(
+        '      app-name: "widget"',
+        '      unit-coverage-fail-under: ninety\n      app-name: "widget"',
+    )
+    assert unpreserved_tests_yaml_declarations(bad, canonical) == [
+        "unit-coverage-fail-under"
+    ]
+
+
+def test_format_dropped_declarations_bounds_the_list_but_not_the_count() -> None:
+    """A refusal nobody reads to the end is the silent failure it replaced."""
+    assert format_dropped_declarations(["a", "b"]) == "`a`, `b`"
+    formatted = format_dropped_declarations([f"k{i}" for i in range(9)])
+    assert formatted.endswith("(+3 more)")
+    assert "`k5`" in formatted
+    assert "`k6`" not in formatted

@@ -68,8 +68,18 @@ _ACTION_PIN_RE = re.compile(r"@[0-9a-f]{40}(?:[ \t]+#[^\n]*)?")
 _APP_NAME_RE = re.compile(r'^\s+app-name:\s+"([^"]+)"\s*$', re.MULTILINE)
 _APP_IMAGE_NAME_RE = re.compile(r'^\s+app-image-name:\s+"([^"]+)"\s*$', re.MULTILINE)
 _ENABLE_E2E_RE = re.compile(r"enable-e2e:\s+(true|false)")
-# Matches an *uncommented* services-script line (quoted value) in the with: block.
-_SERVICES_SCRIPT_RE = re.compile(r'^\s+services-script:\s+"([^"]+)"$', re.MULTILINE)
+# Matches an *uncommented* services-script line in the with: block, quoted or
+# bare. Bare matters: the two repos that actually run a services script
+# (atlan-mongodbatlas-app, atlan-tableau-app) hand-wrote it unquoted, pre-dating
+# this template, and a quoted-only read-back deleted their active line on every
+# --resync — the same silent-loss class as FND-604's other two values, found by
+# the guard added for them. The quote pair is matched as a unit so a half-quoted
+# line, which the YAML parser would reject anyway, cannot read back as valid.
+# The re-render normalises to the quoted form the template has always emitted:
+# one-time C002 drift for those two files, against losing the value entirely.
+_SERVICES_SCRIPT_RE = re.compile(
+    r'^\s+services-script:\s+(?:"([^"]+)"|([^\s"#]+))\s*$', re.MULTILINE
+)
 # tests-reusable.yaml's `unit-coverage-fail-under` input, quoted or bare. Anchored
 # and uncommented-only for the same reason as the lines above. The quote pair is
 # matched as a unit (`"(\d+)"` or `\d+`, never a lone leading/trailing quote) so a
@@ -78,6 +88,29 @@ _SERVICES_SCRIPT_RE = re.compile(r'^\s+services-script:\s+"([^"]+)"$', re.MULTIL
 _UNIT_COVERAGE_FAIL_UNDER_RE = re.compile(
     r'^\s+unit-coverage-fail-under:\s+(?:"(\d+)"|(\d+))\s*$', re.MULTILINE
 )
+
+# An *explicit* ``secrets:`` mapping — the caller shape that composes
+# ``E2E_SOURCE_ENV_JSON`` out of this repo's per-connector source-credential
+# secret NAMES. ``secrets: inherit`` can neither compose nor rename, so
+# downgrading an explicit mapping to it leaves the reusable's integration and
+# e2e legs with no source credentials at all, failing later with what reads as
+# a source-system error (FND-604). Matched in mapping form only: nothing but an
+# optional trailing comment may follow the colon.
+_SECRETS_MAPPING_RE = re.compile(
+    r"^(?P<indent>[ \t]+)secrets:[ \t]*(?:#[^\n]*)?$", re.MULTILINE
+)
+
+# A YAML mapping key as written, with an optional leading sequence dash so a
+# list-of-mappings entry counts as a declaration too. The lookahead requires a
+# space or end-of-line after the colon, so a bare ``http://x`` inside a value
+# cannot read as a key.
+_KEY_LINE_RE = re.compile(
+    r"^(?P<indent>[ \t]*)(?:-[ \t]+)?(?P<key>[A-Za-z0-9_.-]+):(?=[ \t]|$)"
+)
+
+# ``key: |`` / ``key: >-`` and friends: every more-indented line that follows is
+# opaque scalar content, not structure, so it must not be mined for keys.
+_BLOCK_SCALAR_RE = re.compile(r":[ \t]*[|>][+-]?\d*[ \t]*(?:#[^\n]*)?$")
 
 # The floor `tests-reusable.yaml` applies when a caller says nothing — its
 # ``unit-coverage-fail-under`` input default. An app may raise its own floor
@@ -122,6 +155,14 @@ def extract_tests_yaml_params(text: str) -> dict[str, str]:
     to the canonical the checker compares against; two copies could drift into
     a resync that leaves the finding standing.
 
+    ``force_external_runtime`` and ``secrets_block`` were added by FND-604:
+    both are live inputs of ``tests-reusable.yaml`` that apps hand-write, and
+    until they were read back here every ``--resync`` deleted them — the first
+    making the app's boot raise ``DaprNotDetectedError`` (FND-65), the second
+    silently downgrading an explicit ``secrets:`` mapping to ``secrets:
+    inherit``, which cannot compose the ``E2E_SOURCE_ENV_JSON`` the integration
+    and e2e legs read.
+
     ``unit_coverage_fail_under`` is the one value that is only *conditionally*
     preserved: it is kept when it is at or above ``SDK_UNIT_COVERAGE_FLOOR``
     (an app raising its own coverage bar — a choice C002 must not flag) and
@@ -143,11 +184,206 @@ def extract_tests_yaml_params(text: str) -> dict[str, str]:
         params["enable_e2e"] = m.group(1)
     m = _SERVICES_SCRIPT_RE.search(text)
     if m:
-        params["services_script"] = m.group(1).strip()
+        # Quoted and bare forms capture into different groups; exactly one is set.
+        params["services_script"] = next(g for g in m.groups() if g is not None).strip()
     declared = extract_declared_unit_coverage_fail_under(text)
     if declared and int(declared) >= SDK_UNIT_COVERAGE_FLOOR:
         params["unit_coverage_fail_under"] = declared
+    force_external = extract_force_external_runtime(text)
+    if force_external:
+        params["force_external_runtime"] = force_external
+    secrets_block = extract_secrets_block(text)
+    if secrets_block:
+        params["secrets_block"] = secrets_block
     return params
+
+
+def extract_force_external_runtime(text: str) -> str:
+    """Return ``"true"`` when *text* (a tests.yaml) forces the external runtime.
+
+    Anything else — absent, ``false``, unparseable — returns ``""`` ("say
+    nothing, take the SDK default"), for the same reason
+    ``extract_use_ghcr_base`` does: rendering an explicit ``false`` would be a
+    second spelling of the input default and would read as C002 drift on every
+    repo that spells it the other way.
+
+    Read through ``extract_field`` (which accepts bare or quoted values at any
+    indentation) rather than an anchored regex like the lines above: the apps
+    that hand-wrote this input put it at two different positions in the ``with:``
+    block, each under its own explanatory comment, and the value appears as both
+    ``true`` and ``"true"``. Failing to read one of those spellings means
+    ``--resync`` deletes the line, and the connector's ``main.py`` — which still
+    expects external daprd at :3500 / Temporal at :7233 — then fails to boot
+    with ``DaprNotDetectedError`` (FND-65).
+    """
+    return "true" if extract_field(text, "force-external-runtime") == "true" else ""
+
+
+def extract_secrets_block(text: str) -> str:
+    """Return *text*'s explicit ``secrets:`` mapping verbatim, or ``""``.
+
+    *text* is a tests.yaml. The return value is the block exactly as written —
+    the ``secrets:`` line, every more-indented line under it, and any contiguous
+    run of comment lines directly above it at the same indentation — with no
+    trailing newline, so it drops straight into the template in place of the
+    canonical ``secrets: inherit``.
+
+    Spliced verbatim rather than modelled as parameters because the mapping's
+    *contents* are per-connector and unknowable here: which source-credential
+    secret NAMES exist, how many auth flavours they cover, whether a value
+    carries a ``||`` default, and which of them are folded into the
+    ``E2E_SOURCE_ENV_JSON`` object the reusable exports before the app server
+    and pytest start. The preceding comments come along because they are the
+    only record of why the repo dropped ``inherit``, and losing them is the same
+    class of silent loss as losing the mapping itself.
+
+    ``secrets: inherit`` returns ``""``: it is the canonical default, and
+    re-rendering it from a captured block rather than from the template would
+    make every non-customised repo's bytes depend on this extractor.
+
+    The first mapping-form ``secrets:`` line wins. A file carrying both forms is
+    a duplicate YAML key that GitHub rejects outright, so choosing between them
+    is not this function's job — see FND-604 on the repair trap that produces
+    one, and note that the re-render emits a single ``secrets:`` either way, so
+    resyncing such a file collapses the duplicate rather than propagating it.
+    """
+    m = _SECRETS_MAPPING_RE.search(text)
+    if m is None:
+        return ""
+    lines = text.splitlines()
+    start = text[: m.start()].count("\n")
+    indent = len(m.group("indent"))
+    # Children: every following line that is blank (interior blank lines are
+    # part of the block) or indented deeper than `secrets:` itself.
+    end = start + 1
+    while end < len(lines):
+        line = lines[end]
+        if line.strip() and len(line) - len(line.lstrip()) <= indent:
+            break
+        end += 1
+    # A mapping needs at least one child. Without this, a `secrets:` line with
+    # nothing under it — which YAML reads as null, not as a mapping — would be
+    # captured and re-rendered, replacing the working `inherit` default with a
+    # line that passes no secrets at all.
+    body = [line for line in lines[start + 1 : end] if line.strip()]
+    if not body:
+        return ""
+    # Trailing blank lines belong to whatever follows the block, not to it.
+    while end > start + 1 and not lines[end - 1].strip():
+        end -= 1
+    # Contiguous same-indent comments directly above are part of the block.
+    head = start
+    while head > 0:
+        above = lines[head - 1]
+        stripped = above.strip()
+        if not stripped.startswith("#") or len(above) - len(above.lstrip()) != indent:
+            break
+        head -= 1
+    return "\n".join(lines[head:end])
+
+
+def declared_keys(text: str) -> list[str]:
+    """Return the distinct YAML mapping keys *text* declares, in file order.
+
+    Structure only: comment lines are skipped, and the body of a block scalar
+    (``key: |``, ``key: >-``) is skipped as opaque content rather than mined for
+    keys that a hand-written ``run:`` step happens to contain.
+
+    Key *names* rather than key paths, because tests.yaml legitimately repeats a
+    name at several depths (every ``workflow_dispatch`` input has its own
+    ``description`` / ``required`` / ``default`` / ``type``) and a set of names
+    is the coarsest comparison that still answers the only question
+    ``unpreserved_declarations`` asks — "does this file say something the
+    canonical has no place for?" — without a YAML parser this package does not
+    depend on.
+    """
+    keys: list[str] = []
+    skip_deeper_than: int | None = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        indent = len(line) - len(line.lstrip())
+        if skip_deeper_than is not None:
+            if indent > skip_deeper_than:
+                continue
+            skip_deeper_than = None
+        if stripped.startswith("#"):
+            continue
+        m = _KEY_LINE_RE.match(line)
+        if m is None:
+            continue
+        key = m.group("key")
+        if key not in keys:
+            keys.append(key)
+        if _BLOCK_SCALAR_RE.search(line):
+            skip_deeper_than = len(m.group("indent"))
+    return keys
+
+
+def unpreserved_declarations(existing: str, rerendered: str) -> list[str]:
+    """Return the keys *existing* declares that *rerendered* would drop.
+
+    The generalised guard FND-604 asked for: ``--resync`` re-renders a whole
+    write-if-absent scaffold from its canonical template, so anything the
+    template has no place for is deleted. Naming those keys turns a silent loss
+    into a refusal that says what it refused over — and, unlike a line diff,
+    generalises to whatever the next unrecognised per-repo value turns out to
+    be, without needing to have anticipated it.
+
+    Compares *sets of key names*, deliberately: the audit script that first
+    caught this reported a line that merely *moved* as a removal, and
+    reapplying on that reading duplicates a YAML key so only the last copy
+    survives. A key that moved is present on both sides and reads as preserved,
+    which it is.
+
+    Detects *dropped* declarations only. A key present on both sides whose value
+    the re-render would change is a different (and far less damaging) class, and
+    is left to the ``.bak`` and to C002's own drift finding.
+    """
+    kept = set(declared_keys(rerendered))
+    return [key for key in declared_keys(existing) if key not in kept]
+
+
+def unpreserved_tests_yaml_declarations(existing: str, rerendered: str) -> list[str]:
+    """``unpreserved_declarations`` minus the one drop that is policy, not loss.
+
+    A ``unit-coverage-fail-under`` *below* ``SDK_UNIT_COVERAGE_FLOOR`` is the
+    single declaration this module refuses to preserve on purpose — an app may
+    raise its coverage floor above the SDK's, not use its own workflow to duck
+    under a fleet-wide bar — so ``--resync`` deleting that line is the intended
+    remediation, announced ahead of time by C002's own message. Letting it reach
+    the generalised guard would invert that: the resync would refuse, and the
+    sub-floor line would survive every run.
+
+    The carve-out is conditioned on the value actually reading back as a
+    sub-floor number, not on the key name alone. A spelling the extractor cannot
+    parse (``unit-coverage-fail-under: ninety``) is not a decision anyone made,
+    so it still counts as unpreserved and still stops the resync.
+    """
+    dropped = unpreserved_declarations(existing, rerendered)
+    if rejected_unit_coverage_fail_under(existing):
+        dropped = [key for key in dropped if key != "unit-coverage-fail-under"]
+    return dropped
+
+
+# Enough to name the whole of a realistic per-repo customisation (an explicit
+# secrets mapping plus a forced runtime came to two), small enough that the
+# message stays readable when a repo carries an extra job — whose every key
+# (``needs``, ``runs-on``, ``steps``, ...) counts as a dropped declaration.
+_MAX_DROPPED_LISTED = 6
+
+
+def format_dropped_declarations(keys: list[str]) -> str:
+    """Render *keys* as a bounded, quoted list for a one-line message.
+
+    Shared by ``--resync``'s refusal and C002's explanation of it, so the two
+    descriptions of the same file cannot list different keys or elide at
+    different points. The count is always exact even when the list is elided.
+    """
+    shown = ", ".join(f"`{key}`" for key in keys[:_MAX_DROPPED_LISTED])
+    hidden = len(keys) - _MAX_DROPPED_LISTED
+    return f"{shown} (+{hidden} more)" if hidden > 0 else shown
 
 
 def rejected_unit_coverage_fail_under(text: str) -> str:

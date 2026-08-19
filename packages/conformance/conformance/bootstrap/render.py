@@ -122,6 +122,8 @@ def render(
     automerge: str = "true",
     unit_coverage_fail_under: str = "",
     use_ghcr_base: str = "",
+    force_external_runtime: str = "",
+    secrets_block: str = "",
 ) -> str:
     """Render template *name* with the given substitution variables.
 
@@ -163,7 +165,15 @@ def render(
       the apps that already raised their floor hand-wrote, so those files match
       this canonical instead of reporting C002 drift for having opted up. A
       surrounding explanatory comment, or any other position, would guarantee
-      the mismatch.
+      the mismatch.  ``force_external_runtime`` (default ``""`` — no line;
+      ``"true"`` renders a bare ``force-external-runtime: true`` immediately
+      after the coverage line) and ``secrets_block`` (default ``""`` — renders
+      the canonical ``secrets: inherit``; supply a verbatim block, as
+      ``bootstrap.extract.extract_secrets_block`` reads one off disk, to render
+      an app's explicit ``secrets:`` mapping in its place) are the two values
+      FND-604 added, hugged onto their tags' lines for the same byte-identity
+      reason.  ``secrets_block`` carries no trailing newline of its own — the
+      template's line supplies it, so the no-override render is unchanged.
     - ``.gitignore``: static template, no substitution.
 
     All other keyword arguments are accepted but unused, so callers can pass
@@ -189,4 +199,6 @@ def render(
         automerge=automerge,
         unit_coverage_fail_under=unit_coverage_fail_under,
         use_ghcr_base=use_ghcr_base,
+        force_external_runtime=force_external_runtime,
+        secrets_block=secrets_block,
     )
