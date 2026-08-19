@@ -83,6 +83,6 @@ module.exports = {
     // these entries — a `]` truncates the allowlist the guard parses, and a
     // backslash means something different to the JS string literal than to the
     // regex ("\d" is just "d" in JS, silently breaking the pattern at runtime).
-    "^renovate-uv-lock-bounded --window P7D --exempt atlan-application-sdk --exempt atlan-application-sdk-conformance --exempt pyatlan$",
+    "^renovate-uv-lock-bounded --window P3D --exempt atlan-application-sdk --exempt atlan-application-sdk-conformance --exempt pyatlan$",
   ],
 };
