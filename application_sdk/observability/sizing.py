@@ -231,6 +231,15 @@ def record_observation(observation: SizingObservation) -> None:
             "activity_sizing_observation %s",
             orjson.dumps(payload, default=str).decode(),
         )
+
+        # Durable copy for offline tier fitting. Separate from the log line on
+        # purpose: the log is grep-able on one tenant today, this is what reaches
+        # the upstream store and survives log retention.
+        from application_sdk.observability.sizing_sink import (  # noqa: PLC0415 — circular: the sink imports this module's record type
+            persist,
+        )
+
+        persist(observation)
     # conformance: ignore[E004] telemetry in an activity finally; a failure here must cost the observation, never the activity's real outcome
     except Exception:
         _logger.debug("sizing observation emission failed", exc_info=True)
