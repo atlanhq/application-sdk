@@ -499,6 +499,60 @@ class TestActivityAllowList:
             await interceptor.execute_activity(MockExecuteActivityInput())
         mock_record.assert_called_once()
 
+    async def test_bare_name_matches_the_qualified_activity_type(self, mock_next):
+        """A v3 activity registers as "{app}:{task}", but a dev writes the task name.
+
+        Requiring "automation-engine:merge" would silently collect nothing while
+        the config looked correct — so the bare name has to match.
+        """
+        interceptor = _SizingActivityInboundInterceptor(
+            mock_next, 1.0, frozenset({"merge"})
+        )
+        with (
+            patch(_ACTIVITY_TARGET) as mock_act,
+            patch(_TRACKER_TARGET, _tracker(ContainerTrace(peak_memory_bytes=1))),
+            patch(_RECORD_TARGET) as mock_record,
+        ):
+            mock_act.info.return_value = MockActivityInfo(
+                activity_type="automation-engine:merge"
+            )
+            await interceptor.execute_activity(MockExecuteActivityInput())
+        mock_record.assert_called_once()
+        assert mock_record.call_args[0][0].activity_type == "automation-engine:merge"
+
+    async def test_qualified_name_also_matches(self, mock_next):
+        """Both spellings work, so an app with two same-named tasks can disambiguate."""
+        interceptor = _SizingActivityInboundInterceptor(
+            mock_next, 1.0, frozenset({"automation-engine:merge"})
+        )
+        with (
+            patch(_ACTIVITY_TARGET) as mock_act,
+            patch(_TRACKER_TARGET, _tracker(ContainerTrace(peak_memory_bytes=1))),
+            patch(_RECORD_TARGET) as mock_record,
+        ):
+            mock_act.info.return_value = MockActivityInfo(
+                activity_type="automation-engine:merge"
+            )
+            await interceptor.execute_activity(MockExecuteActivityInput())
+        mock_record.assert_called_once()
+
+    async def test_qualified_entry_does_not_match_another_app(self, mock_next):
+        """The qualified form must stay a narrowing, not a no-op."""
+        interceptor = _SizingActivityInboundInterceptor(
+            mock_next, 1.0, frozenset({"automation-engine:merge"})
+        )
+        with (
+            patch(_ACTIVITY_TARGET) as mock_act,
+            patch(_TRACKER_TARGET) as mock_tracker,
+            patch(_RECORD_TARGET) as mock_record,
+        ):
+            mock_act.info.return_value = MockActivityInfo(
+                activity_type="publish-app:merge"
+            )
+            await interceptor.execute_activity(MockExecuteActivityInput())
+        mock_tracker.assert_not_called()
+        mock_record.assert_not_called()
+
     async def test_a_failing_unselected_activity_still_propagates(self, mock_next):
         """The passthrough path must not change failure behaviour either."""
         mock_next.execute_activity = AsyncMock(side_effect=ValueError("boom"))
