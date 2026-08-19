@@ -223,6 +223,14 @@ class BaseE2ETest:
     # 5 min to recover. That is deliberate (AE overload is the other thing that
     # fails this leg) and bounded: _RETRY_AFTER_BUDGET_SECONDS still caps the
     # extra waiting a slow origin can request on top of the fixed gap.
+    #
+    # The headline 300s is the fixed-gap floor, not the true worst case. Each of
+    # the retries can additionally honour an origin-requested `retry_after`
+    # (bounded by _RETRY_AFTER_BUDGET_SECONDS = 300s per submit call), and every
+    # attempt costs its own HTTP round-trip, so a genuinely overloaded origin can
+    # stretch the wall-clock bound to ~300s floor + ~300s honoured `retry_after`
+    # + per-request time ≈ 10 min. Plan CI timeouts for the ~10 min bound, not
+    # the 5 min headline.
     app_ready_timeout_seconds: ClassVar[int] = 300
     app_ready_poll_interval_seconds: ClassVar[int] = 5
 

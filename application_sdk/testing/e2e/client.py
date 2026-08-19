@@ -347,20 +347,29 @@ def _is_already_active_run(status: int, body: Any) -> bool:
 # `retryable` predicate already retries any non-already-active 5xx, this shape
 # included. It exists only to (a) justify the long cold-start budget and (b)
 # name the terminal failure AppNotReadyError instead of a bare 500.
-_APP_NOT_READY_MARKER = "connection refused"
+#
+# The match requires the refused-dial-to-:8000 sequence, not the bare
+# `connection refused` substring: a genuine terminal 5xx whose body merely
+# mentions a refused connection (e.g. an upstream DB dial surfaced through
+# Heracles) must not be mis-named AppNotReadyError. Requiring `dial tcp` +
+# `:8000` + `connection refused` together restricts the match to a refused dial
+# to the tenant app pod.
+_APP_NOT_READY_MARKERS = ("dial tcp", ":8000", "connection refused")
 
 
 def _is_app_not_ready(status: int, body: Any) -> bool:
     """True when a submit response reads as a not-yet-serving tenant app pod.
 
-    Deliberately narrow (connection-refused only): a refused dial never reached
-    the pod, so no run was created and the wait is unambiguously a cold start.
-    A genuine 5xx, a 4xx, or the already-active conflict must not read as this.
+    Deliberately narrow (refused dial to :8000 only): a refused dial never
+    reached the pod, so no run was created and the wait is unambiguously a cold
+    start. A genuine 5xx, a 4xx, the already-active conflict, or a 5xx that only
+    mentions a refused connection in passing must not read as this.
     """
     if status < 400:
         return False
     haystack = body if isinstance(body, str) else repr(body)
-    return _APP_NOT_READY_MARKER in haystack.casefold()
+    haystack = haystack.casefold()
+    return all(marker in haystack for marker in _APP_NOT_READY_MARKERS)
 
 
 class DAGNodeStatus(str, Enum):

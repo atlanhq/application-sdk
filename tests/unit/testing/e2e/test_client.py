@@ -1009,7 +1009,25 @@ class TestAppNotReadyDetection:
 
     def test_refused_dial_detected_in_dict_and_str_body(self):
         assert _is_app_not_ready(500, _REFUSED_BODY) is True
-        assert _is_app_not_ready(502, "… connect: Connection Refused") is True
+        assert (
+            _is_app_not_ready(
+                502, "… dial tcp 10.0.0.5:8000: connect: Connection Refused"
+            )
+            is True
+        )
+
+    def test_bare_connection_refused_substring_is_not_app_not_ready(self):
+        # The match requires the refused-dial-to-:8000 sequence, not the bare
+        # substring: a genuine terminal 5xx whose body merely mentions a refused
+        # connection (e.g. an upstream DB dial surfaced through Heracles) must
+        # not be mis-named AppNotReadyError.
+        assert _is_app_not_ready(500, "… connect: Connection Refused") is False
+        assert (
+            _is_app_not_ready(
+                500, {"err": "upstream db dial: connection refused on :5432"}
+            )
+            is False
+        )
 
     def test_other_submit_failures_are_not_app_not_ready(self):
         # A genuine AE 5xx, a 4xx, the already-active conflict, and any 2xx must
