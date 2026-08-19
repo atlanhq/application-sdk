@@ -225,7 +225,13 @@ class BaseE2ETest:
     # runner has no kubectl route to the remote tenant vcluster in this path, so
     # the AE submit path is the only tenant-facing probe of the pod. 0 disables
     # the gate (falls back to the single-attempt submit).
-    app_ready_timeout_seconds: ClassVar[int] = 120
+    #
+    # 300s (5 min): live gcs e2e (run 32259032704) showed the tenant pod cold-
+    # starting past the initial 120s window but serving well within 300s, so the
+    # AE-submit-500s on gcs/s3/mongodbatlas are a genuine cold-start race, not
+    # dead pods. 5 min gives comfortable margin while still failing a genuinely
+    # unreachable pod in a bounded time. Connectors may override per-repo.
+    app_ready_timeout_seconds: ClassVar[int] = 300
     app_ready_poll_interval_seconds: ClassVar[int] = 5
 
     # --- optional class attrs ------------------------------------------
