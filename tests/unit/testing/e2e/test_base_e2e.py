@@ -18,6 +18,8 @@ import pytest
 
 from application_sdk.contracts.types import ConnectionRef
 from application_sdk.testing.e2e._errors import (
+    AppNotReadyError,
+    AtlanApiHttpError,
     ManifestDagMissingError,
     ManifestFileNotFoundError,
     MissingHarnessEnvError,
@@ -889,3 +891,87 @@ class TestAgentJsonOverrideReachesPayload:
         # And the flat routing rows the cluster template reads follow it.
         assert params["agent-json.auth-type"] == "keypair"
         assert params["agent-json.host"] == "db.example.com"
+
+
+# ---------------------------------------------------------------------------
+# _submit_when_app_ready — tenant-app readiness gate (FND-402)
+# ---------------------------------------------------------------------------
+
+
+def _refused_error() -> AtlanApiHttpError:
+    """A submit failure shaped like a not-yet-serving tenant pod."""
+    return AtlanApiHttpError(
+        message=(
+            "AE submit failed: HTTP 500\n"
+            'response="dial tcp 10.0.0.5:8000: connect: connection refused"'
+        ),
+    )
+
+
+class TestSubmitWhenAppReady:
+    """The pre-submit readiness gate that fixes the connection-refused 500s."""
+
+    def _harness(self) -> _ConcreteE2ETest:
+        harness = _ConcreteE2ETest()
+        harness.client = MagicMock()
+        # No real sleeping in the poll loop.
+        harness.app_ready_poll_interval_seconds = 0
+        return harness
+
+    def test_polls_until_the_pod_accepts_the_connection(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A refused submit is retried until the pod serves, then the run_id."""
+        monkeypatch.setattr(
+            "application_sdk.testing.e2e.base.time.sleep", lambda _s: None
+        )
+        harness = self._harness()
+        harness.client.submit_workflow.side_effect = [
+            _refused_error(),
+            _refused_error(),
+            "run-ready",
+        ]
+        assert harness._submit_when_app_ready({"any": "payload"}) == "run-ready"
+        assert harness.client.submit_workflow.call_count == 3
+
+    def test_raises_app_not_ready_after_timeout(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Exhausting the budget fails with a clear AppNotReadyError, not a 500."""
+        monkeypatch.setattr(
+            "application_sdk.testing.e2e.base.time.sleep", lambda _s: None
+        )
+        # Deterministic clock: first read arms the deadline, later reads cross it.
+        ticks = iter([0.0, 1.0, 999.0, 999.0])
+        monkeypatch.setattr(
+            "application_sdk.testing.e2e.base.time.monotonic", lambda: next(ticks)
+        )
+        harness = self._harness()
+        harness.app_ready_timeout_seconds = 10
+        refused = _refused_error()
+        harness.client.submit_workflow.side_effect = refused
+        with pytest.raises(AppNotReadyError) as excinfo:
+            harness._submit_when_app_ready({})
+        # The originating 500 is chained so the operator still sees the raw error.
+        assert excinfo.value.__cause__ is refused
+        assert "did not accept connections on :8000" in str(excinfo.value)
+
+    def test_non_refused_error_is_reraised_immediately(self) -> None:
+        """A genuine AE error is never swallowed by the readiness gate."""
+        harness = self._harness()
+        genuine = AtlanApiHttpError(
+            message='AE submit failed: HTTP 500\nresponse="internal error"'
+        )
+        harness.client.submit_workflow.side_effect = genuine
+        with pytest.raises(AtlanApiHttpError) as excinfo:
+            harness._submit_when_app_ready({})
+        assert excinfo.value is genuine
+        assert harness.client.submit_workflow.call_count == 1
+
+    def test_timeout_zero_disables_the_gate(self) -> None:
+        """A 0 budget falls back to a single plain submit."""
+        harness = self._harness()
+        harness.app_ready_timeout_seconds = 0
+        harness.client.submit_workflow.return_value = "run-direct"
+        assert harness._submit_when_app_ready({}) == "run-direct"
+        assert harness.client.submit_workflow.call_count == 1

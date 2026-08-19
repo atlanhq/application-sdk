@@ -53,6 +53,8 @@ from application_sdk.common.task_queue import (
 from application_sdk.contracts.types import ConnectionRef
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.e2e._errors import (
+    AppNotReadyError,
+    AtlanApiHttpError,
     HarnessMethodNotImplementedError,
     ManifestDagMissingError,
     ManifestFileNotFoundError,
@@ -82,6 +84,20 @@ logger = get_logger(__name__)
 _HARD_FAIL_NODE_STATUSES = frozenset(
     {DAGNodeStatus.FAILED, DAGNodeStatus.ERROR, DAGNodeStatus.CANCELLED}
 )
+
+# Substrings that mark an AE submit failure as "the tenant app pod isn't
+# serving yet" rather than a real AE error (FND-402). Heracles surfaces a
+# refused dial to the pod as an HTTP 500 whose body echoes the Go net error —
+# e.g. "dial tcp 10.x.x.x:8000: connect: connection refused". Matched
+# case-insensitively; kept deliberately narrow (connection-refused only) so the
+# readiness gate never swallows a genuine 5xx, a 4xx, or the already-active
+# conflict. See BaseE2ETest._submit_when_app_ready.
+_APP_NOT_READY_MARKER = "connection refused"
+
+
+def _looks_like_app_not_ready(text: str) -> bool:
+    """True when an AE submit error reads as a not-yet-serving tenant pod."""
+    return _APP_NOT_READY_MARKER in text.lower()
 
 
 @dataclass(frozen=True)
@@ -189,6 +205,28 @@ class BaseE2ETest:
     worker_health_url: ClassVar[str] = "http://localhost:8000/server/health"
     worker_health_timeout_seconds: ClassVar[int] = 120
     worker_health_poll_interval_seconds: ClassVar[int] = 3
+
+    # --- tenant-app readiness gate (FND-402) ---------------------------
+    # The worker_health_* probe above covers the LOCAL CI worker container
+    # (localhost:8000). It does NOT cover the TENANT-installed app pod, which is
+    # a different :8000: at AE submit, Heracles POSTs the credential config to
+    # http://<conn>.<conn>-app.svc.cluster.local:8000/workflows/v1/config/...
+    # against that pod. prepare-tenant installs the app and LM reports the
+    # deployment reconciled, but the pod can still be seconds from serving when
+    # the leg reaches submit — observed live as intermittent
+    # "AE submit failed: HTTP 500 ... dial tcp :8000: connect: connection
+    # refused" (s3/gcs/mongodbatlas failed while cloudsql/iceberg passed in the
+    # same window). submit_workflow's own generic-5xx retry (4 x 5s ~= 20s) is
+    # tuned for transient AE overload, not pod cold-start, so it gives up before
+    # the pod is up. run_full_dag polls the submit path until the pod accepts
+    # the connection, up to app_ready_timeout_seconds, then fails with a clear
+    # AppNotReadyError. This is safe because a refused submit never reached the
+    # pod (no run created), so re-submitting cannot spawn a duplicate. The
+    # runner has no kubectl route to the remote tenant vcluster in this path, so
+    # the AE submit path is the only tenant-facing probe of the pod. 0 disables
+    # the gate (falls back to the single-attempt submit).
+    app_ready_timeout_seconds: ClassVar[int] = 120
+    app_ready_poll_interval_seconds: ClassVar[int] = 5
 
     # --- optional class attrs ------------------------------------------
     connection_type: ClassVar[str] = ""
@@ -966,6 +1004,56 @@ class BaseE2ETest:
         )
         return required_ok and no_hard_failure
 
+    def _submit_when_app_ready(self, payload: dict[str, Any]) -> str:
+        """AE submit, gated on the tenant app pod actually serving on :8000.
+
+        Readiness gate for FND-402. See ``app_ready_timeout_seconds`` for the
+        full rationale: a tenant pod that reconciled but isn't serving yet makes
+        Heracles' submit-time POST fail with an HTTP 500 whose body carries
+        ``dial tcp :8000: connect: connection refused``. That is the ONLY
+        connection-refused-shaped submit failure — a refused connection never
+        reached the pod, so no run was created and re-submitting is
+        side-effect-free (unlike a committed submit, which
+        :meth:`AEWorkflowClient.submit_workflow` guards against re-issuing).
+        Poll the submit until the pod accepts the connection, bounded by
+        ``app_ready_timeout_seconds``; any submit failure that is NOT
+        connection-refused (a real AE error, a 4xx, the already-active conflict)
+        is re-raised immediately, so this gate never masks a genuine failure.
+        """
+        if self.app_ready_timeout_seconds <= 0:
+            return self.client.submit_workflow(payload)
+
+        deadline = time.monotonic() + self.app_ready_timeout_seconds
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                return self.client.submit_workflow(payload)
+            except AtlanApiHttpError as exc:
+                if not _looks_like_app_not_ready(str(exc)):
+                    raise
+                if time.monotonic() >= deadline:
+                    raise AppNotReadyError(
+                        message=(
+                            f"tenant app pod for {self.connector_short_name} "
+                            "did not accept connections on :8000 within "
+                            f"{self.app_ready_timeout_seconds}s "
+                            f"({attempt} submit attempt(s)). Heracles POSTs the "
+                            "credential config to the tenant-deployed pod at AE "
+                            "submit, and it kept refusing the connection ('dial "
+                            "tcp :8000: connect: connection refused'). The "
+                            "deployment reconciled (prepare-tenant went green) "
+                            "but the pod never started serving HTTP in time."
+                        ),
+                    ) from exc
+                logger.info(
+                    "tenant app not serving yet (attempt %d): %s — retrying in %ds",
+                    attempt,
+                    exc,
+                    self.app_ready_poll_interval_seconds,
+                )
+                time.sleep(self.app_ready_poll_interval_seconds)
+
     def run_full_dag(self) -> FullDAGOutcome:
         """Submit, poll AE, poll Atlas, return the combined outcome."""
         slug = self._bootstrap_workflow()
@@ -988,7 +1076,7 @@ class BaseE2ETest:
             self.mode.value,
             self.connection_qualified_name,
         )
-        run_id = self.client.submit_workflow(payload)
+        run_id = self._submit_when_app_ready(payload)
         logger.info("AE submit returned run_id=%s", run_id)
 
         ae_result = self.client.poll_native_status(

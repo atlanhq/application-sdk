@@ -98,6 +98,28 @@ class AdminRoleNotResolvedError(PreconditionError):
 
 
 @dataclass(kw_only=True)
+class AppNotReadyError(PreconditionError):
+    """The tenant-installed app pod did not accept connections before AE submit.
+
+    ``prepare-tenant`` installs the app and LM reports the deployment
+    reconciled, but the pod can still be tens of seconds away from serving HTTP
+    on ``:8000`` when the leg reaches the AE submit. At submit, Heracles POSTs
+    the credential config to
+    ``http://<conn>.<conn>-app.svc.cluster.local:8000/workflows/v1/config/...``
+    against that pod; a not-yet-serving pod surfaces as
+    ``AE submit failed: HTTP 500 ... dial tcp :8000: connect: connection
+    refused``. A refused submit never reaches the pod, so no run is created and
+    re-submitting is side-effect-free: ``run_full_dag`` polls the submit path
+    until the pod accepts the connection, bounded by
+    ``app_ready_timeout_seconds``. This is raised when that budget is exhausted,
+    so the failure names "app never became ready" instead of an opaque 500.
+    """
+
+    code: ClassVar[str] = "PRECONDITION_APP_NOT_READY"
+    expected_state: str | None = "tenant app pod serving HTTP on :8000"
+
+
+@dataclass(kw_only=True)
 class NoWorkerOnTaskQueueError(PreconditionError):
     """No worker started any DAG node within the stall-grace window.
 
