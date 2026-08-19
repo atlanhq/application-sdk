@@ -267,17 +267,20 @@ def withhold(lock_path: Path, baseline: str, window: str) -> bool:
     required age check that fails on its own evidence rather than on a lock the
     build cannot install (FND-379).
 
-    An empty baseline means the ref had no committed ``uv.lock``; there is
-    nothing to write and truncating the file would be worse than leaving it.
+    A branch that *adds* a brand-new ``uv.lock`` has no committed baseline to
+    write back. The tripwire still goes on, over whatever the resolve left: there
+    is no safer content to choose, and leaving a valid-but-unbounded lock in place
+    is the one refusal that lands on no required check at all. ``strip_options``
+    recovers whatever was there in both cases.
     """
-    if not baseline:
+    base = baseline or lock_path.read_text()
+    if not base:
         return False
+    base = strip_options(base)
     tripwire = f'\n[options]\nexclude-newer-span = "{window}"\n'
-    anchor = baseline.find("\n[[package]]")
+    anchor = base.find("\n[[package]]")
     lock_path.write_text(
-        baseline[:anchor] + tripwire + baseline[anchor:]
-        if anchor != -1
-        else baseline + tripwire
+        base[:anchor] + tripwire + base[anchor:] if anchor != -1 else base + tripwire
     )
     return True
 
@@ -689,8 +692,10 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 "Bounded `uv lock` failed and no deliberately-floored package was "
                 "named in the error, so there is nothing safe to admit early. "
-                "Refusing to fall back to an unbounded resolve. The committed "
-                "lock has been restored.\n" + result.stderr,
+                "Refusing to fall back to an unbounded resolve. The lock is left "
+                "deliberately un-installable — baseline versions plus a tripwire "
+                "`[options]` table — so a required check holds the branch.\n"
+                + result.stderr,
                 file=sys.stderr,
             )
             return 1
@@ -702,8 +707,9 @@ def main(argv: list[str] | None = None) -> int:
             withhold(lock_path, baseline, args.window)
             print(
                 "Bounded `uv lock` still failed after admitting "
-                f"{', '.join(admitted_early)}. The committed lock has been "
-                "restored.\n" + result.stderr,
+                f"{', '.join(admitted_early)}. The lock is left deliberately "
+                "un-installable — baseline versions plus a tripwire `[options]` "
+                "table — so a required check holds the branch.\n" + result.stderr,
                 file=sys.stderr,
             )
             return 1
@@ -725,8 +731,9 @@ def main(argv: list[str] | None = None) -> int:
             "API will say — because no resolve can keep a yanked pin and every "
             "one of them will land here until the base branch moves off it. A "
             "changed constraint is the other candidate. Either way it wants a "
-            "human, so the committed lock has been restored and this run bounds "
-            "nothing.",
+            "human, so this run bounds nothing and leaves the lock deliberately "
+            "un-installable — baseline versions plus a tripwire `[options]` "
+            "table — for a required check to hold the branch on.",
             file=sys.stderr,
         )
         return 1

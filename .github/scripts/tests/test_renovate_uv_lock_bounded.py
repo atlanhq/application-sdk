@@ -1030,12 +1030,62 @@ class TestWithholds:
         assert len(calls) == 2, "the floor should have earned exactly one retry"
         self._assert_withheld(project, baseline)
 
-    def test_withhold_leaves_a_lock_with_no_baseline_alone(self, tmp_path):
-        # A lock added in this very branch has no committed copy to fall back to.
+    def test_a_new_lockfile_is_tripwired_too(self, monkeypatch, tmp_path):
+        """The branch that ADDS uv.lock still has to be held.
+
+        There is no committed baseline to write back here, and the pre-fix
+        behaviour — leave the tree as it is — was the one refusal that landed on
+        no required check: a valid-but-unbounded lock that Renovate commits and
+        every gate waves through.
+        """
+        project = self._repo(tmp_path, lock(boto3="1.43.72"))
+        subprocess.run(["git", "rm", "-q", "uv.lock"], cwd=project, check=True)
+        subprocess.run(
+            ["git", "commit", "-qm", "drop the lock"],
+            cwd=project,
+            check=True,
+            env=self.GIT_ENV,
+        )
+        assert bounded.baseline_lock_text(project) is None
+
+        # What Renovate left: a valid, unbounded lock. uv then fails WITHOUT
+        # rewriting it, which is what makes this the dangerous shape — the tree
+        # holds something installable that every required check waves through.
+        unbounded = lock(boto3="1.43.75")
+        (project / "uv.lock").write_text(unbounded)
+
+        def fake_run(command, cwd):
+            return subprocess.CompletedProcess(
+                command, 1, "", "error: something else entirely"
+            )
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        assert bounded.main(["--window", "P3D", "--project-dir", str(project)]) == 1
+        on_disk = (project / "uv.lock").read_text()
+        assert "[options]" in on_disk, "a new lockfile must be held like any other"
+        assert bounded.strip_options(on_disk) == unbounded
+
+    def test_withhold_only_no_ops_on_an_empty_file(self, tmp_path):
+        # Nothing committed AND nothing on disk: there is no content to tripwire,
+        # and writing a bare [options] table would be a lock nobody can recover.
+        target = tmp_path / "uv.lock"
+        target.write_text("")
+        assert bounded.withhold(target, "", "P3D") is False
+        assert target.read_text() == ""
+
+    def test_withhold_does_not_stack_options_tables(self, tmp_path):
+        # The on-disk fallback is whatever the bounded resolve left, which already
+        # carries uv's own [options]. Two tables would be invalid TOML rather than
+        # a recoverable lock.
         target = tmp_path / "uv.lock"
         target.write_text(LOCK_WITH_OPTIONS)
-        assert bounded.withhold(target, "", "P3D") is False
-        assert target.read_text() == LOCK_WITH_OPTIONS
+        assert bounded.withhold(target, "", "P3D") is True
+        written = target.read_text()
+        assert written.count("[options]") == 1
+        assert 'exclude-newer-span = "P3D"' in written
+        assert bounded.strip_options(written) == bounded.strip_options(
+            LOCK_WITH_OPTIONS
+        )
 
     def test_the_tripwire_names_the_window_and_survives_a_strip(self, tmp_path):
         baseline = lock(boto3="1.43.72")
