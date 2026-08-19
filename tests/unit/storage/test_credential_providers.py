@@ -19,11 +19,12 @@ through their real SDK boundary objects and assert on documented surfaces:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timezone
 from pathlib import Path
 
 import pytest
 import trustme
+from dateutil.tz import tzutc
 from cryptography.hazmat.primitives import serialization
 from obstore.auth.azure import AzureCredentialProvider
 from obstore.auth.boto3 import StsCredentialProvider
@@ -68,6 +69,31 @@ class FakeSession:
     def client(self, service_name: str) -> FakeStsClient:
         self.client_requests.append(service_name)
         return self.sts
+
+
+class BotocoreTzStsClient(FakeStsClient):
+    """FakeStsClient whose ``Expiration`` carries botocore's real tzinfo.
+
+    botocore deserialises STS timestamps with ``dateutil``, so a live
+    AssumeRole response has ``tzinfo=dateutil.tz.tzutc()`` — equal to, but not
+    identical with, ``datetime.timezone.utc``. ``FakeStsClient`` above uses the
+    stdlib singleton, which is why it never reproduced the obstore rejection.
+    """
+
+    def assume_role(self, **kwargs: object) -> dict[str, object]:
+        response = super().assume_role(**kwargs)
+        credentials = response["Credentials"]
+        assert isinstance(credentials, dict)
+        credentials["Expiration"] = datetime(2026, 1, 1, tzinfo=tzutc())
+        return response
+
+
+class BotocoreTzSession(FakeSession):
+    """FakeSession that hands out a :class:`BotocoreTzStsClient`."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.sts = BotocoreTzStsClient()
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +209,42 @@ class TestMakeS3AssumeRoleProvider:
 
         provider = make_s3_assume_role_provider(role_arn=ROLE_ARN)
         assert provider.config == {}
+
+    def test_expiry_is_normalised_to_stdlib_utc(self) -> None:
+        """The expiry handed to obstore must carry ``datetime.timezone.utc``.
+
+        obstore's Rust binding requires that exact tzinfo and raises
+        ``ValueError: expected datetime.timezone.utc`` otherwise, surfaced as
+        ``UnauthenticatedError ... path: "External AWS credential provider"``
+        on the first object-store call. botocore supplies
+        ``dateutil.tz.tzutc()``, which obstore's Python-side check lets through
+        because it only tests ``tzinfo is not None`` — so the failure only
+        appears at the Rust boundary, deterministically, exhausting the retry
+        budget without progress.
+
+        Asserted with ``is`` rather than ``==``: ``tzutc() == timezone.utc``
+        compares equal, so an equality check would pass while obstore still
+        rejects the value.
+        """
+        provider = make_s3_assume_role_provider(role_arn=ROLE_ARN)
+        provider.session = BotocoreTzSession()
+
+        credential = provider()
+
+        expires_at = credential["expires_at"]
+        assert expires_at.tzinfo is timezone.utc
+        # The instant must be preserved, not shifted.
+        assert expires_at == datetime(2026, 1, 1, tzinfo=UTC)
+
+    def test_stdlib_utc_expiry_passes_through_unchanged(self) -> None:
+        """Normalisation is idempotent for an already-stdlib-UTC expiry."""
+        provider = make_s3_assume_role_provider(role_arn=ROLE_ARN)
+        provider.session = FakeSession()
+
+        expires_at = provider()["expires_at"]
+
+        assert expires_at.tzinfo is timezone.utc
+        assert expires_at == datetime(2026, 1, 1, tzinfo=UTC)
 
     def test_provider_call_exchanges_sts_response_for_s3_credential(self) -> None:
         """End-to-end refresh through the fake session seam.
