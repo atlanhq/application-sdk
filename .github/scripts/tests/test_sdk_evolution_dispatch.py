@@ -94,8 +94,9 @@ def test_successful_complete_stream():
 
 def test_error_event_fails():
     st = _stream("event: error", 'data: {"code": "boom", "message": "kaboom"}')
+    assert st.errored is True
     code, msg = sd.decide_exit(st)
-    assert code == 1 and "boom" in msg
+    assert code == 1 and "boom" in msg and "kaboom" in msg
 
 
 def test_elicitation_treated_as_error():
@@ -104,13 +105,30 @@ def test_elicitation_treated_as_error():
     assert sd.decide_exit(st)[0] == 1
 
 
-def test_complete_with_error_status_fails():
+def test_complete_with_error_status_surfaces_code_and_message():
+    # Regression: a `complete` carrying status=error used to leave st.errored
+    # False, so both consumers dropped the parsed reason and the log showed only
+    # "final status=error" with no code/message.
     st = _stream(
         "event: complete",
-        'data: {"status": "error", "error": {"code": "x", "message": "y"}}',
+        'data: {"status": "error", '
+        '"error": {"code": "upstream_error", "message": "provider returned 400"}}',
     )
+    assert st.errored is True
     code, msg = sd.decide_exit(st)
-    assert code == 1 and "x" in msg
+    assert code == 1
+    assert "upstream_error" in msg and "provider returned 400" in msg
+    out = sd.render_step_summary(st, "CRITICAL", "2026-08-19", "http://run")
+    assert "`upstream_error` provider returned 400" in out
+
+
+def test_complete_with_error_status_and_no_detail_keeps_status_message():
+    # Empty error object: there is nothing to surface, so stay on the bare
+    # status message rather than reporting a content-free `code=none`.
+    st = _stream("event: complete", 'data: {"status": "error"}')
+    assert st.errored is False
+    code, msg = sd.decide_exit(st)
+    assert code == 1 and "final status=error" in msg
 
 
 def test_no_events_fails():

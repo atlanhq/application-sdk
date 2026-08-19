@@ -57,9 +57,21 @@ def test_complete_with_error_status_fails():
         'data: {"status": "error", "error": {"code": "X", "message": "y"}}',
         "",
     )
-    code, _ = md.decide_exit(st)
+    # Regression: the parsed reason used to be dropped because a `complete`
+    # carrying status=error never set st.errored, so the log showed only
+    # "final status=error" with no code/message.
+    assert st.errored is True
+    code, msg = md.decide_exit(st)
     assert code == 1
     assert st.status == "error"
+    assert "X" in msg and "y" in msg
+
+
+def test_complete_with_error_status_and_no_detail_keeps_status_message():
+    st = _stream("event: complete", 'data: {"status": "error"}', "")
+    assert st.errored is False
+    code, msg = md.decide_exit(st)
+    assert code == 1 and "final status=error" in msg
 
 
 def test_no_events_fails():
