@@ -411,6 +411,66 @@ class TestAgainstTheRealTracker:
         mock_meter.assert_not_called()
 
 
+class TestInputSizeReachesTheRecord:
+    """The driver variable has to arrive on the same row as the peak."""
+
+    @pytest.fixture
+    def mock_next(self):
+        n = AsyncMock()
+        n.execute_activity = AsyncMock(return_value="ok")
+        return n
+
+    def _input_with(self, tmp_path, size: int):
+        from pydantic import BaseModel
+
+        from application_sdk.contracts.types import FileReference
+
+        f = tmp_path / "in.parquet"
+        f.write_bytes(b"x" * size)
+
+        class _In(BaseModel):
+            ref: FileReference
+
+        # args[0] is TaskContext, args[1] is the Input — matching the v3
+        # activity signature the interceptor reads.
+        return MockExecuteActivityInput(
+            args=[object(), _In(ref=FileReference(local_path=str(f)))]
+        )
+
+    async def _run(self, mock_next, activity_input):
+        interceptor = _SizingActivityInboundInterceptor(
+            mock_next, 1.0, frozenset({"merge"})
+        )
+        with (
+            patch(_ACTIVITY_TARGET) as mock_act,
+            patch(_TRACKER_TARGET, _tracker(ContainerTrace(peak_memory_bytes=3000))),
+            patch(_RECORD_TARGET) as mock_record,
+        ):
+            mock_act.info.return_value = MockActivityInfo(activity_type="merge")
+            await interceptor.execute_activity(activity_input)
+        return mock_record.call_args[0][0]
+
+    async def test_file_reference_size_is_recorded(self, mock_next, tmp_path):
+        obs = await self._run(mock_next, self._input_with(tmp_path, 1000))
+        assert obs.input_bytes == 1000
+        assert obs.input_basis == "file_reference"
+        assert obs.peak_per_input_byte == pytest.approx(3.0)
+
+    async def test_no_input_args_is_not_an_error(self, mock_next):
+        """Activities with no Input still produce a peak row, just no driver."""
+        obs = await self._run(mock_next, MockExecuteActivityInput())
+        assert obs.input_bytes is None
+        assert obs.peak_memory_bytes == 3000
+
+    async def test_unsizeable_input_still_records_the_peak(self, mock_next):
+        """An input the sizer cannot read must not cost the peak measurement."""
+        obs = await self._run(
+            mock_next, MockExecuteActivityInput(args=[object(), "not a model"])
+        )
+        assert obs.input_bytes is None
+        assert obs.peak_memory_bytes == 3000
+
+
 async def interceptor_execute(mock_next):
     interceptor = _SizingActivityInboundInterceptor(
         mock_next, 1.0, frozenset({"merge"})
