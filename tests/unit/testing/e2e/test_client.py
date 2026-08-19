@@ -14,6 +14,7 @@ from unittest.mock import patch
 import pytest
 
 from application_sdk.testing.e2e._errors import (
+    AppNotReadyError,
     AtlanAEWorkflowAlreadyActiveError,
     AtlanApiHttpError,
     AtlanApiTimeoutError,
@@ -30,6 +31,7 @@ from application_sdk.testing.e2e.client import (
     DAGRunResult,
     DAGRunStatus,
     _is_already_active_run,
+    _is_app_not_ready,
     _is_credential_name_conflict,
     _requested_retry_after,
     _retry_gap,
@@ -992,6 +994,109 @@ class TestSubmitWorkflowCredentialRetry:
             with pytest.raises(AtlanApiHttpError):
                 client.submit_workflow(
                     self._payload_with_cred(), retries=1, retry_sleep_seconds=0
+                )
+
+
+# Heracles echoes a refused dial to the tenant app pod back as an HTTP 500
+# carrying the Go net error verbatim (FND-402).
+_REFUSED_BODY = {
+    "error": "dial tcp 10.0.0.5:8000: connect: connection refused",
+}
+
+
+class TestAppNotReadyDetection:
+    """_is_app_not_ready: the tenant-app cold-start shape, and only that shape."""
+
+    def test_refused_dial_detected_in_dict_and_str_body(self):
+        assert _is_app_not_ready(500, _REFUSED_BODY) is True
+        assert (
+            _is_app_not_ready(
+                502, "… dial tcp 10.0.0.5:8000: connect: Connection Refused"
+            )
+            is True
+        )
+
+    def test_bare_connection_refused_substring_is_not_app_not_ready(self):
+        # The match requires the refused-dial-to-:8000 sequence, not the bare
+        # substring: a genuine terminal 5xx whose body merely mentions a refused
+        # connection (e.g. an upstream DB dial surfaced through Heracles) must
+        # not be mis-named AppNotReadyError.
+        assert _is_app_not_ready(500, "… connect: Connection Refused") is False
+        assert (
+            _is_app_not_ready(
+                500, {"err": "upstream db dial: connection refused on :5432"}
+            )
+            is False
+        )
+
+    def test_other_submit_failures_are_not_app_not_ready(self):
+        # A genuine AE 5xx, a 4xx, the already-active conflict, and any 2xx must
+        # not read as a cold start — each has its own terminal handling.
+        assert _is_app_not_ready(500, {"err": "internal error"}) is False
+        assert _is_app_not_ready(400, {"message": "bad payload"}) is False
+        assert _is_app_not_ready(500, _MASKED_409_BODY) is False
+        assert _is_app_not_ready(200, {"run_id": "r"}) is False
+
+    def test_4xx_carrying_the_markers_is_not_app_not_ready(self):
+        # The status gate is 5xx-only, so a request-side rejection AE decided
+        # without dialling the pod stays a terminal AtlanApiHttpError even when
+        # its body happens to carry all three markers (e.g. an echoed-back
+        # payload). Heracles reports the real refused dial as a 500.
+        assert _is_app_not_ready(400, _REFUSED_BODY) is False
+        assert _is_app_not_ready(404, _REFUSED_BODY) is False
+        assert _is_app_not_ready(499, _REFUSED_BODY) is False
+        assert _is_app_not_ready(500, _REFUSED_BODY) is True
+
+
+class TestSubmitWorkflowAppColdStart:
+    """A cold-starting tenant app pod: retried by the existing loop, then named."""
+
+    def test_refused_dial_is_retried_by_the_existing_5xx_retry(self):
+        """No second loop needed — a refused dial IS a retryable 5xx."""
+        client = _make_client()
+        refused = (500, _REFUSED_BODY)
+        with (
+            patch.object(
+                client,
+                "_request",
+                side_effect=[refused, refused, (200, {"data": {"run_id": "run-warm"}})],
+            ),
+            patch("time.sleep"),
+        ):
+            run_id = client.submit_workflow(
+                {"metadata": {"name": "wf"}}, retries=60, retry_sleep_seconds=0
+            )
+        assert run_id == "run-warm"
+
+    def test_budget_exhausted_raises_app_not_ready_with_typed_fields(self):
+        """Terminal cold start is named, not surfaced as an opaque 500."""
+        client = _make_client()
+        refused = (500, _REFUSED_BODY)
+        with (
+            patch.object(client, "_request", side_effect=[refused] * 3),
+            patch("time.sleep"),
+        ):
+            with pytest.raises(AppNotReadyError) as excinfo:
+                client.submit_workflow(
+                    {"metadata": {"name": "wf"}}, retries=2, retry_sleep_seconds=0
+                )
+        err = excinfo.value
+        # attempts/elapsed_seconds are queryable fields, not just prose — same
+        # shape as DaprSidecarUnreachableError.
+        assert err.attempts == 3
+        assert err.elapsed_seconds is not None
+        assert "never accepted connections on :8000" in err.message
+
+    def test_genuine_5xx_still_raises_atlan_api_http_error(self):
+        """The cold-start naming never swallows a real AE failure."""
+        client = _make_client()
+        with (
+            patch.object(client, "_request", side_effect=[(500, {"err": "boom"})] * 2),
+            patch("time.sleep"),
+        ):
+            with pytest.raises(AtlanApiHttpError):
+                client.submit_workflow(
+                    {"metadata": {"name": "wf"}}, retries=1, retry_sleep_seconds=0
                 )
 
 

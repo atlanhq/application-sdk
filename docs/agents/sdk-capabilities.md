@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.28.0
-source-sha:    d5548eae3d88e678a476d4e0894cc4d1e7442006
-source-date:   2026-08-18T22:22:15+01:00
+sdk-version:   3.28.1
+source-sha:    e3a811170428dc379015d9bc01c8fe7d806af9b2
+source-date:   2026-08-19T19:33:58+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 96 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 97 |
 | `application_sdk.validation` | Offline asset validation — pyatlan_v9 .validate() wrappers, no network call | 5 |
 
 ## Subpackage Details
@@ -3331,6 +3331,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `clean_task_registry()`
 - **Summary:** TaskRegistry reset before and after each test.
 - **Defined in:** `application_sdk/testing/fixtures.py`
+
+#### `cold_start_submit_kwargs`
+
+- **Import:** `from application_sdk.testing.full_dag.client import cold_start_submit_kwargs`
+- **Signature:** `cold_start_submit_kwargs(timeout_seconds: int, poll_interval_seconds: int)`
+- **Summary:** Re-size :meth:`AEWorkflowClient.submit_workflow`'s retry to a cold start.
+- **Defined in:** `application_sdk/testing/e2e/client.py`
 
 #### `compare_category`
 

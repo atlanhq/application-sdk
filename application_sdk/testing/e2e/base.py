@@ -63,6 +63,7 @@ from application_sdk.testing.e2e.client import (
     AEWorkflowClient,
     DAGNodeStatus,
     DAGRunResult,
+    cold_start_submit_kwargs,
 )
 from application_sdk.testing.e2e.credential import CredentialBody
 from application_sdk.testing.e2e.payload import (
@@ -189,6 +190,50 @@ class BaseE2ETest:
     worker_health_url: ClassVar[str] = "http://localhost:8000/server/health"
     worker_health_timeout_seconds: ClassVar[int] = 120
     worker_health_poll_interval_seconds: ClassVar[int] = 3
+
+    # --- tenant-app cold-start budget (FND-402) ------------------------
+    # The worker_health_* probe above covers the LOCAL CI worker container
+    # (localhost:8000). It does NOT cover the TENANT-installed app pod, which is
+    # a different :8000: at AE submit, Heracles POSTs the credential config to
+    # http://<conn>.<conn>-app.svc.cluster.local:8000/workflows/v1/config/...
+    # against that pod. prepare-tenant installs the app and LM reports the
+    # deployment reconciled, but the pod can still be minutes from serving when
+    # the leg reaches submit — observed live as intermittent
+    # "AE submit failed: HTTP 500 ... dial tcp :8000: connect: connection
+    # refused" (s3/gcs/mongodbatlas failed while cloudsql/iceberg passed in the
+    # same window). The runner has no kubectl route to the remote tenant
+    # vcluster in this path, so the AE submit is the only tenant-facing probe of
+    # the pod — there is nothing to gate on except the submit itself.
+    #
+    # submit_workflow ALREADY retries this: a refused dial arrives as a generic
+    # 5xx, which its `retryable` predicate matches. Only its default budget was
+    # wrong — 4 x 5s ~= 20s, tuned for transient AE overload, not pod cold
+    # start. So run_full_dag re-sizes that existing retry rather than wrapping a
+    # second loop around it; on exhaustion submit_workflow raises
+    # AppNotReadyError when the last response still read as connection-refused.
+    #
+    # 300s (5 min): live gcs e2e (run 32259032704) showed the tenant pod cold-
+    # starting past the initial 120s window but serving well within 300s, so the
+    # AE-submit-500s on gcs/s3/mongodbatlas are a genuine cold-start race, not
+    # dead pods. 5 min gives comfortable margin while still failing a genuinely
+    # unreachable pod in a bounded time. Connectors may override per-repo; 0
+    # restores submit_workflow's own default budget.
+    #
+    # NOTE: this widens the budget for every retryable submit 5xx, not only the
+    # cold-start shape — an AE that is genuinely overloaded now gets the same
+    # 5 min to recover. That is deliberate (AE overload is the other thing that
+    # fails this leg) and bounded: _RETRY_AFTER_BUDGET_SECONDS still caps the
+    # extra waiting a slow origin can request on top of the fixed gap.
+    #
+    # The headline 300s is the fixed-gap floor, not the true worst case. Each of
+    # the retries can additionally honour an origin-requested `retry_after`
+    # (bounded by _RETRY_AFTER_BUDGET_SECONDS = 300s per submit call), and every
+    # attempt costs its own HTTP round-trip, so a genuinely overloaded origin can
+    # stretch the wall-clock bound to ~300s floor + ~300s honoured `retry_after`
+    # + per-request time ≈ 10 min. Plan CI timeouts for the ~10 min bound, not
+    # the 5 min headline.
+    app_ready_timeout_seconds: ClassVar[int] = 300
+    app_ready_poll_interval_seconds: ClassVar[int] = 5
 
     # --- optional class attrs ------------------------------------------
     connection_type: ClassVar[str] = ""
@@ -966,6 +1011,23 @@ class BaseE2ETest:
         )
         return required_ok and no_hard_failure
 
+    def _submit_retry_kwargs(self) -> dict[str, int]:
+        """Re-size ``submit_workflow``'s retry to the tenant-app cold-start budget.
+
+        Thin binding of this harness' ``app_ready_*`` class attrs onto
+        :func:`~application_sdk.testing.e2e.client.cold_start_submit_kwargs`,
+        which carries the rationale and the validation. See
+        ``app_ready_timeout_seconds`` for the budget rationale.
+
+        Raises:
+            MissingHarnessClassAttrError: when ``app_ready_timeout_seconds`` is
+                positive but ``app_ready_poll_interval_seconds`` is not.
+        """
+        return cold_start_submit_kwargs(
+            self.app_ready_timeout_seconds,
+            self.app_ready_poll_interval_seconds,
+        )
+
     def run_full_dag(self) -> FullDAGOutcome:
         """Submit, poll AE, poll Atlas, return the combined outcome."""
         slug = self._bootstrap_workflow()
@@ -988,7 +1050,7 @@ class BaseE2ETest:
             self.mode.value,
             self.connection_qualified_name,
         )
-        run_id = self.client.submit_workflow(payload)
+        run_id = self.client.submit_workflow(payload, **self._submit_retry_kwargs())
         logger.info("AE submit returned run_id=%s", run_id)
 
         ae_result = self.client.poll_native_status(
