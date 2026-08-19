@@ -881,6 +881,11 @@ class TestUploadSameStoreCopy:
 
         return set(await list_data_keys("", store, normalize=False))
 
+    async def _read(self, store, key: str) -> bytes | None:
+        from application_sdk.storage.ops import _get_bytes
+
+        return await _get_bytes(key, store, normalize=False)
+
     async def test_key_preserving_dir_copy_is_a_noop(self, tmp_path) -> None:
         """Local absent, source store IS the target store, and the destination
         prefix is pinned to the source prefix: every key is its own destination.
@@ -930,7 +935,8 @@ class TestUploadSameStoreCopy:
 
         store = create_memory_store()
         src_prefix = "artifacts/apps/postgres/wf/run/transformed"
-        await self._seed(store, f"{src_prefix}/table/entities.json", b"T")
+        payload = b'{"typeName": "Table", "attributes": {"name": "orders"}}\n'
+        await self._seed(store, f"{src_prefix}/table/entities.json", payload)
 
         missing_local = str(tmp_path / "never-created" / "transformed")
 
@@ -950,6 +956,12 @@ class TestUploadSameStoreCopy:
             f"{src_prefix}/table/entities.json",  # source retained
             "dest/transformed/table/entities.json",  # copy landed
         }
+        # Read the bytes back: the right key holding truncated or altered
+        # content would satisfy a key-only assertion.
+        assert (
+            await self._read(store, "dest/transformed/table/entities.json") == payload
+        )
+        assert await self._read(store, f"{src_prefix}/table/entities.json") == payload
 
     async def test_key_preserving_single_file_copy_is_a_noop(self, tmp_path) -> None:
         """Single-file fallback shape of the same guard, and the reason string
@@ -977,3 +989,55 @@ class TestUploadSameStoreCopy:
         assert out.ref.file_count == 1
         assert out.synced == 0
         assert out.reason == "skipped:same_object"
+
+    async def test_same_key_with_absent_source_object_still_raises(
+        self, tmp_path
+    ) -> None:
+        """ "Satisfied" must mean the object is there. A stale ``FileReference``
+        pinned to a key that was never written must not buy a durable-looking
+        success out of the same-object guard — it fails with the same not-found
+        error any other leg would raise."""
+        from application_sdk.contracts.types import FileReference
+        from application_sdk.storage.errors import StorageNotFoundError
+
+        store = create_memory_store()  # nothing seeded — the key does not exist
+        key = "artifacts/apps/postgres/wf/run/transformed/entities.json"
+        missing_local = str(tmp_path / "never-created" / "entities.json")
+
+        with pytest.raises(StorageNotFoundError):
+            await upload(
+                missing_local,
+                storage_path=key,
+                store=store,
+                _source_ref=FileReference(local_path=missing_local, storage_path=key),
+                _source_store=store,
+            )
+
+    async def test_listed_source_keys_skip_the_existence_head(self, tmp_path) -> None:
+        """Keys enumerated from the source store are already proven present, so
+        the directory fallback must not pay a HEAD per key to re-establish it."""
+        from application_sdk.contracts.types import FileReference
+
+        store = create_memory_store()
+        prefix = "artifacts/apps/postgres/wf/run/transformed"
+        await self._seed(store, f"{prefix}/table/entities.json", b"T")
+        await self._seed(store, f"{prefix}/column/entities.json", b"C")
+
+        missing_local = str(tmp_path / "never-created" / "transformed")
+
+        with patch(
+            "application_sdk.storage.ops.exists", side_effect=AssertionError("HEAD")
+        ) as exists_spy:
+            out = await upload(
+                missing_local,
+                storage_path=prefix,
+                store=store,
+                _source_ref=FileReference(
+                    local_path=missing_local, storage_path=prefix
+                ),
+                _source_store=store,
+            )
+
+        exists_spy.assert_not_called()
+        assert out.ref.file_count == 2
+        assert out.synced == 0

@@ -133,6 +133,8 @@ async def _upload_from_store(
     source_key: str,
     target_store: ObjectStore,
     target_key: str,
+    *,
+    source_listed: bool = False,
 ) -> tuple[bool, str]:
     """Upload a single file from *source_store* to *target_store*.
 
@@ -150,18 +152,36 @@ async def _upload_from_store(
       the source's sidecar, the upload against what the target reports back,
       and ``upload_file`` writes the target's own sidecar (FND-306).
 
+    Args:
+        source_store: Store to read *source_key* from.
+        source_key: Key to copy.
+        target_store: Store to write *target_key* to.
+        target_key: Destination key.
+        source_listed: ``True`` when the caller obtained *source_key* by listing
+            *source_store*, which proves the object is there.  Lets the
+            same-object guard skip its existence HEAD; leave ``False`` whenever
+            the key came from a caller-supplied ``FileReference``.
+
     Returns ``(transferred, reason)``.
     """
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         download_file_chunked,
+        exists,
         upload_file,
     )
 
     if source_store is target_store and source_key == target_key:
         # Copying an object onto itself: no bytes to move and no sidecar to
-        # compare. Still progress for the heartbeat — one key resolved.
-        current_progress_tracker().mark_progress("storage.copy_file")
-        return False, "skipped:same_object"
+        # compare. But "satisfied" must mean the object is actually there — a
+        # stale FileReference pinned to a key that was never written would
+        # otherwise buy a durable-looking success out of nothing. When the key
+        # came from a listing that is already proven; otherwise one HEAD settles
+        # it, and an absent object falls through to the copy path below, which
+        # fails with the same not-found error any other leg would raise.
+        if source_listed or await exists(source_key, source_store, normalize=False):
+            # Still progress for the heartbeat — one key resolved.
+            current_progress_tracker().mark_progress("storage.copy_file")
+            return False, "skipped:same_object"
 
     if await _cross_store_sha256_match(
         source_store, source_key, target_store, target_key
@@ -668,7 +688,11 @@ async def upload(
                 )
             async with sem:
                 ok, _ = await _upload_from_store(
-                    source_resolved, source_key, resolved, target_key
+                    source_resolved,
+                    source_key,
+                    resolved,
+                    target_key,
+                    source_listed=True,  # came from _list_source_data_keys
                 )
                 return ok
 
@@ -733,6 +757,7 @@ async def upload(
                         source_key,
                         resolved,
                         f"{fallback_prefix}/{rel}" if fallback_prefix else rel,
+                        source_listed=True,  # came from _list_source_data_keys
                     )
                     return ok
 

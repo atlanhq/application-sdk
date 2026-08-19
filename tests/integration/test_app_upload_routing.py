@@ -816,7 +816,8 @@ async def test_app_upload_ref_only_lands_identical_keys_in_both_stores(
 
     src_prefix = "artifacts/apps/test-app/workflows/wf-xpod/run-xpod/transformed"
     src_file = tmp_path / "entities.json"
-    src_file.write_bytes(b'{"typeName": "Table"}\n')
+    payload = b'{"typeName": "Table", "attributes": {"name": "orders"}}\n'
+    src_file.write_bytes(payload)
     await upload_file(
         f"{src_prefix}/table/entities.json", src_file, deployment_store, normalize=False
     )
@@ -850,6 +851,14 @@ async def test_app_upload_ref_only_lands_identical_keys_in_both_stores(
     # Deployment store holds both its original ref copy and the mirror at the
     # identical key the upstream write used.
     assert deployment_keys == {f"{src_prefix}/table/entities.json", expected}
+
+    # Read the bytes back from both stores: "identical key" is only worth
+    # anything if the object under it is identical too — the right key holding
+    # truncated or altered content would satisfy a key-only assertion.
+    from application_sdk.storage.ops import _get_bytes
+
+    assert await _get_bytes(expected, upstream_store, normalize=False) == payload
+    assert await _get_bytes(expected, deployment_store, normalize=False) == payload
 
 
 # ---------------------------------------------------------------------------

@@ -133,7 +133,11 @@ prefix to the destination key. Two shapes follow:
   hand-rolled `upload_to_atlan` bridges do): source and target key are the same
   object, so `_upload_from_store` returns immediately with
   `reason="skipped:same_object"` — no bytes, and not even the two sidecar GETs
-  the cross-store SHA-256 dedup would cost;
+  the cross-store SHA-256 dedup would cost. "Already satisfied" is conditional on
+  the object being there: keys that came from a listing of the source store are
+  proven present, and a caller-supplied `ref` costs one HEAD, so a stale `ref`
+  pinned to a key that was never written still fails with
+  `StorageNotFoundError` rather than buying a durable-looking success;
 - **destination not pinned**: a real copy runs, which is what keeps the
   identical-key invariant above true for the ref-only case.
 
