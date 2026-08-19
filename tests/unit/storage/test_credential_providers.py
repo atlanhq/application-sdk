@@ -222,9 +222,15 @@ class TestMakeS3AssumeRoleProvider:
         appears at the Rust boundary, deterministically, exhausting the retry
         budget without progress.
 
-        Asserted with ``is`` rather than ``==``: ``tzutc() == timezone.utc``
-        compares equal, so an equality check would pass while obstore still
-        rejects the value.
+        Asserted on the ``tzinfo`` with ``is``, because that is the condition
+        obstore actually enforces. Note what an assertion on the *datetime*
+        would not catch: ``datetime(..., tzinfo=tzutc())`` and
+        ``datetime(..., tzinfo=timezone.utc)`` compare equal — same instant —
+        so the ``==`` check below pins that the value was not shifted, and
+        cannot on its own tell a normalised expiry from an unnormalised one.
+        (Between the tzinfo objects themselves ``==`` is False, so a tzinfo
+        equality check would also fail the unnormalised case; identity is used
+        because it states obstore's requirement exactly.)
         """
         provider = make_s3_assume_role_provider(role_arn=ROLE_ARN)
         provider.session = BotocoreTzSession()
