@@ -46,38 +46,27 @@ class InterceptorSettings:
     enable_sizing_telemetry: bool = False
     """Collect per-activity peak memory and CPU throttling for tier sizing.
 
-    Off by default, so an SDK version bump alone changes nothing and collection
-    is a per-tenant decision. This is the "collect data" stage of collect →
-    classify → productionise; it only measures, and never routes.
-
-    A master kill switch, independent of the allow-list below: flipping this to
-    false stops collection without anyone having to edit per-tenant lists.
+    Off by default, so a version bump alone changes nothing. A master switch
+    independent of the allow-list, so collection can be stopped without editing
+    per-tenant lists. Measures only; never routes.
     """
 
     sizing_telemetry_activities: frozenset[str] = frozenset()
-    """Activity names to collect sizing telemetry for. **Empty collects nothing.**
+    """Activity names to measure. **Empty collects nothing.**
 
-    Sizing data is only worth collecting for activities whose resource use varies
-    with the data they process — a merge, a transform, an extract. Most activities
-    are fixed-cost bookkeeping, and measuring them adds rows to the dataset that
-    the tier table is fitted from without adding information.
+    Opt-in by name: only activities whose resource use varies with their data are
+    worth measuring, and rows from fixed-cost ones add no information to the
+    dataset the tier table is fitted from. Empty is also fail-closed, so a
+    half-finished config change collects nothing rather than everything.
 
-    So this is an allow-list an app author opts into by name, not a default-on
-    sweep. Empty means nothing is collected, which is the fail-closed direction:
-    a tenant that sets the enable flag and forgets the list gets no telemetry
-    rather than telemetry on everything.
-
-    ``"*"`` collects every activity. That is the discovery case — worth running on
-    a test tenant to find out *which* activities vary before choosing names, and
-    not something to ship fleet-wide.
+    ``"*"`` measures all of them — a discovery pass on a test tenant.
     """
 
     sizing_telemetry_poll_seconds: float = 1.0
     """Peak-memory poll interval when the kernel watermark is not resettable.
 
-    Two file reads per tick with no RPC. ``0`` disables polling, which leaves
-    peak memory uncollected on any host whose ``memory.peak`` cannot be reset —
-    i.e. most kernels before 6.8 — so only set it to 0 to prove a cost concern.
+    Two file reads per tick, no RPC. ``0`` disables polling, which collects no peak
+    at all on kernels before 6.8 (where ``memory.peak`` is read-only).
     """
 
     enable_cleanup_interceptor: bool = False
@@ -138,17 +127,11 @@ def load_interceptor_settings() -> InterceptorSettings:
                 exc_info=True,
             )
             return default
-        # Negative would mean "poll in the past". Clamp rather than raise: a bad
-        # value on one tenant must not stop its workers from starting.
+        # Clamp rather than raise: a bad value must not stop workers starting.
         return max(0.0, value)
 
     def _name_set(env_var: str) -> frozenset[str]:
-        """Parse a comma-separated activity-name allow-list.
-
-        Tolerant of stray whitespace and empty entries, because this is hand-edited
-        in a Helm values file. Anything unparseable yields an empty set, i.e. no
-        collection — never accidental collection on everything.
-        """
+        """Parse a comma-separated allow-list, tolerating Helm-file whitespace."""
         raw = os.environ.get(env_var, "")
         return frozenset(name.strip() for name in raw.split(",") if name.strip())
 

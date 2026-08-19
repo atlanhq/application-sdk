@@ -1,31 +1,11 @@
 """Container-level (cgroup) resource readings for activity sizing telemetry.
 
-``resource_sampler`` reads the **process**: ``/proc/self/stat`` RSS and
-``getrusage`` CPU. That is the right instrument for the App Vitals efficiency
-metrics, and the wrong one for deciding how big a pod an activity needs.
+``resource_sampler`` reads the process; sizing needs the container. RSS is not
+what the OOM killer acts on, endpoint samples miss the peak a tier has to cover,
+and CPU seconds cannot tell a cheap activity from a throttled one.
 
-Three gaps, and each one is a wrong answer rather than a missing one:
-
-1. **RSS is not what the OOM killer acts on.** The kernel kills on the cgroup's
-   ``memory.current``, which includes page cache, kernel memory and any child
-   process. An activity that shells out, or that reads a large Parquet file
-   through the page cache, is under-measured by RSS — in the direction that
-   makes a too-small tier look safe.
-2. **Start/end point samples miss the peak.** A tier has to cover the *maximum*
-   an activity reaches, not its value at the moment it finished. A query that
-   builds a 12 GiB hash table and then releases it reads small at both ends.
-   ``compute_deltas`` averages the two endpoints, which is right for a
-   memory-time integral and useless for sizing.
-3. **CPU seconds cannot distinguish "cheap" from "starved".** An activity given
-   a 1-core quota and needing 3 will report ~1 core-second per wall second and
-   look perfectly sized. ``cpu.stat``'s throttling counters are the only signal
-   that separates the two, and they are the reason a CPU tier can be raised on
-   evidence instead of on a guess.
-
-Everything here returns ``None`` rather than raising or guessing. cgroup reads
-are genuinely fragile — vcluster and some managed runtimes expose a partial
-hierarchy — and a missing reading has to stay distinguishable from a zero one:
-sizing on a silent 0 would recommend the smallest tier for every activity.
+Every reader returns ``None`` rather than raising or guessing — a missing reading
+must stay distinguishable from a zero, or sizing picks the smallest tier.
 """
 
 from __future__ import annotations
@@ -41,9 +21,7 @@ from application_sdk.observability.resource_sampler import parse_pod_memory_limi
 
 _logger = get_logger(__name__)
 
-# cgroup v2 first, then the v1 hierarchy. Order matters: a host running v2 with
-# the v1 compatibility mounts still present must read the v2 values, because
-# those are the ones the kernel is enforcing.
+# v2 first: a host with both mounted must read v2, which is what the kernel enforces.
 _MEMORY_CURRENT_PATHS = (
     "/sys/fs/cgroup/memory.current",
     "/sys/fs/cgroup/memory/memory.usage_in_bytes",
@@ -65,9 +43,8 @@ _CPU_MAX_V2 = "/sys/fs/cgroup/cpu.max"
 _CPU_QUOTA_V1 = "/sys/fs/cgroup/cpu/cpu.cfs_quota_us"
 _CPU_PERIOD_V1 = "/sys/fs/cgroup/cpu/cpu.cfs_period_us"
 
-# v1 writes "no limit" as a near-2**63 sentinel rather than a word. Anything at
-# or above this is "unlimited", which for sizing purposes means "unknown" — the
-# pod is bounded by the node, and the node's size is not this activity's budget.
+# v1 spells "no limit" as a near-2**63 sentinel, not a word. At or above this is
+# unlimited, which for sizing means unknown.
 _V1_UNLIMITED_FLOOR = 1 << 62
 
 
@@ -103,25 +80,15 @@ def _read_int(paths: tuple[str, ...]) -> int | None:
 
 
 def memory_usage_bytes() -> int | None:
-    """Current container memory usage, or ``None`` if unreadable.
-
-    This is the counter the kernel OOM killer acts on, which is why it — not
-    RSS — is the number a memory tier has to cover.
-    """
+    """Current container memory usage — the counter the OOM killer acts on."""
     return _read_int(_MEMORY_CURRENT_PATHS)
 
 
 def memory_limit_bytes() -> int | None:
-    """The container's memory limit in bytes, or ``None``.
+    """Container memory limit, or ``None`` if unlimited/unknown.
 
-    Prefers the cgroup, then falls back to ``K8S_POD_MEMORY_LIMIT`` — the env var
-    the rest of the SDK already reads (``main``, ``execution.heartbeat``). The
-    cgroup comes first because it reflects what the kernel is enforcing; the env
-    var reflects what the manifest asked for, and they diverge whenever a
-    mutating admission controller or a VPA is in play.
-
-    ``None`` for an unlimited cgroup: an unbounded container is bounded only by
-    its node, and a node's size is not this activity's budget.
+    cgroup first (what the kernel enforces), then ``K8S_POD_MEMORY_LIMIT`` (what
+    the manifest asked for) — they diverge under a VPA or mutating webhook.
     """
     value = _read_int(_MEMORY_LIMIT_PATHS)
     if value is not None and 0 < value < _V1_UNLIMITED_FLOOR:
@@ -142,31 +109,22 @@ def memory_fraction() -> float | None:
 
 
 def memory_peak_bytes() -> int | None:
-    """The kernel's high-water mark for this cgroup, or ``None``.
+    """Kernel high-water mark, cumulative since creation or the last reset.
 
-    Cumulative since the cgroup was created **or since the last successful
-    reset**. On a worker that runs activities back to back the un-reset value is
-    a pod-lifetime watermark and therefore not attributable to any one activity
-    — which is exactly what :func:`reset_memory_peak` exists to fix.
+    Un-reset it is a pod-lifetime figure, attributable to no single activity —
+    see :func:`reset_memory_peak`.
     """
     return _read_int(_MEMORY_PEAK_PATHS)
 
 
 def reset_memory_peak() -> bool:
-    """Try to reset the kernel high-water mark. Returns whether it was *proven*.
+    """Reset the kernel high-water mark; returns whether the reset was *proven*.
 
-    A proven reset is worth a lot: it makes per-activity peak memory a **two
-    file reads per activity** measurement instead of a background poller ticking
-    every second in every worker in the fleet.
-
-    Proof, not version-sniffing. ``memory.peak`` is only writable from Linux 6.8,
-    a kernel write can succeed and be a no-op, and the v1/v2 split makes any
-    version table unreliable — so this reads the watermark back and requires it
-    to have actually dropped. If the watermark is already sitting at current
-    usage there is no drop to observe, so the reset is unprovable and this
-    returns ``False``; the caller falls back to polling, which is correct but
-    more expensive. That is the safe direction: an unproven reset would report
-    the pod's lifetime watermark as this activity's peak.
+    Proof, not version-sniffing: ``memory.peak`` is only writable from Linux 6.8
+    and a write can succeed as a no-op, so the value is read back and must have
+    dropped. Unprovable (watermark already at current usage) returns ``False``
+    and the caller polls instead — an unproven reset would report the pod's
+    lifetime watermark as this activity's peak.
     """
     before = memory_peak_bytes()
     if before is None:
@@ -191,12 +149,10 @@ def reset_memory_peak() -> bool:
 
 @dataclass(frozen=True)
 class CpuStat:
-    """A point-in-time read of the container's CPU accounting.
+    """Point-in-time container CPU accounting.
 
-    ``throttled_seconds`` is the one that matters for sizing: it is wall-clock
-    time during which runnable threads were held off the CPU because the quota
-    was exhausted. Unlike ``usage_seconds`` it cannot be confused with an
-    activity that is simply cheap.
+    ``throttled_seconds`` is the sizing signal: time runnable threads were held
+    off the CPU. Unlike ``usage_seconds`` it cannot be confused with cheapness.
     """
 
     usage_seconds: float
@@ -206,12 +162,11 @@ class CpuStat:
 
 
 def cpu_stat() -> CpuStat | None:
-    """Read container CPU usage and throttling, or ``None`` if unreadable.
+    """Container CPU usage and throttling, or ``None``.
 
-    v2 exposes everything in one ``cpu.stat`` in microseconds. v1 splits usage
-    into ``cpuacct.usage`` (nanoseconds) and throttling into ``cpu/cpu.stat``
-    (``throttled_time``, nanoseconds), so the two halves are read separately and
-    a v1 host missing ``cpuacct`` still yields the throttling counters.
+    v2 puts everything in ``cpu.stat`` (microseconds). v1 splits usage into
+    ``cpuacct.usage`` and throttling into ``cpu/cpu.stat`` (both nanoseconds),
+    read separately so a missing ``cpuacct`` still yields throttling.
     """
     raw = _read_first((_CPU_STAT_V2,))
     if raw:
@@ -253,11 +208,7 @@ def _parse_kv(raw: str) -> dict[str, float]:
 
 
 def cpu_quota_cores() -> float | None:
-    """The container's CPU limit in cores, or ``None`` if unlimited/unreadable.
-
-    The denominator for "was this activity starved": throttling only makes sense
-    against the quota that caused it.
-    """
+    """CPU limit in cores, or ``None``. The denominator for throttling."""
     raw = _read_first((_CPU_MAX_V2,))
     if raw:
         parts = raw.split()
@@ -280,12 +231,11 @@ def cpu_quota_cores() -> float | None:
 
 @dataclass
 class ContainerTrace:
-    """What one activity actually consumed, as measured at the container.
+    """What one activity consumed, measured at the container.
 
-    Deliberately records ``peak_source``. A peak from a reset kernel watermark
-    and a peak from a 1-second poller are not the same measurement — the poller
-    misses any spike shorter than its interval — and a tier derived from the two
-    mixed together would be tuned to an unknown blend of the two error profiles.
+    Records ``peak_source``: a watermark peak and a polled peak have different
+    blind spots (the poller misses sub-interval spikes), so a tier fitted to a
+    silent mix of the two is fitted to an unknown error profile.
     """
 
     peak_memory_bytes: int | None = None
@@ -310,12 +260,7 @@ class ContainerTrace:
 
     @property
     def throttled_fraction(self) -> float | None:
-        """Share of scheduling periods in which the quota was exhausted.
-
-        The headline CPU-starvation number. Above roughly 0.1 the activity spent
-        a tenth of its life waiting for CPU it was entitled to ask for, which is
-        a tier problem rather than a code problem.
-        """
+        """Share of CFS periods that exhausted the quota — the starvation number."""
         if not self.cpu_periods or self.cpu_throttled_periods is None:
             return None
         return self.cpu_throttled_periods / self.cpu_periods
@@ -327,34 +272,20 @@ async def track_container_usage(
 ) -> AsyncIterator[ContainerTrace]:
     """Measure peak memory and CPU throttling across a block.
 
-    Picks the cheapest instrument that works:
+    Picks the cheapest instrument that works, recorded as ``peak_source``:
+    ``watermark`` (reset + read, catches spikes of any duration), ``poll``
+    (background sampling, only when the reset was unprovable), or ``unavailable``
+    (no cgroup — trace stays ``None``, which is "no data", not zero).
 
-    * **watermark** — the kernel's ``memory.peak`` is reset on entry and read on
-      exit. Two reads per activity, and it catches spikes of *any* duration.
-    * **poll** — a background task samples ``memory.current``. Used only when the
-      watermark could not be reset, because an un-reset watermark reports the
-      pod's whole life rather than this activity.
-    * **unavailable** — no cgroup at all (macOS, most local dev). The block runs
-      untouched and the trace stays ``None``, which downstream must read as "no
-      data" and not as zero.
-
-    Never raises, and never fails the wrapped block: this is telemetry, and an
-    activity that succeeded must not be turned into a failure by the thing
-    measuring it. Note the contrast with AE's ``report_memory_pressure``, whose
-    watchdog raises *on purpose* — that one is a safety device, this one is an
-    instrument.
-
-    ``poll_interval_seconds <= 0`` disables polling entirely, so a fleet-wide
-    rollout can take the free watermark path and nothing else.
+    Never raises and never fails the wrapped block. ``poll_interval_seconds <= 0``
+    disables polling.
     """
     trace = ContainerTrace()
     start_cpu: CpuStat | None = None
     task: asyncio.Task[None] | None = None
 
-    # Guarded as a whole, not read by read. Every line below touches the cgroup
-    # or the event loop, and the block it wraps has to run either way — an
-    # unguarded setup read is the one place this instrument could still fail the
-    # activity it is measuring, which a test now pins.
+    # Guarded as a whole: an unguarded setup read is the one place this could
+    # still fail the activity it measures.
     try:
         trace.memory_limit_bytes = memory_limit_bytes()
         start_cpu = cpu_stat()
@@ -387,9 +318,8 @@ async def track_container_usage(
     finally:
         if task is not None:
             task.cancel()
-            # Suppresses Exception too, not just CancelledError: if a cgroup read
-            # blew up inside the poller, ``await task`` re-raises it here — on the
-            # exit path of an activity that may well have succeeded.
+            # Exception too, not just CancelledError: a cgroup read that blew up
+            # inside the poller would be re-raised here by ``await task``.
             # conformance: ignore[E003] deliberate; the poller's failure is telemetry loss and must not become the activity's failure
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
@@ -397,18 +327,12 @@ async def track_container_usage(
 
 
 def _finalise(trace: ContainerTrace, start_cpu: CpuStat | None) -> None:
-    """Close out a trace: read the watermark and difference the CPU counters.
-
-    Wrapped whole in a guard for the same reason the sampler is: a telemetry
-    read failing at the end of a successful activity must not surface as a
-    failure of that activity.
-    """
+    """Read the watermark and difference the CPU counters. Never raises."""
     try:
         if trace.peak_source == "watermark":
             trace.observe(memory_peak_bytes(), trace.memory_limit_bytes)
         elif trace.peak_source == "poll":
-            # One final reading, so a block shorter than the poll interval still
-            # produces a number instead of a None.
+            # Final reading, so a block shorter than the interval still yields a number.
             trace.observe(memory_usage_bytes(), trace.memory_limit_bytes)
 
         end_cpu = cpu_stat()

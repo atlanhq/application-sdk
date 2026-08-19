@@ -289,17 +289,13 @@ class TestCreateWorker:
         )
 
     def test_sizing_interceptor_absent_by_default(self, monkeypatch) -> None:
-        """An SDK version bump alone must not start measuring anything."""
+        """A version bump alone must not start measuring anything."""
         assert self._has_sizing(self._interceptors_for(monkeypatch)) is False
 
     def test_sizing_interceptor_absent_when_enabled_with_no_allow_list(
         self, monkeypatch
     ) -> None:
-        """Enabled but unnamed collects nothing, and costs nothing.
-
-        The allow-list is checked at wiring time as well as per-activity, so an
-        empty list does not even attach the interceptor.
-        """
+        """Enabled but unnamed collects nothing — and is not even attached."""
         interceptors = self._interceptors_for(
             monkeypatch, APPLICATION_SDK_ENABLE_SIZING_TELEMETRY="true"
         )

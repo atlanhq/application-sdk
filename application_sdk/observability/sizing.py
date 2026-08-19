@@ -1,21 +1,10 @@
-"""What one activity execution consumed — the unit of evidence for tier sizing.
+"""What one activity execution consumed — the evidence tier sizing is fitted from.
 
-This is the collection half of "collect data → classify tiers → productionise".
-It answers one question per activity execution: *how big a pod did this actually
-need?* Nothing here decides a tier, and nothing here reads a tier — a module
-that both measured and routed would make the measurement a function of the
-routing and the calibration circular.
+Collection only: nothing here reads or decides a tier, because a measurement that
+depended on the routing would make the calibration circular.
 
-Two OTel histograms go out immediately, so a tenant is observable the day
-collection is enabled rather than after an offline analysis round-trip. The
-richer per-execution record is what the analysis skill consumes; its wire
-format and durable sink are deliberately behind :func:`record_observation` so
-they can change without touching the interceptor.
-
-**Labels are bounded on purpose.** ``activity.type`` and ``task_queue`` are
-finite per app; ``workflow_id`` is a UUID and would blow up every histogram it
-touched. That mistake has already been made once on the AE dashboards, which is
-why the rule is written down here rather than left to reviewers.
+Labels are bounded on purpose — ``workflow_id`` is a UUID and would blow up every
+histogram it touched.
 """
 
 from __future__ import annotations
@@ -41,14 +30,9 @@ _MIB = 1024 * 1024
 class SizingObservation:
     """One activity execution's measured resource envelope.
 
-    ``peak_source`` travels with the numbers rather than being dropped after
-    collection. A peak from a reset kernel watermark and a peak from a 1-second
-    poller have different blind spots — the poller cannot see a sub-second spike
-    — so a tier fitted to a silent mix of the two is fitted to an unknown error
-    profile. The analysis stage needs to be able to segment on it.
-
-    ``attempt`` matters for the same reason: a retry that inherited a warm page
-    cache is not an independent sample of the same workload.
+    ``peak_source`` and ``attempt`` travel with the numbers so analysis can segment
+    on them: watermark and polled peaks have different blind spots, and a retry on
+    a warm page cache is not an independent sample.
     """
 
     activity_type: str
@@ -72,9 +56,8 @@ class SizingObservation:
     def mean_cpu_cores(self) -> float | None:
         """CPU consumed per wall-clock second.
 
-        The number a CPU tier is set from, and only half the story on its own —
-        read it next to ``cpu_throttled_fraction``, because an activity pinned at
-        its quota reports a flattering mean precisely *because* it was starved.
+        Read next to ``cpu_throttled_fraction``: an activity pinned at its quota
+        reports a flattering mean precisely *because* it was starved.
         """
         if self.cpu_seconds is None or self.duration_seconds <= 0:
             return None
@@ -110,11 +93,10 @@ class SizingObservation:
         )
 
     def has_data(self) -> bool:
-        """Whether anything was actually measured.
+        """Whether anything was measured. A non-cgroup host produces nothing.
 
-        An observation with no peak and no CPU delta is what a non-cgroup host
-        produces. Emitting it would put a row of nulls into the dataset the tier
-        table is fitted from, and a null read as a zero picks the smallest tier.
+        Emitting an all-null row would put it in the dataset the tier table is
+        fitted from, where a null read as a zero picks the smallest tier.
         """
         return self.peak_memory_bytes is not None or self.cpu_seconds is not None
 
@@ -129,10 +111,8 @@ def _peak_memory_mib():
             "activity.sizing.peak_memory_mib",
             unit="MiBy",
             description=(
-                "Peak container memory (cgroup memory.current / memory.peak) "
-                "observed during one activity execution. This is the counter the "
-                "kernel OOM killer acts on, so it — not process RSS — is what a "
-                "memory tier has to cover."
+                "Peak container memory during one activity execution. The counter "
+                "the OOM killer acts on, so what a memory tier has to cover."
             ),
         )
     return _INSTRUMENTS["peak_mem"]
@@ -144,9 +124,8 @@ def _peak_memory_fraction():
             "activity.sizing.peak_memory_fraction",
             unit="1",
             description=(
-                "Peak container memory as a fraction of the container limit. The "
-                "utilisation view: sustained low values mean an over-provisioned "
-                "tier, values near 1.0 mean the next run may OOM."
+                "Peak container memory as a fraction of the limit. Sustained low "
+                "means over-provisioned; near 1.0 means the next run may OOM."
             ),
         )
     return _INSTRUMENTS["peak_frac"]
@@ -158,10 +137,8 @@ def _cpu_throttled_fraction():
             "activity.sizing.cpu_throttled_fraction",
             unit="1",
             description=(
-                "Share of CFS periods in which the activity's container exhausted "
-                "its CPU quota. The only signal that separates a cheap activity "
-                "from a starved one — mean CPU cannot, because a throttled "
-                "activity reports a mean pinned neatly at its quota."
+                "Share of CFS periods that exhausted the CPU quota. The only signal "
+                "separating a cheap activity from a starved one."
             ),
         )
     return _INSTRUMENTS["throttle"]
@@ -173,24 +150,21 @@ def _mean_cpu_cores():
             "activity.sizing.mean_cpu_cores",
             unit="1",
             description=(
-                "Container CPU seconds consumed per wall-clock second during one "
-                "activity execution. Read alongside cpu_throttled_fraction."
+                "Container CPU seconds per wall-clock second. Read alongside "
+                "cpu_throttled_fraction."
             ),
         )
     return _INSTRUMENTS["cpu_cores"]
 
 
 def record_observation(observation: SizingObservation) -> None:
-    """Emit one observation: OTel histograms now, durable record for analysis.
+    """Emit one observation as OTel histograms plus a structured log line.
 
-    Never raises. This is called from an activity's ``finally``, where an
-    exception would replace the activity's real outcome — success or a genuine
-    failure — with a telemetry bug.
+    Never raises — called from an activity's ``finally``, where an exception would
+    replace the activity's real outcome with a telemetry bug.
 
-    The structured log line is the sink that works on every tenant today,
-    because every tenant already ships worker logs. A durable columnar sink is a
-    separate change; it goes behind this same function so the interceptor never
-    learns where the data lands.
+    The log line is the sink that works on every tenant today; a columnar sink is a
+    separate change, hidden behind this function.
     """
     if not observation.has_data():
         return
@@ -213,8 +187,7 @@ def record_observation(observation: SizingObservation) -> None:
 
         payload = asdict(observation)
         payload["mean_cpu_cores"] = mean_cores
-        # One JSON object on one line, so a log pipeline can lift the whole
-        # dataset out with a single grep on the marker below.
+        # One JSON object per line, so a log pipeline lifts the dataset with one grep.
         _logger.info(
             "activity_sizing_observation %s",
             orjson.dumps(payload, default=str).decode(),

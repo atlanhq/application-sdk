@@ -47,11 +47,8 @@ class MockExecuteActivityInput:
 def _tracker(trace: ContainerTrace, *, fill_on_exit: ContainerTrace | None = None):
     """A stand-in for ``track_container_usage``.
 
-    ``fill_on_exit`` reproduces the real contract: the tracker populates the peak
-    and the CPU deltas in *its* ``finally``, after the ``async with`` body has
-    run. A test double that pre-fills everything would pass even if the
-    interceptor read the trace from inside the block, which is the one ordering
-    mistake that silently produces all-zero telemetry.
+    ``fill_on_exit`` reproduces the real contract — the tracker fills the trace in
+    *its* ``finally`` — so a double that pre-filled it would hide the ordering bug.
     """
     import contextlib
 
@@ -94,7 +91,7 @@ class TestSizingObservation:
         assert obs.mean_cpu_cores is None
 
     def test_mean_cpu_cores_none_for_zero_duration(self):
-        """No divide-by-zero, and no infinite core count on a sub-tick activity."""
+        """No divide-by-zero on a sub-tick activity."""
         obs = SizingObservation(
             activity_type="merge",
             task_queue="q",
@@ -107,11 +104,8 @@ class TestSizingObservation:
         assert obs.mean_cpu_cores is None
 
     def test_has_data_is_false_when_nothing_was_measured(self):
-        """A non-cgroup host must produce no row, not a row of nulls.
-
-        A null peak read downstream as a zero would fit the smallest tier to an
-        activity nobody measured.
-        """
+        """A non-cgroup host produces no row — a null read as zero fits the
+        smallest tier to an activity nobody measured."""
         obs = SizingObservation(
             activity_type="merge",
             task_queue="q",
@@ -196,7 +190,7 @@ class TestRecordObservation:
         assert 2048.0 in recorded
 
     def test_labels_are_bounded(self, mock_meter):
-        """No workflow_id. It is a UUID and would blow up every histogram."""
+        """No workflow_id — a UUID would blow up every histogram."""
         sizing_module.record_observation(self._obs())
         hist = mock_meter.create_histogram.return_value
         attrs = hist.record.call_args_list[0][0][1]
@@ -258,12 +252,8 @@ class TestSizingInterceptor:
             )
 
     async def test_reads_the_trace_after_the_tracker_exits(self, mock_next):
-        """The ordering bug that would make every peak zero.
-
-        ``track_container_usage`` fills the watermark and the CPU deltas in its
-        own ``finally``. Recording from inside the ``async with`` body would
-        capture an empty trace and every collected peak would be null.
-        """
+        """Recording inside the ``async with`` would capture an empty trace and
+        null every collected peak."""
         filled = ContainerTrace(
             peak_memory_bytes=9 * 1024**3,
             peak_memory_fraction=0.9,
@@ -351,12 +341,10 @@ class TestSizingInterceptor:
 
 
 class TestAgainstTheRealTracker:
-    """The doubles above pin the interceptor's contract; this pins the wiring.
+    """The doubles above pin the contract; this pins the wiring.
 
-    Every test in ``TestSizingInterceptor`` patches ``track_container_usage``, so
-    all of them would keep passing if the real tracker and the real interceptor
-    disagreed about when the trace is complete. This one runs both for real
-    against a fake cgroup on disk.
+    Everything in ``TestSizingInterceptor`` patches the tracker, so all of it would
+    pass if tracker and interceptor disagreed on when the trace is complete.
     """
 
     async def test_a_peak_reaches_the_observation(self, tmp_path, monkeypatch):
@@ -396,7 +384,7 @@ class TestAgainstTheRealTracker:
         assert obs.has_data() is True
 
     async def test_no_cgroup_produces_no_row(self, tmp_path, monkeypatch):
-        """Local dev and macOS. Nothing measured must mean nothing recorded."""
+        """Nothing measured must mean nothing recorded."""
         from application_sdk.observability import cgroup
 
         missing = (str(tmp_path / "nope"),)
@@ -453,10 +441,8 @@ class TestActivityAllowList:
                 await interceptor.execute_activity(MockExecuteActivityInput()) == "ok"
             )
 
-        # The tracker is never even constructed: an unselected activity must cost a
-        # set lookup, not a cgroup probe. Asserting on the tracker rather than on
-        # the record is what pins that — filtering later would still record nothing
-        # while paying the setup on every activity in the app.
+        # Asserting on the tracker, not the record: filtering later would also
+        # record nothing while still paying setup on every activity.
         mock_tracker.assert_not_called()
         mock_record.assert_not_called()
 
@@ -500,11 +486,8 @@ class TestActivityAllowList:
         mock_record.assert_called_once()
 
     async def test_bare_name_matches_the_qualified_activity_type(self, mock_next):
-        """A v3 activity registers as "{app}:{task}", but a dev writes the task name.
-
-        Requiring "automation-engine:merge" would silently collect nothing while
-        the config looked correct — so the bare name has to match.
-        """
+        """A v3 activity registers as "{app}:{task}" but a dev writes the task name;
+        requiring the qualified form would silently collect nothing."""
         interceptor = _SizingActivityInboundInterceptor(
             mock_next, 1.0, frozenset({"merge"})
         )
@@ -521,7 +504,7 @@ class TestActivityAllowList:
         assert mock_record.call_args[0][0].activity_type == "automation-engine:merge"
 
     async def test_qualified_name_also_matches(self, mock_next):
-        """Both spellings work, so an app with two same-named tasks can disambiguate."""
+        """Both spellings work, so same-named tasks can be disambiguated."""
         interceptor = _SizingActivityInboundInterceptor(
             mock_next, 1.0, frozenset({"automation-engine:merge"})
         )
@@ -554,7 +537,7 @@ class TestActivityAllowList:
         mock_record.assert_not_called()
 
     async def test_a_failing_unselected_activity_still_propagates(self, mock_next):
-        """The passthrough path must not change failure behaviour either."""
+        """The passthrough path must not change failure behaviour."""
         mock_next.execute_activity = AsyncMock(side_effect=ValueError("boom"))
         interceptor = _SizingActivityInboundInterceptor(
             mock_next, 1.0, frozenset({"merge"})
@@ -567,7 +550,7 @@ class TestActivityAllowList:
 
 class TestSizingSettings:
     def test_off_by_default(self, monkeypatch):
-        """An SDK version bump alone must change nothing on any tenant."""
+        """A version bump alone must change nothing on any tenant."""
         monkeypatch.delenv("APPLICATION_SDK_ENABLE_SIZING_TELEMETRY", raising=False)
         assert load_interceptor_settings().enable_sizing_telemetry is False
 
@@ -586,7 +569,7 @@ class TestSizingSettings:
         assert load_interceptor_settings().sizing_telemetry_poll_seconds == 0.5
 
     def test_garbage_poll_seconds_falls_back(self, monkeypatch):
-        """A bad env value must not stop a tenant's workers from starting."""
+        """A bad env value must not stop workers starting."""
         monkeypatch.setenv("APPLICATION_SDK_SIZING_TELEMETRY_POLL_SECONDS", "soon")
         assert load_interceptor_settings().sizing_telemetry_poll_seconds == 1.0
 
@@ -595,7 +578,7 @@ class TestSizingSettings:
         assert load_interceptor_settings().sizing_telemetry_poll_seconds == 0.0
 
     def test_activities_default_to_empty(self, monkeypatch):
-        """Unset must mean nothing measured, never everything measured."""
+        """Unset means nothing measured, never everything."""
         monkeypatch.delenv("APPLICATION_SDK_SIZING_TELEMETRY_ACTIVITIES", raising=False)
         assert load_interceptor_settings().sizing_telemetry_activities == frozenset()
 
@@ -608,7 +591,7 @@ class TestSizingSettings:
         )
 
     def test_activities_tolerate_helm_whitespace_and_empty_entries(self, monkeypatch):
-        """Hand-edited in a values file, so ' merge , , transform ' has to work."""
+        """Hand-edited in a values file, so stray whitespace has to work."""
         monkeypatch.setenv(
             "APPLICATION_SDK_SIZING_TELEMETRY_ACTIVITIES", " merge , , transform ,"
         )

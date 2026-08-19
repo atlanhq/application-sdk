@@ -1,28 +1,18 @@
 """Activity resource-sizing telemetry, collected at the interceptor.
 
-Why an interceptor and not a decorator. A decorator would have to be applied by
-every app author to every task method — 44 v3 apps, and the ones that forget are
-exactly the ones with no sizing data, so the dataset would be biased towards
-teams who already care about resource usage. ``create_worker`` already attaches
-the SDK's interceptors to every activity in every v3 app, so the interceptor is
-the only hook that is uniform by construction. It also needs nothing from the
-activity's signature, which matters because it has to work for tasks the SDK has
-never seen.
+An interceptor, not a decorator: ``create_worker`` already attaches SDK
+interceptors to every activity in every v3 app, whereas a decorator would be
+skipped by exactly the teams whose data is most needed. It also reads nothing from
+the activity's signature, so it works for tasks the SDK has never seen.
 
-A **sibling** of ``MetricsInterceptor`` rather than an extension of it, for two
-reasons: this one is gated and that one is unconditional, and the App Vitals
-metrics path should not gain a background task and a set of cgroup reads as a
-side effect of a sizing rollout.
+A *sibling* of ``MetricsInterceptor``, not an extension — this one is gated, and
+the App Vitals path should not gain a background task as a side effect.
 
-**Cost.** Two small file reads per poll tick and roughly four per activity, with
-no RPC. Deliberately unlike AE's ``report_memory_pressure``, whose per-tick
-``activity.heartbeat()`` is a network call — that one is a safety device whose
-readings must reach the workflow, this one only has to reach the local process.
-That difference is what makes a 1-second default defensible fleet-wide.
+Cost: ~4 file reads per activity plus 2 per poll tick, and no RPC. Unlike AE's
+``report_memory_pressure``, whose per-tick heartbeat is a network call, this only
+has to reach the local process — which is what makes a 1s default affordable.
 
-Ships **off**. Collection is enabled per tenant by
-``APPLICATION_SDK_ENABLE_SIZING_TELEMETRY``, so a version bump alone changes
-nothing.
+Ships off, and measures only the activities named in the allow-list.
 """
 
 from __future__ import annotations
@@ -44,9 +34,7 @@ from application_sdk.observability.sizing import SizingObservation, record_obser
 logger = get_logger(__name__)
 
 
-#: Allow-list value that selects every activity. The discovery case — run it on a
-#: test tenant to find out which activities actually vary with their data, then
-#: replace it with those names.
+#: Selects every activity. For a discovery pass on a test tenant, not production.
 WILDCARD = "*"
 
 
@@ -64,14 +52,10 @@ class _SizingActivityInboundInterceptor(ActivityInboundInterceptor):
     def _selected(self, activity_type: str) -> bool:
         """Whether this activity is on the allow-list.
 
-        Matches the **bare task name as well as the qualified one**. A v3 activity
-        registers with Temporal as ``"{app_name}:{task_name}"`` (see
-        ``execution._temporal.activities``), so ``activity_type`` is
-        ``"automation-engine:merge"`` — but an app author reading their own source
-        sees ``@task async def merge`` and will write ``merge``. Requiring the
-        qualified form would silently collect nothing, which is the worst outcome
-        available: the config looks right, the worker logs success, and the dataset
-        is empty. Both forms are accepted, so either spelling works.
+        Matches the bare task name as well as the qualified one. A v3 activity
+        registers as ``"{app}:{task}"``, but an author reading ``@task async def
+        merge`` writes ``merge`` — and requiring the qualified form would silently
+        collect nothing while the config looked correct.
         """
         if WILDCARD in self._activities:
             return True
@@ -81,17 +65,15 @@ class _SizingActivityInboundInterceptor(ActivityInboundInterceptor):
 
     async def execute_activity(self, input: ExecuteActivityInput) -> Any:
         info = activity.info()
-        # Filter FIRST, before the tracker. A worker polls one queue for many
-        # activities, so an unselected one has to be a bare set lookup — no cgroup
-        # reads and no poller. Deciding inside the tracker would pay the setup cost
-        # for every activity in the app just to throw the reading away.
+        # Filter before the tracker, so an unselected activity costs a set lookup
+        # rather than the tracker's setup on every activity in the app.
         if not self._selected(info.activity_type or ""):
             return await self.next.execute_activity(input)
 
         start_ns = time.monotonic_ns()
         outcome = "OK"
-        # Bound before the ``async with`` so the outer ``finally`` cannot raise
-        # NameError on the one path where the tracker never yields.
+        # Bound first so the outer ``finally`` cannot NameError if the tracker
+        # never yields.
         trace = None
         try:
             async with track_container_usage(
@@ -104,10 +86,8 @@ class _SizingActivityInboundInterceptor(ActivityInboundInterceptor):
             outcome = "ERROR"
             raise
         finally:
-            # Read the trace *after* the ``async with`` has exited. The tracker
-            # fills in the peak watermark and the CPU deltas in its own
-            # ``finally``, so reading inside the block would record a trace that
-            # is still empty.
+            # After the ``async with`` exits: the tracker fills the peak and CPU
+            # deltas in its own ``finally``, so reading inside would record nothing.
             if trace is not None:
                 duration_s = (time.monotonic_ns() - start_ns) / 1_000_000_000
                 record_observation(
@@ -124,26 +104,17 @@ class _SizingActivityInboundInterceptor(ActivityInboundInterceptor):
 
 
 class SizingTelemetryInterceptor(Interceptor):
-    """Measures what each activity execution actually consumed.
+    """Measures what each activity execution consumed.
 
-    Emits, per activity execution:
+    Per execution: ``activity.sizing.peak_memory_mib``, ``peak_memory_fraction``,
+    ``cpu_throttled_fraction`` and ``mean_cpu_cores``, plus one structured
+    ``activity_sizing_observation`` log line for offline tier fitting.
 
-    * ``activity.sizing.peak_memory_mib`` — peak cgroup memory
-    * ``activity.sizing.peak_memory_fraction`` — the utilisation view
-    * ``activity.sizing.cpu_throttled_fraction`` — CPU starvation
-    * ``activity.sizing.mean_cpu_cores`` — CPU consumed per wall second
+    ``activities`` is an opt-in allow-list; empty measures nothing, so being
+    attached is never on its own enough to make this do work.
 
-    plus one structured ``activity_sizing_observation`` log line carrying the
-    full record for offline tier fitting.
-
-    ``activities`` is an opt-in allow-list of activity names. Empty measures
-    nothing, so this interceptor being attached is never on its own enough to
-    make it do work.
-
-    Not exported from the ``interceptors`` package and not accepted via
-    ``create_worker(interceptors=...)``: it is wired only by ``create_worker``
-    when collection is enabled. Keeping it un-exported is what makes
-    double-registration — and therefore two pollers per activity — impossible by
+    Not exported and not accepted via ``create_worker(interceptors=...)``, which
+    makes double-registration — two pollers per activity — impossible by
     construction rather than by a guard list.
     """
 
