@@ -296,6 +296,21 @@ Otherwise:
    gh pr comment <number> --repo atlanhq/application-sdk --body "@sdk-resolve"
    ```
 
+**The upstream-gap case.** Sometimes the rule is *right* and the app is
+*wrong*, but the correct fix is blocked on something neither owns — e.g. a
+`creator()` the rule prescribes that pyatlan does not expose yet, or an SDK
+seam that does not exist. Do NOT force a worse fix into the app, and do NOT
+narrow a correct rule. Instead the rule-fix PR (or, when no rule change is
+warranted at all, a standalone note PR against
+`packages/conformance/conformance/docs/rules/<series>.md`) must carry an
+**"Upstream dependency"** section stating exactly: which library/API is
+missing what, the smallest upstream change that unblocks the prescribed fix,
+and what the fleet should do meanwhile (usually: the finding stays visible,
+unsuppressed — a tracked gap is the honest state). Put the same sentence in
+your RESULT detail so the ledger and the dashboard carry it against the rule:
+`rule-review:<pr-url> blocked upstream: <one line>`. A gap nobody wrote down
+is a gap that gets rediscovered from scratch every sweep.
+
 Then `cd` back to `/workspace/$(basename "$REPO")`. **Never** commit SDK changes
 into the app repo, or app changes into the SDK — two clones, two branches, no
 crossing.
