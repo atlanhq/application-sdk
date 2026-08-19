@@ -3,8 +3,10 @@
 Follow ALL stages (0–8). NEVER stop early. NEVER defer work to "later".
 Print `[Stage N/8 complete]` after each stage.
 
-**Hard stop: 75 minutes.** If you approach it, skip to Stage 8 and report what
-actually happened with an honest `N of M`.
+**Hard stop: 75 minutes** (single-unit runs) or **`TIME_BUDGET_MINUTES` from
+the dispatch prompt** (batch runs). If you approach it, skip to Stage 8 and
+report what actually happened with an honest `N of M` — and in batch mode,
+report every unit you never started as `not-reached`.
 
 ## Run context
 
@@ -23,6 +25,64 @@ SUITE_VERSION  e.g. 0.20.1        — pinned; never "latest"
 APPLY_UNVERIFIABLE  true | false
 RUN_ID         the orchestrator's run id, for the report
 ```
+
+---
+
+## Batch mode — one rover, many units
+
+If `/workspace/.mothership/session/BATCH.json` exists, this run is a **batch**:
+one sandbox working a pre-triaged manifest of units across up to ~10 app repos.
+The orchestrator has already done the deterministic analysis — every unit in
+the manifest has unsuppressed findings, no fresh open lane PR, and no
+human-declined PR — so the manifest IS the worklist. Do not re-plan it.
+
+```
+BATCH.json:
+  batch_id              e.g. crb-1a2b3c4d5e6f
+  suite_version         pinned; never "latest"
+  apply_unverifiable    true | false
+  time_budget_minutes   your hard stop for STARTING new units
+  units[]               ordered: { repo, rule_id, tier, autofixable }
+```
+
+Rules of the batch:
+
+1. **Work app by app, in manifest order.** Finish every unit of one repo before
+   moving to the next. Only the FIRST repo is pre-cloned under `/workspace/`;
+   clone each subsequent repo yourself when you reach it:
+   `gh repo clone <owner/repo> /workspace/<name> -- --depth 50`
+2. **Per unit, run Stages 0–7 exactly as written below**, with `REPO`,
+   `RULE_ID`, `TIER` taken from the manifest entry, `SERIES = RULE_ID[0]`,
+   `DELIVERY = one_pr_per_rule`, `BASE_REF = main`, and `SUITE_VERSION` /
+   `APPLY_UNVERIFIABLE` from BATCH.json. Everything holds per unit: reconcile
+   first, branch before any edit, ONE PR per rule per repo, never mix rules in
+   one branch.
+3. **Prior rulings are keyed** — entries in `PRIOR_DECISIONS.json` carry
+   `repo` + `rule_id`; apply only the ones matching the unit in hand.
+4. **The time budget bounds STARTS, not finishes.** Check elapsed time between
+   units. Past `time_budget_minutes`, do not start another unit: finish (or
+   cleanly abandon — revert, no push) the one in flight, then report every
+   remaining unit as `not-reached`. An honest partial batch is a success; a
+   rushed fix is not.
+5. **One stuck unit never strands the batch.** A unit that ends in
+   `rule-review` or `error` is recorded as such and you MOVE ON. Never retry a
+   unit inside the batch — the orchestrator owns retries.
+6. **Stage 8 is replaced by the batch report** (see *Stage 8 — batch contract*
+   below): one JSON line per manifest unit in `=== BATCH RESULTS ===`, every
+   unit exactly once, then `RESULT: batch:<completed>/<total>`.
+
+Per-unit result kinds in a batch (superset of the single-unit kinds):
+
+| result | meaning |
+|---|---|
+| `pushed` | new lane PR opened (or new commits on a fresh branch) |
+| `refreshed` | an existing stale open lane PR was updated in place — same branch, plain push |
+| `exists` | an adequate open PR already covers the rule; zero work |
+| `no-op` | pinned detect found nothing unsuppressed — findings were stale |
+| `declined-respected` | newest lane PR was closed unmerged by a human — veto honoured, app untouched |
+| `rule-review` | the rule is wrong/gapped: SDK fix PR raised (see Stage 6), app untouched |
+| `error` | the unit failed; detail says how |
+| `not-reached` | time budget expired before this unit started |
 
 ---
 
@@ -412,3 +472,42 @@ RESULT: pushed:<sha> | exists:<url> | no-op:<reason> | rule-review:<sdk-pr-url|r
 ```
 
 Print: `[Stage 8/8 complete]`
+
+---
+
+### Stage 8 — batch contract (batch mode only)
+
+In batch mode, emit ONE summary of the run and the per-unit results block in
+place of the single-unit summary/RESULT:
+
+```
+=== BATCH RESULTS ===
+{"repo":"atlanhq/atlan-a-app","rule":"L004","result":"pushed","pr_url":"https://github.com/…","findings_before":3,"findings_after":0,"detail":""}
+{"repo":"atlanhq/atlan-a-app","rule":"E002","result":"rule-review","pr_url":"https://github.com/atlanhq/application-sdk/pull/…","detail":"detector counts re-raised broad excepts"}
+{"repo":"atlanhq/atlan-b-app","rule":"L011","result":"not-reached","detail":"time budget expired"}
+=== END BATCH RESULTS ===
+
+=== DECISIONS ===
+{"repo":"atlanhq/atlan-a-app","rule":"L004","fingerprint":"…","question":"…","options":["…"],"chosen":"…","rationale":"…","evidence":["path:line"],"confidence":"high","flag_for_human":true}
+=== END DECISIONS ===
+```
+
+Rules:
+
+- One JSON object per line; **every manifest unit appears exactly once**,
+  including the `not-reached` ones. A unit you never mention is treated as a
+  failure by the orchestrator — silence is an omission, not an outcome.
+- `pushed`/`refreshed` MUST carry `pr_url` and honest `findings_before`/
+  `findings_after` from the pinned re-detect — the orchestrator cross-checks
+  them and disbelieves a delivery whose numbers did not drop.
+- Decisions carry `repo` + `rule` so they replay to the right unit next time.
+- Emit both blocks even when empty.
+
+Finish with exactly one line:
+
+```
+RESULT: batch:<completed>/<total>
+```
+
+where `<completed>` counts units that reached ANY terminal outcome other than
+`not-reached`. Print: `[Stage 8/8 complete]`

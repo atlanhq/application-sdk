@@ -29,7 +29,8 @@ Written by the orchestrator at dispatch — read, never edit:
 | Path | Contents |
 |---|---|
 | `/workspace/.mothership/session/REMEDIATION.md` | this lane's playbook, fetched from `application-sdk@main` |
-| `/workspace/.mothership/session/PRIOR_DECISIONS.json` | rulings from earlier attempts on this `(repo, rule)`, keyed by finding fingerprint |
+| `/workspace/.mothership/session/PRIOR_DECISIONS.json` | rulings from earlier attempts, keyed by finding fingerprint (batch runs: entries also carry `repo` + `rule_id`) |
+| `/workspace/.mothership/session/BATCH.json` | batch runs only: the pre-triaged manifest of units — its presence is what makes this a batch run |
 | `~/.claude/skills/remediate/SKILL.md` | the remediation skill |
 
 `PRIOR_DECISIONS.json` shape:
