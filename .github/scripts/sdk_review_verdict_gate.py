@@ -32,7 +32,10 @@ Environment:
     STARTER_STARTED_AT   ISO-8601 lower bound: the starter comment's timestamp,
                          set by this run's own starter step. Comments older
                          than this belong to a previous trigger.
-    GHA_RUN_URL          link to this workflow run (optional)
+    GHA_RUN_URL          link to this workflow run, and the ownership key
+                         `sdk_review_summaries.attribute()` matches on
+    HEAD_SHA             the sha this run was dispatched for, so a summary for
+                         a different head cannot vouch for this run
     GH_TOKEN             consumed by `gh` for auth (not read here directly)
     GITHUB_OUTPUT        path to the step-output file (optional)
 
@@ -135,7 +138,9 @@ def fetch_comments(
     return None
 
 
-def count_summaries(comments: list[dict], since: datetime, run_url: str = "") -> int:
+def count_summaries(
+    comments: list[dict], since: datetime, run_url: str = "", head_sha: str = ""
+) -> int:
     """How many summary comments this run posted.
 
     Delegates to `sdk_review_summaries.attribute()`, which the dedupe step also
@@ -143,14 +148,18 @@ def count_summaries(comments: list[dict], since: datetime, run_url: str = "") ->
     answered from one definition of ownership rather than two.
 
     That matters here more than anywhere: this gate is the only one that exits
-    non-zero. Attributing by time window alone let another run's summary — a
-    zombie sandbox posting minutes after its job was cancelled, or a concurrent
-    human trigger — vouch for a run that delivered nothing, and comparing an
-    unfloored millisecond bound against GitHub's second-precision `created_at`
-    dropped this run's own verdict when both landed in the same second, failing
-    a review that had in fact been posted.
+    non-zero, so its count has to be the stricter of the two. Attributing by
+    time window alone let another run's summary — a zombie sandbox posting
+    minutes after its job was cancelled, or a concurrent human trigger — vouch
+    for a run that delivered nothing.
+
+    Every narrowing `attribute()` offers is passed, `head_sha` included.
+    Dropping it left a footerless summary for a *different* reviewed head
+    counting here while the dedupe step, which passed it, called the same
+    comment nobody's — one shared decision returning two answers, which is the
+    thing this module exists to prevent.
     """
-    return len(attribute(comments, run_url, since)[0])
+    return len(attribute(comments, run_url, since, head_sha)[0])
 
 
 def no_verdict_body(pr_number: str, cost: str, run_url: str) -> str:
@@ -227,6 +236,7 @@ def main(runner: Runner = subprocess.run, sleeper: Sleeper = time.sleep) -> int:
     final_status = os.environ.get("FINAL_STATUS", "").strip()
     cost = os.environ.get("FINAL_COST", "").strip()
     run_url = os.environ.get("GHA_RUN_URL", "").strip()
+    head_sha = os.environ.get("HEAD_SHA", "").strip()
     since = parse_ts(os.environ.get("STARTER_STARTED_AT", ""))
 
     # Only a run that claims it finished cleanly is in scope. Every other
@@ -252,7 +262,7 @@ def main(runner: Runner = subprocess.run, sleeper: Sleeper = time.sleep) -> int:
         comments = fetch_comments(repo, pr_number, runner, sleeper)
         if comments is None:
             return _fail_open(f"could not list comments on PR #{pr_number}")
-        count = count_summaries(comments, since, run_url)
+        count = count_summaries(comments, since, run_url, head_sha)
         if count > 0:
             break
         if attempt < RECHECK_ATTEMPTS:

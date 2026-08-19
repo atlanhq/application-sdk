@@ -1110,6 +1110,7 @@ jobs:
           FINAL_STATUS: ${{ steps.dispatch.outputs.final_status }}
           FINAL_COST: ${{ steps.dispatch.outputs.final_cost }}
           STARTER_STARTED_AT: ${{ steps.starter.outputs.started_at }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
           GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: python3 .github/scripts/sdk_review_verdict_gate.py
 

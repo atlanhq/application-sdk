@@ -185,6 +185,23 @@ def test_the_delivery_gate_shares_the_ownership_key():
     env = step("Verify the review delivered a verdict")["env"]
     assert env["GHA_RUN_URL"].endswith("/actions/runs/${{ github.run_id }}")
     assert env["STARTER_STARTED_AT"] == "${{ steps.starter.outputs.started_at }}"
+    # Every narrowing attribute() offers, or the two steps answer differently
+    # for the same comment — and this is the one that exits non-zero.
+    assert env["HEAD_SHA"] == "${{ steps.pr.outputs.head_sha }}"
+
+
+def test_both_attribution_callers_are_given_the_same_inputs():
+    """A shared decision only agrees if both callers feed it the same thing.
+
+    The dedupe step reads these from its own env; the gate step from its. A
+    narrowing wired into one and not the other is how the shared module ends up
+    returning two answers for one comment.
+    """
+    shared = ("GHA_RUN_URL", "HEAD_SHA")
+    dispatch = step("Dispatch to mothership Rover Direct API")["env"]
+    verdict = step("Verify the review delivered a verdict")["env"]
+    for key in shared:
+        assert dispatch[key] == verdict[key], f"{key} differs between the two callers"
 
 
 def test_the_summary_template_still_carries_the_run_url():
