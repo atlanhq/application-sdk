@@ -1095,9 +1095,14 @@ jobs:
       # fails open whenever it cannot establish the count — a false red on a
       # delivered review is the failure mode the run-29001242204 RCA was
       # written about.
+      # Guarded like the other post-review steps: a re-trigger the locked
+      # dedupe check declined never dispatched a sandbox, so there is no
+      # verdict for it to be missing. (`final_status` would be empty and the
+      # gate would bow out on its own, but a check that reds a run must not
+      # depend on that indirection.)
       - name: Verify the review delivered a verdict
         id: verdict
-        if: success() && steps.parse.outputs.pr_number != ''
+        if: success() && steps.parse.outputs.pr_number != '' && steps.lock_gate.outputs.decision != 'skip'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}

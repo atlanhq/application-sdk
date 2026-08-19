@@ -6,7 +6,9 @@ retry replayed the assistant turn that posts the comment.
 
 The shape that must NOT be collapsed is someone else's summary landing in the
 same window — a zombie sandbox that outlived its cancelled job, or a concurrent
-human-triggered run. Attribution is by run URL for that reason.
+human-triggered run. Attribution is by run URL for that reason; the attribution
+decision itself is tested in test_sdk_review_summaries.py, and what this module
+does with the answer is tested here.
 """
 
 from __future__ import annotations
@@ -100,98 +102,6 @@ def _env(monkeypatch: pytest.MonkeyPatch, out: Path, **extra: str) -> None:
         monkeypatch.setenv(key, value)
 
 
-# --- created_at_or_after() -----------------------------------------------
-
-
-def test_bound_ignores_sub_second_precision_in_both_directions():
-    """GitHub stores `created_at` to the second; the bound has milliseconds.
-
-    Unfloored, a verdict posted at …:39.950Z is stored as …:39Z, parses to
-    39.000, and falls *before* a …:39.900Z bound — so the verdict this run just
-    posted is excluded and a delivered review hard-fails.
-    """
-    assert dedupe.created_at_or_after(
-        "2026-08-19T18:09:39Z", "2026-08-19T18:09:39.900Z"
-    )
-    # …and the string form's opposite error: a comment from the second *before*
-    # the bound must still be excluded.
-    assert not dedupe.created_at_or_after(
-        "2026-08-19T18:09:38Z", "2026-08-19T18:09:39.900Z"
-    )
-
-
-def test_bound_is_inclusive():
-    assert dedupe.created_at_or_after(SINCE, SINCE)
-
-
-def test_bound_accepts_a_later_instant():
-    assert dedupe.created_at_or_after("2026-08-19T18:14:55Z", SINCE)
-
-
-def test_unparseable_timestamps_fall_back_to_string_order():
-    assert dedupe.created_at_or_after("zzz", "aaa")
-
-
-# --- summaries_by_run_url() ---------------------------------------------
-
-
-def test_run_url_identifies_our_summaries_exactly():
-    comments = [
-        verdict(1, "2026-08-19T17:33:00Z", run_url=OTHER_RUN_URL),
-        chatter(2, "2026-08-19T18:10:00Z"),
-        verdict(3, "2026-08-19T18:14:35Z"),
-    ]
-    assert [c["id"] for c in dedupe.summaries_by_run_url(comments, RUN_URL)] == [3]
-
-
-def test_run_url_matching_ignores_the_time_window_entirely():
-    """A replay can post long after the starter; the URL still identifies it."""
-    comments = [verdict(1, "2026-08-19T02:00:00Z")]
-    assert [c["id"] for c in dedupe.summaries_by_run_url(comments, RUN_URL)] == [1]
-
-
-def test_no_run_url_matches_nothing():
-    assert dedupe.summaries_by_run_url([verdict(1, "2026-08-19T18:14:35Z")], "") == []
-
-
-def test_same_second_duplicates_are_ordered_by_comment_id():
-    """created_at is second-precision; ids break the tie in posting order."""
-    comments = [
-        verdict(30, "2026-08-19T18:14:50Z"),
-        verdict(10, "2026-08-19T18:14:50Z"),
-        verdict(20, "2026-08-19T18:14:50Z"),
-    ]
-    assert [c["id"] for c in dedupe.summaries_by_run_url(comments, RUN_URL)] == [
-        10,
-        20,
-        30,
-    ]
-
-
-# --- summaries_in_window() ----------------------------------------------
-
-
-def test_window_fallback_excludes_a_summary_for_another_head():
-    """A zombie sandbox posts inside our window for the sha it was reviewing."""
-    comments = [verdict(1, "2026-08-19T18:14:35Z", head=OTHER_HEAD)]
-    assert dedupe.summaries_in_window(comments, SINCE, HEAD) == []
-
-
-def test_window_fallback_keeps_our_head():
-    comments = [verdict(1, "2026-08-19T18:14:35Z")]
-    assert [c["id"] for c in dedupe.summaries_in_window(comments, SINCE, HEAD)] == [1]
-
-
-def test_window_fallback_admits_a_summary_predating_the_head_marker():
-    comments = [verdict(1, "2026-08-19T18:14:35Z", head=None)]
-    assert [c["id"] for c in dedupe.summaries_in_window(comments, SINCE, HEAD)] == [1]
-
-
-def test_window_fallback_excludes_summaries_before_the_bound():
-    comments = [verdict(1, "2026-08-19T17:33:00Z")]
-    assert dedupe.summaries_in_window(comments, SINCE, HEAD) == []
-
-
 # --- main(): the #3276 burst --------------------------------------------
 
 
@@ -223,17 +133,22 @@ def test_keeps_the_newest_and_minimizes_the_rest(
     }
 
 
-def test_a_verdict_posted_in_the_starters_own_second_still_counts(
+def test_our_verdict_is_found_however_late_it_lands(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ):
-    """The sub-second regression, end to end, on the fallback path."""
+    """No window can drop our own verdict — the run URL is what finds it.
+
+    This is the case a lenient window was proposed to rescue: a summary whose
+    `created_at` sits outside the starter bound. Attribution never consults the
+    bound for our own summary, so the window stays strict and this still counts.
+    """
     out = tmp_path / "out"
     _env(monkeypatch, out, SINCE="2026-08-19T18:09:39.900Z")
-    # No run URL on the summary, so attribution falls back to the window.
-    runner = fake_runner([[verdict(1, "2026-08-19T18:09:39Z", run_url=None)]])
+    runner = fake_runner([[verdict(1, "2026-08-19T18:09:39Z")]])
 
     assert dedupe.main(runner) == 0
     assert outputs(out)["verdict_posted"] == "1"
+    assert outputs(out)["attribution"] == "run-url"
 
 
 def test_the_normal_single_summary_is_left_alone(
@@ -283,15 +198,24 @@ def test_a_zombie_sandboxs_summary_in_our_window_is_never_minimized(
 def test_another_runs_summary_alone_does_not_claim_a_delivered_review(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ):
-    """Soft-success must not fire when our sandbox posted nothing."""
+    """Soft-success must not fire when our sandbox posted nothing.
+
+    The summary is for our head and inside our window — the only thing that
+    says it is not ours is the run URL in its footer. Before that was the
+    ownership key this reported `verdict_posted=1`, so the dispatch step
+    soft-succeeded on a review this run never delivered.
+    """
     out = tmp_path / "out"
     _env(monkeypatch, out)
     comments = [verdict(1, "2026-08-19T18:14:35Z", run_url=OTHER_RUN_URL)]
 
     assert dedupe.main(fake_runner([comments])) == 0
-    assert outputs(out)["verdict_posted"] == "1"  # same head, so the fallback keeps it
-    assert outputs(out)["attribution"] == "window-fallback"
-    assert outputs(out)["minimized_count"] == "0"
+    assert outputs(out) == {
+        "verdict_posted": "0",
+        "verdict_count": "0",
+        "minimized_count": "0",
+        "attribution": "none",
+    }
 
 
 def test_another_head_in_our_window_is_not_a_delivered_review(

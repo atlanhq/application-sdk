@@ -50,14 +50,18 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import time
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime
+from pathlib import Path
 
-# Both markers count as a delivered verdict. `sdk_review_approve.py` accepts
-# the legacy `<!-- TEST_SDK_REVIEW -->` form too, and a gate that failed a run
-# the approver would have happily stamped would be worse than no gate.
-SUMMARY_MARKERS = ("<!-- SDK_REVIEW -->", "<!-- TEST_SDK_REVIEW -->")
+sys.path.insert(0, str(Path(__file__).parent))
+
+from sdk_review_summaries import (  # noqa: E402  (needs the sys.path bootstrap)
+    attribute,
+    parse_ts,
+)
 
 # Our own marker. Deliberately not a `<!-- SDK_REVIEW -->` prefix so this
 # comment can never be mistaken for a verdict by the counters above, by
@@ -76,25 +80,6 @@ RECHECK_DELAY_S = 10.0
 
 Runner = Callable[..., subprocess.CompletedProcess]
 Sleeper = Callable[[float], None]
-
-
-def parse_ts(value: str) -> datetime | None:
-    """Parse a GitHub/JS ISO-8601 timestamp, tolerating the `Z` suffix.
-
-    Compared as datetimes rather than strings because the two sides differ in
-    precision: `new Date().toISOString()` carries milliseconds
-    (`...:03.371Z`), the REST API's `created_at` does not (`...:03Z`).
-    """
-    text = (value or "").strip()
-    if not text:
-        return None
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed
 
 
 def fetch_comments(
@@ -150,22 +135,22 @@ def fetch_comments(
     return None
 
 
-def count_summaries(comments: list[dict], since: datetime) -> int:
-    """Summary comments created at or after `since`.
+def count_summaries(comments: list[dict], since: datetime, run_url: str = "") -> int:
+    """How many summary comments this run posted.
 
-    The lower bound is what stops a verdict from a *previous* trigger — same
-    PR, older head — from vouching for this run.
+    Delegates to `sdk_review_summaries.attribute()`, which the dedupe step also
+    uses, so "this run posted no verdict" and "this run posted too many" are
+    answered from one definition of ownership rather than two.
+
+    That matters here more than anywhere: this gate is the only one that exits
+    non-zero. Attributing by time window alone let another run's summary — a
+    zombie sandbox posting minutes after its job was cancelled, or a concurrent
+    human trigger — vouch for a run that delivered nothing, and comparing an
+    unfloored millisecond bound against GitHub's second-precision `created_at`
+    dropped this run's own verdict when both landed in the same second, failing
+    a review that had in fact been posted.
     """
-    count = 0
-    for comment in comments:
-        body = comment.get("body") or ""
-        if not any(marker in body for marker in SUMMARY_MARKERS):
-            continue
-        created = parse_ts(str(comment.get("created_at") or ""))
-        if created is None or created < since:
-            continue
-        count += 1
-    return count
+    return len(attribute(comments, run_url, since)[0])
 
 
 def no_verdict_body(pr_number: str, cost: str, run_url: str) -> str:
@@ -267,7 +252,7 @@ def main(runner: Runner = subprocess.run, sleeper: Sleeper = time.sleep) -> int:
         comments = fetch_comments(repo, pr_number, runner, sleeper)
         if comments is None:
             return _fail_open(f"could not list comments on PR #{pr_number}")
-        count = count_summaries(comments, since)
+        count = count_summaries(comments, since, run_url)
         if count > 0:
             break
         if attempt < RECHECK_ATTEMPTS:

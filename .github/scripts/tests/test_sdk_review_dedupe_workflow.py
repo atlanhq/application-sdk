@@ -176,6 +176,17 @@ def test_the_dispatch_step_supplies_the_ownership_key():
     assert env["STARTER_STARTED_AT"] == "${{ steps.starter.outputs.started_at }}"
 
 
+def test_the_delivery_gate_shares_the_ownership_key():
+    """The gate that reds a run and the step that hides duplicates must agree.
+
+    Both read `sdk_review_summaries.attribute()`; the gate can only reach the
+    exact tier if the workflow hands it the same run URL.
+    """
+    env = step("Verify the review delivered a verdict")["env"]
+    assert env["GHA_RUN_URL"].endswith("/actions/runs/${{ github.run_id }}")
+    assert env["STARTER_STARTED_AT"] == "${{ steps.starter.outputs.started_at }}"
+
+
 def test_the_summary_template_still_carries_the_run_url():
     """The ownership key only works because §3e mandates this footer line.
 
