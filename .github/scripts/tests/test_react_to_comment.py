@@ -452,6 +452,7 @@ def test_every_caller_can_actually_reach_the_script() -> None:
 EXPECTED_CALLERS = {
     ("sdk-review.yml", "react-on-skip", "React to skipped trigger"),
     ("sdk-review.yml", "sdk-review-dispatch", "React to comment"),
+    ("sdk-review.yml", "sdk-review-dispatch", "React to skipped re-trigger"),
     ("sdk-resolve.yml", "sdk-resolve-dispatch", "Acknowledge with a reaction"),
     ("auto-fix-vulnerabilities.yaml", "auto-fix", "React to comment"),
     ("capability-manifest-regen.yaml", "regen", "React to comment"),

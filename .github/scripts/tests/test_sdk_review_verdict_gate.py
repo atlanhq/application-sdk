@@ -36,13 +36,21 @@ BEFORE = "2026-08-19T17:10:00Z"
 AFTER = "2026-08-19T19:04:11Z"
 
 
-def summary_comment(created_at: str, marker: str = "<!-- SDK_REVIEW -->") -> dict:
+HEAD = "0cab6b6e4eff94f28f249e1319ab74d55e1f7abc"
+OTHER_HEAD = "51c160b06a2a350289c7d779f4ab887503f98685"
+
+
+def summary_comment(
+    created_at: str,
+    marker: str = "<!-- SDK_REVIEW -->",
+    head: str = HEAD,
+) -> dict:
     return {
         "created_at": created_at,
         "body": (
             f"{marker}\n"
             "<!-- VERDICT: READY_TO_MERGE -->\n"
-            "<!-- REVIEWED_HEAD: 0cab6b6e4eff94f28f249e1319ab74d55e1f7abc -->\n"
+            f"<!-- REVIEWED_HEAD: {head} -->\n"
             "## SDK Review (mothership)\n"
         ),
     }
@@ -96,6 +104,7 @@ def env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         "FINAL_STATUS": "completed",
         "FINAL_COST": "7.98",
         "STARTER_STARTED_AT": STARTED_AT,
+        "HEAD_SHA": HEAD,
         "GHA_RUN_URL": "https://github.com/atlanhq/application-sdk/actions/runs/32285618316",
         "GITHUB_OUTPUT": str(output),
     }.items():
@@ -183,6 +192,29 @@ def test_mixed_precision_timestamps_are_compared_as_instants(env: Path):
 
     gh = FakeGh(comments=[summary_comment("2026-08-19T18:56:04Z")])
     assert verdict_gate.main(gh, lambda _s: None) == 0
+
+
+def test_a_summary_for_another_head_does_not_vouch_for_this_run(env: Path):
+    """The narrowing this gate was dropping.
+
+    A footerless summary inside our window, for a head this run was not
+    dispatched for — a zombie sandbox still posting for the sha it was
+    reviewing. It counted here while the dedupe step, passing the same
+    `head_sha` to the same shared decision, called it nobody's. The gate is the
+    one that exits non-zero, so it has to be at least as strict.
+    """
+    gh = FakeGh(comments=[summary_comment(AFTER, head=OTHER_HEAD)])
+
+    assert verdict_gate.main(gh, lambda _s: None) == 1
+    assert outputs(env)["verdict_delivered"] == "false"
+
+
+def test_our_own_head_in_the_window_still_vouches(env: Path):
+    """The inverse, so the narrowing cannot be over-tightened unnoticed."""
+    gh = FakeGh(comments=[summary_comment(AFTER)])
+
+    assert verdict_gate.main(gh, lambda _s: None) == 0
+    assert outputs(env)["verdict_delivered"] == "true"
 
 
 def test_legacy_test_marker_counts_as_delivered(env: Path):
