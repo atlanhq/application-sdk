@@ -17,11 +17,7 @@ serving image omits the extra and the route 404s.
 
 from server_sdk.clients.models import DatabaseConfig
 from server_sdk.clients.sql import BaseSQLClient
-from server_sdk.config import (
-    ConfigStore,
-    LocalFileConfigStore,
-    config_objectstore_key,
-)
+from server_sdk.config import ConfigStore, LocalFileConfigStore, config_objectstore_key
 from server_sdk.errors import (
     AppError,
     AuthError,

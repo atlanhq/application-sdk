@@ -24,11 +24,10 @@ from __future__ import annotations
 from datetime import timedelta
 from uuid import uuid4
 
-from temporalio.client import Client
-
 from server_sdk.manifest import worker_task_queue
 from server_sdk.observability.logger_adaptor import get_logger
 from server_sdk.workflow import StartRequest, StartResult
+from temporalio.client import Client
 
 logger = get_logger(__name__)
 

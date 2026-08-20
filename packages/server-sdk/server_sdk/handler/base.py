@@ -50,7 +50,9 @@ class DefaultHandler(Handler):
     """Pass-through handler — SUCCESS / READY / empty. Useful for thin apps."""
 
     async def test_auth(self, input: AuthInput) -> AuthOutput:
-        return AuthOutput(status=AuthStatus.SUCCESS, message="Authentication successful")
+        return AuthOutput(
+            status=AuthStatus.SUCCESS, message="Authentication successful"
+        )
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
         return PreflightOutput(

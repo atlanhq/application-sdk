@@ -30,7 +30,6 @@ the same defect was found independently in three of the first apps migrated.
 
 from __future__ import annotations
 
-import copy
 import json
 import os
 import re
@@ -82,7 +81,9 @@ def _parse_fe_inputs(raw: str | None) -> dict[str, Any]:
     try:
         parsed = json.loads(raw)
     except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="fe_inputs is not valid JSON") from None
+        raise HTTPException(
+            status_code=400, detail="fe_inputs is not valid JSON"
+        ) from None
     return parsed if isinstance(parsed, dict) else {}
 
 
@@ -105,7 +106,6 @@ def register_manifest_routes(
     registry = _manifest_registry(generated_dir)
 
     async def _serve(entrypoint: str | None, fe_inputs: str | None) -> Response:
-
         if entrypoint:
             if not ENTRYPOINT_NAME_RE.match(entrypoint):
                 raise HTTPException(status_code=400, detail="Invalid entrypoint name")
@@ -143,9 +143,7 @@ def register_manifest_routes(
 
         base = json.loads(raw)
         computed = await hook(base, _parse_fe_inputs(fe_inputs))
-        return Response(
-            content=json.dumps(computed), media_type="application/json"
-        )
+        return Response(content=json.dumps(computed), media_type="application/json")
 
     @app.get("/workflows/v1/manifest")
     async def get_manifest(

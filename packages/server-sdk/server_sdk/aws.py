@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Any
+from typing import Any, ClassVar
 
 from server_sdk.errors.leaves import (
     AuthError,
@@ -30,6 +30,8 @@ AWS_SESSION_NAME = os.getenv("AWS_SESSION_NAME", "temp-session")
 
 
 class AwsRegionNotFoundError(InvalidInputError):
+    code: ClassVar[str] = "INVALID_INPUT_AWS_REGION_NOT_FOUND"
+
     def __init__(self) -> None:
         super().__init__(
             message="Could not determine AWS region from hostname",
@@ -39,6 +41,8 @@ class AwsRegionNotFoundError(InvalidInputError):
 
 
 class AwsCredentialSourceMissingError(InvalidInputError):
+    code: ClassVar[str] = "INVALID_INPUT_AWS_CREDENTIAL_SOURCE_MISSING"
+
     def __init__(self) -> None:
         super().__init__(
             message="No AWS credential source provided",
@@ -48,6 +52,8 @@ class AwsCredentialSourceMissingError(InvalidInputError):
 
 
 class AwsCredentialSourceConflictError(InvalidInputError):
+    code: ClassVar[str] = "INVALID_INPUT_AWS_CREDENTIAL_SOURCE_CONFLICT"
+
     def __init__(self) -> None:
         super().__init__(
             message="Multiple AWS credential sources provided",
@@ -57,6 +63,8 @@ class AwsCredentialSourceConflictError(InvalidInputError):
 
 
 class AwsClientCreationError(DependencyUnavailableError):
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_AWS_CLIENT_CREATION"
+
     def __init__(self, *, service: str, cause: Exception) -> None:
         super().__init__(
             message=f"Failed to create AWS client for {service}",
@@ -113,16 +121,16 @@ def create_aws_client(
 
     try:
         if session is not None:
-            return session.client(service, region_name=region)
+            return session.client(service, region_name=region)  # type: ignore
         if temp_credentials is not None:
-            return boto3.client(
+            return boto3.client(  # type: ignore
                 service,
                 aws_access_key_id=temp_credentials["AccessKeyId"],
                 aws_secret_access_key=temp_credentials["SecretAccessKey"],
                 aws_session_token=temp_credentials["SessionToken"],
                 region_name=region,
             )
-        return boto3.client(service, region_name=region)
+        return boto3.client(service, region_name=region)  # type: ignore
     except Exception as e:  # noqa: BLE001 — normalize to a typed error
         raise AwsClientCreationError(service=service, cause=e) from e
 

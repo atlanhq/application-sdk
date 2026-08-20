@@ -12,14 +12,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from pydantic import (
-    AliasChoices,
-    BaseModel,
-    ConfigDict,
-    Field,
-    field_validator,
-)
-
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from server_sdk.contracts.base import SerializableEnum
 from server_sdk.errors.base import AppError
 from server_sdk.errors.wire import FailureDetails

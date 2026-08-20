@@ -33,7 +33,6 @@ from fastapi import FastAPI, HTTPException
 from fastapi import Path as PathParam
 from fastapi import Query, Request
 from fastapi.responses import JSONResponse
-
 from server_sdk.config.store import (
     CONFIG_KEY_PATTERN,
     ConfigStore,
@@ -42,19 +41,18 @@ from server_sdk.config.store import (
 from server_sdk.errors.base import AppError, HandlerError
 from server_sdk.errors.categories import FailureCategory
 from server_sdk.handler.base import Handler
-from server_sdk.manifest import (
-    ENTRYPOINT_NAME_RE,
-    ComputeManifest,
-    register_manifest_routes,
-)
 from server_sdk.handler.contracts import (
     AuthInput,
-    HandlerCredential,
     MetadataInput,
     PreflightCheck,
     PreflightInput,
     PreflightOutput,
     normalize_credentials,
+)
+from server_sdk.manifest import (
+    ENTRYPOINT_NAME_RE,
+    ComputeManifest,
+    register_manifest_routes,
 )
 from server_sdk.observability.logger_adaptor import get_logger
 from server_sdk.workflow import (
@@ -268,14 +266,18 @@ def build_asgi_app(
     # label of the Host it's addressed by. The common API server reads this to
     # route by Host header without any per-app configuration.
     app.state.app_name = app_name
-    gen_dir = Path(generated_dir) if generated_dir is not None else _default_generated_dir()
+    gen_dir = (
+        Path(generated_dir) if generated_dir is not None else _default_generated_dir()
+    )
     generated_files = _scan_generated(gen_dir)
 
     if config_store is None:
         # Same pattern as the workflow starter: explicit injection wins, else the
         # deployment environment decides (S3_BUCKET set → S3-backed store; unset →
         # None → /config endpoints answer 503 "not configured").
-        from server_sdk.config.s3 import default_config_store  # noqa: PLC0415 — avoids importing boto3-adjacent module unless needed
+        from server_sdk.config.s3 import (  # noqa: PLC0415 — avoids importing boto3-adjacent module unless needed
+            default_config_store,
+        )
 
         config_store = default_config_store()
 
@@ -334,9 +336,14 @@ def build_asgi_app(
             raise
         except Exception as e:
             logger.error(
-                "Auth test failed unexpectedly for app %s: %s", app_name, e, exc_info=True
+                "Auth test failed unexpectedly for app %s: %s",
+                app_name,
+                e,
+                exc_info=True,
             )
-            raise HTTPException(status_code=500, detail="Internal server error") from None
+            raise HTTPException(
+                status_code=500, detail="Internal server error"
+            ) from None
 
     # -- check ---------------------------------------------------------------
     @app.post("/workflows/v1/check")
@@ -396,7 +403,9 @@ def build_asgi_app(
                 e,
                 exc_info=True,
             )
-            raise HTTPException(status_code=500, detail="Internal server error") from None
+            raise HTTPException(
+                status_code=500, detail="Internal server error"
+            ) from None
 
     # -- metadata ------------------------------------------------------------
     @app.post("/workflows/v1/metadata")
@@ -442,7 +451,9 @@ def build_asgi_app(
                 e,
                 exc_info=True,
             )
-            raise HTTPException(status_code=500, detail="Internal server error") from None
+            raise HTTPException(
+                status_code=500, detail="Internal server error"
+            ) from None
 
     # -- config --------------------------------------------------------------
     @app.get("/workflows/v1/config/{config_id}")
@@ -454,7 +465,9 @@ def build_asgi_app(
         if config is None and config_store is None:
             raise HTTPException(status_code=503, detail="No object store configured")
         if config is None:
-            raise HTTPException(status_code=404, detail=f"Config not found: {config_id}")
+            raise HTTPException(
+                status_code=404, detail=f"Config not found: {config_id}"
+            )
         return JSONResponse(
             content=_wrap_response(
                 cast("dict[str, Any]", config),

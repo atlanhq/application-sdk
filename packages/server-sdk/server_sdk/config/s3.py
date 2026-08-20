@@ -20,13 +20,13 @@ deployment shows up in logs instead of masquerading as "config not found".
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 from typing import Any
 
 from server_sdk.config.store import _json_dumps, _json_loads
+from server_sdk.observability.logger_adaptor import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class S3ConfigStore:
@@ -62,7 +62,8 @@ class S3ConfigStore:
         except ModuleNotFoundError:
             logger.warning(
                 "S3_BUCKET is set but boto3 is not installed; /config endpoints "
-                "stay unconfigured (503). Install the server-sdk [aws] extra."
+                "stay unconfigured (503). Install the server-sdk [aws] extra.",
+                exc_info=True,
             )
             return None
 
@@ -78,7 +79,9 @@ class S3ConfigStore:
             # operational problem worth a log line (but still reads as absent).
             code = getattr(e, "response", {}).get("Error", {}).get("Code", "")
             if code not in ("NoSuchKey", "404"):
-                logger.warning("S3 config load failed for key %s: %s", key, e)
+                logger.warning(
+                    "S3 config load failed for key %s: %s", key, e, exc_info=True
+                )
             return None
 
     async def save(self, key: str, body: dict[str, Any]) -> None:

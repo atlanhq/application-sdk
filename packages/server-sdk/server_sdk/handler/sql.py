@@ -86,7 +86,9 @@ class SQLHandler(Handler):
                 status=AuthStatus.SUCCESS, message="Authentication successful"
             )
         except Exception as e:  # noqa: BLE001 — boundary: report FAILED, never 500
-            logger.warning("%s auth test failed: %s", type(self).__name__, e)
+            logger.warning(
+                "%s auth test failed: %s", type(self).__name__, e, exc_info=True
+            )
             return AuthOutput(status=AuthStatus.FAILED, message=str(e))
         finally:
             if client:

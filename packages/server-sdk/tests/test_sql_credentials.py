@@ -80,12 +80,16 @@ def test_extra_as_json_string_is_parsed():
 
 def test_genuinely_missing_field_still_raises():
     with pytest.raises(InvalidInputError) as exc:
-        _client({**BASE, "extra": {"deployment_type": "provisioned"}}).get_sqlalchemy_connection_string()
+        _client(
+            {**BASE, "extra": {"deployment_type": "provisioned"}}
+        ).get_sqlalchemy_connection_string()
     assert "database" in str(exc.value)
 
 
 def test_defaults_still_apply():
-    url = _client({**BASE, "extra": {"database": "dev"}}).get_sqlalchemy_connection_string()
+    url = _client(
+        {**BASE, "extra": {"database": "dev"}}
+    ).get_sqlalchemy_connection_string()
     assert ":5439/" in url
 
 

@@ -12,7 +12,6 @@ import asyncio
 from typing import Any
 
 import pytest
-
 from server_sdk.config.s3 import S3ConfigStore
 from server_sdk.config.store import config_objectstore_key
 
@@ -94,7 +93,10 @@ def test_s3_roundtrip() -> None:
 
 def test_s3_missing_is_none() -> None:
     store = S3ConfigStore("bkt", client=_FakeS3())
-    assert asyncio.run(store.load("persistent-artifacts/apps/x/workflows/y/config.json")) is None
+    assert (
+        asyncio.run(store.load("persistent-artifacts/apps/x/workflows/y/config.json"))
+        is None
+    )
 
 
 def test_s3_save_failure_raises() -> None:

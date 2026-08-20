@@ -134,4 +134,4 @@ class BaseSQLClient:
             try:
                 await asyncio.get_running_loop().run_in_executor(None, engine.dispose)
             except Exception as exc:  # noqa: BLE001
-                logger.warning("engine dispose failed: %s", exc)
+                logger.warning("engine dispose failed: %s", exc, exc_info=True)

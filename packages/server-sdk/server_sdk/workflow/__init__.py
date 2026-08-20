@@ -27,7 +27,6 @@ if TYPE_CHECKING:
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-
 from server_sdk.handler.contracts import normalize_credentials
 from server_sdk.observability.logger_adaptor import get_logger
 
@@ -61,8 +60,7 @@ class StartResult:
 class WorkflowStarter(Protocol):
     """Dispatches a workflow. The Temporal impl lives behind the ``[workflow]`` extra."""
 
-    async def start(self, request: StartRequest) -> StartResult:
-        ...
+    async def start(self, request: StartRequest) -> StartResult: ...
 
 
 def starter_from_env(app_name: str) -> "TemporalWorkflowStarter | None":
@@ -81,7 +79,9 @@ def starter_from_env(app_name: str) -> "TemporalWorkflowStarter | None":
     host = os.getenv("ATLAN_TEMPORAL_HOST", "")
     if not host:
         return None
-    from server_sdk.workflow.temporal import TemporalWorkflowStarter  # noqa: PLC0415 — imports temporalio; gated above
+    from server_sdk.workflow.temporal import (  # noqa: PLC0415 — imports temporalio; gated above
+        TemporalWorkflowStarter,
+    )
 
     return TemporalWorkflowStarter(
         app_name=app_name,
@@ -178,7 +178,9 @@ def register_start_route(
         except HTTPException:
             raise
         except TypeError as e:
-            logger.error("Invalid workflow input for app %s: %s", app_name, e, exc_info=True)
+            logger.error(
+                "Invalid workflow input for app %s: %s", app_name, e, exc_info=True
+            )
             raise HTTPException(status_code=400, detail="Invalid input") from None
         except Exception as e:
             logger.error(
