@@ -659,13 +659,29 @@ def test_extract_tests_yaml_params_carries_both_fnd604_values() -> None:
     [
         '      services-script: ".github/test/setup-services.sh"',
         "      services-script: .github/test/setup-services.sh",
+        "      services-script: '.github/test/setup-services.sh'",
     ],
+    ids=["double", "bare", "single"],
 )
 def test_extract_services_script_reads_quoted_and_bare(line: str) -> None:
     """Bare is not hypothetical: the only two repos that run a services script
     hand-wrote it unquoted, and a quoted-only read-back deleted their active line
-    on every --resync — FND-604's class again, caught by the guard added for it."""
-    text = f"jobs:\n  tests:\n    with:\n{line}\n"
+    on every --resync — FND-604's class again, caught by the guard added for it.
+
+    The fixture carries the ``uses:`` line because this is an input of the
+    reusable job and is read from that job's own ``with:`` block, like
+    ``force-external-runtime`` and the app-identity pair. A file with no reusable
+    job declares no inputs for it, and the round-trip guard refuses that file on
+    its own jobs' keys rather than losing anything here.
+    """
+    text = (
+        "jobs:\n"
+        "  tests:\n"
+        "    uses: atlanhq/application-sdk"
+        "/.github/workflows/tests-reusable.yaml@main\n"
+        "    with:\n"
+        f"{line}\n"
+    )
     params = extract_tests_yaml_params(text)
     assert params["services_script"] == ".github/test/setup-services.sh"
 
@@ -997,6 +1013,56 @@ def test_extract_field_bare_value_stops_at_whitespace() -> None:
     """A bare value still ends at the first whitespace, so a trailing comment
     stays out of it."""
     assert extract_field("k: v # note\n", "k") == "v"
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["scripts/svc.sh", "'scripts/svc.sh'", '"scripts/svc.sh"'],
+    ids=["bare", "single", "double"],
+)
+def test_services_script_value_spelling_round_trips(value: str) -> None:
+    """Every valid spelling of ``services-script`` yields the same path.
+
+    The single-quoted form is the one that bit: the old reader's bare arm
+    excluded only ``"`` and ``#``, so ``'scripts/svc.sh'`` matched *with the
+    quotes attached* and was re-rendered into the path itself. The round-trip
+    guard cannot catch that — the key is present on both sides, only the value
+    changed — so it was a silent corruption rather than a refusal.
+    """
+    canonical = render(
+        "tests.yaml", app_name="widget", services_script="scripts/svc.sh"
+    )
+    text = canonical.replace(
+        '      services-script: "scripts/svc.sh"', f"      services-script: {value}", 1
+    )
+    params = extract_tests_yaml_params(text)
+    assert params["services_script"] == "scripts/svc.sh"
+    rendered = render("tests.yaml", **params)
+    assert '      services-script: "scripts/svc.sh"' in rendered
+    assert unpreserved_tests_yaml_declarations(text, rendered) == []
+
+
+@pytest.mark.parametrize(
+    "value", ["95", "'95'", '"95"'], ids=["bare", "single", "double"]
+)
+def test_unit_coverage_value_spelling_round_trips(value: str) -> None:
+    """A single-quoted coverage floor is preserved like the other two spellings.
+
+    Read as absent it reached the round-trip guard as a dropped declaration, so
+    the resync refused instead of preserving an app's own raised coverage bar.
+    """
+    canonical = render("tests.yaml", app_name="widget", unit_coverage_fail_under="95")
+    text = canonical.replace(
+        '      unit-coverage-fail-under: "95"',
+        f"      unit-coverage-fail-under: {value}",
+        1,
+    )
+    assert extract_declared_unit_coverage_fail_under(text) == "95"
+    params = extract_tests_yaml_params(text)
+    assert params["unit_coverage_fail_under"] == "95"
+    assert (
+        unpreserved_tests_yaml_declarations(text, render("tests.yaml", **params)) == []
+    )
 
 
 def test_commented_out_app_name_is_not_read_back() -> None:

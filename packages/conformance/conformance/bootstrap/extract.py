@@ -67,30 +67,27 @@ _ACTION_PIN_RE = re.compile(r"@[0-9a-f]{40}(?:[ \t]+#[^\n]*)?")
 # An anchored regex only ever recognised the spelling the template emits, so a
 # repo that hand-wrote a bare or single-quoted value read as *absent* and could
 # never be re-synced — the same "a hand-written spelling defeats the read-back"
-# class as _SERVICES_SCRIPT_RE below, which two real repos hit.
+# class as the services-script line below, which two real repos hit.
 # The *commented-out* line that anchoring was there to exclude is excluded more
 # strongly by the new path: `reusable_job_with_block` is built from
 # `structural_lines`, which blanks comment lines outright.
 
-# Matches an *uncommented* services-script line in the with: block, quoted or
-# bare. Bare matters: the two repos that actually run a services script
-# (atlan-mongodbatlas-app, atlan-tableau-app) hand-wrote it unquoted, pre-dating
-# this template, and a quoted-only read-back deleted their active line on every
-# --resync — the same silent-loss class as FND-604's other two values, found by
-# the guard added for them. The quote pair is matched as a unit so a half-quoted
-# line, which the YAML parser would reject anyway, cannot read back as valid.
-# The re-render normalises to the quoted form the template has always emitted:
-# one-time C002 drift for those two files, against losing the value entirely.
-_SERVICES_SCRIPT_RE = re.compile(
-    r'^\s+services-script:\s+(?:"([^"]+)"|([^\s"#]+))\s*$', re.MULTILINE
-)
+# `services-script` is read the same way, and for the same reason. Bare matters:
+# the two repos that actually run a services script (atlan-mongodbatlas-app,
+# atlan-tableau-app) hand-wrote it unquoted, pre-dating this template, and a
+# quoted-only read-back deleted their active line on every --resync. The regex
+# that replaced accepted bare and double-quoted values only, and its bare arm
+# excluded just `"` and `#` — so a single-quoted value matched *with the quotes
+# attached* and was re-rendered into the path. The re-render normalises to the
+# quoted form the template has always emitted: one-time C002 drift for those two
+# files, against losing or corrupting the value.
 # tests-reusable.yaml's `unit-coverage-fail-under` input, quoted or bare. Anchored
 # and uncommented-only for the same reason as the lines above. The quote pair is
 # matched as a unit (`"(\d+)"` or `\d+`, never a lone leading/trailing quote) so a
 # half-quoted line — which the YAML parser would reject anyway — can't read back
 # as a valid declaration.
 _UNIT_COVERAGE_FAIL_UNDER_RE = re.compile(
-    r'^\s+unit-coverage-fail-under:\s+(?:"(\d+)"|(\d+))\s*$', re.MULTILINE
+    r"^\s+unit-coverage-fail-under:\s+(?:\"(\d+)\"|'(\d+)'|(\d+))\s*$", re.MULTILINE
 )
 
 # An *explicit* ``secrets:`` mapping — the caller shape that composes
@@ -251,10 +248,14 @@ def extract_tests_yaml_params(text: str) -> dict[str, str]:
         enable_e2e = extract_field(with_block, "enable-e2e")
         if enable_e2e in ("true", "false"):
             params["enable_e2e"] = enable_e2e
-    m = _SERVICES_SCRIPT_RE.search(text)
-    if m:
-        # Quoted and bare forms capture into different groups; exactly one is set.
-        params["services_script"] = next(g for g in m.groups() if g is not None).strip()
+        # Same reader for the same reason. The regex this replaced had a bare arm
+        # that excluded only `"` and `#`, so a *single*-quoted value matched it
+        # with the quotes still attached and was re-rendered as part of the path
+        # — a corrupted value the round-trip guard cannot see, because the key is
+        # still present on both sides.
+        services_script = extract_field(with_block, "services-script")
+        if services_script:
+            params["services_script"] = services_script
     declared = extract_declared_unit_coverage_fail_under(text)
     if declared and int(declared) >= SDK_UNIT_COVERAGE_FLOOR:
         params["unit_coverage_fail_under"] = declared
