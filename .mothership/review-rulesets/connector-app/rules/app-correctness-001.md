@@ -5,13 +5,17 @@ level: L2
 category: correctness
 globs: []
 severity: HIGH
-provenance: application-sdk
+provenance: application-sdk docs; connector under-extraction incidents
 suppressible: false
 ---
-# Return complete source results
+# Publish complete results or fail loudly
 
-When changed connector code reads a paginated, streamed, or batched source API,
-verify that it processes every page and propagates failures. Report a finding
-when the new code can silently return partial assets, lineage, or metadata.
-
-Do not report this rule when the diff does not change source-result iteration.
+- MUST fail the run when any extraction slice is missing — never publish a
+  partial result as a complete one. Downstream diffing turns silent
+  under-extraction into asset deletes.
+- MUST verify cross-activity handoffs against a declaration (expected file
+  list/count written by the producer), not by listing whatever exists at a
+  storage prefix. A prefix scan cannot tell "absent" from "lost".
+- MUST keep completeness checks per source; never sum counts across sources —
+  a surplus in one producer must not mask a shortfall in another.
+- FLAG any `except` that converts a missing input into an empty result.

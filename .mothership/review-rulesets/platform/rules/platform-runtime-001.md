@@ -2,17 +2,21 @@
 schema: 2
 id: PLATFORM-RUNTIME-001
 level: L4
-category: runtime
+category: platform-runtime
 globs: []
 severity: HIGH
-provenance: application-sdk
+provenance: atlan-databricks-app app-review.md (TEMP, SDK v3 platform rules)
 suppressible: false
 ---
-# Keep workflows deterministic and activities bounded
+# Workflow bodies are deterministic orchestration only
 
-When changed code runs in a Temporal workflow, verify that it does not perform
-network, file, clock, random, or environment I/O directly. Such I/O belongs in
-an activity. For changed long-running activities, verify that timeouts, retries,
-and heartbeats are bounded and preserve safe replay.
-
-Do not report this rule when the diff does not change workflow or activity behavior.
+- MUST NOT call `datetime.now()`, `uuid4()`, `random`, or read env/config
+  dynamically inside a workflow `run()` — replay produces different values
+  and the workflow non-deterministically diverges.
+- MUST NOT await object-store, state-store, or HTTP I/O from the workflow
+  body — the sandbox lets it through silently and the workflow hangs. All
+  I/O belongs in activities.
+- MUST NOT `import temporalio` in app code — the SDK owns the Temporal seam;
+  use typed inputs / `workflow_args`.
+- Run-scoped values (output paths, markers) come from activity outputs, not
+  from helpers evaluated in the workflow body.

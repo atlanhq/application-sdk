@@ -1,3 +1,10 @@
 schema: 2
 rules:
   - rules/app-correctness-001.md
+  - rules/app-async-001.md
+  - rules/app-errors-001.md
+  - rules/app-storage-001.md
+  - rules/app-resources-001.md
+  - rules/app-parallel-001.md
+  - rules/app-secrets-001.md
+  - rules/app-observability-001.md
