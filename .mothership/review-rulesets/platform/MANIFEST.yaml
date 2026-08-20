@@ -1,0 +1,3 @@
+schema: 2
+rules:
+  - rules/platform-runtime-001.md

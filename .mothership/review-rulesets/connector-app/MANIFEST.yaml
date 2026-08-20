@@ -1,0 +1,3 @@
+schema: 2
+rules:
+  - rules/app-correctness-001.md
