@@ -42,6 +42,16 @@ the better thing, which is what flagging them amounted to.
    extracted here — so the structural catch-up lands and the per-repo choices
    survive.
 
+   "The per-repo choices survive" only holds for choices the extractor reads
+   back, which is what made FND-604: ``tests.yaml``'s ``force-external-runtime``
+   and its explicit ``secrets:`` mapping were live inputs of the reusable that
+   nothing read, so every ``--resync`` deleted them and CI reddened two tiers
+   later with what looked like a source-system credential error.  Both are read
+   back now, and ``unpreserved_tests_yaml_declarations`` covers the general
+   case: a file declaring anything the canonical has no place for makes
+   ``--resync`` refuse, and ``_unpreservable_note`` says so in this finding so
+   the remediation this message recommends cannot silently decline.
+
 Remediation: run ``atlan-application-sdk-conformance bootstrap`` to re-sync.
 """
 
@@ -64,8 +74,10 @@ from conformance.bootstrap.extract import (
     extract_renovate_automerge,
     extract_tests_yaml_params,
     extract_use_ghcr_base,
+    format_dropped_declarations,
     resolve_renovate_fallback_exit_zero,
     strip_action_pins,
+    unpreserved_tests_yaml_declarations,
 )
 from conformance.bootstrap.render import (
     MANAGED_ACTION_FILES,
@@ -413,15 +425,46 @@ def _scan_tests_yaml(path: Path, root: Path) -> list[Finding]:
                 "(structural changes detected; param customizations are not flagged). "
                 f"Run `{_CLI_CMD} --resync` to re-render it from the "
                 "canonical, reusing the app-name/app-image-name/enable-e2e/"
-                "services-script/unit-coverage-fail-under values read back off this "
+                "services-script/unit-coverage-fail-under/force-external-runtime "
+                "values and any explicit `secrets:` mapping read back off this "
                 "file. Any other hand edit is replaced (kept as tests.yaml.bak). "
                 "If --resync reports it skipped (no parseable app-name, so its "
                 "identity can't be read back), it needs a manual fix. "
+                + _unpreservable_note(on_disk, canonical)
                 + _below_floor_coverage_note(on_disk)
                 + _warn_only
             ),
         )
     ]
+
+
+def _unpreservable_note(on_disk: str, canonical: str) -> str:
+    """Return an explanation when *on_disk* declares keys the canonical drops.
+
+    The counterpart to ``--resync``'s own refusal (FND-604): this checker is
+    where a fleet-wide scan reports the file, so the reason the suggested
+    remediation will decline to run belongs in the finding too — otherwise the
+    message above promises a re-render that then does not happen, and the app
+    owner has to run the command to find out why.
+
+    Named here rather than resolved silently because these keys are exactly the
+    per-repo CI wiring two prior incidents lost (FND-65, FND-110): an explicit
+    ``secrets:`` mapping composing ``E2E_SOURCE_ENV_JSON``, a
+    ``force-external-runtime: true``, a hand-kept extra job whose name branch
+    protection still requires. Both of the first two are now preserved, so
+    anything reaching this note is a third thing nobody has anticipated.
+    """
+    dropped = unpreserved_tests_yaml_declarations(on_disk, canonical)
+    if not dropped:
+        return ""
+    return (
+        f"Note: this file declares {format_dropped_declarations(dropped)}, which "
+        "the canonical template has no place for, so a re-render would delete "
+        "them — --resync therefore "
+        "REFUSES on this file and leaves it untouched rather than dropping "
+        "per-repo CI wiring silently. Reapply the structural update by hand, or "
+        "remove those declarations first. "
+    )
 
 
 def _below_floor_coverage_note(on_disk: str) -> str:

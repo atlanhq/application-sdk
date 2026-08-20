@@ -21,7 +21,9 @@ from conformance.bootstrap.autodetect import apply_bootstrap_autodetection
 from conformance.bootstrap.extract import (
     extract_renovate_automerge,
     extract_tests_yaml_params,
+    format_dropped_declarations,
     strip_action_pins,
+    unpreserved_tests_yaml_declarations,
 )
 from conformance.bootstrap.render import (
     MANAGED_ACTION_FILES,
@@ -149,6 +151,12 @@ def _sync_tests_yaml(
     uses to decide the file drifted — keeps every per-repo choice and makes
     the written bytes exactly the canonical the checker compares against.
 
+    That only holds for values the extractor knows about, though, which is what
+    made this the FND-604 defect: a value it did not read back was deleted on
+    every resync with nothing failing until CI reddened in a later tier. The
+    ``unpreserved=`` guard closes the general case — a file declaring anything
+    the canonical has no place for is refused rather than rewritten.
+
     Returns the ``(path, status)`` pairs this call wrote or left alone, for
     ``main()``'s ``--json`` touched-files manifest.
     """
@@ -159,7 +167,12 @@ def _sync_tests_yaml(
         print(f"scaffolded: {tests_dest}")
         return [(tests_dest, "scaffolded")]
     if resync:
-        return _resync_scaffold(tests_dest, "tests.yaml", _tests_yaml_resync_params)
+        return _resync_scaffold(
+            tests_dest,
+            "tests.yaml",
+            _tests_yaml_resync_params,
+            unpreserved=unpreserved_tests_yaml_declarations,
+        )
     print(
         f"ok (exists): {tests_dest}"
         "  (edit freely; C002 tracks drift at WARN — pass"
@@ -201,6 +214,7 @@ def _resync_scaffold(
     dest: pathlib.Path,
     template_name: str,
     extract: Callable[[str], dict[str, str] | None],
+    unpreserved: Callable[[str, str], list[str]] | None = None,
 ) -> list[tuple[pathlib.Path, str]]:
     """Re-render an existing write-if-absent scaffold from its canonical.
 
@@ -211,6 +225,13 @@ def _resync_scaffold(
 
     *extract* returns the render params read off the on-disk content, or
     ``None`` when they can't be read confidently enough to rewrite the file.
+
+    *unpreserved* names the declarations a re-render would delete, and turns a
+    non-empty answer into a refusal (FND-604). It is per-target because "a
+    declaration the canonical has no place for" is a YAML-shaped question:
+    ``tests.yaml`` passes the key-set comparison, ``renovate.json`` passes
+    nothing, since its own extractor already refuses anything it cannot parse
+    and its canonical is the whole preset rather than a scaffold apps extend.
 
     Returns the ``(path, status)`` pairs for ``main()``'s ``--json`` manifest.
     """
@@ -238,6 +259,28 @@ def _resync_scaffold(
     if strip_action_pins(existing) == strip_action_pins(target):
         print(f"ok (up to date): {dest}")
         return [(dest, "unchanged")]
+
+    # Refuse to downgrade. A re-render replaces the whole file, so anything the
+    # canonical template has no place for is deleted — and the two that bit the
+    # fleet hardest (an explicit `secrets:` mapping downgraded to `secrets:
+    # inherit`, a dropped `force-external-runtime: true`) failed nowhere near
+    # here: CI went red later, in the integration and e2e legs, with a
+    # credential error that read as a source-system problem (FND-604, recurring
+    # FND-110's damage via a different cause). Both are now carried forward, so
+    # reaching this branch means the file declares something else again —
+    # refuse, name it, and let a human decide, rather than backing it up and
+    # trusting someone to diff the .bak. Ordered after the identity check so a
+    # file that is already canonical still reports "up to date" rather than a
+    # refusal it does not need.
+    dropped = unpreserved(existing, target) if unpreserved is not None else []
+    if dropped:
+        print(
+            f"skipped: {dest} declares {format_dropped_declarations(dropped)}, which the"
+            " canonical template has no place for — a re-render would delete"
+            " them; left untouched. Reapply the structural update by hand, or"
+            " remove those declarations first."
+        )
+        return [(dest, "exists")]
 
     # Unconditional backup, unlike the --enforce force-overwrite path below —
     # which skips it when the existing content is one of the two canonical
