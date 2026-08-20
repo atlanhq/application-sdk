@@ -21,6 +21,7 @@ from application_sdk.testing.e2e._errors import (
     DAGProgressStalledError,
     NoWorkerOnTaskQueueError,
 )
+from application_sdk.testing.e2e._poll import fake_clock
 from application_sdk.testing.e2e.client import (
     _MAX_RETRY_AFTER_SECONDS,
     _REQUEST_MAX_ATTEMPTS,
@@ -102,7 +103,7 @@ class TestPollNativeStatusStallGuard:
         stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
 
         with patch.object(client, "get_native_status", return_value=stuck):
-            with patch("time.sleep"):
+            with fake_clock():
                 with pytest.raises(NoWorkerOnTaskQueueError) as exc:
                     client.poll_native_status(
                         _RUN_ID,
@@ -123,7 +124,7 @@ class TestPollNativeStatusStallGuard:
         stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.SCHEDULED)
 
         with patch.object(client, "get_native_status", return_value=stuck):
-            with patch("time.sleep"):
+            with fake_clock():
                 with pytest.raises(NoWorkerOnTaskQueueError):
                     client.poll_native_status(
                         _RUN_ID,
@@ -140,7 +141,7 @@ class TestPollNativeStatusStallGuard:
         stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
 
         with patch.object(client, "get_native_status", return_value=stuck):
-            with patch("time.sleep"):
+            with fake_clock():
                 with pytest.raises(NoWorkerOnTaskQueueError) as exc:
                     client.poll_native_status(
                         _RUN_ID,
@@ -161,7 +162,7 @@ class TestPollNativeStatusStallGuard:
         side_effects = [running] * 6 + [done]
 
         with patch.object(client, "get_native_status", side_effect=side_effects):
-            with patch("time.sleep"):
+            with fake_clock():
                 result = client.poll_native_status(
                     _RUN_ID,
                     interval_seconds=10,
@@ -178,7 +179,7 @@ class TestPollNativeStatusStallGuard:
         stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
 
         with patch.object(client, "get_native_status", return_value=stuck):
-            with patch("time.sleep"):
+            with fake_clock():
                 result = client.poll_native_status(
                     _RUN_ID,
                     interval_seconds=10,
@@ -194,7 +195,7 @@ class TestPollNativeStatusStallGuard:
         stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
 
         with patch.object(client, "get_native_status", return_value=stuck):
-            with patch("time.sleep"):
+            with fake_clock():
                 result = client.poll_native_status(
                     _RUN_ID,
                     interval_seconds=10,
@@ -210,7 +211,7 @@ class TestPollNativeStatusStallGuard:
         stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
 
         with patch.object(client, "get_native_status", return_value=stuck):
-            with patch("time.sleep"):
+            with fake_clock():
                 result = client.poll_native_status(
                     _RUN_ID,
                     interval_seconds=10,
@@ -233,7 +234,7 @@ class TestPollNativeStatusProgressWatchdog:
         stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
 
         with patch.object(client, "get_native_status", return_value=stuck):
-            with patch("time.sleep"):
+            with fake_clock():
                 with pytest.raises(DAGProgressStalledError) as exc:
                     client.poll_native_status(
                         _RUN_ID,
@@ -252,7 +253,7 @@ class TestPollNativeStatusProgressWatchdog:
         stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
 
         with patch.object(client, "get_native_status", return_value=stuck):
-            with patch("time.sleep"):
+            with fake_clock():
                 result = client.poll_native_status(
                     _RUN_ID,
                     interval_seconds=10,
@@ -272,7 +273,7 @@ class TestPollNativeStatusProgressWatchdog:
         with patch.object(
             client, "get_native_status", side_effect=[running, running, done]
         ):
-            with patch("time.sleep"):
+            with fake_clock():
                 result = client.poll_native_status(
                     _RUN_ID,
                     interval_seconds=10,
@@ -306,7 +307,7 @@ class TestSkippedStatus:
         skipped = _result(DAGRunStatus.SKIPPED, DAGNodeStatus.PENDING)
 
         with patch.object(client, "get_native_status", return_value=skipped):
-            with patch("time.sleep"):
+            with fake_clock():
                 result = client.poll_native_status(
                     _RUN_ID,
                     interval_seconds=10,
@@ -328,7 +329,7 @@ class TestPollNativeStatusTransientHandling:
         side_effects = [err, err, ok]
 
         with patch.object(client, "get_native_status", side_effect=side_effects):
-            with patch("time.sleep"):
+            with fake_clock():
                 result = client.poll_native_status(
                     _RUN_ID,
                     interval_seconds=1,
@@ -345,7 +346,7 @@ class TestPollNativeStatusTransientHandling:
         side_effects = [_http_error()] * max_failures
 
         with patch.object(client, "get_native_status", side_effect=side_effects):
-            with patch("time.sleep"):
+            with fake_clock():
                 with pytest.raises(AtlanApiHttpError):
                     client.poll_native_status(
                         _RUN_ID,
@@ -369,7 +370,7 @@ class TestPollNativeStatusTransientHandling:
         side_effects = [err, err, running, err, err, ok]
 
         with patch.object(client, "get_native_status", side_effect=side_effects):
-            with patch("time.sleep"):
+            with fake_clock():
                 result = client.poll_native_status(
                     _RUN_ID,
                     interval_seconds=1,
@@ -387,7 +388,7 @@ class TestPollNativeStatusTransientHandling:
             patch.object(
                 client, "get_native_status", side_effect=ValueError("unexpected")
             ),
-            patch("time.sleep"),
+            fake_clock(),
             pytest.raises(ValueError, match="unexpected"),
         ):
             client.poll_native_status(
@@ -706,7 +707,7 @@ class TestPollNativeStatusHonoursRetryAfter:
             patch.object(
                 client, "get_native_status", side_effect=[err, _succeeded_result()]
             ),
-            patch("time.sleep") as mock_sleep,
+            fake_clock() as clock,
         ):
             result = client.poll_native_status(
                 _RUN_ID,
@@ -715,7 +716,7 @@ class TestPollNativeStatusHonoursRetryAfter:
                 max_transient_failures=5,
             )
         assert result.status == DAGRunStatus.SUCCEEDED
-        mock_sleep.assert_called_once_with(120)
+        assert clock.slept == [120]
 
     def test_hintless_error_keeps_the_poll_cadence(self):
         client = _make_client()
@@ -725,7 +726,7 @@ class TestPollNativeStatusHonoursRetryAfter:
                 "get_native_status",
                 side_effect=[_http_error(), _succeeded_result()],
             ),
-            patch("time.sleep") as mock_sleep,
+            fake_clock() as clock,
         ):
             client.poll_native_status(
                 _RUN_ID,
@@ -733,7 +734,7 @@ class TestPollNativeStatusHonoursRetryAfter:
                 timeout_seconds=600,
                 max_transient_failures=5,
             )
-        mock_sleep.assert_called_once_with(10)
+        assert clock.slept == [10]
 
     def test_long_backoff_counts_against_the_poll_timeout(self):
         """Honouring a long wait must not let the loop outlive timeout_seconds."""
@@ -745,7 +746,7 @@ class TestPollNativeStatusHonoursRetryAfter:
         )
         with (
             patch.object(client, "get_native_status", side_effect=[err] * 10),
-            patch("time.sleep") as mock_sleep,
+            fake_clock() as clock,
             pytest.raises(AtlanApiTimeoutError),
         ):
             client.poll_native_status(
@@ -757,7 +758,7 @@ class TestPollNativeStatusHonoursRetryAfter:
         # Each honoured sleep is clamped to the remaining timeout budget:
         # 120s requested against a 200s deadline sleeps 120s, then only 80s,
         # so the loop exits exactly at the deadline rather than overshooting.
-        assert [call.args[0] for call in mock_sleep.call_args_list] == [120, 80]
+        assert clock.slept == [120, 80]
 
     def test_honoured_wait_is_clamped_to_the_remaining_timeout(self):
         """timeout_seconds < retry_after: the first sleep stops at the deadline."""
@@ -769,7 +770,7 @@ class TestPollNativeStatusHonoursRetryAfter:
         )
         with (
             patch.object(client, "get_native_status", side_effect=[err] * 10),
-            patch("time.sleep") as mock_sleep,
+            fake_clock() as clock,
             pytest.raises(AtlanApiTimeoutError),
         ):
             client.poll_native_status(
@@ -780,7 +781,7 @@ class TestPollNativeStatusHonoursRetryAfter:
             )
         # 50s remain and the origin asked for 120s: one clamped 50s sleep
         # reaches the deadline exactly; the loop never sleeps past it.
-        assert [call.args[0] for call in mock_sleep.call_args_list] == [50]
+        assert clock.slept == [50]
 
     def test_honoured_backoff_is_budgeted_across_the_poll_loop(self):
         """A tenant repeating retry_after: 120 exhausts the shared budget, then
@@ -794,7 +795,7 @@ class TestPollNativeStatusHonoursRetryAfter:
         )
         with (
             patch.object(client, "get_native_status", side_effect=[err] * 10),
-            patch("time.sleep") as mock_sleep,
+            fake_clock() as clock,
             pytest.raises(AtlanApiHttpError),
         ):
             client.poll_native_status(
@@ -809,7 +810,7 @@ class TestPollNativeStatusHonoursRetryAfter:
         # 110 + 110 + 80 = 300), then the fixed 10s cadence once the budget
         # is spent — no unbounded 120s waits. The fifth error hits the
         # transient-failure cap and re-raises.
-        assert [call.args[0] for call in mock_sleep.call_args_list] == [
+        assert clock.slept == [
             120,
             120,
             80,
