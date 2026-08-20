@@ -65,8 +65,13 @@ _ACTION_PIN_RE = re.compile(r"@[0-9a-f]{40}(?:[ \t]+#[^\n]*)?")
 # a renamed app most often leaves behind) can't satisfy the read-back — the
 # --resync identity guard in particular must skip rather than re-render from a
 # value the file no longer declares.
-_APP_NAME_RE = re.compile(r'^\s+app-name:\s+"([^"]+)"\s*$', re.MULTILINE)
-_APP_IMAGE_NAME_RE = re.compile(r'^\s+app-image-name:\s+"([^"]+)"\s*$', re.MULTILINE)
+_APP_NAME_RE = re.compile(
+    r'^\s+(?:app-name|"app-name"|\'app-name\'):\s+"([^"]+)"\s*$', re.MULTILINE
+)
+_APP_IMAGE_NAME_RE = re.compile(
+    r'^\s+(?:app-image-name|"app-image-name"|\'app-image-name\'):\s+"([^"]+)"\s*$',
+    re.MULTILINE,
+)
 _ENABLE_E2E_RE = re.compile(r"enable-e2e:\s+(true|false)")
 # Matches an *uncommented* services-script line in the with: block, quoted or
 # bare. Bare matters: the two repos that actually run a services script
@@ -95,9 +100,11 @@ _UNIT_COVERAGE_FAIL_UNDER_RE = re.compile(
 # downgrading an explicit mapping to it leaves the reusable's integration and
 # e2e legs with no source credentials at all, failing later with what reads as
 # a source-system error (FND-604). Matched in mapping form only: nothing but an
-# optional trailing comment may follow the colon.
+# optional trailing comment may follow the colon. The key may be bare or
+# single/double-quoted — a quoted ``"secrets":`` is the same declaration.
 _SECRETS_MAPPING_RE = re.compile(
-    r"^(?P<indent>[ \t]+)secrets:[ \t]*(?:#[^\n]*)?$", re.MULTILINE
+    r"^(?P<indent>[ \t]+)(?:secrets|\"secrets\"|'secrets'):[ \t]*(?:#[^\n]*)?$",
+    re.MULTILINE,
 )
 
 # A ``secrets:`` line carrying its value *inline* rather than as an indented
@@ -112,7 +119,8 @@ _SECRETS_MAPPING_RE = re.compile(
 # exists to stop, through a different spelling of the same declaration, so the
 # form is detected and routed to the refusal instead.
 _SECRETS_INLINE_RE = re.compile(
-    r"^[ \t]+secrets:[ \t]+(?P<value>[^#\s][^\n]*?)[ \t]*$", re.MULTILINE
+    r"^[ \t]+(?:secrets|\"secrets\"|'secrets'):[ \t]+(?P<value>[^#\s][^\n]*?)[ \t]*$",
+    re.MULTILINE,
 )
 
 # The ``uses:`` line that identifies the job calling the SDK's reusable test
@@ -134,14 +142,38 @@ _TESTS_REUSABLE_USES_RE = re.compile(
 # A YAML mapping key as written, with an optional leading sequence dash so a
 # list-of-mappings entry counts as a declaration too. The lookahead requires a
 # space or end-of-line after the colon, so a bare ``http://x`` inside a value
-# cannot read as a key.
+# cannot read as a key. The key may be bare or single/double-quoted — a quoted
+# ``"secrets":`` is the same declaration as ``secrets:``, and a read that only
+# knew the bare spelling would be blind to it (the quoted-key class below). The
+# quote character is captured so ``_yaml_key`` can strip it; a half-quoted key
+# (one the YAML parser would reject) never matches.
 _KEY_LINE_RE = re.compile(
-    r"^(?P<indent>[ \t]*)(?:-[ \t]+)?(?P<key>[A-Za-z0-9_.-]+):(?=[ \t]|$)"
+    r"^(?P<indent>[ \t]*)(?:-[ \t]+)?"
+    r"(?P<key>(?:(?P<quote>[\"'])[A-Za-z0-9_.-]+(?P=quote)|[A-Za-z0-9_.-]+)):(?=[ \t]|$)"
 )
 
+
+def _yaml_key(raw: str) -> str:
+    """Return *raw* (a ``_KEY_LINE_RE`` key capture) with any quotes stripped.
+
+    The one normalisation every key comparison goes through, so the guard, the
+    scoped readers, and ``declared_keys`` cannot disagree about whether a quoted
+    ``"secrets":`` is the same declaration as a bare ``secrets:``.
+    """
+    return raw.strip("\"'")
+
+
 # ``key: |`` / ``key: >-`` and friends: every more-indented line that follows is
-# opaque scalar content, not structure, so it must not be mined for keys.
-_BLOCK_SCALAR_RE = re.compile(r":[ \t]*[|>][+-]?\d*[ \t]*(?:#[^\n]*)?$")
+# opaque scalar content, not structure, so it must not be mined for keys. The
+# header may carry an optional YAML tag (``!!str``, ``!custom``, ``!<tag:x>``)
+# before the indicator, and the chomping (``-``/``+``) and indent (``\d``)
+# indicators may appear in either order — ``|2-`` is as valid as ``|-2``. A
+# shape this misses leaves the scalar body visible as structure, so a ``uses:``
+# or ``with:`` quoted inside it is mined as a real declaration (the
+# scalar-header class below).
+_BLOCK_SCALAR_RE = re.compile(
+    r":[ \t]*(?:(?:!!?[^\s|>]+|!<[^>\s]*>)[ \t]+)?[|>](?:[+-]?\d*|\d+[+-]?)[ \t]*(?:#[^\n]*)?$"
+)
 
 # The floor `tests-reusable.yaml` applies when a caller says nothing — its
 # ``unit-coverage-fail-under`` input default. An app may raise its own floor
@@ -354,7 +386,8 @@ def _reusable_job_key_line(text: str, key: str) -> tuple[list[str], int, int] | 
         line = lines[i]
         if len(line) - len(line.lstrip()) != key_indent:
             continue
-        if _KEY_LINE_RE.match(line) and line.strip().split(":", 1)[0] == key:
+        m = _KEY_LINE_RE.match(line)
+        if m is not None and _yaml_key(m.group("key")) == key:
             return lines, i, key_indent
     return None
 
@@ -565,7 +598,7 @@ def declared_keys(text: str) -> list[str]:
         m = _KEY_LINE_RE.match(line)
         if m is None:
             continue
-        key = m.group("key")
+        key = _yaml_key(m.group("key"))
         if key not in keys:
             keys.append(key)
     return keys
@@ -709,7 +742,10 @@ def extract_field(text: str, field: str) -> str:
     the other.
     """
     for line in text.splitlines():
-        m = re.match(rf"^\s*{re.escape(field)}:\s*(\S+)", line)
+        m = re.match(
+            rf"^\s*(?:{re.escape(field)}|\"{re.escape(field)}\"|'{re.escape(field)}'):\s*(\S+)",
+            line,
+        )
         if m:
             return m.group(1).strip("\"'")
     return ""

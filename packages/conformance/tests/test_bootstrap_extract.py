@@ -843,3 +843,118 @@ def test_format_dropped_declarations_bounds_the_list_but_not_the_count() -> None
     assert formatted.endswith("(+3 more)")
     assert "`k5`" in formatted
     assert "`k6`" not in formatted
+
+
+# --- Quoted-key coverage (the quoted-key class) ------------------------------
+
+
+@pytest.mark.parametrize("quote", ['"', "'"], ids=["double", "single"])
+def test_quoted_block_secrets_round_trips_through_render(quote: str) -> None:
+    """A quoted ``"secrets":`` block is the same declaration as a bare one.
+
+    The guard and both readers used to know the bare spelling only, so a quoted
+    block was refused over its *child* key while the block itself was dropped —
+    naming the wrong declaration and losing the mapping at once. The quoted
+    spelling must splice verbatim and survive the key-set guard, exactly as the
+    bare one does.
+    """
+    canonical = render("tests.yaml", app_name="widget")
+    block = _EXPLICIT_SECRETS.replace("secrets:", f"{quote}secrets{quote}:", 1)
+    text = canonical.replace("    secrets: inherit", block)
+    assert extract_secrets_block(text) == block
+    assert unpreservable_secrets_form(text) == ""
+    rerendered = render("tests.yaml", **extract_tests_yaml_params(text))
+    assert unpreserved_tests_yaml_declarations(text, rerendered) == []
+
+
+@pytest.mark.parametrize("quote", ['"', "'"], ids=["double", "single"])
+def test_quoted_inline_secrets_still_stops_the_resync(quote: str) -> None:
+    """A quoted inline mapping is unpreservable, so it must refuse — not vanish.
+
+    Inline form is invisible to the block splice, so the re-render emits
+    ``secrets: inherit``. The whole point of the guard is that this downgrade
+    refuses; a quoted spelling the readers could not see would have sailed
+    through the key-set comparison and been silently replaced.
+    """
+    canonical = render("tests.yaml", app_name="widget")
+    inline = f'    {quote}secrets{quote}: {{SDR_TEST_TENANT: "${{{{ secrets.SDR_TEST_TENANT }}}}"}}'
+    text = canonical.replace("    secrets: inherit", inline)
+    assert extract_secrets_block(text) == ""
+    assert unpreservable_secrets_form(text) != ""
+    assert unpreserved_tests_yaml_declarations(text, canonical) == ["secrets"]
+
+
+@pytest.mark.parametrize("quote", ['"', "'"], ids=["double", "single"])
+def test_quoted_force_external_runtime_is_read(quote: str) -> None:
+    """A quoted ``"force-external-runtime": true`` must not be silently dropped.
+
+    Read through ``extract_field``, which used to anchor on the bare spelling —
+    a quoted key returned ``""`` and ``--resync`` deleted the line, booting the
+    connector into ``DaprNotDetectedError`` (FND-65) through a spelling the
+    reader missed.
+    """
+    canonical = render("tests.yaml", app_name="widget")
+    text = canonical.replace(
+        "      app-name:",
+        f"      {quote}force-external-runtime{quote}: true\n      app-name:",
+        1,
+    )
+    assert extract_force_external_runtime(text) == "true"
+
+
+@pytest.mark.parametrize("quote", ['"', "'"], ids=["double", "single"])
+def test_quoted_app_name_is_not_renamed(quote: str) -> None:
+    """A quoted ``"app-name"`` must be carried, not reverted to the default.
+
+    ``_APP_NAME_RE`` anchored on the bare spelling, so a quoted key read as
+    absent and ``--resync`` rendered ``app-name: "app"`` — renaming the app in
+    its own CI config with no refusal.
+    """
+    canonical = render("tests.yaml", app_name="widget")
+    text = canonical.replace(
+        '      app-name: "widget"', f'      {quote}app-name{quote}: "widget"', 1
+    )
+    assert extract_tests_yaml_params(text)["app_name"] == "widget"
+
+
+def test_declared_keys_normalises_a_quoted_key() -> None:
+    """A quoted key lands in the same set as its bare spelling.
+
+    The guard compares *sets of key names*; a quoted spelling kept distinct
+    would read as a dropped declaration on one side and an added one on the
+    other, so the same declaration would refuse its own round-trip.
+    """
+    assert declared_keys('    "secrets":\n      A: b') == ["secrets", "A"]
+    assert declared_keys("    'secrets':\n      A: b") == ["secrets", "A"]
+
+
+# --- Tagged / indent-first scalar headers (the scalar-header class) ----------
+
+
+@pytest.mark.parametrize(
+    "header",
+    ["!!str |", "!custom >-", "!<tag:x> |", "|2-", "|2+"],
+    ids=[
+        "tagged-pipe",
+        "tagged-custom",
+        "verbatim-tag",
+        "indent-first-minus",
+        "indent-first-plus",
+    ],
+)
+def test_tagged_and_indent_first_scalar_bodies_are_not_mined(header: str) -> None:
+    """A scalar body must stay opaque no matter how its header is spelled.
+
+    ``_BLOCK_SCALAR_RE`` used to know only untagged, chomping-first headers, so
+    a ``run: !!str |`` or ``run: |2-`` body was mined as structure — and a
+    ``uses:``/``with:`` quoted inside it hoisted into the rendered job, the very
+    FND-65-reverse class ``structural_lines`` was added to stop.
+    """
+    text = (
+        "jobs:\n  tests:\n    steps:\n"
+        f"      - run: {header}\n"
+        "          uses: atlanhq/application-sdk/.github/workflows/tests-reusable.yaml@main\n"
+        "          force-external-runtime: true\n"
+    )
+    assert declared_keys(text) == ["jobs", "tests", "steps", "run"]
+    assert extract_force_external_runtime(text) == ""
