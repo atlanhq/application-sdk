@@ -2301,6 +2301,7 @@ jobs:
         discover-e2e,
         build-e2e-image,
         merge-e2e-image,
+        sdk-head-recheck,
         lease-tenant,
         prepare-tenant,
         e2e,
@@ -2429,6 +2430,13 @@ jobs:
           lease-tenant-result: ${{ needs.lease-tenant.result }}
           prepare-tenant-result: ${{ needs.prepare-tenant.result }}
           e2e-result: ${{ needs.e2e.result }}
+          # Explains a skipped matrix as a deliberate stand-down rather than the
+          # misconfiguration the matrix-skipped anomaly exists to catch. Empty
+          # (the recheck job skipped, or it failed and wrote no answer) reads as
+          # "not explained", which is the correct default: the anomaly is what
+          # stops a future re-wiring of the e2e `if` from greening the gate by
+          # skipping it (FND-701).
+          superseded: ${{ needs.sdk-head-recheck.outputs.superseded }}
 
       # Body only — this step emits no verdict; the completion step below takes
       # the gate's. Its CLI stays frozen: this script is checked out from the
@@ -2729,6 +2737,7 @@ jobs:
         discover-e2e,
         build-e2e-image,
         merge-e2e-image,
+        sdk-head-recheck,
         lease-tenant,
         prepare-tenant,
         e2e,
@@ -2772,6 +2781,13 @@ jobs:
           lease-tenant-result: ${{ needs.lease-tenant.result }}
           prepare-tenant-result: ${{ needs.prepare-tenant.result }}
           e2e-result: ${{ needs.e2e.result }}
+          # Explains a skipped matrix as a deliberate stand-down rather than the
+          # misconfiguration the matrix-skipped anomaly exists to catch. Empty
+          # (the recheck job skipped, or it failed and wrote no answer) reads as
+          # "not explained", which is the correct default: the anomaly is what
+          # stops a future re-wiring of the e2e `if` from greening the gate by
+          # skipping it (FND-701).
+          superseded: ${{ needs.sdk-head-recheck.outputs.superseded }}
 
       - name: Post unified test-summary comment on PR
         if: always() && github.event_name == 'pull_request'

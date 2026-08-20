@@ -471,6 +471,49 @@ def test_the_recheck_is_consumed_at_main() -> None:
     assert step["uses"].endswith("/e2e-dispatch-recheck@main")
 
 
+def test_both_gate_evaluations_are_told_about_the_stand_down() -> None:
+    """Standing down produces the exact tuple the gate driver's matrix-skipped
+    anomaly exists to catch — discovery success, matrix skipped, no install-path
+    failure. Untold, `tests-passed` reds the required check AND `report-to-sdk`
+    mirrors conclusion=failure onto the dispatching SDK commit: "your change
+    broke the connector" for a run that deliberately stood down, which is the
+    FND-218 misattribution the cancelled/failure split exists to prevent.
+
+    Both call sites, because the two are meant to be one decision evaluated
+    twice: a gate told and a callback not told would disagree, which is the
+    drift the shared driver exists to remove."""
+    jobs = _workflow()["jobs"]
+
+    for name in ("tests-passed", "report-to-sdk"):
+        step = next(s for s in jobs[name]["steps"] if s.get("id") == "gate")
+        assert step["uses"].endswith("/verify-test-gate@main"), name
+        assert (
+            step["with"]["superseded"]
+            == "${{ needs.sdk-head-recheck.outputs.superseded }}"
+        ), name
+        # The expression above renders EMPTY unless the job declares the need,
+        # and empty reads as "unexplained" — the anomaly would fire silently.
+        assert "sdk-head-recheck" in jobs[name]["needs"], name
+
+
+def test_the_gate_input_is_optional_and_defaults_to_unexplained() -> None:
+    """The driver is consumed cross-repo at @main. A required input would break
+    every connector the instant it merged, and a default of "true" would let any
+    unexplained skipped matrix green the gate — the anomaly's whole purpose."""
+    gate_action = yaml.safe_load(
+        (
+            Path(__file__).parent.parent.parent
+            / "actions"
+            / "verify-test-gate"
+            / "action.yaml"
+        ).read_text()
+    )
+    superseded = gate_action["inputs"]["superseded"]
+
+    assert superseded["required"] is False
+    assert superseded["default"] == "false"
+
+
 def test_the_action_needs_no_write_permission() -> None:
     """Every read is of public data in another repository, so the job runs on
     contents:read. A check that quietly required more would fail open forever."""

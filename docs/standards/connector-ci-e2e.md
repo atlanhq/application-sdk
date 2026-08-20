@@ -193,10 +193,29 @@ would be skipped as a silent no-op.
   nobody installed onto with `expected-app-version` empty: a silently passing
   wrong-version run, the exact FND-31 failure the lease exists to prevent.
 
-A stood-down run still reports to the dispatching SDK commit, and still reports
-green — the same vacuous green the SDK-side gate gives that commit, for the same
-reason: it is no longer the commit under review, and only the head commit's run
-can satisfy a required check.
+**The Tests Gate has to be told.** A stand-down produces the exact tuple the gate
+driver's "matrix skipped despite discovered suites" anomaly exists to catch — a
+successful discovery, a skipped matrix, and no install-path failure to explain
+it. Left untold, `tests-passed` reds the required check *and* `report-to-sdk`
+mirrors `conclusion=failure` onto the dispatching SDK commit: "your change broke
+the connector" for a run that deliberately stood down, which is exactly the
+misattribution the cancelled/failure split exists to prevent (FND-218).
+
+So `verify-test-gate` takes a `superseded` input, and both call sites pass it —
+they are one decision evaluated twice, and a gate told while the callback is not
+would put them back in disagreement. Only the literal `"true"` explains the skip:
+an absent, empty or unparseable value means the recheck job never answered, and
+an unanswered skip is still unexplained. The input is optional and defaults to
+`"false"`, so a connector pinned at `@main` that has not wired the job keeps the
+previous behaviour, and a future re-wiring of the e2e `if` still cannot green the
+gate by skipping the matrix. The e2e row then reads
+`⊘ Stood down — superseded SDK commit` rather than pointing a reader at a
+workflow misconfiguration that is not there.
+
+A stood-down run therefore reports green to the dispatching SDK commit — the same
+vacuous green the SDK-side gate gives that commit, for the same reason: it is no
+longer the commit under review, and only the head commit's run can satisfy a
+required check.
 
 ## SDR composite action inputs
 
