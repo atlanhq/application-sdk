@@ -104,6 +104,44 @@ class TestDeadlineIsRespected:
         assert attempts[0].remaining == 0
         assert clock.slept == []
 
+    def test_a_slow_probe_does_not_push_the_loop_past_the_deadline(self):
+        """A probe that outlasts its interval must shrink the next gap, not add to it.
+
+        timeout=10, interval=3, one 8s probe: sleeping a full 3s on top of it would
+        end the loop at 11s. The gap is re-clamped against the clock read after the
+        probe returns.
+        """
+        clock = FakeClock()
+        seen: list[Attempt] = []
+        for attempt in until_deadline(
+            10, 3, label="thing", clock=clock.monotonic, sleep=clock.sleep
+        ):
+            seen.append(attempt)
+            if attempt.number == 1:
+                clock.now += 8  # the probe itself takes 8s
+
+        assert clock.slept == [2]
+        assert clock.now == 10
+        assert [a.is_last for a in seen] == [False, True]
+
+    def test_a_probe_that_blows_the_budget_still_gets_a_final_attempt(self):
+        """Clamping the gap to zero must not cost the call site its raise.
+
+        The exhaustion branch keys on is_last, so a loop that returned silently
+        here would swallow the failure.
+        """
+        clock = FakeClock()
+        seen: list[Attempt] = []
+        for attempt in until_deadline(
+            10, 3, label="thing", clock=clock.monotonic, sleep=clock.sleep
+        ):
+            seen.append(attempt)
+            if attempt.number == 1:
+                clock.now += 50  # the probe alone outlasts the whole budget
+
+        assert clock.slept == [0]
+        assert [a.is_last for a in seen] == [False, True]
+
     def test_zero_interval_spins_to_the_deadline(self):
         """interval=0 is legal (the worker-health tier uses it) and terminates.
 
@@ -260,6 +298,21 @@ class TestAsyncTwin:
 
         assert async_attempts == sync_attempts
         assert async_clock.slept == sync_clock.slept
+
+    async def test_a_slow_probe_does_not_push_the_loop_past_the_deadline(self):
+        """The post-probe gap clamp must hold in the async twin too."""
+        clock = FakeClock()
+        seen: list[Attempt] = []
+        async for attempt in until_deadline_async(
+            10, 3, label="thing", clock=clock.monotonic, sleep=clock.async_sleep
+        ):
+            seen.append(attempt)
+            if attempt.number == 1:
+                clock.now += 8
+
+        assert clock.slept == [2]
+        assert clock.now == 10
+        assert [a.is_last for a in seen] == [False, True]
 
     async def test_honours_sleep_next(self):
         clock = FakeClock()

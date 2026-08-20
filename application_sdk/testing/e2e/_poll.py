@@ -27,7 +27,8 @@ own ``try``/``except`` and raises its own typed error leaf on exhaustion::
                 attempts=attempt.number, elapsed_seconds=attempt.elapsed
             )
 
-What the loop owns: the clock, the sleeping, the off-by-one, and a throttled
+What the loop owns: the clock, the sleeping, the off-by-one (including the gap
+after a probe that overran its own interval), and a throttled
 heartbeat log so a multi-minute wait doesn't look wedged in CI output. What the
 call site owns: the probe, the success condition, and the failure.
 
@@ -96,9 +97,11 @@ class Attempt:
             seconds: The gap the origin asked for.
 
         Returns:
-            The gap the loop will actually wait — clamped to :attr:`remaining`,
-            so a 120s request against a 50s residual budget cannot push the loop
-            past its own deadline. Log this, not the requested value.
+            The gap the loop will wait — clamped to :attr:`remaining`, so a 120s
+            request against a 50s residual budget cannot push the loop past its
+            own deadline. Log this, not the requested value. Measured against the
+            budget as of *this* attempt; a probe that then overruns its own
+            interval shortens the real gap further (see :func:`_next_gap`).
 
         Note:
             A no-op on an :attr:`is_last` attempt: the loop stops rather than
@@ -146,6 +149,28 @@ def _next_attempt(
     )
 
 
+def _next_gap(
+    attempt: Attempt,
+    start: float,
+    timeout_seconds: float,
+    interval_seconds: float,
+    now: float,
+) -> float:
+    """How long to wait before the next poll, given the clock after the probe.
+
+    ``attempt.remaining`` was measured *before* the probe ran. A probe that
+    outlasts its own interval has already eaten into the budget, so sleeping the
+    full gap on top of it would carry the loop past the deadline — the exact
+    overshoot ``is_last`` exists to prevent, arriving by a different route. Read
+    the clock again and clamp.
+
+    Clamping to zero costs the call site nothing: the next iteration still yields
+    a final attempt with ``is_last=True``, so its exhaustion branch always fires.
+    """
+    requested = attempt._gap if attempt._gap is not None else interval_seconds
+    return min(requested, max(timeout_seconds - (now - start), 0.0))
+
+
 def until_deadline(
     timeout_seconds: float,
     interval_seconds: float,
@@ -157,10 +182,20 @@ def until_deadline(
 ) -> Iterator[Attempt]:
     """Yield one :class:`Attempt` per poll until the budget expires, sleeping between.
 
-    At least one attempt is always yielded — a zero or negative budget still gets
-    a single probe, and that probe carries ``is_last=True``. The final attempt is
-    the last one for which a further ``interval_seconds`` still fits inside
-    ``timeout_seconds``, so the loop never sleeps beyond its own deadline.
+    The final attempt is the last one for which a further ``interval_seconds``
+    still fits inside ``timeout_seconds``, and each gap is re-clamped against the
+    clock read *after* the probe returns, so the loop never sleeps beyond its own
+    deadline — not even when a probe outlasts its own interval.
+
+    At least one attempt is always yielded: a zero or negative budget still gets a
+    single probe, carrying ``is_last=True``. This is a deliberate contract change
+    from the hand-rolled ``while clock() < deadline`` loops this replaced, which
+    probed zero times on a non-positive budget. Exhaustion branches key on
+    ``is_last``, so a loop that yields nothing raises nothing — the failure would
+    vanish silently instead of surfacing as a typed error. No call site passes a
+    non-positive budget today (every one reads a positive ``ClassVar`` default),
+    so the change is contract-only; a caller that genuinely wants
+    zero-budget-means-no-work must check that before entering the loop.
 
     Args:
         timeout_seconds: Total wall-clock budget for the whole loop.
@@ -195,7 +230,9 @@ def until_deadline(
         yield attempt
         if attempt.is_last:
             return
-        do_sleep(attempt._gap if attempt._gap is not None else interval_seconds)
+        do_sleep(
+            _next_gap(attempt, start, timeout_seconds, interval_seconds, read_clock())
+        )
 
 
 async def until_deadline_async(
@@ -243,7 +280,9 @@ async def until_deadline_async(
         yield attempt
         if attempt.is_last:
             return
-        await do_sleep(attempt._gap if attempt._gap is not None else interval_seconds)
+        await do_sleep(
+            _next_gap(attempt, start, timeout_seconds, interval_seconds, read_clock())
+        )
 
 
 # ---------------------------------------------------------------------------
