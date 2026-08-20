@@ -58,6 +58,11 @@ inputs:
       function of the names: derive it from anything per-run and two contenders
       disagree about which lock comes first, which is the whole guarantee.
 
+      Names are canonicalised to the lease key before they are ordered, so
+      spelling cannot reorder the locks: `aws, gcp` and `aws,gcp` are one pair of
+      tenants taken in one order, and a difference in case or spacing between two
+      callers cannot invert them.
+
       Empty falls back to `cloud`, so a caller can pass both unconditionally —
       no branching shell — and the single-tenant path, where the resolved cloud
       list is legitimately empty, keeps leasing "default".

@@ -1367,6 +1367,30 @@ def test_ordered_acquisition_deduplicates_clouds(http: FakeHTTP) -> None:
     assert list(outcome.held) == [_ref_for("aws")]
 
 
+@pytest.mark.parametrize("spelling", ["aws,gcp", "aws, gcp", " GCP ,aws", "AWS,gcp"])
+def test_ordered_acquisition_orders_by_the_lease_key_not_the_spelling(
+    spelling: str, http: FakeHTTP
+) -> None:
+    """Every spelling of one set names the same pair of LOCKS, so every spelling
+    has to take them in the same order. Sorting the raw tokens does not: " gcp"
+    sorts before "aws" on its leading space, so `"aws, gcp"` and `"aws,gcp"` would
+    take one pair of locks in opposite orders — two contenders disagreeing about
+    which lock comes first, which is exactly the FND-646 cycle. So the sort key is
+    the `slug()` the lease is keyed on, not the text the caller typed."""
+    _stub_free_and_claimable(http, ["aws", "gcp"])
+    _ordered(spelling.split(","))
+    assert _claimed_refs(http) == [_ref_for("aws"), _ref_for("gcp")]
+
+
+def test_ordered_acquisition_deduplicates_across_spellings(http: FakeHTTP) -> None:
+    # Same lease named twice. Canonicalizing before the dedup is what collapses
+    # it to one entry; two raw spellings would CAS the one ref twice, and the
+    # second attempt reads this run's own lease as somebody else's occupancy.
+    _stub_free_and_claimable(http, ["aws"])
+    outcome = _ordered(["aws", " AWS "])
+    assert list(outcome.held) == [_ref_for("aws")]
+
+
 def test_a_blocked_cloud_gives_back_what_was_already_held(http: FakeHTTP) -> None:
     """The whole point. Holding aws while blocking on azure is hold-and-wait —
     exactly the shape that deadlocked when two runs split a freed set — so a run
@@ -1433,6 +1457,31 @@ def test_release_all_gives_every_lease_back(http: FakeHTTP) -> None:
 def test_release_all_of_nothing_makes_no_calls(http: FakeHTTP) -> None:
     release_all(REPO, [], 100, 1)
     assert http.calls == []
+
+
+def test_release_all_attempts_every_ref_even_when_one_release_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """This is the unwind path for a partial hold, so it must not abandon the rest
+    of the set at the first transport failure: the leases it skipped would stay
+    held until their TTL expired, which is the hold-and-wait that ordered
+    acquisition exists to remove. Every ref is attempted, then the first failure
+    is re-raised so the job still goes red."""
+    attempted: list[str] = []
+
+    def failing_release(repo: str, ref: str, run_id: int, attempt: int) -> bool:
+        attempted.append(ref)
+        if ref == _ref_for("gcp"):
+            raise SystemExit("::error::curl retries exhausted")
+        return True
+
+    monkeypatch.setattr("e2e_tenant_lease.release", failing_release)
+
+    with pytest.raises(SystemExit, match="retries exhausted"):
+        release_all(REPO, [_ref_for("aws"), _ref_for("gcp")], 100, 1)
+
+    # Reverse order, so gcp is the one that fails — and aws is still given back.
+    assert attempted == [_ref_for("gcp"), _ref_for("aws")]
 
 
 # --- the ordered CLI -------------------------------------------------------

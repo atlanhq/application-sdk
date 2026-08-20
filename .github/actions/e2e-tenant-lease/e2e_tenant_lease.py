@@ -797,7 +797,17 @@ def acquire_ordered(
     The order is ``sorted()`` over the cloud names, and it MUST stay a pure
     function of the names. Deriving it from anything per-run (run id, arrival
     order, the caller's list order) is what breaks the guarantee, because two
-    contenders would then disagree about which lock comes first. Every contender
+    contenders would then disagree about which lock comes first.
+
+    It sorts the ``slug()`` of each name — the same canonical form ``lease_ref``
+    keys the lease on — rather than the raw token, because the order has to be a
+    pure function of the *lock*, not of its spelling. Sorting raw tokens would let
+    ``"aws, gcp"`` and ``"aws,gcp"`` (or a difference in case) take the very same
+    pair of locks in opposite orders, which is exactly the disagreement that
+    reopens the FND-646 cycle. Canonicalizing first also makes the dedup real:
+    two spellings of one cloud collapse to the one lease they name.
+
+    Every contender
     also computes it over its OWN resolved cloud list, which may be a subset —
     that is fine and is why sorting works: any two runs still take their common
     subset in the same relative order.
@@ -814,7 +824,7 @@ def acquire_ordered(
     rate by the number of clouds, and that rate is the binding constraint (see
     the module docstring's API budget section).
     """
-    order = sorted(set(clouds))
+    order = sorted({slug(cloud) for cloud in clouds})
     held: list[str] = []
     deadline = clock() + wait_seconds
     ref = lease_ref(app, order[0])
@@ -867,9 +877,22 @@ def release_all(repo: str, refs: list[str], run_id: int, attempt: int) -> None:
     Reverse order, so the lock taken last is given back first. It makes no
     difference to correctness — releases cannot block — but it keeps the log
     reading as the inverse of the acquisition.
+
+    Every ref is attempted even if one release exhausts its transport retries and
+    raises: this is the unwind path for a partial hold, so abandoning the rest at
+    the first failure would leave earlier leases held until their TTL expires —
+    the hold-and-wait ``acquire_ordered`` exists to remove. The first failure is
+    re-raised once the whole set has been attempted, so the job still goes red.
     """
+    failure: SystemExit | None = None
     for ref in reversed(refs):
-        release(repo, ref, run_id, attempt)
+        try:
+            release(repo, ref, run_id, attempt)
+        except SystemExit as exc:
+            print(f"::warning::could not release {ref}; continuing with the rest.")
+            failure = failure or exc
+    if failure is not None:
+        raise failure
 
 
 def _sleep_for_rate_limit(sleep, poll_seconds: int, retry_after: int | None) -> None:
@@ -1069,7 +1092,12 @@ def main(argv: list[str] | None = None) -> int:
             "(0 disables the TTL backstop)"
         )
 
-    clouds = [cloud for cloud in args.clouds.split(",") if cloud.strip()]
+    # Canonicalize to the same form `lease_ref` keys the lease on, so the
+    # acquisition order is a function of the lock rather than of its spelling:
+    # "aws, gcp" and "aws,gcp" name one pair of locks and must take them in one
+    # order. Blank tokens are dropped on the raw text first, because `slug("")`
+    # is the single-tenant "default" rather than nothing.
+    clouds = [slug(cloud) for cloud in args.clouds.split(",") if cloud.strip()]
     if clouds and args.cloud.strip():
         # Silently preferring one would make the OTHER one's tenant unserialised
         # while the job still went green.
