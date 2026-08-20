@@ -261,8 +261,10 @@ artifacts land under the canonical run prefix for the tier. A key-preserving
 copy whose source and destination are the same object is recognised as already
 satisfied (`reason="skipped:same_object"`) rather than moving bytes — but a
 `ref` pointing at a key that was never written still fails loudly with
-`StorageNotFoundError`. A partially-present local directory gets both: the local
-files plus anything present only in the store. See
+`StorageNotFoundError`. A partially-present local directory gets both — the
+local files plus anything present only in the store — but only when the
+destination is a *different* store (an SDR hand-off to the upstream store);
+within a single store the local tree stays authoritative. See
 [file-reference.md](file-reference.md) and
 [ADR-0014](../adr/0014-two-store-storage-architecture.md).
 

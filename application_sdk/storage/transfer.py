@@ -142,9 +142,14 @@ async def _upload_from_store(
 
     * Step 0 — same-object guard: when *source_store* and *target_store* are the
       same store and the keys are identical, the object already is its own
-      destination.  Returns immediately, without even the two sidecar GETs the
-      SHA-256 dedup would cost.  This is the key-preserving
-      deployment→deployment leg of the ADR-0014 dual write (FND-536).
+      destination — **provided it is there**.  Presence is taken from
+      *source_listed*, or established with one HEAD when the key came from a
+      caller-supplied ``FileReference``; only then does this return immediately,
+      without even the two sidecar GETs the SHA-256 dedup would cost.  An absent
+      object falls through to the copy path below and raises
+      ``StorageNotFoundError`` like any other leg would.  This is the
+      key-preserving deployment→deployment leg of the ADR-0014 dual write
+      (FND-536).
     * Step 1 — cross-store SHA-256 dedup: skips the transfer when both stores
       already hold the same content at their respective keys.
     * Step 3 — deployment-store fallback: downloads to a temporary local file

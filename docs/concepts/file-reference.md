@@ -435,9 +435,13 @@ Two behaviours worth knowing:
   this shape. A `ref` pointing at a key that was never written is *not* silently
   treated as satisfied — it fails with `StorageNotFoundError`.
 
-A **partially**-present local directory gets both halves: the local files are
-uploaded and anything present only in the store is streamed, so the destination
-copy is complete regardless of which pod produced what.
+A **partially**-present local directory gets both halves **when the destination
+is a different store** — i.e. an SDR hand-off to the upstream store: the local
+files are uploaded and anything present only in the deployment store is
+streamed, so the destination copy is complete regardless of which pod produced
+what. Within a single store the local directory stays authoritative and
+store-only files are not merged in; there is no second store to reconcile
+against, so a partial local tree publishes as partial.
 
 Deriving the ref is automatic — passing `local_path` alone gives you the same
 fallback, since the SDK derives `ref` from it. Pass `ref` explicitly when the
