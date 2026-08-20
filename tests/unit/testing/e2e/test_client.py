@@ -1531,6 +1531,45 @@ class TestFindRunCreatedSince:
         assert lookup == RunLookup(run_id=None, conclusive=True)
 
 
+class TestProbeRunIsListed:
+    """The success-path probe that settles _RESUBMIT_WHEN_AE_REPORTS_NO_RUN.
+
+    Its whole value is that a wrong answer is worse than no answer, so
+    'listed', 'answered but absent' and 'never answered' stay three outcomes.
+    """
+
+    def test_listed_run_returns_true(self):
+        body = {"data": [{"guid": "r-1"}, {"guid": "r-0"}]}
+        client = _make_client()
+        with patch.object(client, "_request", return_value=(200, body)):
+            assert client.probe_run_is_listed("slug-x", "r-1") is True
+
+    def test_answered_without_the_run_returns_false(self):
+        client = _make_client()
+        with patch.object(client, "_request", return_value=(200, {"data": []})):
+            assert client.probe_run_is_listed("slug-x", "r-1") is False
+
+    def test_unanswered_read_returns_none_not_false(self):
+        """A read that never got through settles nothing — reporting it as
+        'absent' would be recorded as evidence for flipping the gate."""
+        client = _make_client()
+        with patch.object(
+            client, "_request", side_effect=AtlanApiTimeoutError(message="blackholed")
+        ):
+            assert client.probe_run_is_listed("slug-x", "r-1") is None
+
+    def test_non_2xx_returns_none(self):
+        client = _make_client()
+        with patch.object(client, "_request", return_value=(503, {"err": "down"})):
+            assert client.probe_run_is_listed("slug-x", "r-1") is None
+
+    def test_never_raises_into_the_leg(self):
+        """Outcome-neutral: a broken probe must not fail a passing e2e run."""
+        client = _make_client()
+        with patch.object(client, "_request", return_value=(200, {"data": "junk"})):
+            assert client.probe_run_is_listed("slug-x", "r-1") is False
+
+
 class TestSubmitReconciliation:
     """submit_workflow resolves an ambiguous timeout by asking AE what happened
     rather than guessing from the transport error."""

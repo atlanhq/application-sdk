@@ -1251,6 +1251,83 @@ class AEWorkflowClient:
             )
         return RunLookup(conclusive=answered)
 
+    def probe_run_is_listed(self, slug: str, run_id: str) -> bool | None:
+        """Log-only check that *run_id* is visible in AE's run listing for *slug*.
+
+        Exists to settle :data:`_RESUBMIT_WHEN_AE_REPORTS_NO_RUN` with evidence
+        instead of waiting for a rare failure to produce it. The reconcile read
+        only fires on an ambiguous submit timeout, so on its own it would tell
+        us nothing until the next such timeout — and only for that one leg.
+        This probe runs on the *success* path, where we already know the true
+        run id, and asks the one question the gate turns on: does a run
+        submitted through Heracles show up in a listing that filters on
+        automation-engine fields?
+
+        Call it after the DAG poll has finished, not right after the submit:
+        production AE serves the listing from Elasticsearch, and an immediate
+        probe would report a lag as an absence — the exact false negative the
+        gate exists to avoid, recorded as if it were the answer.
+
+        Never raises and never affects the run's outcome.
+
+        Returns:
+            ``True`` if AE listed the run, ``False`` if it answered without it,
+            ``None`` if the read did not get through (which settles nothing).
+        """
+        path = (
+            f"/automation/api/v1/runs?workflow_slug={quote(slug, safe='')}"
+            f"&page=0&page_size={_RECONCILE_PAGE_SIZE}"
+            "&include_test_runs=true&include_system=true"
+        )
+        try:
+            status, body = self._request("GET", path)
+        except AppError:
+            logger.warning(
+                "AE-listing probe for slug %s did not get through; whether a "
+                "Heracles-submitted run is listable stays unanswered",
+                slug,
+                exc_info=True,
+            )
+            return None
+        if status >= 300 or not isinstance(body, dict):
+            logger.warning(
+                "AE-listing probe for slug %s returned HTTP %d; whether a "
+                "Heracles-submitted run is listable stays unanswered\n"
+                "response=%r",
+                slug,
+                status,
+                body,
+            )
+            return None
+        rows = body.get("data")
+        listed = (
+            [r.get("guid") or r.get("run_id") for r in rows if isinstance(r, dict)]
+            if isinstance(rows, list)
+            else []
+        )
+        if run_id in listed:
+            logger.info(
+                "AE-listing probe: run %s IS listed under slug %s — a "
+                "Heracles-submitted run is discoverable via "
+                "GET /automation/api/v1/runs, so reconciliation can trust an "
+                "empty read as proof of absence (FND-676: this is the evidence "
+                "_RESUBMIT_WHEN_AE_REPORTS_NO_RUN waits on)",
+                run_id,
+                slug,
+            )
+            return True
+        logger.warning(
+            "AE-listing probe: run %s is NOT listed under slug %s (AE returned "
+            "%d run(s): %r) — reconciliation must NOT treat an empty read as "
+            "proof of absence; keep _RESUBMIT_WHEN_AE_REPORTS_NO_RUN off "
+            "(FND-676)",
+            run_id,
+            slug,
+            len(listed),
+            listed,
+        )
+        return False
+
     def submit_workflow(
         self,
         payload: dict[str, Any],

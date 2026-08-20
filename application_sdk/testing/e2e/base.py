@@ -1067,6 +1067,11 @@ class BaseE2ETest:
             progress_stall_seconds=self.dag_progress_stall_seconds,
         )
 
+        # Log-only, outcome-neutral. Placed after the poll so Elasticsearch
+        # indexing lag cannot masquerade as an absence. See
+        # probe_run_is_listed — this is what settles FND-676's gate.
+        self.client.probe_run_is_listed(slug, run_id)
+
         asset_counts: dict[str, int] = {}
         asset_qn_samples: dict[str, list[str]] = {}
         total_assets = 0

@@ -773,6 +773,11 @@ class BaseFullDAGE2ETest:
             timeout_seconds=self.ae_poll_timeout_seconds,
         )
 
+        # Log-only, outcome-neutral. Placed after the poll so Elasticsearch
+        # indexing lag cannot masquerade as an absence. See
+        # probe_run_is_listed — this is what settles FND-676's gate.
+        self.client.probe_run_is_listed(slug, run_id)
+
         # Only probe Atlas if every DAG node succeeded — extract feeds
         # publish, qi feeds lineage-app, lineage-app feeds lineage-
         # publish, so a partial-success DAG produces a partial-success
