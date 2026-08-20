@@ -314,6 +314,20 @@ class TestAsyncTwin:
         assert clock.now == 10
         assert [a.is_last for a in seen] == [False, True]
 
+    async def test_a_probe_that_blows_the_budget_still_gets_a_final_attempt(self):
+        """Clamping the async gap to zero must not cost the call site its raise."""
+        clock = FakeClock()
+        seen: list[Attempt] = []
+        async for attempt in until_deadline_async(
+            10, 3, label="thing", clock=clock.monotonic, sleep=clock.async_sleep
+        ):
+            seen.append(attempt)
+            if attempt.number == 1:
+                clock.now += 50  # the probe alone outlasts the whole budget
+
+        assert clock.slept == [0]
+        assert [a.is_last for a in seen] == [False, True]
+
     async def test_honours_sleep_next(self):
         clock = FakeClock()
         async for attempt in until_deadline_async(
