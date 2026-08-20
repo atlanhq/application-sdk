@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import mothership_terminate_session as mts
 
-SESSION = "sdk-review-atlanhq-application-sdk-1234-deadbeef"
+SESSION = "sdk-review-1234-deadbeef-99-1"
 
 
 def _requester(status: int, body: str = ""):

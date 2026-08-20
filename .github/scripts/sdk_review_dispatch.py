@@ -64,6 +64,7 @@ step in `.github/workflows/sdk-review.yml`):
 
 from __future__ import annotations
 
+import hashlib
 import http.client
 import json
 import os
@@ -159,6 +160,20 @@ IDLE_TIMEOUT_SECONDS = 1800
 # be empty" — same model, same bug). Swapping the model is the whole point of
 # the retry.
 MAX_DISPATCH_ATTEMPTS = 2
+# Mothership names the sandbox after the `session_id` it is handed, and that
+# name is a DNS label: `worker /sandbox/create` answers HTTP 500
+# {"error":"Sandbox ID must be 1-63 characters long."} for anything longer.
+# That killed the retry on #3326 and, by arithmetic, every retry this lane had
+# ever authorised (FND-677): the base id the workflow builds was 62 chars, so
+# attempt 1 booted and attempt 2 — base + `-retry1` — was 69 and could not
+# create a sandbox at all. Both retry classes derive their id here, so both
+# were dead on arrival. The base id is now short enough that the ladder fits
+# untouched; this cap is the invariant that keeps it that way.
+SANDBOX_ID_MAX_CHARS = 63
+# Chars of sha256 spent identifying an id that had to be squeezed. 10 hex chars
+# is ~40 bits — collision-proof enough for one repo's review ids, and short
+# enough to leave the human-readable head intact.
+SANDBOX_ID_DIGEST_CHARS = 10
 # Attempt 2's main model: mothership's own DEFAULT_CLAUDE_MODEL, named
 # explicitly rather than by omitting `model` from the payload, so a test can
 # assert the two attempts actually differ and the retry does not silently
@@ -293,6 +308,28 @@ def attempt_suffix(attempt: int) -> str:
     return "" if attempt <= 1 else f"-retry{attempt - 1}"
 
 
+def fit_sandbox_id(session_id: str) -> str:
+    """Squeeze `session_id` into mothership's sandbox-name budget.
+
+    Truncation alone would be a correctness bug, not a cosmetic one: every
+    part of the id that carries uniqueness (run id, run attempt, retry suffix)
+    sits at the END, and consecutive GitHub run ids share a long prefix — so a
+    head-truncated id could equal the previous run's, which is precisely the
+    resume-a-dead-conversation collision the attempt ladder exists to avoid.
+    Keep the legible head, and spend the last chars on a digest of the WHOLE
+    pre-truncation id so distinct inputs keep distinct outputs.
+
+    This is a backstop, not the fix: the workflow's base id leaves ~18 chars of
+    headroom under the cap, so a squeezed id means the format drifted (a test
+    asserts the real one still fits untouched).
+    """
+    if len(session_id) <= SANDBOX_ID_MAX_CHARS:
+        return session_id
+    digest = hashlib.sha256(session_id.encode()).hexdigest()[:SANDBOX_ID_DIGEST_CHARS]
+    head = session_id[: SANDBOX_ID_MAX_CHARS - SANDBOX_ID_DIGEST_CHARS - 1].rstrip("-")
+    return f"{head}-{digest}" if head else digest
+
+
 def attempt_session_id(session_id: str, attempt: int) -> str:
     """A retry MUST NOT reuse the session id.
 
@@ -302,8 +339,12 @@ def attempt_session_id(session_id: str, attempt: int) -> str:
     conversation found with session" failure on #2987 and the zero-SSE death on
     #2989. `mothership_terminate_session.py` derives the same ids so a cancel
     still stops whichever attempt is live.
+
+    Every id the lane can send goes through here, so the sandbox-name budget is
+    enforced in one place — the dispatcher and the terminator cannot disagree
+    about what was actually booted.
     """
-    return f"{session_id}{attempt_suffix(attempt)}"
+    return fit_sandbox_id(f"{session_id}{attempt_suffix(attempt)}")
 
 
 def build_payload(
