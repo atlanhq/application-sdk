@@ -16,6 +16,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import re
 import sys
 import urllib.error
 from pathlib import Path
@@ -54,7 +55,7 @@ def _frame(inner: dict) -> str:
 
 def _payload(**overrides):
     kwargs = dict(
-        session_id="sdk-review-atlanhq-application-sdk-42-0cab6b6e-99-1",
+        session_id="sdk-review-42-0cab6b6e-99-1",
         pr_number="42",
         pr_url="https://github.com/atlanhq/application-sdk/pull/42",
         repo="atlanhq/application-sdk",
@@ -844,6 +845,116 @@ def test_the_session_id_comes_from_the_step_the_terminator_also_reads():
         == terminator["env"]["SESSION_ID"]
         == "${{ steps.session.outputs.session_id }}"
     )
+
+
+# ---------------------------------------------------------------------------
+# the sandbox-name budget (FND-677)
+# ---------------------------------------------------------------------------
+
+# Worst case, deliberately past anything GitHub has handed this repo: 6-digit
+# PR numbers, a 13-digit run id (they are 11 today), and a 2-digit run attempt.
+# The budget has to survive growth, not just today's values.
+WORST_CASE_SESSION_VARS = {
+    "PR_NUMBER": "999999",
+    "HEAD_SHA_SHORT": "0cab6b6e",
+    "RUN_ID": "9999999999999",
+    "RUN_ATTEMPT": "99",
+}
+
+
+def session_step() -> dict:
+    steps = yaml.safe_load(WORKFLOW.read_text())["jobs"]["sdk-review-dispatch"]["steps"]
+    for step in steps:
+        if step.get("id") == "session":
+            return step
+    raise AssertionError("no `session` step in sdk-review-dispatch")
+
+
+def worst_case_base_session_id() -> str:
+    """The id the workflow would emit for the worst-case inputs.
+
+    Read out of the YAML rather than restated here: a test that hardcodes the
+    format cannot fail when the format is what drifts.
+    """
+    step = session_step()
+    template = re.search(r'session_id=(\S+)" >> "\$GITHUB_OUTPUT"', step["run"])
+    assert template, f"no session_id assignment in the `session` step: {step['run']!r}"
+    fmt = template.group(1)
+    referenced = set(re.findall(r"\$\{(\w+)", fmt))
+    assert referenced == set(WORST_CASE_SESSION_VARS), (
+        "the session id format changed which variables it interpolates — "
+        f"{referenced} vs {set(WORST_CASE_SESSION_VARS)}; re-check the budget "
+        "before updating this list"
+    )
+    for name, value in WORST_CASE_SESSION_VARS.items():
+        assert name in step["env"], f"session step no longer supplies {name}"
+        fmt = fmt.replace(f"${{{name}}}", value)
+    assert "$" not in fmt, f"unsubstituted shell in {fmt!r}"
+    return fmt
+
+
+def test_every_id_in_the_ladder_fits_the_sandbox_name_untruncated():
+    """The bug that made every re-dispatch unbootable, asserted at the source.
+
+    Mothership names the sandbox after the session id and rejects anything over
+    63 chars, so the base id has to leave room for the LONGEST suffix the ladder
+    can append — not merely fit on its own. It used to carry the repo name,
+    which put the base at 62 and `-retry1` at 69: attempt 1 booted and every
+    retry died on `/sandbox/create`.
+
+    Asserting equality, not just length, is the point: a `len() <= 63` check
+    would pass just as happily on an id `fit_sandbox_id()` had silently
+    replaced with a digest, which is a backstop and not a state to ship in.
+    """
+    base = worst_case_base_session_id()
+    for attempt in range(1, sd.MAX_DISPATCH_ATTEMPTS + 1):
+        expected = f"{base}{sd.attempt_suffix(attempt)}"
+        assert len(expected) <= sd.SANDBOX_ID_MAX_CHARS, (
+            f"attempt {attempt} id is {len(expected)} chars, over mothership's "
+            f"{sd.SANDBOX_ID_MAX_CHARS}-char sandbox name: {expected}"
+        )
+        assert sd.attempt_session_id(base, attempt) == expected
+
+
+def test_a_short_id_is_handed_through_unchanged():
+    """The cap must be invisible in the normal case — including to the
+    terminator, which reconstructs ids the dispatcher already sent."""
+    assert sd.fit_sandbox_id("sdk-review-42-0cab6b6e-99-1") == (
+        "sdk-review-42-0cab6b6e-99-1"
+    )
+    assert sd.attempt_session_id("base-id", 2) == "base-id-retry1"
+
+
+def test_a_squeezed_id_stays_inside_the_budget_and_keeps_its_head():
+    over = "sdk-review-" + "x" * 80
+    fitted = sd.fit_sandbox_id(over)
+    assert len(fitted) == sd.SANDBOX_ID_MAX_CHARS
+    assert fitted.startswith("sdk-review-")
+    # A DNS label: lowercase alphanumerics and dashes, starting and ending on a
+    # character mothership will accept.
+    assert re.fullmatch(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?", fitted)
+
+
+def test_squeezing_keeps_the_uniqueness_that_lives_in_the_tail():
+    """Plain truncation would resurrect the collision the ladder exists to stop.
+
+    Consecutive GitHub run ids share a long prefix and the attempt/retry
+    markers sit at the very end, so an id cut to length would make two distinct
+    runs — and the two attempts of one run — ask mothership to RESUME the same
+    session. The digest is taken over the whole pre-truncation id, so the parts
+    that fall off still change the result.
+    """
+    long_base = "sdk-review-999999-0cab6b6e-" + "9" * 40
+    neighbours = [f"{long_base}1-1", f"{long_base}2-1", f"{long_base}1-2"]
+    fitted = [sd.fit_sandbox_id(n) for n in neighbours]
+    assert len(set(fitted)) == len(neighbours)
+
+    ladder = [
+        sd.attempt_session_id(f"{long_base}1-1", attempt)
+        for attempt in range(1, sd.MAX_DISPATCH_ATTEMPTS + 1)
+    ]
+    assert len(set(ladder)) == sd.MAX_DISPATCH_ATTEMPTS
+    assert all(len(sid) <= sd.SANDBOX_ID_MAX_CHARS for sid in ladder)
 
 
 # ---------------------------------------------------------------------------
