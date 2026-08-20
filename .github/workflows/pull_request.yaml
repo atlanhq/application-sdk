@@ -480,11 +480,19 @@ jobs:
     #                         scoping as tests-reusable's lease-tenant job.
     #   checks: read        — has this SHA already been dispatched? The
     #                         'Connector E2E run / <app>' check is the evidence.
+    #   actions: read       — tell a claimant that died before dispatching from
+    #                         one that is mid-dispatch. Without it the run read
+    #                         404s, a LIVE claimant reads as dead, and its claim
+    #                         is reclaimed — a second connector run onto the same
+    #                         tenants, i.e. the bug the guard exists to prevent.
+    #                         The sibling lease-tenant job grants this for the
+    #                         same reason.
     #   pull-requests: read — the stale-claim prune keeps a claim only while its
     #                         SHA is still an open PR head.
     permissions:
       contents: write
       checks: read
+      actions: read
       pull-requests: read
     strategy:
       fail-fast: false

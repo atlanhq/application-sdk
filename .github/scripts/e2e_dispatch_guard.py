@@ -142,6 +142,12 @@ _PRUNE_MAX_PAGES = 5
 _PRUNE_MAX_DELETES = 25
 _OPEN_PR_MAX_PAGES = 5
 
+# Pages of check runs on ONE commit. Ten (1000 checks) is far past what any SHA
+# here carries; the cap exists so a pathological commit cannot spin, and hitting
+# it is reported as "unreadable" rather than "no dispatch found" — the direction
+# that fails open.
+_CHECKS_MAX_PAGES = 10
+
 _SAFE_SLUG_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789._-")
 _SHA_RE = re.compile(r"\A[0-9a-f]{7,64}\Z")
 
@@ -461,28 +467,64 @@ def checks_state(repo: str, sha: str, check_run_name: str) -> str | None:
     because "absent" and "done" mean opposite things to the prune: a claim whose
     check was never created may still be about to dispatch, while one whose check
     has concluded cannot.
+
+    Paginated, and "absent" is only returned once every page has been read. A
+    single ``per_page=100`` GET would report a named check living past page one as
+    "never dispatched", which is the one wrong answer that costs a tenant: the
+    reclaim path would then fire a second connector run. This repo's SHAs already
+    carry enough checks for that to be reachable, which is why
+    ``poll_check_runs_gate.py`` paginates the same endpoint.
+
+    Anything that prevents full coverage — a failed page, a missing page, more
+    pages than the cap — is "unreadable" rather than "absent", so the callers
+    fall open instead of acting on a partial list.
     """
-    response = gh_request(
-        "GET",
-        f"repos/{repo}/commits/{sha}/check-runs?per_page=100",
-    )
-    if response.status >= 400 or not isinstance(response.body, dict):
+    matches: list[dict] = []
+    seen = 0
+    for page in range(1, _CHECKS_MAX_PAGES + 1):
+        response = gh_request(
+            "GET",
+            f"repos/{repo}/commits/{sha}/check-runs?per_page=100&page={page}",
+        )
+        if response.status >= 400 or not isinstance(response.body, dict):
+            print(
+                f"::warning::could not read the check runs on {sha} "
+                f"(HTTP {response.status})."
+            )
+            return None
+        runs = response.body.get("check_runs")
+        if not isinstance(runs, list):
+            return None
+        matches.extend(
+            entry
+            for entry in runs
+            if isinstance(entry, dict) and entry.get("name") == check_run_name
+        )
+        seen += len(runs)
+
+        total = response.body.get("total_count")
+        # total_count makes coverage decidable; without it a short page is the
+        # only end-of-list signal left.
+        if seen >= total if isinstance(total, int) else len(runs) < 100:
+            break
+        if not runs:
+            # A page that adds nothing while the count says there is more: the
+            # listing cannot be completed, so it is unreadable, not empty.
+            print(
+                f"::warning::the check-run listing for {sha} stopped short of "
+                f"its own total_count ({seen}/{total})."
+            )
+            return None
+    else:
         print(
-            f"::warning::could not read the check runs on {sha} "
-            f"(HTTP {response.status})."
+            f"::warning::{sha} carries more than {_CHECKS_MAX_PAGES} pages of "
+            "check runs, so this could not be read in full."
         )
         return None
-    runs = response.body.get("check_runs")
-    if not isinstance(runs, list):
-        return None
-    mine = [
-        entry
-        for entry in runs
-        if isinstance(entry, dict) and entry.get("name") == check_run_name
-    ]
-    if not mine:
+
+    if not matches:
         return "absent"
-    return "done" if all(e.get("status") == _COMPLETED for e in mine) else "running"
+    return "done" if all(e.get("status") == _COMPLETED for e in matches) else "running"
 
 
 def claim_is_settled(repo: str, ref: str, sha: str, check_run_name: str) -> bool | None:
@@ -799,7 +841,8 @@ def main(argv: list[str] | None = None) -> int:
             f"::warning::the duplicate-dispatch guard is not working ({unavailable}), "
             "so this run is dispatching unguarded. Worst case is the pre-existing "
             "behaviour: a duplicate connector run. Grant this job 'contents: write' "
-            "(claim refs), 'checks: read' and 'pull-requests: read' if that is what "
+            "(claim refs), 'checks: read', 'actions: read' and "
+            "'pull-requests: read' if that is what "
             "is missing."
         )
         write_outputs(

@@ -188,7 +188,9 @@ runs:
     # continue-on-error plus `!= 'false'` below: every guard failure must leave
     # the dispatch happening. A PR whose e2e silently never ran is far worse than
     # one that pays for a duplicate — which is exactly the pre-existing
-    # behaviour. Needs contents:write (the claim ref), checks:read (has this SHA
+    # behaviour. Needs contents:write (the claim ref), actions:read (is a
+    # claimant that has not dispatched yet still alive, or did it die?),
+    # checks:read (has this SHA
     # already been dispatched?) and pull-requests:read (the stale-claim prune).
     - name: Claim the dispatch slot for this SHA
       id: dispatch_guard

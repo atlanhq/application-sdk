@@ -28,8 +28,10 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from e2e_dispatch_guard import (  # noqa: E402
+    _CHECKS_MAX_PAGES,
     Claimant,
     GuardUnavailable,
+    checks_state,
     claim_is_settled,
     claim_ref,
     dispatch_exists,
@@ -641,6 +643,125 @@ def test_a_5xx_is_retried_before_giving_up(http: FakeHTTP, monkeypatch) -> None:
     assert http.count("GET", "/actions/runs/7") == 2
 
 
+# --- the check-run listing is paginated ------------------------------------
+#
+# A single per_page=100 GET reports a named check living past page one as "never
+# dispatched" — the one wrong answer that costs a tenant, because the reclaim
+# path then fires a second connector run. This repo's SHAs already carry enough
+# checks for that to be reachable, which is why poll_check_runs_gate.py
+# paginates the same endpoint.
+
+
+def _filler(count: int, name: str = "SDK Gate"):
+    return [{"name": name, "status": "completed"} for _ in range(count)]
+
+
+def test_a_named_check_past_page_one_is_found(http: FakeHTTP) -> None:
+    http.route(
+        "GET",
+        "/check-runs",
+        (200, {"total_count": 101, "check_runs": _filler(100)}),
+        (
+            200,
+            {
+                "total_count": 101,
+                "check_runs": [{"name": CHECK, "status": "in_progress"}],
+            },
+        ),
+    )
+    assert checks_state(REPO, SHA, CHECK) == "running"
+    assert http.count("GET", "/check-runs") == 2
+
+
+def test_a_dispatch_recorded_past_page_one_is_not_reclaimed(http: FakeHTTP) -> None:
+    """The failure this pagination exists to stop: a claim held by a dead run
+    whose check lives on page two used to read as "never dispatched", and the
+    reclaim path would dispatch a second connector run onto the same tenants."""
+    _stub_taken(http, 999)
+    http.route(
+        "GET",
+        "/check-runs",
+        (200, {"total_count": 101, "check_runs": _filler(100)}),
+        (
+            200,
+            {
+                "total_count": 101,
+                "check_runs": [{"name": CHECK, "status": "completed"}],
+            },
+        ),
+    )
+
+    state, blocker = _resolve(run_id=1)
+
+    assert state == "duplicate"
+    assert blocker is not None and blocker.run_id == 999
+    # No reclaim: no ref deletion, no second CAS.
+    assert http.count("DELETE", "/git/refs/") == 0
+    assert http.count("POST", "/git/refs") == 0
+
+
+def test_a_failed_later_page_is_unreadable_not_absent(http: FakeHTTP) -> None:
+    # "absent" licenses a reclaim, so it may only be returned from a listing
+    # that was read in full.
+    http.route(
+        "GET",
+        "/check-runs",
+        (200, {"total_count": 200, "check_runs": _filler(100)}),
+        (500, {"message": "boom"}),
+    )
+    assert checks_state(REPO, SHA, CHECK) is None
+
+
+def test_more_pages_than_the_cap_is_unreadable(http: FakeHTTP) -> None:
+    http.route(
+        "GET",
+        "/check-runs",
+        *[
+            (200, {"total_count": 10_000, "check_runs": _filler(100)})
+            for _ in range(11)
+        ],
+    )
+    assert checks_state(REPO, SHA, CHECK) is None
+    # Bounded: it stops at the cap rather than walking a pathological commit.
+    assert http.count("GET", "/check-runs") == _CHECKS_MAX_PAGES
+
+
+def test_a_listing_short_of_its_own_total_is_unreadable(http: FakeHTTP) -> None:
+    http.route(
+        "GET",
+        "/check-runs",
+        (200, {"total_count": 200, "check_runs": _filler(100)}),
+        (200, {"total_count": 200, "check_runs": []}),
+    )
+    assert checks_state(REPO, SHA, CHECK) is None
+
+
+def test_a_single_short_page_is_one_call(http: FakeHTTP) -> None:
+    # The normal case must not pay for pagination it does not need.
+    http.route("GET", "/check-runs", (200, _checks((CHECK, "completed"))))
+    assert checks_state(REPO, SHA, CHECK) == "done"
+    assert http.count("GET", "/check-runs") == 1
+
+
+def test_a_listing_without_a_total_count_still_terminates(http: FakeHTTP) -> None:
+    # total_count is not load-bearing: a short page is the fallback end-of-list
+    # signal, so a response shape change cannot make this spin.
+    http.route("GET", "/check-runs", (200, {"check_runs": _filler(3)}))
+    assert checks_state(REPO, SHA, CHECK) == "absent"
+    assert http.count("GET", "/check-runs") == 1
+
+
+def test_several_named_checks_are_only_done_when_all_are(http: FakeHTTP) -> None:
+    """Duplicate dispatches are exactly what put two same-named checks on one
+    SHA, so the prune's "settled" question is about the whole set."""
+    http.route(
+        "GET",
+        "/check-runs",
+        (200, _checks((CHECK, "completed"), (CHECK, "in_progress"))),
+    )
+    assert checks_state(REPO, SHA, CHECK) == "running"
+
+
 # --- wiring: the action and its caller -------------------------------------
 
 
@@ -721,6 +842,13 @@ def test_the_caller_grants_what_the_guard_needs() -> None:
     assert permissions["contents"] == "write", "claim refs are created and deleted"
     assert permissions["checks"] == "read", "has this SHA already been dispatched?"
     assert permissions["pull-requests"] == "read", "the stale-claim prune"
+    # Without this, GET /actions/runs/<id> 404s the way a deleted run does — so a
+    # LIVE claimant reads as dead, its claim is reclaimed, and a second connector
+    # run lands on the same tenants. The sibling lease-tenant job grants it too.
+    assert permissions["actions"] == "read", (
+        "run liveness decides whether a claimant that has not dispatched yet is "
+        "mid-dispatch or dead; a permission-shaped 404 reads as dead"
+    )
 
 
 def test_the_guard_keys_on_the_same_sha_as_the_check_run() -> None:
