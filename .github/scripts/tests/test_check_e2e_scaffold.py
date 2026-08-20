@@ -8,6 +8,7 @@ pass for every repo whose e2e legs work today, i.e. it must require exactly what
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -223,10 +224,21 @@ def test_the_scaffold_check_runs_in_discover_e2e() -> None:
         ).read_text(encoding="utf-8")
     )
     runs = [
-        str(step.get("run", "")) for step in reusable["jobs"]["discover-e2e"]["steps"]
+        # Comments stripped, and the invocation matched as a command rather than
+        # a bare mention: otherwise a commented-out step still satisfies this,
+        # pinning that the script is *named* in discover-e2e rather than *run*
+        # there — which is the whole property under test.
+        "\n".join(
+            line
+            for line in str(step.get("run", "")).splitlines()
+            if not line.strip().startswith("#")
+        )
+        for step in reusable["jobs"]["discover-e2e"]["steps"]
     ]
 
-    assert any("check_e2e_scaffold.py" in run for run in runs), (
+    assert any(
+        re.search(r"python3?\s+\S*check_e2e_scaffold\.py", run) for run in runs
+    ), (
         "the scaffold precondition must run in discover-e2e — the first job on "
         "the e2e path, before two image builds, a tenant lease and a tenant "
         "install have been spent"

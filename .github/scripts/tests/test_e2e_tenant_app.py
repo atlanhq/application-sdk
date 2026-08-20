@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
+import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -968,6 +969,67 @@ def test_refusal_names_the_escape_hatch(monkeypatch: pytest.MonkeyPatch) -> None
         app.install(
             _install_args(repo_url="https://github.com/atlanhq/application-sdk")
         )
+
+
+#: The only ``--repo-url`` shape that justifies ``--repo-url-is-self``: derived
+#: from the repo the workflow runs in, so it cannot name another app's repo.
+_DERIVED_REPO_URL = "${{ github.server_url }}/${{ github.repository }}"
+
+
+def _steps_passing_the_self_flag(workflow: Path) -> list[dict]:
+    """Every step in *workflow* that passes ``--repo-url-is-self``."""
+    parsed = yaml.safe_load(workflow.read_text(encoding="utf-8"))
+    return [
+        step
+        for job in parsed["jobs"].values()
+        for step in (job.get("steps") or [])
+        if "--repo-url-is-self" in str(step.get("run", ""))
+    ]
+
+
+def test_the_self_assertion_is_only_made_where_repo_url_is_derived() -> None:
+    """``--repo-url-is-self`` downgrades a fail-closed provenance guard on a
+    premise stated in a *different file*, and nothing in Python links the two.
+
+    Repoint ``REPO_URL`` at an input — plausible, since e2e-tenant-install.yaml
+    already has one and these two workflows converge over time — and the flag
+    keeps being passed while its premise is false. The guard then accepts an
+    operator-supplied ``--repo-url`` naming another app's repo, which is the
+    provenance rewrite it exists to refuse: it fails open, silently, with the
+    warning still claiming the URL was derived. Same coupling class the B2
+    scaffold-drift tests pin, except here the silent failure is a disarmed
+    security guard rather than a misplaced error message.
+    """
+    root = Path(__file__).resolve().parents[3]
+    steps = _steps_passing_the_self_flag(root / ".github/workflows/tests-reusable.yaml")
+
+    assert steps, (
+        "no step passes --repo-url-is-self any more. That is safe (the guard is "
+        "fail-closed again), but it makes this test vacuous — delete it along "
+        "with the flag."
+    )
+    for step in steps:
+        assert (step.get("env") or {}).get("REPO_URL") == _DERIVED_REPO_URL, (
+            f"step {step.get('name')!r} passes --repo-url-is-self, which "
+            "downgrades the image/repo cross-check to a warning on the premise "
+            "that REPO_URL is DERIVED from the running repo. REPO_URL is no "
+            "longer that expression, so the premise is false and the provenance "
+            "guard now fails open on an operator-supplied value."
+        )
+
+
+def test_the_free_text_repo_url_path_never_asserts_self() -> None:
+    """The other half of the coupling: e2e-tenant-install.yaml's ``repo_url`` is
+    a free-text dispatch input, so there the cross-check is doing real work and
+    the flag must never be passed."""
+    root = Path(__file__).resolve().parents[3]
+    install_wf = root / ".github/workflows/e2e-tenant-install.yaml"
+
+    assert not _steps_passing_the_self_flag(install_wf), (
+        "e2e-tenant-install.yaml passes --repo-url-is-self, but its repo_url is "
+        "a free-text dispatch input — an operator can name any repo, so the "
+        "provenance guard must stay fail-closed on this path"
+    )
 
 
 def test_non_ghcr_repo_image_mismatch_warns_but_proceeds(
