@@ -627,6 +627,11 @@ jobs:
       # The step's outputs (`final_status`, `final_cost`, `final_err_code`,
       # `final_err_msg`) are a contract: `sdk_review_verdict_gate.py`, the
       # starter-comment stamper and `sdk_review_approve.py` all read them.
+      #
+      # The step can boot TWO sandboxes: it re-dispatches once on a different
+      # main model when the first dies on a hard error a model swap could
+      # survive (FND-641, ported in FND-643). `final_cost` is then the sum, and
+      # the step summary carries the per-attempt trail.
       - name: Dispatch to mothership Rover Direct API
         id: dispatch
         if: steps.lock_gate.outputs.decision != 'skip'
@@ -702,6 +707,11 @@ jobs:
       # nothing left to stop. Never fail the job from here: this is
       # best-effort cleanup running inside the cancellation grace period,
       # and masking the real outcome with a teardown error helps nobody.
+      #
+      # SESSION_ID is the BASE id. A run can boot more than one sandbox (the
+      # dispatcher re-dispatches once on a different model when the first dies),
+      # and each attempt gets its own derived id, so the script walks the same
+      # ladder rather than trusting an id this step cannot know.
       - name: Terminate mothership sandbox on cancel
         if: cancelled() && steps.session.outputs.session_id != ''
         env:
