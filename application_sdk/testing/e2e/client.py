@@ -840,7 +840,7 @@ class AEWorkflowClient:
             ),
             operation=path,
             delivery=delivery,
-        )
+        ) from last_exc
 
     # ------------------------------------------------------------------
     # Endpoints
