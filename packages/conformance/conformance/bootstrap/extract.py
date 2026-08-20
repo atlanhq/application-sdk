@@ -229,56 +229,154 @@ def extract_tests_yaml_params(text: str) -> dict[str, str]:
     return params
 
 
-def tests_reusable_with_block(text: str) -> str:
+def structural_lines(text: str) -> list[str]:
+    """Return *text*'s lines with everything that is not YAML structure blanked.
+
+    A comment line, and every line belonging to a block scalar's body
+    (``key: |``, ``key: >-``), becomes ``""``. Line *count* is preserved, so an
+    index into the result is the same index into ``text.splitlines()`` — callers
+    that need the verbatim line can take it from there.
+
+    Single source of truth for "which lines of this file are structure". Every
+    scan in this module goes through it, because a raw-text regex cannot tell a
+    real declaration from text that merely looks like one inside a ``run: |``
+    step — and this file's scans are the ones that decide whether ``--resync``
+    rewrites a repo's CI config. A ``uses: …tests-reusable.yaml`` line quoted
+    inside a documentation job's shell would otherwise be located as *the*
+    reusable call, and a ``force-external-runtime: true`` under it read as that
+    job's input and hoisted into the rendered ``jobs.tests.with`` — forcing the
+    external runtime on a repo that never asked for it, the FND-65 boot-failure
+    class in reverse. ``declared_keys`` already skipped scalar bodies, so the
+    key-set guard could not catch that one either: the key it would have refused
+    over is invisible to it by design.
+
+    Blanked rather than dropped so the two needs cannot diverge: the boundary
+    walks below reason about indentation and adjacency, which a compacted list
+    would silently change, while ``extract_secrets_block`` splices the original
+    bytes and must index back into them.
+    """
+    out: list[str] = []
+    skip_deeper_than: int | None = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            out.append("")
+            continue
+        indent = len(line) - len(line.lstrip())
+        if skip_deeper_than is not None:
+            if indent > skip_deeper_than:
+                out.append("")
+                continue
+            skip_deeper_than = None
+        if stripped.startswith("#"):
+            out.append("")
+            continue
+        out.append(line)
+        m = _KEY_LINE_RE.match(line)
+        if m is not None and _BLOCK_SCALAR_RE.search(line):
+            skip_deeper_than = len(m.group("indent"))
+    return out
+
+
+def _outdents(lines: list[str], index: int, limit: int) -> bool:
+    """True when *lines*[*index*] starts a mapping shallower than *limit*.
+
+    Blank lines never outdent — they carry no indentation of their own, and a
+    blank line inside a job body (or one left behind by a blanked comment) must
+    not end it.
+    """
+    line = lines[index]
+    return bool(line.strip()) and len(line) - len(line.lstrip()) < limit
+
+
+def _reusable_job_scope(lines: list[str]) -> tuple[int, int, int] | None:
+    """Locate the job calling ``tests-reusable.yaml`` in *lines*.
+
+    *lines* must be ``structural_lines`` output. Returns ``(start, end,
+    key_indent)`` — the half-open line range of the job's body and the
+    indentation of its own keys — or ``None`` when no such job is present.
+
+    The scope for every read that is *about that job*: its inputs
+    (``force-external-runtime``) and its ``secrets:`` mapping. A repo's
+    tests.yaml is free to carry other jobs — an aggregator gate, a hand-kept
+    ``tests-passed`` whose name branch protection requires — and any of them may
+    declare a key that is also one of the reusable's. Reading file-wide
+    attributes that key to the reusable call and re-renders it as one of *its*
+    values, which is a value nobody declared.
+
+    Nothing is lost by scoping this narrowly. A `secrets:` or an input outside
+    this job necessarily sits under another job, and another job means keys the
+    canonical has no place for — so ``unpreserved_declarations`` refuses that
+    file anyway. The narrow read cannot silently drop what the guard already
+    stops. Same for a file with no reusable job at all: the re-render would add
+    one and delete that file's own jobs, which the guard refuses on their keys.
+
+    Located by walking indentation rather than parsing: this package ships
+    standalone into consumer repos and takes no YAML dependency (see
+    ``declared_keys``). Keyed on the reusable's own path rather than on the job
+    being named ``tests``, because the job name is the branch-protection context
+    string and a repo is free to change it, while a job that calls this workflow
+    is by definition the one whose inputs these are.
+    """
+    uses_at = next(
+        (i for i, line in enumerate(lines) if _TESTS_REUSABLE_USES_RE.match(line)),
+        None,
+    )
+    if uses_at is None:
+        return None
+    key_indent = len(lines[uses_at]) - len(lines[uses_at].lstrip())
+    # Outward from `uses:` until a line shallower than its siblings. Both ways,
+    # because `with:` (and `secrets:`) may be written above `uses:`.
+    start = uses_at
+    while start > 0 and not _outdents(lines, start - 1, key_indent):
+        start -= 1
+    end = uses_at + 1
+    while end < len(lines) and not _outdents(lines, end, key_indent):
+        end += 1
+    return start, end, key_indent
+
+
+def _reusable_job_key_line(text: str, key: str) -> tuple[list[str], int, int] | None:
+    """Find *key* among the reusable job's own keys in *text* (a tests.yaml).
+
+    Returns ``(structural_lines, index, key_indent)`` for the first match, or
+    ``None`` when the file has no reusable job or that job does not declare
+    *key* as one of its own (sibling-of-``uses:``) keys. Shared by the
+    ``with:``, ``secrets:``-block and inline-``secrets:`` reads so all three
+    agree on what counts as "declared by that job".
+    """
+    lines = structural_lines(text)
+    scope = _reusable_job_scope(lines)
+    if scope is None:
+        return None
+    start, end, key_indent = scope
+    for i in range(start, end):
+        line = lines[i]
+        if len(line) - len(line.lstrip()) != key_indent:
+            continue
+        if _KEY_LINE_RE.match(line) and line.strip().split(":", 1)[0] == key:
+            return lines, i, key_indent
+    return None
+
+
+def reusable_job_with_block(text: str) -> str:
     """Return the body of the ``with:`` mapping of *text*'s reusable-tests job.
 
     *text* is a tests.yaml. The return value is the block's child lines only
     (the ``with:`` line itself excluded), or ``""`` when the file has no job
     calling ``tests-reusable.yaml``, or that job declares no ``with:``.
 
-    The scope for reading back an *input* of that job. A repo's tests.yaml is
-    free to carry other jobs — an aggregator gate, a hand-kept ``tests-passed``
-    whose name branch protection requires — and any of them may legitimately
-    mention a key that is also a reusable input. Reading the first match
-    file-wide attributes that key to the reusable call and re-renders it as one
-    of its inputs, which is a value nobody declared.
-
-    Located by walking indentation rather than parsing: this package ships
-    standalone into consumer repos and takes no YAML dependency (see
-    ``declared_keys``). The job's own keys are the ``uses:`` line's siblings, so
-    the job body is the run of lines around it indented at least that far, and
-    ``with:``'s body is the run of more-indented lines below it.
+    Structure only — see ``structural_lines`` — so an input named inside a
+    ``run: |`` step cannot read as one the job actually passes.
     """
-    m = _TESTS_REUSABLE_USES_RE.search(text)
-    if m is None:
+    found = _reusable_job_key_line(text, "with")
+    if found is None:
         return ""
-    lines = text.splitlines()
-    uses_at = text[: m.start()].count("\n")
-    key_indent = len(m.group("indent"))
-
-    def _outdents(index: int, limit: int) -> bool:
-        """True when line *index* starts a shallower mapping than *limit*."""
-        line = lines[index]
-        return bool(line.strip()) and len(line) - len(line.lstrip()) < limit
-
-    # The job body: outward from `uses:` until a line shallower than its
-    # siblings. Scanning both ways because `with:` may be written above `uses:`.
-    start = uses_at
-    while start > 0 and not _outdents(start - 1, key_indent):
-        start -= 1
-    end = uses_at + 1
-    while end < len(lines) and not _outdents(end, key_indent):
-        end += 1
-
-    for i in range(start, end):
-        line = lines[i]
-        if len(line) - len(line.lstrip()) != key_indent or line.strip() != "with:":
-            continue
-        body_end = i + 1
-        while body_end < end and not _outdents(body_end, key_indent + 1):
-            body_end += 1
-        return "\n".join(lines[i + 1 : body_end])
-    return ""
+    lines, with_at, key_indent = found
+    body_end = with_at + 1
+    while body_end < len(lines) and not _outdents(lines, body_end, key_indent + 1):
+        body_end += 1
+    return "\n".join(lines[with_at + 1 : body_end])
 
 
 def extract_force_external_runtime(text: str) -> str:
@@ -306,7 +404,7 @@ def extract_force_external_runtime(text: str) -> str:
     ``unpreserved_declarations`` as a key the re-render would lose, which
     refuses the resync instead.
     """
-    scope = tests_reusable_with_block(text)
+    scope = reusable_job_with_block(text)
     return (
         "true"
         if scope and extract_field(scope, "force-external-runtime") == "true"
@@ -336,34 +434,43 @@ def extract_secrets_block(text: str) -> str:
     re-rendering it from a captured block rather than from the template would
     make every non-customised repo's bytes depend on this extractor.
 
-    The first mapping-form ``secrets:`` line wins. A file carrying both forms is
-    a duplicate YAML key that GitHub rejects outright, so choosing between them
-    is not this function's job — see FND-604 on the repair trap that produces
-    one, and note that the re-render emits a single ``secrets:`` either way, so
-    resyncing such a file collapses the duplicate rather than propagating it.
+    Read from the reusable job's own keys only — see ``_reusable_job_scope``.
+    Splicing a ``secrets:`` mapping found under a *different* job into the
+    rendered ``jobs.tests`` would fabricate credential wiring on a job that
+    never declared it, which is worse than dropping it: the guard already
+    refuses any file carrying another job.
+
+    The job's first ``secrets:`` line wins, and only in mapping form. A file
+    carrying two is a duplicate YAML key that GitHub rejects outright, so
+    choosing between them is not this function's job — see FND-604 on the repair
+    trap that produces one, and note that the re-render emits a single
+    ``secrets:`` either way, so resyncing such a file collapses the duplicate
+    rather than propagating it.
     """
-    m = _SECRETS_MAPPING_RE.search(text)
-    if m is None:
+    found = _reusable_job_key_line(text, "secrets")
+    if found is None:
         return ""
+    structural, start, indent = found
+    if not _SECRETS_MAPPING_RE.match(structural[start]):
+        return ""
+    # Boundaries come off the structural view; the returned bytes come off the
+    # original, because this value is spliced into the template verbatim and its
+    # comments are the only record of why the repo dropped `inherit`.
     lines = text.splitlines()
-    start = text[: m.start()].count("\n")
-    indent = len(m.group("indent"))
     # Children: every following line that is blank (interior blank lines are
     # part of the block) or indented deeper than `secrets:` itself.
     end = start + 1
-    while end < len(lines):
-        line = lines[end]
-        if line.strip() and len(line) - len(line.lstrip()) <= indent:
-            break
+    while end < len(structural) and not _outdents(structural, end, indent + 1):
         end += 1
     # A mapping needs at least one child. Without this, a `secrets:` line with
     # nothing under it — which YAML reads as null, not as a mapping — would be
     # captured and re-rendered, replacing the working `inherit` default with a
     # line that passes no secrets at all.
-    body = [line for line in lines[start + 1 : end] if line.strip()]
-    if not body:
+    if not any(line.strip() for line in structural[start + 1 : end]):
         return ""
     # Trailing blank lines belong to whatever follows the block, not to it.
+    # Measured on the original: a comment line the structural view blanked is
+    # part of the block's own text and must not be trimmed off its end.
     while end > start + 1 and not lines[end - 1].strip():
         end -= 1
     # Contiguous same-indent comments directly above are part of the block.
@@ -403,23 +510,37 @@ def unpreservable_secrets_form(text: str) -> str:
     module must not produce. Anything other than the two known-safe shapes
     therefore counts, so an unrecognised spelling stops the resync instead of
     being assumed harmless.
+
+    Scoped to the reusable job's own keys, the same boundary
+    ``extract_secrets_block`` reads within — so the pair cannot disagree about
+    which ``secrets:`` declaration the re-render is even about. A file-wide scan
+    reported an inline ``secrets:`` under an unrelated job as unpreservable and
+    appended ``secrets`` to the refusal list, although the re-render only
+    rewrites ``jobs.tests``; harmless while any extra job is refused on its own
+    keys, but it would block a resync outright the day the canonical grows a
+    sibling job of its own.
     """
-    for m in _SECRETS_INLINE_RE.finditer(text):
-        # A trailing comment is not part of the value. Split on whitespace-then-#
-        # so a `#` inside the value itself does not truncate it; the result only
-        # ever has to be distinguishable from `inherit`.
-        value = re.split(r"[ \t]#", m.group("value"), maxsplit=1)[0].strip()
-        if value and value != "inherit":
-            return value
-    return ""
+    found = _reusable_job_key_line(text, "secrets")
+    if found is None:
+        return ""
+    structural, at, _ = found
+    m = _SECRETS_INLINE_RE.match(structural[at])
+    if m is None:
+        return ""
+    # A trailing comment is not part of the value. Split on whitespace-then-#
+    # so a `#` inside the value itself does not truncate it; the result only
+    # ever has to be distinguishable from `inherit`.
+    value = re.split(r"[ \t]#", m.group("value"), maxsplit=1)[0].strip()
+    return value if value and value != "inherit" else ""
 
 
 def declared_keys(text: str) -> list[str]:
     """Return the distinct YAML mapping keys *text* declares, in file order.
 
-    Structure only: comment lines are skipped, and the body of a block scalar
-    (``key: |``, ``key: >-``) is skipped as opaque content rather than mined for
-    keys that a hand-written ``run:`` step happens to contain.
+    Structure only, via ``structural_lines``: comment lines are skipped, and the
+    body of a block scalar (``key: |``, ``key: >-``) is skipped as opaque content
+    rather than mined for keys that a hand-written ``run:`` step happens to
+    contain.
 
     Key *names* rather than key paths, because tests.yaml legitimately repeats a
     name at several depths (every ``workflow_dispatch`` input has its own
@@ -430,26 +551,13 @@ def declared_keys(text: str) -> list[str]:
     depend on.
     """
     keys: list[str] = []
-    skip_deeper_than: int | None = None
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        indent = len(line) - len(line.lstrip())
-        if skip_deeper_than is not None:
-            if indent > skip_deeper_than:
-                continue
-            skip_deeper_than = None
-        if stripped.startswith("#"):
-            continue
+    for line in structural_lines(text):
         m = _KEY_LINE_RE.match(line)
         if m is None:
             continue
         key = m.group("key")
         if key not in keys:
             keys.append(key)
-        if _BLOCK_SCALAR_RE.search(line):
-            skip_deeper_than = len(m.group("indent"))
     return keys
 
 

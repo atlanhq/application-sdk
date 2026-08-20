@@ -22,6 +22,8 @@ from conformance.bootstrap.extract import (
     extract_use_ghcr_base,
     format_dropped_declarations,
     resolve_renovate_fallback_exit_zero,
+    reusable_job_with_block,
+    structural_lines,
     unpreservable_secrets_form,
     unpreserved_declarations,
     unpreserved_tests_yaml_declarations,
@@ -443,6 +445,105 @@ def test_another_jobs_input_still_stops_the_resync() -> None:
     )
 
 
+def test_reusable_uses_line_inside_a_run_scalar_is_not_the_reusable_call() -> None:
+    """A block scalar's body is text, not structure.
+
+    The sharpest form of the hoisting bug, because it evades the guard as well as
+    the read: a job whose ``run: |`` scalar quotes the reusable's ``uses:`` line
+    binds first (it is earlier in the file), so the scoped read returns the
+    *scalar's* text and reads ``force-external-runtime: true`` out of it — while
+    ``declared_keys`` skips scalar bodies by design, so the key-set guard never
+    sees the key it would have refused over. The re-render then silently ADDS the
+    input to ``jobs.tests.with``, forcing the external runtime on a repo that
+    never asked (the FND-65 boot-failure class).
+
+    The quoted ``uses:`` and ``with:`` sit at the *same* indent inside the
+    scalar, which is what makes that text parse as a job whose ``with:`` is a
+    sibling of its ``uses:``. Staggered indents happen not to reproduce, so a
+    fixture that staggered them would have passed against the bug.
+    """
+    text = (
+        "jobs:\n"
+        "  docs:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - run: |\n"
+        "        cat <<'EOF'\n"
+        f"          {_REUSABLE_USES.strip()}\n"
+        "          with:\n"
+        "            force-external-runtime: true\n"
+        "        EOF\n"
+        "  tests:\n"
+        f"{_REUSABLE_USES}\n"
+        '    with:\n      app-name: "widget"\n'
+    )
+    assert reusable_job_with_block(text) == '      app-name: "widget"'
+    assert extract_force_external_runtime(text) == ""
+
+
+def test_secrets_mapping_inside_a_run_scalar_is_not_spliced() -> None:
+    """The same class on the writing side, and the sharper half.
+
+    A ``secrets:`` mapping quoted inside a ``run: |`` step was spliced into the
+    rendered ``jobs.tests`` verbatim — fabricating credential wiring out of a
+    documentation example, on a job whose real declaration was ``inherit``.
+    """
+    text = (
+        "jobs:\n"
+        "  docs:\n"
+        "    steps:\n"
+        "      - run: |\n"
+        "        secrets:\n"
+        "          A: notreal\n"
+        "  tests:\n"
+        f"{_REUSABLE_USES}\n"
+        "    secrets: inherit\n"
+    )
+    assert extract_secrets_block(text) == ""
+
+
+def test_structural_lines_blanks_scalar_bodies_and_comments_in_place() -> None:
+    """Line count is preserved, so an index maps back to the original line.
+
+    ``extract_secrets_block`` splices original bytes at indices this view
+    decides; a compacted list would shift every one of them.
+    """
+    text = "a: 1\n# comment\nb: |\n  not: structure\n\nc: 2\n"
+    assert structural_lines(text) == ["a: 1", "", "b: |", "", "", "c: 2"]
+
+
+def test_extract_secrets_block_ignores_another_jobs_mapping() -> None:
+    """Scoped like the input read, and for a sharper reason.
+
+    Splicing a mapping found under a different job into the rendered
+    ``jobs.tests`` would fabricate credential wiring on a job that never
+    declared it — worse than dropping it, and the guard already refuses any file
+    carrying an extra job.
+    """
+    text = (
+        f'jobs:\n  tests:\n{_REUSABLE_USES}\n    with:\n      app-name: "widget"\n'
+        "  e2e:\n    uses: ./other.yaml\n    secrets:\n"
+        "      A: ${{ secrets.A }}\n"
+    )
+    assert extract_secrets_block(text) == ""
+
+
+def test_unpreservable_secrets_form_ignores_another_jobs_inline_mapping() -> None:
+    """The refusal is scoped to the same boundary the splice reads within.
+
+    A file-wide scan appended ``secrets`` to the refusal list for an inline
+    mapping under an unrelated job, although the re-render only rewrites
+    ``jobs.tests``. Latent while any extra job is refused on its own keys — but
+    it would block a resync outright the day the canonical grows a sibling job.
+    """
+    text = (
+        f"jobs:\n  tests:\n{_REUSABLE_USES}\n    secrets: inherit\n"
+        "  e2e:\n    uses: ./other.yaml\n"
+        "    secrets: {A: ${{ secrets.A }}}\n"
+    )
+    assert unpreservable_secrets_form(text) == ""
+
+
 def test_extract_force_external_runtime_reads_a_with_block_above_uses() -> None:
     """Key order inside the job is the author's choice, not a signal."""
     text = (
@@ -496,13 +597,14 @@ def test_extract_secrets_block_empty_for_a_childless_secrets_line() -> None:
     Capturing it would replace the working ``inherit`` default with a line that
     passes no secrets at all — the very failure this extractor exists to prevent.
     """
-    text = "jobs:\n  tests:\n    uses: x\n    secrets:\n\nother: 1\n"
+    text = f"jobs:\n  tests:\n{_REUSABLE_USES}\n    secrets:\n\nother: 1\n"
     assert extract_secrets_block(text) == ""
 
 
 def test_extract_secrets_block_stops_at_the_next_sibling_key() -> None:
     text = (
-        "jobs:\n  tests:\n    secrets:\n      A: ${{ secrets.A }}\n\n"
+        f"jobs:\n  tests:\n{_REUSABLE_USES}\n"
+        "    secrets:\n      A: ${{ secrets.A }}\n\n"
         "  other-job:\n    runs-on: ubuntu-latest\n"
     )
     assert extract_secrets_block(text) == "    secrets:\n      A: ${{ secrets.A }}"
