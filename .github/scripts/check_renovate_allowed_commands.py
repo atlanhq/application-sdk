@@ -35,6 +35,12 @@ RUNNER_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "renovate.yaml"
 # becomes a bare PATH command on the fleet runner.
 _INSTALL_RE = re.compile(r"install\s+-m\s+\d+\s+\S+\s+/usr/local/bin/(\S+)")
 
+# A full YAML comment line: optional leading whitespace, then `#`. These are
+# dropped before scanning for install steps, so a *commented-out* install line
+# (`  # sudo install …`) is not read as a real install — otherwise disabling a
+# step would leave the guard green while the executable 404s on the runner.
+_COMMENT_LINE_RE = re.compile(r"^\s*#.*$", re.MULTILINE)
+
 # Where the allowedCommands array starts in the admin config. The array is then
 # scanned character by character rather than matched with a regex: the entries
 # are themselves regexes, and `allowedCommands:\s*\[(.*?)\]` stops at the first
@@ -148,8 +154,14 @@ def unauthorized_commands(preset_json: str, self_hosted_source: str) -> list[str
 
 
 def installed_commands(workflow_text: str) -> set[str]:
-    """Bare PATH command names the fleet runner installs into /usr/local/bin."""
-    return set(_INSTALL_RE.findall(workflow_text))
+    """Bare PATH command names the fleet runner installs into /usr/local/bin.
+
+    YAML comment lines are stripped first, so a commented-out install step does
+    not count as an install. Only full comment lines are removed — a trailing
+    `# …` remark on a live `run:` line stays, which is fine because it can only
+    add text after the command, never fabricate an install that is not there.
+    """
+    return set(_INSTALL_RE.findall(_COMMENT_LINE_RE.sub("", workflow_text)))
 
 
 def uninstalled_commands(preset_json: str, workflow_text: str) -> list[str]:

@@ -193,6 +193,17 @@ class TestUninstalledCommands:
             SECOND_COMMAND
         ]
 
+    def test_a_commented_out_install_step_does_not_count(self):
+        # A disabled install step is a comment, not an install: scanning the raw
+        # workflow text would read the `# sudo install …` line as a real install
+        # and pass the guard with the actual step absent.
+        commented = WORKFLOW_WITH_INSTALL.replace(
+            "        run: sudo install", "        # run: sudo install"
+        )
+        assert guard.uninstalled_commands(preset(SECOND_COMMAND), commented) == [
+            SECOND_COMMAND
+        ]
+
     def test_clean_against_the_real_preset_and_runner_workflow(self):
         assert (
             guard.uninstalled_commands(
