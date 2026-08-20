@@ -112,7 +112,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
             findings.extend(scan_authoring(tree, rel, version, directives))
 
     ledger = load_ledger(repo_root=root)
-    findings.extend(scan_contract_compat(paths, root, ledger))
+    findings.extend(scan_contract_compat(paths, root, ledger, scope))
     return findings
 
 

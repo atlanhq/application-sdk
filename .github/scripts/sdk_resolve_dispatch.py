@@ -12,6 +12,12 @@ Dispatch + SSE parsing + GITHUB_STEP_SUMMARY rendering live here (tested) rather
 than in inline workflow shell, per docs/standards/ci.md. Parses the
 `=== SDK RESOLVE SUMMARY ===` block the resolver emits (ORCHESTRATION Phase 4).
 
+One re-dispatch is allowed when the sandbox dies on a hard error that a
+different model could survive — see MAX_DISPATCH_ATTEMPTS and retry_decision().
+The retry fires only after the out-of-band poll has come back empty, which is
+the single point where the sandbox is provably dead and nothing further will
+land; every other stream ending stays fail-fast.
+
 Environment:
     MOTHERSHIP_URL      base URL (e.g. https://mothership.atlan.dev)
     HARNESS_TOKEN       bearer for /api/sandbox/execute
@@ -36,9 +42,9 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, NamedTuple
 
 HEALTH_RETRIES = 5
 HEALTH_BACKOFF_SECONDS = 5
@@ -59,6 +65,76 @@ DEFAULT_MAX_ROUNDS = 8
 # $1.00/Mtok) — better and cheaper on the fast lane. Reverting is a one-liner.
 MAIN_MODEL = "kimi-k3"
 FAST_MODEL = "gpt-5.6-luna"
+
+# --- Re-dispatch when the sandbox dies on a hard error ----------------------
+# One retry, on a DIFFERENT main model. Mothership's intra-group provider
+# fallback already exists and already fires on a 429 — but every provider in the
+# `kimi-k3` group serves the SAME model, so a same-model re-dispatch just
+# re-hits the same model-level fault (observed: the 429 fell through to Moonshot
+# AI, which returned 400 "the message at position 21 with role 'assistant' must
+# not be empty" — same model, same bug). Swapping the model is the whole point
+# of the retry; without it the second sandbox boot fails identically.
+MAX_DISPATCH_ATTEMPTS = 2
+# Attempt 2's main model. This is mothership's own DEFAULT_CLAUDE_MODEL, named
+# explicitly rather than by omitting `model` from the payload: an explicit
+# constant lets a test assert the two attempts actually differ, and keeps the
+# retry from silently following a mothership config change. `small_fast_model`
+# and CLAUDE_CODE_SUBAGENT_MODEL stay pinned to FAST_MODEL on the retry —
+# mothership's model_routing_env does `fast = small_fast_model or model`, so
+# changing only `model` must not be allowed to drag the background lane along.
+RETRY_MAIN_MODEL = "claude-opus-5"
+# Retry only a fault a different model can plausibly survive. This is an
+# allowlist, not a denylist: a wrong retry burns a second sandbox boot — up to
+# an hour of the job's 130-min budget plus a real bill — so an unrecognised
+# cause stays fail-fast. A recognised code decides on its own; the message is
+# consulted ONLY when the code carries no information at all.
+RETRYABLE_ERR_CODES = frozenset(
+    {
+        "400",
+        "429",
+        "500",
+        "502",
+        "503",
+        "504",
+        "api_error",
+        "overloaded_error",
+        "provider_error",
+        "rate_limit_error",
+        "sandbox_error",
+    }
+)
+# Message substrings that identify a model/provider fault. These are a fallback
+# for one specific case: a `complete` event flattens an absent error code to
+# `none`, and a standalone `error` event defaults it to `unknown`, while both
+# still forward the provider's own text. They must NEVER override a code that
+# does carry information — "401 upstream auth failed" mentions upstream and is
+# nonetheless a permanent fault that would fail identically on any model.
+RETRYABLE_ERR_PATTERNS = (
+    "must not be empty",  # the kimi-k3 empty-assistant-turn fault
+    "rate-limited",
+    "rate limited",
+    "overloaded",
+    "temporarily unavailable",
+    "upstream",
+)
+UNINFORMATIVE_ERR_CODES = frozenset({"", "none", "unknown"})
+# Causes that fail identically on any model — never spend a second sandbox:
+#   elicitation   the sandbox wants interactive input, which GHA can never give.
+#   stream_error  OUR urlopen died, not the sandbox. The resolver is probably
+#                 still alive and working, so a re-dispatch would double-run it
+#                 — the exact thing the hook point below is chosen to avoid.
+# Auth/permission and prompt faults are excluded by the allowlist above rather
+# than named here: they will fail the same way on any model, forever.
+NEVER_RETRY_ERR_CODES = frozenset({"elicitation", "stream_error"})
+# The job caps at 130 min (`timeout-minutes: 130` in sdk-resolve.yml) and the VPN
+# steps eat a few of those before dispatch starts, so budget this step at 110 min
+# from its own start. A retry is only worth booting with enough of that left to
+# finish at least one review->fix round; below the floor, fail fast rather than
+# burn a sandbox the runner will kill mid-flight. Cancelling the job does NOT
+# stop the sandbox, so the retry's own `max_timeout_seconds` is clamped to what
+# remains — otherwise a killed runner leaves it billing for up to 2h unattended.
+DISPATCH_BUDGET_SECONDS = 6600
+RETRY_MIN_REMAINING_SECONDS = 1800
 
 # --- Out-of-band hand-off backstop -----------------------------------------
 # The resolver runs in its OWN mothership sandbox; our SSE stream only observes
@@ -84,6 +160,9 @@ OOB_SINCE_SKEW_SECONDS = 120
 
 SUMMARY_START = "=== SDK RESOLVE SUMMARY ==="
 SUMMARY_END = "=== END SUMMARY ==="
+# Summary rows only a run that reached Phase 4 can carry. Any one of them is
+# proof of work; their absence is proof the resolver never got there.
+TERMINAL_SUMMARY_KEYS = ("final_verdict", "merge_ready", "stopped_reason")
 # Rows rendered into the GitHub step summary, in order.
 SUMMARY_ROWS = (
     "rounds",
@@ -161,6 +240,11 @@ def _reviewer_handles(reviewers: str, requester: str) -> list[str]:
     return handles
 
 
+def attempt_model(attempt: int) -> str:
+    """Main model for this attempt — the swap that makes a retry worth booting."""
+    return MAIN_MODEL if attempt <= 1 else RETRY_MAIN_MODEL
+
+
 def build_payload(
     pr_number: str,
     gha_run_url: str,
@@ -168,12 +252,21 @@ def build_payload(
     run_date: str,
     reviewers: str,
     requester: str,
+    *,
+    attempt: int = 1,
+    max_timeout_seconds: int = STREAM_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
+    # `attempt` > 1 is a re-dispatch after the previous sandbox died on a hard
+    # error: same prompt (the resolver re-reads live PR state in Phase 0, so the
+    # second sandbox resumes wherever the first stopped), different main model.
+    # The source_id is suffixed so the two runs are distinguishable on the
+    # mothership side rather than colliding on one id.
+    suffix = "" if attempt <= 1 else f"-retry{attempt - 1}"
     return {
         "mode": "direct",
         "stream": True,
         "source": "github-comment",
-        "source_id": f"sdk-resolve-{pr_number}-{run_date}",
+        "source_id": f"sdk-resolve-{pr_number}-{run_date}{suffix}",
         "repositories": ["atlanhq/application-sdk"],
         "base_branch": "main",
         "snapshot": "_base",
@@ -184,13 +277,13 @@ def build_payload(
         # the main lane runs. `small_fast_model` must be pinned explicitly:
         # mothership's model_routing_env does `fast = small_fast_model or model`,
         # so pinning `model` alone would put the background lane on kimi-k3.
-        "model": MAIN_MODEL,
+        "model": attempt_model(attempt),
         "small_fast_model": FAST_MODEL,
         "env_vars": {"CLAUDE_CODE_SUBAGENT_MODEL": FAST_MODEL},
         "prompt": build_prompt(
             pr_number, gha_run_url, max_rounds, reviewers, requester
         ),
-        "max_timeout_seconds": STREAM_TIMEOUT_SECONDS,
+        "max_timeout_seconds": max_timeout_seconds,
         "idle_timeout_seconds": 1800,
         "metadata": {
             "pr_number": pr_number,
@@ -198,6 +291,7 @@ def build_payload(
             "run_date": run_date,
             "reviewers": reviewers,
             "requester": requester,
+            "attempt": attempt,
         },
     }
 
@@ -300,8 +394,16 @@ def process_line(line: str, st: SSEState) -> str | None:
         st.status = _jget(data, "status", default="unknown")
         st.cost = _jget(data, "cost_usd")
         if st.status == "error":
-            st.err_code = _jget(data, "error", "code", default="none")
+            # A `complete` carrying status=error is as terminal as a standalone
+            # `error` event, so flag it the same way — otherwise decide_exit and
+            # the step summary parse the reason and then throw it away, leaving
+            # the log with only "final status=error" and no code/message.
+            # Gated on there actually being detail: with an empty error object
+            # the bare `status=...` line downstream says more than `code=none`.
+            code = _jget(data, "error", "code")
+            st.err_code = code or "none"
             st.err_msg = _jget(data, "error", "message")
+            st.errored = bool(code or st.err_msg)
         return f"[complete]  status={st.status} cost_usd={st.cost}"
     return None
 
@@ -339,20 +441,42 @@ def mine_summary(st: SSEState) -> dict[str, str]:
 def run_completed(st: SSEState) -> bool:
     """True when the resolver actually finished its work.
 
-    The transport `complete` event is the normal success signal, but mothership
-    sometimes ends the resolve stream cleanly (EOF) without it. The resolver
-    emits its Phase 4 `=== SDK RESOLVE SUMMARY ===` block as its very last action
-    (ORCHESTRATION Phase 4), so a mined summary carrying a terminal key is
-    end-of-run evidence independent of the sentinel — treat that as completed. A
-    stream truncated mid-work carries no summary block and is still a failure, so
-    this never masks a genuinely incomplete run.
+    Proof of work is the Phase 4 `=== SDK RESOLVE SUMMARY ===` block, which the
+    resolver emits as its very last action (ORCHESTRATION Phase 4) — never the
+    transport `complete` sentinel. The sentinel reports only that the sandbox
+    stopped, and a sandbox can stop having done nothing at all: two dispatches
+    ended `status=completed` after 3-5 min having posted no `@sdk-review`
+    trigger, no status comment and no report, and pushed nothing, yet both runs
+    went green because the sentinel alone decided the exit code. Conversely,
+    mothership sometimes ends a fully successful stream cleanly (EOF) with no
+    sentinel at all. So the summary decides in both directions; the sentinel
+    decides only whether the sandbox is still alive, which is
+    `sandbox_terminated_abnormally`'s job.
     """
     if st.errored:
         return False
-    if st.completed:
-        return st.status == "completed"
+    if st.completed and st.status != "completed":
+        # A terminal status the sandbox itself calls a failure. `process_line`
+        # leaves `errored` False for a `complete` carrying status=error with an
+        # empty error object, so the check above does not cover this — and
+        # without it a run that streamed its Phase 4 summary and *then* died
+        # would render as merge-ready in the step summary while `decide_exit`
+        # returned 1. Terminal status and proof of work are both consulted, so
+        # the two never diverge.
+        return False
     summary = mine_summary(st)
-    return any(k in summary for k in ("final_verdict", "merge_ready", "stopped_reason"))
+    return any(k in summary for k in TERMINAL_SUMMARY_KEYS)
+
+
+def resolved_nothing(st: SSEState) -> bool:
+    """True for a no-op run: the sandbox reported success but did no work.
+
+    Distinct from every other failure shape in that nothing went wrong at the
+    transport or provider layer — the model simply ended its turn before
+    working through the ORCHESTRATION. Nothing was pushed and nothing was
+    posted, so re-dispatching is both safe and the only way forward.
+    """
+    return st.completed and st.status == "completed" and not run_completed(st)
 
 
 def _rounds_completed(summary: dict[str, str]) -> int | None:
@@ -363,14 +487,90 @@ def _rounds_completed(summary: dict[str, str]) -> int | None:
         return None
 
 
+class Attempt(NamedTuple):
+    """One dispatch of the run: which model it ran, and how it ended."""
+
+    number: int
+    model: str
+    state: SSEState
+
+
+def _md_cell(text: str) -> str:
+    """Flatten arbitrary error text into one Markdown table cell."""
+    # Truncate BEFORE escaping: the other order can cut mid-escape and leave a
+    # trailing backslash that swallows the cell delimiter.
+    return " ".join(text.split())[:200].replace("|", "\\|")
+
+
+def total_cost(attempts: Sequence[Attempt]) -> str:
+    """Summed `cost_usd` across attempts, or "" when none reported one.
+
+    Mothership's cost telemetry is already unreliable (runs that streamed
+    hundreds of responses have reported an empty or zero cost), so an
+    unparseable value is skipped rather than treated as zero — and the caller
+    renders the per-attempt breakdown alongside this total so a retry ladder
+    cannot hide its spend behind one number.
+    """
+    total = 0.0
+    seen = False
+    for a in attempts:
+        try:
+            total += float(a.state.cost)
+        except (TypeError, ValueError):
+            continue
+        seen = True
+    if not seen:
+        return ""
+    return f"{total:.4f}".rstrip("0").rstrip(".")
+
+
+def render_attempt_trail(attempts: Sequence[Attempt]) -> list[str]:
+    """Per-attempt model/status/cost rows; empty unless a retry actually ran."""
+    if len(attempts) < 2:
+        return []
+    lines = [
+        "",
+        "### Attempts",
+        "",
+        "| # | Model | Status | Cost (USD) | Error |",
+        "|---|---|---|---|---|",
+    ]
+    missing_cost = False
+    for a in attempts:
+        st = a.state
+        status = st.status or ("error" if st.errored else "no `complete` event")
+        err = f"`{st.err_code}` {st.err_msg}".strip() if st.errored else ""
+        if not st.cost:
+            missing_cost = True
+        lines.append(
+            f"| {a.number} | `{a.model}` | {status} | {st.cost or 'n/a'} | "
+            f"{_md_cell(err)} |"
+        )
+    if missing_cost:
+        lines += [
+            "",
+            "> One or more attempts reported no `cost_usd` — the total above "
+            "is a lower bound.",
+        ]
+    return lines
+
+
 def render_step_summary(
-    st: SSEState, pr_number: str, gha_run_url: str, oob_url: str | None = None
+    st: SSEState,
+    pr_number: str,
+    gha_run_url: str,
+    oob_url: str | None = None,
+    attempts: Sequence[Attempt] = (),
 ) -> str:
     """Build the Markdown written to GITHUB_STEP_SUMMARY — always renders.
 
     `oob_url`, when set, is the resolver's out-of-band Phase-4 hand-off comment
     found by polling after our stream was cut: the run completed even though the
     stream reported failure, so render it as a recovered success.
+
+    `attempts` carries every dispatch this run made. With a single attempt it
+    changes nothing; with a retry it adds the per-attempt cost trail and makes
+    the headline cost the sum, so the retry's spend is never invisible.
     """
     summary = mine_summary(st)
     ok = run_completed(st) or oob_url is not None
@@ -386,6 +586,11 @@ def render_step_summary(
             "✅ completed out-of-band — our stream dropped, but the resolver's "
             "Phase-4 hand-off comment was found on the PR"
         )
+    elif resolved_nothing(st):
+        outcome = (
+            "❌ no-op run — the sandbox reported success but did no work (no "
+            "Phase-4 summary, nothing pushed); safe to re-run `@sdk-resolve`"
+        )
     elif not ok:
         outcome = "❌ run failed"
     elif merge_ready:
@@ -397,11 +602,15 @@ def render_step_summary(
         )
     else:
         outcome = "⚠️ stopped short — needs a human"
+    cost = total_cost(attempts) if len(attempts) > 1 else st.cost
+    cost_line = f"**Cost:** {cost or 'n/a'} USD"
+    if len(attempts) > 1:
+        cost_line += f" across {len(attempts)} attempts"
     lines = [
         f"# SDK Resolve — PR #{pr_number}",
         "",
         f"**Outcome:** {outcome}  ",
-        f"**Cost:** {st.cost or 'n/a'} USD  ",
+        f"{cost_line}  ",
     ]
     if gha_run_url:
         lines.append(f"**Run:** [logs + cost]({gha_run_url})  ")
@@ -422,6 +631,7 @@ def render_step_summary(
             "> No summary block was emitted by the run — see the workflow log "
             "for phase output.",
         ]
+    lines += render_attempt_trail(attempts)
     return "\n".join(lines) + "\n"
 
 
@@ -473,6 +683,18 @@ def decide_exit(st: SSEState) -> tuple[int, str]:
         return 1, "::error::Stream ended without a 'complete' event"
     if st.status != "completed":
         return 1, f"::error::Sandbox final status={st.status} (expected 'completed')"
+    if resolved_nothing(st):
+        # The sentinel says the sandbox exited happily; the missing Phase 4
+        # summary says it never did the work. Fail, so the retry ladder below
+        # gets a chance on a different model instead of the run going green
+        # over a resolve that pushed nothing and posted nothing.
+        return (
+            1,
+            "::error::Sandbox reported status=completed but emitted no Phase 4 "
+            "summary — the resolver ended its turn without working through the "
+            "ORCHESTRATION (no @sdk-review trigger, no report, nothing pushed). "
+            "Treating as a failed run.",
+        )
     return 0, f"SDK Resolve completed (cost={st.cost})."
 
 
@@ -530,14 +752,93 @@ def _fetch_pr_comments(
     return data if isinstance(data, list) else []
 
 
+def sandbox_terminated_abnormally(st: SSEState) -> bool:
+    """True when the sandbox itself died, as opposed to our stream being cut.
+
+    The distinction drives two decisions: how long to wait for an out-of-band
+    hand-off, and whether re-dispatching is safe. A dead sandbox will post
+    nothing more; a live one behind a cut stream is still working, and
+    re-dispatching against it would double-run the resolver.
+
+    A no-op run (`resolved_nothing`) belongs on the dead side: the sentinel
+    proves the sandbox has stopped, so it will post nothing more and a
+    re-dispatch cannot double-run it.
+    """
+    if st.errored:
+        return True
+    if not st.completed:
+        return False  # no sentinel — our stream was cut, the sandbox may live on
+    return st.status != "completed" or resolved_nothing(st)
+
+
 def oob_poll_budget(st: SSEState) -> int:
     """Seconds to look for an out-of-band summary, given how the stream ended."""
     if not st.got_event:
         return 0  # never saw an event → sandbox likely never started; nothing to await
-    if st.errored or (st.completed and st.status != "completed"):
+    if sandbox_terminated_abnormally(st):
         # Sandbox terminated abnormally; only catch a summary posted just before.
         return OOB_POLL_SECONDS_HARD_ERROR
     return OOB_POLL_SECONDS_STREAM_DROP  # transport drop; sandbox likely still working
+
+
+def is_retryable_fault(st: SSEState) -> bool:
+    """True when the cause looks like a model/provider fault, not a fixed one.
+
+    The code decides whenever it carries information: a recognised retryable one
+    retries, and anything else — 401, 403, a prompt fault — does not. The message
+    patterns are consulted only for a code of `none`/`unknown`/empty, which is
+    the flattened-code case they exist for. Letting them speak for a known code
+    would classify "401 upstream auth failed" as retryable and buy a second
+    sandbox that fails identically.
+    """
+    if st.err_code in NEVER_RETRY_ERR_CODES:
+        return False
+    if resolved_nothing(st):
+        # A no-op run carries no error code at all, so the code ladder below
+        # cannot see it. The fault is the model ending its turn early, which is
+        # precisely the kind a different model can plausibly survive.
+        return True
+    if st.err_code in RETRYABLE_ERR_CODES:
+        return True
+    if st.err_code not in UNINFORMATIVE_ERR_CODES:
+        return False
+    return any(p in st.err_msg.lower() for p in RETRYABLE_ERR_PATTERNS)
+
+
+def retry_decision(st: SSEState, attempt: int, seconds_left: float) -> tuple[bool, str]:
+    """Whether to re-dispatch after this attempt, and the reason either way.
+
+    Called only once the out-of-band poll has come back empty, so "the sandbox
+    is dead and posted nothing" is already established for the abnormal-
+    termination branch. The reason is logged verbatim so a run that did NOT
+    retry says why, which is the part that is invisible today.
+    """
+    if attempt >= MAX_DISPATCH_ATTEMPTS:
+        return False, f"already used all {MAX_DISPATCH_ATTEMPTS} attempts"
+    if not sandbox_terminated_abnormally(st):
+        return False, (
+            "the stream ended without a hard error — the sandbox may still be "
+            "running, and a re-dispatch would double-run the resolver"
+        )
+    if not is_retryable_fault(st):
+        return False, (
+            f"code={st.err_code or 'none'} is not a known model/provider fault, "
+            "so a different model would fail the same way"
+        )
+    if seconds_left < RETRY_MIN_REMAINING_SECONDS:
+        return False, (
+            f"only {int(seconds_left)}s of the job budget remain, below the "
+            f"{RETRY_MIN_REMAINING_SECONDS}s a retry needs to finish a round"
+        )
+    cause = (
+        "the sandbox reported success but emitted no Phase 4 summary (no-op run)"
+        if resolved_nothing(st)
+        else f"code={st.err_code or 'none'} looks like a model/provider fault"
+    )
+    return True, (
+        f"{cause} — re-dispatching on {RETRY_MAIN_MODEL} (attempt {attempt + 1} "
+        f"of {MAX_DISPATCH_ATTEMPTS})"
+    )
 
 
 def poll_for_oob_summary(
@@ -598,6 +899,39 @@ def _max_rounds() -> int:
         return DEFAULT_MAX_ROUNDS
 
 
+def dispatch_once(
+    base_url: str,
+    token: str,
+    payload: dict[str, Any],
+    opener: Callable[..., Any] = urllib.request.urlopen,
+) -> SSEState:
+    """POST one execution and drain its SSE stream into an SSEState."""
+    req = urllib.request.Request(
+        f"{base_url}/api/sandbox/execute",
+        data=json.dumps(payload).encode(),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+        },
+        method="POST",
+    )
+    try:
+        # timeout is the per-read socket idle watchdog (not a whole-request cap):
+        # a silent stall frees the runner in ~READ_IDLE_TIMEOUT_SECONDS instead
+        # of blocking the full 2h. TimeoutError/OSError surface here too.
+        with opener(req, timeout=READ_IDLE_TIMEOUT_SECONDS) as resp:
+            return process_stream(raw.decode("utf-8", "replace") for raw in resp)
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        print(f"::error::Sandbox dispatch stream error/stall: {e}")
+        st = SSEState()
+        st.errored = True
+        # NOT retryable: this is OUR connection dying, not the sandbox. See
+        # NEVER_RETRY_ERR_CODES — the resolver is probably still working.
+        st.err_code = "stream_error"
+        st.err_msg = str(e)
+        return st
+
+
 def main() -> int:
     missing = [
         v
@@ -637,37 +971,47 @@ def main() -> int:
         print("::error::Cannot reach mothership after retries")
         return 1
 
-    payload = build_payload(
-        pr_number, gha_run_url, max_rounds, run_date, reviewers, requester
-    )
-    req = urllib.request.Request(
-        f"{base_url}/api/sandbox/execute",
-        data=json.dumps(payload).encode(),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {token}",
-        },
-        method="POST",
-    )
-    try:
-        # timeout is the per-read socket idle watchdog (not a whole-request cap):
-        # a silent stall frees the runner in ~READ_IDLE_TIMEOUT_SECONDS instead
-        # of blocking the full 2h. TimeoutError/OSError surface here too.
-        with urllib.request.urlopen(req, timeout=READ_IDLE_TIMEOUT_SECONDS) as resp:
-            st = process_stream(raw.decode("utf-8", "replace") for raw in resp)
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
-        print(f"::error::Sandbox dispatch stream error/stall: {e}")
-        st = SSEState()
-        st.errored = True
-        st.err_code = "stream_error"
-        st.err_msg = str(e)
-
-    code, message = decide_exit(st)
+    attempts: list[Attempt] = []
     oob_url: str | None = None
-    if code != 0:
+    attempt = 1
+    while True:
+        model = attempt_model(attempt)
+        # Clamp the sandbox's own cap to what is left of this step's budget.
+        # Cancelling the job does not stop the sandbox, so an unclamped retry
+        # started late would keep billing for up to 2h after the runner dies.
+        seconds_left = DISPATCH_BUDGET_SECONDS - (time.time() - run_start_epoch)
+        payload = build_payload(
+            pr_number,
+            gha_run_url,
+            max_rounds,
+            run_date,
+            reviewers,
+            requester,
+            attempt=attempt,
+            max_timeout_seconds=max(1, min(STREAM_TIMEOUT_SECONDS, int(seconds_left))),
+        )
+        print(f"[attempt {attempt}/{MAX_DISPATCH_ATTEMPTS}] dispatching on {model}")
+        st = dispatch_once(base_url, token, payload)
+        attempts.append(Attempt(attempt, model, st))
+        code, message = decide_exit(st)
+        # Per-attempt cost, logged separately so a retry ladder cannot hide its
+        # spend behind a single total.
+        print(
+            f"[attempt {attempt}/{MAX_DISPATCH_ATTEMPTS}] model={model} "
+            f"status={st.status or 'none'} cost_usd={st.cost or 'n/a'} "
+            f"code={st.err_code or 'none'}"
+        )
+        if code == 0:
+            break
+
         # Transport backstop: the resolver may have finished out-of-band after our
         # stream was cut. Look for its Phase-4 hand-off comment before failing.
-        budget = oob_poll_budget(st)
+        # Clamped to what is left of the step's budget: a 45-min stream-drop poll
+        # started late (most likely on a retry, which begins with attempt 1's time
+        # already spent) would otherwise let the runner's 130-min timeout kill the
+        # job before the step summary is ever written.
+        seconds_left = DISPATCH_BUDGET_SECONDS - (time.time() - run_start_epoch)
+        budget = min(oob_poll_budget(st), max(0, int(seconds_left)))
         if github_token and budget > 0:
             print(
                 f"::warning::Stream ended unhappily; polling PR #{pr_number} for up "
@@ -687,8 +1031,31 @@ def main() -> int:
                 f"its Phase-4 hand-off out-of-band ({oob_url}) — the run completed. "
                 "Treating as success."
             )
+            break
 
-    write_step_summary(render_step_summary(st, pr_number, gha_run_url, oob_url))
+        # Only here is the sandbox provably dead with nothing further to land:
+        # the hard-error poll came back empty. Retrying earlier would double-run
+        # a resolver that is still working, or one that finished just before it
+        # died. Phase 0 re-reads live PR state, so a second sandbox resumes
+        # rather than restarts.
+        should_retry, reason = retry_decision(
+            st, attempt, DISPATCH_BUDGET_SECONDS - (time.time() - run_start_epoch)
+        )
+        if not should_retry:
+            print(f"::warning::Not re-dispatching: {reason}")
+            break
+        print(f"::warning::Re-dispatching on a fresh sandbox: {reason}")
+        attempt += 1
+
+    if code != 0 and len(attempts) > 1:
+        message += (
+            f" (retried on {attempt_model(len(attempts))} after "
+            f"{attempt_model(1)} failed; both attempts failed)"
+        )
+
+    write_step_summary(
+        render_step_summary(st, pr_number, gha_run_url, oob_url, attempts)
+    )
     print(message)
     return code
 

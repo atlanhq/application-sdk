@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.28.0
-source-sha:    5b5599430dacc5b98e1f0d8758b66be8d6a8acad
-source-date:   2026-08-18T07:47:50Z
+sdk-version:   3.28.1
+source-sha:    e3a811170428dc379015d9bc01c8fe7d806af9b2
+source-date:   2026-08-19T19:33:58+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -18,21 +18,24 @@ do-not-edit:   re-run the skill instead of hand-editing
 
 | Subpackage | Purpose | Exports |
 |---|---|---|
-| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 26 |
-| `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 11 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 11 |
-| `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
+| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 42 |
+| `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 20 |
+| `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 34 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 45 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 61 |
-| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 21 |
+| `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 63 |
+| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 45 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
-| `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
+| `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 22 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
+| `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
-| `application_sdk.templates` | SQL metadata extractor templates and their contracts | 5 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 15 |
+| `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 97 |
+| `application_sdk.validation` | Offline asset validation — pyatlan_v9 .validate() wrappers, no network call | 5 |
 
 ## Subpackage Details
 
@@ -45,6 +48,7 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 #### `App`
 
 - **Import:** `from application_sdk.app import App`
+- **Also importable from:** `application_sdk.app.base`
 - **Signature:** `class App`
 - **Summary:** Base class for all Apps.
 - **Defined in:** `application_sdk/app/base.py`
@@ -59,6 +63,7 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 #### `AppError`
 
 - **Import:** `from application_sdk.app import AppError`
+- **Also importable from:** `application_sdk.app.base`
 - **Signature:** `class AppError(message: str, ...)`
 - **Summary:** Deprecated: use ``application_sdk.errors.AppError`` directly — removed in v4.0.
 - **Defined in:** `application_sdk/app/base.py`
@@ -69,6 +74,13 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Signature:** `class AppRegistry`
 - **Summary:** Registry for App discovery and registration.
 - **Defined in:** `application_sdk/app/registry.py`
+
+#### `AppStateAccessor`
+
+- **Import:** `from application_sdk.app.base import AppStateAccessor`
+- **Signature:** `class AppStateAccessor(app: App) -> None`
+- **Summary:** Accessor for in-memory state scoped to app execution.
+- **Defined in:** `application_sdk/app/base.py`
 
 #### `AtlanClientMixin`
 
@@ -84,6 +96,13 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Summary:** Metadata about a registered entry point.
 - **Defined in:** `application_sdk/app/entrypoint.py`
 
+#### `FileReference`
+
+- **Import:** `from application_sdk.app.base import FileReference`
+- **Signature:** `class FileReference`
+- **Summary:** Reference to externally-stored data (for large payloads).
+- **Defined in:** `application_sdk/contracts/types.py`
+
 #### `Input`
 
 - **Import:** `from application_sdk.app import Input`
@@ -94,6 +113,7 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 #### `NonRetryableError`
 
 - **Import:** `from application_sdk.app import NonRetryableError`
+- **Also importable from:** `application_sdk.app.base`
 - **Signature:** `class NonRetryableError`
 - **Summary:** Deprecated: use a typed ``AppError`` subclass with ``default_retryable = False`` — removed in v4.0.
 - **Defined in:** `application_sdk/app/base.py`
@@ -112,9 +132,17 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Summary:** Standard run-result status used on :class:`Output`.
 - **Defined in:** `application_sdk/contracts/base.py`
 
+#### `PersistentStateAccessor`
+
+- **Import:** `from application_sdk.app.base import PersistentStateAccessor`
+- **Signature:** `class PersistentStateAccessor(app: App) -> None`
+- **Summary:** Accessor for durable state stored externally.
+- **Defined in:** `application_sdk/app/base.py`
+
 #### `RetryableError`
 
 - **Import:** `from application_sdk.app import RetryableError`
+- **Also importable from:** `application_sdk.app.base`
 - **Signature:** `class RetryableError`
 - **Summary:** Deprecated: use a typed ``AppError`` subclass with ``default_retryable = True`` — removed in v4.0.
 - **Defined in:** `application_sdk/app/base.py`
@@ -140,6 +168,13 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Summary:** Registry for Task discovery and registration.
 - **Defined in:** `application_sdk/app/registry.py`
 
+#### `TaskStateAccessor`
+
+- **Import:** `from application_sdk.app.base import TaskStateAccessor`
+- **Signature:** `class TaskStateAccessor`
+- **Summary:** Accessor for app state from within a task (not a @task method on an App).
+- **Defined in:** `application_sdk/app/base.py`
+
 ### Decorators
 
 #### `@entrypoint`
@@ -152,11 +187,75 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 #### `@task`
 
 - **Import:** `from application_sdk.app import task`
+- **Also importable from:** `application_sdk.app.base`
 - **Signature:** `task(func: F | None = None, *, ...)`
 - **Summary:** Decorator to mark a method as a task (Temporal activity).
 - **Defined in:** `application_sdk/app/task.py`
 
 ### Functions
+
+#### `_apply_app_registration`
+
+- **Import:** `from application_sdk.app.base import _apply_app_registration`
+- **Signature:** `_apply_app_registration(cls: type[App], ...)`
+- **Summary:** Register an App class with the AppRegistry.
+- **Defined in:** `application_sdk/app/_ep_registration.py`
+
+#### `_create_task_activity_wrapper`
+
+- **Import:** `from application_sdk.app.base import _create_task_activity_wrapper`
+- **Signature:** `_create_task_activity_wrapper(app_name: str, *, ...)`
+- **Summary:** Create a wrapper that executes a task as a Temporal activity.
+- **Defined in:** `application_sdk/app/base.py`
+
+#### `_pascal_to_kebab`
+
+- **Import:** `from application_sdk.app.base import _pascal_to_kebab`
+- **Signature:** `_pascal_to_kebab(name: str) -> str`
+- **Summary:** Convert PascalCase to kebab-case.
+- **Defined in:** `application_sdk/app/base.py`
+
+#### `_register_tasks`
+
+- **Import:** `from application_sdk.app.base import _register_tasks`
+- **Signature:** `_register_tasks(cls: type, app_name: str)`
+- **Summary:** Register all @task decorated methods for an App class.
+- **Defined in:** `application_sdk/app/_ep_registration.py`
+
+#### `_safe_log`
+
+- **Import:** `from application_sdk.app.base import _safe_log`
+- **Signature:** `_safe_log(level: str, message: str, **attrs: Any) -> None`
+- **Summary:** Log using Temporal's workflow logger.
+- **Defined in:** `application_sdk/app/base.py`
+
+#### `_safe_now`
+
+- **Import:** `from application_sdk.app.base import _safe_now`
+- **Signature:** `_safe_now() -> datetime`
+- **Summary:** Get current time (deterministic for Temporal replay).
+- **Defined in:** `application_sdk/app/base.py`
+
+#### `_safe_uuid`
+
+- **Import:** `from application_sdk.app.base import _safe_uuid`
+- **Signature:** `_safe_uuid() -> UUID`
+- **Summary:** Generate UUID (deterministic for Temporal replay).
+- **Defined in:** `application_sdk/app/base.py`
+
+#### `_scan_entrypoints`
+
+- **Import:** `from application_sdk.app.base import _scan_entrypoints`
+- **Signature:** `_scan_entrypoints(cls: type)`
+- **Summary:** Scan a class for @entrypoint-decorated methods.
+- **Defined in:** `application_sdk/app/_ep_registration.py`
+
+#### `_wrap_instance_tasks`
+
+- **Import:** `from application_sdk.app.base import _wrap_instance_tasks`
+- **Signature:** `_wrap_instance_tasks(app_instance: Any, context_data: dict[str, Any]) -> None`
+- **Summary:** Wrap @task methods on an instance to execute as Temporal activities.
+- **Defined in:** `application_sdk/app/base.py`
 
 #### `entrypoint_module_segment`
 
@@ -165,12 +264,35 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Summary:** Convert a kebab-case entry-point name to its Python module segment.
 - **Defined in:** `application_sdk/app/entrypoint.py`
 
+#### `generate_workflow_class`
+
+- **Import:** `from application_sdk.app.base import generate_workflow_class`
+- **Signature:** `generate_workflow_class(app_cls: type[App], ep: EntryPointMetadata) -> type`
+- **Summary:** Generate a Temporal workflow class for one entry point.
+- **Defined in:** `application_sdk/app/base.py`
+
 #### `mcp_tool`
 
 - **Import:** `from application_sdk.app import mcp_tool`
-- **Summary:** _(no docstring)_
+- **Signature:** `mcp_tool(name: str | None = None, description: str | None = None, visible: bool = True, *args, **kwargs)`
+- **Summary:** Decorator to mark functions as MCP tools.
+- **Defined in:** `application_sdk/server/mcp/decorators.py`
 
 ### Constants and Enums
+
+#### `_app_state`
+
+- **Import:** `from application_sdk.app.base import _app_state`
+- **Signature:** `_app_state: dict[str, dict[str, Any]]`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/app/base.py`
+
+#### `_app_state_lock`
+
+- **Import:** `from application_sdk.app.base import _app_state_lock`
+- **Signature:** `_app_state_lock`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/app/base.py`
 
 #### `InteractionUnfinishedPolicy`
 
@@ -313,6 +435,15 @@ Connection clients (SQL, Redis, Azure) and ClientInterface ABC
 - **Summary:** Get the SSL verification context for HTTP clients (httpx, aiohttp, etc.).
 - **Defined in:** `application_sdk/clients/ssl_utils.py`
 
+### Constants and Enums
+
+#### `AZURE_MANAGEMENT_API_ENDPOINT`
+
+- **Import:** `from application_sdk.clients.azure import AZURE_MANAGEMENT_API_ENDPOINT`
+- **Signature:** `AZURE_MANAGEMENT_API_ENDPOINT`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/clients/azure/__init__.py`
+
 ## `application_sdk.common`
 
 Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType
@@ -329,6 +460,7 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 #### `FilterPattern`
 
 - **Import:** `from application_sdk.common import FilterPattern`
+- **Also importable from:** `application_sdk.common.filter_matching`
 - **Signature:** `class FilterPattern(include: list[re.Pattern[str]], exclude: list[re.Pattern[str]])`
 - **Summary:** A compiled include/exclude filter with uniform regex-or-exact semantics.
 - **Defined in:** `application_sdk/common/filter_matching.py`
@@ -349,9 +481,45 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 
 ### Functions
 
+#### `atomic_copy`
+
+- **Import:** `from application_sdk.common.atomic import atomic_copy`
+- **Signature:** `atomic_copy(src: str | Path, dst: str | Path, *, operation: str = 'file copy') -> None`
+- **Summary:** Copy *src* to *dst* so that *dst* never exists in a partial state.
+- **Defined in:** `application_sdk/common/atomic.py`
+
+#### `atomic_path`
+
+- **Import:** `from application_sdk.common.atomic import atomic_path`
+- **Signature:** `atomic_path(path: str | Path, *, operation: str, required_bytes: int | None = None) -> Iterator[Path]`
+- **Summary:** Yield a staging path to write, and publish it onto *path* on clean exit.
+- **Defined in:** `application_sdk/common/atomic.py`
+
+#### `atomic_write`
+
+- **Import:** `from application_sdk.common.atomic import atomic_write`
+- **Signature:** `atomic_write(path: str | Path, *, ...)`
+- **Summary:** Yield an open handle whose contents land at *path* only if the block succeeds.
+- **Defined in:** `application_sdk/common/atomic.py`
+
+#### `disk_full_guard`
+
+- **Import:** `from application_sdk.common.atomic import disk_full_guard`
+- **Signature:** `disk_full_guard(path: str | Path, *, operation: str, required_bytes: int | None = None) -> Iterator[None]`
+- **Summary:** Map a disk-full ``OSError`` raised inside the block to ``DiskFullError``.
+- **Defined in:** `application_sdk/common/atomic.py`
+
+#### `ensure_free_space`
+
+- **Import:** `from application_sdk.common.atomic import ensure_free_space`
+- **Signature:** `ensure_free_space(path: str | Path, required_bytes: int, *, operation: str) -> None`
+- **Summary:** Fail before a large write that the filesystem plainly cannot hold.
+- **Defined in:** `application_sdk/common/atomic.py`
+
 #### `filter_matches`
 
 - **Import:** `from application_sdk.common import filter_matches`
+- **Also importable from:** `application_sdk.common.filter_matching`
 - **Signature:** `filter_matches(candidate: str, *, ...)`
 - **Summary:** Convenience one-shot: compile ``include``/``exclude`` and test ``candidate``.
 - **Defined in:** `application_sdk/common/filter_matching.py`
@@ -363,12 +531,33 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Get the actual number of CPUs available to the current process.
 - **Defined in:** `application_sdk/common/concurrency.py`
 
+#### `get_backfill_tables`
+
+- **Import:** `from application_sdk.common.incremental.column_extraction import get_backfill_tables`
+- **Signature:** `get_backfill_tables(current_transformed_dir: Path, previous_current_state_dir: Path | None)`
+- **Summary:** Use DuckDB to compare current tables vs previous current-state.
+- **Defined in:** `application_sdk/common/incremental/column_extraction/backfill.py`
+
 #### `get_safe_num_threads`
 
 - **Import:** `from application_sdk.common import get_safe_num_threads`
 - **Signature:** `get_safe_num_threads()`
 - **Summary:** Get recommended number of threads for parallel processing.
 - **Defined in:** `application_sdk/common/concurrency.py`
+
+#### `get_tables_needing_column_extraction`
+
+- **Import:** `from application_sdk.common.incremental.column_extraction import get_tables_needing_column_extraction`
+- **Signature:** `get_tables_needing_column_extraction(transformed_dir: Path, backfill_qualified_names: set[str] | None = None)`
+- **Summary:** Get tables needing column extraction using DuckDB.
+- **Defined in:** `application_sdk/common/incremental/column_extraction/analysis.py`
+
+#### `get_transformed_dir`
+
+- **Import:** `from application_sdk.common.incremental.column_extraction import get_transformed_dir`
+- **Signature:** `get_transformed_dir(workflow_args: dict[str, Any])`
+- **Summary:** Return current run's transformed directory.
+- **Defined in:** `application_sdk/common/incremental/column_extraction/analysis.py`
 
 #### `normalize_filters`
 
@@ -398,11 +587,27 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Read all SQL files from a directory and return as a name→content mapping.
 - **Defined in:** `application_sdk/common/sql_filters.py`
 
+### Constants and Enums
+
+#### `PARTIAL_DIRNAME`
+
+- **Import:** `from application_sdk.common.atomic import PARTIAL_DIRNAME`
+- **Signature:** `PARTIAL_DIRNAME`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/_listing.py`
+
 ## `application_sdk.contracts`
 
 Typed Pydantic Input/Output base classes, payload safety, storage and type helpers
 
 ### Classes
+
+#### `CompatibilityError`
+
+- **Import:** `from application_sdk.contracts.compat import CompatibilityError`
+- **Signature:** `class CompatibilityError(issues: list[Incompatibility]) -> None`
+- **Summary:** Raised by :func:`assert_backwards_compatible` on incompatible contracts.
+- **Defined in:** `application_sdk/contracts/compat.py`
 
 #### `ConnectionRef`
 
@@ -459,6 +664,13 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Signature:** `class HeartbeatDetails`
 - **Summary:** Base class for heartbeat progress contracts.
 - **Defined in:** `application_sdk/contracts/base.py`
+
+#### `Incompatibility`
+
+- **Import:** `from application_sdk.contracts.compat import Incompatibility`
+- **Signature:** `class Incompatibility(field: str, reason: str) -> None`
+- **Summary:** One backwards-incompatibility between two contract versions.
+- **Defined in:** `application_sdk/contracts/compat.py`
 
 #### `Input`
 
@@ -552,6 +764,34 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Defined in:** `application_sdk/contracts/storage.py`
 
 ### Functions
+
+#### `assert_backwards_compatible`
+
+- **Import:** `from application_sdk.contracts.compat import assert_backwards_compatible`
+- **Signature:** `assert_backwards_compatible(old_cls: type, new_cls: type) -> None`
+- **Summary:** Assert *new_cls* is backwards-compatible with *old_cls*, raising on failure.
+- **Defined in:** `application_sdk/contracts/compat.py`
+
+#### `canonical_type_str`
+
+- **Import:** `from application_sdk.contracts.compat import canonical_type_str`
+- **Signature:** `canonical_type_str(tp: Any) -> str`
+- **Summary:** Return a normalized string representation of a type annotation.
+- **Defined in:** `application_sdk/contracts/compat.py`
+
+#### `check_backwards_compatible`
+
+- **Import:** `from application_sdk.contracts.compat import check_backwards_compatible`
+- **Signature:** `check_backwards_compatible(old_cls: type, new_cls: type) -> tuple[bool, list[Incompatibility]]`
+- **Summary:** Check whether *new_cls* is backwards-compatible with *old_cls*.
+- **Defined in:** `application_sdk/contracts/compat.py`
+
+#### `field_lifecycle`
+
+- **Import:** `from application_sdk.contracts.compat import field_lifecycle`
+- **Signature:** `field_lifecycle(cls: type, field_name: str) -> str`
+- **Summary:** Return the lifecycle status of a contract field: ``"active"``, ``"deprecated"``, or ``"sunset"``.
+- **Defined in:** `application_sdk/contracts/compat.py`
 
 #### `get_contract_fields`
 
@@ -929,6 +1169,42 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 - **Summary:** Every spelling the field arrives under, in discovery order.
 - **Defined in:** `application_sdk/credentials/ingress.py`
 
+## `application_sdk.dev`
+
+Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed
+
+### Classes
+
+#### `EmbeddedDapr`
+
+- **Import:** `from application_sdk.dev import EmbeddedDapr`
+- **Signature:** `class EmbeddedDapr(http_port: int, grpc_port: int, components_dir: str)`
+- **Summary:** Connection details for the embedded Dapr sidecar.
+- **Defined in:** `application_sdk/dev/_dapr.py`
+
+#### `EmbeddedRuntime`
+
+- **Import:** `from application_sdk.dev import EmbeddedRuntime`
+- **Signature:** `class EmbeddedRuntime(host: str, namespace: str = 'default', ui_url: str | None = None)`
+- **Summary:** Connection details for the in-process workflow runtime.
+- **Defined in:** `application_sdk/dev/_embedded.py`
+
+### Functions
+
+#### `embedded_dapr`
+
+- **Import:** `from application_sdk.dev import embedded_dapr`
+- **Signature:** `embedded_dapr(*, *, ...)`
+- **Summary:** Boot an embedded ``daprd`` for local app development.
+- **Defined in:** `application_sdk/dev/_dapr.py`
+
+#### `embedded_runtime`
+
+- **Import:** `from application_sdk.dev import embedded_runtime`
+- **Signature:** `embedded_runtime(*, *, ...)`
+- **Summary:** Boot an in-process workflow runtime for local development.
+- **Defined in:** `application_sdk/dev/_embedded.py`
+
 ## `application_sdk.errors`
 
 Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.)
@@ -1059,6 +1335,20 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Import:** `from application_sdk.errors import NotFoundError`
 - **Signature:** `class NotFoundError(*, ...)`
 - **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `ObjectStoreDownloadError`
+
+- **Import:** `from application_sdk.errors import ObjectStoreDownloadError`
+- **Signature:** `class ObjectStoreDownloadError(*, ...)`
+- **Summary:** No local files found and download from object store failed.
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `ObjectStoreReadError`
+
+- **Import:** `from application_sdk.errors import ObjectStoreReadError`
+- **Signature:** `class ObjectStoreReadError(*, ...)`
+- **Summary:** Object store listing returned no files matching the expected extension.
 - **Defined in:** `application_sdk/errors/leaves.py`
 
 #### `PreconditionError`
@@ -1386,12 +1676,69 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Summary:** Wraps Temporal Worker to emit worker_start on startup and to push
 - **Defined in:** `application_sdk/execution/_temporal/worker.py`
 
+#### `AtlanLoggerAdapter`
+
+- **Import:** `from application_sdk.execution.heartbeat import AtlanLoggerAdapter`
+- **Signature:** `class AtlanLoggerAdapter(logger_name: str)`
+- **Summary:** A custom logger adapter for Atlan that extends AtlanObservability.
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `BrokenProcessPool`
+
+- **Import:** `from application_sdk.execution.heartbeat import BrokenProcessPool`
+- **Signature:** `class BrokenProcessPool()`
+- **Summary:** Raised when a process in a ProcessPoolExecutor terminated abruptly _(re-exported from `concurrent.futures.process.BrokenProcessPool`)_
+
+#### `ClosedHold`
+
+- **Import:** `from application_sdk.execution.progress import ClosedHold`
+- **Signature:** `class ClosedHold(label: str, duration_seconds: float, allowance_seconds: float | None)`
+- **Summary:** One completed hold, observed at the moment its token was released.
+- **Defined in:** `application_sdk/_runtime/progress.py`
+
+#### `HeartbeatController`
+
+- **Import:** `from application_sdk.execution.heartbeat import HeartbeatController`
+- **Signature:** `class HeartbeatController`
+- **Summary:** Protocol for heartbeat operations.
+- **Defined in:** `application_sdk/execution/heartbeat.py`
+
+#### `NoopHeartbeatController`
+
+- **Import:** `from application_sdk.execution.heartbeat import NoopHeartbeatController`
+- **Signature:** `class NoopHeartbeatController() -> None`
+- **Summary:** No-op HeartbeatController for local execution and testing.
+- **Defined in:** `application_sdk/execution/heartbeat.py`
+
+#### `ProgressTracker`
+
+- **Import:** `from application_sdk.execution.heartbeat import ProgressTracker`
+- **Also importable from:** `application_sdk.execution.progress`
+- **Signature:** `class ProgressTracker(clock: Callable[[], ...)`
+- **Summary:** Observed forward progress for one activity attempt.
+- **Defined in:** `application_sdk/_runtime/progress.py`
+
+#### `ProgressWatchdogMode`
+
+- **Import:** `from application_sdk.execution.heartbeat import ProgressWatchdogMode`
+- **Also importable from:** `application_sdk.execution.progress`
+- **Signature:** `class ProgressWatchdogMode`
+- **Summary:** How the stall watchdog reacts to a no-progress gap (ADR-0018).
+- **Defined in:** `application_sdk/execution/progress.py`
+
 #### `RetryPolicy`
 
 - **Import:** `from application_sdk.execution import RetryPolicy`
 - **Signature:** `class RetryPolicy(max_attempts: int = 3, ...)`
 - **Summary:** Configuration for retry behavior.
 - **Defined in:** `application_sdk/execution/retry.py`
+
+#### `StallObservation`
+
+- **Import:** `from application_sdk.execution.progress import StallObservation`
+- **Signature:** `class StallObservation(stalled_for_seconds: float, last_progress_label: str)`
+- **Summary:** The no-progress gap the watchdog acted on, frozen at the moment it acted.
+- **Defined in:** `application_sdk/_runtime/progress.py`
 
 #### `TemporalActivityError`
 
@@ -1438,6 +1785,13 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Summary:** Temporal-based executor backend for running Apps as workflows.
 - **Defined in:** `application_sdk/execution/_temporal/backend.py`
 
+#### `TemporalHeartbeatController`
+
+- **Import:** `from application_sdk.execution.heartbeat import TemporalHeartbeatController`
+- **Signature:** `class TemporalHeartbeatController() -> None`
+- **Summary:** HeartbeatController that uses Temporal's activity.heartbeat().
+- **Defined in:** `application_sdk/execution/heartbeat.py`
+
 #### `TemporalTerminatedError`
 
 - **Import:** `from application_sdk.execution import TemporalTerminatedError`
@@ -1457,6 +1811,20 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Summary:** Error that occurs when a workflow is unsuccessful. _(re-exported from `temporalio.client.WorkflowFailureError`)_
 
 ### Functions
+
+#### `auto_heartbeat_loop`
+
+- **Import:** `from application_sdk.execution.heartbeat import auto_heartbeat_loop`
+- **Signature:** `auto_heartbeat_loop(interval_seconds: float, *, ...)`
+- **Summary:** Background task that sends heartbeats at regular intervals.
+- **Defined in:** `application_sdk/execution/heartbeat.py`
+
+#### `bind_progress_tracker`
+
+- **Import:** `from application_sdk.execution.progress import bind_progress_tracker`
+- **Signature:** `bind_progress_tracker(tracker: ProgressTracker)`
+- **Summary:** Bind ``tracker`` as the current attempt's tracker for the block's extent.
+- **Defined in:** `application_sdk/_runtime/progress.py`
 
 #### `build_output_path`
 
@@ -1493,12 +1861,35 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Summary:** Create a Temporal worker for registered Apps.
 - **Defined in:** `application_sdk/execution/_temporal/worker.py`
 
+#### `current_progress_tracker`
+
+- **Import:** `from application_sdk.execution.heartbeat import current_progress_tracker`
+- **Also importable from:** `application_sdk.execution.progress`
+- **Signature:** `current_progress_tracker()`
+- **Summary:** Get the :class:`ProgressTracker` for the current activity attempt.
+- **Defined in:** `application_sdk/_runtime/progress.py`
+
+#### `declared_hold_active`
+
+- **Import:** `from application_sdk.execution.heartbeat import declared_hold_active`
+- **Also importable from:** `application_sdk.execution.progress`
+- **Signature:** `declared_hold_active()`
+- **Summary:** Whether an explicit declared allowance is *still* covering this context.
+- **Defined in:** `application_sdk/_runtime/progress.py`
+
 #### `get_object_store_prefix`
 
 - **Import:** `from application_sdk.execution import get_object_store_prefix`
 - **Signature:** `get_object_store_prefix(path: str)`
 - **Summary:** Convert a local-path or object-store-path into an object-store prefix.
 - **Defined in:** `application_sdk/execution/_temporal/activity_utils.py`
+
+#### `holding_progress`
+
+- **Import:** `from application_sdk.execution.progress import holding_progress`
+- **Signature:** `holding_progress(label: str, *, timeout: float | None)`
+- **Summary:** Vouch for one opaque operation for as long as you would let it run.
+- **Defined in:** `application_sdk/_runtime/progress.py`
 
 #### `needs_lock`
 
@@ -1507,12 +1898,84 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Summary:** Decorator to mark activities that require distributed locking.
 - **Defined in:** `application_sdk/execution/decorators.py`
 
+#### `record_no_progress_gap`
+
+- **Import:** `from application_sdk.execution.heartbeat import record_no_progress_gap`
+- **Signature:** `record_no_progress_gap(task_name: str, stalled_for: float, last_label: str, mode: ProgressWatchdogMode)`
+- **Summary:** Record one no-progress gap. Never raises.
+- **Defined in:** `application_sdk/execution/progress_telemetry.py`
+
+#### `resolve_max_no_progress_seconds`
+
+- **Import:** `from application_sdk.execution.progress import resolve_max_no_progress_seconds`
+- **Signature:** `resolve_max_no_progress_seconds(declared: float | None) -> float`
+- **Summary:** Resolve one task's effective allowance against the process-wide setting.
+- **Defined in:** `application_sdk/execution/progress.py`
+
+#### `resolve_watchdog_mode`
+
+- **Import:** `from application_sdk.execution.progress import resolve_watchdog_mode`
+- **Signature:** `resolve_watchdog_mode(declared: ProgressWatchdogMode | None) -> ProgressWatchdogMode`
+- **Summary:** Resolve one task's effective mode against the process-wide setting.
+- **Defined in:** `application_sdk/execution/progress.py`
+
 #### `retry_product_seconds`
 
 - **Import:** `from application_sdk.execution import retry_product_seconds`
 - **Signature:** `retry_product_seconds(timeout_seconds: int, *, ...)`
 - **Summary:** The worst-case total seconds a task can consume across *every* attempt.
 - **Defined in:** `application_sdk/execution/retry.py`
+
+#### `run_best_effort`
+
+- **Import:** `from application_sdk.execution.heartbeat import run_best_effort`
+- **Signature:** `run_best_effort(func: Callable[..., ...)`
+- **Summary:** Run non-essential native work fault-isolated; never let it break the caller.
+- **Defined in:** `application_sdk/_runtime/offload.py`
+
+#### `run_fault_isolated`
+
+- **Import:** `from application_sdk.execution.heartbeat import run_fault_isolated`
+- **Signature:** `run_fault_isolated(func: Callable[..., ...)`
+- **Summary:** Run ``func`` in an isolated child process (native-crash containment).
+- **Defined in:** `application_sdk/_runtime/offload.py`
+
+#### `run_in_thread`
+
+- **Import:** `from application_sdk.execution.heartbeat import run_in_thread`
+- **Signature:** `run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any)`
+- **Summary:** Last-resort escape hatch: run a blocking function in a thread pool.
+- **Defined in:** `application_sdk/_runtime/offload.py`
+
+#### `submit_in_thread`
+
+- **Import:** `from application_sdk.execution.heartbeat import submit_in_thread`
+- **Signature:** `submit_in_thread(func: Callable[..., Any], *args: Any, **kwargs: Any)`
+- **Summary:** Run a blocking *cleanup* call on the offload pool without awaiting it.
+- **Defined in:** `application_sdk/_runtime/offload.py`
+
+### Constants and Enums
+
+#### `DEFAULT_MAX_NO_PROGRESS_SECONDS`
+
+- **Import:** `from application_sdk.execution.progress import DEFAULT_MAX_NO_PROGRESS_SECONDS`
+- **Signature:** `DEFAULT_MAX_NO_PROGRESS_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/_runtime/progress.py`
+
+#### `MAX_NO_PROGRESS_SECONDS`
+
+- **Import:** `from application_sdk.execution.progress import MAX_NO_PROGRESS_SECONDS`
+- **Signature:** `MAX_NO_PROGRESS_SECONDS: float`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/execution/progress.py`
+
+#### `PROGRESS_WATCHDOG_MODE`
+
+- **Import:** `from application_sdk.execution.progress import PROGRESS_WATCHDOG_MODE`
+- **Signature:** `PROGRESS_WATCHDOG_MODE: ProgressWatchdogMode`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/execution/progress.py`
 
 ## `application_sdk.handler`
 
@@ -1987,6 +2450,13 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Summary:** A custom logger adapter for Atlan that extends AtlanObservability.
 - **Defined in:** `application_sdk/observability/logger_adaptor.py`
 
+#### `AtlanTracesAdapter`
+
+- **Import:** `from application_sdk.observability.traces_adaptor import AtlanTracesAdapter`
+- **Signature:** `class AtlanTracesAdapter()`
+- **Summary:** A traces adapter for Atlan that extends AtlanObservability.
+- **Defined in:** `application_sdk/observability/traces_adaptor.py`
+
 #### `CorrelationContext`
 
 - **Import:** `from application_sdk.observability import CorrelationContext`
@@ -2001,7 +2471,70 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Summary:** Immutable snapshot of the current Temporal execution context.
 - **Defined in:** `application_sdk/observability/context.py`
 
+#### `PushGatewayClient`
+
+- **Import:** `from application_sdk.observability.pushgateway import PushGatewayClient`
+- **Signature:** `class PushGatewayClient(*, ...)`
+- **Summary:** Periodic + shutdown Prometheus Pushgateway pusher.
+- **Defined in:** `application_sdk/observability/pushgateway.py`
+
+#### `TemporalCoreCollector`
+
+- **Import:** `from application_sdk.observability.pushgateway import TemporalCoreCollector`
+- **Signature:** `class TemporalCoreCollector(url: str, timeout_s: float = 1.0) -> None`
+- **Summary:** Bridge Temporal's Rust-core Prometheus endpoint into the OTel registry.
+- **Defined in:** `application_sdk/observability/pushgateway.py`
+
+#### `TraceRecord`
+
+- **Import:** `from application_sdk.observability.traces_adaptor import TraceRecord`
+- **Signature:** `class TraceRecord(timestamp: float, ...)`
+- **Summary:** A dataclass representing a trace record in the system.
+- **Defined in:** `application_sdk/observability/models.py`
+
 ### Functions
+
+#### `create_counter`
+
+- **Import:** `from application_sdk.observability.metrics import create_counter`
+- **Signature:** `create_counter(name: str, *, unit: str = '', description: str = '') -> Counter`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/metrics.py`
+
+#### `create_histogram`
+
+- **Import:** `from application_sdk.observability.metrics import create_histogram`
+- **Signature:** `create_histogram(name: str, *, unit: str = '', description: str = '') -> Histogram`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/metrics.py`
+
+#### `create_observable_counter`
+
+- **Import:** `from application_sdk.observability.metrics import create_observable_counter`
+- **Signature:** `create_observable_counter(name: str, *, ...)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/metrics.py`
+
+#### `create_observable_gauge`
+
+- **Import:** `from application_sdk.observability.metrics import create_observable_gauge`
+- **Signature:** `create_observable_gauge(name: str, *, ...)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/metrics.py`
+
+#### `create_observable_up_down_counter`
+
+- **Import:** `from application_sdk.observability.metrics import create_observable_up_down_counter`
+- **Signature:** `create_observable_up_down_counter(name: str, *, ...)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/metrics.py`
+
+#### `create_up_down_counter`
+
+- **Import:** `from application_sdk.observability.metrics import create_up_down_counter`
+- **Signature:** `create_up_down_counter(name: str, *, unit: str = '', description: str = '') -> UpDownCounter`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/metrics.py`
 
 #### `get_correlation_context`
 
@@ -2023,6 +2556,13 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Signature:** `get_logger(name: str | None = None)`
 - **Summary:** Get or create an instance of AtlanLoggerAdapter.
 - **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `get_traces`
+
+- **Import:** `from application_sdk.observability.traces_adaptor import get_traces`
+- **Signature:** `get_traces() -> AtlanTracesAdapter`
+- **Summary:** Get or create a singleton instance of AtlanTracesAdapter.
+- **Defined in:** `application_sdk/observability/traces_adaptor.py`
 
 #### `metrics`
 
@@ -2095,6 +2635,42 @@ Output collectors and record models for Automation Engine
 - **Signature:** `get_outputs() -> OutputCollector`
 - **Summary:** Get the output collector for the current execution context.
 - **Defined in:** `application_sdk/outputs/__init__.py`
+
+## `application_sdk.server`
+
+FastAPI server, MCP integration, middleware, health endpoint
+
+### Classes
+
+#### `LogMiddleware`
+
+- **Import:** `from application_sdk.server.middleware import LogMiddleware`
+- **Signature:** `class LogMiddleware(app: ASGIApp)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/server/middleware/log.py`
+
+#### `MCPMetadata`
+
+- **Import:** `from application_sdk.server.mcp import MCPMetadata`
+- **Signature:** `class MCPMetadata`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/server/mcp/models.py`
+
+#### `MCPServer`
+
+- **Import:** `from application_sdk.server.mcp import MCPServer`
+- **Signature:** `class MCPServer(application_name: str, instructions: Optional[str] = None)`
+- **Summary:** MCP Server using FastMCP with FastAPI mounting capability.
+- **Defined in:** `application_sdk/server/mcp/server.py`
+
+### Constants and Enums
+
+#### `EXCLUDED_LOG_PATHS`
+
+- **Import:** `from application_sdk.server.middleware import EXCLUDED_LOG_PATHS`
+- **Signature:** `EXCLUDED_LOG_PATHS: frozenset[str]`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/server/middleware/_constants.py`
 
 ## `application_sdk.storage`
 
@@ -2413,6 +2989,14 @@ SQL metadata extractor templates and their contracts
 - **Summary:** Base App for all metadata extraction connectors.
 - **Defined in:** `application_sdk/templates/base_metadata_extractor.py`
 
+#### `IncrementalRunContext`
+
+- **Import:** `from application_sdk.templates.contracts import IncrementalRunContext`
+- **Also importable from:** `application_sdk.templates.contracts.incremental_sql`
+- **Signature:** `class IncrementalRunContext(workflow_id: str = '', ...)`
+- **Summary:** Incremental extraction state accumulated across tasks within a single run().
+- **Defined in:** `application_sdk/templates/contracts/incremental_sql.py`
+
 #### `IncrementalSqlMetadataExtractor`
 
 - **Import:** `from application_sdk.templates import IncrementalSqlMetadataExtractor`
@@ -2446,6 +3030,164 @@ SQL metadata extractor templates and their contracts
 Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers
 
 ### Classes
+
+#### `AEWorkflowClient`
+
+- **Import:** `from application_sdk.testing.full_dag import AEWorkflowClient`
+- **Also importable from:** `application_sdk.testing.full_dag.client`
+- **Signature:** `class AEWorkflowClient(tenant_url: str, ...)`
+- **Summary:** Thin wrapper over the three Atlan endpoints used by full-DAG tests.
+- **Defined in:** `application_sdk/testing/e2e/client.py`
+
+#### `APIType`
+
+- **Import:** `from application_sdk.testing.integration import APIType`
+- **Signature:** `class APIType`
+- **Summary:** Supported API types for integration testing.
+- **Defined in:** `application_sdk/testing/integration/models.py`
+
+#### `AppConfig`
+
+- **Import:** `from application_sdk.testing.e2e import AppConfig`
+- **Signature:** `class AppConfig(app_name: str, ...)`
+- **Summary:** Configuration for an app under K8s e2e testing.
+- **Defined in:** `application_sdk/testing/e2e/config.py`
+
+#### `AssetDiff`
+
+- **Import:** `from application_sdk.testing.integration import AssetDiff`
+- **Also importable from:** `application_sdk.testing.parity`
+- **Signature:** `class AssetDiff(asset_type: str, ...)`
+- **Summary:** A single difference found between expected and actual metadata.
+- **Defined in:** `application_sdk/testing/integration/comparison.py`
+
+#### `AssetValidationFailure`
+
+- **Import:** `from application_sdk.testing.integration import AssetValidationFailure`
+- **Signature:** `class AssetValidationFailure(file: str, ...)`
+- **Summary:** A single asset that failed per-asset (``.validate()``) checks.
+- **Defined in:** `application_sdk/validation/assets.py`
+
+#### `AssetValidationReport`
+
+- **Import:** `from application_sdk.testing.integration import AssetValidationReport`
+- **Signature:** `class AssetValidationReport(total: int = 0, ...)`
+- **Summary:** Aggregate outcome of validating a batch of transformed assets.
+- **Defined in:** `application_sdk/validation/assets.py`
+
+#### `BaseE2ETest`
+
+- **Import:** `from application_sdk.testing.e2e import BaseE2ETest`
+- **Signature:** `class BaseE2ETest`
+- **Summary:** Pytest base — subclass per connector, set class attrs.
+- **Defined in:** `application_sdk/testing/e2e/base.py`
+
+#### `BaseFullDAGE2ETest`
+
+- **Import:** `from application_sdk.testing.full_dag import BaseFullDAGE2ETest`
+- **Signature:** `class BaseFullDAGE2ETest`
+- **Summary:** Pytest base — subclass per connector, set class attrs.
+- **Defined in:** `application_sdk/testing/full_dag/base.py`
+
+#### `BaseIntegrationTest`
+
+- **Import:** `from application_sdk.testing.integration import BaseIntegrationTest`
+- **Signature:** `class BaseIntegrationTest`
+- **Summary:** Base class for integration tests.
+- **Defined in:** `application_sdk/testing/integration/runner.py`
+
+#### `BaseSDRIntegrationTest`
+
+- **Import:** `from application_sdk.testing.sdr import BaseSDRIntegrationTest`
+- **Signature:** `class BaseSDRIntegrationTest`
+- **Summary:** Deprecated: use ``application_sdk.testing.e2e.BaseE2ETest`` with
+- **Defined in:** `application_sdk/testing/sdr/base.py`
+
+#### `CategoryResult`
+
+- **Import:** `from application_sdk.testing.parity import CategoryResult`
+- **Signature:** `class CategoryResult(category: str, ...)`
+- **Summary:** Comparison result for a single category (e.g., table, column).
+- **Defined in:** `application_sdk/testing/parity/models.py`
+
+#### `DAGNodeResult`
+
+- **Import:** `from application_sdk.testing.full_dag.client import DAGNodeResult`
+- **Signature:** `class DAGNodeResult(name: str, ...)`
+- **Summary:** One row of the per-node breakdown returned by ``native-status``.
+- **Defined in:** `application_sdk/testing/e2e/client.py`
+
+#### `DAGNodeStatus`
+
+- **Import:** `from application_sdk.testing.full_dag import DAGNodeStatus`
+- **Also importable from:** `application_sdk.testing.full_dag.client`
+- **Signature:** `class DAGNodeStatus`
+- **Summary:** Status values returned by ``native-status`` per DAG node.
+- **Defined in:** `application_sdk/testing/e2e/client.py`
+
+#### `DAGRunResult`
+
+- **Import:** `from application_sdk.testing.full_dag.client import DAGRunResult`
+- **Signature:** `class DAGRunResult(run_id: str, workflow_slug: str, status: DAGRunStatus, nodes: list[DAGNodeResult])`
+- **Summary:** Full result returned by :meth:`AEWorkflowClient.poll_native_status`.
+- **Defined in:** `application_sdk/testing/e2e/client.py`
+
+#### `DAGRunStatus`
+
+- **Import:** `from application_sdk.testing.full_dag import DAGRunStatus`
+- **Also importable from:** `application_sdk.testing.full_dag.client`
+- **Signature:** `class DAGRunStatus`
+- **Summary:** Top-level status of an AE workflow run.
+- **Defined in:** `application_sdk/testing/e2e/client.py`
+
+#### `DataForgeSource`
+
+- **Import:** `from application_sdk.testing.integration import DataForgeSource`
+- **Signature:** `class DataForgeSource(datasource: str, fields: Mapping[str, str])`
+- **Summary:** The integration source's credential fields, read uniformly from env.
+- **Defined in:** `application_sdk/testing/integration/source.py`
+
+#### `FieldDiff`
+
+- **Import:** `from application_sdk.testing.parity import FieldDiff`
+- **Signature:** `class FieldDiff(field_path: str, baseline_value: Any, candidate_value: Any)`
+- **Summary:** A single field-level difference between baseline and candidate.
+- **Defined in:** `application_sdk/testing/parity/models.py`
+
+#### `FullDAGOutcome`
+
+- **Import:** `from application_sdk.testing.e2e import FullDAGOutcome`
+- **Signature:** `class FullDAGOutcome(ae_result: DAGRunResult, ...)`
+- **Summary:** Combined result of a single full-DAG run.
+- **Defined in:** `application_sdk/testing/e2e/base.py`
+
+#### `GapReport`
+
+- **Import:** `from application_sdk.testing.integration import GapReport`
+- **Signature:** `class GapReport(diffs: list[AssetDiff] = list(), summary: dict[str, int] = dict(), expected_file: str | None = None)`
+- **Summary:** Summary of all differences between expected and actual metadata.
+- **Defined in:** `application_sdk/testing/integration/comparison.py`
+
+#### `IntegrationTestClient`
+
+- **Import:** `from application_sdk.testing.integration import IntegrationTestClient`
+- **Signature:** `class IntegrationTestClient(host: str, version: str = 'v1', workflow_endpoint: str = '/start', timeout: int = 30)`
+- **Summary:** Client for integration testing of the Core 3 APIs.
+- **Defined in:** `application_sdk/testing/integration/client.py`
+
+#### `Lazy`
+
+- **Import:** `from application_sdk.testing.integration import Lazy`
+- **Signature:** `class Lazy(fn: Callable[[], T])`
+- **Summary:** Wrapper for lazy evaluation with caching.
+- **Defined in:** `application_sdk/testing/integration/lazy.py`
+
+#### `LogCollector`
+
+- **Import:** `from application_sdk.testing.e2e import LogCollector`
+- **Signature:** `class LogCollector(namespace: str, output_dir: Path)`
+- **Summary:** Collect kubectl logs, pod descriptions, and events from a namespace.
+- **Defined in:** `application_sdk/testing/e2e/logs.py`
 
 #### `MockBinding`
 
@@ -2489,7 +3231,64 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** In-memory state store with call-tracking for unit tests.
 - **Defined in:** `application_sdk/testing/mocks.py`
 
+#### `ReferentialFailure`
+
+- **Import:** `from application_sdk.testing.integration import ReferentialFailure`
+- **Signature:** `class ReferentialFailure(missing_type_name: str, ...)`
+- **Summary:** A relationship reference whose target asset is absent from the batch.
+- **Defined in:** `application_sdk/validation/assets.py`
+
+#### `RunMode`
+
+- **Import:** `from application_sdk.testing.e2e import RunMode`
+- **Also importable from:** `application_sdk.testing.full_dag`
+- **Signature:** `class RunMode`
+- **Summary:** Whether the connector runs in tenant or in caller-controlled CI.
+- **Defined in:** `application_sdk/testing/e2e/payload.py`
+
+#### `Scenario`
+
+- **Import:** `from application_sdk.testing.integration import Scenario`
+- **Signature:** `class Scenario(name: str, ...)`
+- **Summary:** Represents a single integration test scenario.
+- **Defined in:** `application_sdk/testing/integration/models.py`
+
+#### `ScenarioResult`
+
+- **Import:** `from application_sdk.testing.integration import ScenarioResult`
+- **Signature:** `class ScenarioResult(scenario: Scenario, ...)`
+- **Summary:** Result of executing a single scenario.
+- **Defined in:** `application_sdk/testing/integration/models.py`
+
+#### `SQLAppE2EFullTest`
+
+- **Import:** `from application_sdk.testing.full_dag import SQLAppE2EFullTest`
+- **Signature:** `class SQLAppE2EFullTest`
+- **Summary:** Full-DAG e2e harness pre-wired for SQL connectors.
+- **Defined in:** `application_sdk/testing/full_dag/sql_app.py`
+
+#### `SQLAppE2ETest`
+
+- **Import:** `from application_sdk.testing.e2e import SQLAppE2ETest`
+- **Signature:** `class SQLAppE2ETest`
+- **Summary:** Full-DAG e2e harness pre-wired for SQL connectors.
+- **Defined in:** `application_sdk/testing/e2e/sql_app.py`
+
 ### Functions
+
+#### `all_of`
+
+- **Import:** `from application_sdk.testing.integration import all_of`
+- **Signature:** `all_of(*predicates: Predicate, description: str | None = None)`
+- **Summary:** Assert that all predicates pass.
+- **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `any_of`
+
+- **Import:** `from application_sdk.testing.integration import any_of`
+- **Signature:** `any_of(*predicates: Predicate, description: str | None = None)`
+- **Summary:** Assert that at least one predicate passes.
+- **Defined in:** `application_sdk/testing/integration/assertions.py`
 
 #### `app_context`
 
@@ -2497,6 +3296,27 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `app_context(mock_state_store: MockStateStore, mock_secret_store: MockSecretStore)`
 - **Summary:** AppContext wired with MockStateStore and MockSecretStore.
 - **Defined in:** `application_sdk/testing/fixtures.py`
+
+#### `between`
+
+- **Import:** `from application_sdk.testing.integration import between`
+- **Signature:** `between(min_value: float, max_value: float, *, description: str | None = None)`
+- **Summary:** Assert that the actual value is between min and max (inclusive).
+- **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `build_ae_payload`
+
+- **Import:** `from application_sdk.testing.full_dag import build_ae_payload`
+- **Signature:** `build_ae_payload(*, *, ...)`
+- **Summary:** Assemble the AE submit body.
+- **Defined in:** `application_sdk/testing/full_dag/payload.py`
+
+#### `build_seed_dag`
+
+- **Import:** `from application_sdk.testing.full_dag import build_seed_dag`
+- **Signature:** `build_seed_dag(*, *, ...)`
+- **Summary:** Build a seed-version DAG matching the connector's manifest.json shape.
+- **Defined in:** `application_sdk/testing/full_dag/payload.py`
 
 #### `clean_app_registry`
 
@@ -2511,6 +3331,258 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `clean_task_registry()`
 - **Summary:** TaskRegistry reset before and after each test.
 - **Defined in:** `application_sdk/testing/fixtures.py`
+
+#### `cold_start_submit_kwargs`
+
+- **Import:** `from application_sdk.testing.full_dag.client import cold_start_submit_kwargs`
+- **Signature:** `cold_start_submit_kwargs(timeout_seconds: int, poll_interval_seconds: int)`
+- **Summary:** Re-size :meth:`AEWorkflowClient.submit_workflow`'s retry to a cold start.
+- **Defined in:** `application_sdk/testing/e2e/client.py`
+
+#### `compare_category`
+
+- **Import:** `from application_sdk.testing.parity import compare_category`
+- **Signature:** `compare_category(category: str, baseline_dir: Path, candidate_dir: Path)`
+- **Summary:** Compare a single category (e.g., 'table', 'column') between two runs.
+- **Defined in:** `application_sdk/testing/parity/comparator.py`
+
+#### `compare_metadata`
+
+- **Import:** `from application_sdk.testing.integration import compare_metadata`
+- **Signature:** `compare_metadata(expected: dict[str, ...)`
+- **Summary:** Compare actual extracted metadata against an expected baseline.
+- **Defined in:** `application_sdk/testing/integration/comparison.py`
+
+#### `contains`
+
+- **Import:** `from application_sdk.testing.integration import contains`
+- **Signature:** `contains(item: Any, *, description: str | None = None)`
+- **Summary:** Assert that the actual value contains the given item.
+- **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `custom`
+
+- **Import:** `from application_sdk.testing.integration import custom`
+- **Signature:** `custom(fn: Callable[[Any], bool], description: str = 'custom')`
+- **Summary:** Create a custom assertion from a user-provided function.
+- **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `discover_categories`
+
+- **Import:** `from application_sdk.testing.parity import discover_categories`
+- **Signature:** `discover_categories(baseline_dir: Path, candidate_dir: Path)`
+- **Summary:** Find all category subdirectories across both dirs.
+- **Defined in:** `application_sdk/testing/parity/comparator.py`
+
+#### `ends_with`
+
+- **Import:** `from application_sdk.testing.integration import ends_with`
+- **Signature:** `ends_with(suffix: str, *, description: str | None = None)`
+- **Summary:** Assert that the actual value ends with the given suffix.
+- **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `equals`
+
+- **Import:** `from application_sdk.testing.integration import equals`
+- **Signature:** `equals(expected: Any, *, description: str | None = None)`
+- **Summary:** Assert that the actual value equals the expected value.
+- **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `evaluate_if_lazy`
+
+- **Import:** `from application_sdk.testing.integration import evaluate_if_lazy`
+- **Signature:** `evaluate_if_lazy(value: T)`
+- **Summary:** Evaluate a value if it's lazy, otherwise return as-is.
+- **Defined in:** `application_sdk/testing/integration/lazy.py`
+
+#### `exists`
+
+- **Import:** `from application_sdk.testing.integration import exists`
+- **Signature:** `exists(*, description: str | None = None)`
+- **Summary:** Assert that the actual value is not None.
+- **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `format_validation_report`
+
+- **Import:** `from application_sdk.testing.integration import format_validation_report`
+- **Signature:** `format_validation_report(results: list[dict[str, Any]])`
+- **Summary:** Format pandera validation results into a human-readable report.
+- **Defined in:** `application_sdk/testing/integration/validation.py`
+
+#### `generate_json_report`
+
+- **Import:** `from application_sdk.testing.parity import generate_json_report`
+- **Signature:** `generate_json_report(results: list[CategoryResult], baseline_ref: str = 'main', candidate_ref: str = 'PR')`
+- **Summary:** Generate a JSON report from comparison results.
+- **Defined in:** `application_sdk/testing/parity/report.py`
+
+#### `generate_markdown`
+
+- **Import:** `from application_sdk.testing.parity import generate_markdown`
+- **Signature:** `generate_markdown(results: list[CategoryResult], baseline_ref: str = 'main', candidate_ref: str = 'PR')`
+- **Summary:** Generate a markdown report from comparison results.
+- **Defined in:** `application_sdk/testing/parity/report.py`
+
+#### `generate_test_methods`
+
+- **Import:** `from application_sdk.testing.integration import generate_test_methods`
+- **Signature:** `generate_test_methods(test_class: type[BaseIntegrationTest])`
+- **Summary:** Generate individual test methods for each scenario.
+- **Defined in:** `application_sdk/testing/integration/runner.py`
+
+#### `get_normalised_dataframe`
+
+- **Import:** `from application_sdk.testing.integration import get_normalised_dataframe`
+- **Signature:** `get_normalised_dataframe(extracted_file_path: str)`
+- **Summary:** Read extracted output files and normalize into a DataFrame.
+- **Defined in:** `application_sdk/testing/integration/validation.py`
+
+#### `get_schema_file_paths`
+
+- **Import:** `from application_sdk.testing.integration import get_schema_file_paths`
+- **Signature:** `get_schema_file_paths(schema_base_path: str)`
+- **Summary:** Find all pandera YAML schema files in the given directory.
+- **Defined in:** `application_sdk/testing/integration/validation.py`
+
+#### `greater_than`
+
+- **Import:** `from application_sdk.testing.integration import greater_than`
+- **Signature:** `greater_than(value: float, *, description: str | None = None)`
+- **Summary:** Assert that the actual value is greater than the given value.
+- **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `greater_than_or_equal`
+
+- **Import:** `from application_sdk.testing.integration import greater_than_or_equal`
+- **Signature:** `greater_than_or_equal(value: float, *, description: str | None = None)`
+- **Summary:** Assert that the actual value is greater than or equal to the given value.
+- **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `has_length`
+
+- **Import:** `from application_sdk.testing.integration import has_length`
+- **Signature:** `has_length(expected_length: int, *, description: str | None = None)`
+- **Summary:** Assert that the actual value has the expected length.
+- **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `is_dict`
+
+- **Import:** `from application_sdk.testing.integration import is_dict`
+- **Signature:** `is_dict(*, description: str | None = None)`
+- **Summary:** Assert that the actual value is a dictionary.
+- **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `is_empty`
+
+- **Import:** `from application_sdk.testing.integration import is_empty`
+- **Signature:** `is_empty(*, description: str | None = None)`
+- **Summary:** Assert that the actual value is empty.
+- **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `is_false`
+
+- **Import:** `from application_sdk.testing.integration import is_false`
+- **Signature:** `is_false(*, description: str | None = None)`
+- **Summary:** Assert that the actual value is falsy.
+- **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `is_lazy`
+
+- **Import:** `from application_sdk.testing.integration import is_lazy`
+- **Signature:** `is_lazy(value: Any)`
+- **Summary:** Check if a value is a lazy wrapper.
+- **Defined in:** `application_sdk/testing/integration/lazy.py`
+
+#### `is_list`
+
+- **Import:** `from application_sdk.testing.integration import is_list`
+- **Signature:** `is_list(*, description: str | None = None)`
+- **Summary:** Assert that the actual value is a list.
+- **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `is_none`
+
+- **Import:** `from application_sdk.testing.integration import is_none`
+- **Signature:** `is_none(*, description: str | None = None)`
+- **Summary:** Assert that the actual value is None.
+- **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `is_not_empty`
+
+- **Import:** `from application_sdk.testing.integration import is_not_empty`
+- **Signature:** `is_not_empty(*, description: str | None = None)`
+- **Summary:** Assert that the actual value is not empty.
+- **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `is_string`
+
+- **Import:** `from application_sdk.testing.integration import is_string`
+- **Signature:** `is_string(*, description: str | None = None)`
+- **Summary:** Assert that the actual value is a string.
+- **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `is_true`
+
+- **Import:** `from application_sdk.testing.integration import is_true`
+- **Signature:** `is_true(*, description: str | None = None)`
+- **Summary:** Assert that the actual value is truthy.
+- **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `is_type`
+
+- **Import:** `from application_sdk.testing.integration import is_type`
+- **Signature:** `is_type(expected_type: type, *, description: str | None = None)`
+- **Summary:** Assert that the actual value is an instance of the given type.
+- **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `kube_http_call`
+
+- **Import:** `from application_sdk.testing.e2e import kube_http_call`
+- **Signature:** `kube_http_call(namespace: str, ...)`
+- **Summary:** Make an HTTP call to a K8s service via an ephemeral port-forward.
+- **Defined in:** `application_sdk/testing/e2e/portforward.py`
+
+#### `lazy`
+
+- **Import:** `from application_sdk.testing.integration import lazy`
+- **Signature:** `lazy(fn: Callable[[], T]) -> Lazy[T]`
+- **Summary:** Create a lazy evaluation wrapper.
+- **Defined in:** `application_sdk/testing/integration/lazy.py`
+
+#### `less_than`
+
+- **Import:** `from application_sdk.testing.integration import less_than`
+- **Signature:** `less_than(value: float, *, description: str | None = None)`
+- **Summary:** Assert that the actual value is less than the given value.
+- **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `less_than_or_equal`
+
+- **Import:** `from application_sdk.testing.integration import less_than_or_equal`
+- **Signature:** `less_than_or_equal(value: float, *, description: str | None = None)`
+- **Summary:** Assert that the actual value is less than or equal to the given value.
+- **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `load_actual_output`
+
+- **Import:** `from application_sdk.testing.integration import load_actual_output`
+- **Signature:** `load_actual_output(base_path: str, workflow_id: str, run_id: str, subdirectory: str = 'transformed')`
+- **Summary:** Load all extracted metadata from the output directory.
+- **Defined in:** `application_sdk/testing/integration/comparison.py`
+
+#### `load_expected_data`
+
+- **Import:** `from application_sdk.testing.integration import load_expected_data`
+- **Signature:** `load_expected_data(file_path: str)`
+- **Summary:** Load expected metadata from a JSON file.
+- **Defined in:** `application_sdk/testing/integration/comparison.py`
+
+#### `matches`
+
+- **Import:** `from application_sdk.testing.integration import matches`
+- **Signature:** `matches(pattern: str | Pattern, *, description: str | None = None)`
+- **Summary:** Assert that the actual value matches the given regex pattern.
+- **Defined in:** `application_sdk/testing/integration/assertions.py`
 
 #### `mock_binding`
 
@@ -2553,6 +3625,140 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `mock_state_store()`
 - **Summary:** Fresh MockStateStore instance.
 - **Defined in:** `application_sdk/testing/fixtures.py`
+
+#### `none_of`
+
+- **Import:** `from application_sdk.testing.integration import none_of`
+- **Signature:** `none_of(*predicates: Predicate, description: str | None = None)`
+- **Summary:** Assert that none of the predicates pass.
+- **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `not_contains`
+
+- **Import:** `from application_sdk.testing.integration import not_contains`
+- **Signature:** `not_contains(item: Any, *, description: str | None = None)`
+- **Summary:** Assert that the actual value does not contain the given item.
+- **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `not_equals`
+
+- **Import:** `from application_sdk.testing.integration import not_equals`
+- **Signature:** `not_equals(unexpected: Any, *, description: str | None = None)`
+- **Summary:** Assert that the actual value does not equal the unexpected value.
+- **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `not_one_of`
+
+- **Import:** `from application_sdk.testing.integration import not_one_of`
+- **Signature:** `not_one_of(excluded: list[Any], *, description: str | None = None)`
+- **Summary:** Assert that the actual value is not one of the given values.
+- **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `one_of`
+
+- **Import:** `from application_sdk.testing.integration import one_of`
+- **Signature:** `one_of(options: list[Any], *, description: str | None = None)`
+- **Summary:** Assert that the actual value is one of the given options.
+- **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `parametrize_scenarios`
+
+- **Import:** `from application_sdk.testing.integration import parametrize_scenarios`
+- **Signature:** `parametrize_scenarios(scenarios: list[Scenario])`
+- **Summary:** Create a pytest parametrize decorator for scenarios.
+- **Defined in:** `application_sdk/testing/integration/runner.py`
+
+#### `run_comparison`
+
+- **Import:** `from application_sdk.testing.parity import run_comparison`
+- **Signature:** `run_comparison(baseline_dir: Path, candidate_dir: Path)`
+- **Summary:** Run full parity comparison across all categories.
+- **Defined in:** `application_sdk/testing/parity/comparator.py`
+
+#### `run_workflow`
+
+- **Import:** `from application_sdk.testing.e2e import run_workflow`
+- **Signature:** `run_workflow(namespace: str, service: str, port: int, workflow_name: str, payload: dict[str, Any])`
+- **Summary:** POST to the handler's workflow endpoint and return the workflow ID.
+- **Defined in:** `application_sdk/testing/e2e/workflows.py`
+
+#### `starts_with`
+
+- **Import:** `from application_sdk.testing.integration import starts_with`
+- **Signature:** `starts_with(prefix: str, *, description: str | None = None)`
+- **Summary:** Assert that the actual value starts with the given prefix.
+- **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `validate_asset`
+
+- **Import:** `from application_sdk.testing.integration import validate_asset`
+- **Signature:** `validate_asset(asset: Asset, *, for_creation: bool = True)`
+- **Summary:** Run pyatlan_v9's ``.validate()`` and return its error messages.
+- **Defined in:** `application_sdk/validation/assets.py`
+
+#### `validate_transformed_dir`
+
+- **Import:** `from application_sdk.testing.integration import validate_transformed_dir`
+- **Signature:** `validate_transformed_dir(path: str | Path, *, for_creation: bool = True, check_referential_integrity: bool = True)`
+- **Summary:** Validate every transformed-output asset under ``path``.
+- **Defined in:** `application_sdk/validation/assets.py`
+
+#### `validate_with_pandera`
+
+- **Import:** `from application_sdk.testing.integration import validate_with_pandera`
+- **Signature:** `validate_with_pandera(schema_base_path: str, extracted_output_path: str, subdirectory: str = 'transformed')`
+- **Summary:** Validate extracted output against pandera YAML schemas.
+- **Defined in:** `application_sdk/testing/integration/validation.py`
+
+#### `wait_for_workflow`
+
+- **Import:** `from application_sdk.testing.e2e import wait_for_workflow`
+- **Signature:** `wait_for_workflow(namespace: str, ...)`
+- **Summary:** Poll GET /api/v1/workflows/{id} until the workflow reaches a terminal state.
+- **Defined in:** `application_sdk/testing/e2e/workflows.py`
+
+## `application_sdk.validation`
+
+Offline asset validation — pyatlan_v9 .validate() wrappers, no network call
+
+### Classes
+
+#### `AssetValidationFailure`
+
+- **Import:** `from application_sdk.validation import AssetValidationFailure`
+- **Signature:** `class AssetValidationFailure(file: str, ...)`
+- **Summary:** A single asset that failed per-asset (``.validate()``) checks.
+- **Defined in:** `application_sdk/validation/assets.py`
+
+#### `AssetValidationReport`
+
+- **Import:** `from application_sdk.validation import AssetValidationReport`
+- **Signature:** `class AssetValidationReport(total: int = 0, ...)`
+- **Summary:** Aggregate outcome of validating a batch of transformed assets.
+- **Defined in:** `application_sdk/validation/assets.py`
+
+#### `ReferentialFailure`
+
+- **Import:** `from application_sdk.validation import ReferentialFailure`
+- **Signature:** `class ReferentialFailure(missing_type_name: str, ...)`
+- **Summary:** A relationship reference whose target asset is absent from the batch.
+- **Defined in:** `application_sdk/validation/assets.py`
+
+### Functions
+
+#### `validate_asset`
+
+- **Import:** `from application_sdk.validation import validate_asset`
+- **Signature:** `validate_asset(asset: Asset, *, for_creation: bool = True)`
+- **Summary:** Run pyatlan_v9's ``.validate()`` and return its error messages.
+- **Defined in:** `application_sdk/validation/assets.py`
+
+#### `validate_transformed_dir`
+
+- **Import:** `from application_sdk.validation import validate_transformed_dir`
+- **Signature:** `validate_transformed_dir(path: str | Path, *, for_creation: bool = True, check_referential_integrity: bool = True)`
+- **Summary:** Validate every transformed-output asset under ``path``.
+- **Defined in:** `application_sdk/validation/assets.py`
 
 ## Contracts
 

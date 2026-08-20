@@ -30,9 +30,10 @@ from conformance.suite.checks.prescriptions._error_code_prefix import (
     collect_classes,
     collect_import_aliases,
 )
+from conformance.suite.schema.disposition import RuleScope
 from conformance.suite.schema.findings import Finding
 
-from ._ledger_schema import ContractField, ContractLedger
+from ._ledger_schema import ContractField, ContractLedger, regen_command
 
 # ── Main scan function ────────────────────────────────────────────────────────
 
@@ -41,6 +42,7 @@ def scan_contract_compat(
     paths: list[Path],
     root: Path,
     ledger: ContractLedger,
+    scope: RuleScope | None = None,
 ) -> list[Finding]:
     """Emit B005/B006 for entrypoint contract backwards-compatibility violations.
 
@@ -89,6 +91,8 @@ def scan_contract_compat(
     ledger_by_contract: dict[str, list[ContractField]] = {}
     for f in ledger.fields:
         ledger_by_contract.setdefault(f.contract, []).append(f)
+
+    regen = regen_command(scope)
 
     findings: list[Finding] = []
 
@@ -174,9 +178,13 @@ def scan_contract_compat(
                                 f"Contract field '{class_node.name}.{fi.name}'"
                                 f"{inherited_note} is not recorded in the contract "
                                 "ledger (contract_schema.lock.json). Run "
-                                "'uv run atlan-application-sdk-conformance "
-                                "gen-contract-ledger' (writes contract_schema.lock.json "
+                                f"'{regen}' (writes contract_schema.lock.json "
                                 "in the repo root) and commit that file in the same PR. "
+                                "Keep the version pin: it is the version that raised "
+                                "this finding, and a bare 'uv run' resolves this repo's "
+                                "locked conformance dev dependency, which — when it lags "
+                                "the release the CI checker runs — rewrites the ledger "
+                                "byte-identically and leaves the finding standing. "
                                 "The generator is append-only — it "
                                 "can never launder a removal."
                             ),

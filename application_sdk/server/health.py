@@ -145,6 +145,16 @@ class WorkerHealthServer:
         self._started_at: datetime | None = None
         self._last_activity: datetime | None = None
         self._request_count: int = 0
+        # Poll-loop diagnostics (ARUN-1127). These are observational only: none
+        # of them flips a probe, because the mechanism behind a parked poll loop
+        # is not yet established and a probe that acts on a guess can kill a
+        # healthy worker. They exist so the mechanism can be read off a live
+        # tenant. See ``main.py::_observe_worker_poll_state``.
+        self._last_fatal_at: datetime | None = None
+        self._last_fatal_type: str | None = None
+        self._fatal_count: int = 0
+        self._last_poller_counts: dict[str, float] | None = None
+        self._last_poller_read_at: datetime | None = None
         # Reject non-finite windows to match the env loader
         # (``_load_worker_liveness_max_idle_seconds``): an ``inf`` window is set
         # but can never trip (``idle > inf`` is always False) and ``nan``
@@ -172,6 +182,43 @@ class WorkerHealthServer:
         Call this when the worker processes a task to update liveness tracking.
         """
         self._last_activity = _utc_now()
+
+    def record_worker_fatal(self, exc: BaseException) -> None:
+        """Record that a worker poll loop died with a fatal error.
+
+        Wired to Temporal's ``on_fatal_error`` hook, which fires the moment a
+        poll task raises. Only the exception *type* is retained: the full cause
+        chain goes to the logs instead, because the probe payload is served over
+        HTTP and a gRPC status repr can carry response metadata.
+        """
+        self._last_fatal_at = _utc_now()
+        self._last_fatal_type = type(exc).__name__
+        self._fatal_count += 1
+
+    def record_poller_counts(self, counts: dict[str, float] | None) -> None:
+        """Record sdk-core's live poller gauge, keyed by poller type.
+
+        ``None`` means the gauge could not be read (unknown), which is recorded
+        as such and never as zero.
+        """
+        self._last_poller_counts = counts
+        self._last_poller_read_at = _utc_now()
+
+    def _poll_diagnostics(self) -> dict[str, Any]:
+        """Poll-loop diagnostic fields shared by ``/ready`` and ``/live``."""
+        return {
+            "poller_counts": self._last_poller_counts,
+            "poller_counts_read_at": (
+                self._last_poller_read_at.isoformat()
+                if self._last_poller_read_at
+                else None
+            ),
+            "last_fatal_at": (
+                self._last_fatal_at.isoformat() if self._last_fatal_at else None
+            ),
+            "last_fatal_type": self._last_fatal_type,
+            "fatal_count": self._fatal_count,
+        }
 
     async def check_health(self) -> HealthStatus:
         """Basic health check - is the process running?
@@ -210,7 +257,10 @@ class WorkerHealthServer:
         return HealthStatus(
             healthy=True,
             message="Worker is ready",
-            details={"identity": self._temporal_client.identity},
+            details={
+                "identity": self._temporal_client.identity,
+                **self._poll_diagnostics(),
+            },
         )
 
     async def check_live(self) -> HealthStatus:
@@ -241,13 +291,21 @@ class WorkerHealthServer:
                         "last_activity": last_activity_iso,
                         "idle_seconds": idle_seconds,
                         "max_idle_seconds": self._max_idle_seconds,
+                        # The poll-loop evidence matters most on this 503: it is
+                        # the probe an operator reaches for when the worker looks
+                        # stalled, so surface the same diagnostics the healthy
+                        # branch serves.
+                        **self._poll_diagnostics(),
                     },
                 )
 
         return HealthStatus(
             healthy=True,
             message="Worker is responsive",
-            details={"last_activity": last_activity_iso},
+            details={
+                "last_activity": last_activity_iso,
+                **self._poll_diagnostics(),
+            },
         )
 
     async def _handle_request(

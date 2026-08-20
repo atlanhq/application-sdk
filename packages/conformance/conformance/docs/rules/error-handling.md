@@ -13,6 +13,15 @@ Suppress a finding on the violating line or the line directly above it:
 # conformance: ignore[E012] intentional: stdlib interop
 ```
 
+**See also — error-seam rules live in the P-series:** the E-series grades *how* an app
+handles an exception, decidable from the AST alone, and most of it applies to the SDK
+and consumer apps alike.  Rules about *which* error class an app is allowed to couple to
+— `P043` `NonPublicErrorControlFlow` and `P045` `PrivateErrorClassImport` — are seam
+rules: they grade a consumer app against `application_sdk.errors.__all__`, the SDK's
+published error contract, and so are app-scoped and require that surface as input data.
+They are documented alongside the orchestration, storage and client seam rules in
+[prescriptions.md](prescriptions.md#p043).
+
 | ID | Name | Tier | Scope | Category | Autofixable | Since |
 |---|---|---|---|---|---|---|
 | [E001](#e001) | `BareExceptPass` | `block` | `both` | `silent-swallow` | — | 0.2.0 |

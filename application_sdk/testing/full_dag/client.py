@@ -10,6 +10,7 @@ from application_sdk.testing.e2e.client import (
     DAGNodeStatus,
     DAGRunResult,
     DAGRunStatus,
+    cold_start_submit_kwargs,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "DAGNodeStatus",
     "DAGRunResult",
     "DAGRunStatus",
+    "cold_start_submit_kwargs",
 ]

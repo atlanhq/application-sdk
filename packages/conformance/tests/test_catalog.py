@@ -323,6 +323,11 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # which the SDK never declares (fleet SDR sweep).
     # P042: hand-rolled upload_to_atlan bridge in an SDR app — same gating as
     # P030, which it was split out of.
+    # P043/P045: error-seam — apps must build control flow on the SDK's public
+    # error surface (application_sdk.errors.__all__), not on an internal error
+    # class that can move, or stop being the one a boundary raises, in a minor
+    # release. The SDK is the publisher of that surface, so neither rule grades
+    # it (CONNECT-970).
     assert app_scoped == {
         "B001",
         "B007",
@@ -330,6 +335,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P040",
         "P041",
         "P042",
+        "P043",
+        "P044",
+        "P045",
         "C002",
         "D001",
         "D002",
@@ -560,6 +568,11 @@ def test_catalog_p_series_present() -> None:
     standing in for App.upload(), split out of P030 so the "bytes move but the
     SDK contract is reimplemented" shape carries its own severity, its own
     remediation, and a retirement date (the v4.0 removal of upload_to_atlan).
+    P043/P045 are the error-seam rules — NonPublicErrorControlFlow and
+    PrivateErrorClassImport. Only ``application_sdk.errors.__all__`` is the
+    public error contract; an ``except`` on an internal class silently stops
+    matching when the SDK changes which class a boundary surfaces, because the
+    replacement is a sibling rather than a subclass (CONNECT-970).
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -608,6 +621,9 @@ def test_catalog_p_series_present() -> None:
         "P040",
         "P041",
         "P042",
+        "P043",
+        "P044",
+        "P045",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
