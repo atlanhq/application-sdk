@@ -643,9 +643,120 @@ class TestExtractTaskQueue:
 
         assert _AgentModeTest()._extract_task_queue() == "atlan-openapi-e2e-full-ci-42"
 
-    def test_direct_mode_falls_back_to_connector_default(self) -> None:
-        # _ConcreteE2ETest is RunMode.DIRECT → agent_spec() is None.
-        assert _ConcreteE2ETest()._extract_task_queue() == "atlan-openapi-default"
+    def test_direct_mode_targets_the_tenant_deployment_not_default(self) -> None:
+        """DIRECT mode dispatches to the TENANT worker's queue.
+
+        Under RunMode.DIRECT extraction runs on the tenant's own deployed pod,
+        whose worker polls atlan-{app}-{deployment}. The literal "default" this
+        used to emit is not a deployment name anywhere, so the extract node was
+        queued on a queue nobody polls and the run hung (FND-656 A2).
+        """
+        # _ConcreteE2ETest is RunMode.DIRECT → agent_spec() is None, and its
+        # inherited manifest_path does not exist in the test tree, so the queue
+        # falls back to the connector_short_name form.
+        assert _ConcreteE2ETest()._extract_task_queue() == "atlan-openapi-production"
+        assert "default" not in _ConcreteE2ETest()._extract_task_queue()
+
+    def test_direct_mode_honours_the_per_leg_deployment_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A tenant whose system apps are not under "production" is env-supplied.
+
+        Same seam resolved_tenant_deployment_name() serves everywhere else, so a
+        tenant-matrix entry carrying deployment_name reaches the extract queue
+        without a per-connector override.
+        """
+        monkeypatch.setenv("E2E_TENANT_DEPLOYMENT_NAME", "staging")
+
+        assert _ConcreteE2ETest()._extract_task_queue() == "atlan-openapi-staging"
+
+    def test_direct_mode_takes_the_app_name_from_the_manifest(
+        self, tmp_path: Path
+    ) -> None:
+        """The contract, not the class attr, names the app half of the queue.
+
+        Every generated manifest bakes the app name into the extract node's
+        task_queue, and that string is what the tenant-side DAG runs — so a
+        connector whose connector_short_name disagrees with its contract must
+        still land on the queue the tenant worker polls.
+        """
+        manifest = tmp_path / "manifest.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "dag": {
+                        "extract": {
+                            "inputs": {
+                                "task_queue": "atlan-azure-data-factory-{deployment_name}"
+                            }
+                        }
+                    }
+                }
+            )
+        )
+
+        class _T(_ConcreteE2ETest):
+            connector_short_name = "adf"
+            manifest_path = str(manifest)
+
+        assert _T()._extract_task_queue() == "atlan-azure-data-factory-production"
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            "{ not json",
+            json.dumps({"dag": {}}),
+            json.dumps({"dag": {"extract": {}}}),
+            json.dumps({"dag": {"extract": {"inputs": {"task_queue": 7}}}}),
+        ],
+        ids=["unparseable", "no-extract", "no-inputs", "non-string-queue"],
+    )
+    def test_unusable_manifest_falls_back_instead_of_raising(
+        self, tmp_path: Path, payload: str
+    ) -> None:
+        """The queue lookup is also reached from the stall-guard diagnostic.
+
+        Raising there would replace the diagnosis with a traceback about reading
+        the file used to produce it, so every unusable-manifest shape degrades to
+        the connector_short_name form.
+        """
+        manifest = tmp_path / "manifest.json"
+        manifest.write_text(payload)
+
+        class _T(_ConcreteE2ETest):
+            manifest_path = str(manifest)
+
+        assert _T()._extract_task_queue() == "atlan-openapi-production"
+
+    def test_agent_mode_ignores_the_manifest(self, tmp_path: Path) -> None:
+        """AGENT mode must still override the manifest's queue.
+
+        The CI worker's queue is dynamic and per-leg; the manifest names the
+        tenant's. Reading the manifest in AGENT mode would send the extract node
+        to the tenant while the CI worker polls elsewhere — the FND-656 A2 bug
+        with the modes swapped.
+        """
+        manifest = tmp_path / "manifest.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "dag": {
+                        "extract": {
+                            "inputs": {"task_queue": "atlan-openapi-production"}
+                        }
+                    }
+                }
+            )
+        )
+
+        class _T(_ConcreteE2ETest):
+            mode = RunMode.AGENT
+            manifest_path = str(manifest)
+
+            def agent_spec(self) -> AgentSpec:
+                return AgentSpec(agent_name="openapi-e2e-full-ci-42")
+
+        assert _T()._extract_task_queue() == "atlan-openapi-e2e-full-ci-42"
 
 
 class TestAgentSpecDerivation:
@@ -943,6 +1054,51 @@ class TestSubmitRetryKwargs:
             MissingHarnessClassAttrError, match="app_ready_poll_interval_seconds"
         ):
             harness._submit_retry_kwargs()
+
+    def test_env_override_wins_over_the_class_attr(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """How long a tenant pod takes to serve :8000 is a property of the RUN.
+
+        A split-contract crawler entrypoint on a cold node can outlast the 300s
+        class default; widening it for one investigation must not need a PR
+        against the connector repo (FND-656 A5).
+        """
+        monkeypatch.setenv("E2E_APP_READY_TIMEOUT_SECONDS", "600")
+        assert _ConcreteE2ETest()._submit_retry_kwargs() == {
+            "retries": 120,
+            "retry_sleep_seconds": 5,
+        }
+
+    def test_blank_env_override_is_treated_as_unset(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unset Actions env var arrives as "" — reading it as 0 would DISABLE
+        the budget, the opposite of what setting the variable is for."""
+        monkeypatch.setenv("E2E_APP_READY_TIMEOUT_SECONDS", "   ")
+        assert _ConcreteE2ETest()._submit_retry_kwargs() == {
+            "retries": 60,
+            "retry_sleep_seconds": 5,
+        }
+
+    def test_env_override_can_disable_the_budget(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """0 restores submit_workflow's own default budget, per the documented
+        contract of the class attr it overrides."""
+        monkeypatch.setenv("E2E_APP_READY_TIMEOUT_SECONDS", "0")
+        assert _ConcreteE2ETest()._submit_retry_kwargs() == {}
+
+    def test_non_integer_env_override_raises_rather_than_falling_back(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A typo'd budget that silently reverted to the default would be
+        diagnosed as "the override does not work", days later."""
+        monkeypatch.setenv("E2E_APP_READY_TIMEOUT_SECONDS", "10m")
+        with pytest.raises(
+            MissingHarnessEnvError, match="E2E_APP_READY_TIMEOUT_SECONDS"
+        ):
+            _ConcreteE2ETest()._submit_retry_kwargs()
 
     def test_run_full_dag_passes_the_budget_to_submit(
         self, monkeypatch: pytest.MonkeyPatch

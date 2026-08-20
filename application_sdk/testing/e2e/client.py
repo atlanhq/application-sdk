@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
 import time
 import urllib.error
 import urllib.request
@@ -59,6 +60,7 @@ from application_sdk.testing.e2e._errors import (
     AtlanApiTimeoutError,
     DAGProgressStalledError,
     MissingHarnessClassAttrError,
+    MissingHarnessEnvError,
     NoWorkerOnTaskQueueError,
 )
 
@@ -377,6 +379,59 @@ def _is_app_not_ready(status: int, body: Any) -> bool:
     return all(marker in haystack for marker in _APP_NOT_READY_MARKERS)
 
 
+#: Env override for the tenant-app cold-start budget, read by
+#: :func:`resolved_app_ready_timeout_seconds`.
+APP_READY_TIMEOUT_ENV_VAR = "E2E_APP_READY_TIMEOUT_SECONDS"
+
+
+def resolved_app_ready_timeout_seconds(class_default: int) -> int:
+    """Cold-start budget in seconds: env override, else the harness class attr.
+
+    The class attr (``app_ready_timeout_seconds``) is a property of the *suite*,
+    but how long a tenant app pod takes to serve :8000 is a property of the
+    *tenant* and of what was just installed onto it — a split-contract crawler
+    entrypoint on a cold node is not the same wait as a warm single-entrypoint
+    pod. Same reason ``E2E_TENANT_DEPLOYMENT_NAME`` exists: the value belongs to
+    the run, so widening it for one investigation should be a per-leg env var
+    rather than a PR against every connector that needs it (FND-656 A5).
+
+    Blank is treated as unset — an unset GitHub Actions env var arrives as an
+    empty string, and reading that as 0 would silently DISABLE the cold-start
+    budget (0 means "leave submit_workflow's own 4x5s default in place"), which
+    is the opposite of what someone setting this variable wants.
+
+    A non-integer value is a loud error rather than a fallback: a typo'd budget
+    that silently reverts to the class default would be diagnosed as "the
+    override does not work", days later, from a run that looks identical to one
+    with no override at all.
+
+    Args:
+        class_default: The harness' ``app_ready_timeout_seconds`` class attr.
+
+    Returns:
+        The resolved budget. Non-positive disables the override (see
+        :func:`cold_start_submit_kwargs`).
+
+    Raises:
+        MissingHarnessEnvError: when the env var is set to a non-integer.
+    """
+    raw = os.environ.get(APP_READY_TIMEOUT_ENV_VAR, "").strip()
+    if not raw:
+        return class_default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise MissingHarnessEnvError(
+            message=(
+                f"{APP_READY_TIMEOUT_ENV_VAR}={raw!r} is not an integer number of "
+                "seconds. Unset it to use the harness' app_ready_timeout_seconds "
+                "class attr, or set it to a whole number of seconds (0 disables "
+                "the cold-start budget and restores submit_workflow's own "
+                "4x5s default)."
+            ),
+        ) from exc
+
+
 def cold_start_submit_kwargs(
     timeout_seconds: int,
     poll_interval_seconds: int,
@@ -399,7 +454,11 @@ def cold_start_submit_kwargs(
     Args:
         timeout_seconds: Total cold-start budget (the harness'
             ``app_ready_timeout_seconds``). 0 or negative returns no overrides,
-            leaving ``submit_workflow``'s own defaults in place.
+            leaving ``submit_workflow``'s own defaults in place. Passed through
+            :func:`resolved_app_ready_timeout_seconds` first, so a per-leg
+            ``E2E_APP_READY_TIMEOUT_SECONDS`` wins over the class attr — done
+            here rather than at each call site so both full-DAG harnesses honour
+            the override through one implementation.
         poll_interval_seconds: Gap between submit attempts (the harness'
             ``app_ready_poll_interval_seconds``).
 
@@ -413,6 +472,7 @@ def cold_start_submit_kwargs(
             by the interval, so a zero or negative interval would crash with
             ``ZeroDivisionError`` rather than gate the submit.
     """
+    timeout_seconds = resolved_app_ready_timeout_seconds(timeout_seconds)
     if timeout_seconds <= 0:
         return {}
     if poll_interval_seconds <= 0:

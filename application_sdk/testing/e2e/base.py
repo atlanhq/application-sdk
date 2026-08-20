@@ -930,11 +930,86 @@ class BaseE2ETest:
         AGENT mode this must equal the queue the deployed worker polls
         (``atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}``), so the
         test's ``agent_spec().agent_name`` has to match that suffix.
+
+        In DIRECT mode there is no CI worker to name: extraction runs on the
+        tenant's own already-deployed pod, so the queue is the tenant's — see
+        :meth:`_tenant_extract_task_queue`.
         """
         agent = self.agent_spec()
         if agent is not None:
             return f"atlan-{agent.agent_name}"
-        return f"atlan-{self.connector_short_name}-default"
+        return self._tenant_extract_task_queue()
+
+    def _tenant_extract_task_queue(self) -> str:
+        """DIRECT-mode extract queue: the one the TENANT's deployed pod polls.
+
+        The tenant worker derives its queue exactly as every other worker does,
+        ``atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}`` (see
+        :func:`application_sdk.main._derive_task_queue`), and on a tenant the
+        deployment half is the tenant's own deployment name — ``production`` by
+        default, or whatever the tenant-matrix entry's ``deployment_name`` field
+        supplies via ``E2E_TENANT_DEPLOYMENT_NAME``. It is never ``default``:
+        nothing deploys under that name, so the literal
+        ``atlan-{connector}-default`` this used to return addressed a queue no
+        worker has ever polled. The extract node was accepted, queued, and then
+        sat there — observed live as a DIRECT-mode gcs run that hung for ~6h
+        with the tenant worker polling ``atlan-gcs-production`` throughout, and
+        with KEDA scaling nothing because the queue it watches stayed empty
+        (FND-656 A2).
+
+        The app half is taken from the connector's own manifest when there is
+        one. Every generated manifest bakes the app name into the extract node's
+        ``task_queue`` (``atlan-<app>-{deployment_name}``) because that string is
+        also what the tenant-side DAG runs, so reading it back keeps this queue
+        pinned to the contract rather than to a class attr that can disagree
+        with it. ``connector_short_name`` is the fallback for a connector on the
+        hand-crafted legacy seed DAG (``manifest_path`` empty), where there is no
+        contract to read and the class attr is the only name available.
+        """
+        template = self._manifest_extract_queue_template()
+        if not template:
+            template = f"atlan-{self.connector_short_name}-{{deployment_name}}"
+        return template.replace(
+            "{deployment_name}", self.resolved_tenant_deployment_name()
+        )
+
+    def _manifest_extract_queue_template(self) -> str:
+        """The extract node's raw ``task_queue`` from the manifest, or ``""``.
+
+        Best-effort and deliberately silent on every failure mode: the caller has
+        a correct fallback, and this is also reached from the stall-guard
+        diagnostic — an error path, where raising would replace the diagnosis
+        with a traceback about reading the file used to produce it. A missing,
+        unparseable, or extract-less manifest therefore reads the same as
+        "no manifest configured".
+        """
+        if not self.manifest_path:
+            return ""
+        try:
+            path = Path(self.manifest_path)
+            if not path.is_absolute():
+                path = Path.cwd() / path
+            if not path.is_file():
+                return ""
+            dag = orjson.loads(path.read_bytes()).get("dag")
+            if not isinstance(dag, dict):
+                return ""
+            extract = dag.get("extract")
+            if not isinstance(extract, dict):
+                return ""
+            inputs = extract.get("inputs")
+            if not isinstance(inputs, dict):
+                return ""
+            queue = inputs.get("task_queue")
+            return queue.strip() if isinstance(queue, str) else ""
+        except Exception:  # noqa: BLE001 — see the docstring: fallback, not failure
+            logger.debug(
+                "Could not read the extract task_queue out of %s; falling back to "
+                "the connector_short_name form.",
+                self.manifest_path,
+                exc_info=True,
+            )
+            return ""
 
     def _bootstrap_workflow(self) -> str:
         """Ensure an AE workflow exists with a published version.
