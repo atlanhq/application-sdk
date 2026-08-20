@@ -114,23 +114,38 @@ IDLE_WARN_SECONDS = 300
 # request, replacing kimi-k3 (which was itself chosen on cost per TASK, not per
 # token: index 57.2, ~$0.85/task vs claude-opus-5 at 60.5, ~$2.40). Two things
 # have to hold on the proxy side or every dispatch dies on turn one, and the
-# codes tell you which: 404 means `x-ai/grok-4.6` is not in the
-# llmproxy.atlan.dev catalog, 403 means the `sdk_review` gateway key does not
+# codes tell you which: 400 means the pinned name is not one the
+# llmproxy.atlan.dev catalog recognises (its own message is "Invalid model
+# name passed in model=..."), 403 means the `sdk_review` gateway key does not
 # allowlist it.
+#
+# Mothership itself does not validate the name at all: `_validate_model_ids`
+# in `harness/api/models/sandbox.py` only rejects blank/whitespace/control-char
+# values, by design ("No allow-list of names: new models must work without a
+# code change"). So a typo in this constant is never caught at dispatch - it
+# boots a real sandbox, bills for it, and only dies mid-run when the container
+# itself calls the proxy. That is exactly what happened for FND-660: this
+# constant carried the OpenRouter-style `x-ai/` prefix instead of this proxy's
+# `xai/`, so any dispatch that reached the sandbox would have paid for one
+# and failed on its first proxy call.
 #
 # KNOWN RISK, carried deliberately: xAI does NOT prompt-cache on the
 # Anthropic `/v1/messages` route Claude Code uses (verified in the LiteLLM
-# ledger when mothership pinned its PR reviewer to x-ai/grok-4.5 in Jul 2026 —
+# ledger when mothership pinned its PR reviewer to xai/grok-4.5 in Jul 2026 -
 # Cache Hit False even with Claude Code sending cache_control), so a multi-turn
 # agentic reviewer re-bills its full context every turn. That is why mothership
 # reverted its own grok pin. This lane has the same shape, so watch the
-# per-review cost before treating the switch as settled.
+# per-review cost before treating the switch as settled. That risk was
+# measured on grok-4.5, not 4.6: a manual `/v1/messages` probe of
+# `xai/grok-4.6` on 2026-08-20 returned a non-zero `cache_read_input_tokens`,
+# so the no-caching claim is unverified for 4.6 and the per-run cost should be
+# re-measured before it is treated as settled.
 #
 # The fast lane stays on gpt-5.6-luna. `small_fast_model` must be pinned
 # explicitly: mothership's model_routing_env does `fast = small_fast_model or
 # model`, so pinning `model` alone would drag the background lane onto the main
 # model too.
-MAIN_MODEL = "x-ai/grok-4.6"
+MAIN_MODEL = "xai/grok-4.6"
 FAST_MODEL = "gpt-5.6-luna"
 IDLE_TIMEOUT_SECONDS = 1800
 
@@ -190,6 +205,14 @@ UNINFORMATIVE_ERR_CODES = frozenset({"", "none", "unknown"})
 # Fails identically on any model, so never spend a second sandbox on it: the
 # sandbox wants interactive input, which GHA can never give.
 NEVER_RETRY_ERR_CODES = frozenset({"elicitation"})
+# Dispatch-level HTTP statuses live in their own `http_` codespace, kept apart
+# from the stream's provider codes on purpose: a provider 400 carried inside the
+# stream is worth a different model, while a 400 on the POST itself is a
+# malformed payload that fails identically on any model. Only 429 and 5xx mean
+# "the far side was transiently unable to accept the request".
+RETRYABLE_DISPATCH_HTTP_CODES = frozenset(
+    {"http_429", "http_500", "http_502", "http_503", "http_504"}
+)
 # The job caps at 130 min (`timeout-minutes: 130`) and the VPN steps eat a few
 # of those before dispatch starts, so budget this step at 110 min from its own
 # start. A retry is only worth booting with enough of that left to finish a
@@ -692,6 +715,10 @@ def is_retryable_fault(st: SSEState) -> bool:
     known code would classify "401 upstream auth failed" as retryable and buy a
     second sandbox that fails identically.
     """
+    if st.err_code.startswith("http_"):
+        # Self-deciding codespace: a dispatch-level HTTP status never falls
+        # through to the message-pattern ladder below.
+        return st.err_code in RETRYABLE_DISPATCH_HTTP_CODES
     if st.err_code in NEVER_RETRY_ERR_CODES:
         return False
     if st.err_code in RETRYABLE_ERR_CODES:
@@ -1138,6 +1165,32 @@ def dispatch_once(
                 st,
                 deadline,
             )
+    except urllib.error.HTTPError as e:
+        # Ordering matters: HTTPError is itself a URLError subclass, and
+        # URLError is one of STREAM_TRANSPORT_ERRORS below - this clause MUST
+        # come first or a dispatch-level HTTP status lands on `stream_error`
+        # and `_retry_class` bails with "our stream died rather than the
+        # sandbox", which is the bug this closes (run 32347771368 got a 504 on
+        # the POST and never retried, never polled, delivered nothing).
+        #
+        # `st.errored = True` with `st.stream_error` left EMPTY is deliberate:
+        # an HTTP status means the far side answered and no sandbox was ever
+        # started, so `_retry_class` should reach the abnormal-termination /
+        # `is_retryable_fault` branches, not the stream-death one.
+        try:
+            # Narrow on purpose: a body read can fail on a half-open socket
+            # (OSError), a premature close (http.client.HTTPException), or a
+            # response whose `fp` was already consumed/absent (AttributeError,
+            # ValueError). None of those may be allowed to mask the HTTP status
+            # we came here to record.
+            body = e.read().decode("utf-8", "replace")
+        except (OSError, http.client.HTTPException, AttributeError, ValueError):
+            body = str(e.reason)
+        body = body[:500]
+        print(f"::error::Sandbox dispatch rejected with HTTP {e.code}: {body}")
+        st.errored = True
+        st.err_code = f"http_{e.code}"
+        st.err_msg = f"HTTP {e.code} on dispatch POST: {body}"
     except STREAM_TRANSPORT_ERRORS as e:
         # NOT `errored`: this is OUR connection dying, not the sandbox. The
         # shell saw the same class of failure as curl diagnostics on stdout and
