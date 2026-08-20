@@ -557,6 +557,7 @@ def test_the_head_sha_keeps_waiting(monkeypatch):
         _http_response(403, None, {"message": "Resource not accessible"}),
         _http_response(500, None, {"message": "boom"}),
         _http_response(200, None, {"number": 3322}),
+        _completed_raw(200, "<html>proxy error</html>"),
     ],
 )
 def test_an_unreadable_pr_head_keeps_waiting(monkeypatch, pr_answer):

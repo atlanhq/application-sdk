@@ -82,11 +82,13 @@ def pr_head_sha(repo: str, number: int) -> str | None:
     it was written for, where an unreadable check listing is a real failure, and
     exactly wrong here: this read is an optimisation, so a missing
     ``pull-requests: read`` grant would otherwise turn "stop waiting sooner" into
-    "kill the gate the first time it looks".
+    "kill the gate the first time it looks". A 200 whose body is not JSON raises
+    ``json.JSONDecodeError`` from the same parser; swallow that too, matching the
+    dispatch-side fail-open, so a proxy HTML page cannot fail the required gate.
     """
     try:
         status_code, _etag, body = gh_api_conditional(f"repos/{repo}/pulls/{number}")
-    except SystemExit as unreadable:
+    except (SystemExit, json.JSONDecodeError) as unreadable:
         print(
             f"::warning::could not read pull request #{number} ({unreadable}); "
             "continuing to wait."
