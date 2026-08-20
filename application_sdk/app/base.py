@@ -1288,10 +1288,18 @@ class App(ABC):
         result: UploadOutput | None = None
         deferred_required_error: Exception | None = None
         for target_store, label, fatal in targets:
-            # When writing to the deployment store, it is already the source for the
-            # cross-store fallback — passing it as _source_store would add a redundant
-            # SHA-256 sidecar lookup against itself. Skip it in that case.
-            source_store = None if target_store is deployment else self.context.storage
+            # FND-536: every leg — including the deployment leg — gets the
+            # deployment store as its fallback source. Withholding it there made
+            # a deployment→deployment copy inexpressible: with ``local_path``
+            # absent (cross-pod / ref-only, the shape the P042 bridges use)
+            # ``transfer.upload`` could not take its deployment-store fallback
+            # branch and raised "local_path does not exist", which is a spurious
+            # WARNING under ``best_effort`` and fails the run under ``required``.
+            # Passing it costs nothing on the local-present paths: the directory
+            # reconcile is gated on a *distinct* source store, the single-file
+            # path never reads it, and ``_upload_from_store`` short-circuits a
+            # same-store copy of an identical key without any sidecar GET.
+            source_store = self.context.storage
             try:
                 out = await _upload(
                     input.local_path,

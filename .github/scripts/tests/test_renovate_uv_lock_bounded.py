@@ -51,6 +51,16 @@ source = { editable = "." }
 """
 
 
+def with_options(lock_text: str, window: str = "P3D") -> str:
+    """`lock_text` as uv leaves it after a bounded resolve: same versions, plus
+    the [options] table recording the window."""
+    table = f'\n[options]\nexclude-newer-span = "{window}"\n'
+    anchor = lock_text.find("\n[[package]]")
+    if anchor == -1:
+        return lock_text + table
+    return lock_text[:anchor] + table + lock_text[anchor:]
+
+
 def lock(**packages: str) -> str:
     body = 'version = 1\nrevision = 3\nrequires-python = ">=3.11"\n'
     for name, version in packages.items():
@@ -539,7 +549,11 @@ class TestMain:
             return subprocess.CompletedProcess(command, 0, "", "")
 
         monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
-        assert bounded.main(["--window", "P7D", "--project-dir", str(project)]) == 0
+        # Exit 1, not 0: this fixture is also the hold-everything case — the bound
+        # admits nothing while Renovate's working-tree copy moved boto3 — so the
+        # run withholds rather than hand that copy to the branch. What this test
+        # is about is the ceiling flags below.
+        assert bounded.main(["--window", "P7D", "--project-dir", str(project)]) == 1
 
         # boto3's committed version is from 2020, comfortably outside the window,
         # so it needs no ceiling. Had the baseline been the working tree, the
@@ -755,7 +769,10 @@ class TestBaselineRef:
         monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
 
         argv = ["--window", "P7D", "--project-dir", str(tmp_path)]
-        assert bounded.main([*argv, "--baseline-ref", "base"]) == 0
+        # Withheld (1), not clean (0): the bound admits nothing here while the
+        # branch commit carries a fresh boto3, so the run refuses rather than
+        # leave Renovate's copy in place. The ceilings are what is under test.
+        assert bounded.main([*argv, "--baseline-ref", "base"]) == 1
         ceilings = [a for a in seen[0] if a.startswith("boto3=")]
         assert ceilings == [], (
             "the base branch locks a 2020 boto3, so nothing needs a ceiling; one "
@@ -766,6 +783,10 @@ class TestBaselineRef:
         # Without this half the assertion above could pass for the wrong reason.
         seen.clear()
         resolved = fresh
+        # Put the tree back the way Renovate leaves it, since the withheld run
+        # above rewrote uv.lock. In production each run re-resolves from scratch;
+        # here the fixture has to say so.
+        (tmp_path / "uv.lock").write_text(fresh)
         assert bounded.main(argv) == 0
         assert any(a.startswith("boto3=2") for a in seen[0]), seen[0]
 
@@ -840,3 +861,238 @@ class TestBaselineRef:
             ]
         )
         assert exit_code == 1
+
+
+class TestWithholds:
+    """A refusal has to land on a REQUIRED check, or it withholds nothing.
+
+    Renovate captures its own unbounded resolve before this command runs, commits
+    the working tree afterwards whatever the exit code, and falls back to that
+    captured artifact whenever the tree matches HEAD. `renovate/artifacts` is
+    advisory — not a required check in any lock-lane repo, and those repos need no
+    approving review either — and Renovate re-arms GitHub-native automerge in the
+    same pass that records the failure. So every refusal writes the baseline's
+    versions plus an `[options]` table the repo does not declare: `uv sync
+    --locked` rejects that, and `scan / Build Image` is required wherever this
+    lane runs.
+    """
+
+    GIT_ENV = {
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@t",
+        "PATH": os.environ.get("PATH", ""),
+    }
+
+    def _repo(self, tmp_path: Path, lock_text: str, pyproject: str = "") -> Path:
+        (tmp_path / "uv.lock").write_text(lock_text)
+        (tmp_path / "pyproject.toml").write_text(
+            pyproject or "[project]\nname = 'app'\n"
+        )
+        for command in (
+            ["git", "init", "-q"],
+            ["git", "add", "-A"],
+            ["git", "commit", "-qm", "baseline"],
+        ):
+            subprocess.run(command, cwd=tmp_path, check=True, env=self.GIT_ENV)
+        return tmp_path
+
+    def _assert_withheld(self, project: Path, baseline: str) -> None:
+        """The three properties a refusal needs, together.
+
+        The base branch's versions (so neither the rejected resolve nor Renovate's
+        unbounded one lands), an `[options]` table (so a required check rejects
+        it), and NOT byte-identical to the base branch — that last one is what
+        stops Renovate substituting its own captured artifact.
+        """
+        on_disk = (project / "uv.lock").read_text()
+        assert bounded.lock_versions(on_disk) == bounded.lock_versions(baseline)
+        assert "[options]" in on_disk
+        assert on_disk != baseline
+        assert bounded.strip_options(on_disk) == baseline
+
+    def test_the_bound_admitting_nothing_is_withheld_not_shipped(
+        self, monkeypatch, tmp_path
+    ):
+        """The common case, and the one that was merging unattended.
+
+        Renovate's unbounded pass moves a package published minutes ago and the
+        bound correctly holds it. Restoring the baseline here would leave the tree
+        matching HEAD, and Renovate would commit its own copy instead — a valid
+        lock that passes every required check while carrying a minutes-old
+        release.
+        """
+        baseline = lock(boto3="1.43.74")
+        project = self._repo(tmp_path, baseline)
+        # Renovate got here first: this is the artifact it has already captured.
+        (project / "uv.lock").write_text(lock(boto3="1.43.75"))
+
+        def fake_run(command, cwd):
+            (Path(cwd) / "uv.lock").write_text(with_options(baseline))
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        assert bounded.main(["--window", "P3D", "--project-dir", str(project)]) == 1
+        self._assert_withheld(project, baseline)
+
+    def test_a_genuinely_quiet_run_is_left_clean_and_passes(
+        self, monkeypatch, tmp_path
+    ):
+        """The control for the test above.
+
+        Renovate's own resolve moved nothing either ("uv.lock is unchanged"), so
+        there is no unbounded copy to withhold and no reason to fail. The tree is
+        left byte-identical to the baseline and the run succeeds — otherwise every
+        quiet run in the fleet would red a required check.
+        """
+        baseline = lock(boto3="1.43.74")
+        project = self._repo(tmp_path, baseline)
+
+        def fake_run(command, cwd):
+            (Path(cwd) / "uv.lock").write_text(with_options(baseline))
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        assert bounded.main(["--window", "P3D", "--project-dir", str(project)]) == 0
+        assert (project / "uv.lock").read_text() == baseline
+
+    def test_a_real_upgrade_still_strips_and_passes(self, monkeypatch, tmp_path):
+        # The success path must be untouched: a bounded upgrade strips [options]
+        # and exits 0, or nothing would ever merge again.
+        baseline = lock(boto3="1.43.70")
+        project = self._repo(tmp_path, baseline)
+        (project / "uv.lock").write_text(lock(boto3="1.43.75"))
+        resolved = lock(boto3="1.43.72")
+
+        def fake_run(command, cwd):
+            (Path(cwd) / "uv.lock").write_text(with_options(resolved))
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        assert bounded.main(["--window", "P3D", "--project-dir", str(project)]) == 0
+        assert (project / "uv.lock").read_text() == resolved
+
+    def test_a_rejected_downgrade_is_withheld(self, monkeypatch, tmp_path):
+        """The yanked-pin case: the base branch pins a release upstream has
+        yanked, so every resolve comes back lower. Neither the downgrade nor
+        Renovate's unbounded copy may reach the branch."""
+        baseline = lock(pytest_timeout="2.5.0")
+        project = self._repo(tmp_path, baseline)
+        (project / "uv.lock").write_text(lock(pytest_timeout="2.4.0"))
+
+        def fake_run(command, cwd):
+            (Path(cwd) / "uv.lock").write_text(
+                with_options(lock(pytest_timeout="2.4.0"))
+            )
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        assert bounded.main(["--window", "P3D", "--project-dir", str(project)]) == 1
+        self._assert_withheld(project, baseline)
+        assert '"2.4.0"' not in (project / "uv.lock").read_text()
+
+    def test_a_failed_resolve_is_withheld(self, monkeypatch, tmp_path):
+        # uv can rewrite the lock and then fail; whatever it left behind is what
+        # Renovate would commit.
+        baseline = lock(boto3="1.43.72")
+        project = self._repo(tmp_path, baseline)
+
+        def fake_run(command, cwd):
+            (Path(cwd) / "uv.lock").write_text(LOCK_WITH_OPTIONS)
+            return subprocess.CompletedProcess(
+                command, 1, "", "error: something else entirely"
+            )
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        assert bounded.main(["--window", "P3D", "--project-dir", str(project)]) == 1
+        self._assert_withheld(project, baseline)
+
+    def test_a_failed_retry_is_withheld(self, monkeypatch, tmp_path):
+        baseline = lock(cryptography="46.0.5")
+        project = self._repo(
+            tmp_path,
+            baseline,
+            "[project]\nname = 'app'\n\n[tool.uv]\n"
+            'constraint-dependencies = ["cryptography>=46.0.5"]\n',
+        )
+        calls: list[list[str]] = []
+
+        def fake_run(command, cwd):
+            calls.append(command)
+            (Path(cwd) / "uv.lock").write_text(LOCK_WITH_OPTIONS)
+            return subprocess.CompletedProcess(
+                command, 1, "", "error: No solution found ... cryptography>=46.0.5 ..."
+            )
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        assert bounded.main(["--window", "P3D", "--project-dir", str(project)]) == 1
+        assert len(calls) == 2, "the floor should have earned exactly one retry"
+        self._assert_withheld(project, baseline)
+
+    def test_a_new_lockfile_is_tripwired_too(self, monkeypatch, tmp_path):
+        """The branch that ADDS uv.lock still has to be held.
+
+        There is no committed baseline to write back here, and the pre-fix
+        behaviour — leave the tree as it is — was the one refusal that landed on
+        no required check: a valid-but-unbounded lock that Renovate commits and
+        every gate waves through.
+        """
+        project = self._repo(tmp_path, lock(boto3="1.43.72"))
+        subprocess.run(["git", "rm", "-q", "uv.lock"], cwd=project, check=True)
+        subprocess.run(
+            ["git", "commit", "-qm", "drop the lock"],
+            cwd=project,
+            check=True,
+            env=self.GIT_ENV,
+        )
+        assert bounded.baseline_lock_text(project) is None
+
+        # What Renovate left: a valid, unbounded lock. uv then fails WITHOUT
+        # rewriting it, which is what makes this the dangerous shape — the tree
+        # holds something installable that every required check waves through.
+        unbounded = lock(boto3="1.43.75")
+        (project / "uv.lock").write_text(unbounded)
+
+        def fake_run(command, cwd):
+            return subprocess.CompletedProcess(
+                command, 1, "", "error: something else entirely"
+            )
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        assert bounded.main(["--window", "P3D", "--project-dir", str(project)]) == 1
+        on_disk = (project / "uv.lock").read_text()
+        assert "[options]" in on_disk, "a new lockfile must be held like any other"
+        assert bounded.strip_options(on_disk) == unbounded
+
+    def test_withhold_only_no_ops_on_an_empty_file(self, tmp_path):
+        # Nothing committed AND nothing on disk: there is no content to tripwire,
+        # and writing a bare [options] table would be a lock nobody can recover.
+        target = tmp_path / "uv.lock"
+        target.write_text("")
+        assert bounded.withhold(target, "", "P3D") is False
+        assert target.read_text() == ""
+
+    def test_withhold_does_not_stack_options_tables(self, tmp_path):
+        # The on-disk fallback is whatever the bounded resolve left, which already
+        # carries uv's own [options]. Two tables would be invalid TOML rather than
+        # a recoverable lock.
+        target = tmp_path / "uv.lock"
+        target.write_text(LOCK_WITH_OPTIONS)
+        assert bounded.withhold(target, "", "P3D") is True
+        written = target.read_text()
+        assert written.count("[options]") == 1
+        assert 'exclude-newer-span = "P3D"' in written
+        assert bounded.strip_options(written) == bounded.strip_options(
+            LOCK_WITH_OPTIONS
+        )
+
+    def test_the_tripwire_names_the_window_and_survives_a_strip(self, tmp_path):
+        baseline = lock(boto3="1.43.72")
+        target = tmp_path / "uv.lock"
+        target.write_text(lock(boto3="1.43.99"))
+        assert bounded.withhold(target, baseline, "P3D") is True
+        written = target.read_text()
+        assert 'exclude-newer-span = "P3D"' in written
+        # Recoverable: a human, or the next run, gets the baseline back exactly.
+        assert bounded.strip_options(written) == baseline

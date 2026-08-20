@@ -511,8 +511,14 @@ support backwards-compatible field retirement:
 ```
 
 After changing field lifecycle in `app.pkl`, run
-`uv run atlan-application-sdk-conformance gen-contract-ledger` in the app repo
-and commit the updated `contract_schema.lock.json` in the same PR.
+`uvx atlan-application-sdk-conformance==<version> gen-contract-ledger` in the app
+repo and commit the updated `contract_schema.lock.json` in the same PR. Use the
+version-pinned `uvx` form, not a bare `uv run`: CI checks the ledger with an
+unpinned `uvx` install (always the latest release) while `uv run` resolves the
+app's *locked* conformance dev dependency, and the generator's output depends on
+its own version — so regenerating with an older locked version can rewrite the
+ledger byte-identically and leave a B006 finding standing with no diff to commit
+(FND-607). Any B005/B006 finding names the exact command to run.
 
 ## App Repo Structure
 

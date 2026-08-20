@@ -5,8 +5,10 @@ listing the bucket. Auth is KEYLESS: the binding carries no static credentials,
 so the SDK falls back to the ambient AWS credential chain — in CI these are the
 short-lived creds the GitHub OIDC role-assumption exports
 (AWS_ACCESS_KEY_ID/SECRET/SESSION_TOKEN). Embedded-credential resolution
-(accessKey/secretKey, secretKeyRef, assumeRoleArn) is covered hermetically by the
-emulator tests (``test_emulator_s3.py``) and unit tests.
+(accessKey/secretKey, secretKeyRef) is covered hermetically by the emulator
+tests (``test_emulator_s3.py``) and unit tests; assumeRoleArn is covered by
+``test_emulator_s3_assume_role.py``, which runs a real STS exchange against
+MinIO's own STS.
 
 Prerequisites (set by the keyless CI job; or locally for an ad-hoc run):
     # ambient AWS creds on the environment (any valid chain) +

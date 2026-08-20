@@ -15,6 +15,21 @@ def _stream(*lines: str):
     return sr.process_stream(list(lines))
 
 
+def _completed_stream(cost: str = "7.50"):
+    """A stream that both ends on the sentinel AND carries the Phase 4 summary.
+
+    Success needs both halves now: the sentinel alone is what a no-op run also
+    emits (see `test_complete_without_a_summary_is_a_noop_failure`).
+    """
+    return _stream(
+        "event: response",
+        f"data: {json.dumps({'text': _SUMMARY_BLOCK})}",
+        "",
+        "event: complete",
+        f'data: {{"status": "completed", "cost_usd": "{cost}"}}',
+    )
+
+
 # ---------------------------------------------------------------------------
 # payload / prompt
 # ---------------------------------------------------------------------------
@@ -43,7 +58,7 @@ def test_payload_pins_all_three_model_lanes():
     # mothership's Claude defaults (main -> claude-opus-5, sub-agent ->
     # claude-sonnet-5), and `small_fast_model` unset resolves to `model`.
     p = sr.build_payload("1", "u", 8, "2026-07-08", "reviewer-one", "requester-login")
-    assert p["model"] == "kimi-k3"
+    assert p["model"] == "x-ai/grok-4.6"
     assert p["small_fast_model"] == "gpt-5.6-luna"
     assert p["env_vars"]["CLAUDE_CODE_SUBAGENT_MODEL"] == "gpt-5.6-luna"
     # Every pinned value must survive JSON encoding as a non-blank string —
@@ -109,21 +124,142 @@ def test_reviewer_handles_dedupe_and_strip():
 
 
 def test_successful_complete_stream():
+    st = _completed_stream("7.50")
+    assert st.completed and st.status == "completed" and st.cost == "7.50"
+    assert sr.decide_exit(st) == (0, "SDK Resolve completed (cost=7.50).")
+    assert sr.resolved_nothing(st) is False
+
+
+def test_complete_without_a_summary_is_a_noop_failure():
+    # Regression (FND-644): two dispatches on PR #3297 ended `status=completed`
+    # after 3-5 min having posted no @sdk-review trigger, no report, and pushed
+    # nothing — and both runs went green, because the sentinel alone decided the
+    # exit code. Proof of work is the Phase 4 summary, so a sentinel without one
+    # is a failed run.
     st = _stream(
         "event: started",
         'data: {"session_id": "s1", "sandbox_id": "b1"}',
         "",
+        "event: response",
+        'data: {"text": "Let me look at the PR."}',
+        "",
         "event: complete",
-        'data: {"status": "completed", "cost_usd": "7.50"}',
+        'data: {"status": "completed", "cost_usd": "1.457863"}',
     )
-    assert st.completed and st.status == "completed" and st.cost == "7.50"
-    assert sr.decide_exit(st) == (0, "SDK Resolve completed (cost=7.50).")
+    assert sr.resolved_nothing(st) is True
+    code, msg = sr.decide_exit(st)
+    assert code == 1
+    assert "no Phase 4 summary" in msg
+    assert "nothing pushed" in msg
+
+
+def test_resolved_nothing_is_false_for_every_other_stream_shape():
+    # Only a happy sentinel with no summary is a no-op. A hard error, a
+    # transport drop and a real success must each stay off this path, or they
+    # would inherit the no-op's short poll and its re-dispatch.
+    err = _stream("event: complete", 'data: {"status": "error"}')
+    drop = _stream("event: response", 'data: {"text": "working..."}')
+    assert sr.resolved_nothing(err) is False
+    assert sr.resolved_nothing(drop) is False
+    assert sr.resolved_nothing(_completed_stream()) is False
+
+
+def test_a_summary_does_not_outrank_a_failed_terminal_status():
+    # `process_line` leaves `errored` False for a `complete` carrying
+    # status=error with an empty error object. Without consulting the terminal
+    # status, a run that streamed its Phase 4 summary and *then* died would
+    # render as merge-ready while `decide_exit` returned 1 — the exit code and
+    # the step summary must never disagree.
+    st = _stream(
+        "event: response",
+        f"data: {json.dumps({'text': _SUMMARY_BLOCK})}",
+        "",
+        "event: complete",
+        'data: {"status": "error"}',
+    )
+    assert st.errored is False and st.status == "error"
+    assert sr.run_completed(st) is False
+    assert sr.decide_exit(st)[0] == 1
+    out = sr.render_step_summary(st, "1234", "http://run")
+    assert "merge-ready" not in out
+    assert "run failed" in out
+    # Still not a no-op: the sandbox reported a failure, so it keeps the
+    # error-code retry path rather than the no-op one.
+    assert sr.resolved_nothing(st) is False
+
+
+def test_noop_run_is_a_stopped_sandbox_with_a_short_poll():
+    # The sentinel proves the sandbox stopped, so it will post nothing more:
+    # poll briefly for a hand-off that landed just before, then move on. The
+    # 45-min stream-drop budget would strand the run for nothing.
+    st = _stream("event: complete", 'data: {"status": "completed"}')
+    assert sr.sandbox_terminated_abnormally(st) is True
+    assert sr.oob_poll_budget(st) == sr.OOB_POLL_SECONDS_HARD_ERROR
+
+
+def test_noop_run_is_retryable_and_names_itself_in_the_reason():
+    # It carries no error code at all, so the code ladder cannot classify it.
+    st = _stream("event: complete", 'data: {"status": "completed"}')
+    assert st.err_code == ""
+    assert sr.is_retryable_fault(st) is True
+    ok, reason = sr.retry_decision(st, 1, sr.DISPATCH_BUDGET_SECONDS)
+    assert ok is True
+    assert "no-op run" in reason
+    assert sr.RETRY_MAIN_MODEL in reason
+
+
+def test_render_noop_run_is_distinct_from_a_hard_failure():
+    st = _stream("event: complete", 'data: {"status": "completed", "cost_usd": "1.45"}')
+    out = sr.render_step_summary(st, "3297", "http://run")
+    assert "no-op run" in out
+    assert "run failed" not in out
+    assert "No summary block was emitted" in out
 
 
 def test_error_event_fails():
     st = _stream("event: error", 'data: {"code": "boom", "message": "kaboom"}')
+    assert st.errored is True
     code, msg = sr.decide_exit(st)
-    assert code == 1 and "boom" in msg
+    assert code == 1 and "boom" in msg and "kaboom" in msg
+    assert "`boom` kaboom" in sr.render_step_summary(st, "1234", "http://run")
+
+
+def test_complete_with_error_status_surfaces_code_and_message():
+    # Regression: a `complete` carrying status=error used to leave st.errored
+    # False, so both consumers dropped the parsed reason and the log showed only
+    # "final status=error" with no code/message.
+    st = _stream(
+        "event: complete",
+        'data: {"status": "error", "cost_usd": "1.75", '
+        '"error": {"code": "upstream_error", "message": "provider returned 400"}}',
+    )
+    assert st.errored is True
+    code, msg = sr.decide_exit(st)
+    assert code == 1
+    assert "upstream_error" in msg and "provider returned 400" in msg
+    out = sr.render_step_summary(st, "1234", "http://run")
+    assert "`upstream_error` provider returned 400" in out
+
+
+def test_complete_with_error_status_and_no_detail_keeps_status_message():
+    # Empty error object: there is nothing to surface, so stay on the bare
+    # status message rather than reporting a content-free `code=none`.
+    st = _stream("event: complete", 'data: {"status": "error"}')
+    assert st.errored is False
+    code, msg = sr.decide_exit(st)
+    assert code == 1 and "final status=error" in msg
+
+
+def test_complete_with_error_status_does_not_mask_oob_handoff():
+    # A hard error still yields to the out-of-band hand-off row when one is
+    # found, exactly as the standalone-`error` path does.
+    st = _stream(
+        "event: complete",
+        'data: {"status": "error", "error": {"code": "c", "message": "m"}}',
+    )
+    out = sr.render_step_summary(st, "1234", "http://run", "http://comment")
+    assert "out-of-band" in out
+    assert "**Error:**" not in out
 
 
 def test_no_events_fails():
@@ -476,3 +612,377 @@ def test_health_retries_then_fails():
 
     assert sr.check_health("http://m", opener=opener, sleeper=lambda _: None) is False
     assert calls["n"] == sr.HEALTH_RETRIES
+
+
+# ---------------------------------------------------------------------------
+# re-dispatch with a model swap (FND-641)
+# ---------------------------------------------------------------------------
+
+
+def test_retry_payload_swaps_only_the_main_model():
+    # The whole point of the retry: a different MODEL. Mothership's own
+    # provider fallback already covers a different provider for the same model,
+    # and that is what failed. The two fast lanes must NOT move with it —
+    # model_routing_env does `fast = small_fast_model or model`.
+    first = sr.build_payload("1", "u", 8, "2026-08-19", "rev", "req", attempt=1)
+    retry = sr.build_payload("1", "u", 8, "2026-08-19", "rev", "req", attempt=2)
+    assert first["model"] == sr.MAIN_MODEL
+    assert retry["model"] == sr.RETRY_MAIN_MODEL
+    assert retry["model"] != first["model"]
+    assert retry["small_fast_model"] == first["small_fast_model"] == sr.FAST_MODEL
+    assert (
+        retry["env_vars"]["CLAUDE_CODE_SUBAGENT_MODEL"]
+        == first["env_vars"]["CLAUDE_CODE_SUBAGENT_MODEL"]
+        == sr.FAST_MODEL
+    )
+    # Same prompt (Phase 0 re-reads live PR state, so the retry resumes), but a
+    # distinguishable source_id and a recorded attempt number.
+    assert retry["prompt"] == first["prompt"]
+    assert retry["source_id"] != first["source_id"]
+    assert retry["metadata"]["attempt"] == 2
+
+
+def test_retry_payload_clamps_the_sandbox_timeout():
+    # Cancelling the job does not stop the sandbox, so a late retry must not be
+    # left billing for the full 2h after the runner dies.
+    p = sr.build_payload(
+        "1", "u", 8, "2026-08-19", "rev", "req", attempt=2, max_timeout_seconds=900
+    )
+    assert p["max_timeout_seconds"] == 900
+    assert (
+        sr.build_payload("1", "u", 8, "d", "rev", "req")["max_timeout_seconds"]
+        == sr.STREAM_TIMEOUT_SECONDS
+    )
+
+
+def test_provider_faults_are_retryable():
+    for code, msg in (
+        ("429", "moonshotai/kimi-k3 is temporarily rate-limited upstream"),
+        ("400", "the message at position 21 with role 'assistant' must not be empty"),
+        ("sandbox_error", ""),
+        ("503", ""),
+    ):
+        st = sr.SSEState()
+        st.errored, st.err_code, st.err_msg = True, code, msg
+        assert sr.is_retryable_fault(st) is True, code
+
+
+def test_provider_text_is_matched_when_the_code_is_flattened():
+    # mothership flattens an absent `complete` error code to `none` (and a
+    # standalone `error` event defaults it to `unknown`) while still forwarding
+    # the provider's text, so code alone is not enough — for THOSE codes.
+    for code in ("none", "unknown", ""):
+        st = sr.SSEState()
+        st.errored, st.err_code = True, code
+        st.err_msg = "upstream provider returned an unexpected payload"
+        assert sr.is_retryable_fault(st) is True, code
+
+
+def test_message_patterns_never_override_an_informative_code():
+    # Regression: the pattern fallback used to match "<code> <message>" for ANY
+    # code, so a permanent fault whose text happened to mention "upstream" was
+    # classified retryable and bought a second sandbox that failed identically.
+    for code, msg in (
+        ("401", "upstream auth failed"),
+        ("403", "upstream permission denied"),
+        ("422", "prompt is overloaded with tokens"),
+    ):
+        st = sr.SSEState()
+        st.errored, st.err_code, st.err_msg = True, code, msg
+        assert sr.is_retryable_fault(st) is False, code
+
+
+def test_fixed_faults_are_not_retryable():
+    for code, msg in (
+        ("elicitation", "Sandbox requires interactive input; cannot answer from GHA"),
+        ("stream_error", "<urlopen error timed out>"),
+        ("401", "bad credentials"),
+        ("403", "resource not accessible"),
+        ("none", ""),
+    ):
+        st = sr.SSEState()
+        st.errored, st.err_code, st.err_msg = True, code, msg
+        assert sr.is_retryable_fault(st) is False, code
+
+
+def test_retry_decision_fires_on_a_dead_sandbox_with_a_provider_fault():
+    st = sr.SSEState()
+    st.got_event = st.completed = st.errored = True
+    st.status, st.err_code = "error", "429"
+    ok, reason = sr.retry_decision(st, 1, sr.DISPATCH_BUDGET_SECONDS)
+    assert ok is True
+    assert sr.RETRY_MAIN_MODEL in reason
+
+
+def test_retry_decision_refuses_a_second_retry():
+    st = sr.SSEState()
+    st.got_event = st.completed = st.errored = True
+    st.status, st.err_code = "error", "429"
+    ok, reason = sr.retry_decision(st, sr.MAX_DISPATCH_ATTEMPTS, 6000)
+    assert ok is False and "attempts" in reason
+
+
+def test_retry_decision_refuses_a_transport_drop():
+    # The sandbox may still be working — a re-dispatch would double-run it.
+    st = _stream("event: started", 'data: {"session_id": "s1"}')
+    assert sr.sandbox_terminated_abnormally(st) is False
+    ok, reason = sr.retry_decision(st, 1, 6000)
+    assert ok is False and "double-run" in reason
+
+
+def test_retry_decision_refuses_when_the_job_budget_is_nearly_gone():
+    st = sr.SSEState()
+    st.got_event = st.completed = st.errored = True
+    st.status, st.err_code = "error", "429"
+    ok, reason = sr.retry_decision(st, 1, sr.RETRY_MIN_REMAINING_SECONDS - 1)
+    assert ok is False and "job budget" in reason
+
+
+def test_attempt_model_swaps_on_the_second_attempt():
+    assert sr.attempt_model(1) == sr.MAIN_MODEL
+    assert sr.attempt_model(2) == sr.RETRY_MAIN_MODEL
+
+
+def test_total_cost_sums_attempts_and_skips_unreported_ones():
+    a = sr.SSEState()
+    a.cost = "1.75"
+    b = sr.SSEState()
+    b.cost = ""
+    c = sr.SSEState()
+    c.cost = "0.25"
+    assert sr.total_cost([sr.Attempt(1, "m", a), sr.Attempt(2, "n", c)]) == "2"
+    assert sr.total_cost([sr.Attempt(1, "m", a), sr.Attempt(2, "n", b)]) == "1.75"
+    assert sr.total_cost([sr.Attempt(1, "m", b)]) == ""
+
+
+def test_attempt_trail_renders_both_attempts_costs_separately():
+    first = sr.SSEState()
+    first.completed = first.errored = True
+    first.status, first.cost, first.err_code = "error", "1.75", "429"
+    first.err_msg = "rate-limited\nupstream | pipe"
+    second = _stream(
+        "event: complete", 'data: {"status": "completed", "cost_usd": "2.10"}'
+    )
+    attempts = [
+        sr.Attempt(1, sr.MAIN_MODEL, first),
+        sr.Attempt(2, sr.RETRY_MAIN_MODEL, second),
+    ]
+    out = sr.render_step_summary(second, "1234", "http://run", None, attempts)
+    assert "### Attempts" in out
+    assert "1.75" in out and "2.10" in out
+    assert f"`{sr.MAIN_MODEL}`" in out and f"`{sr.RETRY_MAIN_MODEL}`" in out
+    # Headline cost is the sum, and says so, so the retry's spend is not hidden.
+    assert "**Cost:** 3.85 USD across 2 attempts" in out
+    # Multi-line / pipe-bearing error text must not break the table.
+    assert "rate-limited upstream \\| pipe" in out
+
+
+def test_attempt_trail_flags_an_attempt_that_reported_no_cost():
+    first = sr.SSEState()
+    first.completed = first.errored = True
+    first.status, first.cost, first.err_code = "error", "", "429"
+    second = _stream(
+        "event: complete", 'data: {"status": "completed", "cost_usd": "2.10"}'
+    )
+    out = sr.render_step_summary(
+        second,
+        "1234",
+        "http://run",
+        None,
+        [
+            sr.Attempt(1, sr.MAIN_MODEL, first),
+            sr.Attempt(2, sr.RETRY_MAIN_MODEL, second),
+        ],
+    )
+    assert "lower bound" in out
+
+
+def test_single_attempt_renders_no_attempt_trail():
+    st = _stream("event: complete", 'data: {"status": "completed", "cost_usd": "7.50"}')
+    out = sr.render_step_summary(
+        st, "1234", "http://run", None, [sr.Attempt(1, "m", st)]
+    )
+    assert "### Attempts" not in out
+    assert "**Cost:** 7.50 USD  " in out
+
+
+# --- main() end-to-end over the retry loop ---------------------------------
+
+
+def _main_env(monkeypatch):
+    for k, v in {
+        "MOTHERSHIP_URL": "http://m",
+        "HARNESS_TOKEN": "t",
+        "PR_NUMBER": "1234",
+        "GITHUB_TOKEN": "gh",
+        "MAX_ROUNDS": "8",
+        "RUN_DATE": "2026-08-19",
+        "GHA_RUN_URL": "http://run",
+        "REVIEWERS": "rev",
+        "REQUESTER": "req",
+    }.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.setattr(sr, "check_health", lambda *a, **k: True)
+    # No out-of-band hand-off landed: the sandbox really is dead.
+    monkeypatch.setattr(sr, "poll_for_oob_summary", lambda *a, **k: None)
+
+
+def _record_dispatches(monkeypatch, states):
+    """Stub dispatch_once to return `states` in order; capture each payload."""
+    seen = []
+
+    def fake(base_url, token, payload, opener=None):
+        seen.append(payload)
+        return states[len(seen) - 1]
+
+    monkeypatch.setattr(sr, "dispatch_once", fake)
+    return seen
+
+
+def test_main_redispatches_on_a_model_fault_and_recovers(monkeypatch, capsys):
+    _main_env(monkeypatch)
+    dead = sr.SSEState()
+    dead.got_event = dead.completed = dead.errored = True
+    dead.status, dead.cost, dead.err_code = "error", "1.75", "429"
+    dead.err_msg = "moonshotai/kimi-k3 is temporarily rate-limited upstream"
+    good = _completed_stream("2.10")
+    payloads = _record_dispatches(monkeypatch, [dead, good])
+
+    assert sr.main() == 0
+    assert [p["model"] for p in payloads] == [sr.MAIN_MODEL, sr.RETRY_MAIN_MODEL]
+    # The background lanes stay put across the swap.
+    assert {p["small_fast_model"] for p in payloads} == {sr.FAST_MODEL}
+    out = capsys.readouterr().out
+    assert "Re-dispatching on a fresh sandbox" in out
+    # Both attempts' costs are logged separately.
+    assert "cost_usd=1.75" in out and "cost_usd=2.10" in out
+
+
+def test_main_redispatches_a_noop_run_on_the_other_model(monkeypatch, capsys):
+    # End-to-end of the FND-644 path: attempt 1 reports success having done
+    # nothing, so the run must NOT go green on it — it re-dispatches on the
+    # other main model and succeeds there.
+    _main_env(monkeypatch)
+    noop = _stream(
+        "event: complete", 'data: {"status": "completed", "cost_usd": "1.45"}'
+    )
+    payloads = _record_dispatches(monkeypatch, [noop, _completed_stream("2.10")])
+
+    assert sr.main() == 0
+    assert [p["model"] for p in payloads] == [sr.MAIN_MODEL, sr.RETRY_MAIN_MODEL]
+    out = capsys.readouterr().out
+    assert "no-op run" in out
+    # The no-op attempt's spend stays visible rather than hiding behind the
+    # recovered attempt's success.
+    assert "cost_usd=1.45" in out
+
+
+def test_main_fails_when_both_attempts_are_noop_runs(monkeypatch, capsys):
+    # No silent green when the swap does not help either.
+    _main_env(monkeypatch)
+    noop = _stream("event: complete", 'data: {"status": "completed"}')
+    payloads = _record_dispatches(monkeypatch, [noop, noop])
+
+    assert sr.main() == 1
+    assert len(payloads) == 2
+    assert "both attempts failed" in capsys.readouterr().out
+
+
+def test_main_does_not_redispatch_an_elicitation(monkeypatch, capsys):
+    _main_env(monkeypatch)
+    st = _stream("event: elicitation", "data: {}")
+    payloads = _record_dispatches(monkeypatch, [st])
+
+    assert sr.main() == 1
+    assert len(payloads) == 1
+    assert "Not re-dispatching" in capsys.readouterr().out
+
+
+def test_main_does_not_redispatch_a_transport_drop(monkeypatch, capsys):
+    # Stream cut mid-work: the resolver is probably still running. Retrying here
+    # would double-run it, so this stays fail-fast even though it exits 1.
+    _main_env(monkeypatch)
+    st = _stream(
+        "event: started",
+        'data: {"session_id": "s1"}',
+        "",
+        "event: response",
+        'data: {"text": "working"}',
+    )
+    payloads = _record_dispatches(monkeypatch, [st])
+
+    assert sr.main() == 1
+    assert len(payloads) == 1
+    assert "double-run" in capsys.readouterr().out
+
+
+def test_main_stops_after_one_retry(monkeypatch, capsys):
+    _main_env(monkeypatch)
+
+    def dead():
+        st = sr.SSEState()
+        st.got_event = st.completed = st.errored = True
+        st.status, st.cost, st.err_code = "error", "1.75", "429"
+        return st
+
+    payloads = _record_dispatches(monkeypatch, [dead(), dead()])
+
+    assert sr.main() == 1
+    assert len(payloads) == sr.MAX_DISPATCH_ATTEMPTS
+    out = capsys.readouterr().out
+    assert "already used all" in out
+    assert "both attempts failed" in out
+
+
+def test_main_prefers_an_out_of_band_handoff_over_a_retry(monkeypatch):
+    # The dead sandbox had already posted its Phase-4 hand-off — the run is
+    # done, so spending a second sandbox on it would be pure waste.
+    _main_env(monkeypatch)
+    monkeypatch.setattr(sr, "poll_for_oob_summary", lambda *a, **k: "http://handoff")
+    dead = sr.SSEState()
+    dead.got_event = dead.completed = dead.errored = True
+    dead.status, dead.err_code = "error", "429"
+    payloads = _record_dispatches(monkeypatch, [dead])
+
+    assert sr.main() == 0
+    assert len(payloads) == 1
+
+
+def test_main_writes_the_attempt_trail_to_the_step_summary(monkeypatch, tmp_path):
+    _main_env(monkeypatch)
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    dead = sr.SSEState()
+    dead.got_event = dead.completed = dead.errored = True
+    dead.status, dead.cost, dead.err_code = "error", "1.75", "429"
+    good = _completed_stream("2.10")
+    _record_dispatches(monkeypatch, [dead, good])
+
+    assert sr.main() == 0
+    text = summary.read_text()
+    assert "### Attempts" in text
+    assert "**Cost:** 3.85 USD across 2 attempts" in text
+
+
+def test_main_skips_the_oob_poll_and_the_retry_when_the_budget_is_spent(
+    monkeypatch, capsys
+):
+    # With no job budget left there is time for neither a 120s hand-off poll nor
+    # a second sandbox — the runner's 130-min timeout would kill the job before
+    # either finished, and take the step summary with it.
+    _main_env(monkeypatch)
+    monkeypatch.setattr(sr, "DISPATCH_BUDGET_SECONDS", 0)
+    polled = []
+    monkeypatch.setattr(
+        sr, "poll_for_oob_summary", lambda *a, **k: polled.append(a) or None
+    )
+    dead = sr.SSEState()
+    dead.got_event = dead.completed = dead.errored = True
+    dead.status, dead.err_code = "error", "429"
+    payloads = _record_dispatches(monkeypatch, [dead])
+
+    assert sr.main() == 1
+    assert polled == []
+    assert len(payloads) == 1
+    assert "job budget" in capsys.readouterr().out

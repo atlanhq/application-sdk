@@ -2,7 +2,15 @@
 
 Usage
 -----
-Regenerate the committed ledger (normal developer workflow):
+Regenerate the committed ledger in a **consumer app** (normal developer
+workflow).  The version pin matters — see :func:`regen_command`: ``detect``
+runs the checker from an unpinned ``uvx`` install, so a bare ``uv run`` here
+would use the app's *locked* dev dependency and can produce a byte-identical
+ledger that leaves a B006 finding standing (FND-607):
+
+    uvx atlan-application-sdk-conformance==<version> gen-contract-ledger
+
+In the SDK repo itself the suite is in-tree, so ``uv run`` is correct:
 
     uv run atlan-application-sdk-conformance gen-contract-ledger
 
@@ -37,7 +45,7 @@ import ast
 import sys
 from pathlib import Path
 
-from conformance.suite.checks._ast_common import discover
+from conformance.suite.checks._ast_common import detect_scope, discover
 from conformance.suite.checks._entrypoint_contract_fields import (
     collect_entrypoint_contract_names,
     resolve_contract_fields,
@@ -46,6 +54,7 @@ from conformance.suite.checks.deprecation._ledger_schema import (
     ContractField,
     ContractLedger,
     load_ledger,
+    regen_command,
     serialize,
 )
 from conformance.suite.checks.prescriptions._error_code_prefix import (
@@ -203,8 +212,8 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(1)
         if outfile.read_text(encoding="utf-8") != content:
             print(
-                f"STALE: {outfile}\nRun `uv run atlan-application-sdk-conformance "
-                "gen-contract-ledger` to update.",
+                f"STALE: {outfile}\nRun `{regen_command(detect_scope(repo_root))}` "
+                "to update.",
                 file=sys.stderr,
             )
             sys.exit(1)

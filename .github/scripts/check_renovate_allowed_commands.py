@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Guard: every postUpgradeTasks command in the shared fleet preset must be
-authorized by the self-hosted runner's allowedCommands allowlist.
+"""Guard: every postUpgradeTasks command in the shared fleet preset must be both
+authorized by the self-hosted runner's allowedCommands allowlist and installed
+onto that runner's PATH.
 
 renovate-config/default.json (repo-settable) declares the commands;
 renovate-config/self-hosted.js (admin-only) declares the regexes that authorize
@@ -28,6 +29,17 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).parent.parent.parent
 PRESET = REPO_ROOT / "renovate-config" / "default.json"
 SELF_HOSTED = REPO_ROOT / "renovate-config" / "self-hosted.js"
+RUNNER_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "renovate.yaml"
+
+# `sudo install -m 0755 <src> /usr/local/bin/<name>` — the only way a driver
+# becomes a bare PATH command on the fleet runner.
+_INSTALL_RE = re.compile(r"install\s+-m\s+\d+\s+\S+\s+/usr/local/bin/(\S+)")
+
+# A full YAML comment line: optional leading whitespace, then `#`. These are
+# dropped before scanning for install steps, so a *commented-out* install line
+# (`  # sudo install …`) is not read as a real install — otherwise disabling a
+# step would leave the guard green while the executable 404s on the runner.
+_COMMENT_LINE_RE = re.compile(r"^\s*#.*$", re.MULTILINE)
 
 # Where the allowedCommands array starts in the admin config. The array is then
 # scanned character by character rather than matched with a regex: the entries
@@ -141,19 +153,60 @@ def unauthorized_commands(preset_json: str, self_hosted_source: str) -> list[str
     ]
 
 
+def installed_commands(workflow_text: str) -> set[str]:
+    """Bare PATH command names the fleet runner installs into /usr/local/bin.
+
+    YAML comment lines are stripped first, so a commented-out install step does
+    not count as an install. Only full comment lines are removed — a trailing
+    `# …` remark on a live `run:` line stays, which is fine because it can only
+    add text after the command, never fabricate an install that is not there.
+    """
+    return set(_INSTALL_RE.findall(_COMMENT_LINE_RE.sub("", workflow_text)))
+
+
+def uninstalled_commands(preset_json: str, workflow_text: str) -> list[str]:
+    """Preset commands whose executable the runner never puts on PATH.
+
+    The authorization check above is only half the pairing: a command can be
+    perfectly allowlisted and still not exist. The drivers are not part of the
+    Renovate image — each is copied onto PATH by an explicit ``sudo install``
+    step in the runner workflow, so deleting or renaming that step (or the
+    script it copies) leaves the preset naming an executable that is not there.
+    Renovate then reports an artifact error rather than failing silently, which
+    the auto-approve gate turns into a withheld approval — better than silence,
+    but it is a fleet-wide red discovered by a stalled PR instead of by CI here.
+    """
+    installed = installed_commands(workflow_text)
+    missing: list[str] = []
+    for command in preset_commands(preset_json):
+        executable = command.split()[0] if command.split() else ""
+        if executable and executable not in installed:
+            missing.append(command)
+    return missing
+
+
 def main() -> int:
-    unauthorized = unauthorized_commands(PRESET.read_text(), SELF_HOSTED.read_text())
-    if unauthorized:
-        for command in unauthorized:
-            print(
-                f"postUpgradeTasks command is not authorized by "
-                f"renovate-config/self-hosted.js allowedCommands: {command!r}. "
-                "Add a matching anchored regex there, or the fleet runner will "
-                "skip the command with only a log line to show for it.",
-                file=sys.stderr,
-            )
-        return 1
-    return 0
+    preset_json = PRESET.read_text()
+    unauthorized = unauthorized_commands(preset_json, SELF_HOSTED.read_text())
+    uninstalled = uninstalled_commands(preset_json, RUNNER_WORKFLOW.read_text())
+    for command in unauthorized:
+        print(
+            f"postUpgradeTasks command is not authorized by "
+            f"renovate-config/self-hosted.js allowedCommands: {command!r}. "
+            "Add a matching anchored regex there, or the fleet runner will "
+            "skip the command with only a log line to show for it.",
+            file=sys.stderr,
+        )
+    for command in uninstalled:
+        print(
+            f"postUpgradeTasks command is not installed onto PATH by "
+            f".github/workflows/renovate.yaml: {command!r}. Add a "
+            "`sudo install -m 0755 .github/scripts/<driver>.py "
+            "/usr/local/bin/<command>` step, or the command 404s on the fleet "
+            "runner and every branch reports an artifact error.",
+            file=sys.stderr,
+        )
+    return 1 if (unauthorized or uninstalled) else 0
 
 
 if __name__ == "__main__":

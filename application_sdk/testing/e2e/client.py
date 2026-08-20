@@ -52,11 +52,13 @@ if TYPE_CHECKING:
 from application_sdk.errors.base import AppError
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.e2e._errors import (
+    AppNotReadyError,
     AtlanAEWorkflowAlreadyActiveError,
     AtlanApiHttpError,
     AtlanApiResponseInvariantError,
     AtlanApiTimeoutError,
     DAGProgressStalledError,
+    MissingHarnessClassAttrError,
     NoWorkerOnTaskQueueError,
 )
 
@@ -324,6 +326,108 @@ def _is_already_active_run(status: int, body: Any) -> bool:
         return False
     haystack = body if isinstance(body, str) else repr(body)
     return _ALREADY_ACTIVE_CODE.casefold() in haystack.casefold()
+
+
+# A tenant app pod that LM reports as reconciled can still be tens of seconds
+# from serving HTTP on :8000. At submit, Heracles POSTs the credential config to
+# http://<conn>.<conn>-app.svc.cluster.local:8000/workflows/v1/config/... against
+# that pod and echoes a refused dial back as an HTTP 500 carrying the Go net
+# error — e.g. "dial tcp 10.x.x.x:8000: connect: connection refused" (FND-402:
+# s3/gcs/mongodbatlas failed this way while cloudsql/iceberg passed in the same
+# window).
+#
+# Unlike _ALREADY_ACTIVE_CODE this has no stable error code to match — the
+# string originates in Go's net package, passes through Heracles unstructured,
+# and never acquires one — so this is necessarily a prose match. Same caveat as
+# _is_credential_name_conflict: if the wire text changes the match silently
+# stops firing and the race resurfaces as a generic retryable 5xx, which is the
+# pre-FND-402 behaviour (safe, just slower to diagnose) rather than a new
+# failure mode.
+#
+# This does NOT gate whether the submit is retried — submit_workflow's
+# `retryable` predicate already retries any non-already-active 5xx, this shape
+# included. It exists only to (a) justify the long cold-start budget and (b)
+# name the terminal failure AppNotReadyError instead of a bare 500.
+#
+# The match requires the refused-dial-to-:8000 sequence, not the bare
+# `connection refused` substring: a genuine terminal 5xx whose body merely
+# mentions a refused connection (e.g. an upstream DB dial surfaced through
+# Heracles) must not be mis-named AppNotReadyError. Requiring `dial tcp` +
+# `:8000` + `connection refused` together restricts the match to a refused dial
+# to the tenant app pod.
+_APP_NOT_READY_MARKERS = ("dial tcp", ":8000", "connection refused")
+
+
+def _is_app_not_ready(status: int, body: Any) -> bool:
+    """True when a submit response reads as a not-yet-serving tenant app pod.
+
+    Deliberately narrow (refused dial to :8000 only): a refused dial never
+    reached the pod, so no run was created and the wait is unambiguously a cold
+    start. A genuine 5xx, a 4xx, the already-active conflict, or a 5xx that only
+    mentions a refused connection in passing must not read as this.
+    """
+    # 5xx only. Heracles reports the refused dial as a 500, and a 4xx is a
+    # request-side rejection AE decided without dialling the pod — so a 4xx
+    # whose body happens to carry the markers (e.g. echoed-back config) is a
+    # terminal AtlanApiHttpError, not this race.
+    if status < 500:
+        return False
+    haystack = body if isinstance(body, str) else repr(body)
+    haystack = haystack.casefold()
+    return all(marker in haystack for marker in _APP_NOT_READY_MARKERS)
+
+
+def cold_start_submit_kwargs(
+    timeout_seconds: int,
+    poll_interval_seconds: int,
+) -> dict[str, int]:
+    """Re-size :meth:`AEWorkflowClient.submit_workflow`'s retry to a cold start.
+
+    Shared by both full-DAG harnesses (``BaseE2ETest.run_full_dag`` and the
+    deprecated ``BaseFullDAGE2ETest.run_full_dag``) so a DIRECT-mode submit
+    against a freshly-installed tenant app gets the same budget in either.
+
+    A refused dial to a still-booting tenant app pod arrives as a generic
+    retryable 5xx, so ``submit_workflow`` already retries it (see
+    :func:`_is_app_not_ready`) — only its default 4x5s budget is too short for a
+    pod cold start. Widening that existing loop keeps ONE retry path for the
+    submit, which matters because the submit is non-idempotent: a second loop
+    wrapped around it would re-enter the inner retry per outer attempt (5x the
+    POSTs it reports) and would bypass ``retry_after`` honouring and the
+    credential-name rotation that make each re-POST safe.
+
+    Args:
+        timeout_seconds: Total cold-start budget (the harness'
+            ``app_ready_timeout_seconds``). 0 or negative returns no overrides,
+            leaving ``submit_workflow``'s own defaults in place.
+        poll_interval_seconds: Gap between submit attempts (the harness'
+            ``app_ready_poll_interval_seconds``).
+
+    Returns:
+        ``retries`` / ``retry_sleep_seconds`` kwargs for ``submit_workflow``,
+        or an empty dict when the budget is disabled.
+
+    Raises:
+        MissingHarnessClassAttrError: when ``timeout_seconds`` is positive but
+            ``poll_interval_seconds`` is not — the retry count integer-divides
+            by the interval, so a zero or negative interval would crash with
+            ``ZeroDivisionError`` rather than gate the submit.
+    """
+    if timeout_seconds <= 0:
+        return {}
+    if poll_interval_seconds <= 0:
+        raise MissingHarnessClassAttrError(
+            message=(
+                "app_ready_poll_interval_seconds must be > 0 when "
+                f"app_ready_timeout_seconds={timeout_seconds} is set; got "
+                f"app_ready_poll_interval_seconds={poll_interval_seconds}"
+            ),
+            field="app_ready_poll_interval_seconds",
+        )
+    return {
+        "retries": timeout_seconds // poll_interval_seconds,
+        "retry_sleep_seconds": poll_interval_seconds,
+    }
 
 
 class DAGNodeStatus(str, Enum):
@@ -826,7 +930,19 @@ class AEWorkflowClient:
           :class:`AtlanAEWorkflowAlreadyActiveError`.
 
         Genuine 5xx that are *not* the already-active conflict remain retryable.
+
+        A tenant app pod that is still cold-starting also answers as a generic
+        retryable 5xx (see :func:`_is_app_not_ready`), so the retry above
+        already covers it — but the default 4x5s budget expires long before a
+        pod boots. Callers that submit against a freshly-installed tenant app
+        (both harnesses' ``run_full_dag``) therefore pass a cold-start-sized
+        ``retries`` / ``retry_sleep_seconds``, built by
+        :func:`cold_start_submit_kwargs`; on exhaustion, a last response
+        that still reads as connection-refused is surfaced as
+        :class:`AppNotReadyError` rather than an opaque
+        :class:`AtlanApiHttpError`, so the failure names the cause. FND-402.
         """
+        started = time.monotonic()
         status, body = self._post_with_retry(
             "/api/service/package-workflows?submit=true",
             body=payload,
@@ -869,6 +985,21 @@ class AEWorkflowClient:
             raise AtlanApiResponseInvariantError(
                 message=f"AE submit returned no run_id\nresponse={body!r}",
                 expectation="run_id present in submit response",
+            )
+        if _is_app_not_ready(status, body):
+            elapsed = time.monotonic() - started
+            raise AppNotReadyError(
+                message=(
+                    "the tenant app pod never accepted connections on :8000 "
+                    f"across {retries + 1} submit attempt(s) over {elapsed:.0f}s. "
+                    "Heracles POSTs the credential config to the tenant-deployed "
+                    "pod at AE submit and it kept refusing the connection ('dial "
+                    "tcp :8000: connect: connection refused'). The deployment "
+                    "reconciled (prepare-tenant went green) but the pod never "
+                    f"started serving HTTP in time.\nresponse={body!r}"
+                ),
+                attempts=retries + 1,
+                elapsed_seconds=elapsed,
             )
         raise AtlanApiHttpError(
             message=f"AE submit failed: HTTP {status}\nresponse={body!r}",

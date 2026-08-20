@@ -64,7 +64,11 @@ from application_sdk.testing.full_dag._errors import (
     MissingHarnessClassAttrError,
     MissingHarnessEnvError,
 )
-from application_sdk.testing.full_dag.client import AEWorkflowClient, DAGRunResult
+from application_sdk.testing.full_dag.client import (
+    AEWorkflowClient,
+    DAGRunResult,
+    cold_start_submit_kwargs,
+)
 from application_sdk.testing.full_dag.payload import (
     AgentSpec,
     ConnectionSpec,
@@ -232,6 +236,17 @@ class BaseFullDAGE2ETest:
     ae_poll_timeout_seconds: ClassVar[int] = 600
     atlas_poll_interval_seconds: ClassVar[int] = 30
     atlas_poll_timeout_seconds: ClassVar[int] = 1500
+
+    # Tenant-app cold-start budget for the AE submit. In DIRECT mode Heracles
+    # POSTs the credential config to the tenant-deployed pod at :8000 during
+    # submit, and that pod can still be minutes from serving when the leg
+    # reaches submit — the refused dial arrives as a retryable 5xx that
+    # submit_workflow's default 4x5s budget expires long before. Same values and
+    # same rationale as BaseE2ETest.app_ready_timeout_seconds (read that comment
+    # for the wall-clock bound); both harnesses size the submit retry through
+    # cold_start_submit_kwargs. 0 restores submit_workflow's own default budget.
+    app_ready_timeout_seconds: ClassVar[int] = 300
+    app_ready_poll_interval_seconds: ClassVar[int] = 5
 
     # Per-typeName minimums for the inventory assertion the default
     # test runs after Connection lands. Keys must be valid Atlas
@@ -740,7 +755,13 @@ class BaseFullDAGE2ETest:
             self.mode.value,
             self.connection_qualified_name,
         )
-        run_id = self.client.submit_workflow(payload)
+        run_id = self.client.submit_workflow(
+            payload,
+            **cold_start_submit_kwargs(
+                self.app_ready_timeout_seconds,
+                self.app_ready_poll_interval_seconds,
+            ),
+        )
         logger.info("AE submit returned run_id=%s", run_id)
 
         ae_result = self.client.poll_native_status(
