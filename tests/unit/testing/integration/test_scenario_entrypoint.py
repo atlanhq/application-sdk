@@ -148,7 +148,7 @@ class TestQueryStringComposition:
         assert resolved == "/start?entrypoint=extract-metadata"
 
     def test_an_empty_scenario_entrypoint_falls_through_to_the_class(self) -> None:
-        """"" is 'unset', not 'send an empty selector'."""
+        """ "" is 'unset', not 'send an empty selector'."""
         resolved = _MinerSuite()._resolve_workflow_endpoint(_scenario(entrypoint=""))
         assert resolved == "/start?entrypoint=miner"
 

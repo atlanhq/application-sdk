@@ -140,7 +140,9 @@ def _base_names(cls: ast.ClassDef) -> set[str]:
     return names
 
 
-def _generated_base_entrypoints(bases: set[str], candidates: frozenset[str]) -> set[str]:
+def _generated_base_entrypoints(
+    bases: set[str], candidates: frozenset[str]
+) -> set[str]:
     """Entrypoints implied by inheriting ``<Ep>GeneratedE2EBase``.
 
     The generated class is named from the entrypoint in PascalCase, so
