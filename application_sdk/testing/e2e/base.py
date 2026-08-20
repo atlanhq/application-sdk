@@ -966,12 +966,33 @@ class BaseE2ETest:
         hand-crafted legacy seed DAG (``manifest_path`` empty), where there is no
         contract to read and the class attr is the only name available.
         """
+        deployment = self.resolved_tenant_deployment_name()
+        # A blank deployment name would render atlan-<app>- and dispatch the
+        # extract node to a trailing-dash queue nobody polls: the same silent
+        # hang this method exists to remove, one character further along.
+        # resolved_tenant_deployment_name() already treats a blank env var as
+        # unset and falls back to the class attr, so reaching here blank means
+        # the class attr itself was set to "" — a class-level defect worth
+        # naming rather than a run-time condition worth tolerating. (Its own
+        # docstring makes this argument about atlan-publish-; the extract node
+        # became susceptible to it when the queue stopped being a literal.)
+        if not deployment:
+            raise MissingHarnessClassAttrError(
+                message=(
+                    "tenant_deployment_name resolved to empty, so the DIRECT-mode "
+                    f"extract queue would be 'atlan-{self.connector_short_name}-' "
+                    "— a queue no worker polls, which hangs the run instead of "
+                    "failing it. Leave tenant_deployment_name at its 'production' "
+                    "default, or set E2E_TENANT_DEPLOYMENT_NAME (or the tenant "
+                    "matrix entry's deployment_name field) to the deployment the "
+                    "tenant's app is registered under."
+                ),
+                field="tenant_deployment_name",
+            )
         template = self._manifest_extract_queue_template()
         if not template:
             template = f"atlan-{self.connector_short_name}-{{deployment_name}}"
-        return template.replace(
-            "{deployment_name}", self.resolved_tenant_deployment_name()
-        )
+        return template.replace("{deployment_name}", deployment)
 
     def _manifest_extract_queue_template(self) -> str:
         """The extract node's raw ``task_queue`` from the manifest, or ``""``.

@@ -728,6 +728,66 @@ class TestExtractTaskQueue:
 
         assert _T()._extract_task_queue() == "atlan-openapi-production"
 
+    def test_blank_deployment_name_is_named_rather_than_rendered(self) -> None:
+        """A blank deployment must not render atlan-<app>-.
+
+        That is a queue no worker polls, i.e. the same silent hang this method
+        exists to remove, one character further along. It only became reachable
+        for the extract node when the queue stopped being a literal, so it is
+        guarded at the point that changed.
+        """
+
+        class _T(_ConcreteE2ETest):
+            tenant_deployment_name = ""
+
+        with pytest.raises(
+            MissingHarnessClassAttrError, match="tenant_deployment_name"
+        ):
+            _T()._extract_task_queue()
+
+    def test_blank_env_override_still_falls_back_to_the_class_attr(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The guard must not fire on an UNSET env var — an unset Actions env var
+        arrives as "", which resolved_tenant_deployment_name() already treats as
+        unset. Firing here would red every leg that does not set it."""
+        monkeypatch.setenv("E2E_TENANT_DEPLOYMENT_NAME", "")
+
+        assert _ConcreteE2ETest()._extract_task_queue() == "atlan-openapi-production"
+
+    def test_stall_guard_and_seed_dag_name_the_same_queue(self, tmp_path: Path) -> None:
+        """The two consumers must not disagree.
+
+        run_full_dag hands the stall-guard diagnostic _extract_task_queue() and
+        _bootstrap_workflow pins the seed DAG's extract node to it. A diagnostic
+        naming a different queue than the one the work was dispatched to is worse
+        than none — it sends the reader to an idle queue that is not the problem.
+        """
+        manifest = tmp_path / "manifest.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "dag": {
+                        "extract": {
+                            "inputs": {"task_queue": "atlan-gcs-{deployment_name}"}
+                        }
+                    }
+                }
+            )
+        )
+
+        class _T(_ConcreteE2ETest):
+            manifest_path = str(manifest)
+
+        harness = _T()
+        seeded = harness._seed_dag_from_manifest(harness._extract_task_queue())
+
+        assert (
+            seeded["extract"]["inputs"]["task_queue"]
+            == harness._extract_task_queue()
+            == "atlan-gcs-production"
+        )
+
     def test_agent_mode_ignores_the_manifest(self, tmp_path: Path) -> None:
         """AGENT mode must still override the manifest's queue.
 
