@@ -18,9 +18,15 @@ jobs:
       pull-requests: write
 
     steps:
+    # No repo-token: actions/stale defaults to the job's GITHUB_TOKEN, which is
+    # all this needs -- every API call it makes is against the current repo. On
+    # Enterprise Cloud that token draws on a 15,000/hr per-repo budget, whereas
+    # an org PAT draws on one shared 5,000/hr budget for every repo using it.
+    # A stale bot enumerates every open issue and PR on each scheduled run, so
+    # it is one of the hungriest things to point at a shared budget. The
+    # `permissions:` block above grants the writes it needs to label and comment.
     - uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11
       with:
-        repo-token: ${{ secrets.ORG_PAT_GITHUB }}
         stale-issue-message: 'Stale issue'
         stale-pr-message: 'Stale pull request'
         stale-issue-label: 'Stale'
