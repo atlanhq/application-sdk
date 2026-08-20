@@ -93,7 +93,7 @@ def test_payload_pins_all_three_model_lanes():
     # Leaving any lane unset silently falls back to mothership's Claude
     # defaults, and `small_fast_model` unset resolves to `model`.
     p = _payload()
-    assert p["model"] == "x-ai/grok-4.6"
+    assert p["model"] == "grok-4.6"
     assert p["small_fast_model"] == "gpt-5.6-luna"
     assert p["env_vars"]["CLAUDE_CODE_SUBAGENT_MODEL"] == "gpt-5.6-luna"
     encoded = json.loads(json.dumps(p))

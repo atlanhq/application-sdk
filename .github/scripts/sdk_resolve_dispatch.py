@@ -63,10 +63,18 @@ DEFAULT_MAX_ROUNDS = 8
 # to Grok 4.6 by operator request, replacing kimi-k3 (chosen on cost per TASK,
 # not per token: index 57.2, ~$0.85/task vs claude-opus-5 at 60.5, ~$2.40).
 # Both proxy sides have to allow it or every dispatch dies on turn one, and the
-# code says which: 404 means `x-ai/grok-4.6` is not in the llmproxy.atlan.dev
+# code says which: 404 means `grok-4.6` is not in the llmproxy.atlan.dev
 # catalog, 403 means the gateway key does not allowlist it. This lane declares
 # no `ai_gateway_key_name`, so that key is mothership's LITELLM_KEY_DEFAULT —
 # not the review lane's scoped `sdk_review` key.
+#
+# SLUG FORM: bare `grok-4.6`, by operator decision. The prefixed spelling
+# `x-ai/grok-4.6` shipped first (FND-660) and its one and only dispatch died
+# before a single SSE byte with a gateway 504 — which is NOT the signature a
+# rejected alias produces (that is a loud 404/403 on turn one), so the prefix
+# was not proven to be the fault. The catalog is genuinely mixed — prefixed
+# (`z-ai/glm-5.2`) and bare (`kimi-k2.5`, `deepseek.v3.2`) aliases both exist —
+# so if a dispatch now comes back 404, `x-ai/grok-4.6` is the form to restore.
 #
 # KNOWN RISK, carried deliberately: xAI does NOT prompt-cache on the Anthropic
 # `/v1/messages` route Claude Code uses (verified in the LiteLLM ledger when
@@ -75,7 +83,7 @@ DEFAULT_MAX_ROUNDS = 8
 # turn — and resolve runs up to DEFAULT_MAX_ROUNDS rounds per PR.
 #
 # The fast lane stays on gpt-5.6-luna. Reverting is a one-liner.
-MAIN_MODEL = "x-ai/grok-4.6"
+MAIN_MODEL = "grok-4.6"
 FAST_MODEL = "gpt-5.6-luna"
 
 # --- Re-dispatch when the sandbox dies on a hard error ----------------------

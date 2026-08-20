@@ -103,9 +103,17 @@ IDLE_WARN_SECONDS = 300
 # request, replacing kimi-k3 (which was itself chosen on cost per TASK, not per
 # token: index 57.2, ~$0.85/task vs claude-opus-5 at 60.5, ~$2.40). Two things
 # have to hold on the proxy side or every dispatch dies on turn one, and the
-# codes tell you which: 404 means `x-ai/grok-4.6` is not in the
+# codes tell you which: 404 means `grok-4.6` is not in the
 # llmproxy.atlan.dev catalog, 403 means the `sdk_review` gateway key does not
 # allowlist it.
+#
+# SLUG FORM: bare `grok-4.6`, by operator decision. The prefixed spelling
+# `x-ai/grok-4.6` shipped first (FND-660); the only dispatch it got (on the
+# resolve lane) died before a single SSE byte with a gateway 504 — not the
+# signature a rejected alias produces (that is a loud 404/403 on turn one), so
+# the prefix was never proven to be the fault. The catalog is genuinely mixed —
+# prefixed (`z-ai/glm-5.2`) and bare (`kimi-k2.5`, `deepseek.v3.2`) aliases both
+# exist — so a 404 from here means restore `x-ai/grok-4.6`.
 #
 # KNOWN RISK, carried deliberately: xAI does NOT prompt-cache on the
 # Anthropic `/v1/messages` route Claude Code uses (verified in the LiteLLM
@@ -119,7 +127,7 @@ IDLE_WARN_SECONDS = 300
 # explicitly: mothership's model_routing_env does `fast = small_fast_model or
 # model`, so pinning `model` alone would drag the background lane onto the main
 # model too.
-MAIN_MODEL = "x-ai/grok-4.6"
+MAIN_MODEL = "grok-4.6"
 FAST_MODEL = "gpt-5.6-luna"
 IDLE_TIMEOUT_SECONDS = 1800
 

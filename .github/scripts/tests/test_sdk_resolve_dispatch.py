@@ -58,7 +58,7 @@ def test_payload_pins_all_three_model_lanes():
     # mothership's Claude defaults (main -> claude-opus-5, sub-agent ->
     # claude-sonnet-5), and `small_fast_model` unset resolves to `model`.
     p = sr.build_payload("1", "u", 8, "2026-07-08", "reviewer-one", "requester-login")
-    assert p["model"] == "x-ai/grok-4.6"
+    assert p["model"] == "grok-4.6"
     assert p["small_fast_model"] == "gpt-5.6-luna"
     assert p["env_vars"]["CLAUDE_CODE_SUBAGENT_MODEL"] == "gpt-5.6-luna"
     # Every pinned value must survive JSON encoding as a non-blank string —
