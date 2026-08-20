@@ -1051,7 +1051,11 @@ class BaseE2ETest:
             self.mode.value,
             self.connection_qualified_name,
         )
-        run_id = self.client.submit_workflow(payload, **self._submit_retry_kwargs())
+        # slug= lets an ambiguous submit timeout be resolved by reading AE's own
+        # run list under this slug instead of failing the leg outright.
+        run_id = self.client.submit_workflow(
+            payload, slug=slug, **self._submit_retry_kwargs()
+        )
         logger.info("AE submit returned run_id=%s", run_id)
 
         ae_result = self.client.poll_native_status(
@@ -1062,6 +1066,11 @@ class BaseE2ETest:
             stall_task_queue=self._extract_task_queue(),
             progress_stall_seconds=self.dag_progress_stall_seconds,
         )
+
+        # Log-only, outcome-neutral. Placed after the poll so Elasticsearch
+        # indexing lag cannot masquerade as an absence. See
+        # probe_run_is_listed — this is what settles FND-676's gate.
+        self.client.probe_run_is_listed(slug, run_id)
 
         asset_counts: dict[str, int] = {}
         asset_qn_samples: dict[str, list[str]] = {}

@@ -757,6 +757,9 @@ class BaseFullDAGE2ETest:
         )
         run_id = self.client.submit_workflow(
             payload,
+            # Lets an ambiguous submit timeout be resolved by reading AE's own
+            # run list under this slug instead of failing the leg outright.
+            slug=slug,
             **cold_start_submit_kwargs(
                 self.app_ready_timeout_seconds,
                 self.app_ready_poll_interval_seconds,
@@ -769,6 +772,11 @@ class BaseFullDAGE2ETest:
             interval_seconds=self.ae_poll_interval_seconds,
             timeout_seconds=self.ae_poll_timeout_seconds,
         )
+
+        # Log-only, outcome-neutral. Placed after the poll so Elasticsearch
+        # indexing lag cannot masquerade as an absence. See
+        # probe_run_is_listed — this is what settles FND-676's gate.
+        self.client.probe_run_is_listed(slug, run_id)
 
         # Only probe Atlas if every DAG node succeeded — extract feeds
         # publish, qi feeds lineage-app, lineage-app feeds lineage-

@@ -37,13 +37,14 @@ from __future__ import annotations
 import asyncio
 import math
 import time
-import urllib.error
-import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
+import httpx
 import orjson
 
 if TYPE_CHECKING:
@@ -60,13 +61,14 @@ from application_sdk.testing.e2e._errors import (
     DAGProgressStalledError,
     MissingHarnessClassAttrError,
     NoWorkerOnTaskQueueError,
+    RequestDelivery,
 )
 from application_sdk.testing.e2e._poll import _HEARTBEAT_SECONDS, until_deadline
 
 logger = get_logger(__name__)
 
 
-# Standard library urllib's default User-Agent (``Python-urllib/<ver>``)
+# A default client User-Agent (``Python-urllib/<ver>``, ``python-httpx/<ver>``)
 # is blocked by Cloudflare on most Atlan tenants (Error 1010 — browser
 # signature banned). Spoofing a real UA keeps the request flowing through.
 _USER_AGENT = "atlan-sdk-full-dag-e2e/1.0 (+https://github.com/atlanhq/application-sdk)"
@@ -78,7 +80,7 @@ _USER_AGENT = "atlan-sdk-full-dag-e2e/1.0 (+https://github.com/atlanhq/applicati
 _HTTP_TIMEOUT = 60
 # AE create and submit can take >60 s on the first call — the origin
 # server may be slow to respond, causing Cloudflare to return HTTP 504
-# at its own gateway timeout before urllib's 60 s window closes.  Using
+# at its own gateway timeout before a 60 s client window closes.  Using
 # 120 s lets Cloudflare's 504 arrive as an HTTP error (which the
 # existing 5xx retry loop handles) rather than a raw TimeoutError.
 _SUBMIT_TIMEOUT = 120
@@ -89,6 +91,53 @@ _SUBMIT_TIMEOUT = 120
 # 10-15 min poll doesn't fail the whole run.
 _REQUEST_MAX_ATTEMPTS = 4
 _REQUEST_BACKOFF_SECONDS = 3
+
+# Reconciling an ambiguous submit: how long to keep asking AE whether the run
+# it may or may not have accepted actually exists.
+#
+# AE persists the run record BEFORE it calls Temporal and before it answers the
+# submit, so any submit that got far enough to have an effect leaves a row we
+# can find. In production that row is read back through Elasticsearch, which is
+# near-real-time rather than real-time — a run committed microseconds before the
+# connection died can take a few seconds to become searchable. A single probe
+# would read that lag as "no run exists" and re-POST into a duplicate, so we
+# poll for a window instead. The window only ever elapses on a path that today
+# fails the whole leg outright, so it is sized for confidence, not for speed.
+_RECONCILE_TIMEOUT_SECONDS = 90
+_RECONCILE_INTERVAL_SECONDS = 10
+
+# How far before the submit to start looking for "our" run. Absorbs clock skew
+# between the CI runner and the tenant, whose timestamps we are comparing
+# directly. Safe to be generous: the workflow slug is unique per CI leg
+# (``<connector>-e2e-full-ci-<run_id>-<hash>``), so the only runs this window
+# can possibly match are the leg's own submits of the same payload.
+_RECONCILE_CLOCK_SKEW_SECONDS = 120
+
+# AE caps ``page_size`` at 100 and returns runs newest-first. One page is
+# ample: a single leg's unique slug has one run, or a small handful if an
+# earlier attempt in the same call already landed.
+_RECONCILE_PAGE_SIZE = 20
+
+# Whether "AE lists no run under this slug" may authorise re-POSTing an
+# ambiguous submit. Deliberately off.
+#
+# Reconciliation has two halves with very different risk profiles. *Adopting* a
+# run the read finds is pure upside: if the listing works we recover a leg that
+# would otherwise have failed, and if it doesn't we find nothing and behave
+# exactly as before. *Re-POSTing* because the read found nothing is only safe
+# if an empty list genuinely means "no run exists" — and that has not been
+# established end-to-end, because the harness submits through Heracles
+# (``/api/service/package-workflows``) rather than through AE's own
+# ``/api/v1/workflows/{slug}/submit``. AE's run listing filters out runs
+# lacking automation-engine fields, so a Heracles-originated run being invisible
+# here would turn every empty read into a false "nothing landed" and produce the
+# duplicate run this whole mechanism exists to prevent.
+#
+# Flip this on once a live e2e leg has shown a Heracles-submitted run appearing
+# under GET /automation/api/v1/runs?workflow_slug=<slug>. Until then the
+# absence half stays disabled and an unrecovered ambiguous submit fails exactly
+# as it did before. The machinery below is complete and tested either way.
+_RESUBMIT_WHEN_AE_REPORTS_NO_RUN = False
 
 # An overloaded tenant answers a retryable 5xx with its own estimate of how
 # long to wait before trying again:
@@ -242,6 +291,126 @@ def _retry_gap(
     wanted = math.ceil(requested)
     allowed = min(wanted, _MAX_RETRY_AFTER_SECONDS, max(budget_left, 0))
     return _RetryGap(seconds=max(default_seconds, allowed), requested=wanted)
+
+
+@dataclass(frozen=True)
+class RunLookup:
+    """What a read of AE's run list learned about a run we expected to exist.
+
+    Absence and ignorance are different answers and the caller acts on them
+    differently, so they are not both spelled ``None``.
+    """
+
+    run_id: str | None = None
+    """The matching run's id, when one was found."""
+
+    conclusive: bool = False
+    """True when AE actually answered. ``run_id=None, conclusive=True`` is
+    proof the run does not exist; ``conclusive=False`` means the read never
+    got through and nothing was established either way."""
+
+
+@dataclass(frozen=True)
+class WriteRecovery:
+    """What a follow-up read learned about a write whose response was lost.
+
+    Returned by :meth:`AEWorkflowClient._post_with_retry`'s
+    ``recover_ambiguous`` hook. The default — no body, not proven absent — is
+    the "learned nothing" case, which leaves the write as ambiguous as it was.
+    """
+
+    body: dict[str, Any] | None = None
+    """The response the origin would have sent, when the write is found to
+    have landed. Returned to the caller in place of the lost response."""
+
+    proven_absent: bool = False
+    """True only when the read positively established that the write left no
+    trace. This — not the mere absence of a body — is what licenses re-issuing
+    a non-idempotent write."""
+
+
+def _parse_run_timestamp(raw: object) -> datetime | None:
+    """Best-effort read of an AE ``created_at`` into an aware UTC datetime.
+
+    AE models the field as a ``datetime``, which FastAPI serialises to ISO-8601
+    — but this value decides whether we adopt a run or re-POST a
+    non-idempotent submit, so a shape this function fails to recognise must
+    read as "unknown" (``None``), never as "old enough" or "new enough".
+    Numeric forms are accepted too: the Atlan-mode registry populates the field
+    from a metastore entity whose create time is epoch milliseconds.
+    """
+    if isinstance(raw, bool):  # bool is an int; never a timestamp
+        return None
+    if isinstance(raw, int | float):
+        # Disambiguate by magnitude: anything past ~year 5138 in seconds is
+        # milliseconds. Both AE backends are well clear of that boundary.
+        seconds = raw / 1000 if raw > 1e11 else float(raw)
+        try:
+            return datetime.fromtimestamp(seconds, tz=UTC)
+        except (OverflowError, OSError, ValueError):
+            return None
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    # A naive timestamp is UTC by convention on both AE backends
+    # (``datetime.now(timezone.utc)`` server-side, epoch-derived in Atlan mode).
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+def _newest_run_since(body: dict[str, Any], floor: datetime) -> str | None:
+    """Run id of the newest run in *body* created at or after *floor*.
+
+    ``body`` is AE's ``BulkResponse[WorkflowRun]``: ``{"data": [...]}``, newest
+    first. A row whose ``created_at`` cannot be parsed is skipped rather than
+    assumed recent — adopting the wrong run would make the harness poll a run
+    that is not the one it submitted.
+    """
+    rows = body.get("data")
+    if not isinstance(rows, list):
+        return None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        run_id = row.get("guid") or row.get("run_id")
+        if not isinstance(run_id, str) or not run_id:
+            continue
+        created = _parse_run_timestamp(row.get("created_at"))
+        if created is not None and created >= floor:
+            return run_id
+    return None
+
+
+def _classify_delivery(exc: Exception) -> RequestDelivery:
+    """Can the origin have seen the request that raised *exc*?
+
+    ``httpx`` separates the connect phase from everything after it, which
+    ``urllib`` collapsed into a bare ``TimeoutError``. A failure to *establish*
+    the connection proves the request bytes never left the client, so even a
+    non-idempotent write is safe to re-issue. Anything later — a read timeout,
+    a reset mid-flight, a protocol error — may already have been processed by
+    the origin.
+
+    Deliberately conservative: only the three exception types that cannot
+    coexist with a delivered request are classified
+    :attr:`RequestDelivery.NOT_DELIVERED`; everything else, including any
+    future ``httpx`` transport error this function has not been taught about,
+    falls through to :attr:`RequestDelivery.AMBIGUOUS` and keeps the old
+    never-repost behaviour.
+
+    * :class:`httpx.ConnectTimeout` — the TCP/TLS handshake never completed.
+      This is the shape a blackholed public-FQDN hairpin takes on the CI
+      runners, and the case this classification exists to recover.
+    * :class:`httpx.ConnectError` — DNS failure, connection refused, no route.
+    * :class:`httpx.PoolTimeout` — no connection was ever acquired from the
+      pool. Unreachable today (``_request`` builds a single-use client) but
+      classified for correctness rather than left to the ambiguous default.
+    """
+    if isinstance(exc, httpx.ConnectTimeout | httpx.ConnectError | httpx.PoolTimeout):
+        return RequestDelivery.NOT_DELIVERED
+    return RequestDelivery.AMBIGUOUS
 
 
 def _is_credential_name_conflict(status: int, body: dict[str, Any] | str) -> bool:
@@ -588,64 +757,74 @@ class AEWorkflowClient:
     ) -> tuple[int, dict[str, Any] | str]:
         """HTTP request returning ``(status_code, parsed_body_or_text)``.
 
-        ``retry_network_errors=False`` disables the network-layer retry: a
-        read-timeout on a non-idempotent write (submit) is ambiguous — the
-        server may already have processed it — so re-POSTing would spawn a
-        duplicate. Such callers surface the first timeout instead.
+        A 4xx/5xx is a real response, not a failure: it is returned to the
+        caller so the caller's status-based retry/handling applies. Only a
+        transport-layer failure (DNS blip, connect/read timeout, reset) is
+        retried here, and a sustained one surfaces as
+        :class:`AtlanApiTimeoutError` (an :class:`AppError`) so callers'
+        transient-tolerance — e.g. the poll loop — handles it instead of a raw
+        crash.
+
+        ``retry_network_errors=False`` disables that retry entirely: the caller
+        is a non-idempotent write (submit) whose re-POST decision belongs to
+        the single retry loop in :meth:`_post_with_retry`, not to a nested one
+        here. The raised error carries a
+        :class:`~application_sdk.testing.e2e._errors.RequestDelivery` telling
+        that loop whether the origin can have seen the request — which is what
+        makes a connect-phase failure safely retryable there.
         """
         url = f"{self.tenant_url}{path}"
-        data = orjson.dumps(body) if body is not None else None
-        req = urllib.request.Request(url, data=data, method=method)
-        req.add_header("Authorization", f"Bearer {self._api_token}")
-        req.add_header("Accept", "application/json")
-        req.add_header("User-Agent", _USER_AGENT)
+        content = orjson.dumps(body) if body is not None else None
+        headers = {
+            "Authorization": f"Bearer {self._api_token}",
+            "Accept": "application/json",
+            "User-Agent": _USER_AGENT,
+        }
         if body is not None:
-            req.add_header("Content-Type", "application/json")
+            headers["Content-Type"] = "application/json"
         last_exc: Exception | None = None
+        delivery = RequestDelivery.AMBIGUOUS
         for attempt in range(1, _REQUEST_MAX_ATTEMPTS + 1):
             try:
-                with urllib.request.urlopen(req, timeout=timeout) as resp:
-                    raw = resp.read()
-                    try:
-                        return resp.status, orjson.loads(raw)
-                    except orjson.JSONDecodeError:
-                        logger.warning(
-                            "Response body is not JSON; returning raw text",
-                            exc_info=True,
-                        )
-                        return resp.status, raw.decode(errors="replace")
-            except urllib.error.HTTPError as e:
-                # A real HTTP response (4xx/5xx), NOT a transient network error —
-                # return it so the caller's status-based retry/handling applies.
-                raw = e.read()
+                # A fresh client per call, matching the previous urllib
+                # behaviour of one connection per request: a pooled connection
+                # that is already half-dead would otherwise be reused across
+                # the retry, which is the exact condition we retry to escape.
+                # follow_redirects preserves urlopen's redirect handling, which
+                # httpx disables by default.
+                with httpx.Client(
+                    timeout=httpx.Timeout(timeout), follow_redirects=True
+                ) as http:
+                    resp = http.request(method, url, content=content, headers=headers)
+                raw = resp.content
                 try:
-                    return e.code, orjson.loads(raw)
+                    return resp.status_code, orjson.loads(raw)
                 except orjson.JSONDecodeError:
                     logger.warning(
-                        "HTTP error body is not JSON; returning raw text",
+                        "Response body is not JSON; returning raw text",
                         exc_info=True,
                     )
-                    return e.code, raw.decode(errors="replace")
-            except (urllib.error.URLError, TimeoutError, OSError) as e:
-                # Transient network-layer error (DNS blip / read timeout / conn
-                # reset) — common on multi-minute polls over a VPN/loft tunnel.
-                # Retry a few times; if it persists, surface as AtlanApiTimeoutError
-                # (an AppError) so callers' transient-tolerance (e.g. the poll loop)
-                # handles it instead of a raw crash. NOTE: HTTPError is a URLError
-                # subclass but is caught above, so it never reaches here.
+                    return resp.status_code, raw.decode(errors="replace")
+            except (httpx.TransportError, OSError) as e:
+                # Transport-layer error — common on multi-minute polls over a
+                # VPN/loft tunnel, and on CI runners whose node-local egress
+                # SNAT intermittently blackholes a public-FQDN hairpin.
                 last_exc = e
+                delivery = _classify_delivery(e)
                 if not retry_network_errors:
-                    # Non-idempotent caller (submit): do not re-issue — the
-                    # server may have accepted the first request. Surface it.
+                    # Non-idempotent caller (submit): never re-issue from here.
+                    # _post_with_retry owns that decision and now has the
+                    # delivery classification it needs to make it safely.
                     break
                 if attempt < _REQUEST_MAX_ATTEMPTS:
                     logger.warning(
-                        "transient network error on %s %s (attempt %d/%d): %s — "
-                        "retrying in %ds",
+                        "transient network error on %s %s (attempt %d/%d, "
+                        "delivery=%s): %s — retrying in %ds",
                         method,
                         path,
                         attempt,
                         _REQUEST_MAX_ATTEMPTS,
+                        delivery.value,
                         e,
                         _REQUEST_BACKOFF_SECONDS,
                         exc_info=True,
@@ -656,10 +835,12 @@ class AEWorkflowClient:
                 # `attempt` is the actual count made — 1 when retries are
                 # disabled (submit), up to _REQUEST_MAX_ATTEMPTS otherwise — so
                 # a submit timeout doesn't misreport 4 tries when it made 1.
-                f"{method} {path} failed after {attempt} attempt(s): {last_exc!r}"
+                f"{method} {path} failed after {attempt} attempt(s) "
+                f"[delivery={delivery.value}]: {last_exc!r}"
             ),
             operation=path,
-        )
+            delivery=delivery,
+        ) from last_exc
 
     # ------------------------------------------------------------------
     # Endpoints
@@ -676,6 +857,7 @@ class AEWorkflowClient:
         op_name: str,
         mutate_before_retry: Callable[[dict[str, Any] | None], None] | None = None,
         retry_network_errors: bool = True,
+        recover_ambiguous: Callable[[], WriteRecovery] | None = None,
     ) -> tuple[int, dict[str, Any] | str]:
         """POST *path* with unified timeout + retry, returning ``(status, body)``.
 
@@ -703,10 +885,28 @@ class AEWorkflowClient:
                 before each retry (mutates it in place). Lets a caller make a
                 retry idempotent — e.g. rotate a non-idempotent credential name
                 so a re-sent submit can't collide on a unique constraint.
-            retry_network_errors: When False, a network timeout is never
-                re-POSTed (nor re-issued at the ``_request`` layer) — required
-                for non-idempotent writes like submit, where a retry after the
-                server already accepted the request spawns a duplicate run.
+            retry_network_errors: When False, an *ambiguous* network failure is
+                never re-POSTed (nor re-issued at the ``_request`` layer) —
+                required for non-idempotent writes like submit, where a retry
+                after the server already accepted the request spawns a
+                duplicate run. A failure classified
+                :attr:`~application_sdk.testing.e2e._errors.RequestDelivery.NOT_DELIVERED`
+                is re-POSTed regardless: the connection was never established,
+                so the origin provably never saw the request and no duplicate
+                is possible. Those re-POSTs are counted against the same
+                ``total_attempts`` budget as every other retry, keeping the
+                single-retry-loop invariant that
+                :func:`cold_start_submit_kwargs` depends on.
+            recover_ambiguous: Optional read of the origin's own state, called
+                when a network failure leaves it unknown whether the write took
+                effect. Return the response body the origin *would* have sent
+                if the write is found to have landed — it is returned to the
+                caller as a 200 and no retry happens. Return ``None`` if the
+                write provably left no trace, which reclassifies the failure as
+                :attr:`~application_sdk.testing.e2e._errors.RequestDelivery.NOT_APPLIED`
+                and makes a re-POST safe even for a non-idempotent write. Only
+                consulted for a genuinely ambiguous failure: a connect-phase
+                one needs no read, and an idempotent caller needs no proof.
         """
         last: tuple[int, dict[str, Any] | str] = (0, {})
         # Seconds spent waiting *beyond* the fixed gap because the origin asked
@@ -722,12 +922,48 @@ class AEWorkflowClient:
                     retry_network_errors=retry_network_errors,
                 )
             except (TimeoutError, OSError, AtlanApiTimeoutError) as exc:
-                if retry_network_errors and attempt < total_attempts:
+                # Only _request classifies delivery; a bare TimeoutError/OSError
+                # reaching here (a patched _request in tests, or a caller that
+                # raised before classification) keeps the conservative default.
+                delivery = (
+                    exc.delivery
+                    if isinstance(exc, AtlanApiTimeoutError)
+                    else RequestDelivery.AMBIGUOUS
+                )
+                if (
+                    delivery is RequestDelivery.AMBIGUOUS
+                    and recover_ambiguous is not None
+                ):
+                    # Ask the origin what actually happened rather than
+                    # guessing from the transport error.
+                    recovered = recover_ambiguous()
+                    if recovered.body is not None:
+                        logger.info(
+                            "%s attempt %d/%d: the connection died but the "
+                            "write had already landed — adopting the origin's "
+                            "own record instead of re-issuing",
+                            op_name,
+                            attempt,
+                            total_attempts,
+                        )
+                        return 200, recovered.body
+                    if recovered.proven_absent:
+                        delivery = RequestDelivery.NOT_APPLIED
+                # A request the origin never received, or never acted on, is
+                # safe to re-POST even when the caller forbids retrying
+                # genuinely ambiguous ones.
+                may_repost = retry_network_errors or delivery in (
+                    RequestDelivery.NOT_DELIVERED,
+                    RequestDelivery.NOT_APPLIED,
+                )
+                if may_repost and attempt < total_attempts:
                     logger.warning(
-                        "%s attempt %d/%d: timeout (%s) — retrying in %ds",
+                        "%s attempt %d/%d: timeout (delivery=%s) (%s) — "
+                        "retrying in %ds",
                         op_name,
                         attempt,
                         total_attempts,
+                        delivery.value,
                         exc,
                         sleep_seconds,
                         exc_info=True,
@@ -736,12 +972,27 @@ class AEWorkflowClient:
                         mutate_before_retry(body)
                     time.sleep(sleep_seconds)
                     continue
+                # Name why we stopped. "after 1 attempt(s)" on its own reads
+                # like broken retry logic; it is in fact the non-idempotency
+                # guard declining to re-issue a request the origin may have
+                # already processed.
+                halted = (
+                    " — not re-issued: this write is non-idempotent and the "
+                    "connection had already been established when it failed, "
+                    "so the origin may already have processed it"
+                    if not may_repost
+                    else ""
+                )
                 raise AtlanApiTimeoutError(
-                    # `attempt` is the actual count made — 1 when retries are
-                    # disabled (submit), up to total_attempts otherwise — so a
-                    # no-retry submit timeout doesn't misreport total_attempts.
-                    message=f"{op_name} timed out after {attempt} attempt(s)",
+                    # `attempt` is the actual count made — 1 when an ambiguous
+                    # failure halts a non-idempotent write, up to total_attempts
+                    # otherwise — so it doesn't misreport total_attempts.
+                    message=(
+                        f"{op_name} timed out after {attempt} attempt(s) "
+                        f"[delivery={delivery.value}]{halted}"
+                    ),
                     operation=path,
+                    delivery=delivery,
                 ) from exc
             last = (status, resp_body)
             is_retry = retryable(status, resp_body)
@@ -900,10 +1151,188 @@ class AEWorkflowClient:
             retry_after_seconds=_requested_retry_after(body),
         )
 
+    def find_run_created_since(
+        self,
+        slug: str,
+        since: datetime,
+        *,
+        timeout_seconds: int = _RECONCILE_TIMEOUT_SECONDS,
+        interval_seconds: int = _RECONCILE_INTERVAL_SECONDS,
+    ) -> RunLookup:
+        """Poll ``GET /automation/api/v1/runs`` for a run of *slug* created at or
+        after *since*.
+
+        This is how an ambiguous submit gets resolved: AE writes the run record
+        before it answers the submit, so asking AE what runs exist answers the
+        question the timeout left open — did the write take effect? A found run
+        is adopted (the DAG really is executing; only the response was lost),
+        and a genuinely absent one makes a re-POST safe.
+
+        Polls rather than probing once, because production AE serves this list
+        from Elasticsearch and a just-committed run needs a moment to become
+        searchable. Returns as soon as one appears.
+
+        Args:
+            slug: Workflow slug to look under. Unique per CI leg, which is what
+                makes "a run exists under this slug" mean "our run exists".
+            since: Wall-clock instant the submit was issued. Timezone-aware;
+                :data:`_RECONCILE_CLOCK_SKEW_SECONDS` is subtracted internally
+                to absorb runner-vs-tenant clock skew.
+            timeout_seconds: Total budget for the poll.
+            interval_seconds: Gap between polls.
+
+        Returns:
+            A :class:`RunLookup`. ``run_id`` is set when a matching run was
+            found. ``conclusive`` distinguishes the two ways of finding none:
+            AE answered and had no such run (proof of absence, safe to act on)
+            versus AE never answered at all (proves nothing).
+        """
+        floor = since - timedelta(seconds=_RECONCILE_CLOCK_SKEW_SECONDS)
+        # A read that errored proves nothing about whether the run exists. If
+        # the same network fault that killed the submit also kills every
+        # reconcile read, the answer must stay "unknown" — reporting it as
+        # "absent" would authorise the duplicate submit this exists to prevent.
+        answered = False
+        # include_test_runs / include_system both widen an otherwise
+        # default-filtered listing. Widening is free here: the slug already
+        # restricts the result set to this leg's own runs, so the only effect
+        # is that we cannot miss our run because of how AE classified it.
+        path = (
+            f"/automation/api/v1/runs?workflow_slug={quote(slug, safe='')}"
+            f"&page=0&page_size={_RECONCILE_PAGE_SIZE}"
+            "&include_test_runs=true&include_system=true"
+        )
+        for attempt in until_deadline(
+            timeout_seconds,
+            interval_seconds,
+            label=f"an AE run under slug '{slug}' created since {floor.isoformat()}",
+        ):
+            try:
+                status, body = self._request("GET", path)
+            except AppError:
+                # The reconcile read is itself best-effort: a tenant that
+                # cannot answer it leaves the submit exactly as ambiguous as
+                # before, which the caller already handles. Never let it
+                # replace the submit failure the operator needs to see.
+                logger.warning(
+                    "reconcile read failed for slug %s — treating this attempt "
+                    "as inconclusive",
+                    slug,
+                    exc_info=True,
+                )
+                continue
+            if status >= 300 or not isinstance(body, dict):
+                logger.warning(
+                    "reconcile read for slug %s returned HTTP %d — treating "
+                    "this attempt as inconclusive\nresponse=%r",
+                    slug,
+                    status,
+                    body,
+                )
+                continue
+            answered = True
+            run_id = _newest_run_since(body, floor)
+            if run_id is not None:
+                return RunLookup(run_id=run_id, conclusive=True)
+        if answered:
+            logger.warning(
+                "AE reports no run under slug %s created since %s across a "
+                "%ds window — the submit left no trace",
+                slug,
+                floor.isoformat(),
+                timeout_seconds,
+            )
+        else:
+            logger.warning(
+                "no reconcile read of slug %s succeeded within %ds — whether "
+                "the submit landed stays unknown",
+                slug,
+                timeout_seconds,
+            )
+        return RunLookup(conclusive=answered)
+
+    def probe_run_is_listed(self, slug: str, run_id: str) -> bool | None:
+        """Log-only check that *run_id* is visible in AE's run listing for *slug*.
+
+        Exists to settle :data:`_RESUBMIT_WHEN_AE_REPORTS_NO_RUN` with evidence
+        instead of waiting for a rare failure to produce it. The reconcile read
+        only fires on an ambiguous submit timeout, so on its own it would tell
+        us nothing until the next such timeout — and only for that one leg.
+        This probe runs on the *success* path, where we already know the true
+        run id, and asks the one question the gate turns on: does a run
+        submitted through Heracles show up in a listing that filters on
+        automation-engine fields?
+
+        Call it after the DAG poll has finished, not right after the submit:
+        production AE serves the listing from Elasticsearch, and an immediate
+        probe would report a lag as an absence — the exact false negative the
+        gate exists to avoid, recorded as if it were the answer.
+
+        Never raises and never affects the run's outcome.
+
+        Returns:
+            ``True`` if AE listed the run, ``False`` if it answered without it,
+            ``None`` if the read did not get through (which settles nothing).
+        """
+        path = (
+            f"/automation/api/v1/runs?workflow_slug={quote(slug, safe='')}"
+            f"&page=0&page_size={_RECONCILE_PAGE_SIZE}"
+            "&include_test_runs=true&include_system=true"
+        )
+        try:
+            status, body = self._request("GET", path)
+        except AppError:
+            logger.warning(
+                "AE-listing probe for slug %s did not get through; whether a "
+                "Heracles-submitted run is listable stays unanswered",
+                slug,
+                exc_info=True,
+            )
+            return None
+        if status >= 300 or not isinstance(body, dict):
+            logger.warning(
+                "AE-listing probe for slug %s returned HTTP %d; whether a "
+                "Heracles-submitted run is listable stays unanswered\n"
+                "response=%r",
+                slug,
+                status,
+                body,
+            )
+            return None
+        rows = body.get("data")
+        listed = (
+            [r.get("guid") or r.get("run_id") for r in rows if isinstance(r, dict)]
+            if isinstance(rows, list)
+            else []
+        )
+        if run_id in listed:
+            logger.info(
+                "AE-listing probe: run %s IS listed under slug %s — a "
+                "Heracles-submitted run is discoverable via "
+                "GET /automation/api/v1/runs, so reconciliation can trust an "
+                "empty read as proof of absence (FND-676: this is the evidence "
+                "_RESUBMIT_WHEN_AE_REPORTS_NO_RUN waits on)",
+                run_id,
+                slug,
+            )
+            return True
+        logger.warning(
+            "AE-listing probe: run %s is NOT listed under slug %s (AE returned "
+            "%d run(s): %r) — reconciliation must NOT treat an empty read as "
+            "proof of absence; keep _RESUBMIT_WHEN_AE_REPORTS_NO_RUN off "
+            "(FND-676)",
+            run_id,
+            slug,
+            len(listed),
+            listed,
+        )
+        return False
+
     def submit_workflow(
         self,
         payload: dict[str, Any],
         *,
+        slug: str = "",
         retries: int = 4,
         retry_sleep_seconds: int = 5,
     ) -> str:
@@ -921,10 +1350,26 @@ class AEWorkflowClient:
         re-issuing one AE already accepted spawns a duplicate run that AE marks
         ``Skipped`` and returns as a *fresh* run_id — so a blind retry makes the
         harness poll a phantom skipped run while the real one runs to
-        completion under a different id. Two guards prevent that:
+        completion under a different id. Three guards prevent that:
 
-        * ``retry_network_errors=False`` — a read-timeout is ambiguous (the
-          server may have accepted the submit), so we never re-POST on timeout.
+        * ``retry_network_errors=False`` — a failure *after* the connection was
+          established is ambiguous (the server may have accepted the submit),
+          so we never blindly re-POST on one. A connect-phase failure is
+          exempt: the request provably never reached AE, so
+          ``_post_with_retry`` re-POSTs it within the normal attempt budget.
+          See :func:`_classify_delivery`; this is what keeps a blackholed CI
+          hairpin from reding a whole e2e leg on the first packet loss.
+        * ``recover_ambiguous`` — when *slug* is known, an ambiguous failure is
+          resolved by asking AE what actually happened rather than guessing.
+          AE writes the run record before it answers the submit, so
+          :meth:`find_run_created_since` can see a run that was accepted even
+          though the response never arrived: that run is adopted, and the DAG
+          the harness goes on to poll is the real one. A submit called without
+          a *slug*, or one whose reconcile read cannot get through, keeps the
+          old fail-fast behaviour — the guard degrades to what it replaced
+          rather than to a duplicate. The converse move, re-POSTing *because*
+          AE reports no such run, is gated off pending live verification; see
+          :data:`_RESUBMIT_WHEN_AE_REPORTS_NO_RUN`.
         * the ``already active`` conflict (AE-WF-409-03, which Heracles masks
           as a 500 — see :func:`_is_already_active_run`) is treated as terminal,
           not a retryable 5xx, and surfaced as
@@ -942,8 +1387,36 @@ class AEWorkflowClient:
         that still reads as connection-refused is surfaced as
         :class:`AppNotReadyError` rather than an opaque
         :class:`AtlanApiHttpError`, so the failure names the cause. FND-402.
+
+        Args:
+            payload: The AE submit body.
+            slug: Workflow slug the payload submits against. Optional only for
+                backwards compatibility — supplying it is what enables the
+                reconcile-before-retry guard described above, so every caller
+                that has the slug should pass it.
+            retries: Retries on top of the initial attempt.
+            retry_sleep_seconds: Fixed gap between attempts.
         """
         started = time.monotonic()
+        # Wall clock, not the monotonic one above: this is compared against
+        # timestamps AE assigns, so it has to be on the same scale.
+        submitted_at = datetime.now(UTC)
+
+        def _recover_from_ae() -> WriteRecovery:
+            """Ask AE whether the submit whose response we lost took effect."""
+            lookup = self.find_run_created_since(slug, submitted_at)
+            if lookup.run_id is not None:
+                logger.warning(
+                    "submit_workflow: the response was lost but AE has run %s "
+                    "under slug %s — adopting it rather than re-submitting",
+                    lookup.run_id,
+                    slug,
+                )
+                return WriteRecovery(body={"run_id": lookup.run_id})
+            return WriteRecovery(
+                proven_absent=lookup.conclusive and _RESUBMIT_WHEN_AE_REPORTS_NO_RUN
+            )
+
         status, body = self._post_with_retry(
             "/api/service/package-workflows?submit=true",
             body=payload,
@@ -964,6 +1437,9 @@ class AEWorkflowClient:
             op_name="submit_workflow",
             mutate_before_retry=_rotate_submit_credential_name,
             retry_network_errors=False,
+            # Resolvable only when we know which slug to look under; without
+            # one, an ambiguous timeout stays terminal as it always was.
+            recover_ambiguous=_recover_from_ae if slug else None,
         )
         if _is_already_active_run(status, body):
             raise AtlanAEWorkflowAlreadyActiveError(

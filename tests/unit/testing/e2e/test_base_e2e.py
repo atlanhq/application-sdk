@@ -965,4 +965,8 @@ class TestSubmitRetryKwargs:
         with pytest.raises(RuntimeError, match="stop after submit"):
             harness.run_full_dag()
         _, kwargs = harness.client.submit_workflow.call_args
-        assert kwargs == {"retries": 60, "retry_sleep_seconds": 5}
+        assert kwargs == {
+            "slug": "slug",
+            "retries": 60,
+            "retry_sleep_seconds": 5,
+        }
