@@ -23,7 +23,7 @@
 #                                     --max-request-body-size (default: 1024Mi)
 #   DAPR_SCHEDULER_HOST_ADDRESS     - DAPR scheduler address (default: empty = disabled)
 #   DAPR_GRACEFUL_SHUTDOWN_SECONDS  - How long daprd waits for in-flight requests after
-#                                     receiving SIGTERM (default: 3600). Must be >=
+#                                     receiving SIGTERM (default: 43200). Must be >=
 #                                     APP_GRACEFUL_SHUTDOWN_TIMEOUT.
 
 set -eu
@@ -41,9 +41,10 @@ export DAPR_METRICS_PORT="${DAPR_METRICS_PORT:-3100}"
 export DAPR_MAX_BODY_SIZE="${DAPR_MAX_BODY_SIZE:-1024Mi}"
 export DAPR_SCHEDULER_HOST_ADDRESS="${DAPR_SCHEDULER_HOST_ADDRESS:-}"
 # How long daprd waits for in-flight requests to complete after receiving SIGTERM.
-# Must be >= APP_GRACEFUL_SHUTDOWN_TIMEOUT and < terminationGracePeriodSeconds
-# so Kubernetes always gets the last word.
-export DAPR_GRACEFUL_SHUTDOWN_SECONDS="${DAPR_GRACEFUL_SHUTDOWN_SECONDS:-3600}"
+# Must be >= APP_GRACEFUL_SHUTDOWN_TIMEOUT and <= terminationGracePeriodSeconds.
+# Default 43200 equals the chart's worker pod deadline, so daprd and the
+# kubelet reach the same instant and k8s still gets the last word.
+export DAPR_GRACEFUL_SHUTDOWN_SECONDS="${DAPR_GRACEFUL_SHUTDOWN_SECONDS:-43200}"
 
 # PIDs managed by this script
 DAPRD_PID=""

@@ -34,7 +34,7 @@ class TestExecutionSettingsDefaults:
 
     def test_default_graceful_shutdown_timeout(self) -> None:
         settings = ExecutionSettings()
-        assert settings.graceful_shutdown_timeout_seconds == 3600
+        assert settings.graceful_shutdown_timeout_seconds == 43200
 
     def test_default_versioning_behavior_is_pinned(self) -> None:
         settings = ExecutionSettings()

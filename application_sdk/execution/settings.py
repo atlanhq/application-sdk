@@ -35,8 +35,12 @@ class ExecutionSettings:
     max_concurrent_activities: int = 100
     """Maximum concurrent activities per worker."""
 
-    graceful_shutdown_timeout_seconds: int = 3600
-    """Seconds to wait for in-flight activities to complete during worker shutdown."""
+    graceful_shutdown_timeout_seconds: int = 43200
+    """Seconds to wait for in-flight activities to complete during worker shutdown.
+
+    43200s (12h) is kept in lockstep with the atlan-app chart's worker
+    terminationGracePeriodSeconds; if this exceeds the pod deadline the
+    kubelet SIGKILLs the worker mid-drain and in-flight work is lost."""
 
     default_versioning_behavior: VersioningBehavior = VersioningBehavior.PINNED
     """Default Worker Deployment versioning behavior for workflows that do not
@@ -112,7 +116,7 @@ def load_execution_settings() -> ExecutionSettings:
             os.environ.get("TEMPORAL_MAX_CONCURRENT_ACTIVITIES", "100")
         ),
         graceful_shutdown_timeout_seconds=int(
-            os.environ.get("TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT", "3600")
+            os.environ.get("TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT", "43200")
         ),
         default_versioning_behavior=_load_versioning_behavior(
             "TEMPORAL_DEFAULT_VERSIONING_BEHAVIOR"
