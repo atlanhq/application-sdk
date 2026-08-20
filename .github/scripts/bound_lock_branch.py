@@ -116,6 +116,11 @@ def bound_project(project: Project, window: str, baseline_ref: str, root: Path) 
         baseline_ref,
         "--project-dir",
         str(root / project.directory),
+        # This script owns the commit, so a bound that admits nothing is a
+        # net-empty PR here, not the silent substitution it would be under
+        # postUpgradeTasks. Without this the driver fails, nothing is pushed, and
+        # Renovate's unbounded lock stays on the branch — observed on #3290.
+        "--caller-owns-commit",
     ]
     for name in project.exempt:
         argv += ["--exempt", name]

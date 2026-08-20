@@ -936,6 +936,68 @@ class TestWithholds:
         assert bounded.main(["--window", "P3D", "--project-dir", str(project)]) == 1
         self._assert_withheld(project, baseline)
 
+    def test_a_hold_is_an_ordinary_no_op_when_the_caller_owns_the_commit(
+        self, monkeypatch, tmp_path
+    ):
+        """The lane distinction, asserted against the case above.
+
+        application-sdk's own lane runs from a workflow that owns the push, so a
+        bound admitting nothing means "commit the baseline and let the PR go
+        net-empty". Failing there pushes nothing and leaves Renovate's unbounded
+        commit standing on the branch — which is how a 4-hour-old boto3 reached
+        main on 2026-08-20.
+        """
+        baseline = lock(boto3="1.43.74")
+        project = self._repo(tmp_path, baseline)
+        (project / "uv.lock").write_text(lock(boto3="1.43.75"))
+
+        def fake_run(command, cwd):
+            (Path(cwd) / "uv.lock").write_text(with_options(baseline))
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        exit_code = bounded.main(
+            [
+                "--window",
+                "P3D",
+                "--project-dir",
+                str(project),
+                "--caller-owns-commit",
+            ]
+        )
+        assert exit_code == 0
+        # The baseline, stripped: what the caller commits to revert the unbounded
+        # refresh, leaving a net-empty PR rather than a held branch.
+        assert (project / "uv.lock").read_text() == baseline
+
+    def test_a_rejected_downgrade_still_fails_when_the_caller_owns_the_commit(
+        self, monkeypatch, tmp_path
+    ):
+        # The flag narrows the hold-everything case only. A genuine refusal still
+        # refuses in either lane.
+        baseline = lock(pytest_timeout="2.5.0")
+        project = self._repo(tmp_path, baseline)
+
+        def fake_run(command, cwd):
+            (Path(cwd) / "uv.lock").write_text(
+                with_options(lock(pytest_timeout="2.4.0"))
+            )
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        assert (
+            bounded.main(
+                [
+                    "--window",
+                    "P3D",
+                    "--project-dir",
+                    str(project),
+                    "--caller-owns-commit",
+                ]
+            )
+            == 1
+        )
+
     def test_a_genuinely_quiet_run_is_left_clean_and_passes(
         self, monkeypatch, tmp_path
     ):

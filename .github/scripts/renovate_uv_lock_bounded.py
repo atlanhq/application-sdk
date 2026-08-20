@@ -608,6 +608,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--project-dir", default=".")
     parser.add_argument(
+        "--caller-owns-commit",
+        action="store_true",
+        help="The caller controls what gets committed, so a bound that admits "
+        "nothing is an ordinary no-op: write the baseline back and exit 0, and "
+        "let the caller commit that. Set by bound_lock_branch.py (FND-376), whose "
+        "workflow owns the push. Leave it off under Renovate's postUpgradeTasks, "
+        "where Renovate commits the working tree itself and substitutes its own "
+        "unbounded artifact whenever this command leaves the tree matching HEAD — "
+        "there, admitting nothing has to fail visibly instead.",
+    )
+    parser.add_argument(
         "--baseline-ref",
         default="HEAD",
         help="Git ref whose uv.lock is the PRE-refresh baseline for retention "
@@ -738,7 +749,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    if after == before and renovate_versions != before:
+    if after == before and renovate_versions != before and not args.caller_owns_commit:
         moved = ", ".join(
             f"{name} {before.get(name, 'absent')} -> {version}"
             for name, version in sorted(renovate_versions.items())
