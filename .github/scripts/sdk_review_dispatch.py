@@ -30,19 +30,27 @@ have, because the review lane needs them:
     its summary to the PR, the review WAS delivered, so a later stream
     breakage is a mothership-side finalize glitch and must not red the check.
 
-One re-dispatch is allowed, in either of two classes — see
+One re-dispatch is allowed, in any of three classes — see
 MAX_DISPATCH_ATTEMPTS and retry_decision():
 
-  * the sandbox died on a hard error a DIFFERENT model could survive; and
+  * the sandbox died on a hard error a DIFFERENT model could survive;
   * the sandbox reached `status=completed` and posted no verdict, which is the
     turn ending early rather than the model failing, so attempt 2 runs the SAME
-    model.
+    model; and
+  * mothership reported a dropped RPC to the sandbox, which is a fault in the
+    pipe rather than in the model — so attempt 2 also runs the SAME model.
 
-Both fire only after the verdict check has come back empty — confirmed empty,
-sharing `sdk_review_verdict_gate`'s recheck, because the comments API is not
-read-after-write consistent. That is the single point where the sandbox is
-provably finished AND nothing was delivered; every other stream ending stays
-fail-fast, because a second reviewer would post a second summary on the same PR.
+All three fire only after the verdict check has come back empty — confirmed
+empty, sharing `sdk_review_verdict_gate`'s recheck, because the comments API is
+not read-after-write consistent. That is the single point where nothing was
+delivered; every other stream ending stays fail-fast, because a second reviewer
+would post a second summary on the same PR.
+
+The first two classes also have the sandbox provably finished. The third does
+not — a dropped pipe says nothing about the sandbox behind it — and is admitted
+anyway because this lane is self-repairing: both attempts carry the same
+`GHA_RUN_URL`, so FND-636's dedupe collapses a double post. The resolve lane
+gets no such class, for exactly that reason (FND-647).
 
 Environment (all supplied by the `Dispatch to mothership Rover Direct API`
 step in `.github/workflows/sdk-review.yml`):
@@ -217,6 +225,22 @@ RETRYABLE_ERR_PATTERNS = (
     "upstream",
 )
 UNINFORMATIVE_ERR_CODES = frozenset({"", "none", "unknown"})
+# FND-647. A fault in mothership's own RPC to the sandbox, not in the model.
+# Kept in its OWN tuple rather than added to RETRYABLE_ERR_PATTERNS above
+# because it moves a different axis: a model swap cannot fix something the model
+# never touched, so this class re-dispatches on the SAME model (with the fresh
+# session id every attempt already gets). Read only when the code carries no
+# information, exactly like the model-fault patterns.
+#
+# Deliberately narrow — one message shape, observed on resolver run
+# 32309963717, which threw away a healthy $0.69 run over it. Every entry admits
+# a re-dispatch against a sandbox of UNKNOWN liveness, affordable here only
+# because FND-636's dedupe collapses a double post: both attempts carry the same
+# GHA_RUN_URL, the key it attributes on. Do not add a pattern that has not been
+# seen in a real run. The resolve lane keeps its own copy of this tuple and uses
+# it to REFUSE — a second resolver pushes commits — so the two are deliberately
+# not shared: same signature, opposite policy.
+RETRYABLE_TRANSPORT_PATTERNS = ("disconnected prematurely",)
 # Fails identically on any model, so never spend a second sandbox on it: the
 # sandbox wants interactive input, which GHA can never give.
 NEVER_RETRY_ERR_CODES = frozenset({"elicitation"})
@@ -769,6 +793,20 @@ def is_retryable_fault(st: SSEState) -> bool:
     return any(p in st.err_msg.lower() for p in RETRYABLE_ERR_PATTERNS)
 
 
+def is_transport_fault(st: SSEState) -> bool:
+    """True when the reported fault is the RPC to the sandbox, not the model.
+
+    Same code discipline as `is_retryable_fault`: an informative code decides on
+    its own and never falls through to the patterns, which exist for the
+    flattened `none`/`unknown`/empty case. `http_` codes are excluded outright —
+    a status on the POST itself means no sandbox was ever started, so there is no
+    RPC to a sandbox that could have dropped.
+    """
+    if st.err_code.startswith("http_") or st.err_code not in UNINFORMATIVE_ERR_CODES:
+        return False
+    return any(p in st.err_msg.lower() for p in RETRYABLE_TRANSPORT_PATTERNS)
+
+
 def sandbox_completed_cleanly(st: SSEState) -> bool:
     """True when the sandbox reported the terminal `complete` event, happily.
 
@@ -812,6 +850,27 @@ def _retry_class(st: SSEState, attempt: int) -> RetryPlan:
             False,
             "the stream ended without a hard error — the sandbox may still be "
             "running, and a re-dispatch would double-review the PR",
+        )
+    if is_transport_fault(st):
+        # FND-647. mothership's RPC to the sandbox dropped. Nothing about the
+        # model failed, so the swap axis is the wrong one — attempt 2 re-runs
+        # the same model on a fresh session id.
+        #
+        # Ranked BELOW the two guards above rather than above them: reaching
+        # here means mothership itself reported a terminal fault, so this is not
+        # the "our socket died and the reviewer is probably still working" case,
+        # where a retry is usually two sandboxes for one review. It is still a
+        # sandbox of unknown liveness — the drop is in the pipe, not the sandbox
+        # — and that is affordable only because both attempts carry the same
+        # GHA_RUN_URL and FND-636's dedupe collapses a double post.
+        same = attempt_model(attempt)
+        return RetryPlan(
+            True,
+            f"code={st.err_code or 'none'} reports a dropped RPC to the sandbox "
+            f"({_squash(st.err_msg)[:80]}) — the model never failed, so "
+            f"re-dispatching on the same model ({same}) (attempt {attempt + 1} "
+            f"of {MAX_DISPATCH_ATTEMPTS})",
+            same,
         )
     if not is_retryable_fault(st):
         return RetryPlan(

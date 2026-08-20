@@ -18,6 +18,17 @@ The retry fires only after the out-of-band poll has come back empty, which is
 the single point where the sandbox is provably dead and nothing further will
 land; every other stream ending stays fail-fast.
 
+That is a strictly narrower rule than the review lane's, on purpose (FND-647).
+The reviewer also retries a fault it cannot prove killed the sandbox, because
+two reviewers only ever cost a duplicate comment that FND-636's dedupe
+collapses. A resolver PUSHES COMMITS: two live on one branch is what
+`sdk_resolve_push_guard.py` exists to prevent and nothing can undo afterwards.
+So on this lane an unproven death is never re-dispatched — a dropped RPC buys
+the LONG out-of-band poll instead (see `oob_poll_budget`), which is a recovery
+that cannot double-run anything. `retry_decision` has to say that explicitly:
+the fault otherwise reads as a no-op run to `resolved_nothing` and would be
+re-dispatched on the strength of it.
+
 Environment:
     MOTHERSHIP_URL      base URL (e.g. https://mothership.atlan.dev)
     HARNESS_TOKEN       bearer for /api/sandbox/execute
@@ -147,6 +158,19 @@ RETRYABLE_ERR_PATTERNS = (
     "upstream",
 )
 UNINFORMATIVE_ERR_CODES = frozenset({"", "none", "unknown"})
+# FND-647. A fault in mothership's own RPC to the sandbox, not in the model —
+# observed as `code=unknown` + "ReadableStream received over RPC disconnected
+# prematurely." on run 32309963717 (PR #3276), which threw away a healthy $0.69
+# run. Read only when the code carries no information, exactly like the
+# model-fault patterns above.
+#
+# On THIS lane the class never authorises a re-dispatch: the drop is in the pipe,
+# so it is no evidence the resolver died, and a second resolver pushing to one
+# branch is unrecoverable. What it selects is the long out-of-band poll (the
+# resolver may be many minutes from its Phase 4 hand-off) plus a refusal that
+# says so. The review lane keeps its own copy of this tuple and DOES retry on
+# it; the tuples are deliberately per-lane, because the entry conditions are.
+RETRYABLE_TRANSPORT_PATTERNS = ("disconnected prematurely",)
 # Causes that fail identically on any model — never spend a second sandbox:
 #   elicitation   the sandbox wants interactive input, which GHA can never give.
 #   stream_error  OUR urlopen died, not the sandbox. The resolver is probably
@@ -188,7 +212,9 @@ OOB_POLL_INTERVAL_SECONDS = 30
 OOB_POLL_SECONDS_STREAM_DROP = 2700
 # Abnormal sandbox termination (status=error / error event): the sandbox is dead
 # and will post nothing more — a couple of quick checks only catch a summary that
-# landed just before it died.
+# landed just before it died. NOT used for a transport fault, which reports a
+# terminal error without the sandbox being dead (FND-647): those take the
+# stream-drop budget above.
 OOB_POLL_SECONDS_HARD_ERROR = 120
 # Clock-skew margin subtracted from this run's start when matching a summary's
 # created_at, so a hand-off posted right at the boundary isn't missed. Small
@@ -808,14 +834,40 @@ def sandbox_terminated_abnormally(st: SSEState) -> bool:
     return st.status != "completed" or resolved_nothing(st)
 
 
+def is_transport_fault(st: SSEState) -> bool:
+    """True when the reported fault is the RPC to the sandbox, not the model.
+
+    Same code discipline as `is_retryable_fault`: an informative code decides on
+    its own and never falls through to the patterns, which exist for the
+    flattened `none`/`unknown`/empty case. `http_` codes are excluded outright —
+    a status on the POST itself means no sandbox was ever started, so there is no
+    RPC to a sandbox that could have dropped, and that codespace already decides
+    for itself.
+    """
+    if st.err_code.startswith("http_") or st.err_code not in UNINFORMATIVE_ERR_CODES:
+        return False
+    return any(p in st.err_msg.lower() for p in RETRYABLE_TRANSPORT_PATTERNS)
+
+
 def oob_poll_budget(st: SSEState) -> int:
     """Seconds to look for an out-of-band summary, given how the stream ended."""
     if not st.got_event:
         return 0  # never saw an event → sandbox likely never started; nothing to await
+    if is_transport_fault(st):
+        # FND-647. mothership reported a dropped RPC, which `errored` then makes
+        # look like a dead sandbox to the check below — so this ranks above it.
+        # The pipe dropping is no evidence the resolver stopped, and it can be
+        # many minutes from its Phase 4 hand-off, so give it the full window.
+        # Waiting is the ONLY recovery available here: a re-dispatch is off the
+        # table (see `retry_decision`), so the 120s this used to get is exactly
+        # how a healthy run gets thrown away (run 32309963717, $0.69).
+        return OOB_POLL_SECONDS_STREAM_DROP
     if sandbox_terminated_abnormally(st):
         # Sandbox terminated abnormally; only catch a summary posted just before.
         return OOB_POLL_SECONDS_HARD_ERROR
-    return OOB_POLL_SECONDS_STREAM_DROP  # transport drop; sandbox likely still working
+    # Our own stream was cut with no terminal event; the sandbox is likely
+    # still working.
+    return OOB_POLL_SECONDS_STREAM_DROP
 
 
 def is_retryable_fault(st: SSEState) -> bool:
@@ -849,10 +901,12 @@ def is_retryable_fault(st: SSEState) -> bool:
 def retry_decision(st: SSEState, attempt: int, seconds_left: float) -> tuple[bool, str]:
     """Whether to re-dispatch after this attempt, and the reason either way.
 
-    Called only once the out-of-band poll has come back empty, so "the sandbox
-    is dead and posted nothing" is already established for the abnormal-
-    termination branch. The reason is logged verbatim so a run that did NOT
-    retry says why, which is the part that is invisible today.
+    Called only once the out-of-band poll has come back empty, so "posted
+    nothing" is established for every branch, and "the sandbox is dead" for the
+    abnormal-termination branch — with one exception, which is why the transport
+    branch below exists: a dropped RPC reports a terminal fault without proving
+    the resolver stopped, and on this lane an unproven death is never retried.
+    The reason is logged verbatim so a run that did NOT retry says why.
     """
     if attempt >= MAX_DISPATCH_ATTEMPTS:
         return False, f"already used all {MAX_DISPATCH_ATTEMPTS} attempts"
@@ -860,6 +914,28 @@ def retry_decision(st: SSEState, attempt: int, seconds_left: float) -> tuple[boo
         return False, (
             "the stream ended without a hard error — the sandbox may still be "
             "running, and a re-dispatch would double-run the resolver"
+        )
+    if is_transport_fault(st):
+        # FND-647, and it must be ranked ABOVE `is_retryable_fault` rather than
+        # left to fall through it. An error event leaves `run_completed` False,
+        # so a clean `complete` plus a dropped RPC is indistinguishable from a
+        # no-op run — and FND-644's `resolved_nothing` branch answers True on
+        # that basis, buying a second resolver against a first of UNKNOWN
+        # liveness. That is the double-push `sdk_resolve_push_guard.py` exists to
+        # prevent, and no dedupe can undo it after the fact. (Before FND-644 the
+        # same fault fell out the other side, refused with "a different model
+        # would fail the same way" — true, and beside the point: the model never
+        # failed. Run 32309963717 was lost that way.)
+        #
+        # This lane therefore has NO transport retry class at all, by decision
+        # rather than by default: what the fault buys instead is the long
+        # out-of-band poll above, which recovers the run without ever risking a
+        # second resolver. If that poll came back empty, the run is spent.
+        return False, (
+            f"code={st.err_code or 'none'} reports a dropped RPC to the sandbox, "
+            "not a dead one — the resolver may still be pushing, and two "
+            "resolvers on one branch cannot be undone, so this lane waits for "
+            "the out-of-band hand-off instead of re-dispatching"
         )
     if not is_retryable_fault(st):
         return False, (

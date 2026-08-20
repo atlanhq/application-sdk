@@ -640,10 +640,13 @@ jobs:
       # `final_err_msg`) are a contract: `sdk_review_verdict_gate.py`, the
       # starter-comment stamper and `sdk_review_approve.py` all read them.
       #
-      # The step can boot TWO sandboxes: it re-dispatches once on a different
-      # main model when the first dies on a hard error a model swap could
-      # survive (FND-641, ported in FND-643). `final_cost` is then the sum, and
-      # the step summary carries the per-attempt trail.
+      # The step can boot TWO sandboxes. It re-dispatches once, on one of
+      # three classes: a hard error a model swap could survive (FND-641, ported
+      # in FND-643) goes to a DIFFERENT main model; a clean `status=completed`
+      # that delivered no verdict (FND-645) and a dropped RPC to the sandbox
+      # (FND-647) re-run the SAME one, because neither is a model fault. All
+      # three fire only on a confirmed-empty verdict read. `final_cost` is then
+      # the sum, and the step summary carries the per-attempt trail.
       - name: Dispatch to mothership Rover Direct API
         id: dispatch
         if: steps.lock_gate.outputs.decision != 'skip'
@@ -721,9 +724,10 @@ jobs:
       # and masking the real outcome with a teardown error helps nobody.
       #
       # SESSION_ID is the BASE id. A run can boot more than one sandbox (the
-      # dispatcher re-dispatches once on a different model when the first dies),
-      # and each attempt gets its own derived id, so the script walks the same
-      # ladder rather than trusting an id this step cannot know.
+      # dispatcher re-dispatches once when the first delivers nothing — on the
+      # same model or a different one, depending on the fault), and each attempt
+      # gets its own derived id, so the script walks the same ladder rather than
+      # trusting an id this step cannot know.
       - name: Terminate mothership sandbox on cancel
         if: cancelled() && steps.session.outputs.session_id != ''
         env:

@@ -218,9 +218,13 @@ jobs:
       # The script dispatches ONCE, then re-dispatches at most once more on a
       # DIFFERENT main model when the sandbox died on a model/provider fault and
       # posted no out-of-band hand-off (FND-641). Both attempts' costs are logged
-      # separately and rendered in the step summary. Everything else — a
-      # transport drop, an auth or prompt fault, an elicitation — stays
-      # fail-fast; see MAX_DISPATCH_ATTEMPTS / retry_decision() in the script.
+      # separately and rendered in the step summary. Everything else — a cut
+      # stream, a dropped RPC to the sandbox, an auth or prompt fault, an
+      # elicitation — stays fail-fast: unlike the review lane, a second resolver
+      # would push to the same branch, so an unproven death is never retried
+      # here (FND-647). A dropped RPC instead buys the long out-of-band poll,
+      # which recovers the run without a second sandbox. See
+      # MAX_DISPATCH_ATTEMPTS / retry_decision() in the script.
       - name: Dispatch SDK Resolve to mothership Rover Direct API
         env:
           MOTHERSHIP_URL: ${{ vars.MOTHERSHIP_URL }}
