@@ -344,6 +344,16 @@ def test_is_suppressed_bare_rule_still_suppresses_discriminated_findings() -> No
     assert _is_suppressed(suppressions, "T025", 2)[0]
 
 
+def test_bare_entry_wins_over_a_subject_entry_for_the_same_rule() -> None:
+    """``ignore[T025:miner, T025]`` must not be narrowed back by the subject."""
+    for text in (
+        "# conformance: ignore[T025:miner, T025] why\n[project]\n",
+        "# conformance: ignore[T025, T025:miner] why\n[project]\n",
+    ):
+        suppressions = parse_toml_suppressions(text)
+        assert _is_suppressed(suppressions, "T025", 2, discriminator="crawler")[0]
+
+
 def test_d002_suppressed_inline_directive_is_counted_but_not_active() -> None:
     text = (
         '[project]\nname = "demo-app"\n'

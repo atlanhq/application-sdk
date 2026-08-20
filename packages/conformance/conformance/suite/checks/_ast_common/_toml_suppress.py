@@ -87,7 +87,10 @@ def parse_toml_suppressions(text: str) -> SuppressionsMap:
             subject = em.group("discriminator")
             if subject is None:
                 rule_ids.add(rule)
-            else:
+                # The bare form is rule-wide; a ``:subject`` entry for the same
+                # rule elsewhere in the list must not narrow it back.
+                discriminators.pop(rule, None)
+            elif rule not in rule_ids:
                 saw_discriminator = True
                 discriminators.setdefault(rule, set()).add(subject.strip().lower())
         out[lineno] = (
