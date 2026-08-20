@@ -59,6 +59,7 @@ from application_sdk.testing.e2e._errors import (
     MissingHarnessClassAttrError,
     MissingHarnessEnvError,
 )
+from application_sdk.testing.e2e._poll import until_deadline
 from application_sdk.testing.e2e.client import (
     AEWorkflowClient,
     DAGNodeStatus,
@@ -1097,8 +1098,14 @@ class BaseE2ETest:
                     # consistent but assets appear within seconds if publish
                     # succeeded. Use a short dedicated timeout rather than the
                     # full atlas_poll_timeout_seconds used for the connection.
-                    deadline = time.monotonic() + self.atlas_asset_poll_timeout_seconds
-                    while True:
+                    for _attempt in until_deadline(
+                        self.atlas_asset_poll_timeout_seconds,
+                        self.atlas_asset_poll_interval_seconds,
+                        label=f"Atlas asset counts under {self.connection_qualified_name}",
+                        # The per-poll inventory line below already reports
+                        # progress every iteration; a heartbeat would duplicate it.
+                        heartbeat_seconds=0,
+                    ):
                         asset_counts = self.client.count_assets_under_connection(
                             self.connection_qualified_name,
                             type_names=probe_types,
@@ -1113,16 +1120,14 @@ class BaseE2ETest:
                         # same evaluator as the final assertion, so the two can
                         # never drift to different definitions of "met".
                         met = not self._evaluate_asset_expectations(asset_counts)
-                        if time.monotonic() >= deadline:
-                            break
                         # Floors/non-empty can exit as soon as they're satisfied.
                         # Exact-count parity must NOT: ES indexing is eventually
                         # consistent, so a transient match could end polling
                         # before late-arriving over-extracted assets land. Keep
-                        # polling to the deadline so over-extraction surfaces.
+                        # polling to the deadline so over-extraction surfaces —
+                        # `until_deadline` ends the loop on its own last attempt.
                         if met and not self.expected_exact_counts:
                             break
-                        time.sleep(self.atlas_asset_poll_interval_seconds)
                 # True total across ALL asset types (not just the probed ones).
                 # The non-empty backstop uses this so it also protects connectors
                 # that declare no per-type expectations — precisely the ones most
@@ -1306,27 +1311,30 @@ class BaseE2ETest:
         """
         url = os.environ.get("E2E_WORKER_HEALTH_URL", self.worker_health_url)
         logger.info("Worker-up-only tier: probing %s", url)
-        deadline = time.monotonic() + self.worker_health_timeout_seconds
         last_error = ""
-        while True:
-            # conformance: ignore[L006] short, bounded readiness poll (worker_health_timeout_seconds) with a modest interval, not a hot loop; the worker is already health-gated by the sdr-e2e action so this converges on the first attempt in CI
+        for attempt in until_deadline(
+            self.worker_health_timeout_seconds,
+            self.worker_health_poll_interval_seconds,
+            label=f"{self.connector_short_name} worker health at {url}",
+        ):
             try:
                 with urllib.request.urlopen(url, timeout=10) as resp:  # noqa: S310 — fixed health URL, not user input
                     status = resp.status
                 if 200 <= status < 300:
+                    # conformance: ignore[L006] fires at most once per call — the immediately-following return exits the loop on first success; not per-iteration log volume
                     logger.info("App worker healthy: %s -> HTTP %s", url, status)
                     return
                 last_error = f"HTTP {status}"
             except (urllib.error.URLError, OSError) as exc:
                 last_error = str(exc)
-            if time.monotonic() >= deadline:
+            if attempt.is_last:
                 raise AssertionError(
                     f"App worker for {self.connector_short_name} did not become "
                     f"healthy at {url} within {self.worker_health_timeout_seconds}s "
-                    f"(last: {last_error}). No source is provisioned, so this run "
+                    f"({attempt.number} attempts, {attempt.elapsed:.0f}s elapsed; "
+                    f"last: {last_error}). No source is provisioned, so this run "
                     "only checks that the worker deploys and serves /server/health."
                 )
-            time.sleep(self.worker_health_poll_interval_seconds)
 
     # ------------------------------------------------------------------
     # Default test method

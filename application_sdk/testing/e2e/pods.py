@@ -2,11 +2,11 @@
 
 import asyncio
 import json
-import time
 
 import orjson
 
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.testing.e2e._poll import until_deadline_async
 
 logger = get_logger(__name__)
 
@@ -48,8 +48,11 @@ async def wait_for_pods_ready(
     poll_interval: float = 5.0,
 ) -> None:
     """Wait until all matching pods have all containers Ready."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+    async for attempt in until_deadline_async(
+        timeout,
+        poll_interval,
+        label=f"pods '{label_selector}' in namespace '{namespace}'",
+    ):
         pods = await get_pods(namespace, label_selector)
         if pods:
             all_ready = all(
@@ -61,11 +64,12 @@ async def wait_for_pods_ready(
             )
             if all_ready:
                 return
-        await asyncio.sleep(poll_interval)
-    raise TimeoutError(
-        f"Pods with selector '{label_selector}' in namespace '{namespace}' "
-        f"did not become ready within {timeout}s"
-    )
+        if attempt.is_last:
+            raise TimeoutError(
+                f"Pods with selector '{label_selector}' in namespace '{namespace}' "
+                f"did not become ready within {timeout}s ({attempt.number} attempts, "
+                f"{attempt.elapsed:.0f}s elapsed; {len(pods)} pod(s) matched)"
+            )
 
 
 async def get_pod_logs(namespace: str, pod_name: str, container: str = "") -> str:

@@ -1379,6 +1379,200 @@ def test_resync_reported_in_json_manifest(
     assert ".github/workflows/tests.yaml.bak" in payload["touched"]
 
 
+# ---------------------------------------------------------------------------
+# FND-604: --resync must not silently drop per-repo CI wiring.
+#
+# It did, on 6 of 10 wave-D repos: an explicit `secrets:` mapping downgraded to
+# `secrets: inherit` (which cannot compose the E2E_SOURCE_ENV_JSON the
+# integration and e2e legs read) and a dropped `force-external-runtime: true`
+# (boot then raises DaprNotDetectedError — FND-65). Nothing failed here; CI went
+# red two tiers later with what read as a source-system credential error. These
+# lock both halves of the fix: the two values now survive, and anything else the
+# canonical has no place for stops the resync instead of being deleted.
+# ---------------------------------------------------------------------------
+
+
+# An explicit mapping, in the shape the wave-D repos hand-wrote (synthetic
+# credential names). Deliberately carries a preceding comment and a block
+# scalar: both are things a naive line-based preserve would mangle.
+_EXPLICIT_SECRETS_BLOCK = """\
+    # Mapped explicitly instead of `secrets: inherit`: inherit cannot compose.
+    secrets:
+      SDR_TEST_TENANT: ${{ secrets.SDR_TEST_TENANT }}
+      E2E_SOURCE_ENV_JSON: |
+        {"ATLAN_APP_MODULE": "app.widget:WidgetApp",
+         "E2E_WIDGET_HOST": ${{ toJSON(secrets.E2E_WIDGET_HOST) }}}"""
+
+
+def _customised_tests_yaml() -> str:
+    """A drifted tests.yaml carrying both values FND-604 found being deleted.
+
+    Written the way the apps wrote them rather than by rendering the template
+    back at itself: the forced runtime sits at a position the canonical does not
+    use and under its own explanatory comment (both real — the fleet hand-wrote
+    it in two different places), and the explicit mapping replaces `inherit`
+    entirely. A fixture rendered from the template would pass on a preserve that
+    only works for the exact bytes the template emits.
+    """
+    canonical = render("tests.yaml", app_name="app")
+    body = "".join(
+        line
+        for line in canonical.splitlines(keepends=True)
+        if "secrets: inherit" not in line
+    )
+    body = body.replace(
+        '      app-image-name: "atlan-app-app"\n',
+        '      app-image-name: "atlan-app-app"\n'
+        "      # main.py still expects external daprd at :3500 / Temporal at :7233.\n"
+        "      force-external-runtime: true\n",
+    )
+    return body + _EXPLICIT_SECRETS_BLOCK + "\n"
+
+
+def test_resync_keeps_an_explicit_secrets_mapping(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The downgrade that broke 6 repos: `secrets:` → `secrets: inherit`.
+
+    Asserted on the mapping's contents, not just on the absence of `inherit`:
+    the credential NAMES are the payload, and E2E_SOURCE_ENV_JSON is the one
+    the reusable exports before the app server and pytest start.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(_customised_tests_yaml())
+    _cmd_bootstrap(["--resync"])
+    after = wf.read_text()
+    assert _EXPLICIT_SECRETS_BLOCK in after
+    # Line-exact: the block's own comment mentions `secrets: inherit` by name.
+    assert "    secrets: inherit\n" not in after
+
+
+def test_resync_keeps_force_external_runtime(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Dropping this line makes the connector's main.py fail to boot (FND-65)."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(_customised_tests_yaml())
+    _cmd_bootstrap(["--resync"])
+    assert "force-external-runtime: true" in wf.read_text()
+
+
+def test_resync_of_a_customised_file_still_lands_the_structural_catch_up(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Preserving the two values must not cost the catch-up they blocked.
+
+    A fix that merely refused on every customised file would leave the whole
+    migrated fleet — where an explicit `secrets:` mapping is the norm, not the
+    exception — permanently unable to pull a structural update.
+    """
+    from conformance.suite.checks.bootstrap_drift import scan_path
+
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(_customised_tests_yaml())
+    assert scan_path(wf, tmp_path), "fixture is not actually drifted"
+    _cmd_bootstrap(["--resync"])
+    assert scan_path(wf, tmp_path) == []
+
+
+def test_resync_is_idempotent_on_a_customised_file(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second run must be a no-op, or the fleet churns a .bak on every run."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(_customised_tests_yaml())
+    _cmd_bootstrap(["--resync"])
+    once = wf.read_text()
+    (tmp_path / ".github" / "workflows" / "tests.yaml.bak").unlink()
+    _cmd_bootstrap(["--resync"])
+    assert wf.read_text() == once
+    assert not (tmp_path / ".github" / "workflows" / "tests.yaml.bak").exists()
+
+
+def _tests_yaml_with_an_extra_job() -> str:
+    """A drifted tests.yaml keeping a second job, as several migrated repos do.
+
+    The realistic remaining case: the job's name is what the repo's branch
+    protection requires, so deleting it takes the required check with it.
+    """
+    return _drifted_tests_yaml(app_name="app") + (
+        "\n  tests-passed:\n"
+        "    needs: [tests]\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - run: echo ok\n"
+    )
+
+
+def test_resync_refuses_rather_than_deleting_an_unrecognised_declaration(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The generalising half of the fix, and the safer default FND-604 asked for.
+
+    Carrying the two known values forward only covers the two known values; the
+    refusal covers whatever the next unrecognised per-repo value turns out to
+    be, without having had to anticipate it.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(_tests_yaml_with_an_extra_job())
+    before = wf.read_text()
+    _cmd_bootstrap(["--resync"])
+    assert wf.read_text() == before
+    assert not (tmp_path / ".github" / "workflows" / "tests.yaml.bak").exists()
+
+
+def test_resync_refusal_names_what_it_refused_over(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A refusal that doesn't say what it saw is the silent loss in a costume.
+
+    The whole failure mode was invisibility: the removals only showed up in a
+    deliberate diff against HEAD, so the message has to carry the finding.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(_tests_yaml_with_an_extra_job())
+    capsys.readouterr()
+    _cmd_bootstrap(["--resync"])
+    out = capsys.readouterr().out
+    assert "skipped" in out
+    assert "tests-passed" in out
+
+
+def test_resync_refusal_touches_nothing(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A refused file must not appear in the --json touched-files manifest.
+
+    A remediation pass scopes its commit (and its revert) to that list, so a
+    path reported as touched but left unchanged would put an unrelated hand edit
+    inside the pass's write scope.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(_tests_yaml_with_an_extra_job())
+    capsys.readouterr()
+    _cmd_bootstrap(["--resync", "--json"])
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert ".github/workflows/tests.yaml" not in payload["touched"]
+
+
 # --- --resync's second target: renovate.json -------------------------------
 
 

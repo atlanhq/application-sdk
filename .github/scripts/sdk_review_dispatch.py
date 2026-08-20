@@ -30,12 +30,19 @@ have, because the review lane needs them:
     its summary to the PR, the review WAS delivered, so a later stream
     breakage is a mothership-side finalize glitch and must not red the check.
 
-One re-dispatch is allowed when the sandbox dies on a hard error that a
-different model could survive — see MAX_DISPATCH_ATTEMPTS and retry_decision().
-The retry fires only after the verdict check has come back empty, which is the
-single point where the sandbox is provably dead AND nothing was delivered;
-every other stream ending stays fail-fast, because a second reviewer would post
-a second summary on the same PR.
+One re-dispatch is allowed, in either of two classes — see
+MAX_DISPATCH_ATTEMPTS and retry_decision():
+
+  * the sandbox died on a hard error a DIFFERENT model could survive; and
+  * the sandbox reached `status=completed` and posted no verdict, which is the
+    turn ending early rather than the model failing, so attempt 2 runs the SAME
+    model.
+
+Both fire only after the verdict check has come back empty — confirmed empty,
+sharing `sdk_review_verdict_gate`'s recheck, because the comments API is not
+read-after-write consistent. That is the single point where the sandbox is
+provably finished AND nothing was delivered; every other stream ending stays
+fail-fast, because a second reviewer would post a second summary on the same PR.
 
 Environment (all supplied by the `Dispatch to mothership Rover Direct API`
 step in `.github/workflows/sdk-review.yml`):
@@ -57,6 +64,7 @@ step in `.github/workflows/sdk-review.yml`):
 
 from __future__ import annotations
 
+import hashlib
 import http.client
 import json
 import os
@@ -73,6 +81,10 @@ from typing import Any, NamedTuple
 sys.path.insert(0, str(Path(__file__).parent))
 
 import sdk_review_dedupe_verdicts  # noqa: E402  (needs the sys.path bootstrap)
+from sdk_review_verdict_gate import (  # noqa: E402  (same bootstrap)
+    RECHECK_ATTEMPTS,
+    RECHECK_DELAY_S,
+)
 
 HEALTH_RETRIES = 5
 HEALTH_BACKOFF_SECONDS = 5
@@ -99,25 +111,69 @@ STREAM_TRANSPORT_ERRORS = (
 # the sandbox looks stalled. Re-armed by every content-bearing event.
 IDLE_WARN_SECONDS = 300
 
-# Models this lane runs on. Chosen on cost per TASK, not per token: kimi-k3
-# (index 57.2, ~$0.85/task) vs claude-opus-5 (60.5, ~$2.40) and gpt-5.6-luna
-# (51.2, $0.20/Mtok in) vs claude-haiku-4-5 (29.6, $1.00/Mtok) — better and
-# cheaper on the fast lane. `small_fast_model` must be pinned explicitly:
-# mothership's model_routing_env does `fast = small_fast_model or model`, so
-# pinning `model` alone would put the background lane on kimi-k3 too.
-MAIN_MODEL = "kimi-k3"
+# Models this lane runs on. The main lane is pinned to Grok 4.6 by operator
+# request, replacing kimi-k3 (which was itself chosen on cost per TASK, not per
+# token: index 57.2, ~$0.85/task vs claude-opus-5 at 60.5, ~$2.40). Two things
+# have to hold on the proxy side or every dispatch dies on turn one, and the
+# codes tell you which: 400 means the pinned name is not one the
+# llmproxy.atlan.dev catalog recognises (its own message is "Invalid model
+# name passed in model=..."), 403 means the `sdk_review` gateway key does not
+# allowlist it.
+#
+# Mothership itself does not validate the name at all: `_validate_model_ids`
+# in `harness/api/models/sandbox.py` only rejects blank/whitespace/control-char
+# values, by design ("No allow-list of names: new models must work without a
+# code change"). So a typo in this constant is never caught at dispatch - it
+# boots a real sandbox, bills for it, and only dies mid-run when the container
+# itself calls the proxy. That is exactly what happened for FND-660: this
+# constant carried the OpenRouter-style `x-ai/` prefix instead of this proxy's
+# `xai/`, so any dispatch that reached the sandbox would have paid for one
+# and failed on its first proxy call.
+#
+# KNOWN RISK, carried deliberately: xAI does NOT prompt-cache on the
+# Anthropic `/v1/messages` route Claude Code uses (verified in the LiteLLM
+# ledger when mothership pinned its PR reviewer to xai/grok-4.5 in Jul 2026 -
+# Cache Hit False even with Claude Code sending cache_control), so a multi-turn
+# agentic reviewer re-bills its full context every turn. That is why mothership
+# reverted its own grok pin. This lane has the same shape, so watch the
+# per-review cost before treating the switch as settled. That risk was
+# measured on grok-4.5, not 4.6: a manual `/v1/messages` probe of
+# `xai/grok-4.6` on 2026-08-20 returned a non-zero `cache_read_input_tokens`,
+# so the no-caching claim is unverified for 4.6 and the per-run cost should be
+# re-measured before it is treated as settled.
+#
+# The fast lane stays on gpt-5.6-luna. `small_fast_model` must be pinned
+# explicitly: mothership's model_routing_env does `fast = small_fast_model or
+# model`, so pinning `model` alone would drag the background lane onto the main
+# model too.
+MAIN_MODEL = "xai/grok-4.6"
 FAST_MODEL = "gpt-5.6-luna"
 IDLE_TIMEOUT_SECONDS = 1800
 
 # --- Re-dispatch when the sandbox dies on a hard error ----------------------
 # One retry, on a DIFFERENT main model — the port of the resolve lane's
 # FND-641. Mothership's intra-group provider fallback already exists and fires
-# on a 429, but every provider in the `kimi-k3` group serves the SAME model, so
-# a same-model re-dispatch just re-hits the same model-level fault (observed on
-# resolve: the 429 fell through to Moonshot AI, which returned 400 "the message
-# at position 21 with role 'assistant' must not be empty" — same model, same
-# bug). Swapping the model is the whole point of the retry.
+# on a 429, but every provider in a model's group serves the SAME model, so a
+# same-model re-dispatch just re-hits the same model-level fault (observed on
+# resolve while the main lane was kimi-k3: the 429 fell through to Moonshot AI,
+# which returned 400 "the message at position 21 with role 'assistant' must not
+# be empty" — same model, same bug). Swapping the model is the whole point of
+# the retry.
 MAX_DISPATCH_ATTEMPTS = 2
+# Mothership names the sandbox after the `session_id` it is handed, and that
+# name is a DNS label: `worker /sandbox/create` answers HTTP 500
+# {"error":"Sandbox ID must be 1-63 characters long."} for anything longer.
+# That killed the retry on #3326 and, by arithmetic, every retry this lane had
+# ever authorised (FND-677): the base id the workflow builds was 62 chars, so
+# attempt 1 booted and attempt 2 — base + `-retry1` — was 69 and could not
+# create a sandbox at all. Both retry classes derive their id here, so both
+# were dead on arrival. The base id is now short enough that the ladder fits
+# untouched; this cap is the invariant that keeps it that way.
+SANDBOX_ID_MAX_CHARS = 63
+# Chars of sha256 spent identifying an id that had to be squeezed. 10 hex chars
+# is ~40 bits — collision-proof enough for one repo's review ids, and short
+# enough to leave the human-readable head intact.
+SANDBOX_ID_DIGEST_CHARS = 10
 # Attempt 2's main model: mothership's own DEFAULT_CLAUDE_MODEL, named
 # explicitly rather than by omitting `model` from the payload, so a test can
 # assert the two attempts actually differ and the retry does not silently
@@ -153,7 +209,7 @@ RETRYABLE_ERR_CODES = frozenset(
 # does carry information — "401 upstream auth failed" mentions upstream and is
 # nonetheless a permanent fault that would fail identically on any model.
 RETRYABLE_ERR_PATTERNS = (
-    "must not be empty",  # the kimi-k3 empty-assistant-turn fault
+    "must not be empty",  # the empty-assistant-turn fault (first seen on kimi-k3)
     "rate-limited",
     "rate limited",
     "overloaded",
@@ -164,6 +220,14 @@ UNINFORMATIVE_ERR_CODES = frozenset({"", "none", "unknown"})
 # Fails identically on any model, so never spend a second sandbox on it: the
 # sandbox wants interactive input, which GHA can never give.
 NEVER_RETRY_ERR_CODES = frozenset({"elicitation"})
+# Dispatch-level HTTP statuses live in their own `http_` codespace, kept apart
+# from the stream's provider codes on purpose: a provider 400 carried inside the
+# stream is worth a different model, while a 400 on the POST itself is a
+# malformed payload that fails identically on any model. Only 429 and 5xx mean
+# "the far side was transiently unable to accept the request".
+RETRYABLE_DISPATCH_HTTP_CODES = frozenset(
+    {"http_429", "http_500", "http_502", "http_503", "http_504"}
+)
 # The job caps at 130 min (`timeout-minutes: 130`) and the VPN steps eat a few
 # of those before dispatch starts, so budget this step at 110 min from its own
 # start. A retry is only worth booting with enough of that left to finish a
@@ -230,12 +294,40 @@ ORCHESTRATION.md Phase 0 step 7."""
 
 
 def attempt_model(attempt: int) -> str:
-    """Main model for this attempt — the swap that makes a retry worth booting."""
+    """Default main model for this attempt — the swap the hard-error retry needs.
+
+    Only a default: `retry_decision()` names the model for the attempt it
+    authorises, because the two retry classes differ on exactly this axis. A
+    same-model re-dispatch (the sandbox finished cleanly and said nothing) must
+    NOT be dragged onto RETRY_MAIN_MODEL — nothing about the model failed.
+    """
     return MAIN_MODEL if attempt <= 1 else RETRY_MAIN_MODEL
 
 
 def attempt_suffix(attempt: int) -> str:
     return "" if attempt <= 1 else f"-retry{attempt - 1}"
+
+
+def fit_sandbox_id(session_id: str) -> str:
+    """Squeeze `session_id` into mothership's sandbox-name budget.
+
+    Truncation alone would be a correctness bug, not a cosmetic one: every
+    part of the id that carries uniqueness (run id, run attempt, retry suffix)
+    sits at the END, and consecutive GitHub run ids share a long prefix — so a
+    head-truncated id could equal the previous run's, which is precisely the
+    resume-a-dead-conversation collision the attempt ladder exists to avoid.
+    Keep the legible head, and spend the last chars on a digest of the WHOLE
+    pre-truncation id so distinct inputs keep distinct outputs.
+
+    This is a backstop, not the fix: the workflow's base id leaves ~18 chars of
+    headroom under the cap, so a squeezed id means the format drifted (a test
+    asserts the real one still fits untouched).
+    """
+    if len(session_id) <= SANDBOX_ID_MAX_CHARS:
+        return session_id
+    digest = hashlib.sha256(session_id.encode()).hexdigest()[:SANDBOX_ID_DIGEST_CHARS]
+    head = session_id[: SANDBOX_ID_MAX_CHARS - SANDBOX_ID_DIGEST_CHARS - 1].rstrip("-")
+    return f"{head}-{digest}" if head else digest
 
 
 def attempt_session_id(session_id: str, attempt: int) -> str:
@@ -247,8 +339,12 @@ def attempt_session_id(session_id: str, attempt: int) -> str:
     conversation found with session" failure on #2987 and the zero-SSE death on
     #2989. `mothership_terminate_session.py` derives the same ids so a cancel
     still stops whichever attempt is live.
+
+    Every id the lane can send goes through here, so the sandbox-name budget is
+    enforced in one place — the dispatcher and the terminator cannot disagree
+    about what was actually booted.
     """
-    return f"{session_id}{attempt_suffix(attempt)}"
+    return fit_sandbox_id(f"{session_id}{attempt_suffix(attempt)}")
 
 
 def build_payload(
@@ -265,6 +361,7 @@ def build_payload(
     comment_id: str,
     gha_run_url: str,
     attempt: int = 1,
+    model: str | None = None,
     max_timeout_seconds: int = STREAM_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """The /api/sandbox/execute body.
@@ -272,10 +369,11 @@ def build_payload(
     `base_branch` is the PR's HEAD ref, not `main`: the sandbox clones the repo
     at the ref it is given, and a review has to read the code under review.
 
-    `attempt` > 1 is a re-dispatch after the previous sandbox died on a hard
-    error: same prompt (review is stateless — the orchestration re-reads live
-    PR state, and a prior review on the PR is handled by its delta logic),
-    different main model, and a fresh session id.
+    `attempt` > 1 is a re-dispatch: same prompt (review is stateless — the
+    orchestration re-reads live PR state, and a prior review on the PR is
+    handled by its delta logic) and a fresh session id. `model` defaults to
+    `attempt_model(attempt)`; the caller passes it explicitly so the same-model
+    retry class can keep attempt 2 on MAIN_MODEL.
     """
     return {
         "mode": "direct",
@@ -287,7 +385,7 @@ def build_payload(
         "base_branch": head_ref,
         "snapshot": "_base",
         "ai_gateway_key_name": "sdk_review",
-        "model": attempt_model(attempt),
+        "model": model or attempt_model(attempt),
         "small_fast_model": FAST_MODEL,
         "env_vars": {"CLAUDE_CODE_SUBAGENT_MODEL": FAST_MODEL},
         "prompt": build_prompt(
@@ -625,6 +723,19 @@ class Attempt(NamedTuple):
     state: SSEState
 
 
+class RetryPlan(NamedTuple):
+    """Whether to re-dispatch, why, and which main model attempt N+1 runs.
+
+    `model` is empty when `retry` is False. It cannot be derived from the
+    attempt number alone: the two retry classes differ on exactly that axis — a
+    dead sandbox needs a DIFFERENT model, a silent one needs the SAME one.
+    """
+
+    retry: bool
+    reason: str
+    model: str = ""
+
+
 def sandbox_terminated_abnormally(st: SSEState) -> bool:
     """True when the sandbox itself died, as opposed to our stream being cut.
 
@@ -645,6 +756,10 @@ def is_retryable_fault(st: SSEState) -> bool:
     known code would classify "401 upstream auth failed" as retryable and buy a
     second sandbox that fails identically.
     """
+    if st.err_code.startswith("http_"):
+        # Self-deciding codespace: a dispatch-level HTTP status never falls
+        # through to the message-pattern ladder below.
+        return st.err_code in RETRYABLE_DISPATCH_HTTP_CODES
     if st.err_code in NEVER_RETRY_ERR_CODES:
         return False
     if st.err_code in RETRYABLE_ERR_CODES:
@@ -654,41 +769,84 @@ def is_retryable_fault(st: SSEState) -> bool:
     return any(p in st.err_msg.lower() for p in RETRYABLE_ERR_PATTERNS)
 
 
-def retry_decision(st: SSEState, attempt: int, seconds_left: float) -> tuple[bool, str]:
-    """Whether to re-dispatch after this attempt, and the reason either way.
+def sandbox_completed_cleanly(st: SSEState) -> bool:
+    """True when the sandbox reported the terminal `complete` event, happily.
 
-    Called only once the verdict check has come back empty, so "the sandbox is
-    dead and delivered nothing" is already established. The reason is logged
-    verbatim so a run that did NOT retry says why — the part that is otherwise
-    invisible.
+    Paired with a confirmed-empty verdict this is the silent-review defect: a
+    full review streams to the log, bills a real cost, ends
+    `[complete] status=completed`, and nothing reaches the PR (run
+    32310634558 on #3276). `sdk_review_verdict_gate.py` reds it correctly one
+    step later, but nothing retried it, so the review was simply lost.
     """
-    if attempt >= MAX_DISPATCH_ATTEMPTS:
-        return False, f"already used all {MAX_DISPATCH_ATTEMPTS} attempts"
+    return st.completed and st.status == "completed" and not st.errored
+
+
+def _retry_class(st: SSEState, attempt: int) -> RetryPlan:
+    """Which retry class this ending falls into, if either, and on which model.
+
+    Called only once the verdict check has come back CONFIRMED empty, so
+    "nothing was delivered" is already established for every branch below.
+    """
+    if sandbox_completed_cleanly(st):
+        # Ranked above the cut-stream guard deliberately: `complete` IS the
+        # terminal event, so the sandbox is provably finished and will post
+        # nothing further even if our socket then died on the way out. And
+        # nothing about the MODEL failed here — the turn ended early — so the
+        # swap axis is irrelevant and attempt 2 re-runs the same one.
+        same = attempt_model(attempt)
+        return RetryPlan(
+            True,
+            "the sandbox reached status=completed and posted no verdict — the "
+            f"turn ended early, so re-dispatching on the same model ({same}) "
+            f"(attempt {attempt + 1} of {MAX_DISPATCH_ATTEMPTS})",
+            same,
+        )
     if st.stream_error:
-        return False, (
+        return RetryPlan(
+            False,
             "our stream died rather than the sandbox — it is probably still "
-            "reviewing, and a re-dispatch would post a second summary"
+            "reviewing, and a re-dispatch would post a second summary",
         )
     if not sandbox_terminated_abnormally(st):
-        return False, (
+        return RetryPlan(
+            False,
             "the stream ended without a hard error — the sandbox may still be "
-            "running, and a re-dispatch would double-review the PR"
+            "running, and a re-dispatch would double-review the PR",
         )
     if not is_retryable_fault(st):
-        return False, (
+        return RetryPlan(
+            False,
             f"code={st.err_code or 'none'} is not a known model/provider fault, "
-            "so a different model would fail the same way"
+            "so a different model would fail the same way",
         )
-    if seconds_left < RETRY_MIN_REMAINING_SECONDS:
-        return False, (
-            f"only {int(seconds_left)}s of the job budget remain, below the "
-            f"{RETRY_MIN_REMAINING_SECONDS}s a retry needs to deliver a review"
-        )
-    return True, (
+    return RetryPlan(
+        True,
         f"code={st.err_code or 'none'} looks like a model/provider fault — "
         f"re-dispatching on {RETRY_MAIN_MODEL} (attempt {attempt + 1} of "
-        f"{MAX_DISPATCH_ATTEMPTS})"
+        f"{MAX_DISPATCH_ATTEMPTS})",
+        RETRY_MAIN_MODEL,
     )
+
+
+def retry_decision(st: SSEState, attempt: int, seconds_left: float) -> RetryPlan:
+    """Whether to re-dispatch after this attempt, on what, and why either way.
+
+    The reason is logged verbatim so a run that did NOT retry says why — the
+    part that is otherwise invisible. The attempt cap and the wall-clock floor
+    bound BOTH classes; only the classification in `_retry_class` differs.
+    """
+    if attempt >= MAX_DISPATCH_ATTEMPTS:
+        return RetryPlan(False, f"already used all {MAX_DISPATCH_ATTEMPTS} attempts")
+    plan = _retry_class(st, attempt)
+    if not plan.retry:
+        return plan
+    if seconds_left < RETRY_MIN_REMAINING_SECONDS:
+        return RetryPlan(
+            False,
+            f"only {int(seconds_left)}s of the job budget remain, below the "
+            f"{RETRY_MIN_REMAINING_SECONDS}s a retry needs to deliver a review",
+        )
+    return plan
 
 
 def total_cost(attempts: Sequence[Attempt]) -> str:
@@ -947,6 +1105,41 @@ def check_verdict_posted(
     return False
 
 
+def check_verdict_posted_confirmed(
+    since: str,
+    repo: str,
+    dedupe: Callable[[], int] = _dedupe_main,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> bool:
+    """`check_verdict_posted`, with a zero re-read before it is believed.
+
+    The comment listing is not read-after-write consistent — a summary written
+    seconds ago can be missing from the next GET — and a single unconfirmed
+    zero is now load-bearing twice over: it authorises a re-dispatch (which on
+    a PR whose verdict DID land would post a second summary) as well as the
+    hard-failure path.
+
+    `RECHECK_ATTEMPTS` / `RECHECK_DELAY_S` are imported from
+    `sdk_review_verdict_gate`, which reads the same comments one step later for
+    the same reason. Two copies of the threshold would drift, and this step
+    deciding "empty" while the gate decides "delivered" is precisely the
+    contradiction the shared constant prevents. The 20s is spent only on a run
+    that is already failing or about to retry.
+    """
+    for attempt in range(1, RECHECK_ATTEMPTS + 1):
+        if check_verdict_posted(since, repo, dedupe):
+            return True
+        if attempt < RECHECK_ATTEMPTS:
+            print(
+                f"No SDK_REVIEW summary attributed to this run (attempt "
+                f"{attempt}/{RECHECK_ATTEMPTS}) — re-reading in "
+                f"{RECHECK_DELAY_S:.0f}s in case the listing has not caught up.",
+                flush=True,
+            )
+            sleeper(RECHECK_DELAY_S)
+    return False
+
+
 # --- transport -------------------------------------------------------------
 
 
@@ -1013,6 +1206,32 @@ def dispatch_once(
                 st,
                 deadline,
             )
+    except urllib.error.HTTPError as e:
+        # Ordering matters: HTTPError is itself a URLError subclass, and
+        # URLError is one of STREAM_TRANSPORT_ERRORS below - this clause MUST
+        # come first or a dispatch-level HTTP status lands on `stream_error`
+        # and `_retry_class` bails with "our stream died rather than the
+        # sandbox", which is the bug this closes (run 32347771368 got a 504 on
+        # the POST and never retried, never polled, delivered nothing).
+        #
+        # `st.errored = True` with `st.stream_error` left EMPTY is deliberate:
+        # an HTTP status means the far side answered and no sandbox was ever
+        # started, so `_retry_class` should reach the abnormal-termination /
+        # `is_retryable_fault` branches, not the stream-death one.
+        try:
+            # Narrow on purpose: a body read can fail on a half-open socket
+            # (OSError), a premature close (http.client.HTTPException), or a
+            # response whose `fp` was already consumed/absent (AttributeError,
+            # ValueError). None of those may be allowed to mask the HTTP status
+            # we came here to record.
+            body = e.read().decode("utf-8", "replace")
+        except (OSError, http.client.HTTPException, AttributeError, ValueError):
+            body = str(e.reason)
+        body = body[:500]
+        print(f"::error::Sandbox dispatch rejected with HTTP {e.code}: {body}")
+        st.errored = True
+        st.err_code = f"http_{e.code}"
+        st.err_msg = f"HTTP {e.code} on dispatch POST: {body}"
     except STREAM_TRANSPORT_ERRORS as e:
         # NOT `errored`: this is OUR connection dying, not the sandbox. The
         # shell saw the same class of failure as curl diagnostics on stdout and
@@ -1050,11 +1269,15 @@ def main() -> int:
     run_start = time.monotonic()
     attempts: list[Attempt] = []
     attempt = 1
+    # Named by the previous attempt's RetryPlan; empty on the first pass. The
+    # model is NOT a function of the attempt number — see RetryPlan.
+    next_model = ""
     while True:
         # Clamp the sandbox's own cap to what is left of this step's budget.
         # Cancelling the job does not stop the sandbox, so an unclamped retry
         # started late would keep billing for up to 2h after the runner dies.
         seconds_left = DISPATCH_BUDGET_SECONDS - (time.monotonic() - run_start)
+        model = next_model or attempt_model(attempt)
         payload = build_payload(
             session_id=os.environ["SESSION_ID"],
             pr_number=pr_number,
@@ -1068,9 +1291,9 @@ def main() -> int:
             comment_id=os.environ.get("COMMENT_ID", ""),
             gha_run_url=gha_run_url,
             attempt=attempt,
+            model=model,
             max_timeout_seconds=max(1, min(STREAM_TIMEOUT_SECONDS, int(seconds_left))),
         )
-        model = attempt_model(attempt)
         print(f"[attempt {attempt}/{MAX_DISPATCH_ATTEMPTS}] dispatching on {model}")
         st = dispatch_once(base_url, token, payload, pr_number, gha_run_url)
         attempts.append(Attempt(attempt, model, st))
@@ -1087,24 +1310,30 @@ def main() -> int:
         # one would post a second summary on the same PR. This is the review
         # lane's equivalent of the resolve lane's out-of-band poll — cheaper,
         # because the reviewer's hand-off IS a PR comment we already read.
-        verdict_posted = check_verdict_posted(since, repo)
+        verdict_posted = check_verdict_posted_confirmed(since, repo)
         code, messages = decide_exit(st, verdict_posted, pr_number)
-        if code == 0:
+        if code == 0 and verdict_posted:
             break
 
-        should_retry, reason = retry_decision(
+        # A clean `complete` with no verdict exits 0 here — `decide_exit` has
+        # nothing to fault — so the retry decision has to be reached on the
+        # green path too, or the silent-review class could never fire. When it
+        # declines, the outcome is exactly what it was before: exit 0, and
+        # `sdk_review_verdict_gate.py` reds the run one step later.
+        plan = retry_decision(
             st, attempt, DISPATCH_BUDGET_SECONDS - (time.monotonic() - run_start)
         )
-        if not should_retry:
-            print(f"::warning::Not re-dispatching: {reason}")
+        if not plan.retry:
+            print(f"::warning::Not re-dispatching: {plan.reason}")
             break
-        print(f"::warning::Re-dispatching after a dead sandbox: {reason}")
+        print(f"::warning::Re-dispatching on {plan.model}: {plan.reason}")
+        next_model = plan.model
         attempt += 1
 
     if code != 0 and len(attempts) > 1:
         messages[-1] += (
-            f" (retried on {attempt_model(len(attempts))} after "
-            f"{attempt_model(1)} died; both attempts failed)"
+            f" (retried on {attempts[-1].model} after {attempts[0].model}; "
+            "both attempts failed)"
         )
 
     # Export the outputs before printing the decision — the failure paths we

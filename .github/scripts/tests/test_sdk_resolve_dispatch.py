@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+import urllib.error
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -58,7 +59,7 @@ def test_payload_pins_all_three_model_lanes():
     # mothership's Claude defaults (main -> claude-opus-5, sub-agent ->
     # claude-sonnet-5), and `small_fast_model` unset resolves to `model`.
     p = sr.build_payload("1", "u", 8, "2026-07-08", "reviewer-one", "requester-login")
-    assert p["model"] == "kimi-k3"
+    assert p["model"] == "xai/grok-4.6"
     assert p["small_fast_model"] == "gpt-5.6-luna"
     assert p["env_vars"]["CLAUDE_CODE_SUBAGENT_MODEL"] == "gpt-5.6-luna"
     # Every pinned value must survive JSON encoding as a non-blank string —
@@ -278,7 +279,7 @@ def test_no_complete_but_phase4_summary_soft_completes():
     fragments = [
         line
         for chunk in _SUMMARY_BLOCK.splitlines(keepends=True)
-        for line in ("event: response", f'data: {json.dumps({"text": chunk})}')
+        for line in ("event: response", f"data: {json.dumps({'text': chunk})}")
     ]
     st = _stream(*fragments)
     assert not st.completed
@@ -344,7 +345,7 @@ def test_mine_summary_from_delta_response():
     fragments = [
         line
         for chunk in _SUMMARY_BLOCK.splitlines(keepends=True)
-        for line in ("event: response", f'data: {json.dumps({"text": chunk})}')
+        for line in ("event: response", f"data: {json.dumps({'text': chunk})}")
     ]
     st = _stream(*fragments)
     got = sr.mine_summary(st)
@@ -741,6 +742,98 @@ def test_retry_decision_refuses_when_the_job_budget_is_nearly_gone():
 def test_attempt_model_swaps_on_the_second_attempt():
     assert sr.attempt_model(1) == sr.MAIN_MODEL
     assert sr.attempt_model(2) == sr.RETRY_MAIN_MODEL
+
+
+# ---------------------------------------------------------------------------
+# dispatch-level HTTP status vs stream-transport error (FND-660 follow-up)
+# ---------------------------------------------------------------------------
+
+
+def _raising_opener(exc):
+    def opener(req, timeout=0):
+        raise exc
+
+    return opener
+
+
+def test_an_http_status_on_the_post_is_not_a_stream_error():
+    # Regression for run 32347771368: mothership answered the dispatch POST
+    # with a 504, and because HTTPError is a URLError subclass it was caught
+    # by the stream-error clause and logged "code=stream_error is not a known
+    # model/provider fault" — no retry, no out-of-band poll, zero work done.
+    exc = urllib.error.HTTPError(
+        "http://m/api/sandbox/execute", 504, "Gateway Time-out", {}, None
+    )
+    st = sr.dispatch_once("http://m", "tok", {}, opener=_raising_opener(exc))
+    assert st.err_code == "http_504"
+    assert st.errored is True
+    ok, reason = sr.retry_decision(st, 1, sr.DISPATCH_BUDGET_SECONDS)
+    assert ok is True
+    assert sr.RETRY_MAIN_MODEL in reason
+
+
+def test_a_permanent_http_status_still_does_not_retry():
+    for code, reason_phrase in ((401, "Unauthorized"), (400, "Bad Request")):
+        exc = urllib.error.HTTPError(
+            "http://m/api/sandbox/execute", code, reason_phrase, {}, None
+        )
+        st = sr.dispatch_once("http://m", "tok", {}, opener=_raising_opener(exc))
+        assert st.err_code == f"http_{code}"
+        # The 400 case is the important one: "400" sits in RETRYABLE_ERR_CODES
+        # for a provider fault carried inside the stream, and must NOT rescue
+        # a dispatch-level 400 — a malformed payload fails identically on any
+        # model, so the http_ codespace must stay separate from that one.
+        assert sr.is_retryable_fault(st) is False, code
+
+
+def test_a_genuine_transport_drop_is_still_never_retried():
+    # Guards the fix from over-reaching: a plain URLError (not an HTTPError)
+    # must still land on the never-retried stream_error path.
+    exc = urllib.error.URLError("timed out")
+    st = sr.dispatch_once("http://m", "tok", {}, opener=_raising_opener(exc))
+    assert st.err_code == "stream_error"
+    assert sr.is_retryable_fault(st) is False
+
+
+def test_the_http_error_body_reaches_the_error_message():
+    body = b"Invalid model name passed in model=xai/grok-4.6" + b"x" * 600
+
+    class _FakeFp:
+        def read(self):
+            return body
+
+        def close(self):
+            pass
+
+    exc = urllib.error.HTTPError(
+        "http://m/api/sandbox/execute", 400, "Bad Request", {}, _FakeFp()
+    )
+    st = sr.dispatch_once("http://m", "tok", {}, opener=_raising_opener(exc))
+    assert "Invalid model name" in st.err_msg
+    assert len(st.err_msg) < len(body.decode()) + 100  # truncated, not dumped whole
+
+    # e.read() itself raising must not escape dispatch_once.
+    class _BrokenFp:
+        def read(self):
+            raise OSError("already consumed")
+
+        def close(self):
+            pass
+
+    exc2 = urllib.error.HTTPError(
+        "http://m/api/sandbox/execute", 502, "Bad Gateway", {}, _BrokenFp()
+    )
+    st2 = sr.dispatch_once("http://m", "tok", {}, opener=_raising_opener(exc2))
+    assert st2.err_code == "http_502"
+
+
+def test_main_model_is_not_an_openrouter_style_id():
+    # Weak guard, deliberately: CI has no LiteLLM key, so the real check
+    # (GET /v1/models on llmproxy.atlan.dev) cannot run here. This only catches
+    # the specific `x-ai/` vs `xai/` prefix confusion that broke FND-660 —
+    # `x-ai/grok-4.6` is the OpenRouter-style id and this proxy rejects it.
+    assert "x-ai/" not in sr.MAIN_MODEL
+    assert "x-ai/" not in sr.FAST_MODEL
 
 
 def test_total_cost_sums_attempts_and_skips_unreported_ones():

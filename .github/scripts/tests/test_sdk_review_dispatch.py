@@ -16,6 +16,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import re
 import sys
 import urllib.error
 from pathlib import Path
@@ -27,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import mothership_terminate_session as mts  # noqa: E402  (sys.path bootstrap)
 import sdk_review_dispatch as sd  # noqa: E402  (needs the sys.path bootstrap)
+import sdk_review_verdict_gate as vg  # noqa: E402  (sys.path bootstrap)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW = REPO_ROOT / ".github/workflows/sdk-review.yml"
@@ -53,7 +55,7 @@ def _frame(inner: dict) -> str:
 
 def _payload(**overrides):
     kwargs = dict(
-        session_id="sdk-review-atlanhq-application-sdk-42-0cab6b6e-99-1",
+        session_id="sdk-review-42-0cab6b6e-99-1",
         pr_number="42",
         pr_url="https://github.com/atlanhq/application-sdk/pull/42",
         repo="atlanhq/application-sdk",
@@ -93,7 +95,7 @@ def test_payload_pins_all_three_model_lanes():
     # Leaving any lane unset silently falls back to mothership's Claude
     # defaults, and `small_fast_model` unset resolves to `model`.
     p = _payload()
-    assert p["model"] == "kimi-k3"
+    assert p["model"] == "xai/grok-4.6"
     assert p["small_fast_model"] == "gpt-5.6-luna"
     assert p["env_vars"]["CLAUDE_CODE_SUBAGENT_MODEL"] == "gpt-5.6-luna"
     encoded = json.loads(json.dumps(p))
@@ -613,6 +615,110 @@ def test_a_stream_that_completes_inside_the_cap_is_untouched():
 
 
 # ---------------------------------------------------------------------------
+# dispatch-level HTTP status vs stream-transport error (FND-660 follow-up)
+# ---------------------------------------------------------------------------
+
+
+def _raising_opener(exc):
+    def opener(req, timeout=None):
+        raise exc
+
+    return opener
+
+
+def test_an_http_status_on_the_post_is_not_a_stream_error():
+    # Regression for run 32347771368: mothership answered the dispatch POST
+    # with a 504, which is a URLError subclass and used to land in
+    # STREAM_TRANSPORT_ERRORS — leaving `st.stream_error` set, which makes
+    # `_retry_class` bail with "our stream died rather than the sandbox".
+    exc = urllib.error.HTTPError(
+        "http://m/api/sandbox/execute", 504, "Gateway Time-out", {}, None
+    )
+    st = sd.dispatch_once(
+        "http://m", "tok", _payload(), "42", "u", _raising_opener(exc)
+    )
+    assert st.err_code == "http_504"
+    assert st.errored is True
+    assert st.stream_error == ""
+    plan = sd._retry_class(st, 1)
+    assert plan.retry is True
+
+
+def test_a_permanent_http_status_still_does_not_retry():
+    for code, reason_phrase in ((401, "Unauthorized"), (400, "Bad Request")):
+        exc = urllib.error.HTTPError(
+            "http://m/api/sandbox/execute", code, reason_phrase, {}, None
+        )
+        st = sd.dispatch_once(
+            "http://m", "tok", _payload(), "42", "u", _raising_opener(exc)
+        )
+        assert st.err_code == f"http_{code}"
+        # The 400 case matters most: "400" sits in RETRYABLE_ERR_CODES for a
+        # provider fault carried inside the stream, and must not rescue a
+        # dispatch-level 400 — a malformed payload fails identically on any
+        # model, so the http_ codespace has to stay separate from that one.
+        assert sd.is_retryable_fault(st) is False, code
+
+
+def test_a_genuine_transport_drop_is_still_never_retried():
+    # Guards the fix from over-reaching: a plain URLError (not an HTTPError)
+    # must still land on the stream-error path and still never retry.
+    exc = urllib.error.URLError("timed out")
+    st = sd.dispatch_once(
+        "http://m", "tok", _payload(), "42", "u", _raising_opener(exc)
+    )
+    assert st.stream_error
+    assert st.errored is False
+    plan = sd._retry_class(st, 1)
+    assert plan.retry is False
+
+
+def test_the_http_error_body_reaches_the_error_message():
+    body = b"Invalid model name passed in model=xai/grok-4.6" + b"x" * 600
+
+    class _FakeFp:
+        def read(self):
+            return body
+
+        def close(self):
+            pass
+
+    exc = urllib.error.HTTPError(
+        "http://m/api/sandbox/execute", 400, "Bad Request", {}, _FakeFp()
+    )
+    st = sd.dispatch_once(
+        "http://m", "tok", _payload(), "42", "u", _raising_opener(exc)
+    )
+    assert "Invalid model name" in st.err_msg
+    assert len(st.err_msg) < len(body.decode()) + 100  # truncated, not dumped whole
+
+    # e.read() itself raising must not escape dispatch_once.
+    class _BrokenFp:
+        def read(self):
+            raise OSError("already consumed")
+
+        def close(self):
+            pass
+
+    exc2 = urllib.error.HTTPError(
+        "http://m/api/sandbox/execute", 502, "Bad Gateway", {}, _BrokenFp()
+    )
+    st2 = sd.dispatch_once(
+        "http://m", "tok", _payload(), "42", "u", _raising_opener(exc2)
+    )
+    assert st2.err_code == "http_502"
+
+
+def test_main_model_is_not_an_openrouter_style_id():
+    # Weak guard, deliberately: CI has no LiteLLM key, so the real check
+    # (GET /v1/models on llmproxy.atlan.dev) cannot run here. This only catches
+    # the specific `x-ai/` vs `xai/` prefix confusion that broke FND-660 —
+    # `x-ai/grok-4.6` is the OpenRouter-style id and this proxy rejects it.
+    assert "x-ai/" not in sd.MAIN_MODEL
+    assert "x-ai/" not in sd.FAST_MODEL
+
+
+# ---------------------------------------------------------------------------
 # verdict lookup
 # ---------------------------------------------------------------------------
 
@@ -742,6 +848,116 @@ def test_the_session_id_comes_from_the_step_the_terminator_also_reads():
 
 
 # ---------------------------------------------------------------------------
+# the sandbox-name budget (FND-677)
+# ---------------------------------------------------------------------------
+
+# Worst case, deliberately past anything GitHub has handed this repo: 6-digit
+# PR numbers, a 13-digit run id (they are 11 today), and a 2-digit run attempt.
+# The budget has to survive growth, not just today's values.
+WORST_CASE_SESSION_VARS = {
+    "PR_NUMBER": "999999",
+    "HEAD_SHA_SHORT": "0cab6b6e",
+    "RUN_ID": "9999999999999",
+    "RUN_ATTEMPT": "99",
+}
+
+
+def session_step() -> dict:
+    steps = yaml.safe_load(WORKFLOW.read_text())["jobs"]["sdk-review-dispatch"]["steps"]
+    for step in steps:
+        if step.get("id") == "session":
+            return step
+    raise AssertionError("no `session` step in sdk-review-dispatch")
+
+
+def worst_case_base_session_id() -> str:
+    """The id the workflow would emit for the worst-case inputs.
+
+    Read out of the YAML rather than restated here: a test that hardcodes the
+    format cannot fail when the format is what drifts.
+    """
+    step = session_step()
+    template = re.search(r'session_id=(\S+)" >> "\$GITHUB_OUTPUT"', step["run"])
+    assert template, f"no session_id assignment in the `session` step: {step['run']!r}"
+    fmt = template.group(1)
+    referenced = set(re.findall(r"\$\{(\w+)", fmt))
+    assert referenced == set(WORST_CASE_SESSION_VARS), (
+        "the session id format changed which variables it interpolates — "
+        f"{referenced} vs {set(WORST_CASE_SESSION_VARS)}; re-check the budget "
+        "before updating this list"
+    )
+    for name, value in WORST_CASE_SESSION_VARS.items():
+        assert name in step["env"], f"session step no longer supplies {name}"
+        fmt = fmt.replace(f"${{{name}}}", value)
+    assert "$" not in fmt, f"unsubstituted shell in {fmt!r}"
+    return fmt
+
+
+def test_every_id_in_the_ladder_fits_the_sandbox_name_untruncated():
+    """The bug that made every re-dispatch unbootable, asserted at the source.
+
+    Mothership names the sandbox after the session id and rejects anything over
+    63 chars, so the base id has to leave room for the LONGEST suffix the ladder
+    can append — not merely fit on its own. It used to carry the repo name,
+    which put the base at 62 and `-retry1` at 69: attempt 1 booted and every
+    retry died on `/sandbox/create`.
+
+    Asserting equality, not just length, is the point: a `len() <= 63` check
+    would pass just as happily on an id `fit_sandbox_id()` had silently
+    replaced with a digest, which is a backstop and not a state to ship in.
+    """
+    base = worst_case_base_session_id()
+    for attempt in range(1, sd.MAX_DISPATCH_ATTEMPTS + 1):
+        expected = f"{base}{sd.attempt_suffix(attempt)}"
+        assert len(expected) <= sd.SANDBOX_ID_MAX_CHARS, (
+            f"attempt {attempt} id is {len(expected)} chars, over mothership's "
+            f"{sd.SANDBOX_ID_MAX_CHARS}-char sandbox name: {expected}"
+        )
+        assert sd.attempt_session_id(base, attempt) == expected
+
+
+def test_a_short_id_is_handed_through_unchanged():
+    """The cap must be invisible in the normal case — including to the
+    terminator, which reconstructs ids the dispatcher already sent."""
+    assert sd.fit_sandbox_id("sdk-review-42-0cab6b6e-99-1") == (
+        "sdk-review-42-0cab6b6e-99-1"
+    )
+    assert sd.attempt_session_id("base-id", 2) == "base-id-retry1"
+
+
+def test_a_squeezed_id_stays_inside_the_budget_and_keeps_its_head():
+    over = "sdk-review-" + "x" * 80
+    fitted = sd.fit_sandbox_id(over)
+    assert len(fitted) == sd.SANDBOX_ID_MAX_CHARS
+    assert fitted.startswith("sdk-review-")
+    # A DNS label: lowercase alphanumerics and dashes, starting and ending on a
+    # character mothership will accept.
+    assert re.fullmatch(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?", fitted)
+
+
+def test_squeezing_keeps_the_uniqueness_that_lives_in_the_tail():
+    """Plain truncation would resurrect the collision the ladder exists to stop.
+
+    Consecutive GitHub run ids share a long prefix and the attempt/retry
+    markers sit at the very end, so an id cut to length would make two distinct
+    runs — and the two attempts of one run — ask mothership to RESUME the same
+    session. The digest is taken over the whole pre-truncation id, so the parts
+    that fall off still change the result.
+    """
+    long_base = "sdk-review-999999-0cab6b6e-" + "9" * 40
+    neighbours = [f"{long_base}1-1", f"{long_base}2-1", f"{long_base}1-2"]
+    fitted = [sd.fit_sandbox_id(n) for n in neighbours]
+    assert len(set(fitted)) == len(neighbours)
+
+    ladder = [
+        sd.attempt_session_id(f"{long_base}1-1", attempt)
+        for attempt in range(1, sd.MAX_DISPATCH_ATTEMPTS + 1)
+    ]
+    assert len(set(ladder)) == sd.MAX_DISPATCH_ATTEMPTS
+    assert all(len(sid) <= sd.SANDBOX_ID_MAX_CHARS for sid in ladder)
+
+
+# ---------------------------------------------------------------------------
 # re-dispatch on a model swap (the FND-641 port)
 # ---------------------------------------------------------------------------
 
@@ -753,7 +969,7 @@ def _errored(code: str = "429", msg: str = "rate limited") -> sd.SSEState:
 def test_the_retry_runs_a_different_main_model():
     """A same-model re-dispatch re-hits the same model-level fault.
 
-    Every provider in the `kimi-k3` group serves the same model, so mothership's
+    Every provider in a model's group serves the same model, so mothership's
     own intra-group fallback cannot help. Swapping the model is the whole point.
     """
     assert sd.attempt_model(1) == sd.MAIN_MODEL
@@ -831,9 +1047,10 @@ def test_a_known_code_is_never_overridden_by_the_message_patterns():
 
 
 def test_retry_fires_on_a_dead_sandbox_with_a_retryable_code():
-    should, reason = sd.retry_decision(_errored("429"), 1, 6000)
-    assert should is True
-    assert sd.RETRY_MAIN_MODEL in reason and "attempt 2 of 2" in reason
+    plan = sd.retry_decision(_errored("429"), 1, 6000)
+    assert plan.retry is True
+    assert plan.model == sd.RETRY_MAIN_MODEL
+    assert sd.RETRY_MAIN_MODEL in plan.reason and "attempt 2 of 2" in plan.reason
 
 
 def test_retry_fires_when_complete_carries_status_error():
@@ -843,12 +1060,12 @@ def test_retry_fires_when_complete_carries_status_error():
         )
     )
     assert sd.sandbox_terminated_abnormally(st) is True
-    assert sd.retry_decision(st, 1, 6000)[0] is True
+    assert sd.retry_decision(st, 1, 6000).retry is True
 
 
 def test_only_one_retry_is_ever_spent():
-    should, reason = sd.retry_decision(_errored("429"), 2, 6000)
-    assert should is False and "all 2 attempts" in reason
+    plan = sd.retry_decision(_errored("429"), 2, 6000)
+    assert plan.retry is False and "all 2 attempts" in plan.reason
     assert sd.MAX_DISPATCH_ATTEMPTS == 2
 
 
@@ -856,26 +1073,26 @@ def test_a_cut_stream_never_retries_because_the_reviewer_may_still_be_working():
     """A second reviewer would post a second summary on the same PR."""
     st = _stream(*_event("started", {"session_id": "s"}))
     st.stream_error = "read timed out"
-    should, reason = sd.retry_decision(st, 1, 6000)
-    assert should is False and "post a second summary" in reason
+    plan = sd.retry_decision(st, 1, 6000)
+    assert plan.retry is False and "post a second summary" in plan.reason
 
 
 def test_a_clean_eof_without_complete_never_retries():
     st = _stream(*_event("started", {"session_id": "s"}))
-    should, reason = sd.retry_decision(st, 1, 6000)
-    assert should is False and "may still be running" in reason
+    plan = sd.retry_decision(st, 1, 6000)
+    assert plan.retry is False and "may still be running" in plan.reason
 
 
 def test_an_unrecognised_cause_stays_fail_fast():
-    should, reason = sd.retry_decision(_errored("401", "auth"), 1, 6000)
-    assert should is False and "not a known model/provider fault" in reason
+    plan = sd.retry_decision(_errored("401", "auth"), 1, 6000)
+    assert plan.retry is False and "not a known model/provider fault" in plan.reason
 
 
 def test_a_retry_is_refused_below_the_wall_clock_floor():
     """Below the floor a second sandbox would be killed mid-review."""
-    should, reason = sd.retry_decision(_errored("429"), 1, 600)
-    assert should is False and "600s of the job budget remain" in reason
-    assert sd.retry_decision(_errored("429"), 1, sd.RETRY_MIN_REMAINING_SECONDS)[0]
+    plan = sd.retry_decision(_errored("429"), 1, 600)
+    assert plan.retry is False and "600s of the job budget remain" in plan.reason
+    assert sd.retry_decision(_errored("429"), 1, sd.RETRY_MIN_REMAINING_SECONDS).retry
 
 
 def test_every_refusal_says_why():
@@ -885,9 +1102,157 @@ def test_every_refusal_says_why():
         (_errored("401"), 1, 6000),
         (_errored("429"), 1, 10),
         (_stream(*_event("started", {})), 1, 6000),
+        (_completed("0.83"), 2, 6000),
+        (_completed("0.83"), 1, 10),
     ):
-        should, reason = sd.retry_decision(st, attempt, left)
-        assert should is False and reason.strip()
+        plan = sd.retry_decision(st, attempt, left)
+        assert plan.retry is False and plan.reason.strip()
+
+
+# ---------------------------------------------------------------------------
+# re-dispatch on the SAME model when a clean sandbox delivers no verdict
+# (FND-645)
+# ---------------------------------------------------------------------------
+
+
+def test_a_clean_completed_sandbox_that_said_nothing_retries_on_the_same_model():
+    """`complete` IS the terminal event, so the sandbox is provably finished.
+
+    Nothing about the model failed — the turn ended early — so dragging in
+    RETRY_MAIN_MODEL would spend the expensive lane on a fault it cannot fix.
+    """
+    st = _completed("3.307718")
+    assert sd.sandbox_completed_cleanly(st) is True
+    assert sd.sandbox_terminated_abnormally(st) is False  # why it never retried
+
+    plan = sd.retry_decision(st, 1, 6000)
+    assert plan.retry is True
+    assert plan.model == sd.MAIN_MODEL != sd.RETRY_MAIN_MODEL
+    assert "posted no verdict" in plan.reason and "same model" in plan.reason
+
+
+def test_the_same_model_retry_still_honours_the_shared_retry_bounds():
+    """Constraint: an extra entry condition only — the knobs do not move."""
+    st = _completed("1.0")
+    assert sd.retry_decision(st, sd.MAX_DISPATCH_ATTEMPTS, 6000).retry is False
+    assert sd.retry_decision(st, 1, sd.RETRY_MIN_REMAINING_SECONDS - 1).retry is False
+    assert sd.retry_decision(st, 1, sd.RETRY_MIN_REMAINING_SECONDS).retry is True
+
+
+def test_a_complete_carrying_a_non_completed_status_is_not_the_clean_class():
+    """That is a dead sandbox — the model-swap class owns it."""
+    st = _stream(
+        *_event(
+            "complete", {"status": "error", "error": {"code": "500", "message": ""}}
+        )
+    )
+    assert sd.sandbox_completed_cleanly(st) is False
+    assert sd.retry_decision(st, 1, 6000).model == sd.RETRY_MAIN_MODEL
+
+
+def test_a_terminal_complete_outranks_a_socket_death_on_the_way_out():
+    """The sandbox already said it was finished; a late transport error cannot
+    make it live again, so this is still the silent-review class."""
+    st = _completed("0.83")
+    st.stream_error = "connection reset by peer"
+    plan = sd.retry_decision(st, 1, 6000)
+    assert plan.retry is True and plan.model == sd.MAIN_MODEL
+
+
+def test_the_same_model_retry_keeps_every_other_dispatch_axis(
+    dispatch_env, monkeypatch
+):
+    """Fresh session id, own source_id, recorded attempt — only the model differs."""
+    seen = _record_dispatches(
+        monkeypatch, [_completed("3.30"), _completed("0.83")], [False, True]
+    )
+
+    assert sd.main() == 0
+    assert [p["model"] for p in seen] == [sd.MAIN_MODEL, sd.MAIN_MODEL]
+    assert [p["session_id"] for p in seen] == ["base-id", "base-id-retry1"]
+    assert seen[1]["source_id"].endswith("-retry1")
+    assert seen[1]["metadata"]["attempt"] == 2
+    assert seen[1]["small_fast_model"] == sd.FAST_MODEL
+
+
+def test_main_does_not_retry_a_clean_run_that_did_deliver(dispatch_env, monkeypatch):
+    """The regression this class could most easily cause: a double review."""
+    seen = _record_dispatches(monkeypatch, [_completed("0.83")], [True])
+
+    assert sd.main() == 0
+    assert len(seen) == 1
+    assert _outputs(dispatch_env)["final_status"] == "completed"
+
+
+def test_main_exits_green_when_the_silent_retry_is_also_silent(
+    dispatch_env, monkeypatch, capsys
+):
+    """Unchanged outcome once the attempts are spent — `sdk_review_verdict_gate`
+    still owns turning that silence into a red check one step later."""
+    seen = _record_dispatches(
+        monkeypatch, [_completed("3.30"), _completed("2.10")], [False, False]
+    )
+
+    assert sd.main() == 0
+    assert len(seen) == 2
+    assert "Not re-dispatching: already used all 2 attempts" in capsys.readouterr().out
+    assert _outputs(dispatch_env)["final_cost"] == "5.4"
+
+
+def test_a_cut_stream_with_no_verdict_still_never_retries(dispatch_env, monkeypatch):
+    """The double-review guard must not regress: no `complete`, so the reviewer
+    may still be working, and a second one would post a second summary."""
+    cut = _stream(*_event("started", {"session_id": "s"}))
+    cut.stream_error = "read timed out"
+    seen = _record_dispatches(monkeypatch, [cut], [False])
+
+    assert sd.main() == 1
+    assert len(seen) == 1
+
+
+# --- the confirmed-empty verdict read --------------------------------------
+
+
+def test_an_empty_verdict_is_re_read_before_it_is_believed(monkeypatch):
+    """The comments API is not read-after-write consistent, and this zero now
+    authorises a re-dispatch as well as the failure path."""
+    reads = []
+    slept = []
+    monkeypatch.setattr(
+        sd, "check_verdict_posted", lambda *_a, **_k: (reads.append(1), False)[1]
+    )
+
+    assert sd.check_verdict_posted_confirmed("s", "o/r", sleeper=slept.append) is False
+    assert len(reads) == sd.RECHECK_ATTEMPTS
+    assert slept == [sd.RECHECK_DELAY_S] * (sd.RECHECK_ATTEMPTS - 1)
+
+
+def test_a_verdict_found_on_the_first_read_costs_no_delay(monkeypatch):
+    reads = []
+    slept = []
+    monkeypatch.setattr(
+        sd, "check_verdict_posted", lambda *_a, **_k: (reads.append(1), True)[1]
+    )
+
+    assert sd.check_verdict_posted_confirmed("s", "o/r", sleeper=slept.append) is True
+    assert len(reads) == 1 and slept == []
+
+
+def test_a_late_landing_verdict_is_caught_by_the_recheck(monkeypatch):
+    """The read-after-write lag this exists for: retrying here would double-review."""
+    answers = [False, True]
+    monkeypatch.setattr(sd, "check_verdict_posted", lambda *_a, **_k: answers.pop(0))
+
+    assert (
+        sd.check_verdict_posted_confirmed("s", "o/r", sleeper=lambda _s: None) is True
+    )
+
+
+def test_the_recheck_threshold_is_the_gate_s_own_not_a_second_copy():
+    """Two copies would drift, and this step deciding `empty` while the gate
+    decides `delivered` is the contradiction sharing them prevents."""
+    assert sd.RECHECK_ATTEMPTS is vg.RECHECK_ATTEMPTS
+    assert sd.RECHECK_DELAY_S is vg.RECHECK_DELAY_S
 
 
 # --- the cost trail --------------------------------------------------------
@@ -996,7 +1361,7 @@ def _record_dispatches(monkeypatch, states, verdicts):
 
     monkeypatch.setattr(sd, "dispatch_once", fake_dispatch)
     monkeypatch.setattr(
-        sd, "check_verdict_posted", lambda *_a, **_k: verdicts[len(seen) - 1]
+        sd, "check_verdict_posted_confirmed", lambda *_a, **_k: verdicts[len(seen) - 1]
     )
     return seen
 
@@ -1017,7 +1382,7 @@ def test_main_re_dispatches_once_on_a_dead_sandbox(dispatch_env, monkeypatch, ca
     assert out["final_status"] == "completed"
     assert out["final_cost"] == "2.4"  # attempt 1 reported none
     assert "### Attempts" in (dispatch_env / "summary").read_text()
-    assert "Re-dispatching after a dead sandbox" in capsys.readouterr().out
+    assert f"Re-dispatching on {sd.RETRY_MAIN_MODEL}" in capsys.readouterr().out
 
 
 def test_main_does_not_retry_once_the_verdict_is_on_the_pr(dispatch_env, monkeypatch):
@@ -1036,7 +1401,7 @@ def test_main_reports_both_models_when_the_retry_also_fails(
 
     assert sd.main() == 1
     printed = capsys.readouterr().out
-    assert f"retried on {sd.RETRY_MAIN_MODEL} after {sd.MAIN_MODEL} died" in printed
+    assert f"retried on {sd.RETRY_MAIN_MODEL} after {sd.MAIN_MODEL}" in printed
     assert _outputs(dispatch_env)["final_status"] == "500"
 
 
