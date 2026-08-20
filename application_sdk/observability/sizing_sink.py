@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import asdict
+from time import time
 from typing import Any
 
 from application_sdk.constants import (
@@ -63,6 +64,12 @@ class SizingObservabilitySink(AtlanObservability[Any]):
             "schema_version": SIZING_SCHEMA_VERSION,
             "app": APPLICATION_NAME,
             "deployment": DEPLOYMENT_NAME,
+            # REQUIRED by the base class: _flush_records partitions on it
+            # (datetime.fromtimestamp(record["timestamp"])) and raises KeyError
+            # without it — swallowed as best-effort telemetry, so the only symptom
+            # would be an empty prefix. The execution's start, not the flush time,
+            # so a row lands in the hour the activity actually ran.
+            "timestamp": record.started_at if record.started_at else time(),
         }
         row.update(asdict(record))
         # Derived here so every consumer computes them identically.
@@ -73,6 +80,21 @@ class SizingObservabilitySink(AtlanObservability[Any]):
         # and a consumer that forgets to apply it pools two different quantities.
         row["is_attributable"] = record.is_attributable
         return row
+
+    def _store_sink_enabled(self) -> bool:
+        """Always on: this sink only exists when sizing collection is enabled.
+
+        ``ATLAN_ENABLE_OBSERVABILITY_STORE_SINK`` gates logs, metrics and traces
+        together, and an app that turns it off to stop shipping those would
+        otherwise lose the sizing dataset too — silently, since the only symptom is
+        an empty prefix. AE is exactly that app: it sets the DAPR-sink fallback to
+        false, which resolves this to false.
+
+        Not a loosening of that switch. Collection is already gated twice, by
+        APPLICATION_SDK_ENABLE_SIZING_TELEMETRY and by the per-activity allow-list,
+        so nothing is written unless an operator asked for it by name.
+        """
+        return True
 
     def export_record(self, record: Any) -> None:
         """No-op: the OTel histograms are emitted by ``sizing.record_observation``.

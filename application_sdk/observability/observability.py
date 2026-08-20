@@ -182,6 +182,19 @@ class AtlanObservability(Generic[T], ABC):
             return "sizing"
         return "other"
 
+    def _store_sink_enabled(self) -> bool:
+        """Whether this signal writes to the object store at all.
+
+        Overridable because ``ATLAN_ENABLE_OBSERVABILITY_STORE_SINK`` is one switch
+        over three very different signals. An app that turns it off to stop shipping
+        logs and metrics — AE does, via the ``ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK``
+        fallback — would also silently lose a signal it explicitly opted into, with
+        no error and an empty dataset as the only symptom.
+
+        A subclass may return ``True`` when it is already gated by its own switch.
+        """
+        return ENABLE_OBSERVABILITY_STORE_SINK
+
     def _get_partition_path(self, timestamp: datetime) -> str:
         """Generate local partition path based on timestamp.
 
@@ -293,7 +306,7 @@ class AtlanObservability(Generic[T], ABC):
         - Uploads to customer bucket (DEPLOYMENT_OBJECT_STORE) always
         - Uploads to Atlan bucket (UPSTREAM_OBJECT_STORE) when ENABLE_ATLAN_UPLOAD=true
         """
-        if not ENABLE_OBSERVABILITY_STORE_SINK or not records:
+        if not self._store_sink_enabled() or not records:
             return
         from application_sdk.storage import upload_file  # noqa: PLC0415
 

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import gzip
+import pathlib
 from unittest.mock import MagicMock, patch
 
+import orjson
 import pytest
 
 from application_sdk.constants import SIZING_FILE_NAME
@@ -80,6 +83,80 @@ class TestSignalRouting:
     def test_signal_type_is_sizing(self, sink):
         """Drives the partition path, so a wrong answer buries the dataset."""
         assert sink._get_signal_type() == "sizing"
+
+
+class TestStoreSinkGate:
+    """The sizing sink must not be switched off by an unrelated signal's flag."""
+
+    def test_sizing_ignores_the_shared_store_sink_flag(self, sink):
+        """AE resolves ENABLE_OBSERVABILITY_STORE_SINK to False.
+
+        It sets ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK=false to stop shipping logs and
+        metrics, and the store-sink flag falls back to it. Without this override the
+        sizing dataset would be empty on AE with no error anywhere — the exact
+        deployment we built this for.
+        """
+        assert sink._store_sink_enabled() is True
+
+    def test_other_signals_still_respect_it(self, tmp_path):
+        """The override is scoped to sizing, not a loosening of the switch."""
+        from application_sdk.constants import LOG_FILE_NAME
+        from application_sdk.observability.observability import AtlanObservability
+
+        class _Other(AtlanObservability):
+            def process_record(self, record):
+                return {}
+
+            def export_record(self, record):
+                return None
+
+        other = _Other(
+            batch_size=1,
+            flush_interval=3600,
+            retention_days=1,
+            cleanup_enabled=False,
+            data_dir=str(tmp_path),
+            file_name=LOG_FILE_NAME,
+        )
+        with patch(
+            "application_sdk.observability.observability.ENABLE_OBSERVABILITY_STORE_SINK",
+            False,
+        ):
+            assert other._store_sink_enabled() is False
+
+    @pytest.mark.asyncio
+    async def test_a_flush_uploads_with_the_shared_flag_off(self, sink, tmp_path):
+        """End to end: the flush must reach the object store, flag or no flag.
+
+        Asserts on the upload rather than a leftover local file — the base uploads
+        and then deletes the staged file, so a passing local-file check would only
+        prove the flush crashed before cleanup.
+        """
+        uploads: list[tuple[str, str]] = []
+
+        async def fake_upload(remote_key, local_path, **kwargs):
+            body = gzip.decompress(pathlib.Path(local_path).read_bytes()).decode()
+            uploads.append((remote_key, body))
+
+        with (
+            patch(
+                "application_sdk.observability.observability.ENABLE_OBSERVABILITY_STORE_SINK",
+                False,
+            ),
+            patch("application_sdk.storage.upload_file", new=fake_upload),
+        ):
+            await sink._flush_records([sink.process_record(_observation())])
+
+        assert uploads, "sizing flush uploaded nothing"
+        remote_key, body = uploads[0]
+        assert "/sizing/" in remote_key
+        # Hive-partitioned on the execution's start, not the flush time.
+        assert "year=" in remote_key and "hour=" in remote_key
+        row = orjson.loads(body.splitlines()[0])
+        assert row["activity_type"] == "automation-engine:merge"
+        assert row["schema_version"] == SIZING_SCHEMA_VERSION
+        assert row["concurrency_max"] == 1
+        assert row["peak_per_input_byte"] == pytest.approx(3.0)
 
 
 class TestProcessRecord:
