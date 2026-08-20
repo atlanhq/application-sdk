@@ -1281,7 +1281,10 @@ is not asked for per-entrypoint suites:
 exempt_test_tiers = ["e2e"]
 ```
 
-Suppress a single entrypoint instead with `# conformance: ignore[T025] <reason>` on the
-first line of `pyproject.toml`.
+Suppress a single entrypoint instead with `# conformance: ignore[T025:<entrypoint>]
+<reason>` on the first line of `pyproject.toml` — e.g. `ignore[T025:miner]` exempts only
+the `miner` finding while the others stay reported. A bare `ignore[T025]` suppresses
+every entrypoint's finding at once. Each finding carries its entrypoint as a fingerprint
+discriminator, so per-entrypoint findings never share a SARIF fingerprint.
 
 ---

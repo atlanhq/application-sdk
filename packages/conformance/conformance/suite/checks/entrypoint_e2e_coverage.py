@@ -242,8 +242,9 @@ def _message(entrypoint: str, all_names: frozenset[str], covered: set[str]) -> s
         f"with a class inheriting the generated base for this entrypoint (the CI "
         f"matrix fans out one leg per file, so a second file is a second leg). If "
         f"'{entrypoint}' genuinely cannot be exercised against a tenant, suppress "
-        f"with '# conformance: ignore[{RULE_T025}] <reason>' on the first line of "
-        f"pyproject.toml."
+        f"it alone with '# conformance: ignore[{RULE_T025}:{entrypoint}] <reason>' "
+        f"on the first line of pyproject.toml (a bare 'ignore[{RULE_T025}]' "
+        f"suppresses every entrypoint's finding)."
     )
 
 
@@ -270,7 +271,11 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
 
     Findings are anchored to ``pyproject.toml`` rather than to a test file,
     because the thing that is missing is a file: there is no line to point at.
-    That also makes the suppression anchor the same one T011/T012 use.
+    That also makes the suppression anchor the same one T011/T012 use. Each
+    finding carries its entrypoint name as the discriminator, so the shared
+    anchor does not collapse their identities: fingerprints stay distinct, and
+    ``# conformance: ignore[T025:<entrypoint>]`` suppresses one entrypoint
+    without suppressing the others.
     """
     scan = scan_contract(root)
     if scan.mode != "multi":
@@ -309,6 +314,14 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
             column=1,
             message=_message(entrypoint, scan.names, covered),
             suppressions=suppressions,
+            # One finding per missing entrypoint, all anchored to the same
+            # pyproject.toml:1. The entrypoint name is the finding's identity:
+            # it keys the SARIF fingerprint (so per-entrypoint dedup and
+            # oscillation tracking can tell "crawler missing" from "miner
+            # missing") and the `# conformance: ignore[T025:<entrypoint>]`
+            # suppression form (so one entrypoint can be exempted while the
+            # others stay reported).
+            discriminator=entrypoint,
         )
         for entrypoint in missing
     ]

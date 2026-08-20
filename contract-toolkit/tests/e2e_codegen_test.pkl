@@ -416,6 +416,51 @@ local apiBundleApp = (App) {
   }
 }
 
+// Miner leg that carries its lineage stage as an extraNodes override rather
+// than the typed `pipeline.lineage` step — a documented DAG shape. The
+// generated base must still expect lineage for it.
+local bundleLineageOverrideContract = (App) {
+  name = "miner"
+  displayName = "Lineage Miner"
+  icon = "https://assets.atlan.com/assets/snowflake.svg"
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  extraNodes {
+    ["lineage-app"] = new App.DAGNode {
+      displayName = "Lineage"
+      workflowType = "LineageWorkflow"
+      dependsOn { "extract" }
+    }
+  }
+  uiConfig = minimalUiConfig
+}
+
+// Explicit-packageId bundle: `packageId` states the entrypoint → package
+// mapping outright, bypassing the leaf/suffix match.
+local explicitPackageBundleApp = (App) {
+  name = "explicit-bundle"
+  displayName = "Explicit Bundle"
+  icon = "https://assets.atlan.com/assets/snowflake.svg"
+  hasCredentialConfig = false
+  argoPackageNames { "@atlan/unrelated-crawler"; "@atlan/unrelated-miner" }
+  entrypoints {
+    new App.Entrypoint {
+      name = "crawler"
+      source = "snowflake"
+      sourceCategory = "database"
+      packageId = "@atlan/unrelated-crawler"
+      contract = bundleCrawlerContract
+    }
+    new App.Entrypoint {
+      name = "miner"
+      source = "snowflake"
+      sourceCategory = "database"
+      packageId = "@atlan/unrelated-miner"
+      contract = bundleLineageOverrideContract
+    }
+  }
+}
+
 local bundleCrawlerBase: String =
   bundleApp.output.files["app/generated/crawler/_e2e_base.py"].text
 local bundleMinerBase: String =
@@ -426,6 +471,10 @@ local suffixMinerBase: String =
   suffixBundleApp.output.files["app/generated/miner/_e2e_base.py"].text
 local apiBundleBase: String =
   apiBundleApp.output.files["app/generated/fetch/_e2e_base.py"].text
+local explicitCrawlerBase: String =
+  explicitPackageBundleApp.output.files["app/generated/crawler/_e2e_base.py"].text
+local explicitMinerBase: String =
+  explicitPackageBundleApp.output.files["app/generated/miner/_e2e_base.py"].text
 
 local apiBase: String = apiApp.output.files["app/generated/_e2e_base.py"].text
 local postgresBase: String = postgresApp.output.files["app/generated/_e2e_base.py"].text
@@ -844,6 +893,15 @@ facts {
     suffixCrawlerBase.contains("argo_template_name = \"atlan-teradata\"")
   }
 
+  ["an explicit packageId is used verbatim, bypassing the leaf match"] {
+    // Neither package leaf matches its entrypoint name, so only the explicit
+    // `packageId` can route these — the leaf/suffix matcher would return null.
+    explicitCrawlerBase.contains("argo_package_name = \"@atlan/unrelated-crawler\"")
+    explicitCrawlerBase.contains("argo_template_name = \"atlan-unrelated-crawler\"")
+    explicitMinerBase.contains("argo_package_name = \"@atlan/unrelated-miner\"")
+    explicitMinerBase.contains("argo_template_name = \"atlan-unrelated-miner\"")
+  }
+
   // ── Bundle _e2e_base.py: harness expectations derived from the pipeline ───────
 
   ["a publishing entrypoint keeps the inventory expectations"] {
@@ -863,6 +921,12 @@ facts {
   ["lineage is expected only when the pipeline declares a lineage step"] {
     bundleCrawlerBase.contains("expect_lineage = False")
     bundleMinerBase.contains("expect_lineage = False")
+  }
+
+  ["lineage carried via extraNodes still generates expect_lineage = True"] {
+    // The override form (`extraNodes["lineage-app"]`) emits the same DAG node
+    // the typed `pipeline.lineage` step would — the suite must assert it landed.
+    explicitMinerBase.contains("expect_lineage = True")
   }
 
   // ── Bundle _e2e_base.py: base-class and connection routing ───────────────────

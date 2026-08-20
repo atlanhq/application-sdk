@@ -1855,8 +1855,12 @@ RULES: tuple[RuleDefinition, ...] = (
             '    exempt_test_tiers = ["e2e"]\n'
             "\n"
             "Suppress a single entrypoint instead with\n"
-            "``# conformance: ignore[T025] <reason>`` on the first line of\n"
-            "``pyproject.toml``.\n"
+            "``# conformance: ignore[T025:<entrypoint>] <reason>`` on the first line\n"
+            "of ``pyproject.toml`` — e.g. ``ignore[T025:miner]`` exempts only the\n"
+            "``miner`` finding while the others stay reported. A bare\n"
+            "``ignore[T025]`` suppresses every entrypoint's finding at once. Each\n"
+            "finding carries its entrypoint as a fingerprint discriminator, so\n"
+            "per-entrypoint findings never share a SARIF fingerprint.\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"

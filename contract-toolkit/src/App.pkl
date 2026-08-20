@@ -3236,6 +3236,19 @@ local function e2eBaseClassForCategory(cat: String?): String =
 local function epPublishes(c: Typed): Boolean =
   c.pipeline.publish != null || c.extraNodes.toMap().containsKey("publish")
 
+// True when this entrypoint's pipeline produces lineage. Mirrors every form
+// `generateDAG()` emits a lineage node for: the typed `pipeline.lineage` step
+// (→ `lineage-app`), the `pipeline.publish.lineagePublish` sub-step
+// (→ `lineage-publish`), and an app that carries its lineage stage in an
+// `extraNodes` override (`lineage-app` / `lineage-publish`) — a documented DAG
+// shape. Reading only `pipeline.lineage` would generate a suite that never
+// asserts the lineage landed for exactly the apps that wired it by hand.
+local function epProducesLineage(c: Typed): Boolean =
+  c.pipeline.lineage != null
+    || (c.pipeline.publish != null && c.pipeline.publish!!.lineagePublish != null)
+    || c.extraNodes.toMap().containsKey("lineage-app")
+    || c.extraNodes.toMap().containsKey("lineage-publish")
+
 // Nodes that must genuinely succeed for the run to count as a pass. Only
 // `extract` and `publish`: `qi`, `popularity`, `lineage-*` and `notifications`
 // are legitimately Skipped by AE, and the harness's skip-tolerant gate is built
@@ -3305,7 +3318,7 @@ local function generateBundleE2EBasePy(ep: Entrypoint): FileOutput = new FileOut
   local pkgName = epPackageName(ep)
   local tmplName = epTemplateName(ep)
   local publishes = epPublishes(c)
-  local expectsLineage = c.pipeline.lineage != null
+  local expectsLineage = epProducesLineage(c)
   // `connection_type` is always emitted (never gated on `value != name`): the SDK
   // falls back to `connector_short_name`, which is now the BUNDLE name and so is
   // wrong for every bundle whose source differs from it.

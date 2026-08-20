@@ -277,6 +277,14 @@ class BaseE2ETest:
     dag_progress_stall_seconds: ClassVar[int] = 1800
     atlas_poll_interval_seconds: ClassVar[int] = 30
     atlas_poll_timeout_seconds: ClassVar[int] = 1500
+    # Probe errors that can never heal by retrying: a deterministic bug in the
+    # probe itself (a wrong call signature, a bad config value) raises the same
+    # exception on every attempt, so waiting out the timeout only delays the
+    # failure. ``seed_connection`` re-raises these immediately.
+    _PROBE_NON_TRANSIENT_ERRORS: ClassVar[tuple[type[BaseException], ...]] = (
+        TypeError,
+        ValueError,
+    )
     # Asset counts use a much shorter poll window: Elasticsearch is eventually
     # consistent but assets that will appear do so within seconds of the
     # publish step completing. No point holding CI for 25 minutes.
@@ -654,6 +662,11 @@ class BaseE2ETest:
             probe: Optional zero-arg callable performing a representative child
                 write. Retried until it stops raising, bounded by
                 ``atlas_poll_timeout_seconds``. Its return value is ignored.
+                Errors in ``_PROBE_NON_TRANSIENT_ERRORS`` (``TypeError``,
+                ``ValueError``) are re-raised immediately: they indicate a
+                deterministic bug in the probe itself, which no retry can heal,
+                so probe authors should raise only transient errors (permission
+                / not-yet-provisioned) from the callable.
 
         Returns:
             The Connection's qualified name (also now on
@@ -735,7 +748,22 @@ class BaseE2ETest:
                 attempts += 1
                 try:
                     probe()
-                except Exception:
+                except Exception as exc:
+                    if isinstance(exc, self._PROBE_NON_TRANSIENT_ERRORS):
+                        # A deterministic probe bug (a TypeError from a wrong
+                        # call signature, a config ValueError) will fail every
+                        # retry identically — burning the whole timeout before
+                        # surfacing. Re-raise immediately instead.
+                        logger.error(
+                            "e2e seed: probe write under %s raised %s, a "
+                            "non-transient error — failing fast rather than "
+                            "retrying until the %ds timeout",
+                            self.connection_qualified_name,
+                            type(exc).__name__,
+                            self.atlas_poll_timeout_seconds,
+                            exc_info=True,
+                        )
+                        raise
                     if time.monotonic() >= deadline:
                         logger.error(
                             "e2e seed: probe write under %s still failing after "

@@ -420,6 +420,29 @@ class TestSeedConnection:
         with pytest.raises(PermissionError):
             harness.seed_connection(probe=_probe)
 
+    @pytest.mark.parametrize("exc_type", [TypeError, ValueError])
+    def test_a_non_transient_probe_error_fails_fast(
+        self, fake_pyatlan: MagicMock, exc_type: type[Exception]
+    ) -> None:
+        """A deterministic probe bug must not burn the whole timeout retrying.
+
+        A wrong call signature or a bad config value raises identically on
+        every attempt, so the retry loop re-raises it on first sight rather
+        than waiting out ``atlas_poll_timeout_seconds``.
+        """
+        harness = _seeding_harness()
+        harness.atlas_poll_timeout_seconds = 1500  # would hang if retried
+        attempts: list[int] = []
+
+        def _probe() -> None:
+            attempts.append(1)
+            raise exc_type("probe bug — not transient")
+
+        with pytest.raises(exc_type):
+            harness.seed_connection(probe=_probe)
+
+        assert len(attempts) == 1
+
 
 class TestSeededConnectionIsTornDown:
     """The isolation guarantee.

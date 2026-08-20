@@ -17,6 +17,14 @@ class Finding:
     still appear in the SARIF output (as ``kind="fail"`` with a
     ``suppressions`` entry) so they are auditable, but they do not contribute
     to the failing count and therefore do not affect the gate exit code.
+
+    ``discriminator`` distinguishes findings that share a rule and location.
+    A rule that emits several findings anchored to one spot (e.g. T025 reports
+    each uncovered bundle entrypoint at ``pyproject.toml:1``) sets it to the
+    varying part (the entrypoint name), so fingerprints stay distinct and a
+    ``# conformance: ignore[T025:<discriminator>]`` directive can suppress one
+    finding without suppressing its siblings. ``None`` (the default) keeps the
+    pre-discriminator fingerprint and directive behaviour.
     """
 
     rule_id: str
@@ -25,6 +33,7 @@ class Finding:
     column: int
     message: str
     snippet: str | None = None
+    discriminator: str | None = field(default=None, compare=False, hash=False)
     suppressed: bool = field(default=False, compare=False, hash=False)
     suppression_justification: str | None = field(
         default=None, compare=False, hash=False
@@ -70,5 +79,6 @@ def findings_to_report(
             message=f.message,
             snippet=f.snippet,
             suppressions=suppressions,
+            discriminator=f.discriminator,
         )
     return builder.build(excluded_paths=excluded_paths)

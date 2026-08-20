@@ -357,3 +357,54 @@ class TestRobustness:
 
         assert findings
         assert all(f.suppressed for f in findings)
+
+    def test_per_entrypoint_suppression_suppresses_only_the_named_entrypoint(
+        self, tmp_path: Path
+    ) -> None:
+        """``ignore[T025:miner]`` must leave a missing third entrypoint reported.
+
+        All T025 findings share the pyproject.toml:1 anchor, so a rule-wide
+        directive would suppress the lot; the ``:<entrypoint>`` discriminator is
+        what lets one legitimate exemption coexist with real gaps elsewhere.
+        """
+        _pyproject(
+            tmp_path,
+            f"# conformance: ignore[{RULE_T025}:miner] miner has no CI-reachable source\n"
+            '[project]\nname = "myapp"\n',
+        )
+        _bundle(tmp_path, "crawler", "miner", "promote-marker")
+        _cover(tmp_path, "crawler")
+
+        findings = scan_all(discover(tmp_path), tmp_path)
+
+        assert len(findings) == 2
+        by_ep = {f.discriminator: f for f in findings}
+        assert by_ep["miner"].suppressed
+        assert not by_ep["promote-marker"].suppressed
+
+    def test_findings_carry_their_entrypoint_as_discriminator(
+        self, tmp_path: Path
+    ) -> None:
+        """The discriminator is what keys the SARIF fingerprint per entrypoint."""
+        _pyproject(tmp_path)
+        _bundle(tmp_path, "crawler", "miner")
+
+        findings = scan_all(discover(tmp_path), tmp_path)
+
+        assert len(findings) == 2
+        assert {f.discriminator for f in findings} == {"crawler", "miner"}
+
+    def test_per_entrypoint_fingerprints_are_distinct(self, tmp_path: Path) -> None:
+        """Two T025 findings at the same anchor must not share a fingerprint."""
+        from conformance.suite.schema.findings import findings_to_report
+
+        _pyproject(tmp_path)
+        _bundle(tmp_path, "crawler", "miner")
+
+        findings = scan_all(discover(tmp_path), tmp_path)
+        report = findings_to_report(findings, tool_version="0.0.0-test")
+        results = report.runs[0].results
+
+        assert len(results) == 2
+        fps = [r.partial_fingerprints["atlanConformance/v1"] for r in results]
+        assert fps[0] != fps[1]
