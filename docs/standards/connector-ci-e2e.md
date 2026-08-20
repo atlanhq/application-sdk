@@ -145,8 +145,58 @@ cases that want opposite answers:
   (dispatched 21:07:38, leased 21:10:10). It holds nothing, so it can stand down
   for free, and the head commit takes the tenant instead.
 
-The second case is a connector-side check made immediately before the lease is
-taken, and it is tracked as FND-701.
+The second case is the connector-side recheck below.
+
+### Standing down before the lease
+
+`sdk-head-recheck` runs in `tests-reusable.yaml` immediately before
+`lease-tenant` and asks the same question the dispatch guard asked, at the last
+moment the answer can still save a tenant. When it says the SHA has been
+superseded, `lease-tenant` skips — and `prepare-tenant`, the `e2e` legs and
+`release-tenant` skip with it (FND-701).
+
+**Finding the pull request.** The connector run is handed `application_sdk_ref`
+and nothing else, and a SHA alone is not enough:
+`GET /commits/{sha}/pulls` answers with an **empty list** for a commit a
+force-push has moved past, which is precisely the case worth detecting. Verified
+against the incident itself — `be82fade` is associated with no pull request,
+while `d47789e0`, the head that replaced it, resolves normally.
+
+So the PR number comes from the record that authorised the dispatch. The guard
+already writes `refs/e2e-dispatch/<app>/<sha>` pointing at a blob describing the
+claim; that blob now carries `pr_number`, and the recheck reads it back. It is a
+positive identification rather than an inference, and the claim is guaranteed to
+outlive the run that needs it: the guard's prune only deletes a claim once that
+SHA's `Connector E2E run / <app>` check has settled, which cannot happen while
+this run is the thing that has yet to complete it.
+
+A run with **no** claim ref is therefore not an SDK pull-request dispatch —
+someone pinning `application_sdk_ref` by hand to test a connector against a
+particular SDK commit — and is left alone. Without that, a deliberate manual run
+would be skipped as a silent no-op.
+
+**Where the gates read from, and why it matters.** Both `lease-tenant` and the
+`e2e` legs gate on the job's `outputs.superseded`, never on its `result`:
+
+* A `needs.<job>.result` check would make an infrastructure failure of the
+  recheck **skip** the lease, and a skipped lease skips the install and greens
+  the run vacuously. Reading the output means an absent answer — job failed, job
+  skipped, output never written — leases exactly as before. The script exits 0
+  on every path for the same reason.
+* `lease-tenant` needs `always()` for that gate to be consulted at all: without
+  a status-check function GitHub applies an implicit `success()` over every
+  need and skips the job before the `if:` is read. That is also why
+  `discover-e2e` and `merge-e2e-image` are now named explicitly there.
+* The `e2e` legs need their **own** clause. A *skipped* `lease-tenant` is the
+  benign value in their existing gate — it is the `install-app-to-tenant: false`
+  path — so gating the lease alone would leave the legs running against a tenant
+  nobody installed onto with `expected-app-version` empty: a silently passing
+  wrong-version run, the exact FND-31 failure the lease exists to prevent.
+
+A stood-down run still reports to the dispatching SDK commit, and still reports
+green — the same vacuous green the SDK-side gate gives that commit, for the same
+reason: it is no longer the commit under review, and only the head commit's run
+can satisfy a required check.
 
 ## SDR composite action inputs
 
