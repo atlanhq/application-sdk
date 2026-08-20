@@ -94,7 +94,7 @@ def test_payload_pins_all_three_model_lanes():
     # Leaving any lane unset silently falls back to mothership's Claude
     # defaults, and `small_fast_model` unset resolves to `model`.
     p = _payload()
-    assert p["model"] == "x-ai/grok-4.6"
+    assert p["model"] == "xai/grok-4.6"
     assert p["small_fast_model"] == "gpt-5.6-luna"
     assert p["env_vars"]["CLAUDE_CODE_SUBAGENT_MODEL"] == "gpt-5.6-luna"
     encoded = json.loads(json.dumps(p))
@@ -611,6 +611,110 @@ def test_a_stream_that_completes_inside_the_cap_is_untouched():
         lambda req, timeout=None: FakeResponse(body),
     )
     assert st.stream_error == "" and st.status == "completed"
+
+
+# ---------------------------------------------------------------------------
+# dispatch-level HTTP status vs stream-transport error (FND-660 follow-up)
+# ---------------------------------------------------------------------------
+
+
+def _raising_opener(exc):
+    def opener(req, timeout=None):
+        raise exc
+
+    return opener
+
+
+def test_an_http_status_on_the_post_is_not_a_stream_error():
+    # Regression for run 32347771368: mothership answered the dispatch POST
+    # with a 504, which is a URLError subclass and used to land in
+    # STREAM_TRANSPORT_ERRORS — leaving `st.stream_error` set, which makes
+    # `_retry_class` bail with "our stream died rather than the sandbox".
+    exc = urllib.error.HTTPError(
+        "http://m/api/sandbox/execute", 504, "Gateway Time-out", {}, None
+    )
+    st = sd.dispatch_once(
+        "http://m", "tok", _payload(), "42", "u", _raising_opener(exc)
+    )
+    assert st.err_code == "http_504"
+    assert st.errored is True
+    assert st.stream_error == ""
+    plan = sd._retry_class(st, 1)
+    assert plan.retry is True
+
+
+def test_a_permanent_http_status_still_does_not_retry():
+    for code, reason_phrase in ((401, "Unauthorized"), (400, "Bad Request")):
+        exc = urllib.error.HTTPError(
+            "http://m/api/sandbox/execute", code, reason_phrase, {}, None
+        )
+        st = sd.dispatch_once(
+            "http://m", "tok", _payload(), "42", "u", _raising_opener(exc)
+        )
+        assert st.err_code == f"http_{code}"
+        # The 400 case matters most: "400" sits in RETRYABLE_ERR_CODES for a
+        # provider fault carried inside the stream, and must not rescue a
+        # dispatch-level 400 — a malformed payload fails identically on any
+        # model, so the http_ codespace has to stay separate from that one.
+        assert sd.is_retryable_fault(st) is False, code
+
+
+def test_a_genuine_transport_drop_is_still_never_retried():
+    # Guards the fix from over-reaching: a plain URLError (not an HTTPError)
+    # must still land on the stream-error path and still never retry.
+    exc = urllib.error.URLError("timed out")
+    st = sd.dispatch_once(
+        "http://m", "tok", _payload(), "42", "u", _raising_opener(exc)
+    )
+    assert st.stream_error
+    assert st.errored is False
+    plan = sd._retry_class(st, 1)
+    assert plan.retry is False
+
+
+def test_the_http_error_body_reaches_the_error_message():
+    body = b"Invalid model name passed in model=xai/grok-4.6" + b"x" * 600
+
+    class _FakeFp:
+        def read(self):
+            return body
+
+        def close(self):
+            pass
+
+    exc = urllib.error.HTTPError(
+        "http://m/api/sandbox/execute", 400, "Bad Request", {}, _FakeFp()
+    )
+    st = sd.dispatch_once(
+        "http://m", "tok", _payload(), "42", "u", _raising_opener(exc)
+    )
+    assert "Invalid model name" in st.err_msg
+    assert len(st.err_msg) < len(body.decode()) + 100  # truncated, not dumped whole
+
+    # e.read() itself raising must not escape dispatch_once.
+    class _BrokenFp:
+        def read(self):
+            raise OSError("already consumed")
+
+        def close(self):
+            pass
+
+    exc2 = urllib.error.HTTPError(
+        "http://m/api/sandbox/execute", 502, "Bad Gateway", {}, _BrokenFp()
+    )
+    st2 = sd.dispatch_once(
+        "http://m", "tok", _payload(), "42", "u", _raising_opener(exc2)
+    )
+    assert st2.err_code == "http_502"
+
+
+def test_main_model_is_not_an_openrouter_style_id():
+    # Weak guard, deliberately: CI has no LiteLLM key, so the real check
+    # (GET /v1/models on llmproxy.atlan.dev) cannot run here. This only catches
+    # the specific `x-ai/` vs `xai/` prefix confusion that broke FND-660 —
+    # `x-ai/grok-4.6` is the OpenRouter-style id and this proxy rejects it.
+    assert "x-ai/" not in sd.MAIN_MODEL
+    assert "x-ai/" not in sd.FAST_MODEL
 
 
 # ---------------------------------------------------------------------------
