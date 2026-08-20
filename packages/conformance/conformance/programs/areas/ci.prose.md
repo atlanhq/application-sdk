@@ -150,8 +150,9 @@ it isn't safe to assume a C002 finding already triggered it:
 
   That re-renders both files from their canonicals while reusing the values
   read back off each existing file — `tests.yaml`'s recognized param set
-  (app-name, app-image-name, enable-e2e, services-script, and a
-  unit-coverage-fail-under at or above the SDK's own floor) and
+  (app-name, app-image-name, enable-e2e, services-script, a
+  unit-coverage-fail-under at or above the SDK's own floor,
+  force-external-runtime, and any explicit `secrets:` mapping) and
   `renovate.json`'s declared auto-merge mode — so the structural catch-up lands
   without resetting any of them. One exception is worth quoting in the residue
   entry when it applies, because `--resync` resolves it by *deleting* the app's
@@ -172,6 +173,15 @@ it isn't safe to assume a C002 finding already triggered it:
   customization with no trace in the resulting diff for a reviewer to catch. A
   human must confirm the drift is stale structure and not something the app
   meant to keep.
+
+  Since FND-604 `--resync` will not drop a *declaration* it cannot carry
+  forward: on a `tests.yaml` that declares something the canonical has no place
+  for, it leaves the file untouched and prints what it would have lost. Read
+  that output — a `skipped:` line means the structural catch-up did NOT land and
+  the residue entry needs the reason quoted, not the command repeated. What it
+  still replaces is everything that is not a declaration: hand comments, and a
+  canonical key whose value the app changed. That residue is why the
+  classification stays `judgment`.
 
 ---
 
