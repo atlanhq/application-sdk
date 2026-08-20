@@ -30,12 +30,19 @@ have, because the review lane needs them:
     its summary to the PR, the review WAS delivered, so a later stream
     breakage is a mothership-side finalize glitch and must not red the check.
 
-One re-dispatch is allowed when the sandbox dies on a hard error that a
-different model could survive — see MAX_DISPATCH_ATTEMPTS and retry_decision().
-The retry fires only after the verdict check has come back empty, which is the
-single point where the sandbox is provably dead AND nothing was delivered;
-every other stream ending stays fail-fast, because a second reviewer would post
-a second summary on the same PR.
+One re-dispatch is allowed, in either of two classes — see
+MAX_DISPATCH_ATTEMPTS and retry_decision():
+
+  * the sandbox died on a hard error a DIFFERENT model could survive; and
+  * the sandbox reached `status=completed` and posted no verdict, which is the
+    turn ending early rather than the model failing, so attempt 2 runs the SAME
+    model.
+
+Both fire only after the verdict check has come back empty — confirmed empty,
+sharing `sdk_review_verdict_gate`'s recheck, because the comments API is not
+read-after-write consistent. That is the single point where the sandbox is
+provably finished AND nothing was delivered; every other stream ending stays
+fail-fast, because a second reviewer would post a second summary on the same PR.
 
 Environment (all supplied by the `Dispatch to mothership Rover Direct API`
 step in `.github/workflows/sdk-review.yml`):
@@ -73,6 +80,10 @@ from typing import Any, NamedTuple
 sys.path.insert(0, str(Path(__file__).parent))
 
 import sdk_review_dedupe_verdicts  # noqa: E402  (needs the sys.path bootstrap)
+from sdk_review_verdict_gate import (  # noqa: E402  (same bootstrap)
+    RECHECK_ATTEMPTS,
+    RECHECK_DELAY_S,
+)
 
 HEALTH_RETRIES = 5
 HEALTH_BACKOFF_SECONDS = 5
@@ -230,7 +241,13 @@ ORCHESTRATION.md Phase 0 step 7."""
 
 
 def attempt_model(attempt: int) -> str:
-    """Main model for this attempt — the swap that makes a retry worth booting."""
+    """Default main model for this attempt — the swap the hard-error retry needs.
+
+    Only a default: `retry_decision()` names the model for the attempt it
+    authorises, because the two retry classes differ on exactly this axis. A
+    same-model re-dispatch (the sandbox finished cleanly and said nothing) must
+    NOT be dragged onto RETRY_MAIN_MODEL — nothing about the model failed.
+    """
     return MAIN_MODEL if attempt <= 1 else RETRY_MAIN_MODEL
 
 
@@ -265,6 +282,7 @@ def build_payload(
     comment_id: str,
     gha_run_url: str,
     attempt: int = 1,
+    model: str | None = None,
     max_timeout_seconds: int = STREAM_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """The /api/sandbox/execute body.
@@ -272,10 +290,11 @@ def build_payload(
     `base_branch` is the PR's HEAD ref, not `main`: the sandbox clones the repo
     at the ref it is given, and a review has to read the code under review.
 
-    `attempt` > 1 is a re-dispatch after the previous sandbox died on a hard
-    error: same prompt (review is stateless — the orchestration re-reads live
-    PR state, and a prior review on the PR is handled by its delta logic),
-    different main model, and a fresh session id.
+    `attempt` > 1 is a re-dispatch: same prompt (review is stateless — the
+    orchestration re-reads live PR state, and a prior review on the PR is
+    handled by its delta logic) and a fresh session id. `model` defaults to
+    `attempt_model(attempt)`; the caller passes it explicitly so the same-model
+    retry class can keep attempt 2 on MAIN_MODEL.
     """
     return {
         "mode": "direct",
@@ -287,7 +306,7 @@ def build_payload(
         "base_branch": head_ref,
         "snapshot": "_base",
         "ai_gateway_key_name": "sdk_review",
-        "model": attempt_model(attempt),
+        "model": model or attempt_model(attempt),
         "small_fast_model": FAST_MODEL,
         "env_vars": {"CLAUDE_CODE_SUBAGENT_MODEL": FAST_MODEL},
         "prompt": build_prompt(
@@ -625,6 +644,19 @@ class Attempt(NamedTuple):
     state: SSEState
 
 
+class RetryPlan(NamedTuple):
+    """Whether to re-dispatch, why, and which main model attempt N+1 runs.
+
+    `model` is empty when `retry` is False. It cannot be derived from the
+    attempt number alone: the two retry classes differ on exactly that axis — a
+    dead sandbox needs a DIFFERENT model, a silent one needs the SAME one.
+    """
+
+    retry: bool
+    reason: str
+    model: str = ""
+
+
 def sandbox_terminated_abnormally(st: SSEState) -> bool:
     """True when the sandbox itself died, as opposed to our stream being cut.
 
@@ -654,41 +686,84 @@ def is_retryable_fault(st: SSEState) -> bool:
     return any(p in st.err_msg.lower() for p in RETRYABLE_ERR_PATTERNS)
 
 
-def retry_decision(st: SSEState, attempt: int, seconds_left: float) -> tuple[bool, str]:
-    """Whether to re-dispatch after this attempt, and the reason either way.
+def sandbox_completed_cleanly(st: SSEState) -> bool:
+    """True when the sandbox reported the terminal `complete` event, happily.
 
-    Called only once the verdict check has come back empty, so "the sandbox is
-    dead and delivered nothing" is already established. The reason is logged
-    verbatim so a run that did NOT retry says why — the part that is otherwise
-    invisible.
+    Paired with a confirmed-empty verdict this is the silent-review defect: a
+    full review streams to the log, bills a real cost, ends
+    `[complete] status=completed`, and nothing reaches the PR (run
+    32310634558 on #3276). `sdk_review_verdict_gate.py` reds it correctly one
+    step later, but nothing retried it, so the review was simply lost.
     """
-    if attempt >= MAX_DISPATCH_ATTEMPTS:
-        return False, f"already used all {MAX_DISPATCH_ATTEMPTS} attempts"
+    return st.completed and st.status == "completed" and not st.errored
+
+
+def _retry_class(st: SSEState, attempt: int) -> RetryPlan:
+    """Which retry class this ending falls into, if either, and on which model.
+
+    Called only once the verdict check has come back CONFIRMED empty, so
+    "nothing was delivered" is already established for every branch below.
+    """
+    if sandbox_completed_cleanly(st):
+        # Ranked above the cut-stream guard deliberately: `complete` IS the
+        # terminal event, so the sandbox is provably finished and will post
+        # nothing further even if our socket then died on the way out. And
+        # nothing about the MODEL failed here — the turn ended early — so the
+        # swap axis is irrelevant and attempt 2 re-runs the same one.
+        same = attempt_model(attempt)
+        return RetryPlan(
+            True,
+            "the sandbox reached status=completed and posted no verdict — the "
+            f"turn ended early, so re-dispatching on the same model ({same}) "
+            f"(attempt {attempt + 1} of {MAX_DISPATCH_ATTEMPTS})",
+            same,
+        )
     if st.stream_error:
-        return False, (
+        return RetryPlan(
+            False,
             "our stream died rather than the sandbox — it is probably still "
-            "reviewing, and a re-dispatch would post a second summary"
+            "reviewing, and a re-dispatch would post a second summary",
         )
     if not sandbox_terminated_abnormally(st):
-        return False, (
+        return RetryPlan(
+            False,
             "the stream ended without a hard error — the sandbox may still be "
-            "running, and a re-dispatch would double-review the PR"
+            "running, and a re-dispatch would double-review the PR",
         )
     if not is_retryable_fault(st):
-        return False, (
+        return RetryPlan(
+            False,
             f"code={st.err_code or 'none'} is not a known model/provider fault, "
-            "so a different model would fail the same way"
+            "so a different model would fail the same way",
         )
-    if seconds_left < RETRY_MIN_REMAINING_SECONDS:
-        return False, (
-            f"only {int(seconds_left)}s of the job budget remain, below the "
-            f"{RETRY_MIN_REMAINING_SECONDS}s a retry needs to deliver a review"
-        )
-    return True, (
+    return RetryPlan(
+        True,
         f"code={st.err_code or 'none'} looks like a model/provider fault — "
         f"re-dispatching on {RETRY_MAIN_MODEL} (attempt {attempt + 1} of "
-        f"{MAX_DISPATCH_ATTEMPTS})"
+        f"{MAX_DISPATCH_ATTEMPTS})",
+        RETRY_MAIN_MODEL,
     )
+
+
+def retry_decision(st: SSEState, attempt: int, seconds_left: float) -> RetryPlan:
+    """Whether to re-dispatch after this attempt, on what, and why either way.
+
+    The reason is logged verbatim so a run that did NOT retry says why — the
+    part that is otherwise invisible. The attempt cap and the wall-clock floor
+    bound BOTH classes; only the classification in `_retry_class` differs.
+    """
+    if attempt >= MAX_DISPATCH_ATTEMPTS:
+        return RetryPlan(False, f"already used all {MAX_DISPATCH_ATTEMPTS} attempts")
+    plan = _retry_class(st, attempt)
+    if not plan.retry:
+        return plan
+    if seconds_left < RETRY_MIN_REMAINING_SECONDS:
+        return RetryPlan(
+            False,
+            f"only {int(seconds_left)}s of the job budget remain, below the "
+            f"{RETRY_MIN_REMAINING_SECONDS}s a retry needs to deliver a review",
+        )
+    return plan
 
 
 def total_cost(attempts: Sequence[Attempt]) -> str:
@@ -947,6 +1022,41 @@ def check_verdict_posted(
     return False
 
 
+def check_verdict_posted_confirmed(
+    since: str,
+    repo: str,
+    dedupe: Callable[[], int] = _dedupe_main,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> bool:
+    """`check_verdict_posted`, with a zero re-read before it is believed.
+
+    The comment listing is not read-after-write consistent — a summary written
+    seconds ago can be missing from the next GET — and a single unconfirmed
+    zero is now load-bearing twice over: it authorises a re-dispatch (which on
+    a PR whose verdict DID land would post a second summary) as well as the
+    hard-failure path.
+
+    `RECHECK_ATTEMPTS` / `RECHECK_DELAY_S` are imported from
+    `sdk_review_verdict_gate`, which reads the same comments one step later for
+    the same reason. Two copies of the threshold would drift, and this step
+    deciding "empty" while the gate decides "delivered" is precisely the
+    contradiction the shared constant prevents. The 20s is spent only on a run
+    that is already failing or about to retry.
+    """
+    for attempt in range(1, RECHECK_ATTEMPTS + 1):
+        if check_verdict_posted(since, repo, dedupe):
+            return True
+        if attempt < RECHECK_ATTEMPTS:
+            print(
+                f"No SDK_REVIEW summary attributed to this run (attempt "
+                f"{attempt}/{RECHECK_ATTEMPTS}) — re-reading in "
+                f"{RECHECK_DELAY_S:.0f}s in case the listing has not caught up.",
+                flush=True,
+            )
+            sleeper(RECHECK_DELAY_S)
+    return False
+
+
 # --- transport -------------------------------------------------------------
 
 
@@ -1050,11 +1160,15 @@ def main() -> int:
     run_start = time.monotonic()
     attempts: list[Attempt] = []
     attempt = 1
+    # Named by the previous attempt's RetryPlan; empty on the first pass. The
+    # model is NOT a function of the attempt number — see RetryPlan.
+    next_model = ""
     while True:
         # Clamp the sandbox's own cap to what is left of this step's budget.
         # Cancelling the job does not stop the sandbox, so an unclamped retry
         # started late would keep billing for up to 2h after the runner dies.
         seconds_left = DISPATCH_BUDGET_SECONDS - (time.monotonic() - run_start)
+        model = next_model or attempt_model(attempt)
         payload = build_payload(
             session_id=os.environ["SESSION_ID"],
             pr_number=pr_number,
@@ -1068,9 +1182,9 @@ def main() -> int:
             comment_id=os.environ.get("COMMENT_ID", ""),
             gha_run_url=gha_run_url,
             attempt=attempt,
+            model=model,
             max_timeout_seconds=max(1, min(STREAM_TIMEOUT_SECONDS, int(seconds_left))),
         )
-        model = attempt_model(attempt)
         print(f"[attempt {attempt}/{MAX_DISPATCH_ATTEMPTS}] dispatching on {model}")
         st = dispatch_once(base_url, token, payload, pr_number, gha_run_url)
         attempts.append(Attempt(attempt, model, st))
@@ -1087,24 +1201,30 @@ def main() -> int:
         # one would post a second summary on the same PR. This is the review
         # lane's equivalent of the resolve lane's out-of-band poll — cheaper,
         # because the reviewer's hand-off IS a PR comment we already read.
-        verdict_posted = check_verdict_posted(since, repo)
+        verdict_posted = check_verdict_posted_confirmed(since, repo)
         code, messages = decide_exit(st, verdict_posted, pr_number)
-        if code == 0:
+        if code == 0 and verdict_posted:
             break
 
-        should_retry, reason = retry_decision(
+        # A clean `complete` with no verdict exits 0 here — `decide_exit` has
+        # nothing to fault — so the retry decision has to be reached on the
+        # green path too, or the silent-review class could never fire. When it
+        # declines, the outcome is exactly what it was before: exit 0, and
+        # `sdk_review_verdict_gate.py` reds the run one step later.
+        plan = retry_decision(
             st, attempt, DISPATCH_BUDGET_SECONDS - (time.monotonic() - run_start)
         )
-        if not should_retry:
-            print(f"::warning::Not re-dispatching: {reason}")
+        if not plan.retry:
+            print(f"::warning::Not re-dispatching: {plan.reason}")
             break
-        print(f"::warning::Re-dispatching after a dead sandbox: {reason}")
+        print(f"::warning::Re-dispatching on {plan.model}: {plan.reason}")
+        next_model = plan.model
         attempt += 1
 
     if code != 0 and len(attempts) > 1:
         messages[-1] += (
-            f" (retried on {attempt_model(len(attempts))} after "
-            f"{attempt_model(1)} died; both attempts failed)"
+            f" (retried on {attempts[-1].model} after {attempts[0].model}; "
+            "both attempts failed)"
         )
 
     # Export the outputs before printing the decision — the failure paths we
