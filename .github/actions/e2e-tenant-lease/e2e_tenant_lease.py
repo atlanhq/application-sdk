@@ -996,9 +996,10 @@ def verify_held(repo: str, ref: str, run_id: int, attempt: int) -> bool:
         print(
             f"::error::this run does not hold the tenant lease {ref}: it is held "
             f"by run {holder.run_id} ({holder.run_url(repo)}), attempt "
-            f"{holder.attempt}. Installing now would race that run. This usually "
-            "means this cloud's acquire failed while another cloud's succeeded. "
-            "Re-run this job."
+            f"{holder.attempt}. Installing now would race that run. Acquisition "
+            "is all-or-nothing across the cloud set, so this normally means the "
+            "lease was broken by its TTL, or reaped after this run was misread "
+            "as finished. Re-run this job."
         )
         return False
     print(f"Tenant lease confirmed held by this run: {ref}")

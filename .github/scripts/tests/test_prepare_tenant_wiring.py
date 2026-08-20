@@ -235,13 +235,35 @@ def test_the_lease_jobs_use_the_shared_action_at_main(
     assert step["with"]["mode"] == mode
 
 
-@pytest.mark.parametrize("job", ["lease-tenant", "release-tenant"])
-def test_the_lease_jobs_key_on_app_and_cloud(jobs: dict, job: str) -> None:  # type: ignore[type-arg]
-    """Acquire and release must name the same tenant, or every run leaks its
+def test_the_release_keys_on_app_and_cloud(jobs: dict) -> None:  # type: ignore[type-arg]
+    """Acquire and release must name the same tenants, or every run leaks its
     ticket and the next contender waits for a holder that has already gone."""
-    with_ = _lease_step(jobs, job)["with"]
+    with_ = _lease_step(jobs, "release-tenant")["with"]
     assert with_["app"] == "${{ inputs.app-name }}"
     assert with_["cloud"] == "${{ matrix.cloud }}"
+
+
+def test_the_acquire_is_one_job_over_an_ordered_cloud_set(jobs: dict) -> None:  # type: ignore[type-arg]
+    """The deadlock fix, asserted as shape (FND-646).
+
+    A per-cloud matrix acquires in PARALLEL and holds each lease while blocking
+    on the rest — hold-and-wait. It deadlocked the first time two runs queued
+    behind one holder: they raced for the freed set, split it, and each blocked on
+    what the other held for the whole wait budget. With two or more runs queued
+    that split is the expected outcome, so the parallel shape must not come back.
+    """
+    lease = jobs["lease-tenant"]
+    assert "strategy" not in lease, (
+        "lease-tenant must acquire every cloud in ONE job, in order; a matrix "
+        "acquires them in parallel and reintroduces hold-and-wait (FND-646)"
+    )
+    with_ = _lease_step(jobs, "lease-tenant")["with"]
+    assert with_["app"] == "${{ inputs.app-name }}"
+    assert with_["clouds"] == "${{ needs.discover-e2e.outputs.cloud-list }}"
+    assert "cloud" not in with_, (
+        "passing both cloud and clouds fails the driver rather than silently "
+        "preferring one; the acquire takes the set"
+    )
 
 
 @pytest.mark.parametrize("job", ["lease-tenant", "release-tenant"])
@@ -533,15 +555,57 @@ def test_the_lease_wait_budget_is_the_operator_facing_signal(jobs: dict) -> None
 
 
 def test_the_lease_and_install_fan_out_over_the_same_clouds(jobs: dict) -> None:  # type: ignore[type-arg]
-    # A lease leg that missed a cloud the install then ran against is an
+    # A cloud the lease missed and the install then ran against is an
     # unserialised install, not a visible failure.
-    assert (
-        jobs["lease-tenant"]["strategy"]["matrix"]
-        == (jobs["prepare-tenant"]["strategy"]["matrix"])
-    )
     assert (
         jobs["release-tenant"]["strategy"]["matrix"]
         == (jobs["prepare-tenant"]["strategy"]["matrix"])
+    )
+
+
+def test_the_lease_set_and_the_install_matrix_come_from_one_discovery(
+    jobs: dict,  # type: ignore[type-arg]
+) -> None:
+    """The acquire takes a LIST and the install fans out over a MATRIX, so they
+    can no longer be compared string-for-string. They are pinned to the same
+    discovery STEP instead — `discover-clouds`, the clouds-only call — because
+    that removes the possibility of disagreement rather than testing for it.
+    """
+    outputs = yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))["jobs"][
+        "discover-e2e"
+    ]["outputs"]
+    assert outputs["cloud-list"] == "${{ steps.discover-clouds.outputs.clouds }}"
+    assert outputs["cloud-matrix"] == "${{ steps.discover-clouds.outputs.matrix }}"
+
+    assert (
+        _lease_step(jobs, "lease-tenant")["with"]["clouds"]
+        == "${{ needs.discover-e2e.outputs.cloud-list }}"
+    )
+    assert "cloud-matrix" in jobs["prepare-tenant"]["strategy"]["matrix"]
+
+
+def test_a_failed_lease_fails_the_install_rather_than_skipping_it(jobs: dict) -> None:  # type: ignore[type-arg]
+    """Load-bearing in the opposite direction to how it reads.
+
+    Acquisition is all-or-nothing, so a failed lease means the run holds nothing
+    — and tightening prepare-tenant's gate to `== 'success'` would SKIP the
+    install. The e2e legs deliberately tolerate a skipped prepare-tenant, so they
+    would then run against whatever version the tenant happens to serve (FND-31).
+    Letting the install run and fail on its own lease check is what stops them.
+    """
+    assert (
+        evaluate(
+            _load_gate("prepare-tenant"),
+            {
+                "inputs": {"install-app-to-tenant": True},
+                "needs": {
+                    "discover-e2e": {"result": "success"},
+                    "merge-e2e-image": {"result": "success"},
+                    "lease-tenant": {"result": "failure"},
+                },
+            },
+        )
+        is True
     )
 
 
