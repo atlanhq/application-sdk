@@ -85,12 +85,17 @@ jobs:
         id: buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
 
+      # GHCR for a package owned by this same repo needs nothing beyond the
+      # job's own GITHUB_TOKEN plus `packages: write` (declared at the top of
+      # this file) -- the org PAT was strictly more privilege than the push
+      # requires. This workflow is not reusable and has no external callers, so
+      # the token is always application-sdk's own.
       - name: Login to GitHub Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.ORG_PAT_GITHUB }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to Chainguard Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
@@ -119,13 +124,14 @@ jobs:
           # Arch-suffixed — merged into the real tag by merge-ghcr below.
           tags: |
             ghcr.io/atlanhq/app-runtime-base-${{ needs.prepare.outputs.lowercase_branch }}:sha-${{ needs.prepare.outputs.sha }}-${{ matrix.arch }}
-          build-args: |
-            ACCESS_TOKEN_USR=$GITHUB_ACTOR
-            ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
-          # This job already logs into GHCR with ORG_PAT_GITHUB above, so
-          # there's no benefit to minting a separate App token just for this
-          # generic GHA-cache-API auth -- the PAT is already in play either way.
-          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          # No `build-args` here on purpose. Build args are recorded in image
+          # config and are readable via `docker history` by anyone who can pull
+          # the image, so a credential passed that way is published, not just
+          # used (FND-697). This Dockerfile is a single `FROM` and needs no
+          # credential at all; a Dockerfile that does should mount one with
+          # `RUN --mount=type=secret`, which BuildKit keeps out of every layer,
+          # and be fed via the `secrets:` input rather than `build-args`.
+          github-token: ${{ secrets.GITHUB_TOKEN }}
         env:
           DOCKER_CLIENT_TIMEOUT: 600
           COMPOSE_HTTP_TIMEOUT: 600
@@ -142,12 +148,13 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
 
+      # Same-repo GHCR push -- see the note on the push-to-ghcr login above.
       - name: Login to GitHub Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.ORG_PAT_GITHUB }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create and push multi-arch manifest
         env:
