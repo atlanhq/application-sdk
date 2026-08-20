@@ -174,6 +174,16 @@ TEMPORAL_PROMETHEUS_BIND_ADDRESS = os.getenv(
 TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS: float = float(
     os.getenv("ATLAN_TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS", "5.0")
 )
+#: Upper bound on the bytes read from the loopback metrics endpoint when
+#: reading sdk-core's poller gauge for diagnostics. The endpoint is local and
+#: diagnostics-only, but a high-cardinality or misbehaving exporter could
+#: otherwise make the observer allocate an unbounded string every interval.
+#: Oversize is treated as unknown (``None``), never as zero. ~1 MiB is far
+#: above a healthy exposition (~460 series) and far below anything that could
+#: pressure the worker.
+TEMPORAL_CORE_METRICS_MAX_BYTES: int = int(
+    os.getenv("ATLAN_TEMPORAL_CORE_METRICS_MAX_BYTES", str(1024 * 1024))
+)
 
 # Prometheus Pushgateway (worker-only deployments)
 #: Pushgateway URL workers push to. Empty disables push (combined-mode
@@ -606,6 +616,17 @@ OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
 )
 #: Whether to enable OpenTelemetry log export
 ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
+#: Whether console tracebacks annotate each frame with the *values* of the names
+#: on its source line (loguru's ``diagnose``). Default is False, unlike loguru's
+#: own default of True: those values reach the console verbatim, so a local
+#: holding a token or a credential dict renders its contents onto a live
+#: worker's stderr. Frames themselves are always kept — ``backtrace`` is
+#: untouched — so only the value annotation is gated.
+#:
+#: Deliberately its own variable rather than a function of ``LOG_LEVEL``: raising
+#: a tenant's log verbosity to DEBUG must not silently re-enable value rendering.
+#: Set to True for local debugging, where the annotation is genuinely useful.
+ENABLE_LOG_DIAGNOSE: bool = os.getenv("ATLAN_LOG_DIAGNOSE", "false").lower() == "true"
 #: Whether to emit SDK logger output during Temporal workflow replay.
 #: Default is False, matching Temporal's native ``workflow.logger`` behaviour.
 #: Set to True to re-enable replay logs for debugging (e.g. when using the

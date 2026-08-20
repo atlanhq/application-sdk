@@ -63,9 +63,15 @@ jobs:
 
       # Sparse, and ahead of the full checkout below, so the ack stays the
       # first thing the requester sees.
+      #
+      # `path:` is load-bearing — this MUST NOT share a git dir with the full
+      # checkout below, or the workspace stays sparse for the rest of the job.
+      # See the long-form explanation in capability-manifest-regen.yaml
+      # (FND-637); the same trap applies here.
       - name: Checkout reaction helper
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          path: .ack
           sparse-checkout: .github/scripts/react_to_comment.py
           sparse-checkout-cone-mode: false
 
@@ -78,7 +84,7 @@ jobs:
           REPO: ${{ github.repository }}
           COMMENT_ID: ${{ github.event.comment.id }}
           REACTION: rocket
-        run: python3 .github/scripts/react_to_comment.py
+        run: python3 .ack/.github/scripts/react_to_comment.py
 
       - name: Mint fleet App token
         id: app-token

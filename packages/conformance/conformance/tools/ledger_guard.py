@@ -27,6 +27,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+from conformance.suite.checks._ast_common import detect_scope
+from conformance.suite.checks.deprecation._ledger_schema import regen_command
+
 
 def _load_json_from_git(ref: str, path: str) -> dict | None:
     """Return parsed JSON at *path* at git ref *ref*, or None if absent."""
@@ -142,7 +145,7 @@ def main(argv: list[str] | None = None) -> int:
         "Field deletions and type changes are not permitted.\n"
         "To retire a field: mark it 'deprecated' or 'sunset' in the widget "
         "definition and regenerate with:\n"
-        "  uv run atlan-application-sdk-conformance gen-contract-ledger",
+        f"  {regen_command(detect_scope(Path.cwd()))}",
         file=sys.stderr,
     )
     return 1

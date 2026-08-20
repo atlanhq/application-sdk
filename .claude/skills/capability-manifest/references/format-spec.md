@@ -44,19 +44,42 @@ A markdown table immediately after the intro block:
 
 | Subpackage | Purpose | Exports |
 |---|---|---|
-| `application_sdk.app` | <purpose from subpackage-purposes.yaml> | <len(__all__)> |
-| ...                   | ...                                     | ...            |
+| `application_sdk.app` | <purpose from subpackage-purposes.yaml> | <symbol count> |
+| ...                   | ...                                     | ...             |
 ```
 
 - **Subpackage** — backtick-quoted full import path, alphabetical.
 - **Purpose** — read from `references/subpackage-purposes.yaml` by short name (e.g., `app`).
-- **Exports** — `len(__all__)` recomputed each render from the `__init__.py` AST.
+- **Exports** — every symbol emitted for the subpackage, recounted each render. That is
+  the union of the package `__init__`'s `__all__` and the `__all__` of every public
+  submodule beneath it, deduplicated by name — not `len(__all__)` of the `__init__`
+  alone. A subpackage can therefore appear with exports while its `__init__` declares
+  no `__all__` at all (`application_sdk.server`).
 
 ---
 
 ## Section 2 — Subpackage Details
 
 One H2 per subpackage, alphabetical. Each subpackage section has one or more H3 groups.
+
+A subpackage section covers every public module beneath it, so the **Import** line
+carries the module a symbol is actually exported from — which is not always the
+subpackage root. `run_in_thread` appears under `application_sdk.execution` with
+`from application_sdk.execution.heartbeat import run_in_thread`. When more than one
+public module exports the same name, the shortest path wins the entry and the rest are
+listed on an **Also importable from** line:
+
+```markdown
+#### `ProgressTracker`
+
+- **Import:** `from application_sdk.execution.heartbeat import ProgressTracker`
+- **Also importable from:** `application_sdk.execution.progress`
+```
+
+**Defined in** stays the file the symbol is *defined* in, which for a re-exported seam
+is a private module (`application_sdk/_runtime/offload.py`). The two lines answer
+different questions on purpose: **Import** is what an app writes, **Defined in** is
+where to read the code.
 
 ```markdown
 ## `application_sdk.<name>`

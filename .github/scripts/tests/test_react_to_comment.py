@@ -20,7 +20,7 @@ import importlib.util
 import math
 import re
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 import yaml
@@ -395,7 +395,12 @@ def test_every_caller_can_actually_reach_the_script() -> None:
     """A caller that never checks out the repo would fail at `python3 …`.
 
     Cheap to get wrong: two of these workflows react *before* their main
-    checkout, so they carry a sparse one just for this file.
+    checkout, so they carry a sparse one just for this file — and, since
+    FND-637, at a `path:` of its own so the sparse setting cannot leak into the
+    full checkout that follows. That makes the *path* part of the contract too:
+    the `run:` line has to name the directory the sparse checkout landed in, or
+    `python3` fails on a file that is genuinely not there. Asserting only that
+    "some checkout happened first" would not catch that.
     """
     for path in _yaml_files():
         text = path.read_text(encoding="utf-8")
@@ -405,17 +410,36 @@ def test_every_caller_can_actually_reach_the_script() -> None:
         jobs = doc.get("jobs") or {}
         for job_name, job in jobs.items():
             steps = job.get("steps") or []
-            checked_out = False
+            checkout_dirs: set[str] = set()
             for step in steps:
                 uses = str(step.get("uses") or "")
                 run = str(step.get("run") or "")
                 if uses.startswith("actions/checkout@"):
-                    checked_out = True
+                    with_block = step.get("with") or {}
+                    raw = str(with_block.get("path") or ".").strip().rstrip("/")
+                    checkout_dirs.add(raw or ".")
                 if SCRIPT_NAME in run:
-                    assert checked_out, (
+                    assert checkout_dirs, (
                         f"{path.name}:{job_name} runs {SCRIPT_NAME} with no "
                         "preceding actions/checkout"
                     )
+                    invoked = [
+                        token for token in run.split() if token.endswith(SCRIPT_NAME)
+                    ]
+                    assert invoked, (
+                        f"{path.name}:{job_name} names {SCRIPT_NAME} but the "
+                        "guard could not find the invoked path in the run body"
+                    )
+                    for token in invoked:
+                        parent = str(PurePosixPath(token).parent)
+                        # `.github/scripts/x.py` → checked out at the root;
+                        # `.ack/.github/scripts/x.py` → checked out at `.ack`.
+                        prefix = parent[: -len(".github/scripts")].rstrip("/") or "."
+                        assert prefix in checkout_dirs, (
+                            f"{path.name}:{job_name} runs '{token}', which needs "
+                            f"a checkout at '{prefix}', but this job only checks "
+                            f"out at {sorted(checkout_dirs)}"
+                        )
 
 
 # Every bot entry point that acknowledges a comment, as (workflow, job, step).
@@ -428,6 +452,7 @@ def test_every_caller_can_actually_reach_the_script() -> None:
 EXPECTED_CALLERS = {
     ("sdk-review.yml", "react-on-skip", "React to skipped trigger"),
     ("sdk-review.yml", "sdk-review-dispatch", "React to comment"),
+    ("sdk-review.yml", "sdk-review-dispatch", "React to skipped re-trigger"),
     ("sdk-resolve.yml", "sdk-resolve-dispatch", "Acknowledge with a reaction"),
     ("auto-fix-vulnerabilities.yaml", "auto-fix", "React to comment"),
     ("capability-manifest-regen.yaml", "regen", "React to comment"),

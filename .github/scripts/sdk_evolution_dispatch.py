@@ -246,8 +246,16 @@ def process_line(line: str, st: SSEState) -> str | None:
         st.status = _jget(data, "status", default="unknown")
         st.cost = _jget(data, "cost_usd")
         if st.status == "error":
-            st.err_code = _jget(data, "error", "code", default="none")
+            # A `complete` carrying status=error is as terminal as a standalone
+            # `error` event, so flag it the same way — otherwise decide_exit and
+            # the step summary parse the reason and then throw it away, leaving
+            # the log with only "final status=error" and no code/message.
+            # Gated on there actually being detail: with an empty error object
+            # the bare `status=...` line downstream says more than `code=none`.
+            code = _jget(data, "error", "code")
+            st.err_code = code or "none"
             st.err_msg = _jget(data, "error", "message")
+            st.errored = bool(code or st.err_msg)
         return f"[complete]  status={st.status} cost_usd={st.cost}"
     return None
 
