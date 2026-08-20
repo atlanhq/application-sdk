@@ -17,9 +17,56 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.observability.resource_sampler import parse_pod_memory_limit
 
 _logger = get_logger(__name__)
+
+# BACKPORT-ONLY. On main this is imported from ``resource_sampler``, where it
+# landed after v3.15.1. Vendored here so this branch runs unmodified against the
+# SDK version AE pins today, which is the whole point of the backport. When AE
+# moves to a release carrying the collector, this branch is deleted and the import
+# on main is what ships — do not port this copy forward.
+_BINARY_SUFFIXES: dict[str, int] = {
+    "Ki": 1024,
+    "Mi": 1024**2,
+    "Gi": 1024**3,
+    "Ti": 1024**4,
+    "Pi": 1024**5,
+    "Ei": 1024**6,
+}
+_DECIMAL_SUFFIXES: dict[str, int] = {
+    "k": 1000,
+    "M": 1000**2,
+    "G": 1000**3,
+    "T": 1000**4,
+    "P": 1000**5,
+    "E": 1000**6,
+}
+
+
+def parse_pod_memory_limit(raw: str) -> int:
+    """Parse a K8S_POD_MEMORY_LIMIT value into bytes; 0 means unknown."""
+    raw = raw.strip()
+    if not raw:
+        return 0
+    for suffix, multiplier in {**_BINARY_SUFFIXES, **_DECIMAL_SUFFIXES}.items():
+        if raw.endswith(suffix):
+            try:
+                return int(raw[: -len(suffix)]) * multiplier
+            except ValueError:
+                _logger.warning(
+                    "Could not parse pod memory limit %r (suffix %r)",
+                    raw,
+                    suffix,
+                    exc_info=True,
+                )
+                return 0
+    try:
+        return int(raw)
+    except ValueError:
+        _logger.warning(
+            "Could not parse pod memory limit %r as integer bytes", raw, exc_info=True
+        )
+        return 0
 
 # v2 first: a host with both mounted must read v2, which is what the kernel enforces.
 _MEMORY_CURRENT_PATHS = (

@@ -8,6 +8,12 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+# BACKPORT-ONLY: main already has a module logger here. Added so the sizing
+# settings loader can warn on a malformed value instead of failing at import.
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
+
 
 @dataclass(frozen=True)
 class ExecutionSettings:
