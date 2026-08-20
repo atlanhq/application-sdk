@@ -678,19 +678,33 @@ def test_acquire_retries_when_the_holder_is_unreadable(http: FakeHTTP) -> None:
     assert http.count("DELETE", "/git/refs/") == 0
 
 
-def test_acquire_disables_itself_without_blob_write(http: FakeHTTP) -> None:
-    # Fail-open: the lease reduces contention, it is not what makes a
-    # wrong-version run detectable (each leg re-asserts the version, FND-31).
+def test_acquire_is_denied_without_blob_write(http: FakeHTTP) -> None:
+    # NOT fail-open (FND-702). The predecessor returned "disabled" and exited 0
+    # on the theory that the run proceeded unserialised; it never did — the
+    # install's own verify step reds every Prepare tenant leg two jobs later.
     _stub_unheld(http)
     http.route("POST", "/git/blobs", _PERMISSION_DENIED)
-    assert _acquire() == ("disabled", None)
+    assert _acquire() == ("denied", None)
 
 
-def test_acquire_disables_itself_without_ref_write(http: FakeHTTP) -> None:
+def test_acquire_is_denied_without_ref_write(http: FakeHTTP) -> None:
     _stub_unheld(http)
     _stub_blob_write(http)
     http.route("POST", "/git/refs", _PERMISSION_DENIED)
-    assert _acquire() == ("disabled", None)
+    assert _acquire() == ("denied", None)
+
+
+@pytest.mark.parametrize("refused", ["/git/blobs", "/git/refs"])
+def test_a_denial_does_not_keep_retrying(http: FakeHTTP, refused: str) -> None:
+    # A denial is a fact about the token, not about timing, so it must answer on
+    # the first pass rather than burning the whole wait budget re-learning it.
+    _stub_unheld(http)
+    _stub_blob_write(http)
+    http.route("POST", refused, _PERMISSION_DENIED)
+    slept: list[int] = []
+    state, _ = _acquire(wait_seconds=300, poll_seconds=1, sleep=slept.append)
+    assert state == "denied"
+    assert slept == []
 
 
 def test_acquire_respects_the_wait_budget(http: FakeHTTP) -> None:
@@ -1135,13 +1149,41 @@ def test_main_acquire_can_warn_instead_of_failing(
     assert "::warning::" in capsys.readouterr().out
 
 
-def test_main_acquire_exits_zero_when_the_lease_is_disabled(
-    http: FakeHTTP, monkeypatch: pytest.MonkeyPatch
+def test_main_acquire_fails_when_the_lease_cannot_be_taken(
+    http: FakeHTTP, capsys, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # FND-702: the documented fail-open was fail-closed. `prepare-tenant` runs
+    # this same driver in --mode verify, which needs only `contents: read`,
+    # finds no lease and exits 1 under `set -euo pipefail` — so exiting 0 here
+    # bought nothing except a red two jobs later saying "Re-run this job", which
+    # cannot help. Exit non-zero at the one place that can name the grant.
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
     _stub_unheld(http)
     http.route("POST", "/git/blobs", _PERMISSION_DENIED)
-    assert main(_argv("acquire")) == 0
+    assert main(_argv("acquire")) == 1
+    printed = capsys.readouterr().out
+    assert "::error::" in printed
+    # Names the grant, the workflow to grant it in, and that retrying is futile.
+    assert "contents: write" in printed
+    assert "actions: read" in printed
+    assert "re-running will not fix it" in printed
+    assert "::warning::" not in printed
+
+
+def test_main_acquire_reports_denied_in_its_outputs(
+    http: FakeHTTP, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A caller that reads `state` must see the denial, not a value that reads as
+    # a benign posture. `acquired` stays false, so no consumer can mistake it.
+    output = tmp_path / "outputs"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    _stub_unheld(http)
+    http.route("POST", "/git/blobs", _PERMISSION_DENIED)
+    assert main(_argv("acquire")) == 1
+    written = output.read_text()
+    assert "state=denied" in written
+    assert "acquired=false" in written
+    assert "lease-refs=\n" in written
 
 
 def test_main_acquire_fails_on_a_persistent_rate_limit(
@@ -1393,6 +1435,27 @@ def test_ordered_acquisition_deduplicates_across_spellings(http: FakeHTTP) -> No
     assert list(outcome.held) == [_ref_for("aws")]
 
 
+def test_ordered_acquisition_reports_a_denial_on_the_first_cloud(
+    http: FakeHTTP,
+) -> None:
+    # A denial is repo-wide, so it answers on the FIRST lease of the set rather
+    # than being rediscovered per cloud. It must reach the caller as "denied" and
+    # not as the timeout it would look like if the state were swallowed — the
+    # two have opposite remedies ("grant the token" vs "wait for the tenant").
+    for cloud in ("aws", "azure", "gcp"):
+        http.route("GET", _path_of(_ref_for(cloud)), (404, {"message": "Not Found"}))
+    http.route("POST", "/git/blobs", _PERMISSION_DENIED)
+
+    outcome = _ordered(["aws", "azure", "gcp"])
+
+    assert outcome.state == "denied"
+    assert outcome.held == ()
+    assert outcome.ref == _ref_for("aws")
+    # Nothing was taken, so nothing is given back — and in particular the unwind
+    # does not issue a DELETE the same token cannot make either.
+    assert http.count("DELETE", "/git/refs/") == 0
+
+
 def test_a_blocked_cloud_gives_back_what_was_already_held(http: FakeHTTP) -> None:
     """The whole point. Holding aws while blocking on azure is hold-and-wait —
     exactly the shape that deadlocked when two runs split a freed set — so a run
@@ -1520,6 +1583,21 @@ def test_main_acquire_reports_the_whole_set_it_holds(
     assert "acquired=true" in written
     assert f"lease-refs={_ref_for('aws')},{_ref_for('gcp')}" in written
     assert "clouds=aws,gcp" in written
+
+
+def test_main_acquire_fails_when_the_whole_set_is_denied(
+    http: FakeHTTP, capsys, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The path lease-tenant actually takes — it always passes --clouds — so the
+    # FND-702 exit code has to hold on the ordered branch too, not only on the
+    # single-tenant one.
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    for cloud in ("aws", "azure", "gcp"):
+        http.route("GET", _path_of(_ref_for(cloud)), (404, {"message": "Not Found"}))
+    http.route("POST", "/git/blobs", _PERMISSION_DENIED)
+
+    assert main(_argv_clouds("acquire", "aws,azure,gcp")) == 1
+    assert "::error::" in capsys.readouterr().out
 
 
 def test_main_acquire_with_an_empty_cloud_list_falls_back_to_one_tenant(

@@ -1530,6 +1530,14 @@ jobs:
       # Ref writes create and delete the lease ticket. Scoped to THIS job on
       # purpose: the long-running e2e legs below keep read-only contents, so the
       # write capability lives only in a job that runs no test code.
+      #
+      # A called workflow's permissions can only EQUAL or NARROW the caller's, so
+      # this declaration is a ceiling and not a grant: if the calling repo's
+      # `tests:` job has no `contents: write` — because it declares a narrower
+      # `permissions:` block, or because the repo default is read-only — the
+      # acquire below fails, by design and with an error naming the grant
+      # (FND-702). The canonical scaffolded tests.yaml declares the whole set for
+      # exactly this reason.
       contents: write
       # Tell a live holder from a dead one, which is what makes a cancelled run's
       # abandoned ticket self-healing.

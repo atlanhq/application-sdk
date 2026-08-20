@@ -116,18 +116,30 @@ sizing is load-bearing for release safety as well as for acquisition: see
 
 Failure posture
 ---------------
-* **No permission to write refs** is a ``::warning::`` and the run proceeds
-  *without* a lease. The lease reduces contention; it is not what keeps a
-  wrong-version run from passing — every leg re-asserts the installed version
-  itself (FND-31). Making an ungrantable lease fail the run would turn a safety
-  improvement into a new way for e2e to go red fleet-wide.
+* **No permission to write refs** fails the acquire, naming the grant that is
+  missing.
 
-  Note the limit of that backstop, which is easy to overstate: the version assert
-  catches a *wrong-version* run, not two runs installing the *same* version and
-  fighting over one tenant. Two dispatches of one commit do exactly that, and it
-  surfaces as a worker/task-queue failure rather than a version mismatch. So
-  fail-open is a real reduction in protection, not a no-op — which is why a rate
-  limit must never be allowed to trigger it.
+  This used to be a ``::warning::`` that returned ``disabled`` and exited 0, on
+  the reasoning that "making an ungrantable lease fail the run would turn a
+  safety improvement into a new way for e2e to go red fleet-wide". That
+  fail-open never existed (FND-702). ``prepare-tenant``'s first step runs this
+  same driver in ``--mode verify``, which needs only ``contents: read``, finds
+  no lease ref, and exits 1 under ``set -euo pipefail`` — so every
+  ``Prepare tenant`` leg failed, the e2e legs were skipped, and the gate went
+  red anyway. The choice was not being made; it was being *reversed* two jobs
+  later, at the cost of an error that said "re-run this job" when re-running
+  could not possibly help.
+
+  So the posture is now the one the code always had, said where it can be
+  explained: a lease that cannot be taken at all is a configuration error in the
+  caller's ``permissions:`` block, and it is reported at the acquire, by name.
+
+  Proceeding unserialised was the alternative and was rejected on its merits,
+  not merely because it was more work. The FND-31 version assert catches a
+  *wrong-version* run, not two runs installing the *same* version and fighting
+  over one tenant — two dispatches of one commit do exactly that, and it
+  surfaces as a worker/task-queue failure rather than a version mismatch. That
+  is also why a rate limit must never be allowed to reach this path.
 * **Not acquired within the wait budget** fails loudly, naming the holding run.
 
 Co-located with the composite action, and pinned ``@main`` by every consumer on
@@ -378,8 +390,10 @@ def _rate_limited(response: Response) -> bool:
 
     Both arrive as 403, and conflating them is how the lease used to switch
     itself OFF exactly when it was needed: several legs queueing for tenants is
-    also when the shared per-repository budget runs out, and the fail-open path
-    then let every waiting run proceed onto the tenant unserialised.
+    also when the shared per-repository budget runs out, and the (then
+    nominally fail-open) denial path let every waiting run give up on the lease.
+    The denial path fails the job now (FND-702), so the same conflation would
+    turn a busy hour into a red run blaming a permission the caller has.
 
     Detected from the headers first (``x-ratelimit-remaining: 0``, or a
     ``retry-after`` on a secondary limit) and the message second, so it does not
@@ -418,7 +432,7 @@ class RateLimited(Exception):
 
     An exception rather than a return value so every call site cannot forget to
     distinguish it from a permission denial — which is the mistake that made the
-    lease fail open under contention.
+    lease abandon itself under contention.
     """
 
     def __init__(self, retry_after: int | None = None) -> None:
@@ -431,8 +445,9 @@ def create_identity_blob(
 ) -> str | None:
     """Write the holder record the lease ref will point at.
 
-    Returns the blob sha, or None if ref writes are not permitted. Raises
-    ``RateLimited`` when the API is merely busy.
+    Returns the blob sha, or None if writes are not permitted — which the caller
+    turns into a red job naming the missing grant, not into a lease-less run.
+    Raises ``RateLimited`` when the API is merely busy.
 
     Written immediately before the CAS, not once per acquire, because the record
     carries the acquisition timestamp: a blob minted when the run first started
@@ -647,14 +662,23 @@ def _timestamp(value: object) -> float | None:
     return stamp.timestamp()
 
 
-_DISABLED_WARNING = (
-    "::warning::this repository will not let the run write git refs, so the "
-    "(app, cloud) tenant lease is disabled for this run and e2e proceeds "
-    "unserialised. Grant the lease job 'contents: write' to enable it. Each e2e "
-    "leg still asserts the installed version independently (FND-31), so a "
-    "WRONG-version run cannot pass silently — but two runs installing the SAME "
-    "version will still fight over the tenant, so this is a real loss of "
-    "protection, not a no-op."
+# Printed at the ONE place that can explain the failure. Reaching the install
+# without a lease is not survivable — `prepare-tenant` verifies its own tenant's
+# lease before installing and fails when there is none — so the choice here is
+# not "red or green", it is "red here with the fix, or red two jobs later with
+# 'Re-run this job'" (FND-702).
+_DENIED_ERROR = (
+    "::error::this run may not write git refs, so the (app, cloud) tenant lease "
+    "cannot be taken. This is a permissions problem in the CALLING workflow, not "
+    "a problem with the change under test, and re-running will not fix it: give "
+    "the job that calls tests-reusable.yaml `contents: write` and `actions: "
+    "read`. A `permissions:` block is exhaustive, not additive — every scope it "
+    "omits becomes `none` — so a caller that declares one must declare the whole "
+    "set the reusable's jobs use (see the block in the scaffolded tests.yaml). A "
+    "caller with NO block at all gets this only where the repository default is "
+    "read-only. Proceeding without the lease is not the fallback: two runs "
+    "installing the SAME version onto one tenant surface as a worker/task-queue "
+    "failure, which the FND-31 per-leg version assert does not catch."
 )
 
 
@@ -672,7 +696,7 @@ def acquire(
 ) -> tuple[str, Holder | None]:
     """Take the lease, or report why not.
 
-    Returns ("acquired" | "disabled" | "timeout" | "rate-limited",
+    Returns ("acquired" | "denied" | "timeout" | "rate-limited",
     blocking_holder_or_None).
 
     Each waiting pass costs two API calls: read the ref, and check the holding
@@ -700,8 +724,8 @@ def acquire(
             try:
                 blob_sha = create_identity_blob(repo, run_id, attempt, clock())
                 if blob_sha is None:
-                    print(_DISABLED_WARNING)
-                    return "disabled", None
+                    print(_DENIED_ERROR)
+                    return "denied", None
                 outcome = try_acquire(repo, ref, blob_sha)
             except RateLimited as limited:
                 rate_limited = True
@@ -713,8 +737,8 @@ def acquire(
                 print(f"Tenant lease acquired: {ref}")
                 return "acquired", None
             if outcome == "denied":
-                print(_DISABLED_WARNING)
-                return "disabled", None
+                print(_DENIED_ERROR)
+                return "denied", None
             # "occupied": somebody won the race between our read and our CAS.
             # Re-read next pass; the CAS was the authority, as intended.
             print("Lost the race for the tenant lease; it is held again.")
@@ -787,7 +811,7 @@ def acquire_ordered(
 ) -> OrderedOutcome:
     """Take EVERY cloud's lease, in a fixed order, under one total budget.
 
-    ``state`` is "acquired" | "disabled" | "timeout" | "rate-limited", and
+    ``state`` is "acquired" | "denied" | "timeout" | "rate-limited", and
     "acquired" is all-or-nothing: any other state hands back whatever was taken
     on the way, so the caller either holds the whole set or nothing.
 
@@ -913,17 +937,18 @@ def release_all(repo: str, refs: list[str], run_id: int, attempt: int) -> None:
 def _sleep_for_rate_limit(sleep, poll_seconds: int, retry_after: int | None) -> None:
     """Back off after a rate limit, honouring Retry-After within reason.
 
-    Never returns "disabled" to the caller: a rate limit is a reason to wait, not
-    evidence that the lease cannot be taken. Switching the lease off here would
-    do it precisely when several legs are contending, which is both when the
-    budget runs out and when the lease matters most.
+    Never returns "denied" to the caller: a rate limit is a reason to wait, not
+    evidence that the caller lacks the grant. Reporting it as a denial would do
+    so precisely when several legs are contending — which is both when the budget
+    runs out and when the lease matters most — and would send whoever read the
+    log to fix a `permissions:` block that was already correct.
     """
     delay = poll_seconds
     if retry_after is not None:
         delay = max(poll_seconds, min(retry_after, _MAX_RETRY_AFTER))
     print(
         "::warning::rate-limited by the GitHub API while taking the tenant lease; "
-        f"backing off {delay}s and retrying. The lease is NOT being disabled — "
+        f"backing off {delay}s and retrying. This is NOT a permission problem — "
         "the per-repository budget is shared by every matrix leg, so this is "
         "expected under contention."
     )
@@ -1004,7 +1029,9 @@ def verify_held(repo: str, ref: str, run_id: int, attempt: int) -> bool:
         print(
             f"::error::this run does not hold the tenant lease {ref} — it is "
             "unheld or its holder record is unreadable, so installing now could "
-            "race another run. Re-run this job."
+            "race another run. Read the 'Tenant lease' job's log before "
+            "re-running: if the acquire itself failed, its error says why and "
+            "re-running this job cannot help."
         )
         return False
     if not holder.is_me(run_id, attempt):
@@ -1191,8 +1218,15 @@ def main(argv: list[str] | None = None) -> int:
         os.environ.get("GITHUB_OUTPUT"),
     )
 
-    if state in ("acquired", "disabled"):
+    if state == "acquired":
         return 0
+
+    if state == "denied":
+        # The message was printed at the point of denial, where the specific call
+        # that was refused is still in hand. Exiting non-zero here is the whole of
+        # FND-702: the run cannot install without a lease either way, so this
+        # moves the red to the one job that can say what to grant.
+        return 1
 
     if state == "rate-limited":
         # Deliberately NOT fail-open: proceeding unserialised because the API was
