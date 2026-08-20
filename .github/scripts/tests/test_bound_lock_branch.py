@@ -122,6 +122,24 @@ class TestWorkflowGuards:
         )
         assert "chore(deps): bound the refreshed locks" in self.job["if"]
 
+    def test_the_bound_step_pins_the_version_parser_it_needs(self):
+        """The runner image is not a promise.
+
+        The driver's rollback gate needs PEP 440 parsing, and `python3` on a bare
+        runner is not guaranteed to have `packaging` importable. Without it the
+        gate reports every upgrade as a regression, so the dependency is declared
+        at the call site rather than assumed — pinned, and `--no-project` so the
+        bound never waits on a full dev sync.
+        """
+        steps = self.job["steps"]
+        bound_step = next(
+            s for s in steps if s.get("name") == "Bound the refreshed locks"
+        )
+        run = bound_step["run"]
+        assert "bound_lock_branch.py" in run
+        assert "--with 'packaging==" in run, run
+        assert "--no-project" in run, run
+
     def test_the_lane_is_scoped_to_the_lock_refresh_branch(self):
         # Widening this to `renovate/**` would put the bound on the single-package
         # lanes, where a deliberately chosen first-party version has no business
