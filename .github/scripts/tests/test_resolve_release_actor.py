@@ -164,6 +164,61 @@ class TestReleaseAttribution:
         )
 
 
+class TestReleaseTagSignal:
+    """The tag identifies a tagged release without consulting the event name.
+
+    ``GITHUB_EVENT_NAME`` in a called reusable workflow is the caller's event
+    (``release``), not ``workflow_call`` — see the module docstring for the
+    reproducer. The tag is carried anyway so attribution does not rest on that
+    one behaviour: every caller sets ``release_tag`` only for a release event,
+    so a non-empty tag means the same thing on its own.
+    """
+
+    def test_a_tag_alone_reaches_the_merger(self):
+        run = fake_gh(
+            {
+                f"repos/{REPO}/commits/{SHA}/pulls": COMMIT_PULLS_RESPONSE,
+                f"repos/{REPO}/pulls/3240": SINGLE_PULL_RESPONSE,
+            }
+        )
+        assert (
+            actor.resolve_actor(
+                "workflow_call",
+                REPO,
+                SHA,
+                "atlan-app-fleet[bot]",
+                run,
+                release_tag="v0.3.2",
+            )
+            == "a-human"
+        )
+
+    def test_a_blank_tag_is_not_a_release(self):
+        """Whitespace is what an unset workflow input degrades to, not a tag."""
+        calls: list = []
+        run = fake_gh({}, calls)
+        assert (
+            actor.resolve_actor(
+                "workflow_dispatch", REPO, SHA, "who-dispatched", run, release_tag=" \n"
+            )
+            == "who-dispatched"
+        )
+        assert calls == []
+
+    def test_a_tagless_push_is_still_pr_derived(self):
+        """Deploy-on-merge apps publish on `push` and never set a tag."""
+        run = fake_gh(
+            {
+                f"repos/{REPO}/commits/{SHA}/pulls": COMMIT_PULLS_RESPONSE,
+                f"repos/{REPO}/pulls/3240": SINGLE_PULL_RESPONSE,
+            }
+        )
+        assert (
+            actor.resolve_actor("push", REPO, SHA, "who-pushed", run, release_tag="")
+            == "a-human"
+        )
+
+
 class TestCreatedByValue:
     def test_prefers_a_public_email_over_the_login(self):
         run = fake_gh(
@@ -253,6 +308,16 @@ class TestWorkflowWiring:
         assert publish["env"]["CREATED_BY"] == (
             "${{ steps." + resolver["id"] + ".outputs.created_by }}"
         )
+
+    def test_the_resolver_step_is_given_the_release_tag(self):
+        """Without this the tag signal is dead and only the event name is left.
+
+        Both halves are asserted: an env var carrying ``inputs.release_tag``,
+        and a command line that actually passes it.
+        """
+        step = self._step("Resolve release attribution")
+        assert step["env"]["RELEASE_TAG"] == "${{ inputs.release_tag }}"
+        assert '--release-tag "${RELEASE_TAG}"' in step["run"]
 
     def test_the_publish_step_no_longer_resolves_the_actor_inline(self):
         # The inline lookup this replaced was dead for two independent reasons
