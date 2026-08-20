@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import mothership_terminate_session as mts  # noqa: E402  (sys.path bootstrap)
 import sdk_review_dispatch as sd  # noqa: E402  (needs the sys.path bootstrap)
+import sdk_review_verdict_gate as vg  # noqa: E402  (sys.path bootstrap)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW = REPO_ROOT / ".github/workflows/sdk-review.yml"
@@ -93,7 +94,7 @@ def test_payload_pins_all_three_model_lanes():
     # Leaving any lane unset silently falls back to mothership's Claude
     # defaults, and `small_fast_model` unset resolves to `model`.
     p = _payload()
-    assert p["model"] == "kimi-k3"
+    assert p["model"] == "x-ai/grok-4.6"
     assert p["small_fast_model"] == "gpt-5.6-luna"
     assert p["env_vars"]["CLAUDE_CODE_SUBAGENT_MODEL"] == "gpt-5.6-luna"
     encoded = json.loads(json.dumps(p))
@@ -753,7 +754,7 @@ def _errored(code: str = "429", msg: str = "rate limited") -> sd.SSEState:
 def test_the_retry_runs_a_different_main_model():
     """A same-model re-dispatch re-hits the same model-level fault.
 
-    Every provider in the `kimi-k3` group serves the same model, so mothership's
+    Every provider in a model's group serves the same model, so mothership's
     own intra-group fallback cannot help. Swapping the model is the whole point.
     """
     assert sd.attempt_model(1) == sd.MAIN_MODEL
@@ -831,9 +832,10 @@ def test_a_known_code_is_never_overridden_by_the_message_patterns():
 
 
 def test_retry_fires_on_a_dead_sandbox_with_a_retryable_code():
-    should, reason = sd.retry_decision(_errored("429"), 1, 6000)
-    assert should is True
-    assert sd.RETRY_MAIN_MODEL in reason and "attempt 2 of 2" in reason
+    plan = sd.retry_decision(_errored("429"), 1, 6000)
+    assert plan.retry is True
+    assert plan.model == sd.RETRY_MAIN_MODEL
+    assert sd.RETRY_MAIN_MODEL in plan.reason and "attempt 2 of 2" in plan.reason
 
 
 def test_retry_fires_when_complete_carries_status_error():
@@ -843,12 +845,12 @@ def test_retry_fires_when_complete_carries_status_error():
         )
     )
     assert sd.sandbox_terminated_abnormally(st) is True
-    assert sd.retry_decision(st, 1, 6000)[0] is True
+    assert sd.retry_decision(st, 1, 6000).retry is True
 
 
 def test_only_one_retry_is_ever_spent():
-    should, reason = sd.retry_decision(_errored("429"), 2, 6000)
-    assert should is False and "all 2 attempts" in reason
+    plan = sd.retry_decision(_errored("429"), 2, 6000)
+    assert plan.retry is False and "all 2 attempts" in plan.reason
     assert sd.MAX_DISPATCH_ATTEMPTS == 2
 
 
@@ -856,26 +858,26 @@ def test_a_cut_stream_never_retries_because_the_reviewer_may_still_be_working():
     """A second reviewer would post a second summary on the same PR."""
     st = _stream(*_event("started", {"session_id": "s"}))
     st.stream_error = "read timed out"
-    should, reason = sd.retry_decision(st, 1, 6000)
-    assert should is False and "post a second summary" in reason
+    plan = sd.retry_decision(st, 1, 6000)
+    assert plan.retry is False and "post a second summary" in plan.reason
 
 
 def test_a_clean_eof_without_complete_never_retries():
     st = _stream(*_event("started", {"session_id": "s"}))
-    should, reason = sd.retry_decision(st, 1, 6000)
-    assert should is False and "may still be running" in reason
+    plan = sd.retry_decision(st, 1, 6000)
+    assert plan.retry is False and "may still be running" in plan.reason
 
 
 def test_an_unrecognised_cause_stays_fail_fast():
-    should, reason = sd.retry_decision(_errored("401", "auth"), 1, 6000)
-    assert should is False and "not a known model/provider fault" in reason
+    plan = sd.retry_decision(_errored("401", "auth"), 1, 6000)
+    assert plan.retry is False and "not a known model/provider fault" in plan.reason
 
 
 def test_a_retry_is_refused_below_the_wall_clock_floor():
     """Below the floor a second sandbox would be killed mid-review."""
-    should, reason = sd.retry_decision(_errored("429"), 1, 600)
-    assert should is False and "600s of the job budget remain" in reason
-    assert sd.retry_decision(_errored("429"), 1, sd.RETRY_MIN_REMAINING_SECONDS)[0]
+    plan = sd.retry_decision(_errored("429"), 1, 600)
+    assert plan.retry is False and "600s of the job budget remain" in plan.reason
+    assert sd.retry_decision(_errored("429"), 1, sd.RETRY_MIN_REMAINING_SECONDS).retry
 
 
 def test_every_refusal_says_why():
@@ -885,9 +887,157 @@ def test_every_refusal_says_why():
         (_errored("401"), 1, 6000),
         (_errored("429"), 1, 10),
         (_stream(*_event("started", {})), 1, 6000),
+        (_completed("0.83"), 2, 6000),
+        (_completed("0.83"), 1, 10),
     ):
-        should, reason = sd.retry_decision(st, attempt, left)
-        assert should is False and reason.strip()
+        plan = sd.retry_decision(st, attempt, left)
+        assert plan.retry is False and plan.reason.strip()
+
+
+# ---------------------------------------------------------------------------
+# re-dispatch on the SAME model when a clean sandbox delivers no verdict
+# (FND-645)
+# ---------------------------------------------------------------------------
+
+
+def test_a_clean_completed_sandbox_that_said_nothing_retries_on_the_same_model():
+    """`complete` IS the terminal event, so the sandbox is provably finished.
+
+    Nothing about the model failed — the turn ended early — so dragging in
+    RETRY_MAIN_MODEL would spend the expensive lane on a fault it cannot fix.
+    """
+    st = _completed("3.307718")
+    assert sd.sandbox_completed_cleanly(st) is True
+    assert sd.sandbox_terminated_abnormally(st) is False  # why it never retried
+
+    plan = sd.retry_decision(st, 1, 6000)
+    assert plan.retry is True
+    assert plan.model == sd.MAIN_MODEL != sd.RETRY_MAIN_MODEL
+    assert "posted no verdict" in plan.reason and "same model" in plan.reason
+
+
+def test_the_same_model_retry_still_honours_the_shared_retry_bounds():
+    """Constraint: an extra entry condition only — the knobs do not move."""
+    st = _completed("1.0")
+    assert sd.retry_decision(st, sd.MAX_DISPATCH_ATTEMPTS, 6000).retry is False
+    assert sd.retry_decision(st, 1, sd.RETRY_MIN_REMAINING_SECONDS - 1).retry is False
+    assert sd.retry_decision(st, 1, sd.RETRY_MIN_REMAINING_SECONDS).retry is True
+
+
+def test_a_complete_carrying_a_non_completed_status_is_not_the_clean_class():
+    """That is a dead sandbox — the model-swap class owns it."""
+    st = _stream(
+        *_event(
+            "complete", {"status": "error", "error": {"code": "500", "message": ""}}
+        )
+    )
+    assert sd.sandbox_completed_cleanly(st) is False
+    assert sd.retry_decision(st, 1, 6000).model == sd.RETRY_MAIN_MODEL
+
+
+def test_a_terminal_complete_outranks_a_socket_death_on_the_way_out():
+    """The sandbox already said it was finished; a late transport error cannot
+    make it live again, so this is still the silent-review class."""
+    st = _completed("0.83")
+    st.stream_error = "connection reset by peer"
+    plan = sd.retry_decision(st, 1, 6000)
+    assert plan.retry is True and plan.model == sd.MAIN_MODEL
+
+
+def test_the_same_model_retry_keeps_every_other_dispatch_axis(
+    dispatch_env, monkeypatch
+):
+    """Fresh session id, own source_id, recorded attempt — only the model differs."""
+    seen = _record_dispatches(
+        monkeypatch, [_completed("3.30"), _completed("0.83")], [False, True]
+    )
+
+    assert sd.main() == 0
+    assert [p["model"] for p in seen] == [sd.MAIN_MODEL, sd.MAIN_MODEL]
+    assert [p["session_id"] for p in seen] == ["base-id", "base-id-retry1"]
+    assert seen[1]["source_id"].endswith("-retry1")
+    assert seen[1]["metadata"]["attempt"] == 2
+    assert seen[1]["small_fast_model"] == sd.FAST_MODEL
+
+
+def test_main_does_not_retry_a_clean_run_that_did_deliver(dispatch_env, monkeypatch):
+    """The regression this class could most easily cause: a double review."""
+    seen = _record_dispatches(monkeypatch, [_completed("0.83")], [True])
+
+    assert sd.main() == 0
+    assert len(seen) == 1
+    assert _outputs(dispatch_env)["final_status"] == "completed"
+
+
+def test_main_exits_green_when_the_silent_retry_is_also_silent(
+    dispatch_env, monkeypatch, capsys
+):
+    """Unchanged outcome once the attempts are spent — `sdk_review_verdict_gate`
+    still owns turning that silence into a red check one step later."""
+    seen = _record_dispatches(
+        monkeypatch, [_completed("3.30"), _completed("2.10")], [False, False]
+    )
+
+    assert sd.main() == 0
+    assert len(seen) == 2
+    assert "Not re-dispatching: already used all 2 attempts" in capsys.readouterr().out
+    assert _outputs(dispatch_env)["final_cost"] == "5.4"
+
+
+def test_a_cut_stream_with_no_verdict_still_never_retries(dispatch_env, monkeypatch):
+    """The double-review guard must not regress: no `complete`, so the reviewer
+    may still be working, and a second one would post a second summary."""
+    cut = _stream(*_event("started", {"session_id": "s"}))
+    cut.stream_error = "read timed out"
+    seen = _record_dispatches(monkeypatch, [cut], [False])
+
+    assert sd.main() == 1
+    assert len(seen) == 1
+
+
+# --- the confirmed-empty verdict read --------------------------------------
+
+
+def test_an_empty_verdict_is_re_read_before_it_is_believed(monkeypatch):
+    """The comments API is not read-after-write consistent, and this zero now
+    authorises a re-dispatch as well as the failure path."""
+    reads = []
+    slept = []
+    monkeypatch.setattr(
+        sd, "check_verdict_posted", lambda *_a, **_k: (reads.append(1), False)[1]
+    )
+
+    assert sd.check_verdict_posted_confirmed("s", "o/r", sleeper=slept.append) is False
+    assert len(reads) == sd.RECHECK_ATTEMPTS
+    assert slept == [sd.RECHECK_DELAY_S] * (sd.RECHECK_ATTEMPTS - 1)
+
+
+def test_a_verdict_found_on_the_first_read_costs_no_delay(monkeypatch):
+    reads = []
+    slept = []
+    monkeypatch.setattr(
+        sd, "check_verdict_posted", lambda *_a, **_k: (reads.append(1), True)[1]
+    )
+
+    assert sd.check_verdict_posted_confirmed("s", "o/r", sleeper=slept.append) is True
+    assert len(reads) == 1 and slept == []
+
+
+def test_a_late_landing_verdict_is_caught_by_the_recheck(monkeypatch):
+    """The read-after-write lag this exists for: retrying here would double-review."""
+    answers = [False, True]
+    monkeypatch.setattr(sd, "check_verdict_posted", lambda *_a, **_k: answers.pop(0))
+
+    assert (
+        sd.check_verdict_posted_confirmed("s", "o/r", sleeper=lambda _s: None) is True
+    )
+
+
+def test_the_recheck_threshold_is_the_gate_s_own_not_a_second_copy():
+    """Two copies would drift, and this step deciding `empty` while the gate
+    decides `delivered` is the contradiction sharing them prevents."""
+    assert sd.RECHECK_ATTEMPTS is vg.RECHECK_ATTEMPTS
+    assert sd.RECHECK_DELAY_S is vg.RECHECK_DELAY_S
 
 
 # --- the cost trail --------------------------------------------------------
@@ -996,7 +1146,7 @@ def _record_dispatches(monkeypatch, states, verdicts):
 
     monkeypatch.setattr(sd, "dispatch_once", fake_dispatch)
     monkeypatch.setattr(
-        sd, "check_verdict_posted", lambda *_a, **_k: verdicts[len(seen) - 1]
+        sd, "check_verdict_posted_confirmed", lambda *_a, **_k: verdicts[len(seen) - 1]
     )
     return seen
 
@@ -1017,7 +1167,7 @@ def test_main_re_dispatches_once_on_a_dead_sandbox(dispatch_env, monkeypatch, ca
     assert out["final_status"] == "completed"
     assert out["final_cost"] == "2.4"  # attempt 1 reported none
     assert "### Attempts" in (dispatch_env / "summary").read_text()
-    assert "Re-dispatching after a dead sandbox" in capsys.readouterr().out
+    assert f"Re-dispatching on {sd.RETRY_MAIN_MODEL}" in capsys.readouterr().out
 
 
 def test_main_does_not_retry_once_the_verdict_is_on_the_pr(dispatch_env, monkeypatch):
@@ -1036,7 +1186,7 @@ def test_main_reports_both_models_when_the_retry_also_fails(
 
     assert sd.main() == 1
     printed = capsys.readouterr().out
-    assert f"retried on {sd.RETRY_MAIN_MODEL} after {sd.MAIN_MODEL} died" in printed
+    assert f"retried on {sd.RETRY_MAIN_MODEL} after {sd.MAIN_MODEL}" in printed
     assert _outputs(dispatch_env)["final_status"] == "500"
 
 

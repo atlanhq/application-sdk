@@ -98,6 +98,7 @@ jobs:
     uses: atlanhq/application-sdk/.github/workflows/tests-reusable.yaml@main
     with:
 <% if unit_coverage_fail_under %>      unit-coverage-fail-under: "<< unit_coverage_fail_under >>"
+<% endif %><% if force_external_runtime %>      force-external-runtime: << force_external_runtime >>
 <% endif %>      app-name: "<< app_name >>"
       app-image-name: "<< app_image_name >>"
 <% if enable_e2e != 'true' %>
@@ -136,4 +137,4 @@ jobs:
       # the first adopter + confirmed end-to-end proof of the boundary
       # crossing.
       two-store: true
-    secrets: inherit
+<% if secrets_block %><< secrets_block >><% else %>    secrets: inherit<% endif %>
