@@ -936,6 +936,27 @@ class TestWithholds:
         assert bounded.main(["--window", "P3D", "--project-dir", str(project)]) == 1
         self._assert_withheld(project, baseline)
 
+    def test_a_missing_version_parser_fails_before_uv_runs(self, monkeypatch, tmp_path):
+        """`packaging` absent must read as `packaging` absent.
+
+        Every comparison in this module degrades to "cannot compare" without it,
+        and the rollback gate reports what it cannot compare — so a run in that
+        state accuses every ordinary upgrade of moving backwards. Observed while
+        probing the driver under an interpreter without it: six forward moves
+        reported as regressions. Fail on the real cause, before uv spends a
+        minute resolving, and hold the branch while doing it.
+        """
+        baseline = lock(boto3="1.43.72")
+        project = self._repo(tmp_path, baseline)
+
+        def fail_if_called(command, cwd):
+            raise AssertionError("uv must not run when versions cannot be compared")
+
+        monkeypatch.setattr(bounded, "Version", None)
+        monkeypatch.setattr(bounded, "run_uv_lock", fail_if_called)
+        assert bounded.main(["--window", "P3D", "--project-dir", str(project)]) == 1
+        self._assert_withheld(project, baseline)
+
     def test_a_hold_is_an_ordinary_no_op_when_the_caller_owns_the_commit(
         self, monkeypatch, tmp_path, capsys
     ):

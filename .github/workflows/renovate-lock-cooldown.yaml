@@ -137,8 +137,14 @@ jobs:
       - name: Bound the refreshed locks
         env:
           BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        # `--with packaging`, pinned: the driver's rollback gate needs PEP 440
+        # parsing, and the runner image shipping `packaging` for the system
+        # interpreter is not a promise GitHub makes. Without it every ordinary
+        # upgrade reads as a regression. `--no-project` keeps this off the repo's
+        # own environment — the bound must not depend on a full dev sync.
         run: |
-          python3 .github/scripts/bound_lock_branch.py \
+          uv run --no-project --with 'packaging==26.3' \
+            python .github/scripts/bound_lock_branch.py \
             --window P3D \
             --baseline-ref "origin/$BASE_BRANCH"
 

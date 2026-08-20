@@ -680,6 +680,23 @@ def main(argv: list[str] | None = None) -> int:
         )
         baseline = ""
 
+    if Version is None:
+        # `packaging` is imported defensively at the top of this module, and every
+        # version comparison here degrades to "cannot compare" without it. The
+        # rollback gate reports what it cannot compare, so a run in that state
+        # accuses every ordinary upgrade of moving backwards — a wedged lane whose
+        # message blames the dependency data. Say the true cause instead, and say
+        # it before uv spends a minute resolving.
+        withhold(lock_path, baseline, args.window)
+        print(
+            "`packaging` is not importable, so no version can be compared and the "
+            "rollback gate cannot do its job. Refusing rather than bounding "
+            "blind: install packaging for the interpreter running this command "
+            "(the workflow pins it) and re-run.",
+            file=sys.stderr,
+        )
+        return 1
+
     before = lock_versions(baseline)
     cutoff = dt.datetime.now(dt.timezone.utc) - window
     ceilings = retention_ceilings(lock_upload_times(baseline), cutoff)
@@ -742,7 +759,9 @@ def main(argv: list[str] | None = None) -> int:
             "been YANKED upstream — `pip index versions <name>` or the PyPI JSON "
             "API will say — because no resolve can keep a yanked pin and every "
             "one of them will land here until the base branch moves off it. A "
-            "changed constraint is the other candidate. Either way it wants a "
+            "changed constraint is the other candidate, as is a version string "
+            "that is not valid PEP 440 — those are reported here too rather than "
+            "silently skipped. Either way it wants a "
             "human, so this run bounds nothing and leaves the lock deliberately "
             "un-installable — baseline versions plus a tripwire `[options]` "
             "table — for a required check to hold the branch on.",
