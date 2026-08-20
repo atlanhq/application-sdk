@@ -100,6 +100,37 @@ _SECRETS_MAPPING_RE = re.compile(
     r"^(?P<indent>[ \t]+)secrets:[ \t]*(?:#[^\n]*)?$", re.MULTILINE
 )
 
+# A ``secrets:`` line carrying its value *inline* rather than as an indented
+# block: a flow mapping (``secrets: {A: ${{ secrets.A }}}``), an alias
+# (``secrets: *shared``), or an anchored value. Matched separately from
+# ``_SECRETS_MAPPING_RE`` because these forms are preserved by neither half of
+# the FND-604 fix: ``extract_secrets_block`` splices block form only, so it
+# returns ``""`` and the re-render emits ``secrets: inherit`` — yet ``secrets``
+# parses as a key on *both* sides of ``unpreserved_declarations``, so the
+# generalised guard reads the shared key name as proof of preservation and does
+# not refuse. That combination reproduces the exact silent downgrade this module
+# exists to stop, through a different spelling of the same declaration, so the
+# form is detected and routed to the refusal instead.
+_SECRETS_INLINE_RE = re.compile(
+    r"^[ \t]+secrets:[ \t]+(?P<value>[^#\s][^\n]*?)[ \t]*$", re.MULTILINE
+)
+
+# The ``uses:`` line that identifies the job calling the SDK's reusable test
+# workflow. ``force-external-runtime`` is an *input of that job*, so the read for
+# it is scoped to that job's ``with:`` block: an unscoped search returns the
+# first match anywhere in the file, including one under an unrelated job a repo
+# added, and hoists it into the rendered ``jobs.tests.with`` — forcing the
+# external runtime on a repo that never asked for it.
+#
+# Keyed on the reusable's own path rather than on the job being named ``tests``:
+# the job name is the branch-protection context string and a repo is free to
+# change it, but a job that takes this input is by definition the one calling
+# this workflow.
+_TESTS_REUSABLE_USES_RE = re.compile(
+    r"^(?P<indent>[ \t]+)uses:[ \t]*[^\s#]*tests-reusable\.ya?ml[^\s#]*[ \t]*(?:#[^\n]*)?$",
+    re.MULTILINE,
+)
+
 # A YAML mapping key as written, with an optional leading sequence dash so a
 # list-of-mappings entry counts as a declaration too. The lookahead requires a
 # space or end-of-line after the colon, so a bare ``http://x`` inside a value
@@ -198,6 +229,58 @@ def extract_tests_yaml_params(text: str) -> dict[str, str]:
     return params
 
 
+def tests_reusable_with_block(text: str) -> str:
+    """Return the body of the ``with:`` mapping of *text*'s reusable-tests job.
+
+    *text* is a tests.yaml. The return value is the block's child lines only
+    (the ``with:`` line itself excluded), or ``""`` when the file has no job
+    calling ``tests-reusable.yaml``, or that job declares no ``with:``.
+
+    The scope for reading back an *input* of that job. A repo's tests.yaml is
+    free to carry other jobs — an aggregator gate, a hand-kept ``tests-passed``
+    whose name branch protection requires — and any of them may legitimately
+    mention a key that is also a reusable input. Reading the first match
+    file-wide attributes that key to the reusable call and re-renders it as one
+    of its inputs, which is a value nobody declared.
+
+    Located by walking indentation rather than parsing: this package ships
+    standalone into consumer repos and takes no YAML dependency (see
+    ``declared_keys``). The job's own keys are the ``uses:`` line's siblings, so
+    the job body is the run of lines around it indented at least that far, and
+    ``with:``'s body is the run of more-indented lines below it.
+    """
+    m = _TESTS_REUSABLE_USES_RE.search(text)
+    if m is None:
+        return ""
+    lines = text.splitlines()
+    uses_at = text[: m.start()].count("\n")
+    key_indent = len(m.group("indent"))
+
+    def _outdents(index: int, limit: int) -> bool:
+        """True when line *index* starts a shallower mapping than *limit*."""
+        line = lines[index]
+        return bool(line.strip()) and len(line) - len(line.lstrip()) < limit
+
+    # The job body: outward from `uses:` until a line shallower than its
+    # siblings. Scanning both ways because `with:` may be written above `uses:`.
+    start = uses_at
+    while start > 0 and not _outdents(start - 1, key_indent):
+        start -= 1
+    end = uses_at + 1
+    while end < len(lines) and not _outdents(end, key_indent):
+        end += 1
+
+    for i in range(start, end):
+        line = lines[i]
+        if len(line) - len(line.lstrip()) != key_indent or line.strip() != "with:":
+            continue
+        body_end = i + 1
+        while body_end < end and not _outdents(body_end, key_indent + 1):
+            body_end += 1
+        return "\n".join(lines[i + 1 : body_end])
+    return ""
+
+
 def extract_force_external_runtime(text: str) -> str:
     """Return ``"true"`` when *text* (a tests.yaml) forces the external runtime.
 
@@ -208,15 +291,27 @@ def extract_force_external_runtime(text: str) -> str:
     repo that spells it the other way.
 
     Read through ``extract_field`` (which accepts bare or quoted values at any
-    indentation) rather than an anchored regex like the lines above: the apps
-    that hand-wrote this input put it at two different positions in the ``with:``
-    block, each under its own explanatory comment, and the value appears as both
-    ``true`` and ``"true"``. Failing to read one of those spellings means
-    ``--resync`` deletes the line, and the connector's ``main.py`` — which still
-    expects external daprd at :3500 / Temporal at :7233 — then fails to boot
-    with ``DaprNotDetectedError`` (FND-65).
+    indentation) rather than an anchored regex like the lines above, because the
+    apps that hand-wrote this input put it at two different positions and the
+    value appears as both ``true`` and ``"true"``. Failing to read one of those
+    spellings means ``--resync`` deletes the line, and the connector's
+    ``main.py`` — which still expects external daprd at :3500 / Temporal at
+    :7233 — then fails to boot with ``DaprNotDetectedError`` (FND-65).
+
+    That tolerance is confined to the reusable job's own ``with:`` block rather
+    than applied file-wide: this is an input of that job, and hoisting a match
+    from anywhere else in the file into the rendered ``with:`` would force the
+    external runtime on a repo that never asked for it. A declaration this
+    cannot see is not silently dropped either — it reaches
+    ``unpreserved_declarations`` as a key the re-render would lose, which
+    refuses the resync instead.
     """
-    return "true" if extract_field(text, "force-external-runtime") == "true" else ""
+    scope = tests_reusable_with_block(text)
+    return (
+        "true"
+        if scope and extract_field(scope, "force-external-runtime") == "true"
+        else ""
+    )
 
 
 def extract_secrets_block(text: str) -> str:
@@ -280,6 +375,43 @@ def extract_secrets_block(text: str) -> str:
             break
         head -= 1
     return "\n".join(lines[head:end])
+
+
+def unpreservable_secrets_form(text: str) -> str:
+    """Return *text*'s inline ``secrets:`` value if it cannot be carried forward.
+
+    *text* is a tests.yaml. Returns the value as written, or ``""`` when the file
+    declares nothing at risk — no ``secrets:`` at all, the canonical
+    ``secrets: inherit``, or a block-form mapping (which
+    ``extract_secrets_block`` splices verbatim).
+
+    The gap this closes is the one shape that is invisible to *both* halves of
+    the FND-604 fix at once. An inline form — a flow mapping
+    (``secrets: {E2E_SOURCE_ENV_JSON: ...}``), an alias (``secrets: *shared``) —
+    is not block form, so ``extract_secrets_block`` returns ``""`` and the
+    re-render emits ``secrets: inherit``. And ``secrets`` is a key on both sides
+    of the key-set comparison, so ``unpreserved_declarations`` reads the shared
+    name as proof of preservation and the refusal never fires. The mapping is
+    replaced by ``inherit``, which can neither compose nor rename, and the
+    integration and e2e legs run with no source credentials — the original
+    defect, reached through a spelling the first fix did not cover.
+
+    Deliberately reports rather than tries to preserve: routing the form to the
+    refusal leaves the file untouched, whereas splicing an inline mapping into a
+    template that emits block form would have to rewrite it to do so, and a
+    guessed transcription of a repo's credential wiring is the one thing this
+    module must not produce. Anything other than the two known-safe shapes
+    therefore counts, so an unrecognised spelling stops the resync instead of
+    being assumed harmless.
+    """
+    for m in _SECRETS_INLINE_RE.finditer(text):
+        # A trailing comment is not part of the value. Split on whitespace-then-#
+        # so a `#` inside the value itself does not truncate it; the result only
+        # ever has to be distinguishable from `inherit`.
+        value = re.split(r"[ \t]#", m.group("value"), maxsplit=1)[0].strip()
+        if value and value != "inherit":
+            return value
+    return ""
 
 
 def declared_keys(text: str) -> list[str]:
@@ -360,10 +492,20 @@ def unpreserved_tests_yaml_declarations(existing: str, rerendered: str) -> list[
     sub-floor number, not on the key name alone. A spelling the extractor cannot
     parse (``unit-coverage-fail-under: ninety``) is not a decision anyone made,
     so it still counts as unpreserved and still stops the resync.
+
+    ``secrets`` is added in the other direction, because for that key alone a
+    shared name is *not* evidence of preservation: an inline mapping and the
+    canonical ``inherit`` both spell the key ``secrets``, so the key-set
+    comparison cannot tell a preserved mapping from one about to be overwritten
+    by ``inherit``. ``unpreservable_secrets_form`` makes that distinction on the
+    value, and anything it names has to reach the refusal the same way a dropped
+    key does.
     """
     dropped = unpreserved_declarations(existing, rerendered)
     if rejected_unit_coverage_fail_under(existing):
         dropped = [key for key in dropped if key != "unit-coverage-fail-under"]
+    if unpreservable_secrets_form(existing) and "secrets" not in dropped:
+        dropped.append("secrets")
     return dropped
 
 

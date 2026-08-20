@@ -22,6 +22,7 @@ from conformance.bootstrap.extract import (
     extract_use_ghcr_base,
     format_dropped_declarations,
     resolve_renovate_fallback_exit_zero,
+    unpreservable_secrets_form,
     unpreserved_declarations,
     unpreserved_tests_yaml_declarations,
 )
@@ -380,13 +381,74 @@ def test_extract_force_external_runtime_round_trips_through_render() -> None:
     assert extract_force_external_runtime(rendered) == "true"
 
 
-@pytest.mark.parametrize(
-    "line",
-    ["      force-external-runtime: true", '  force-external-runtime: "true"'],
+_REUSABLE_USES = (
+    "    uses: atlanhq/application-sdk/.github/workflows/tests-reusable.yaml@main"
 )
-def test_extract_force_external_runtime_reads_both_spellings(line: str) -> None:
-    """The fleet hand-wrote it bare *and* quoted, at two different positions."""
-    text = f"jobs:\n  tests:\n    with:\n{line}\n"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        '      force-external-runtime: true\n      app-name: "widget"',
+        '      app-name: "widget"\n      force-external-runtime: "true"',
+    ],
+    ids=["bare-first", "quoted-last"],
+)
+def test_extract_force_external_runtime_reads_both_spellings(body: str) -> None:
+    """The fleet hand-wrote it bare *and* quoted, at two different positions.
+
+    Both fixtures carry the reusable's ``uses:`` line because the read is scoped
+    to that job's ``with:`` block — see
+    ``test_extract_force_external_runtime_ignores_another_jobs_input``.
+    """
+    text = f"jobs:\n  tests:\n{_REUSABLE_USES}\n    with:\n{body}\n"
+    assert extract_force_external_runtime(text) == "true"
+
+
+def test_extract_force_external_runtime_ignores_another_jobs_input() -> None:
+    """Scoped to the reusable job's own ``with:``.
+
+    A repo is free to carry other jobs, and a key that is also a reusable input
+    may legitimately appear under one. Reading the first match file-wide
+    attributed it to the reusable call and re-rendered it as one of that job's
+    inputs — forcing the external runtime on a repo that never asked for it, so
+    the connector's app server started expecting an external daprd that CI never
+    brought up.
+    """
+    text = (
+        f'jobs:\n  tests:\n{_REUSABLE_USES}\n    with:\n      app-name: "widget"\n'
+        "  other-job:\n    runs-on: ubuntu-latest\n    with:\n"
+        "      force-external-runtime: true\n"
+    )
+    assert extract_force_external_runtime(text) == ""
+
+
+def test_another_jobs_input_still_stops_the_resync() -> None:
+    """The scoping narrows what is *hoisted*, never what is preserved.
+
+    A declaration the scoped read cannot see is not silently deleted either: it
+    reaches the generalised guard as a key the re-render would lose, and the
+    resync refuses. Losing a real declaration and hoisting a stray one are both
+    failures; this pins that closing the second did not open the first.
+    """
+    canonical = render("tests.yaml", app_name="widget")
+    stray = canonical.replace(
+        "    secrets: inherit",
+        "    secrets: inherit\n  other-job:\n    runs-on: ubuntu-latest\n"
+        "    with:\n      force-external-runtime: true",
+    )
+    assert extract_force_external_runtime(stray) == ""
+    assert "force-external-runtime" in unpreserved_tests_yaml_declarations(
+        stray, canonical
+    )
+
+
+def test_extract_force_external_runtime_reads_a_with_block_above_uses() -> None:
+    """Key order inside the job is the author's choice, not a signal."""
+    text = (
+        f"jobs:\n  tests:\n    with:\n      force-external-runtime: true\n"
+        f"{_REUSABLE_USES}\n"
+    )
     assert extract_force_external_runtime(text) == "true"
 
 
@@ -579,6 +641,65 @@ def test_unpreserved_tests_yaml_declarations_still_stops_an_unparseable_floor() 
     assert unpreserved_tests_yaml_declarations(bad, canonical) == [
         "unit-coverage-fail-under"
     ]
+
+
+@pytest.mark.parametrize(
+    "inline",
+    [
+        '{SDR_TEST_TENANT: "${{ secrets.SDR_TEST_TENANT }}"}',
+        "*shared-secrets",
+        "&repo-secrets {A: b}",
+    ],
+    ids=["flow-mapping", "alias", "anchor"],
+)
+def test_unpreserved_tests_yaml_declarations_stops_an_inline_secrets_mapping(
+    inline: str,
+) -> None:
+    """The one shape invisible to *both* halves of the FND-604 fix.
+
+    An inline ``secrets:`` is not block form, so ``extract_secrets_block``
+    returns ``""`` and the re-render emits ``secrets: inherit`` — while
+    ``secrets`` is a key on both sides of the key-set comparison, so the
+    generalised guard reads the shared name as proof of preservation. Together
+    that reproduced the original defect through a different spelling: the
+    explicit mapping replaced by an ``inherit`` that can neither compose nor
+    rename, and the integration and e2e legs left with no source credentials.
+    """
+    canonical = render("tests.yaml", app_name="widget")
+    text = canonical.replace("    secrets: inherit", f"    secrets: {inline}")
+    assert extract_secrets_block(text) == ""
+    assert unpreservable_secrets_form(text) == inline
+    assert unpreserved_tests_yaml_declarations(text, canonical) == ["secrets"]
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["    secrets: inherit", "    secrets: inherit  # composes nothing, by design"],
+    ids=["inherit", "inherit-with-comment"],
+)
+def test_unpreservable_secrets_form_passes_the_canonical_default(line: str) -> None:
+    """``inherit`` is what the template emits, so it must not trip the refusal."""
+    canonical = render("tests.yaml", app_name="widget")
+    text = canonical.replace("    secrets: inherit", line)
+    assert unpreservable_secrets_form(text) == ""
+    assert unpreserved_tests_yaml_declarations(text, canonical) == []
+
+
+def test_unpreservable_secrets_form_passes_a_block_mapping() -> None:
+    """Block form is spliced verbatim, so it is preserved, not refused.
+
+    The refusal is the fallback for shapes the splice cannot carry; firing it on
+    one it *can* would block every repo the FND-604 fix was written to serve.
+    """
+    canonical = render("tests.yaml", app_name="widget")
+    text = canonical.replace("    secrets: inherit", _EXPLICIT_SECRETS)
+    assert unpreservable_secrets_form(text) == ""
+    assert extract_secrets_block(text) == _EXPLICIT_SECRETS
+    # Compared against the re-render --resync would actually write (which carries
+    # the block forward), not against the bare canonical: the mapping's own
+    # credential names are keys too, and they survive because the block does.
+    rerendered = render("tests.yaml", **extract_tests_yaml_params(text))
+    assert unpreserved_tests_yaml_declarations(text, rerendered) == []
 
 
 def test_format_dropped_declarations_bounds_the_list_but_not_the_count() -> None:
