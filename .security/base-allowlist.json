@@ -7,25 +7,5 @@
     "CRITICAL": 7,
     "HIGH": 30
   },
-  "_entry_schema": "Each non-underscore key is a CVE/advisory ID. Required: package, severity (CRITICAL|HIGH only), reason, expires, added_by, case (1-4), ticket. Optional: fix_pr. Keep entries minimal but descriptive.",
-  "CVE-2026-15308": {
-    "package": "python-3.12-base",
-    "severity": "HIGH",
-    "reason": "Case 4: base-image CVE (Chainguard apk in app-runtime-base:3, not a uv.lock dependency); clears on a base-image rebuild onto python-3.12-base 3.12.14-r2.",
-    "expires": "2026-09-18",
-    "added_by": "@atlan-ci (vuln-triage rover)",
-    "case": 4,
-    "ticket": "BLDX-1629",
-    "re_evaluation_trigger": "fix_released"
-  },
-  "CVE-2026-4786": {
-    "package": "python-3.12-base",
-    "severity": "HIGH",
-    "reason": "Case 4: base-image CVE (Chainguard apk in app-runtime-base:3, not a uv.lock dependency); clears on a base-image rebuild onto python-3.12-base 3.12.14-r2.",
-    "expires": "2026-09-18",
-    "added_by": "@atlan-ci (vuln-triage rover)",
-    "case": 4,
-    "ticket": "BLDX-1629",
-    "re_evaluation_trigger": "fix_released"
-  }
+  "_entry_schema": "Each non-underscore key is a CVE/advisory ID. Required: package, severity (CRITICAL|HIGH only), reason, expires, added_by, case (1-4), ticket. Optional: fix_pr. Keep entries minimal but descriptive."
 }
