@@ -1504,12 +1504,17 @@ jobs:
           # attribution collapses to the triggering actor with nothing red.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          # A tagged release marks the run PR-derived on its own, so attribution
+          # holds even where the event name is unavailable. Callers set this
+          # only for `github.event_name == 'release'`.
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
           python3 .sdk-entrypoint/.github/scripts/resolve_release_actor.py \
             --event-name "${GITHUB_EVENT_NAME}" \
             --repo "${GITHUB_REPOSITORY}" \
             --sha "${GITHUB_SHA}" \
+            --release-tag "${RELEASE_TAG}" \
             --triggering-actor "${TRIGGERING_ACTOR}" >> "${GITHUB_OUTPUT}"
 
       - name: Publish version

@@ -5,14 +5,13 @@ The Global Marketplace shows ``created_by`` in the Slack approval message for a
 release, so it needs to name the *human who owns the change* — not whatever
 identity happened to move the bits.
 
-For every event except ``push`` that is simply the triggering actor: a
-``workflow_dispatch``, ``release`` or ``schedule`` run was started deliberately
-by someone, and that someone is the answer.
+For ``workflow_dispatch`` and ``schedule`` that is simply the triggering actor:
+the run was started deliberately by someone, and that someone is the answer.
 
-``push`` (the merge-to-main auto-publish flow) is the hard case. Version-bump
-PRs are opened by the Atlan Fleet App bot, so the PR *author* is a bot and the
-person who owns the release is the one who **merged** it. That name is only
-reachable in two hops:
+``push`` (merge-to-main auto-publish) and ``release`` (the tag flow) are the
+hard cases, and they share a fix. Version-bump PRs are opened by the Atlan
+Fleet App bot, so the PR *author* is a bot and the person who owns the release
+is the one who **merged** it. That name is only reachable in two hops:
 
 1. ``GET /repos/{repo}/commits/{sha}/pulls`` — the PR(s) the merge SHA belongs
    to. This list response carries ``user`` but **not** ``merged_by``: the field
@@ -28,6 +27,19 @@ triggering actor is the bot, while ``merged_by`` still names the human. When
 there is no associated PR at all (a direct push to main), the triggering actor
 *is* the person who pushed, and that is the fallback.
 
+Two independent signals mark a run as PR-derived, and either is enough: the
+event name, or a non-empty ``--release-tag``. The event name carries its own
+weight — inside a *called* reusable workflow ``GITHUB_EVENT_NAME`` is the event
+that triggered the **caller**, not ``workflow_call``. (Verified on a
+``pull_request`` caller run of ``tests-reusable.yaml``: its ``Detect merge
+queue`` job, gated ``if: github.event_name == 'pull_request'``, ran, while
+``Test-readiness scorecard``, gated on the negation, skipped. Both directions
+agree, and neither is possible if the callee saw ``workflow_call``.) The tag
+does not lean on that behaviour at all: every app caller sets ``release_tag``
+only for ``github.event_name == 'release'``, so a non-empty tag *is* a tagged
+release however the event arrives. The event gate stays because the
+deploy-on-merge apps publish on ``push``, which carries no tag.
+
 Finally, GM prefers an email address over a login, so the resolved actor's
 public email is looked up best-effort. Most accounts do not publish one; the
 login is the fallback, and every lookup failure degrades in that direction
@@ -37,7 +49,7 @@ Usage (from within a workflow step)::
 
     python3 .github/scripts/resolve_release_actor.py \
       --event-name push --repo owner/name --sha "$GITHUB_SHA" \
-      --triggering-actor someone >> "$GITHUB_OUTPUT"
+      --release-tag "$RELEASE_TAG" --triggering-actor someone >> "$GITHUB_OUTPUT"
 
 Writes ``created_by=<email-or-login>`` to stdout; diagnostics go to stderr.
 Requires ``GH_TOKEN`` in the environment for the ``gh`` calls.
@@ -56,6 +68,27 @@ import sys
 from typing import Callable
 
 PUSH_EVENT = "push"
+RELEASE_EVENT = "release"
+
+# Events whose triggering actor is not the person who owns the release, so the
+# human has to be recovered from the PR behind the SHA.
+#
+# ``push`` is the merge-to-main auto-publish flow. ``release`` is the tag flow:
+# the tag is cut by ``tag-and-release`` when a release-labelled PR merges, so
+# the GitHub Release is authored by the Fleet App bot and ``triggering_actor``
+# on the resulting ``release: published`` run is that bot — never a human. In
+# both cases GITHUB_SHA is the merge commit of the PR that caused the release,
+# so the same two-hop lookup recovers the person who merged it.
+_PR_DERIVED_EVENTS = (PUSH_EVENT, RELEASE_EVENT)
+
+
+def _is_pr_derived(event_name: str, release_tag: str) -> bool:
+    """Whether the triggering actor is the wrong person to attribute to.
+
+    Either signal alone is sufficient — see the module docstring for why both
+    exist and why neither subsumes the other.
+    """
+    return event_name in _PR_DERIVED_EVENTS or bool(release_tag.strip())
 
 
 def _run_gh(args: list) -> str:
@@ -126,16 +159,18 @@ def resolve_actor(
     sha: str,
     triggering_actor: str,
     run: Callable[[list], str] | None = None,
+    *,
+    release_tag: str = "",
 ) -> str:
     """The login to attribute the release to."""
     run = run or _run_gh
-    if event_name != PUSH_EVENT:
+    if not _is_pr_derived(event_name, release_tag):
         return triggering_actor
     number = pr_number_for_sha(repo, sha, run)
     if number is None:
         print(
             f"::notice::no PR associated with {sha[:12]} — "
-            f"attributing to the pushing actor",
+            f"attributing to the triggering actor",
             file=sys.stderr,
         )
         return triggering_actor
@@ -143,7 +178,7 @@ def resolve_actor(
     if merger is None:
         print(
             f"::warning::PR #{number} for {sha[:12]} reports no merged_by — "
-            f"attributing to the pushing actor",
+            f"attributing to the triggering actor",
             file=sys.stderr,
         )
         return triggering_actor
@@ -168,11 +203,15 @@ def resolve(
     sha: str,
     triggering_actor: str,
     run: Callable[[list], str] | None = None,
+    *,
+    release_tag: str = "",
 ) -> str:
     """The value GM stores as ``created_by`` — an email when one is public."""
     # Resolved per call, not bound as a default, so the ``_run_gh`` seam stays
     # stubbable from ``main`` down.
-    actor = resolve_actor(event_name, repo, sha, triggering_actor, run)
+    actor = resolve_actor(
+        event_name, repo, sha, triggering_actor, run, release_tag=release_tag
+    )
     return public_email(actor, run) or actor
 
 
@@ -184,13 +223,27 @@ def main(argv: list | None = None) -> int:
     parser.add_argument("--repo", required=True, help="owner/name")
     parser.add_argument("--sha", default="", help="github.sha (push events)")
     parser.add_argument(
+        "--release-tag",
+        default="",
+        help=(
+            "inputs.release_tag — non-empty only for a tagged release, which "
+            "marks the run PR-derived without consulting the event name."
+        ),
+    )
+    parser.add_argument(
         "--triggering-actor",
         required=True,
         help="github.triggering_actor — the fallback attribution.",
     )
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
-    created_by = resolve(args.event_name, args.repo, args.sha, args.triggering_actor)
+    created_by = resolve(
+        args.event_name,
+        args.repo,
+        args.sha,
+        args.triggering_actor,
+        release_tag=args.release_tag,
+    )
     # stdout is a strict contract: `created_by=<value>` and nothing else, since
     # the caller redirects it into $GITHUB_OUTPUT and the runner rejects any
     # line there without an `=`.
