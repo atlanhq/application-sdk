@@ -13,9 +13,11 @@ to test and that the run-29001242204 RCA turned on:
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import sys
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -505,26 +507,108 @@ def test_dispatch_once_drains_the_stream():
     assert captured["timeout"] == sd.READ_IDLE_TIMEOUT_SECONDS
 
 
-def test_a_mid_stream_drop_keeps_everything_seen_before_it():
+@pytest.mark.parametrize(
+    "exc",
+    [
+        TimeoutError("read timed out"),
+        OSError("connection reset by peer"),
+        urllib.error.URLError("VPN down"),
+        # NOT an OSError — a premature close raises this via HTTPException, so
+        # before it was in the tuple it escaped and killed the process with a
+        # traceback before the verdict lookup and the output export ever ran.
+        http.client.IncompleteRead(b"half a frame"),
+    ],
+    ids=["timeout", "reset", "urlerror", "incomplete-read"],
+)
+def test_a_mid_stream_drop_keeps_everything_seen_before_it(exc):
     """The sandbox may already have posted the review; the state decides that."""
 
     def opener(req, timeout=None):
         def lines():
             yield b"event: started\n"
             yield b'data: {"session_id": "s"}\n'
-            raise TimeoutError("read timed out")
+            raise exc
 
         return FakeResponse(lines())
 
     st = sd.dispatch_once("http://m", "tok", _payload(), "42", "u", opener)
     assert st.got_event is True
-    assert st.stream_error == "read timed out"
+    assert st.stream_error
     # Not an `error` event: the SANDBOX did not fail, our socket did. The
     # output contract keeps `final_status` on "unknown" for this case.
     assert st.errored is False
-    assert sd.render_outputs(st)["final_status"] == "unknown"
+    outputs = sd.render_outputs(st)
+    assert outputs["final_status"] == "unknown"
+    assert set(outputs) == {
+        "final_status",
+        "final_cost",
+        "final_err_code",
+        "final_err_msg",
+    }
     code, messages = sd.decide_exit(st, False, "42")
     assert code == 1 and "without a 'complete' event" in messages[-1]
+
+
+def test_a_trickling_stream_is_cut_at_the_total_duration_cap():
+    """The per-read timeout only catches SILENCE, not an endless trickle.
+
+    Without this the runner blocks until the job's 130-minute timeout kills it,
+    which skips the verdict lookup, the outputs and the starter-comment stamp.
+    """
+    # SSEState(0), deadline base 0 → cap at STREAM_TIMEOUT_SECONDS; the first
+    # line then arrives one second past it.
+    clock = Clock(0.0, 0.0, sd.STREAM_TIMEOUT_SECONDS + 1)
+    consumed = []
+
+    def opener(req, timeout=None):
+        def lines():
+            for i in range(50):
+                consumed.append(i)
+                yield b": heartbeat\n"
+
+        return FakeResponse(lines())
+
+    st = sd.dispatch_once("http://m", "tok", _payload(), "42", "u", opener, clock)
+    assert "past its" in st.stream_error
+    assert len(consumed) < 50, "the stream was drained instead of being cut"
+    # The normal failure path, with everything seen so far intact.
+    assert st.errored is False
+    assert sd.decide_exit(st, False, "42")[0] == 1
+
+
+def test_the_cap_follows_the_cap_the_sandbox_itself_was_given():
+    """Read off the payload, so the two can never drift."""
+    clock = Clock(0.0, 0.0, 500.0)
+
+    def opener(req, timeout=None):
+        return FakeResponse([b": heartbeat\n", b": heartbeat\n"])
+
+    st = sd.dispatch_once(
+        "http://m",
+        "tok",
+        _payload(max_timeout_seconds=400),
+        "42",
+        "u",
+        opener,
+        clock,
+    )
+    assert "past its" in st.stream_error
+
+
+def test_a_stream_that_completes_inside_the_cap_is_untouched():
+    body = [
+        b"event: complete\n",
+        b'data: {"status": "completed", "cost_usd": "0.83"}\n',
+    ]
+    st = sd.dispatch_once(
+        "http://m",
+        "tok",
+        _payload(),
+        "42",
+        "u",
+        lambda req, timeout=None: FakeResponse(body),
+    )
+    assert st.stream_error == "" and st.status == "completed"
 
 
 # ---------------------------------------------------------------------------

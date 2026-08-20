@@ -50,6 +50,7 @@ step in `.github/workflows/sdk-review.yml`):
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import re
@@ -75,6 +76,18 @@ STREAM_TIMEOUT_SECONDS = 7200
 # once mothership has itself given up on an idle session. curl had no equivalent
 # — only the 7200s total cap — so a dead-but-open socket held the runner for 2h.
 READ_IDLE_TIMEOUT_SECONDS = 1900
+# Transport failures that are NOT OSError subclasses. `http.client.IncompleteRead`
+# is the one that bites: a premature close mid-body raises it (via HTTPException,
+# not OSError), so without this it escaped the handler in `dispatch_once` and
+# killed the process with a traceback — before the verdict lookup ran and before
+# the four outputs were exported. A delivered review would have redded the check
+# with `final_status` never written at all.
+STREAM_TRANSPORT_ERRORS = (
+    urllib.error.URLError,
+    TimeoutError,
+    OSError,
+    http.client.HTTPException,
+)
 # Wall-clock silence, in seconds, before the run page gets a `::warning::` that
 # the sandbox looks stalled. Re-armed by every content-bearing event.
 IDLE_WARN_SECONDS = 300
@@ -463,16 +476,32 @@ def process_stream(
     gha_run_url: str = "",
     now: Callable[[], float] = time.monotonic,
     st: SSEState | None = None,
+    deadline: float | None = None,
 ) -> SSEState:
     """Drain the stream into an SSEState, logging as it goes.
 
     `st` lets a caller keep the partial state when the connection dies
     mid-stream — the review may already have been posted, and the soft-success
     rule needs everything we saw before the drop.
+
+    `deadline` is the total stream-duration cap, the replacement for curl's
+    `--max-time`. The per-read socket timeout only catches SILENCE; a stream
+    that keeps trickling bytes past the sandbox's own cap and never emits
+    `complete` would otherwise hold the runner until the job's 130-minute
+    timeout kills it — which skips the verdict lookup, the outputs and the
+    starter-comment stamp entirely. Stopping here instead exits through the
+    normal failure path with everything seen so far intact.
     """
     st = st if st is not None else SSEState(now())
     for raw in lines:
         now_ts = now()
+        if deadline is not None and now_ts >= deadline:
+            st.stream_error = st.stream_error or (
+                f"stream ran past its {STREAM_TIMEOUT_SECONDS}s cap without a "
+                "'complete' event"
+            )
+            print(f"::warning::Sandbox stream capped: {st.stream_error}", flush=True)
+            break
         idle = check_idle(st, now_ts, pr_number, gha_run_url)
         if idle:
             print(idle, flush=True)
@@ -708,6 +737,10 @@ def dispatch_once(
     # process that may well have posted the review before our socket dropped,
     # and everything the soft-success rule reads was accumulated before then.
     st = SSEState(now())
+    # Total stream cap, read off the payload so it can never drift from the cap
+    # the sandbox itself was given. Together with the per-read timeout below it
+    # covers both shapes of a stuck stream: silence, and an endless trickle.
+    deadline = now() + payload.get("max_timeout_seconds", STREAM_TIMEOUT_SECONDS)
     try:
         # `timeout` is the per-read socket idle watchdog, not a whole-request
         # cap: a silent stall frees the runner in ~READ_IDLE_TIMEOUT_SECONDS
@@ -719,8 +752,9 @@ def dispatch_once(
                 gha_run_url,
                 now,
                 st,
+                deadline,
             )
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
+    except STREAM_TRANSPORT_ERRORS as e:
         # NOT `errored`: this is OUR connection dying, not the sandbox. The
         # shell saw the same class of failure as curl diagnostics on stdout and
         # reported it as "stream ended without a 'complete' event"; keeping that
