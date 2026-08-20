@@ -1051,7 +1051,11 @@ class BaseE2ETest:
             self.mode.value,
             self.connection_qualified_name,
         )
-        run_id = self.client.submit_workflow(payload, **self._submit_retry_kwargs())
+        # slug= lets an ambiguous submit timeout be resolved by reading AE's own
+        # run list under this slug instead of failing the leg outright.
+        run_id = self.client.submit_workflow(
+            payload, slug=slug, **self._submit_retry_kwargs()
+        )
         logger.info("AE submit returned run_id=%s", run_id)
 
         ae_result = self.client.poll_native_status(

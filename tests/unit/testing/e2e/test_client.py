@@ -7,10 +7,10 @@ transient_streak budget works correctly.
 
 from __future__ import annotations
 
-import io
-import urllib.error
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
+import httpx
 import pytest
 
 from application_sdk.testing.e2e._errors import (
@@ -20,10 +20,12 @@ from application_sdk.testing.e2e._errors import (
     AtlanApiTimeoutError,
     DAGProgressStalledError,
     NoWorkerOnTaskQueueError,
+    RequestDelivery,
 )
 from application_sdk.testing.e2e._poll import fake_clock
 from application_sdk.testing.e2e.client import (
     _MAX_RETRY_AFTER_SECONDS,
+    _RECONCILE_CLOCK_SKEW_SECONDS,
     _REQUEST_MAX_ATTEMPTS,
     _RETRY_AFTER_BUDGET_SECONDS,
     AEWorkflowClient,
@@ -31,9 +33,13 @@ from application_sdk.testing.e2e.client import (
     DAGNodeStatus,
     DAGRunResult,
     DAGRunStatus,
+    RunLookup,
+    _classify_delivery,
     _is_already_active_run,
     _is_app_not_ready,
     _is_credential_name_conflict,
+    _newest_run_since,
+    _parse_run_timestamp,
     _requested_retry_after,
     _retry_gap,
     _rotate_submit_credential_name,
@@ -818,36 +824,72 @@ class TestPollNativeStatusHonoursRetryAfter:
         ]
 
 
-class _FakeResponse:
-    """Minimal urlopen() return value usable as a context manager."""
+def _patch_transport(*results: httpx.Response | Exception):
+    """Patch the one httpx call ``_request`` makes, per attempt.
 
-    def __init__(self, status: int, raw: bytes):
-        self.status = status
-        self._raw = raw
+    ``_request`` builds a single-use ``httpx.Client`` per attempt, so patching
+    ``Client.request`` covers every attempt from one place. Pass one entry per
+    expected attempt: a ``Response`` to answer with, or an exception to raise.
+    A single entry is repeated for every attempt.
+    """
+    if len(results) == 1:
+        only = results[0]
+        # A lone Response goes through return_value, not side_effect: an
+        # httpx.Response is itself iterable (byte streaming), so mock would
+        # consume it as a sequence of per-attempt results.
+        kwargs = (
+            {"side_effect": only}
+            if isinstance(only, Exception)
+            else {"return_value": only}
+        )
+    else:
+        kwargs = {"side_effect": list(results)}
+    return patch.object(httpx.Client, "request", autospec=True, **kwargs)
 
-    def __enter__(self):
-        return self
 
-    def __exit__(self, *exc):
-        return False
+def _response(status: int, raw: bytes) -> httpx.Response:
+    return httpx.Response(status_code=status, content=raw)
 
-    def read(self) -> bytes:
-        return self._raw
+
+class TestClassifyDelivery:
+    """Only a connect-phase failure proves the origin never saw the request."""
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            httpx.ConnectTimeout("handshake never completed"),
+            httpx.ConnectError("name resolution failed"),
+            httpx.PoolTimeout("no connection acquired"),
+        ],
+    )
+    def test_connect_phase_is_not_delivered(self, exc):
+        assert _classify_delivery(exc) is RequestDelivery.NOT_DELIVERED
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            httpx.ReadTimeout("the read operation timed out"),
+            httpx.WriteTimeout("write timed out"),
+            httpx.RemoteProtocolError("server disconnected"),
+            httpx.ReadError("connection reset"),
+            OSError("something else entirely"),
+        ],
+    )
+    def test_everything_after_the_handshake_is_ambiguous(self, exc):
+        assert _classify_delivery(exc) is RequestDelivery.AMBIGUOUS
 
 
 class TestRequestNetworkRetry:
     """_request: transient network errors retry; sustained ones surface as
     AtlanApiTimeoutError (an AppError) so the poll loop tolerates them instead
-    of crashing on a raw URLError/TimeoutError mid-poll."""
+    of crashing on a raw transport error mid-poll."""
 
     def test_retries_transient_then_succeeds(self):
-        """URLError on attempt 1 → succeeds on attempt 2."""
+        """A transport error on attempt 1 → succeeds on attempt 2."""
         client = _make_client()
-        ok = _FakeResponse(200, b'{"ok": true}')
         with (
-            patch(
-                "application_sdk.testing.e2e.client.urllib.request.urlopen",
-                side_effect=[urllib.error.URLError("dns blip"), ok],
+            _patch_transport(
+                httpx.ConnectError("dns blip"), _response(200, b'{"ok": true}')
             ),
             patch("time.sleep"),
         ):
@@ -856,41 +898,56 @@ class TestRequestNetworkRetry:
         assert body == {"ok": True}
 
     def test_sustained_network_error_raises_atlan_timeout(self):
-        """URLError on every attempt → AtlanApiTimeoutError after max attempts."""
+        """A transport error on every attempt → AtlanApiTimeoutError."""
         client = _make_client()
         with (
-            patch(
-                "application_sdk.testing.e2e.client.urllib.request.urlopen",
-                side_effect=urllib.error.URLError("name resolution"),
-            ) as mock_open,
+            _patch_transport(httpx.ConnectError("name resolution")) as mock_req,
             patch("time.sleep"),
             pytest.raises(AtlanApiTimeoutError),
         ):
             client._request("GET", "/native-status")
-        assert mock_open.call_count == _REQUEST_MAX_ATTEMPTS
+        assert mock_req.call_count == _REQUEST_MAX_ATTEMPTS
 
-    def test_httperror_returns_immediately_without_retry(self):
+    def test_5xx_returns_immediately_without_retry(self):
         """A real 5xx HTTP response is returned, not retried as a network error."""
         client = _make_client()
-        http_err = urllib.error.HTTPError(
-            url="https://tenant.example.com/native-status",
-            code=500,
-            msg="server error",
-            hdrs=None,
-            fp=io.BytesIO(b'{"err": "boom"}'),
-        )
         with (
-            patch(
-                "application_sdk.testing.e2e.client.urllib.request.urlopen",
-                side_effect=http_err,
-            ) as mock_open,
+            _patch_transport(_response(500, b'{"err": "boom"}')) as mock_req,
             patch("time.sleep") as mock_sleep,
         ):
             status, body = client._request("GET", "/native-status")
         assert status == 500
         assert body == {"err": "boom"}
-        assert mock_open.call_count == 1
+        assert mock_req.call_count == 1
         mock_sleep.assert_not_called()
+
+    def test_non_json_body_returns_raw_text(self):
+        """A 2xx that isn't JSON degrades to text rather than crashing."""
+        client = _make_client()
+        with _patch_transport(_response(200, b"<html>gateway</html>")):
+            status, body = client._request("GET", "/native-status")
+        assert status == 200
+        assert body == "<html>gateway</html>"
+
+    def test_error_carries_the_delivery_classification(self):
+        """The raised error records whether the origin can have seen the
+        request — _post_with_retry's re-POST decision reads this."""
+        client = _make_client()
+        with (
+            _patch_transport(httpx.ReadTimeout("read timed out")),
+            patch("time.sleep"),
+            pytest.raises(AtlanApiTimeoutError) as excinfo,
+        ):
+            client._request("GET", "/native-status")
+        assert excinfo.value.delivery is RequestDelivery.AMBIGUOUS
+
+        with (
+            _patch_transport(httpx.ConnectTimeout("handshake never completed")),
+            patch("time.sleep"),
+            pytest.raises(AtlanApiTimeoutError) as excinfo,
+        ):
+            client._request("GET", "/native-status")
+        assert excinfo.value.delivery is RequestDelivery.NOT_DELIVERED
 
 
 class TestCredentialConflictHelpers:
@@ -1168,10 +1225,28 @@ class TestSubmitWorkflowIdempotency:
         assert mock_req.call_count == 1
         mock_sleep.assert_not_called()
 
-    def test_network_timeout_is_not_reposted(self):
-        """A read-timeout on submit is ambiguous (server may have accepted it),
-        so submit_workflow must surface it without re-POSTing — and report the
-        one attempt actually made, not total_attempts."""
+    def test_ambiguous_network_timeout_is_not_reposted(self):
+        """A read-timeout on submit is ambiguous (AE may have accepted it), so
+        submit_workflow must surface it without re-POSTing — reporting the one
+        attempt actually made, not total_attempts, and naming why it stopped."""
+        client = _make_client()
+        ambiguous = AtlanApiTimeoutError(
+            message="read timed out",
+            operation="/submit",
+            delivery=RequestDelivery.AMBIGUOUS,
+        )
+        with (
+            patch.object(client, "_request", side_effect=ambiguous) as mock_req,
+            patch("time.sleep"),
+            pytest.raises(AtlanApiTimeoutError, match=r"after 1 attempt") as excinfo,
+        ):
+            client.submit_workflow({"any": "payload"})
+        assert mock_req.call_count == 1
+        assert "not re-issued" in str(excinfo.value)
+
+    def test_unclassified_timeout_is_treated_as_ambiguous(self):
+        """A bare TimeoutError carries no delivery classification, so the
+        conservative default applies and submit still refuses to re-POST."""
         client = _make_client()
         with (
             patch.object(
@@ -1183,20 +1258,70 @@ class TestSubmitWorkflowIdempotency:
             client.submit_workflow({"any": "payload"})
         assert mock_req.call_count == 1
 
+    def test_connect_failure_is_reposted_within_the_budget(self):
+        """A connect-phase failure never reached AE, so submit re-POSTs it
+        despite being non-idempotent — and recovers when the next one lands.
+        This is the blackholed-CI-hairpin case that used to red a whole leg."""
+        client = _make_client()
+        never_sent = AtlanApiTimeoutError(
+            message="handshake never completed",
+            operation="/submit",
+            delivery=RequestDelivery.NOT_DELIVERED,
+        )
+        with (
+            patch.object(
+                client, "_request", side_effect=[never_sent, (200, {"run_id": "r-2"})]
+            ) as mock_req,
+            patch("time.sleep"),
+        ):
+            assert client.submit_workflow({"any": "payload"}) == "r-2"
+        assert mock_req.call_count == 2
+
+    def test_sustained_connect_failure_exhausts_the_budget_then_raises(self):
+        """Re-POSTing a never-delivered submit is bounded by the caller's
+        attempt budget, not unbounded — and the raise reports the real count."""
+        client = _make_client()
+        never_sent = AtlanApiTimeoutError(
+            message="handshake never completed",
+            operation="/submit",
+            delivery=RequestDelivery.NOT_DELIVERED,
+        )
+        with (
+            patch.object(client, "_request", side_effect=never_sent) as mock_req,
+            patch("time.sleep"),
+            pytest.raises(AtlanApiTimeoutError, match=r"after 3 attempt") as excinfo,
+        ):
+            client.submit_workflow({"any": "payload"}, retries=2)
+        assert mock_req.call_count == 3
+        # It exhausted the budget rather than declining to re-issue.
+        assert "not re-issued" not in str(excinfo.value)
+
     def test_request_no_repost_on_timeout_when_disabled(self):
         """_request(retry_network_errors=False) issues exactly one POST on a
-        TimeoutError instead of the usual _REQUEST_MAX_ATTEMPTS."""
+        transport error instead of the usual _REQUEST_MAX_ATTEMPTS — the
+        re-POST decision belongs to _post_with_retry, not to a nested loop."""
         client = _make_client()
         with (
-            patch(
-                "application_sdk.testing.e2e.client.urllib.request.urlopen",
-                side_effect=TimeoutError("read timed out"),
-            ) as mock_open,
+            _patch_transport(httpx.ReadTimeout("read timed out")) as mock_req,
             patch("time.sleep"),
             pytest.raises(AtlanApiTimeoutError),
         ):
             client._request("POST", "/submit", body={}, retry_network_errors=False)
-        assert mock_open.call_count == 1
+        assert mock_req.call_count == 1
+
+    def test_request_no_repost_even_when_never_delivered(self):
+        """Same for a connect failure: _request still makes exactly one call.
+        Re-POSTing it is safe, but doing so HERE would nest inside
+        _post_with_retry's loop and blow the cold-start attempt budget."""
+        client = _make_client()
+        with (
+            _patch_transport(httpx.ConnectTimeout("no handshake")) as mock_req,
+            patch("time.sleep"),
+            pytest.raises(AtlanApiTimeoutError) as excinfo,
+        ):
+            client._request("POST", "/submit", body={}, retry_network_errors=False)
+        assert mock_req.call_count == 1
+        assert excinfo.value.delivery is RequestDelivery.NOT_DELIVERED
 
     def test_genuine_5xx_still_retries_then_succeeds(self):
         """A real 5xx that is NOT the already-active conflict remains retryable,
@@ -1218,3 +1343,326 @@ class TestSubmitWorkflowIdempotency:
         client = _make_client()
         with patch.object(client, "_request", return_value=(200, {"run_id": "r-1"})):
             assert client.submit_workflow({"any": "payload"}) == "r-1"
+
+
+class TestParseRunTimestamp:
+    """created_at decides adopt-vs-resubmit, so an unrecognised shape must read
+    as unknown rather than as a plausible-looking instant."""
+
+    def test_iso_with_offset(self):
+        parsed = _parse_run_timestamp("2026-08-20T13:58:39.123456+00:00")
+        assert parsed == datetime(2026, 8, 20, 13, 58, 39, 123456, tzinfo=UTC)
+
+    def test_iso_with_zulu_suffix(self):
+        parsed = _parse_run_timestamp("2026-08-20T13:58:39Z")
+        assert parsed == datetime(2026, 8, 20, 13, 58, 39, tzinfo=UTC)
+
+    def test_naive_iso_is_read_as_utc(self):
+        """Both AE backends stamp UTC; a naive value is not local time."""
+        parsed = _parse_run_timestamp("2026-08-20T13:58:39")
+        assert parsed == datetime(2026, 8, 20, 13, 58, 39, tzinfo=UTC)
+
+    def test_epoch_milliseconds(self):
+        """The Atlan-mode registry derives created_at from a metastore entity
+        create time, which is epoch milliseconds."""
+        assert _parse_run_timestamp(1787234319000) == datetime(
+            2026, 8, 20, 13, 58, 39, tzinfo=UTC
+        )
+
+    def test_epoch_seconds(self):
+        assert _parse_run_timestamp(1787234319) == datetime(
+            2026, 8, 20, 13, 58, 39, tzinfo=UTC
+        )
+
+    @pytest.mark.parametrize(
+        "raw", [None, "", "not-a-date", True, False, {"nested": 1}, []]
+    )
+    def test_unrecognised_shapes_are_unknown_not_guessed(self, raw):
+        assert _parse_run_timestamp(raw) is None
+
+
+class TestNewestRunSince:
+    """Picking our run out of AE's BulkResponse[WorkflowRun]."""
+
+    _FLOOR = datetime(2026, 8, 20, 13, 0, 0, tzinfo=UTC)
+
+    def test_returns_the_first_run_at_or_after_the_floor(self):
+        body = {
+            "data": [
+                {"guid": "newer", "created_at": "2026-08-20T14:00:00Z"},
+                {"guid": "older", "created_at": "2026-08-20T12:00:00Z"},
+            ]
+        }
+        assert _newest_run_since(body, self._FLOOR) == "newer"
+
+    def test_ignores_runs_created_before_the_floor(self):
+        body = {"data": [{"guid": "older", "created_at": "2026-08-20T12:00:00Z"}]}
+        assert _newest_run_since(body, self._FLOOR) is None
+
+    def test_floor_is_inclusive(self):
+        body = {"data": [{"guid": "exact", "created_at": "2026-08-20T13:00:00Z"}]}
+        assert _newest_run_since(body, self._FLOOR) == "exact"
+
+    def test_skips_rows_whose_timestamp_cannot_be_parsed(self):
+        """An unparseable row must not be adopted on optimism — the harness
+        would then poll a run it never submitted."""
+        body = {
+            "data": [
+                {"guid": "unparseable", "created_at": "???"},
+                {"guid": "good", "created_at": "2026-08-20T14:00:00Z"},
+            ]
+        }
+        assert _newest_run_since(body, self._FLOOR) == "good"
+
+    def test_accepts_run_id_as_well_as_guid(self):
+        body = {"data": [{"run_id": "r-1", "created_at": "2026-08-20T14:00:00Z"}]}
+        assert _newest_run_since(body, self._FLOOR) == "r-1"
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {},
+            {"data": None},
+            {"data": []},
+            {"data": "not a list"},
+            {"data": [None, 7, "x"]},
+            {"data": [{"created_at": "2026-08-20T14:00:00Z"}]},  # no id
+            {"data": [{"guid": "", "created_at": "2026-08-20T14:00:00Z"}]},
+        ],
+    )
+    def test_malformed_bodies_yield_nothing(self, body):
+        assert _newest_run_since(body, self._FLOOR) is None
+
+
+class TestFindRunCreatedSince:
+    """The reconcile read: found / proven-absent / never-answered."""
+
+    _SINCE = datetime(2026, 8, 20, 13, 58, 45, tzinfo=UTC)
+
+    def test_found_run_is_conclusive(self):
+        client = _make_client()
+        body = {"data": [{"guid": "r-real", "created_at": "2026-08-20T13:58:46Z"}]}
+        with patch.object(client, "_request", return_value=(200, body)):
+            lookup = client.find_run_created_since("slug-x", self._SINCE)
+        assert lookup == RunLookup(run_id="r-real", conclusive=True)
+
+    def test_queries_ae_under_the_slug(self):
+        client = _make_client()
+        with patch.object(
+            client, "_request", return_value=(200, {"data": []})
+        ) as mock_req:
+            client.find_run_created_since(
+                "slug/with space", self._SINCE, timeout_seconds=0
+            )
+        _, path = mock_req.call_args[0]
+        assert path.startswith("/automation/api/v1/runs?")
+        assert "workflow_slug=slug%2Fwith%20space" in path
+        # Widened so AE's own default filters cannot hide our run.
+        assert "include_test_runs=true" in path
+        assert "include_system=true" in path
+
+    def test_empty_answer_is_proof_of_absence(self):
+        client = _make_client()
+        with patch.object(client, "_request", return_value=(200, {"data": []})):
+            lookup = client.find_run_created_since(
+                "slug-x", self._SINCE, timeout_seconds=0
+            )
+        assert lookup == RunLookup(run_id=None, conclusive=True)
+
+    def test_unanswered_read_proves_nothing(self):
+        """If the fault that killed the submit also kills every reconcile read,
+        the answer must stay unknown — never 'absent', which would authorise
+        the duplicate submit this whole mechanism exists to prevent."""
+        client = _make_client()
+        with patch.object(
+            client, "_request", side_effect=AtlanApiTimeoutError(message="blackholed")
+        ):
+            lookup = client.find_run_created_since(
+                "slug-x", self._SINCE, timeout_seconds=0
+            )
+        assert lookup == RunLookup(run_id=None, conclusive=False)
+
+    def test_non_2xx_read_proves_nothing(self):
+        client = _make_client()
+        with patch.object(client, "_request", return_value=(503, {"err": "down"})):
+            lookup = client.find_run_created_since(
+                "slug-x", self._SINCE, timeout_seconds=0
+            )
+        assert lookup.conclusive is False
+
+    def test_polls_until_the_run_becomes_searchable(self):
+        """AE serves this list from Elasticsearch, so a run committed just
+        before the connection died can take a moment to appear. One empty
+        answer is not the end of the search."""
+        client = _make_client()
+        late = {"data": [{"guid": "r-late", "created_at": "2026-08-20T13:58:46Z"}]}
+        with (
+            patch.object(
+                client,
+                "_request",
+                side_effect=[(200, {"data": []}), (200, {"data": []}), (200, late)],
+            ) as mock_req,
+            patch("time.sleep"),
+        ):
+            lookup = client.find_run_created_since(
+                "slug-x", self._SINCE, timeout_seconds=60, interval_seconds=10
+            )
+        assert lookup.run_id == "r-late"
+        assert mock_req.call_count == 3
+
+    def test_clock_skew_window_admits_a_slightly_earlier_run(self):
+        """The runner's clock and the tenant's are compared directly, so a run
+        AE stamped just before our own 'now' is still ours."""
+        client = _make_client()
+        skewed = self._SINCE - timedelta(seconds=_RECONCILE_CLOCK_SKEW_SECONDS // 2)
+        body = {"data": [{"guid": "r-skewed", "created_at": skewed.isoformat()}]}
+        with patch.object(client, "_request", return_value=(200, body)):
+            lookup = client.find_run_created_since("slug-x", self._SINCE)
+        assert lookup.run_id == "r-skewed"
+
+    def test_run_older_than_the_skew_window_is_not_adopted(self):
+        client = _make_client()
+        stale = self._SINCE - timedelta(seconds=_RECONCILE_CLOCK_SKEW_SECONDS + 60)
+        body = {"data": [{"guid": "r-stale", "created_at": stale.isoformat()}]}
+        with patch.object(client, "_request", return_value=(200, body)):
+            lookup = client.find_run_created_since(
+                "slug-x", self._SINCE, timeout_seconds=0
+            )
+        assert lookup == RunLookup(run_id=None, conclusive=True)
+
+
+class TestSubmitReconciliation:
+    """submit_workflow resolves an ambiguous timeout by asking AE what happened
+    rather than guessing from the transport error."""
+
+    @staticmethod
+    def _ambiguous() -> AtlanApiTimeoutError:
+        return AtlanApiTimeoutError(
+            message="read timed out",
+            operation="/submit",
+            delivery=RequestDelivery.AMBIGUOUS,
+        )
+
+    def test_adopts_the_run_ae_already_created(self):
+        """The submit landed and only the response was lost: the DAG is really
+        running, so return its id instead of failing the leg."""
+        client = _make_client()
+        with (
+            patch.object(client, "_request", side_effect=self._ambiguous()),
+            patch.object(
+                client,
+                "find_run_created_since",
+                return_value=RunLookup(run_id="r-adopted", conclusive=True),
+            ) as mock_find,
+            patch("time.sleep"),
+        ):
+            assert client.submit_workflow({"any": "p"}, slug="slug-x") == "r-adopted"
+        assert mock_find.call_args[0][0] == "slug-x"
+
+    def test_does_not_resubmit_after_adopting(self):
+        client = _make_client()
+        with (
+            patch.object(client, "_request", side_effect=self._ambiguous()) as mock_req,
+            patch.object(
+                client,
+                "find_run_created_since",
+                return_value=RunLookup(run_id="r-adopted", conclusive=True),
+            ),
+            patch("time.sleep"),
+        ):
+            client.submit_workflow({"any": "p"}, slug="slug-x", retries=4)
+        assert mock_req.call_count == 1
+
+    def test_resubmits_when_ae_proves_nothing_landed(self):
+        """Enabled form of the absence half. Gated off by default until a live
+        leg confirms Heracles-submitted runs show up in AE's listing, so the
+        gate is patched on here rather than the test asserting today's default."""
+        client = _make_client()
+        with (
+            patch.object(
+                client,
+                "_request",
+                side_effect=[self._ambiguous(), (200, {"run_id": "r-2"})],
+            ) as mock_req,
+            patch.object(
+                client,
+                "find_run_created_since",
+                return_value=RunLookup(run_id=None, conclusive=True),
+            ),
+            patch(
+                "application_sdk.testing.e2e.client."
+                "_RESUBMIT_WHEN_AE_REPORTS_NO_RUN",
+                True,
+            ),
+            patch("time.sleep"),
+        ):
+            assert client.submit_workflow({"any": "p"}, slug="slug-x") == "r-2"
+        assert mock_req.call_count == 2
+
+    def test_absence_does_not_resubmit_while_the_gate_is_off(self):
+        """Default posture: an unrecovered ambiguous submit fails exactly as it
+        did before reconciliation existed. Adopting is the only enabled half."""
+        client = _make_client()
+        with (
+            patch.object(client, "_request", side_effect=self._ambiguous()) as mock_req,
+            patch.object(
+                client,
+                "find_run_created_since",
+                return_value=RunLookup(run_id=None, conclusive=True),
+            ),
+            patch("time.sleep"),
+            pytest.raises(AtlanApiTimeoutError, match=r"after 1 attempt"),
+        ):
+            client.submit_workflow({"any": "p"}, slug="slug-x")
+        assert mock_req.call_count == 1
+
+    def test_inconclusive_reconcile_still_fails_fast(self):
+        """Unknown is not absent. With no proof either way the old never-repost
+        behaviour stands, rather than risking a duplicate run."""
+        client = _make_client()
+        with (
+            patch.object(client, "_request", side_effect=self._ambiguous()) as mock_req,
+            patch.object(
+                client,
+                "find_run_created_since",
+                return_value=RunLookup(run_id=None, conclusive=False),
+            ),
+            patch("time.sleep"),
+            pytest.raises(AtlanApiTimeoutError, match=r"after 1 attempt") as excinfo,
+        ):
+            client.submit_workflow({"any": "p"}, slug="slug-x")
+        assert mock_req.call_count == 1
+        assert "not re-issued" in str(excinfo.value)
+
+    def test_no_slug_means_no_reconcile(self):
+        """A caller that cannot name the slug keeps the pre-existing fail-fast
+        contract — the guard degrades, it does not guess."""
+        client = _make_client()
+        with (
+            patch.object(client, "_request", side_effect=self._ambiguous()) as mock_req,
+            patch.object(client, "find_run_created_since") as mock_find,
+            patch("time.sleep"),
+            pytest.raises(AtlanApiTimeoutError),
+        ):
+            client.submit_workflow({"any": "p"})
+        assert mock_req.call_count == 1
+        mock_find.assert_not_called()
+
+    def test_connect_failure_skips_the_reconcile_read(self):
+        """A never-delivered request needs no proof: re-POST straight away
+        instead of spending the reconcile window on a settled question."""
+        client = _make_client()
+        never_sent = AtlanApiTimeoutError(
+            message="handshake never completed",
+            operation="/submit",
+            delivery=RequestDelivery.NOT_DELIVERED,
+        )
+        with (
+            patch.object(
+                client, "_request", side_effect=[never_sent, (200, {"run_id": "r-3"})]
+            ),
+            patch.object(client, "find_run_created_since") as mock_find,
+            patch("time.sleep"),
+        ):
+            assert client.submit_workflow({"any": "p"}, slug="slug-x") == "r-3"
+        mock_find.assert_not_called()

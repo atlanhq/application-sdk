@@ -757,6 +757,9 @@ class BaseFullDAGE2ETest:
         )
         run_id = self.client.submit_workflow(
             payload,
+            # Lets an ambiguous submit timeout be resolved by reading AE's own
+            # run list under this slug instead of failing the leg outright.
+            slug=slug,
             **cold_start_submit_kwargs(
                 self.app_ready_timeout_seconds,
                 self.app_ready_poll_interval_seconds,

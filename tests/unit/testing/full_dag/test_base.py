@@ -546,12 +546,17 @@ class TestFullDAGColdStartBudget:
         with pytest.raises(RuntimeError, match="stop after submit"):
             harness.run_full_dag()
         _, kwargs = harness.client.submit_workflow.call_args
-        assert kwargs == {"retries": 60, "retry_sleep_seconds": 5}
+        assert kwargs == {
+            "slug": "slug",
+            "retries": 60,
+            "retry_sleep_seconds": 5,
+        }
 
     def test_zero_budget_defers_to_submit_workflow_defaults(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """0 passes no overrides at all, matching BaseE2ETest."""
+        """0 passes no budget overrides at all, matching BaseE2ETest. The slug
+        is threaded regardless — it is not part of the cold-start budget."""
         _bootstrap_env(monkeypatch)
         cls = _make_test()
         cls.app_ready_timeout_seconds = 0
@@ -569,4 +574,4 @@ class TestFullDAGColdStartBudget:
         with pytest.raises(RuntimeError, match="stop after submit"):
             harness.run_full_dag()
         _, kwargs = harness.client.submit_workflow.call_args
-        assert kwargs == {}
+        assert kwargs == {"slug": "slug"}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import ClassVar
 
 from application_sdk.errors.leaves import (
@@ -45,12 +46,55 @@ class AtlanApiResponseInvariantError(DataIntegrityError):
     location: str | None = "atlan_api_client"
 
 
+class RequestDelivery(str, Enum):
+    """Whether a failed HTTP request can have taken effect at the origin.
+
+    The distinction only matters for a **non-idempotent** write (the AE
+    submit): re-issuing one the origin already processed spawns a duplicate
+    run, so the client must know whether that is possible before retrying.
+
+    Two independent signals narrow the ambiguous case:
+
+    * the transport error's own shape. ``urllib`` could not tell a connect
+      timeout from a read timeout — both surfaced as a bare
+      :class:`TimeoutError` — which forced the submit path to treat every
+      network failure as ambiguous and give up after one attempt. ``httpx``
+      separates the connect phase from everything after it, giving
+      :attr:`NOT_DELIVERED`.
+    * a follow-up read of the origin's own state. A write whose effect is
+      externally observable can simply be looked up afterwards, giving
+      :attr:`NOT_APPLIED` when it is provably absent.
+    """
+
+    NOT_DELIVERED = "not_delivered"
+    """The connection was never established, so the request bytes never left
+    the client. The origin cannot have seen it — re-issuing is safe even for a
+    non-idempotent write."""
+
+    NOT_APPLIED = "not_applied"
+    """The request may well have reached the origin, but a follow-up read of
+    the origin's own state found no trace of its effect. Re-issuing is safe on
+    the strength of that read, not of the transport error."""
+
+    AMBIGUOUS = "ambiguous"
+    """The connection was established, the failure came later (read timeout,
+    reset mid-flight), and nothing has ruled out the origin having processed
+    it. Only an idempotent caller may re-issue."""
+
+
 @dataclass(kw_only=True)
 class AtlanApiTimeoutError(AppTimeoutError):
-    """No response received from the AE API before the timeout elapsed."""
+    """No response received from the AE API before the timeout elapsed.
+
+    ``delivery`` records whether the request can have reached the origin. It
+    defaults to :attr:`RequestDelivery.AMBIGUOUS` — the conservative value —
+    so any raise site that does not classify the failure keeps the old
+    never-repost behaviour for non-idempotent writes.
+    """
 
     code: ClassVar[str] = "TIMEOUT_ATLAN_API"
     operation: str | None = "native_status_poll"
+    delivery: RequestDelivery = RequestDelivery.AMBIGUOUS
 
 
 # ---------------------------------------------------------------------------
