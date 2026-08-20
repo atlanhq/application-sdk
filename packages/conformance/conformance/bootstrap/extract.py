@@ -81,11 +81,15 @@ _ACTION_PIN_RE = re.compile(r"@[0-9a-f]{40}(?:[ \t]+#[^\n]*)?")
 # attached* and was re-rendered into the path. The re-render normalises to the
 # quoted form the template has always emitted: one-time C002 drift for those two
 # files, against losing or corrupting the value.
-# tests-reusable.yaml's `unit-coverage-fail-under` input, quoted or bare. Anchored
-# and uncommented-only for the same reason as the lines above. The quote pair is
-# matched as a unit (`"(\d+)"` or `\d+`, never a lone leading/trailing quote) so a
-# half-quoted line — which the YAML parser would reject anyway — can't read back
-# as a valid declaration.
+
+# tests-reusable.yaml's `unit-coverage-fail-under` input, bare or either quote.
+# Anchored and uncommented-only for the same reason as the lines above. Each quote
+# pair is matched as a unit (`"(\d+)"`, `'(\d+)'` or `\d+`, never a lone
+# leading/trailing quote) so a half-quoted line — which the YAML parser would
+# reject anyway — can't read back as a valid declaration. It keeps a regex rather
+# than moving to `extract_field` because the `\d+` is load-bearing: the value is
+# passed to `int()` below, and a non-numeric one must read as absent (and so reach
+# the guard) rather than raise.
 _UNIT_COVERAGE_FAIL_UNDER_RE = re.compile(
     r"^\s+unit-coverage-fail-under:\s+(?:\"(\d+)\"|'(\d+)'|(\d+))\s*$", re.MULTILINE
 )
