@@ -30,6 +30,13 @@ in the PR body.
 
 ## What you may and may not touch
 
+**Never deliver a suppression.** This lane's PRs never add
+`# conformance: ignore[...]` comments in an app repo — a finding you cannot
+properly fix is either an app defect needing a different (real) fix or a
+rule/SDK edge case (`rule-review`, Stage 6). Suppressions are how *humans*
+record *their* decisions; a bot writing one launders a gap into silence. The
+shape gate rejects such a diff regardless.
+
 **May:** Python source, the root `Dockerfile`, `pyproject.toml`, and contract
 `.pkl` files — whatever the rule's own area prescription authorises.
 

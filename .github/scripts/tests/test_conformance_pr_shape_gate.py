@@ -296,3 +296,67 @@ def test_pr_meta_tolerates_null_fields() -> None:
         return '{"title":null,"headRefName":null,"body":null}'
 
     assert gate.pr_meta("o/r", "1", runner=fake) == ("", "", "")
+
+
+# ── the no-suppression rule ────────────────────────────────────────────────
+#
+# The lane never delivers suppressions: a suppression records a HUMAN decision,
+# and a bot writing one launders an unfixed gap into permanent silence. Either
+# the app gets a real fix or the edge case goes to an SDK rule fix.
+
+
+def test_an_added_suppression_comment_is_rejected() -> None:
+    diff = (
+        "+++ b/app/main.py\n"
+        "+    do_thing()  # conformance: ignore[E002] vendor API raises bare Exception\n"
+    )
+    verdict = gate.evaluate(
+        ["app/main.py"],
+        "fix(conformance): resolve E002 x (E002)",
+        "conformance/e002",
+        "",
+        diff,
+    )
+    assert not verdict.ok
+    assert "never suppresses" in verdict.reason
+
+
+def test_removing_a_suppression_is_allowed() -> None:
+    """Deleting one un-silences a finding — that is remediation, not suppression."""
+    diff = (
+        "+++ b/app/main.py\n"
+        "-    do_thing()  # conformance: ignore[E002] stale justification\n"
+        "+    do_thing_properly()\n"
+    )
+    verdict = gate.evaluate(
+        ["app/main.py"],
+        "fix(conformance): resolve E002 x (E002)",
+        "conformance/e002",
+        "",
+        diff,
+    )
+    assert verdict.ok
+
+
+def test_a_context_line_mentioning_a_suppression_is_not_an_addition() -> None:
+    diff = "+++ b/app/main.py\n     # conformance: ignore[L004] someone else wrote this\n+    fixed()\n"
+    verdict = gate.evaluate(
+        ["app/main.py"],
+        "fix(conformance): resolve L004 x (L004)",
+        "conformance/l004",
+        "",
+        diff,
+    )
+    assert verdict.ok
+
+
+def test_no_diff_available_does_not_fail_the_gate() -> None:
+    """The diff check is additive: path and rule checks stand on their own when
+    the caller supplies no diff (older callers, env-driven tests)."""
+    verdict = gate.evaluate(
+        ["app/main.py"],
+        "fix(conformance): resolve L004 x (L004)",
+        "conformance/l004",
+        "",
+    )
+    assert verdict.ok

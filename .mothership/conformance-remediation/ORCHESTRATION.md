@@ -274,7 +274,7 @@ only way to clear a finding is to change what judges you, the answer is
 |---|---|
 | Two valid fixes, one narrower | take the narrower; record why the broader was rejected |
 | The fix would need an edit outside this rule's concern | do **not** widen — `rule-review` |
-| Suppression is the only clearing move | suppress **with** an 8–40 word justification quoting the evidence; flag for human |
+| Suppression looks like the only clearing move | **never suppress — this lane does not deliver suppression PRs.** A finding that cannot be fixed properly is one of exactly two things: an app defect needing a different (real) fix, or a rule/SDK edge case → `rule-review` (Stage 6). Suppressions in app repos are for humans recording *their* decisions; a bot writing one would launder a gap into silence |
 | Gate is blind (P/S) | apply only with a cited source; flag for human |
 | `forces_external_influence` (C001) | apply, record the resolved SHA as evidence; flag for human |
 | Oscillation, or the attempt cap | stop; `rule-review` with the fingerprint set. Never keep thrashing |
@@ -315,7 +315,24 @@ Already open ⇒ comment your new evidence on that PR and report
 `rule-review:<existing-url>`. One rule-fix PR per rule, same as one remediation PR
 per rule.
 
-Otherwise:
+**Already MERGED but the finding still fires at `SUITE_VERSION`** ⇒ the fix
+exists and is simply not in the pinned release yet (or the app has not picked
+the release up). Do NOT re-file, do NOT force an app-side workaround. Report
+`rule-review:<merged-pr-url> merged, awaiting suite release/adoption` — the
+detail rides the ledger to the dashboard, and the unit clears itself on a
+future round once the app's CI SARIF regenerates on a suite version that
+carries the fix (the planner then finds zero findings and never enqueues it).
+
+**Route the fix to where the defect actually lives** — all three destinations
+are in scope for this stage:
+
+| The defect is in | Fix goes to |
+|---|---|
+| the detector / rule metadata | `packages/conformance/` in `atlanhq/application-sdk` (this path — <https://github.com/atlanhq/application-sdk/tree/main/packages/conformance>) |
+| the SDK library itself (the rule is right, the app is right to want it, but `application_sdk` lacks the seam/API the prescribed fix needs) | `application_sdk/` in the same repo — same branch convention (`conformance/rule-fix/<rule>`), same regression-test bar, same `@sdk-resolve` handoff |
+| pyatlan (e.g. a `creator()` overload a rule prescribes that `atlan-python` does not expose) | you do NOT open PRs there — open or reference a GitHub **issue** on `atlanhq/atlan-python` (<https://github.com/atlanhq/atlan-python>) describing the smallest unblocking change, and link it from the SDK PR's "Upstream dependency" section. Search first: `gh issue list --repo atlanhq/atlan-python --search "<rule or API>" --state all` — reference an existing issue rather than filing a duplicate |
+
+If you can:
 
 1. `git switch -c "$RULE_BRANCH" origin/main`
 2. **Narrow the detector** in `packages/conformance/conformance/suite/checks/` (or
@@ -365,8 +382,13 @@ warranted at all, a standalone note PR against
 `packages/conformance/conformance/docs/rules/<series>.md`) must carry an
 **"Upstream dependency"** section stating exactly: which library/API is
 missing what, the smallest upstream change that unblocks the prescribed fix,
+a link to the `atlanhq/atlan-python` issue tracking it (open one with
+`gh issue create --repo atlanhq/atlan-python` if none exists — search first),
 and what the fleet should do meanwhile (usually: the finding stays visible,
-unsuppressed — a tracked gap is the honest state). Put the same sentence in
+unsuppressed — a tracked gap is the honest state). When the upstream change
+later ships and pyatlan releases, the SDK PR unblocks, the suite releases,
+app CI regenerates its SARIF, and the unit clears out of the planner on its
+own — no one has to remember to come back. Put the same sentence in
 your RESULT detail so the ledger and the dashboard carry it against the rule:
 `rule-review:<pr-url> blocked upstream: <one line>`. A gap nobody wrote down
 is a gap that gets rediscovered from scratch every sweep.

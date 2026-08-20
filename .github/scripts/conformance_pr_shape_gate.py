@@ -213,6 +213,38 @@ def check_paths(files: Iterable[str], rule: str) -> Verdict:
     return Verdict(True, "")
 
 
+#: Marker for an inline conformance suppression. The lane never delivers
+#: these: a suppression is a HUMAN recording a human decision, and a bot
+#: writing one launders an unfixed gap into permanent silence. Removing one is
+#: fine (that un-silences a finding); adding one is what this rejects.
+_SUPPRESSION_MARKER = "conformance: ignore["
+
+
+def added_suppressions(diff: str) -> list[str]:
+    """Added lines that introduce an inline suppression comment."""
+    out: list[str] = []
+    for line in (diff or "").splitlines():
+        if (
+            line.startswith("+")
+            and not line.startswith("+++")
+            and _SUPPRESSION_MARKER in line
+        ):
+            out.append(line[1:].strip())
+    return out
+
+
+def check_no_suppressions(diff: str, rule: str) -> Verdict:
+    hits = added_suppressions(diff)
+    if hits:
+        return Verdict(
+            False,
+            f"remediation PR for {rule} ADDS {len(hits)} suppression comment(s) "
+            f"(e.g. {hits[0][:80]!r}) — this lane never suppresses: fix the app "
+            "properly or route the edge case to an SDK rule fix (rule-review)",
+        )
+    return Verdict(True, "")
+
+
 def check_single_rule(
     files: Iterable[str], title: str, body: str, rule: str
 ) -> Verdict:
@@ -235,8 +267,10 @@ def check_single_rule(
     return Verdict(True, "")
 
 
-def evaluate(files: list[str], title: str, branch: str, body: str) -> Verdict:
-    """Apply all three rules. Returns the first failure, or ok."""
+def evaluate(
+    files: list[str], title: str, branch: str, body: str, diff: str = ""
+) -> Verdict:
+    """Apply all four rules. Returns the first failure, or ok."""
     if not files:
         return Verdict(
             False,
@@ -252,6 +286,7 @@ def evaluate(files: list[str], title: str, branch: str, body: str) -> Verdict:
     for verdict in (
         check_paths(files, rule),
         check_single_rule(files, title, body, rule),
+        check_no_suppressions(diff, rule),
     ):
         if not verdict.ok:
             return verdict
@@ -270,6 +305,7 @@ def main() -> int:
         title = os.environ.get("PR_TITLE", "")
         branch = os.environ.get("PR_BRANCH", "")
         body = os.environ.get("PR_BODY", "")
+        diff = os.environ.get("PR_DIFF", "")
     else:
         if not repo or not pr:
             print("::error::REPO and PR_NUMBER are required")
@@ -277,11 +313,12 @@ def main() -> int:
         try:
             files = changed_files(repo, pr)
             title, branch, body = pr_meta(repo, pr)
+            diff = _run(["gh", "pr", "diff", pr, "--repo", repo])
         except subprocess.CalledProcessError as e:
             print(f"::error::could not read PR {repo}#{pr}: {e.stderr or e}")
             return 1
 
-    verdict = evaluate(files, title, branch, body)
+    verdict = evaluate(files, title, branch, body, diff)
     if verdict.ok:
         print(verdict.reason)
         return 0
