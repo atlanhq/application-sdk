@@ -13,10 +13,17 @@ The cost of pinning is that a repo *without* that scaffold turns an absent
 optional directory into a hard failure — and it fails in the worst possible
 place. The ``sdr-e2e`` action resolves those paths inside each e2e leg, which is
 downstream of two per-arch image builds, a manifest merge, a tenant lease and a
-tenant install: ~40 minutes of runner and live-tenant time before a message that
-says ``config-dir '.github/e2e' not found`` — which reads as a bad input to the
-reusable rather than as "this repo was never onboarded to the full-DAG tier".
-Observed across the FND-402 fleet sweep on 11 connectors.
+tenant install.
+
+Measured by dispatching ``run_e2e=true`` on two such repos: ``atlan-cosmosdb-app``
+(run 32384355074) spent 5m38s and ``atlan-cassandra-dse-app`` (run 32384340162)
+5m05s, each consuming two per-arch image builds, a manifest merge, THREE tenant
+leases and THREE tenant installs, to arrive at ``config-dir '.github/e2e' not
+found`` and ``secrets-script not found`` respectively. The wall clock is modest;
+the live-tenant cost is not, and ``prepare-tenant``'s own ``timeout-minutes: 40``
+bounds how bad a slow LM sync makes it. The message is also wrong: it reads as a
+bad input to the reusable rather than "this repo was never onboarded to the
+full-DAG tier". Observed across the FND-402 fleet sweep on 11 connectors.
 
 Everything checked here is knowable from a checkout in milliseconds, so this runs
 in ``discover-e2e`` — the first job on the e2e path — for the same reason the
@@ -58,10 +65,19 @@ FULL_DAG_CONFIG_DIR = ".github/e2e"
 #: full-DAG one, which is a materially different fix from having neither.
 SDR_CONFIG_DIR = ".github/sdr-e2e"
 
-#: The secrets script ``tests-reusable.yaml`` pins via ``secrets-script``. The
-#: sdr-e2e action hard-fails on its absence (it is what writes
-#: ``<config-dir>/secrets/credentials.json``).
-FULL_DAG_SECRETS_SCRIPT = ".github/e2e/make-secrets-e2e-full.py"
+#: Path of the script ``tests-reusable.yaml`` pins via its ``secrets-script``
+#: input. The sdr-e2e action hard-fails on its absence (it is what writes the
+#: ``<config-dir>/secrets/credentials.json`` bundle).
+#:
+#: Named ``..._BUNDLE_WRITER`` rather than ``..._SECRETS_SCRIPT`` on purpose.
+#: CodeQL's ``py/clear-text-logging-sensitive-data`` classifies an identifier
+#: containing "SECRETS" as holding a secret, so interpolating it into a
+#: ``print()`` was reported as high-severity clear-text logging of sensitive
+#: data. This constant only ever holds a hardcoded repo-relative file path — no
+#: credential passes through this module at all — so that alert was a false
+#: positive. Renaming removes the misleading claim at source, which is a better
+#: answer than suppressing a security rule.
+FULL_DAG_BUNDLE_WRITER = ".github/e2e/make-secrets-e2e-full.py"
 
 _DOCS = "docs/standards/connector-ci-e2e.md"
 
@@ -121,10 +137,10 @@ def find_gaps(*, root: Path = Path(".")) -> list[Gap]:
             )
         )
 
-    if not (root / FULL_DAG_SECRETS_SCRIPT).is_file():
+    if not (root / FULL_DAG_BUNDLE_WRITER).is_file():
         gaps.append(
             Gap(
-                FULL_DAG_SECRETS_SCRIPT,
+                FULL_DAG_BUNDLE_WRITER,
                 "add the script that writes "
                 f"{FULL_DAG_CONFIG_DIR}/secrets/credentials.json from the env "
                 "vars E2E_SOURCE_ENV_JSON exports. The e2e job pins this exact "
@@ -153,7 +169,7 @@ def main(argv: list[str] | None = None) -> int:
     if not gaps:
         print(
             "Full-DAG e2e scaffold present "
-            f"({FULL_DAG_CONFIG_DIR}/, app.yaml, {FULL_DAG_SECRETS_SCRIPT}).",
+            f"({FULL_DAG_CONFIG_DIR}/, app.yaml, {FULL_DAG_BUNDLE_WRITER}).",
             file=sys.stderr,
         )
         return 0

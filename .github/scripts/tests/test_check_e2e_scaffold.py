@@ -206,7 +206,7 @@ def test_the_checked_config_dir_is_the_one_the_caller_pins() -> None:
 
 
 def test_the_checked_secrets_script_is_the_one_the_caller_pins() -> None:
-    assert _e2e_action_inputs()["secrets-script"] == scaffold.FULL_DAG_SECRETS_SCRIPT, (
+    assert _e2e_action_inputs()["secrets-script"] == scaffold.FULL_DAG_BUNDLE_WRITER, (
         "tests-reusable.yaml's e2e job pins a different secrets-script than this "
         "check requires — the check would pass repos the action then fails, and "
         "fail repos the action would have accepted"
