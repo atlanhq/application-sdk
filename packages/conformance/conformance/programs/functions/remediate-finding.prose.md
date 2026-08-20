@@ -32,6 +32,20 @@ description: >
   use.
 - `not_remediable` — boolean; true when the area has no authored prescription
   yet (returns to residue without an edit attempt).
+- `evidence` — optional list of citation strings for any *chosen value* the fix
+  contains: where the number, name, or path came from.  Each entry names a
+  checkable source — a repo-relative `path:line`, a contract schema field
+  (`contract/app.pkl: connection.max_items`), or a documented upstream limit
+  with its identifier.  Empty/omitted for fixes that choose nothing (a rename,
+  an added kwarg, a prescribed rewrite).  **Mandatory for the blind-gate areas
+  under `apply_unverifiable`**: P-series must cite the source of a bound and
+  S-series the secret-store path or env-var NAME being referenced (never a
+  value), because `detect-fix-recheck`'s `require_cited_evidence` rejects a
+  `fix` outcome whose `evidence` is empty *before the edit is applied* — for an
+  area whose gates cannot validate the value, an uncited choice is a guess, and
+  a guess that passes a blind gate is precisely what the gate cannot catch.
+  Free-text rationale is NOT evidence; every entry must point at something a
+  reviewer can open.
 - `touched_files` — optional list of repo-relative paths the edit actually
   wrote. Defaults to `[finding.file]` when omitted, which covers every
   single-file textual edit (the overwhelming majority of fixes). Set
