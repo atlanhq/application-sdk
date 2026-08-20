@@ -25,6 +25,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import mothership_terminate_session as mts  # noqa: E402  (sys.path bootstrap)
 import sdk_review_dispatch as sd  # noqa: E402  (needs the sys.path bootstrap)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -738,3 +739,356 @@ def test_the_session_id_comes_from_the_step_the_terminator_also_reads():
         == terminator["env"]["SESSION_ID"]
         == "${{ steps.session.outputs.session_id }}"
     )
+
+
+# ---------------------------------------------------------------------------
+# re-dispatch on a model swap (the FND-641 port)
+# ---------------------------------------------------------------------------
+
+
+def _errored(code: str = "429", msg: str = "rate limited") -> sd.SSEState:
+    return _stream(*_event("error", {"code": code, "message": msg}))
+
+
+def test_the_retry_runs_a_different_main_model():
+    """A same-model re-dispatch re-hits the same model-level fault.
+
+    Every provider in the `kimi-k3` group serves the same model, so mothership's
+    own intra-group fallback cannot help. Swapping the model is the whole point.
+    """
+    assert sd.attempt_model(1) == sd.MAIN_MODEL
+    assert sd.attempt_model(2) == sd.RETRY_MAIN_MODEL
+    assert sd.MAIN_MODEL != sd.RETRY_MAIN_MODEL
+    assert _payload(attempt=1)["model"] == sd.MAIN_MODEL
+    assert _payload(attempt=2)["model"] == sd.RETRY_MAIN_MODEL
+
+
+def test_the_retry_leaves_the_background_lanes_alone():
+    """`fast = small_fast_model or model`, so changing `model` must not drag it."""
+    p = _payload(attempt=2)
+    assert p["small_fast_model"] == sd.FAST_MODEL
+    assert p["env_vars"]["CLAUDE_CODE_SUBAGENT_MODEL"] == sd.FAST_MODEL
+
+
+def test_the_retry_gets_a_fresh_session_id():
+    """Reusing it makes mothership try to RESUME the conversation that just died.
+
+    `is_follow_up = request.session_id is not None` — that is the "No
+    conversation found with session" failure on #2987 and the zero-SSE death on
+    #2989.
+    """
+    first = _payload(attempt=1, session_id="sdk-review-x-42-abc-99-1")["session_id"]
+    second = _payload(attempt=2, session_id="sdk-review-x-42-abc-99-1")["session_id"]
+    assert first == "sdk-review-x-42-abc-99-1"
+    assert second == "sdk-review-x-42-abc-99-1-retry1"
+    assert first != second
+
+
+def test_the_retry_gets_its_own_source_id_and_records_the_attempt():
+    assert _payload(attempt=2)["source_id"].endswith("-retry1")
+    assert _payload(attempt=1)["metadata"]["attempt"] == 1
+    assert _payload(attempt=2)["metadata"]["attempt"] == 2
+
+
+def test_the_retry_clamps_the_sandbox_cap_to_the_remaining_budget():
+    """Cancelling the job does not stop the sandbox — an unclamped retry bills on."""
+    assert _payload(max_timeout_seconds=900)["max_timeout_seconds"] == 900
+
+
+@pytest.mark.parametrize(
+    "code,msg",
+    [
+        ("429", ""),
+        ("500", ""),
+        ("sandbox_error", ""),
+        ("none", "the message at position 21 must not be empty"),
+        ("unknown", "provider temporarily unavailable"),
+        ("", "upstream returned garbage"),
+    ],
+)
+def test_model_and_provider_faults_are_retryable(code, msg):
+    assert sd.is_retryable_fault(_errored(code, msg)) is True
+
+
+@pytest.mark.parametrize(
+    "code,msg",
+    [
+        ("401", "upstream auth failed"),  # a known code always beats the patterns
+        ("403", "forbidden"),
+        ("elicitation", "needs input"),
+        ("prompt_too_long", "reduce the prompt"),
+        ("none", "the review found 3 blocking issues"),
+    ],
+)
+def test_permanent_faults_are_never_retried(code, msg):
+    """A wrong retry burns a second sandbox boot and a real bill."""
+    assert sd.is_retryable_fault(_errored(code, msg)) is False
+
+
+def test_a_known_code_is_never_overridden_by_the_message_patterns():
+    """`401 upstream auth failed` mentions `upstream` and is still permanent."""
+    assert sd.is_retryable_fault(_errored("401", "upstream auth failed")) is False
+
+
+def test_retry_fires_on_a_dead_sandbox_with_a_retryable_code():
+    should, reason = sd.retry_decision(_errored("429"), 1, 6000)
+    assert should is True
+    assert sd.RETRY_MAIN_MODEL in reason and "attempt 2 of 2" in reason
+
+
+def test_retry_fires_when_complete_carries_status_error():
+    st = _stream(
+        *_event(
+            "complete", {"status": "error", "error": {"code": "500", "message": ""}}
+        )
+    )
+    assert sd.sandbox_terminated_abnormally(st) is True
+    assert sd.retry_decision(st, 1, 6000)[0] is True
+
+
+def test_only_one_retry_is_ever_spent():
+    should, reason = sd.retry_decision(_errored("429"), 2, 6000)
+    assert should is False and "all 2 attempts" in reason
+    assert sd.MAX_DISPATCH_ATTEMPTS == 2
+
+
+def test_a_cut_stream_never_retries_because_the_reviewer_may_still_be_working():
+    """A second reviewer would post a second summary on the same PR."""
+    st = _stream(*_event("started", {"session_id": "s"}))
+    st.stream_error = "read timed out"
+    should, reason = sd.retry_decision(st, 1, 6000)
+    assert should is False and "post a second summary" in reason
+
+
+def test_a_clean_eof_without_complete_never_retries():
+    st = _stream(*_event("started", {"session_id": "s"}))
+    should, reason = sd.retry_decision(st, 1, 6000)
+    assert should is False and "may still be running" in reason
+
+
+def test_an_unrecognised_cause_stays_fail_fast():
+    should, reason = sd.retry_decision(_errored("401", "auth"), 1, 6000)
+    assert should is False and "not a known model/provider fault" in reason
+
+
+def test_a_retry_is_refused_below_the_wall_clock_floor():
+    """Below the floor a second sandbox would be killed mid-review."""
+    should, reason = sd.retry_decision(_errored("429"), 1, 600)
+    assert should is False and "600s of the job budget remain" in reason
+    assert sd.retry_decision(_errored("429"), 1, sd.RETRY_MIN_REMAINING_SECONDS)[0]
+
+
+def test_every_refusal_says_why():
+    """A run that did NOT retry is otherwise silent about the decision."""
+    for st, attempt, left in (
+        (_errored("429"), 2, 6000),
+        (_errored("401"), 1, 6000),
+        (_errored("429"), 1, 10),
+        (_stream(*_event("started", {})), 1, 6000),
+    ):
+        should, reason = sd.retry_decision(st, attempt, left)
+        assert should is False and reason.strip()
+
+
+# --- the cost trail --------------------------------------------------------
+
+
+def _attempts(*costs: str) -> list[sd.Attempt]:
+    out = []
+    for i, cost in enumerate(costs, start=1):
+        st = sd.SSEState()
+        st.cost = cost
+        st.completed = True
+        st.status = "completed"
+        out.append(sd.Attempt(i, sd.attempt_model(i), st))
+    return out
+
+
+def test_a_retry_ladder_reports_the_summed_cost():
+    ladder = _attempts("0.85", "2.40")
+    assert sd.total_cost(ladder) == "3.25"
+    assert sd.render_outputs(ladder[-1].state, ladder)["final_cost"] == "3.25"
+
+
+def test_a_single_attempt_reports_its_own_cost_unchanged():
+    """The `$GITHUB_OUTPUT` contract must not move for the common case."""
+    st = _stream(*_event("complete", {"status": "completed", "cost_usd": "0.83"}))
+    one = [sd.Attempt(1, sd.MAIN_MODEL, st)]
+    expected = {
+        "final_status": "completed",
+        "final_cost": "0.83",
+        "final_err_code": "",
+        "final_err_msg": "",
+    }
+    assert sd.render_outputs(st, one) == expected
+    assert sd.render_outputs(st) == expected
+
+
+def test_unparseable_costs_are_skipped_not_counted_as_zero():
+    """Mothership's cost telemetry is unreliable; a lower bound beats a lie."""
+    assert sd.total_cost(_attempts("", "2.40")) == "2.4"
+    blank = _attempts("", "")
+    assert sd.total_cost(blank) == ""
+    assert sd.render_outputs(blank[-1].state, blank)["final_cost"] == "unknown"
+
+
+def test_the_attempt_trail_only_renders_when_a_retry_actually_ran():
+    assert sd.render_attempt_trail(_attempts("0.83")) == []
+    trail = "\n".join(sd.render_attempt_trail(_attempts("0.85", "2.40")))
+    assert f"`{sd.MAIN_MODEL}`" in trail and f"`{sd.RETRY_MAIN_MODEL}`" in trail
+    assert "| 1 |" in trail and "| 2 |" in trail
+
+
+def test_the_trail_flags_a_missing_cost_as_a_lower_bound():
+    assert "lower bound" in "\n".join(sd.render_attempt_trail(_attempts("", "2.40")))
+
+
+def test_the_trail_cannot_be_broken_by_a_pipe_in_an_error_message():
+    st = _errored("400", "bad | input\nsecond line")
+    ladder = [sd.Attempt(1, sd.MAIN_MODEL, st), sd.Attempt(2, sd.RETRY_MAIN_MODEL, st)]
+    row = next(r for r in sd.render_attempt_trail(ladder) if r.startswith("| 1 |"))
+    # 5 columns → 6 unescaped delimiters. The pipe inside the message is
+    # escaped, so it does not open a seventh cell.
+    assert row.replace("\\|", "").count("|") == 6
+    assert "\\|" in row and "\n" not in row
+
+
+def test_the_step_summary_carries_the_trail_and_the_summed_cost():
+    ladder = _attempts("0.85", "2.40")
+    body = sd.render_step_summary(ladder[-1].state, "42", "u", False, ladder)
+    assert "3.25 USD across 2 attempts" in body
+    assert "### Attempts" in body
+
+
+# --- the loop in main() ----------------------------------------------------
+
+
+@pytest.fixture
+def dispatch_env(tmp_path, monkeypatch):
+    """Enough env for `main()`, with health and the dedupe pass neutralised."""
+    monkeypatch.setenv("MOTHERSHIP_URL", "http://m")
+    monkeypatch.setenv("HARNESS_TOKEN", "tok")
+    monkeypatch.setenv("PR_NUMBER", "42")
+    monkeypatch.setenv("SESSION_ID", "base-id")
+    monkeypatch.setenv("REPO_FULL_NAME", "atlanhq/application-sdk")
+    monkeypatch.setenv("HEAD_REF", "feature-branch")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary"))
+    monkeypatch.setattr(sd, "check_health", lambda *_a, **_k: True)
+    return tmp_path
+
+
+def _outputs(tmp_path) -> dict[str, str]:
+    return dict(
+        line.split("=", 1)
+        for line in (tmp_path / "out").read_text().splitlines()
+        if "=" in line
+    )
+
+
+def _record_dispatches(monkeypatch, states, verdicts):
+    """Stub the transport with one canned SSEState per attempt."""
+    seen: list[dict] = []
+
+    def fake_dispatch(base_url, token, payload, pr_number, gha_run_url, *_a, **_k):
+        seen.append(payload)
+        return states[len(seen) - 1]
+
+    monkeypatch.setattr(sd, "dispatch_once", fake_dispatch)
+    monkeypatch.setattr(
+        sd, "check_verdict_posted", lambda *_a, **_k: verdicts[len(seen) - 1]
+    )
+    return seen
+
+
+def _completed(cost: str) -> sd.SSEState:
+    return _stream(*_event("complete", {"status": "completed", "cost_usd": cost}))
+
+
+def test_main_re_dispatches_once_on_a_dead_sandbox(dispatch_env, monkeypatch, capsys):
+    seen = _record_dispatches(
+        monkeypatch, [_errored("429"), _completed("2.40")], [False, False]
+    )
+
+    assert sd.main() == 0
+    assert [p["model"] for p in seen] == [sd.MAIN_MODEL, sd.RETRY_MAIN_MODEL]
+    assert [p["session_id"] for p in seen] == ["base-id", "base-id-retry1"]
+    out = _outputs(dispatch_env)
+    assert out["final_status"] == "completed"
+    assert out["final_cost"] == "2.4"  # attempt 1 reported none
+    assert "### Attempts" in (dispatch_env / "summary").read_text()
+    assert "Re-dispatching after a dead sandbox" in capsys.readouterr().out
+
+
+def test_main_does_not_retry_once_the_verdict_is_on_the_pr(dispatch_env, monkeypatch):
+    """A delivered review is a soft-success; a retry would post a second one."""
+    seen = _record_dispatches(monkeypatch, [_errored("429")], [True])
+
+    assert sd.main() == 0
+    assert len(seen) == 1
+    assert _outputs(dispatch_env)["final_err_code"] == "429"
+
+
+def test_main_reports_both_models_when_the_retry_also_fails(
+    dispatch_env, monkeypatch, capsys
+):
+    _record_dispatches(monkeypatch, [_errored("429"), _errored("500")], [False, False])
+
+    assert sd.main() == 1
+    printed = capsys.readouterr().out
+    assert f"retried on {sd.RETRY_MAIN_MODEL} after {sd.MAIN_MODEL} died" in printed
+    assert _outputs(dispatch_env)["final_status"] == "500"
+
+
+def test_main_stays_single_attempt_on_a_permanent_fault(
+    dispatch_env, monkeypatch, capsys
+):
+    seen = _record_dispatches(monkeypatch, [_errored("401", "auth")], [False])
+
+    assert sd.main() == 1
+    assert len(seen) == 1
+    assert "Not re-dispatching:" in capsys.readouterr().out
+
+
+def test_main_clamps_the_retry_sandbox_to_the_remaining_budget(
+    dispatch_env, monkeypatch
+):
+    """A killed runner must not leave the second sandbox billing for 2h."""
+    states = [_errored("429"), _completed("1.0")]  # built before the clock is frozen
+    seen = _record_dispatches(monkeypatch, states, [False, False])
+    # Attempt 1 burned all but 3000s of the step's budget.
+    elapsed = [0.0, sd.DISPATCH_BUDGET_SECONDS - 3000]
+    monkeypatch.setattr(sd.time, "monotonic", lambda: elapsed[min(len(seen), 1)])
+
+    sd.main()
+    assert len(seen) == 2
+    assert seen[1]["max_timeout_seconds"] <= 3000
+
+
+# --- the terminator derives the same ids -----------------------------------
+
+
+def test_the_terminator_stops_every_session_the_dispatcher_could_have_booted():
+    """A cancel during the retry must not leave the second sandbox billing.
+
+    The workflow cannot know which attempt was live, so the terminator walks the
+    same `attempt_session_id` ladder; an id that never existed 404s, which it
+    already treats as "nothing to stop".
+    """
+    stopped: list[str] = []
+    monkey = os.environ.copy()
+    monkey.update(MOTHERSHIP_URL="http://m", HARNESS_TOKEN="tok", SESSION_ID="base-id")
+    original_requester = mts._default_requester
+    original_env = dict(os.environ)
+    mts._default_requester = lambda url, token: (stopped.append(url), (200, ""))[1]
+    os.environ.update(monkey)
+    try:
+        assert mts.main() == 0
+    finally:
+        mts._default_requester = original_requester
+        os.environ.clear()
+        os.environ.update(original_env)
+
+    assert len(stopped) == sd.MAX_DISPATCH_ATTEMPTS
+    assert stopped[0].endswith("/api/sandbox/session/base-id?destroy=true")
+    assert stopped[1].endswith("/api/sandbox/session/base-id-retry1?destroy=true")
