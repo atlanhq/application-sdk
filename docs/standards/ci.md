@@ -168,6 +168,54 @@ it, or kept out of that file in the first place.
 `export_extra_env.py` and `test_export_extra_env.py` are the worked example,
 including a static check that every call site masks before it writes.
 
+## Never pass a credential as a Docker `build-arg`
+
+**Rule:** a step that builds an image must not put a token, password, or key in
+`build-args:`. Feed it through `secrets:` instead, and have the Dockerfile read
+it with `RUN --mount=type=secret`.
+
+```yaml
+# WRONG — publishes the credential with the image
+build-args: |
+  ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
+
+# RIGHT — the value is available during the RUN and nowhere after it
+secrets: |
+  git_token=${{ secrets.ORG_PAT_GITHUB }}
+```
+
+```dockerfile
+RUN --mount=type=secret,id=git_token,uid=1000 \
+    UV_GIT_TOKEN="$(cat /run/secrets/git_token)" \
+    uv sync --frozen --no-dev
+```
+
+**Why:** a build arg is not a build-time-only variable. BuildKit records the
+`ARG` name *and its value* in the image config, so `docker history <image>`
+prints it back to anyone who can pull the image — no repo access, no Actions
+log access, no runner access needed. The credential is published as part of the
+artifact, and it stays published in every tag ever built that way; deleting the
+workflow line does not retract the images. `::add-mask::` does not help here for
+the same reason it does not help with artifacts: it rewrites the log stream, not
+bytes written elsewhere.
+
+A `--mount=type=secret` is exposed as a tmpfs file for the duration of one `RUN`
+and is not part of that layer, the image config, or the history. It is also the
+only form that survives layer caching correctly: a build arg changes the cache
+key, so rotating the credential invalidates every layer after the `ARG`.
+
+**Migrating a consumer:** `build-args` and `secrets` are not interchangeable at
+the Dockerfile end, so the two sides have to move together. Land the Dockerfile
+change first — a Dockerfile that mounts `git_token` ignores an
+`ACCESS_TOKEN_PWD` build arg it no longer reads, so it builds green under both
+the old and the new workflow — then drop the build arg from the workflow. Doing
+it the other way round leaves the build with an empty credential, and `uv sync`
+against a private git dependency fails on the next build rather than at merge.
+
+**Scope note:** this covers credentials only. Non-secret build inputs — a
+version string, a target arch, a base-image reference — are what `build-args`
+are for, and recording those in image history is a feature.
+
 ## Renovate post-upgrade commands
 
 Two run today, both installed as bare PATH commands by `.github/workflows/renovate.yaml`
