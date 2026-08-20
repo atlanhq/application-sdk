@@ -136,6 +136,10 @@ def _install_args(**overrides: object) -> argparse.Namespace:
         "scan_wait_seconds": 0,
         "install_retry_seconds": 0,
         "timeout_seconds": 600,
+        # Off by default so every existing test keeps exercising the
+        # fail-closed cross-check; the caller that may set it is
+        # tests-reusable.yaml (see --repo-url-is-self).
+        "repo_url_is_self": False,
     }
     values.update(overrides)
     return argparse.Namespace(**values)
@@ -862,6 +866,108 @@ def test_ghcr_image_with_an_explicit_port_still_fails_closed(
             )
         )
     assert transport.paths("POST") == []
+
+
+def test_derived_repo_url_downgrades_the_image_mismatch_to_a_warning(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """app-image-name drift must not block an app whose image name != repo name.
+
+    ``adf`` publishes ``atlan-adf-app`` out of ``atlan-azure-data-factory-app``
+    (and ``sapase``/``atlan-sap-ase-app` likewise). With --repo-url DERIVED from
+    the running repo the publish cannot repoint provenance — the only destructive
+    mistake the cross-check exists to catch — so the disagreement is a naming
+    inconsistency, not a reason to refuse (FND-656 B6).
+    """
+    transport = _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", _ok({})),
+                StubRoute("POST", "/marketplace/publish", _ok({"version_id": "v1"})),
+                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+                StubRoute(
+                    "GET", "/deployments/", _ok({"deployment_status": "SUCCEEDED"})
+                ),
+                StubRoute("GET", "/info", _ok(_lm_info(_VERSION))),
+            ],
+            sticky=[StubRoute("GET", "/releases/", Response(status=404, body={}))],
+        ),
+    )
+    app.install(
+        _install_args(
+            image="ghcr.io/atlanhq/atlan-adf-app:tag",
+            repo_url="https://github.com/atlanhq/atlan-azure-data-factory-app",
+            repo_url_is_self=True,
+        )
+    )
+    out = capsys.readouterr().out
+    assert "::warning::" in out
+    assert "app-image-name drift" in out
+    # It published: the warning is advisory, not a refusal dressed up as one.
+    assert any(
+        path.endswith("/marketplace/publish") for path in transport.paths("POST")
+    )
+
+
+def test_derived_repo_url_does_not_disarm_the_matching_case(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The flag only affects the MISMATCH branch — an agreeing pair stays silent,
+    so it cannot be read as "warns on every publish now"."""
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", _ok({})),
+                StubRoute("POST", "/marketplace/publish", _ok({"version_id": "v1"})),
+                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+                StubRoute(
+                    "GET", "/deployments/", _ok({"deployment_status": "SUCCEEDED"})
+                ),
+                StubRoute("GET", "/info", _ok(_lm_info(_VERSION))),
+            ],
+            sticky=[StubRoute("GET", "/releases/", Response(status=404, body={}))],
+        ),
+    )
+    app.install(_install_args(repo_url_is_self=True))
+
+    assert "does not match the repo implied by the image" not in capsys.readouterr().out
+
+
+def test_operator_supplied_repo_url_still_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without the flag the guard is unchanged.
+
+    e2e-tenant-install.yaml's ``repo_url`` is a free-text dispatch input, so
+    there it genuinely can name another app's repo and the publish genuinely
+    would repoint provenance. That path must keep refusing.
+    """
+    transport = _wire(
+        monkeypatch,
+        StubTransport(routes=[StubRoute("GET", "/info", _ok({}))]),
+    )
+    with pytest.raises(
+        app.TenantAppError, match="does not match the repo implied by the image"
+    ):
+        app.install(
+            _install_args(
+                image="ghcr.io/atlanhq/atlan-adf-app:tag",
+                repo_url="https://github.com/atlanhq/atlan-azure-data-factory-app",
+            )
+        )
+    assert transport.paths("POST") == []
+
+
+def test_refusal_names_the_escape_hatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A refusal that does not name the flag is a dead end for the one app the
+    convention legitimately does not hold for."""
+    _wire(monkeypatch, StubTransport(routes=[StubRoute("GET", "/info", _ok({}))]))
+    with pytest.raises(app.TenantAppError, match="--repo-url-is-self"):
+        app.install(
+            _install_args(repo_url="https://github.com/atlanhq/application-sdk")
+        )
 
 
 def test_non_ghcr_repo_image_mismatch_warns_but_proceeds(

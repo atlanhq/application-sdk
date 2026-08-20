@@ -386,6 +386,34 @@ def test_the_merge_job_retries_its_manifest_read() -> None:
             )
 
 
+def test_the_image_build_retries_once_on_a_transient_failure() -> None:
+    """The build's own failures are mostly not the app's (FND-656 B8).
+
+    A 504 from whatever the app's download-components task fetches, or an
+    `apk ... Permission denied` on a degraded mirror, reds the build — and with
+    it the sibling arch leg, the manifest merge, the tenant install and every e2e
+    leg, all of which skip. Two connectors lost a full run to exactly that in the
+    FND-402 sweep.
+    """
+    run = _step(_BUILD_ACTION, "Build and push PR image")["run"]
+
+    assert "with-retry.sh" in run, (
+        "the image build is wrapped in with-retry.sh so a transient registry / "
+        "mirror failure costs one retry instead of the whole downstream chain"
+    )
+    assert "RETRY_MAX_ATTEMPTS=2" in run, (
+        "two attempts, not the wrapper's default five: a build takes minutes and "
+        "can fail for a reason retrying will never fix (a broken Dockerfile, an "
+        "unresolvable dependency), so more attempts would multiply the wall-clock "
+        "cost of every genuine break by the attempt count"
+    )
+    for line in run.splitlines():
+        if "with-retry.sh" in line:
+            # The retry must wrap the BUILD, not something cheap next to it —
+            # otherwise the transient failure this exists for is still fatal.
+            assert "imagetools" not in line
+
+
 def test_pkl_is_downloaded_for_the_runners_architecture() -> None:
     """`build-app-image` puts `regenerate-contract` on an arm64 runner.
 
