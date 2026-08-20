@@ -35,6 +35,7 @@ Environment:
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import re
@@ -63,19 +64,34 @@ DEFAULT_MAX_ROUNDS = 8
 # to Grok 4.6 by operator request, replacing kimi-k3 (chosen on cost per TASK,
 # not per token: index 57.2, ~$0.85/task vs claude-opus-5 at 60.5, ~$2.40).
 # Both proxy sides have to allow it or every dispatch dies on turn one, and the
-# code says which: 404 means `x-ai/grok-4.6` is not in the llmproxy.atlan.dev
-# catalog, 403 means the gateway key does not allowlist it. This lane declares
-# no `ai_gateway_key_name`, so that key is mothership's LITELLM_KEY_DEFAULT —
-# not the review lane's scoped `sdk_review` key.
+# code says which: 400 means the pinned name is not one the
+# llmproxy.atlan.dev catalog recognises (its own message is "Invalid model
+# name passed in model=..."), 403 means the gateway key does not allowlist it.
+# This lane declares no `ai_gateway_key_name`, so that key is mothership's
+# LITELLM_KEY_DEFAULT - not the review lane's scoped `sdk_review` key.
+#
+# Mothership itself does not validate the name at all: `_validate_model_ids`
+# in `harness/api/models/sandbox.py` only rejects blank/whitespace/control-char
+# values, by design ("No allow-list of names: new models must work without a
+# code change"). So a typo in this constant is never caught at dispatch - it
+# boots a real sandbox, bills for it, and only dies mid-run when the container
+# itself calls the proxy. That is exactly what happened for FND-660: this
+# constant carried the OpenRouter-style `x-ai/` prefix instead of this proxy's
+# `xai/`, so any dispatch that reached the sandbox would have paid for one
+# and failed on its first proxy call.
 #
 # KNOWN RISK, carried deliberately: xAI does NOT prompt-cache on the Anthropic
 # `/v1/messages` route Claude Code uses (verified in the LiteLLM ledger when
-# mothership pinned its PR reviewer to x-ai/grok-4.5 in Jul 2026, and the reason
+# mothership pinned its PR reviewer to xai/grok-4.5 in Jul 2026, and the reason
 # it reverted), so a multi-turn agentic lane re-bills its full context every
-# turn — and resolve runs up to DEFAULT_MAX_ROUNDS rounds per PR.
+# turn — and resolve runs up to DEFAULT_MAX_ROUNDS rounds per PR. That risk was
+# measured on grok-4.5, not 4.6: a manual `/v1/messages` probe of
+# `xai/grok-4.6` on 2026-08-20 returned a non-zero `cache_read_input_tokens`,
+# so the no-caching claim is unverified for 4.6 and the per-run cost should be
+# re-measured before it is treated as settled.
 #
 # The fast lane stays on gpt-5.6-luna. Reverting is a one-liner.
-MAIN_MODEL = "x-ai/grok-4.6"
+MAIN_MODEL = "xai/grok-4.6"
 FAST_MODEL = "gpt-5.6-luna"
 
 # --- Re-dispatch when the sandbox dies on a hard error ----------------------
@@ -139,6 +155,14 @@ UNINFORMATIVE_ERR_CODES = frozenset({"", "none", "unknown"})
 # Auth/permission and prompt faults are excluded by the allowlist above rather
 # than named here: they will fail the same way on any model, forever.
 NEVER_RETRY_ERR_CODES = frozenset({"elicitation", "stream_error"})
+# Dispatch-level HTTP statuses live in their own `http_` codespace, kept apart
+# from the stream's provider codes on purpose: a provider 400 carried inside the
+# stream is worth a different model, while a 400 on the POST itself is a
+# malformed payload that fails identically on any model. Only 429 and 5xx mean
+# "the far side was transiently unable to accept the request".
+RETRYABLE_DISPATCH_HTTP_CODES = frozenset(
+    {"http_429", "http_500", "http_502", "http_503", "http_504"}
+)
 # The job caps at 130 min (`timeout-minutes: 130` in sdk-resolve.yml) and the VPN
 # steps eat a few of those before dispatch starts, so budget this step at 110 min
 # from its own start. A retry is only worth booting with enough of that left to
@@ -804,6 +828,10 @@ def is_retryable_fault(st: SSEState) -> bool:
     would classify "401 upstream auth failed" as retryable and buy a second
     sandbox that fails identically.
     """
+    if st.err_code.startswith("http_"):
+        # Self-deciding codespace: a dispatch-level HTTP status never falls
+        # through to the message-pattern ladder below.
+        return st.err_code in RETRYABLE_DISPATCH_HTTP_CODES
     if st.err_code in NEVER_RETRY_ERR_CODES:
         return False
     if resolved_nothing(st):
@@ -934,6 +962,35 @@ def dispatch_once(
         # of blocking the full 2h. TimeoutError/OSError surface here too.
         with opener(req, timeout=READ_IDLE_TIMEOUT_SECONDS) as resp:
             return process_stream(raw.decode("utf-8", "replace") for raw in resp)
+    except urllib.error.HTTPError as e:
+        # Ordering matters: HTTPError is itself a URLError subclass, so this
+        # clause MUST come before the URLError/TimeoutError/OSError one below
+        # or every dispatch-level HTTP status would be swallowed into
+        # `stream_error` and treated as "our connection died mid-stream" - the
+        # exact class this codebase refuses to retry (run 32347771368 got a
+        # 504 on the POST and logged "code=stream_error is not a known
+        # model/provider fault": no retry, no out-of-band poll, zero work done).
+        #
+        # An HTTP status on the POST means the far side actually answered and
+        # no sandbox was ever started, unlike a mid-stream drop - so there is
+        # nothing to double-run, which is why this is retryable-eligible where
+        # `stream_error` is not.
+        try:
+            # Narrow on purpose: a body read can fail on a half-open socket
+            # (OSError), a premature close (http.client.HTTPException), or a
+            # response whose `fp` was already consumed/absent (AttributeError,
+            # ValueError). None of those may be allowed to mask the HTTP status
+            # we came here to record.
+            body = e.read().decode("utf-8", "replace")
+        except (OSError, http.client.HTTPException, AttributeError, ValueError):
+            body = str(e.reason)
+        body = body[:500]
+        print(f"::error::Sandbox dispatch rejected with HTTP {e.code}: {body}")
+        st = SSEState()
+        st.errored = True
+        st.err_code = f"http_{e.code}"
+        st.err_msg = f"HTTP {e.code} on dispatch POST: {body}"
+        return st
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         print(f"::error::Sandbox dispatch stream error/stall: {e}")
         st = SSEState()
