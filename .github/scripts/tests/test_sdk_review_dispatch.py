@@ -1457,3 +1457,107 @@ def test_the_terminator_stops_every_session_the_dispatcher_could_have_booted():
     assert len(stopped) == sd.MAX_DISPATCH_ATTEMPTS
     assert stopped[0].endswith("/api/sandbox/session/base-id?destroy=true")
     assert stopped[1].endswith("/api/sandbox/session/base-id-retry1?destroy=true")
+
+
+# ---------------------------------------------------------------------------
+# re-dispatch on the SAME model when mothership's RPC to the sandbox drops
+# (FND-647)
+# ---------------------------------------------------------------------------
+
+# Verbatim from resolver run 32309963717 (PR #3276): the code is flattened to
+# `unknown` and the provider text arrives as a nested JSON blob, so the pattern
+# has to match inside it.
+_RPC_DROP = (
+    '{"type":"error","message":"ReadableStream received over RPC '
+    'disconnected prematurely."}'
+)
+
+
+def _rpc_dropped(cost: str = "0.686704") -> sd.SSEState:
+    """That run's ending: a clean `complete`, then a dropped-RPC error event."""
+    return _stream(
+        *_event("complete", {"status": "completed", "cost_usd": cost}),
+        *_event("error", {"code": "unknown", "message": _RPC_DROP}),
+    )
+
+
+def test_a_dropped_rpc_is_not_a_model_fault_and_used_to_fall_through():
+    """The regression anchor: the model-swap allowlist declines this, correctly.
+
+    Nothing about the model failed, so `is_retryable_fault` has no business
+    saying yes — which is exactly why the run was thrown away at $0.69 before
+    this class existed.
+    """
+    st = _rpc_dropped()
+    assert sd.is_retryable_fault(st) is False
+    assert sd.is_transport_fault(st) is True
+    assert sd.sandbox_completed_cleanly(st) is False  # the error event rules it out
+
+
+def test_a_dropped_rpc_retries_on_the_same_model():
+    plan = sd.retry_decision(_rpc_dropped(), 1, 6000)
+    assert plan.retry is True
+    assert plan.model == sd.MAIN_MODEL != sd.RETRY_MAIN_MODEL
+    assert "dropped RPC" in plan.reason and "same model" in plan.reason
+
+
+def test_a_dropped_rpc_without_a_terminal_complete_is_the_same_class():
+    """The other shape it arrives in: the error event and nothing after it."""
+    st = _stream(*_event("error", {"code": "unknown", "message": _RPC_DROP}))
+    assert st.completed is False and st.stream_error == ""
+    plan = sd.retry_decision(st, 1, 6000)
+    assert plan.retry is True and plan.model == sd.MAIN_MODEL
+
+
+def test_the_transport_retry_still_honours_the_shared_retry_bounds():
+    """Constraint: an extra entry condition only — the knobs do not move."""
+    st = _rpc_dropped()
+    assert sd.retry_decision(st, sd.MAX_DISPATCH_ATTEMPTS, 6000).retry is False
+    assert sd.retry_decision(st, 1, sd.RETRY_MIN_REMAINING_SECONDS - 1).retry is False
+    assert sd.retry_decision(st, 1, sd.RETRY_MIN_REMAINING_SECONDS).retry is True
+
+
+def test_a_known_code_is_never_overridden_by_the_transport_patterns():
+    """A code that carries information decides on its own, as everywhere else."""
+    st = _stream(*_event("error", {"code": "401", "message": _RPC_DROP}))
+    assert sd.is_transport_fault(st) is False
+    assert sd.retry_decision(st, 1, 6000).retry is False
+
+
+def test_a_dispatch_level_http_status_is_never_the_transport_class():
+    """No sandbox was ever started, so no RPC to one can have dropped."""
+    st = sd.SSEState(0.0)
+    st.errored = True
+    st.err_code, st.err_msg = "http_504", f"HTTP 504 on dispatch POST: {_RPC_DROP}"
+    assert sd.is_transport_fault(st) is False
+    # And it keeps the model swap the http_ codespace already earned it.
+    assert sd.retry_decision(st, 1, 6000).model == sd.RETRY_MAIN_MODEL
+
+
+def test_a_model_fault_still_swaps_the_model():
+    """No regression on FND-641/FND-643: the two classes stay on their own axes."""
+    assert sd.retry_decision(_errored("429"), 1, 6000).model == sd.RETRY_MAIN_MODEL
+
+
+def test_main_re_dispatches_a_dropped_rpc_on_the_same_model(
+    dispatch_env, monkeypatch, capsys
+):
+    """Fresh session id, same model, and the verdict lands on attempt 2."""
+    seen = _record_dispatches(
+        monkeypatch, [_rpc_dropped(), _completed("0.83")], [False, True]
+    )
+
+    assert sd.main() == 0
+    assert [p["model"] for p in seen] == [sd.MAIN_MODEL, sd.MAIN_MODEL]
+    assert [p["session_id"] for p in seen] == ["base-id", "base-id-retry1"]
+    assert f"Re-dispatching on {sd.MAIN_MODEL}" in capsys.readouterr().out
+
+
+def test_main_does_not_re_dispatch_a_dropped_rpc_that_delivered(
+    dispatch_env, monkeypatch
+):
+    """The verdict is on the PR: the drop was cosmetic, so no second sandbox."""
+    seen = _record_dispatches(monkeypatch, [_rpc_dropped()], [True])
+
+    assert sd.main() == 0
+    assert len(seen) == 1
