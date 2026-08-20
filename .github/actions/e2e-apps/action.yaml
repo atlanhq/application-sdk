@@ -162,9 +162,67 @@ runs:
           exit 1
         fi
 
+    # ── One live dispatch per (dispatching SHA, app) ─────────────────────────
+    # GitHub can emit several pull_request events for one head SHA — observed as
+    # `opened` plus `labeled e2e` TWICE, one second apart, which spawned three
+    # full PR Checks runs that each dispatched every connector and then fought
+    # over the same cloud tenants (FND-646). Nothing in a workflow `if:` can tell
+    # two identical `labeled` events apart, so the duplication is killed here
+    # instead: an atomic ref CAS on refs/e2e-dispatch/<app>/<sha>, the same
+    # primitive as the tenant lease.
+    #
+    # Deliberately NOT `concurrency: cancel-in-progress`. The dispatch below is
+    # fire-and-forget, so cancelling this run does not cancel the connector run
+    # it already started — and a queueing group holds exactly ONE pending run,
+    # so a third arrival is evicted with no log at all (FND-218).
+    #
+    # Callback mode only, and that is a correctness constraint rather than
+    # scope: in poll mode THIS job's conclusion is the verdict, so a skipped
+    # dispatch would be a vacuous green that can mask the winner's real result on
+    # the same SHA. In callback mode the verdict is the check run on the SHA —
+    # created once, completed by the connector, and polled by every duplicate
+    # run's own connector gate, which is why skipping loses nothing. Poll mode's
+    # only caller also dispatches into a hermetic kind cluster, so it has no
+    # tenant to contend for.
+    #
+    # continue-on-error plus `!= 'false'` below: every guard failure must leave
+    # the dispatch happening. A PR whose e2e silently never ran is far worse than
+    # one that pays for a duplicate — which is exactly the pre-existing
+    # behaviour. Needs contents:write (the claim ref), checks:read (has this SHA
+    # already been dispatched?) and pull-requests:read (the stale-claim prune).
+    - name: Claim the dispatch slot for this SHA
+      id: dispatch_guard
+      if: inputs.wait-mode == 'callback'
+      continue-on-error: true
+      shell: bash
+      env:
+        # The calling job's own token, scoped to THIS repo — the claim refs live
+        # here, next to the SHA they key on. Not checks-app-token: that exists
+        # so the check run is owned by the App the connector's callback uses,
+        # which has nothing to do with ref writes.
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        SHA: ${{ inputs.check-sha }}
+        APP: ${{ inputs.repo-name }}
+        NAME: ${{ inputs.check-run-name }}
+      run: |
+        set -euo pipefail
+        python3 .github/scripts/e2e_dispatch_guard.py \
+          --repo "$REPO" \
+          --sha "$SHA" \
+          --app "$APP" \
+          --check-run-name "$NAME" \
+          --run-id "$GITHUB_RUN_ID" \
+          --run-attempt "$GITHUB_RUN_ATTEMPT"
+
+    # Gated on the guard, so a duplicate run creates NO second check run on the
+    # SHA: the winner's check is the one the connector completes and the one
+    # every duplicate run's connector gate polls. A second in_progress check with
+    # the same name would have nothing to complete it and would hang until the
+    # watchdog swept it.
     - name: Create pending check run
       id: create_check
-      if: inputs.wait-mode == 'callback'
+      if: inputs.wait-mode == 'callback' && steps.dispatch_guard.outputs.claimed != 'false'
       shell: bash
       env:
         # Fleet App token (this repo), NOT github.token — the connector's
@@ -198,7 +256,7 @@ runs:
     # the gate/watchdog timeout rather than an immediate job failure.
     - name: Dispatch connector workflow
       id: return_dispatch_callback
-      if: inputs.wait-mode == 'callback'
+      if: inputs.wait-mode == 'callback' && steps.dispatch_guard.outputs.claimed != 'false'
       continue-on-error: true
       uses: codex-/return-dispatch@85e564d60eaec3cc4aca885373d510cfe4bd5b19 # v4.0.1
       with:
