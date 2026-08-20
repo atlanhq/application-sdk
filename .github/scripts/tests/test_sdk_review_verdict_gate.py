@@ -366,13 +366,22 @@ def test_stamp_step_switches_wording_on_the_exact_gate_string():
 
 def test_soft_success_rule_is_still_intact():
     """The delivered-then-dropped case (run 29001242204) must keep passing:
-    `fail_or_warn` still downgrades to a warning when a verdict was posted."""
+    `fail_or_warn` still downgrades to a warning when a verdict was posted.
+
+    The rule moved out of inlined shell and into `sdk_review_dispatch.py`
+    (FND-643), where `test_sdk_review_dispatch.py` exercises every failure
+    branch against it. This keeps asserting from the gate's side that the
+    dispatch step is still the thing that owns the rule — the gate and the
+    dispatch step cover disjoint cases, and that only holds while both exist.
+    """
     dispatch = next(s for s in dispatch_job()["steps"] if s.get("id") == "dispatch")[
         "run"
     ]
+    assert "sdk_review_dispatch.py" in dispatch
 
-    assert 'if [ "$VERDICT_POSTED" = "1" ]; then' in dispatch
-    assert (
-        "::warning::${msg} — but a SDK_REVIEW summary comment was already posted"
-        in (dispatch)
-    )
+    driver = (
+        Path(__file__).resolve().parents[1] / "sdk_review_dispatch.py"
+    ).read_text()
+    assert "def fail_or_warn(msg: str) -> bool:" in driver
+    assert "if verdict_posted:" in driver
+    assert "already posted on PR #" in driver

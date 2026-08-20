@@ -162,10 +162,20 @@ def test_the_stamper_runs_even_on_a_cancel():
 
 
 def test_the_dispatch_step_collapses_duplicate_verdicts():
+    """The dispatch driver runs the dedupe pass before it decides pass/fail.
+
+    Since FND-643 the dispatch step is `sdk_review_dispatch.py` rather than
+    inlined shell, so the wiring lives in Python: it calls the dedupe module
+    with SINCE bound to the starter timestamp and reads `verdict_posted` back
+    for the soft-success rule.
+    """
     run = step("Dispatch to mothership Rover Direct API")["run"]
-    assert "sdk_review_dedupe_verdicts.py" in run
-    assert 'SINCE="${STARTER_STARTED_AT:-}"' in run
-    assert "verdict_posted" in run
+    assert "sdk_review_dispatch.py" in run
+    driver = (REPO_ROOT / ".github/scripts/sdk_review_dispatch.py").read_text()
+    assert "import sdk_review_dedupe_verdicts" in driver
+    assert 'os.environ["SINCE"] = since' in driver
+    assert 'os.environ.get("STARTER_STARTED_AT", "")' in driver
+    assert "verdict_posted" in driver
 
 
 def test_the_dispatch_step_supplies_the_ownership_key():
