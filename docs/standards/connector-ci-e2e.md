@@ -87,11 +87,20 @@ Duplicate `PR Checks` runs still appear, and each still pays for its base-image
 build. That is accepted: it is cheap and it never reaches a tenant.
 
 Explicitly rejected: `concurrency: cancel-in-progress` on the dispatching
-workflow. The dispatch is fire-and-forget, so cancelling the SDK-side run
-orphans the connector run it already started rather than stopping it — and a
-cancelled connector run is not even safe, because `prepare-tenant` carries
-`if: always()` and finishes installing onto the tenants it had already leased on
-its way out.
+workflow. Once the dispatch has fired it achieves nothing — the dispatch is
+fire-and-forget, so cancelling the SDK-side run orphans the connector run it
+already started rather than stopping it, and a cancelled connector run is not
+even safe, because `prepare-tenant` carries `if: always()` and finishes
+installing onto the tenants it had already leased on its way out.
+
+That is not an argument that cancellation *never* helps, and the section below
+is the counter-example: for the ~8 minutes a run spends building the base image
+before it dispatches, cancelling it would have stopped the fan-out outright. It
+is still not the lever to reach for there — a run cancelled between creating its
+check run and dispatching leaves a check nothing will ever complete, and a
+queueing group holds exactly ONE pending run, so a third arrival is evicted with
+no log at all (FND-218). The head check below buys the same tenant time without
+either hazard.
 
 ### No dispatch for a commit the PR has moved past
 
@@ -124,10 +133,20 @@ from, and skips if it is not:
   automation reads as a real failure. Only the head commit's gate can satisfy a
   required check.
 
-It does **not** close the window where the stale run dispatched first — a push
-landing more than a couple of minutes behind the previous one. That case is a
-live connector run holding a lease it legitimately took, and the queue is the
-right answer to it.
+This closes the window up to the dispatch, and nothing after it. A push landing
+later leaves a connector run already in flight, and that run splits into two
+cases that want opposite answers:
+
+* It has **acquired a lease**. Nothing to be done: cancelling is unsafe for the
+  `prepare-tenant` reason above, so the queue is the right answer and the head
+  commit waits.
+* It has **dispatched but not leased yet** — it is still building, unit-testing
+  and integration-testing, which was 2m30s on the openapi leg of PR #3322
+  (dispatched 21:07:38, leased 21:10:10). It holds nothing, so it can stand down
+  for free, and the head commit takes the tenant instead.
+
+The second case is a connector-side check made immediately before the lease is
+taken, and it is tracked as FND-701.
 
 ## SDR composite action inputs
 

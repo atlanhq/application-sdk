@@ -178,10 +178,16 @@ runs:
     # behind the obsolete commit's whole run — 3m38s, 10m12s and 12m of lease
     # wait across three connectors on PR #3322 (FND-696).
     #
-    # Deliberately NOT `concurrency: cancel-in-progress`. The dispatch below is
-    # fire-and-forget, so cancelling this run does not cancel the connector run
-    # it already started — and a queueing group holds exactly ONE pending run,
-    # so a third arrival is evicted with no log at all (FND-218).
+    # Deliberately NOT `concurrency: cancel-in-progress`, but NOT because it
+    # would achieve nothing: that claim (FND-646) only holds once the dispatch
+    # below has fired, since cancelling this run cannot cancel a connector run it
+    # already started. Before then there is an ~8-minute base-image window in
+    # which cancellation WOULD have stopped the stale run — the case the head
+    # check above exists for. The reasons it is still not the lever to reach for:
+    # a run cancelled between creating its check run and dispatching leaves a
+    # check nothing will ever complete, and a queueing group holds exactly ONE
+    # pending run, so a third arrival is evicted with no log at all (FND-218).
+    # The head check gets the same tenant-side benefit without either.
     #
     # Callback mode only, and that is a correctness constraint rather than
     # scope: in poll mode THIS job's conclusion is the verdict, so a skipped

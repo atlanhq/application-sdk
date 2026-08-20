@@ -21,14 +21,22 @@ to get here reaches a tenant.
 
 Why not ``concurrency:``
 -----------------------
-``cancel-in-progress`` was considered and rejected. The dispatch is
-fire-and-forget (``e2e-apps`` in ``wait-mode: callback`` creates the check run,
-dispatches, and exits), so cancelling the SDK-side run does not cancel the
-connector run it already started — it only orphans it, and the tenant contention
-is unchanged. And a queueing group is worse than useless here: GitHub holds
-exactly ONE pending run per group, so a third arrival cancels the waiter with no
-log output at all. That is FND-218, the failure the tenant lease exists to
-replace; re-adding it in front of the dispatch would reintroduce it.
+``cancel-in-progress`` was considered and rejected. *Once the dispatch has
+fired* it changes nothing: the dispatch is fire-and-forget (``e2e-apps`` in
+``wait-mode: callback`` creates the check run, dispatches, and exits), so
+cancelling the SDK-side run does not cancel the connector run it already started
+— it only orphans it, and the tenant contention is unchanged.
+
+That is not the same as "cancellation could never have helped", and the
+stale-head section below is the counter-example: a run spends ~8 minutes
+building the base image before it reaches the dispatch, and a cancel landing in
+that window would have stopped the fan-out outright. Two things still rule it
+out. A run cancelled between creating its check run and dispatching leaves a
+check that nothing will ever complete. And a queueing group is worse than
+useless here: GitHub holds exactly ONE pending run per group, so a third arrival
+cancels the waiter with no log output at all — FND-218, the failure the tenant
+lease exists to replace, reintroduced in front of the dispatch. The head check
+below buys the same tenant time with neither hazard.
 
 Cancellation is also unsafe as a steady-state mechanism, which is worth stating
 because it is the obvious first idea: ``prepare-tenant`` carries ``if:
@@ -117,9 +125,14 @@ reason above. Unreadable answers dispatch, in keeping with the fail-open posture
 a stale run costs tenant time, a wrongly-skipped head commit costs the PR its
 e2e.
 
-It does not close the window where the stale run dispatched first (a push more
-than ~2min behind the previous one). That case is a live connector run holding a
-lease it legitimately took, and the queue is the right answer to it.
+It closes the window up to the dispatch and nothing past it. A push landing
+later leaves a connector run already in flight, which is two cases, not one. If
+that run has ACQUIRED a lease, there is nothing to do — cancelling it is unsafe
+for the ``prepare-tenant`` reason above, so the queue is the right answer. If it
+has dispatched but NOT yet leased — still building, unit-testing and
+integration-testing, 2m30s on the openapi leg of PR #3322 — it holds nothing and
+could stand down for free. That second case needs a check on the connector side,
+immediately before the lease, and is tracked as FND-701.
 
 Pruning
 -------
