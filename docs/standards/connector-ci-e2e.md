@@ -53,6 +53,46 @@ than cancelling it (`cancel-in-progress: false`). That is deliberate —
 cancelling mid-run abandons a live Automation Engine run and leaves tenant state
 behind — and it is a separate decision from the gating above.
 
+### One dispatch per commit, however many events GitHub sends
+
+GitHub can emit several `pull_request` events for one head SHA. Observed on
+PR #3306: `opened`, then `labeled e2e` **twice**, one second apart — three
+events, one commit, three full `PR Checks` runs, and three independent
+dispatches into the same connector. Those three connector runs then fought over
+the same three cloud tenants: one ran the suite in ten minutes, the other two
+split the freed leases between them and blocked on each other for the whole
+90-minute wait budget (FND-646).
+
+No workflow `if:` can tell two identical `labeled` events apart, so `e2e-apps`
+(`wait-mode: callback`) claims a dispatch slot before it dispatches:
+
+* One ref per commit and app — `refs/e2e-dispatch/<app>/<sha>`, created by an
+  atomic CAS. `POST /git/refs` returns 422 when the ref exists, and exactly one
+  of N simultaneous callers sees 201. Same primitive as the `(app, cloud)`
+  tenant lease.
+* A run that loses creates **no check run** and dispatches nothing. It stays
+  green: the verdict for that commit is the single `Connector E2E run / <app>`
+  check the winner created, and every duplicate run's own Connector Tests Gate
+  polls that same check and reports the same answer.
+* **Re-running the dispatch job still re-dispatches.** The claim is owned by a
+  *run*, not a run attempt, so a re-run of the run that claimed it proceeds.
+* A claim whose run died before dispatching is reclaimed by the next contender,
+  so a crashed dispatcher cannot leave a commit with no e2e.
+* Every failure of the guard itself — no permission, a rate limit, an
+  unreadable answer — **dispatches anyway** with a warning. A commit whose e2e
+  silently never ran is far worse than a duplicate, which is only the
+  pre-existing behaviour.
+
+Duplicate `PR Checks` runs still appear, and each still pays for its base-image
+build. That is accepted: it is cheap and it never reaches a tenant.
+
+Explicitly rejected: `concurrency: cancel-in-progress` on the dispatching
+workflow. The dispatch is fire-and-forget, so cancelling the SDK-side run
+orphans the connector run it already started rather than stopping it — and a
+cancelled connector run is not even safe, because `prepare-tenant` carries
+`if: always()` and finishes installing onto the tenants it had already leased on
+its way out.
+
 ## SDR composite action inputs
 
 ```yaml

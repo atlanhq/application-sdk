@@ -469,8 +469,31 @@ jobs:
     # wait-mode != 'callback' and never runs here. A job-level permissions block
     # replaces rather than merges with the workflow defaults, so contents:read
     # is spelled out explicitly.
+    #
+    # The three grants beyond that all belong to e2e-apps' duplicate-dispatch
+    # guard (FND-646), which runs on github.token because the claim refs live in
+    # THIS repo:
+    #   contents: write     — create/delete refs/e2e-dispatch/<app>/<sha>, the
+    #                         atomic CAS that decides which of several runs on one
+    #                         SHA reaches a tenant. Same capability, same reason,
+    #                         and the same "only in a job that runs no test code"
+    #                         scoping as tests-reusable's lease-tenant job.
+    #   checks: read        — has this SHA already been dispatched? The
+    #                         'Connector E2E run / <app>' check is the evidence.
+    #   actions: read       — tell a claimant that died before dispatching from
+    #                         one that is mid-dispatch. Without it the run read
+    #                         404s, a LIVE claimant reads as dead, and its claim
+    #                         is reclaimed — a second connector run onto the same
+    #                         tenants, i.e. the bug the guard exists to prevent.
+    #                         The sibling lease-tenant job grants this for the
+    #                         same reason.
+    #   pull-requests: read — the stale-claim prune keeps a claim only while its
+    #                         SHA is still an open PR head.
     permissions:
-      contents: read
+      contents: write
+      checks: read
+      actions: read
+      pull-requests: read
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.matrix-builder.outputs.matrix) }}
