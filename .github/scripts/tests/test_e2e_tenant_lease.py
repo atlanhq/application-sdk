@@ -38,6 +38,7 @@ from e2e_tenant_lease import (  # noqa: E402
     _denied,
     _rate_limited,
     acquire,
+    acquire_ordered,
     create_identity_blob,
     gh_request,
     holder_is_live,
@@ -45,6 +46,7 @@ from e2e_tenant_lease import (  # noqa: E402
     main,
     read_holder,
     release,
+    release_all,
     release_ref,
     slug,
     try_acquire,
@@ -1282,3 +1284,282 @@ def test_main_validates_before_touching_the_api(
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     with pytest.raises(SystemExit, match="poll-seconds"):
         main(_argv("acquire", "--poll-seconds", "0"))
+
+
+# --- ordered multi-cloud acquisition (FND-646) ------------------------------
+#
+# The property under test is the absence of a deadlock, which no single-run test
+# can observe directly. What CAN be pinned is the mechanism that rules it out:
+# one run takes its tenants one at a time, in an order that is a pure function of
+# the cloud names, and gives back everything if it cannot get the whole set. Get
+# any of those three wrong and hold-and-wait is back.
+
+
+def _ref_for(cloud: str) -> str:
+    return f"refs/e2e-tenant-lease/example/{cloud}/holder"
+
+
+def _path_of(ref: str) -> str:
+    """The URL fragment FakeHTTP routes on for a given lease ref."""
+    return "/git/ref/" + ref.removeprefix("refs/")
+
+
+def _ordered(clouds: list[str], **kwargs):
+    defaults = dict(
+        wait_seconds=60,
+        poll_seconds=30,
+        ttl_seconds=0,
+        sleep=lambda _s: None,
+        clock=lambda: 1000.0,
+    )
+    defaults.update(kwargs)
+    return acquire_ordered(REPO, "example", clouds, 100, 1, **defaults)
+
+
+def _claimed_refs(http: FakeHTTP) -> list[str]:
+    """The refs this run put through the CAS, in the order it tried them.
+
+    Read from the payloads rather than the URLs because every ref creation POSTs
+    to the same endpoint — the ref name only exists in the body.
+    """
+    return [p["ref"] for p in http.payloads if "ref" in p]
+
+
+def _stub_free_and_claimable(http: FakeHTTP, clouds: list[str]) -> None:
+    for cloud in clouds:
+        http.route("GET", _path_of(_ref_for(cloud)), (404, {"message": "Not Found"}))
+    _stub_blob_write(http)
+    http.route("POST", "/git/refs", *[(201, {"ref": ""}) for _ in clouds])
+
+
+def test_ordered_acquisition_takes_every_cloud(http: FakeHTTP) -> None:
+    _stub_free_and_claimable(http, ["aws", "azure", "gcp"])
+    outcome = _ordered(["aws", "azure", "gcp"])
+    assert outcome.state == "acquired"
+    assert list(outcome.held) == [_ref_for(c) for c in ("aws", "azure", "gcp")]
+
+
+def test_ordered_acquisition_sorts_by_cloud_name(http: FakeHTTP) -> None:
+    """THE guarantee. Resource ordering only excludes a cycle if every contender
+    agrees on the order, so it must come from the names and nothing else — not
+    the caller's list order, not run id, not arrival order."""
+    _stub_free_and_claimable(http, ["aws", "azure", "gcp"])
+    _ordered(["gcp", "aws", "azure"])
+    assert _claimed_refs(http) == [_ref_for(c) for c in ("aws", "azure", "gcp")]
+
+
+def test_ordered_acquisition_of_a_subset_keeps_the_same_relative_order(
+    http: FakeHTTP,
+) -> None:
+    """A repo whose tenant matrix carries only some clouds locks only those. That
+    is safe precisely because sorting a subset preserves the relative order of
+    the locks it shares with any other contender."""
+    _stub_free_and_claimable(http, ["aws", "gcp"])
+    _ordered(["gcp", "aws"])
+    assert _claimed_refs(http) == [_ref_for("aws"), _ref_for("gcp")]
+
+
+def test_ordered_acquisition_deduplicates_clouds(http: FakeHTTP) -> None:
+    # A duplicate would CAS the same ref twice, and the second attempt reads its
+    # own lease as somebody else's occupancy.
+    _stub_free_and_claimable(http, ["aws"])
+    outcome = _ordered(["aws", "aws"])
+    assert list(outcome.held) == [_ref_for("aws")]
+
+
+@pytest.mark.parametrize("spelling", ["aws,gcp", "aws, gcp", " GCP ,aws", "AWS,gcp"])
+def test_ordered_acquisition_orders_by_the_lease_key_not_the_spelling(
+    spelling: str, http: FakeHTTP
+) -> None:
+    """Every spelling of one set names the same pair of LOCKS, so every spelling
+    has to take them in the same order. Sorting the raw tokens does not: " gcp"
+    sorts before "aws" on its leading space, so `"aws, gcp"` and `"aws,gcp"` would
+    take one pair of locks in opposite orders — two contenders disagreeing about
+    which lock comes first, which is exactly the FND-646 cycle. So the sort key is
+    the `slug()` the lease is keyed on, not the text the caller typed."""
+    _stub_free_and_claimable(http, ["aws", "gcp"])
+    _ordered(spelling.split(","))
+    assert _claimed_refs(http) == [_ref_for("aws"), _ref_for("gcp")]
+
+
+def test_ordered_acquisition_deduplicates_across_spellings(http: FakeHTTP) -> None:
+    # Same lease named twice. Canonicalizing before the dedup is what collapses
+    # it to one entry; two raw spellings would CAS the one ref twice, and the
+    # second attempt reads this run's own lease as somebody else's occupancy.
+    _stub_free_and_claimable(http, ["aws"])
+    outcome = _ordered(["aws", " AWS "])
+    assert list(outcome.held) == [_ref_for("aws")]
+
+
+def test_a_blocked_cloud_gives_back_what_was_already_held(http: FakeHTTP) -> None:
+    """The whole point. Holding aws while blocking on azure is hold-and-wait —
+    exactly the shape that deadlocked when two runs split a freed set — so a run
+    that cannot get the whole set must hold none of it."""
+    theirs = "c" * 40
+    http.route(
+        "GET",
+        _path_of(_ref_for("aws")),
+        # Free on the way in, ours on the way back out.
+        (404, {"message": "Not Found"}),
+        (200, {"ref": _ref_for("aws"), "object": {"sha": BLOB, "type": "blob"}}),
+        (200, {"ref": _ref_for("aws"), "object": {"sha": BLOB, "type": "blob"}}),
+    )
+    http.route(
+        "GET",
+        _path_of(_ref_for("azure")),
+        (200, {"ref": _ref_for("azure"), "object": {"sha": theirs, "type": "blob"}}),
+    )
+    _stub_blob_write(http)
+    http.route("POST", "/git/refs", (201, {"ref": _ref_for("aws")}))
+    http.route("GET", f"/git/blobs/{BLOB}", (200, _holder_blob(100, 1)))
+    http.route("GET", f"/git/blobs/{theirs}", (200, _holder_blob(555)))
+    http.route("GET", "/actions/runs/", _live())
+    http.route("DELETE", "/git/refs/", (204, None))
+
+    outcome = _ordered(["aws", "azure"], wait_seconds=1, poll_seconds=1)
+
+    assert outcome.state == "timeout"
+    assert outcome.held == ()
+    assert outcome.blocker is not None and outcome.blocker.run_id == 555
+    # The error names the tenant that actually blocked, not the first of the set.
+    assert outcome.ref == _ref_for("azure")
+    assert http.count("DELETE", "/git/refs/") == 1
+
+
+def test_the_wait_budget_is_total_across_the_set(http: FakeHTTP) -> None:
+    """`wait-seconds` becomes a budget for the whole ordered set, not a fresh one
+    per cloud — otherwise N clouds could outlast the job timeout by N times over
+    and the runner's "cancelled after Nm" would replace the actionable error."""
+    ticks = iter([1000.0, 1000.0, 1000.0, 9999.0, 9999.0, 9999.0])
+    http.route("GET", _path_of(_ref_for("aws")), (404, {"message": "Not Found"}))
+    _stub_blob_write(http)
+    http.route("POST", "/git/refs", (201, {"ref": _ref_for("aws")}))
+    http.route("GET", f"/git/blobs/{BLOB}", (200, _holder_blob(100, 1)))
+    http.route("DELETE", "/git/refs/", (204, None))
+
+    outcome = _ordered(["aws", "azure"], wait_seconds=60, clock=lambda: next(ticks))
+
+    assert outcome.state == "timeout"
+    # azure was never even attempted: the budget was gone.
+    assert _claimed_refs(http) == [_ref_for("aws")]
+    assert outcome.ref == _ref_for("azure")
+    assert outcome.held == ()
+
+
+def test_release_all_gives_every_lease_back(http: FakeHTTP) -> None:
+    http.route("GET", "/git/ref/", (200, _ref_body()))
+    http.route("GET", "/git/blobs/", (200, _holder_blob(100, 1)))
+    http.route("DELETE", "/git/refs/", (204, None), (204, None))
+    release_all(REPO, [_ref_for("aws"), _ref_for("azure")], 100, 1)
+    assert http.count("DELETE", "/git/refs/") == 2
+
+
+def test_release_all_of_nothing_makes_no_calls(http: FakeHTTP) -> None:
+    release_all(REPO, [], 100, 1)
+    assert http.calls == []
+
+
+def test_release_all_attempts_every_ref_even_when_one_release_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """This is the unwind path for a partial hold, so it must not abandon the rest
+    of the set at the first transport failure: the leases it skipped would stay
+    held until their TTL expired, which is the hold-and-wait that ordered
+    acquisition exists to remove. Every ref is attempted, then the first failure
+    is re-raised so the job still goes red."""
+    attempted: list[str] = []
+
+    def failing_release(repo: str, ref: str, run_id: int, attempt: int) -> bool:
+        attempted.append(ref)
+        if ref == _ref_for("gcp"):
+            raise SystemExit("::error::curl retries exhausted")
+        return True
+
+    monkeypatch.setattr("e2e_tenant_lease.release", failing_release)
+
+    with pytest.raises(SystemExit, match="retries exhausted"):
+        release_all(REPO, [_ref_for("aws"), _ref_for("gcp")], 100, 1)
+
+    # Reverse order, so gcp is the one that fails — and aws is still given back.
+    assert attempted == [_ref_for("gcp"), _ref_for("aws")]
+
+
+# --- the ordered CLI -------------------------------------------------------
+
+
+def _argv_clouds(mode: str, clouds: str, *extra: str) -> list[str]:
+    return [
+        "--mode",
+        mode,
+        "--repo",
+        REPO,
+        "--app",
+        "example",
+        "--clouds",
+        clouds,
+        "--run-id",
+        "100",
+        "--run-attempt",
+        "1",
+        *extra,
+    ]
+
+
+def test_main_acquire_reports_the_whole_set_it_holds(
+    http: FakeHTTP, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = tmp_path / "out"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    _stub_free_and_claimable(http, ["aws", "gcp"])
+
+    assert main(_argv_clouds("acquire", "gcp,aws")) == 0
+
+    written = out.read_text()
+    assert "acquired=true" in written
+    assert f"lease-refs={_ref_for('aws')},{_ref_for('gcp')}" in written
+    assert "clouds=aws,gcp" in written
+
+
+def test_main_acquire_with_an_empty_cloud_list_falls_back_to_one_tenant(
+    http: FakeHTTP, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The single-tenant path resolves an EMPTY cloud list, so an empty --clouds
+    has to mean "use --cloud" rather than "lease nothing". That is what lets the
+    action pass both unconditionally instead of branching in shell."""
+    out = tmp_path / "out"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    _stub_unheld(http)
+    _stub_blob_write(http)
+    http.route("POST", "/git/refs", (201, {"ref": REF}))
+
+    assert main(_argv("acquire", "--clouds", "")) == 0
+    assert f"lease-refs={REF}" in out.read_text()
+
+
+def test_main_rejects_both_cloud_and_clouds(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Preferring one silently would leave the other's tenant unserialised while
+    # the job still went green.
+    monkeypatch.setenv("GH_TOKEN", "x")
+    with pytest.raises(SystemExit, match="both given"):
+        main(_argv("acquire", "--clouds", "aws,gcp"))
+
+
+def test_main_verify_refuses_a_cloud_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """verify exists so each install leg confirms ITS OWN tenant. A set-shaped
+    verify would invite the install to check the aggregate again, which is the
+    approximation this mode replaced."""
+    monkeypatch.setenv("GH_TOKEN", "x")
+    with pytest.raises(SystemExit, match="verify takes --cloud"):
+        main(_argv_clouds("verify", "aws,gcp"))
+
+
+def test_main_release_gives_back_the_whole_set(
+    http: FakeHTTP, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    http.route("GET", "/git/ref/", (200, _ref_body()), (200, _ref_body()))
+    http.route("GET", "/git/blobs/", (200, _holder_blob(100, 1)))
+    http.route("DELETE", "/git/refs/", (204, None), (204, None))
+
+    assert main(_argv_clouds("release", "aws,gcp")) == 0
+    assert http.count("DELETE", "/git/refs/") == 2

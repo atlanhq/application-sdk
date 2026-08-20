@@ -57,10 +57,32 @@ loudly and names the holder — a run that starves gets a red job saying the ten
 was busy, not silence. Correctness first; FIFO was the property that turned out
 to be unaffordable.
 
+One run, several tenants: ordered acquisition
+--------------------------------------------
+A cross-CSP run needs one tenant per cloud, and it needs all of them for its
+whole life. Taking them in PARALLEL and holding each while blocking on the rest
+is hold-and-wait, and it deadlocked in production the first time two runs queued
+behind one holder (FND-646): the holder released all three leases, the two
+waiters raced for the freed set and *split* it, and each then blocked on what the
+other held for the full wait budget. With ≥2 runs queued behind a holder that
+split is the expected outcome, not a rare interleaving.
+
+So a run that wants several tenants takes them one at a time, in a fixed order
+derived only from the cloud names (``acquire_ordered``, ``--clouds``). Resource
+ordering makes a cycle impossible, so the worst case degrades from mutual
+blocking to plain serialisation, and nothing is ever cancelled.
+
+Note what this is NOT: it is not the ordered ticket queue rejected above. That
+attempt replaced the CAS with an ordering and got fairness instead of exclusion.
+The CAS below is untouched and remains the only thing that grants a lease; the
+ordering governs only the sequence in which ONE run takes several of them.
+
 API budget
 ----------
 ``GITHUB_TOKEN`` allows 1000 requests/hour **per repository**, and every matrix
-leg of a run shares that one budget. A waiting poll therefore has to be cheap or
+leg of a run shares that one budget. Ordered acquisition helps here too: polling
+one lease at a time rather than three concurrently divides a waiting run's
+request rate by the number of clouds. A waiting poll therefore has to be cheap or
 the lease starves itself of API calls precisely when several legs are queueing —
 and a rate-limit 403 looks exactly like a permission 403, which used to fail the
 lease open. So:
@@ -719,6 +741,160 @@ def acquire(
     return ("rate-limited" if rate_limited else "timeout"), blocker
 
 
+@dataclass(frozen=True)
+class OrderedOutcome:
+    """The result of an ordered multi-cloud acquisition.
+
+    ``ref`` is the one the outcome hinged on — the last lease taken when the
+    whole set was acquired, the one that blocked otherwise — so a caller has one
+    specific tenant to name in an error instead of guessing which of the set it
+    was.
+    """
+
+    state: str
+    blocker: Holder | None
+    held: tuple[str, ...]
+    ref: str
+
+
+def acquire_ordered(
+    repo: str,
+    app: str,
+    clouds: list[str],
+    run_id: int,
+    attempt: int,
+    *,
+    wait_seconds: int,
+    poll_seconds: int,
+    ttl_seconds: int,
+    sleep=time.sleep,
+    clock=time.time,
+) -> OrderedOutcome:
+    """Take EVERY cloud's lease, in a fixed order, under one total budget.
+
+    ``state`` is "acquired" | "disabled" | "timeout" | "rate-limited", and
+    "acquired" is all-or-nothing: any other state hands back whatever was taken
+    on the way, so the caller either holds the whole set or nothing.
+
+    Why ordered, and why one job
+    ----------------------------
+    ``lease-tenant`` used to be a per-cloud matrix that acquired each cloud's
+    lease in PARALLEL and held it for the whole run, with the install gated on
+    the matrix aggregate. That is textbook hold-and-wait: a run that wins a
+    subset sits on those tenants while blocking on the rest. It deadlocked in
+    production the moment two runs queued behind one holder (FND-646) — the
+    holder released all three leases, the two waiters raced for the freed set
+    and *split* it (one took aws + azure, the other gcp), and each then blocked
+    on what the other held for the full wait budget.
+
+    That split is the EXPECTED outcome of a parallel matrix whenever ≥2 runs are
+    queued behind a holder, not a rare interleaving. Acquiring in a fixed global
+    order makes it structurally impossible: two runs can never hold locks the
+    other needs out of order, so the worst case degrades from mutual blocking to
+    plain serialisation. No run is ever cancelled — a queued run waits and then
+    proceeds.
+
+    The order is ``sorted()`` over the cloud names, and it MUST stay a pure
+    function of the names. Deriving it from anything per-run (run id, arrival
+    order, the caller's list order) is what breaks the guarantee, because two
+    contenders would then disagree about which lock comes first.
+
+    It sorts the ``slug()`` of each name — the same canonical form ``lease_ref``
+    keys the lease on — rather than the raw token, because the order has to be a
+    pure function of the *lock*, not of its spelling. Sorting raw tokens would let
+    ``"aws, gcp"`` and ``"aws,gcp"`` (or a difference in case) take the very same
+    pair of locks in opposite orders, which is exactly the disagreement that
+    reopens the FND-646 cycle. Canonicalizing first also makes the dedup real:
+    two spellings of one cloud collapse to the one lease they name.
+
+    Every contender
+    also computes it over its OWN resolved cloud list, which may be a subset —
+    that is fine and is why sorting works: any two runs still take their common
+    subset in the same relative order.
+
+    This is NOT the ordered ticket queue the module docstring rejects. That
+    attempt replaced the atomic CAS with a run_id ordering and got fairness
+    instead of exclusion. Here the CAS is untouched and still the only thing that
+    grants a lease; the ordering governs only the sequence in which ONE run takes
+    several of them.
+
+    ``wait_seconds`` is a TOTAL budget across the set, not per cloud, so the job
+    timeout still bounds the whole thing. It also cuts the API cost: polling one
+    lease at a time instead of three concurrently divides the per-run request
+    rate by the number of clouds, and that rate is the binding constraint (see
+    the module docstring's API budget section).
+    """
+    order = sorted({slug(cloud) for cloud in clouds})
+    held: list[str] = []
+    deadline = clock() + wait_seconds
+    ref = lease_ref(app, order[0])
+
+    for cloud in order:
+        ref = lease_ref(app, cloud)
+        remaining = int(deadline - clock())
+        if remaining <= 0:
+            print(
+                f"::error::the {wait_seconds}s tenant-lease budget ran out before "
+                f"{ref} could be taken."
+            )
+            release_all(repo, held, run_id, attempt)
+            return OrderedOutcome("timeout", None, (), ref)
+
+        state, blocker = acquire(
+            repo,
+            ref,
+            run_id,
+            attempt,
+            wait_seconds=remaining,
+            poll_seconds=poll_seconds,
+            ttl_seconds=ttl_seconds,
+            sleep=sleep,
+            clock=clock,
+        )
+        if state == "acquired":
+            held.append(ref)
+            continue
+
+        # Hand back everything taken on the way in. release-tenant would do it
+        # too, but only after this job's own failure has propagated — and holding
+        # tenants across that gap is the hold-and-wait this function exists to
+        # remove.
+        if held:
+            print(
+                f"Giving back {len(held)} lease(s) already held, because the "
+                f"whole set could not be taken: {', '.join(held)}"
+            )
+        release_all(repo, held, run_id, attempt)
+        return OrderedOutcome(state, blocker, (), ref)
+
+    print(f"All {len(held)} tenant lease(s) acquired in order: {', '.join(held)}")
+    return OrderedOutcome("acquired", None, tuple(held), ref)
+
+
+def release_all(repo: str, refs: list[str], run_id: int, attempt: int) -> None:
+    """Release several leases, ownership-checked one at a time.
+
+    Reverse order, so the lock taken last is given back first. It makes no
+    difference to correctness — releases cannot block — but it keeps the log
+    reading as the inverse of the acquisition.
+
+    Every ref is attempted even if one release exhausts its transport retries and
+    raises: this is the unwind path for a partial hold, so abandoning the rest at
+    the first failure would leave earlier leases held until their TTL expires —
+    the hold-and-wait ``acquire_ordered`` exists to remove. The first failure is
+    re-raised once the whole set has been attempted, so the job still goes red.
+    """
+    failure: SystemExit | None = None
+    for ref in reversed(refs):
+        try:
+            release(repo, ref, run_id, attempt)
+        except SystemExit as exc:
+            print(f"::warning::could not release {ref}; continuing with the rest.")
+            failure = failure or exc
+    if failure is not None:
+        raise failure
+
+
 def _sleep_for_rate_limit(sleep, poll_seconds: int, retry_after: int | None) -> None:
     """Back off after a rate limit, honouring Retry-After within reason.
 
@@ -847,6 +1023,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--cloud", default="", help="Cloud (lease key part); empty = single tenant."
     )
+    parser.add_argument(
+        "--clouds",
+        default="",
+        help="Comma-separated clouds to lease as ONE ordered set (acquire and "
+        "release only). Empty falls back to --cloud, so a caller that always "
+        "passes both needs no conditional shell and the single-tenant path — "
+        "where the resolved cloud list is legitimately empty — keeps working. "
+        "Acquisition is sorted by cloud name and --wait-seconds becomes a TOTAL "
+        "budget across the set; see acquire_ordered for why the order must be a "
+        "pure function of the names.",
+    )
     parser.add_argument("--run-id", required=True, type=int, help="github.run_id")
     parser.add_argument(
         "--run-attempt", required=True, type=int, help="github.run_attempt"
@@ -905,30 +1092,84 @@ def main(argv: list[str] | None = None) -> int:
             "(0 disables the TTL backstop)"
         )
 
+    # Canonicalize to the same form `lease_ref` keys the lease on, so the
+    # acquisition order is a function of the lock rather than of its spelling:
+    # "aws, gcp" and "aws,gcp" name one pair of locks and must take them in one
+    # order. Blank tokens are dropped on the raw text first, because `slug("")`
+    # is the single-tenant "default" rather than nothing.
+    clouds = [slug(cloud) for cloud in args.clouds.split(",") if cloud.strip()]
+    if clouds and args.cloud.strip():
+        # Silently preferring one would make the OTHER one's tenant unserialised
+        # while the job still went green.
+        raise SystemExit(
+            f"::error::--cloud {args.cloud!r} and --clouds {args.clouds!r} were "
+            "both given; pass one. --clouds leases an ordered set, --cloud leases "
+            "one tenant, and an empty --clouds falls back to --cloud."
+        )
+
     ref = lease_ref(args.app, args.cloud)
 
     if args.mode == "release":
-        release(args.repo, ref, args.run_id, args.run_attempt)
+        # Ordered acquisition means a single job may hold several leases, so the
+        # release side has to be able to give back the same set. Ownership is
+        # checked per ref, so a set this run only partly holds is safe.
+        release_all(
+            args.repo,
+            [lease_ref(args.app, cloud) for cloud in sorted(clouds)] or [ref],
+            args.run_id,
+            args.run_attempt,
+        )
         return 0
 
     if args.mode == "verify":
+        # Deliberately single-cloud only. Verify exists because a matrix job
+        # cannot depend on its own leg of an upstream matrix, so each install leg
+        # confirms ITS OWN tenant; a --clouds form here would invite the install
+        # to check the aggregate again, which is the exact approximation this mode
+        # was added to replace.
+        if clouds:
+            raise SystemExit(
+                "::error::--mode verify takes --cloud, not --clouds: each install "
+                "leg must confirm its own tenant rather than the set."
+            )
         held = verify_held(args.repo, ref, args.run_id, args.run_attempt)
         return 0 if held else 1
 
-    state, blocker = acquire(
-        args.repo,
-        ref,
-        args.run_id,
-        args.run_attempt,
-        wait_seconds=args.wait_seconds,
-        poll_seconds=args.poll_seconds,
-        ttl_seconds=args.ttl_seconds,
-    )
+    if clouds:
+        outcome = acquire_ordered(
+            args.repo,
+            args.app,
+            clouds,
+            args.run_id,
+            args.run_attempt,
+            wait_seconds=args.wait_seconds,
+            poll_seconds=args.poll_seconds,
+            ttl_seconds=args.ttl_seconds,
+        )
+        state, blocker, held_refs = outcome.state, outcome.blocker, list(outcome.held)
+        # The ref the outcome hinged on, so the errors below name one specific
+        # tenant. `lease-refs` carries the whole set.
+        ref = outcome.ref
+    else:
+        held_refs = []
+        state, blocker = acquire(
+            args.repo,
+            ref,
+            args.run_id,
+            args.run_attempt,
+            wait_seconds=args.wait_seconds,
+            poll_seconds=args.poll_seconds,
+            ttl_seconds=args.ttl_seconds,
+        )
+        if state == "acquired":
+            held_refs = [ref]
     write_outputs(
         {
             "acquired": "true" if state == "acquired" else "false",
             "state": state,
             "lease-ref": ref,
+            "lease-refs": ",".join(held_refs),
+            "clouds": ",".join(sorted(clouds)) if clouds else args.cloud,
             "holder-run-id": str(blocker.run_id) if blocker else "",
         },
         os.environ.get("GITHUB_OUTPUT"),
