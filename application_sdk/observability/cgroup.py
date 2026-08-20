@@ -269,6 +269,7 @@ class ContainerTrace:
 @contextlib.asynccontextmanager
 async def track_container_usage(
     poll_interval_seconds: float = 1.0,
+    allow_watermark_reset: bool = True,
 ) -> AsyncIterator[ContainerTrace]:
     """Measure peak memory and CPU throttling across a block.
 
@@ -276,6 +277,11 @@ async def track_container_usage(
     ``watermark`` (reset + read, catches spikes of any duration), ``poll``
     (background sampling, only when the reset was unprovable), or ``unavailable``
     (no cgroup — trace stays ``None``, which is "no data", not zero).
+
+    ``allow_watermark_reset=False`` forbids the reset. Pass it when more than one
+    activity shares this process: ``memory.peak`` is a single kernel counter, so two
+    activities resetting it means each reads a peak measured from the *other's*
+    reset — wrong in an unpredictable direction, where polling is merely pod-wide.
 
     Never raises and never fails the wrapped block. ``poll_interval_seconds <= 0``
     disables polling.
@@ -293,7 +299,7 @@ async def track_container_usage(
 
         if memory_usage_bytes() is None:
             trace.peak_source = "unavailable"
-        elif reset_memory_peak():
+        elif allow_watermark_reset and reset_memory_peak():
             trace.peak_source = "watermark"
         elif poll_interval_seconds > 0:
             trace.peak_source = "poll"

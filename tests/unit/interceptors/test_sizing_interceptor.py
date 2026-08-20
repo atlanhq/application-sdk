@@ -52,8 +52,13 @@ def _tracker(trace: ContainerTrace, *, fill_on_exit: ContainerTrace | None = Non
     """
     import contextlib
 
+    calls: list[dict] = []
+
     @contextlib.asynccontextmanager
-    async def _cm(poll_interval_seconds: float = 1.0):
+    async def _cm(
+        poll_interval_seconds: float = 1.0, allow_watermark_reset: bool = True
+    ):
+        calls.append({"allow_watermark_reset": allow_watermark_reset})
         try:
             yield trace
         finally:
@@ -63,6 +68,7 @@ def _tracker(trace: ContainerTrace, *, fill_on_exit: ContainerTrace | None = Non
                 trace.peak_source = fill_on_exit.peak_source
                 trace.cpu_seconds = fill_on_exit.cpu_seconds
 
+    _cm.calls = calls  # type: ignore[attr-defined]
     return _cm
 
 
@@ -199,6 +205,7 @@ class TestRecordObservation:
             "temporal.task_queue",
             "outcome",
             "peak.source",
+            "attributable",
         }
 
     def test_emits_nothing_when_there_is_no_data(self, mock_meter):
@@ -322,7 +329,9 @@ class TestSizingInterceptor:
         import contextlib
 
         @contextlib.asynccontextmanager
-        async def _cm(poll_interval_seconds: float = 1.0):
+        async def _cm(
+            poll_interval_seconds: float = 1.0, allow_watermark_reset: bool = True
+        ):
             captured["interval"] = poll_interval_seconds
             yield ContainerTrace()
 
@@ -469,6 +478,239 @@ class TestInputSizeReachesTheRecord:
         )
         assert obs.input_bytes is None
         assert obs.peak_memory_bytes == 3000
+
+
+class TestConcurrencyAttribution:
+    """The peak is pod-wide unless one activity had the process to itself."""
+
+    @pytest.fixture(autouse=True)
+    def clean_census(self):
+        from application_sdk.observability.sizing_census import CENSUS
+
+        CENSUS._reset_for_testing()
+        yield
+        CENSUS._reset_for_testing()
+
+    @pytest.fixture
+    def mock_next(self):
+        n = AsyncMock()
+        n.execute_activity = AsyncMock(return_value="ok")
+        return n
+
+    async def test_alone_allows_the_watermark_reset(self, mock_next):
+        tracker = _tracker(ContainerTrace(peak_memory_bytes=1))
+        interceptor = _SizingActivityInboundInterceptor(
+            mock_next, 1.0, frozenset({"merge"})
+        )
+        with (
+            patch(_ACTIVITY_TARGET) as mock_act,
+            patch(_TRACKER_TARGET, tracker),
+            patch(_RECORD_TARGET) as mock_record,
+        ):
+            mock_act.info.return_value = MockActivityInfo(activity_type="merge")
+            await interceptor.execute_activity(MockExecuteActivityInput())
+
+        assert tracker.calls[0]["allow_watermark_reset"] is True
+        obs = mock_record.call_args[0][0]
+        assert obs.concurrency_max == 1
+        assert obs.is_attributable is True
+
+    async def test_concurrent_forbids_the_watermark_reset(self, mock_next):
+        """Two activities resetting one kernel counter is cross-talk, not noise.
+
+        Each would read a peak measured from the other's reset — wrong in an
+        unpredictable direction, where a pod-wide poll is merely coarse.
+        """
+        import asyncio
+
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow(_input):
+            started.set()
+            await release.wait()
+            return "ok"
+
+        tracker = _tracker(ContainerTrace(peak_memory_bytes=1))
+        first_next = AsyncMock()
+        first_next.execute_activity = slow
+        first = _SizingActivityInboundInterceptor(first_next, 1.0, frozenset({"merge"}))
+        second = _SizingActivityInboundInterceptor(mock_next, 1.0, frozenset({"merge"}))
+
+        with (
+            patch(_ACTIVITY_TARGET) as mock_act,
+            patch(_TRACKER_TARGET, tracker),
+            patch(_RECORD_TARGET) as mock_record,
+        ):
+            mock_act.info.return_value = MockActivityInfo(activity_type="merge")
+            task = asyncio.create_task(
+                first.execute_activity(MockExecuteActivityInput())
+            )
+            await started.wait()
+            # Second activity enters while the first is still in flight.
+            await second.execute_activity(MockExecuteActivityInput())
+            release.set()
+            await task
+
+        # The second saw concurrency 2 at entry, so it must not reset.
+        assert tracker.calls[1]["allow_watermark_reset"] is False
+        observations = [c[0][0] for c in mock_record.call_args_list]
+        assert all(o.concurrency_max == 2 for o in observations)
+        assert all(o.is_attributable is False for o in observations)
+
+    async def test_first_activity_records_the_high_water_mark(self, mock_next):
+        """It was alone at entry but not for its whole window."""
+        import asyncio
+
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow(_input):
+            started.set()
+            await release.wait()
+            return "ok"
+
+        first_next = AsyncMock()
+        first_next.execute_activity = slow
+        first = _SizingActivityInboundInterceptor(first_next, 1.0, frozenset({"merge"}))
+        second = _SizingActivityInboundInterceptor(mock_next, 1.0, frozenset({"merge"}))
+
+        with (
+            patch(_ACTIVITY_TARGET) as mock_act,
+            patch(_TRACKER_TARGET, _tracker(ContainerTrace(peak_memory_bytes=1))),
+            patch(_RECORD_TARGET) as mock_record,
+        ):
+            mock_act.info.return_value = MockActivityInfo(activity_type="merge")
+            task = asyncio.create_task(
+                first.execute_activity(MockExecuteActivityInput())
+            )
+            await started.wait()
+            await second.execute_activity(MockExecuteActivityInput())
+            release.set()
+            await task
+
+        first_obs = [c[0][0] for c in mock_record.call_args_list][-1]
+        assert first_obs.concurrency_max == 2
+        assert first_obs.is_attributable is False
+
+    async def test_records_the_join_keys(self, mock_next, monkeypatch):
+        """pod + started_at + duration is what lets analysis rebuild the overlap."""
+        monkeypatch.setenv("K8S_POD_NAME", "ae-heavy-7f9c")
+        interceptor = _SizingActivityInboundInterceptor(
+            mock_next, 1.0, frozenset({"merge"})
+        )
+        with (
+            patch(_ACTIVITY_TARGET) as mock_act,
+            patch(_TRACKER_TARGET, _tracker(ContainerTrace(peak_memory_bytes=1))),
+            patch(_RECORD_TARGET) as mock_record,
+        ):
+            mock_act.info.return_value = MockActivityInfo(activity_type="merge")
+            await interceptor.execute_activity(MockExecuteActivityInput())
+
+        obs = mock_record.call_args[0][0]
+        assert obs.pod == "ae-heavy-7f9c"
+        assert obs.started_at is not None and obs.started_at > 1_600_000_000
+        assert obs.duration_seconds >= 0
+
+    async def test_falls_back_to_hostname(self, mock_next, monkeypatch):
+        monkeypatch.delenv("K8S_POD_NAME", raising=False)
+        monkeypatch.setenv("HOSTNAME", "worker-abc")
+        interceptor = _SizingActivityInboundInterceptor(
+            mock_next, 1.0, frozenset({"merge"})
+        )
+        with (
+            patch(_ACTIVITY_TARGET) as mock_act,
+            patch(_TRACKER_TARGET, _tracker(ContainerTrace(peak_memory_bytes=1))),
+            patch(_RECORD_TARGET) as mock_record,
+        ):
+            mock_act.info.return_value = MockActivityInfo(activity_type="merge")
+            await interceptor.execute_activity(MockExecuteActivityInput())
+
+        assert mock_record.call_args[0][0].pod == "worker-abc"
+
+    async def test_census_is_released_on_failure(self, mock_next):
+        """A leaked census entry would inflate concurrency for the pod's lifetime."""
+        from application_sdk.observability.sizing_census import CENSUS
+
+        mock_next.execute_activity = AsyncMock(side_effect=ValueError("boom"))
+        interceptor = _SizingActivityInboundInterceptor(
+            mock_next, 1.0, frozenset({"merge"})
+        )
+        with (
+            patch(_ACTIVITY_TARGET) as mock_act,
+            patch(_TRACKER_TARGET, _tracker(ContainerTrace(peak_memory_bytes=1))),
+            patch(_RECORD_TARGET),
+        ):
+            mock_act.info.return_value = MockActivityInfo(activity_type="merge")
+            with pytest.raises(ValueError):
+                await interceptor.execute_activity(MockExecuteActivityInput())
+
+        assert CENSUS.active() == 0
+
+    async def test_an_unmeasured_activity_still_invalidates_attribution(
+        self, mock_next
+    ):
+        """The census counts every activity, not just the allow-listed ones.
+
+        What breaks attribution is another activity using the pod's memory —
+        not whether we happened to be measuring it. Counting only the allow-list
+        would let a measured merge sharing a pod with unmeasured work report
+        concurrency_max=1, which is precisely the silent lie this field prevents.
+        """
+        import asyncio
+
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow(_input):
+            started.set()
+            await release.wait()
+            return "ok"
+
+        untracked_next = AsyncMock()
+        untracked_next.execute_activity = slow
+        untracked = _SizingActivityInboundInterceptor(
+            untracked_next, 1.0, frozenset({"merge"})
+        )
+        tracked = _SizingActivityInboundInterceptor(
+            mock_next, 1.0, frozenset({"merge"})
+        )
+
+        with (
+            patch(_ACTIVITY_TARGET) as mock_act,
+            patch(_TRACKER_TARGET, _tracker(ContainerTrace(peak_memory_bytes=1))),
+            patch(_RECORD_TARGET) as mock_record,
+        ):
+            # An activity NOT on the allow-list, holding the pod.
+            mock_act.info.return_value = MockActivityInfo(activity_type="write_state")
+            task = asyncio.create_task(
+                untracked.execute_activity(MockExecuteActivityInput())
+            )
+            await started.wait()
+            # Now a measured one runs alongside it.
+            mock_act.info.return_value = MockActivityInfo(activity_type="merge")
+            await tracked.execute_activity(MockExecuteActivityInput())
+            release.set()
+            await task
+
+        # Only the merge produced a row, and it knows it was not alone.
+        assert mock_record.call_count == 1
+        obs = mock_record.call_args[0][0]
+        assert obs.concurrency_max == 2
+        assert obs.is_attributable is False
+
+    async def test_the_census_is_released_for_unselected_activities(self, mock_next):
+        """Counted, but never leaked — an unreleased slot would inflate forever."""
+        from application_sdk.observability.sizing_census import CENSUS
+
+        interceptor = _SizingActivityInboundInterceptor(
+            mock_next, 1.0, frozenset({"merge"})
+        )
+        with patch(_ACTIVITY_TARGET) as mock_act:
+            mock_act.info.return_value = MockActivityInfo(activity_type="other")
+            await interceptor.execute_activity(MockExecuteActivityInput())
+
+        assert CENSUS.active() == 0
 
 
 async def interceptor_execute(mock_next):

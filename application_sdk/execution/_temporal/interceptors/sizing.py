@@ -17,6 +17,7 @@ Ships off, and measures only the activities named in the allow-list.
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Any
 
@@ -30,6 +31,7 @@ from temporalio.worker import (
 from application_sdk.observability.cgroup import track_container_usage
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.sizing import SizingObservation, record_observation
+from application_sdk.observability.sizing_census import CENSUS
 from application_sdk.observability.sizing_inputs import (
     begin_collection,
     describe_inputs,
@@ -37,6 +39,15 @@ from application_sdk.observability.sizing_inputs import (
 )
 
 logger = get_logger(__name__)
+
+
+def _pod_name() -> str | None:
+    """Which pod this row came from — the join key for overlapping executions.
+
+    Same source the OTel resource attributes use, so a sizing row and a metric from
+    the same pod agree on its name.
+    """
+    return os.environ.get("K8S_POD_NAME") or os.environ.get("HOSTNAME") or None
 
 
 #: Selects every activity. For a discovery pass on a test tenant, not production.
@@ -70,23 +81,48 @@ class _SizingActivityInboundInterceptor(ActivityInboundInterceptor):
 
     async def execute_activity(self, input: ExecuteActivityInput) -> Any:
         info = activity.info()
-        # Filter before the tracker, so an unselected activity costs a set lookup
-        # rather than the tracker's setup on every activity in the app.
-        if not self._selected(info.activity_type or ""):
-            return await self.next.execute_activity(input)
+        # EVERY activity is counted, selected or not. What invalidates attribution
+        # is whether anything else was using the pod's memory — not whether we
+        # happened to be measuring it. Counting only the allow-list would let a
+        # measured merge sharing a pod with eight unmeasured activities report
+        # concurrency_max=1, which is the exact silent lie this field exists to
+        # prevent. Cost is a lock and a dict insert; no cgroup reads.
+        token, concurrency_now = CENSUS.enter()
+        try:
+            if not self._selected(info.activity_type or ""):
+                return await self.next.execute_activity(input)
+            return await self._measured(input, info, token, concurrency_now)
+        finally:
+            CENSUS.leave(token)
 
+    async def _measured(
+        self,
+        input: ExecuteActivityInput,
+        info: Any,
+        token: int,
+        concurrency_now: int,
+    ) -> Any:
         start_ns = time.monotonic_ns()
+        # Wall-clock as well as monotonic: monotonic has no epoch, so it cannot be
+        # compared across executions, and comparing windows is the whole point.
+        started_at = time.time()
         outcome = "OK"
         # Created here so the activity's reads accumulate into it. Reporting is a
         # no-op for any activity that never got a collector, which is what keeps
         # report_input_bytes() free to call from a hot read path.
         begin_collection()
+        concurrency_max = concurrency_now
         # Bound first so the outer ``finally`` cannot NameError if the tracker
         # never yields.
         trace = None
         try:
             async with track_container_usage(
-                poll_interval_seconds=self._poll_interval_seconds
+                poll_interval_seconds=self._poll_interval_seconds,
+                # Only the sole occupant may reset the shared kernel counter.
+                # Concurrency can still rise afterwards, which inflates this peak
+                # rather than corrupting it — and concurrency_max records that it
+                # happened, so the analysis is not misled either way.
+                allow_watermark_reset=concurrency_now <= 1,
             ) as trace:
                 return await self.next.execute_activity(input)
         # conformance: ignore[E004] measurement wrapper; re-raises immediately
@@ -95,6 +131,10 @@ class _SizingActivityInboundInterceptor(ActivityInboundInterceptor):
             outcome = "ERROR"
             raise
         finally:
+            # peak(), not leave(): this activity still holds its slot until the
+            # outer wrapper releases it, and leaving early would undercount
+            # concurrency for everything else still running.
+            concurrency_max = CENSUS.peak(token)
             # After the ``async with`` exits: the tracker fills the peak and CPU
             # deltas in its own ``finally``, so reading inside would record nothing.
             if trace is not None:
@@ -115,6 +155,9 @@ class _SizingActivityInboundInterceptor(ActivityInboundInterceptor):
                         outcome=outcome,
                         duration_seconds=duration_s,
                         input_size=input_size,
+                        started_at=started_at,
+                        pod=_pod_name(),
+                        concurrency_max=concurrency_max,
                     )
                 )
             end_collection()
