@@ -144,10 +144,12 @@ class TestReleaseAttribution:
     """
 
     def test_attributes_to_the_merger_not_the_publishing_bot(self):
-        run = fake_gh({
-            f"repos/{REPO}/commits/{SHA}/pulls": COMMIT_PULLS_RESPONSE,
-            f"repos/{REPO}/pulls/3240": SINGLE_PULL_RESPONSE,
-        })
+        run = fake_gh(
+            {
+                f"repos/{REPO}/commits/{SHA}/pulls": COMMIT_PULLS_RESPONSE,
+                f"repos/{REPO}/pulls/3240": SINGLE_PULL_RESPONSE,
+            }
+        )
         assert (
             actor.resolve_actor("release", REPO, SHA, "atlan-app-fleet[bot]", run)
             == "a-human"
