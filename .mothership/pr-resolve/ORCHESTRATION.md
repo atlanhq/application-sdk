@@ -14,6 +14,58 @@ Never fabricate a CI result or a reviewer comment. Always read real state from
 
 ---
 
+## Commit + push rules
+
+Referenced by every phase that writes. Two invariants, then the mechanics.
+
+### 1. Never push while a review is in flight
+
+`@sdk-review` runs in its **own sandbox** against the HEAD it saw when it
+started. Pushing between your trigger (3a) and its verdict (3b) moves HEAD out
+from under it: the verdict lands stamped `REVIEWED_HEAD: <the sha you just
+replaced>`, `sdk_review_approve.py` compares that stamp against the live head,
+and declines *every* stamp — no labels, no approval, no commit status. The round
+produced nothing and you have one fewer left. The two lanes have no shared
+notion of a round, so this window is yours to respect.
+
+The trigger→verdict window is a **no-push window**, and it is not a judgement
+call. Run the guard before every `git push`, in every phase:
+
+```bash
+python3 .github/scripts/sdk_resolve_push_guard.py --pr "$PR_NUMBER" --wait
+git push
+```
+
+`--wait` blocks (printing a heartbeat) until the in-flight review answers, then
+exits 0. "Answers" means the same thing it means in 3b — the reviewer's
+`ANSWERS_TRIGGER` echo of *your* trigger, not merely a verdict with a later
+timestamp. Exit **10** means it gave up: either the trigger has gone 40 min
+unanswered (reviewer sandbox died) or the 30-min wait budget elapsed. On exit 10
+do **not** push — carry the change into the next round and push it once the
+verdict has been consumed. Never `git push` without the guard in front of it,
+and never route around a hold by amending or force-pushing.
+
+### 2. One push per round
+
+Batch the round's work — CI fixes *and* review-finding fixes — into a single
+push, then re-trigger. Every push fires `reset-on-push` (strips the
+`sdk-review-*` labels, resets the `sdk-review` status) and restarts CI, so two
+pushes per round buys two CI waves and two label resets for one review.
+
+The corollary binds Phase 1 and Phase 3e: **finish the head before you trigger
+on it.** If you already know CI on the current HEAD needs a fix you can make,
+make it and push it *before* posting `@sdk-review` — not after the verdict comes
+back. A review triggered on a head you are about to change is a review you have
+chosen to throw away, and it takes an earned approval with it. (Guardrail 4 is
+unchanged: red CI you *cannot* fix never blocks the review — trigger anyway.)
+
+### 3. Mechanics
+
+Conventional Commits. Commit specific files; never `git add -A`, `--amend`,
+`--no-verify`, or force-push. Never touch `CHANGELOG.md`. No Co-Authored-By.
+
+---
+
 ## Phase 0: Preflight
 
 ```bash
@@ -43,8 +95,9 @@ then:
   the diff) → do NOT touch; note it and move on.
 
 If you changed files: `uv run pre-commit run --files <changed>`, run the relevant
-tests, then commit + push (see Commit rules). Re-watch and repeat. Cap: **5 fix
-attempts**.
+tests, then commit + push (see **Commit + push rules** — the push guard applies
+here too, even though no review has been triggered yet: a *human* may have tagged
+`@sdk-review` before you started). Re-watch and repeat. Cap: **5 fix attempts**.
 
 **Best-effort, NON-blocking — never skip the review over red CI.** This phase
 is a quick head start on the obvious failures, not a gate. If CI is still red
@@ -64,7 +117,8 @@ Fetch unresolved, non-outdated review threads whose first comment author login
 contains `copilot` (GraphQL — see the `automate-pr` skill for the exact query).
 For each: read the code, **fix** or **dismiss as false-positive with a
 rationale**, always reply on the thread, then resolve the thread via
-`resolveReviewThread`. Push any fixes. Cap: **3 rounds**, then move on.
+`resolveReviewThread`. Push any fixes (through the guard — see **Commit + push
+rules**). Cap: **3 rounds**, then move on.
 
 Print: `[Phase 2 complete] copilot=<N fixed>/<M dismissed>`
 
@@ -75,6 +129,12 @@ Print: `[Phase 2 complete] copilot=<N fixed>/<M dismissed>`
 Repeat up to `MAX_ROUNDS`:
 
 ### 3a. Trigger the reviewer (its own sandbox)
+
+**Before you post the trigger:** the HEAD you trigger on is the HEAD you are
+committing to leave standing until the verdict lands. Land any CI fix you
+already know you are going to make *first* (**Commit + push rules** §2) — from
+the moment this comment posts until 3c consumes the reply, you must not push.
+
 ```bash
 TRIGGER_URL=$(gh pr comment "$PR_NUMBER" --body "@sdk-review") || TRIGGER_URL=""
 # Validate the comment actually landed — a swallowed gh failure here would make
@@ -109,15 +169,32 @@ REPLY=""
 deadline=$(( $(date +%s) + 2400 ))
 while [ "$(date +%s)" -lt "$deadline" ]; do
   REPLY=$(gh pr view "$PR_NUMBER" --json comments --jq \
-    "[.comments[] | select(.createdAt > \"$TRIGGER_TIME\")
+    "[.comments[]
        | select(.author.login | test(\"mothership\"))
-       | select(.body | contains(\"<!-- SDK_REVIEW -->\"))] | last | .url // empty")
+       | select(.body | contains(\"<!-- SDK_REVIEW -->\"))
+       | select(
+           (.body | contains(\"<!-- ANSWERS_TRIGGER: $TRIGGER_ID -->\"))
+           or ((.body | test(\"<!-- ANSWERS_TRIGGER: [0-9]+ -->\") | not)
+               and (.createdAt > \"$TRIGGER_TIME\"))
+         )] | last | .url // empty")
   [ -n "$REPLY" ] && break
   echo "[3b] waiting for @sdk-review reply … $(date -u +%H:%M:%S)"
   sleep 30
 done
 [ -z "$REPLY" ] && echo "[3b] no reply after 40 min — stopped_reason=review-timeout"
 ```
+
+**Why the filter is not just `createdAt > TRIGGER_TIME`.** Two reviews can be
+outstanding on one PR at once — the reviewer's sandbox runs up to 2h while this
+wait is 40 min, and a human can tag `@sdk-review` mid-review. An earlier round's
+verdict then lands *after* your trigger, and a timestamp-only filter latches it:
+you act on a verdict computed for a HEAD that is no longer current, and the
+review actually running has its verdict stranded. So match on the reviewer's
+`<!-- ANSWERS_TRIGGER: <comment id> -->` echo of the trigger it answers
+(`.mothership/pr-review/ORCHESTRATION.md` §3e), and fall back to the timestamp
+only for a verdict that carries no such stamp — a `workflow_dispatch` review, or
+one predating the marker. `sdk_resolve_push_guard.py` applies the same rule; keep
+the two in step.
 
 Take the **last** matching comment (never a CI comment, a human comment, the
 `@sdk-review` trigger you just posted, or an older review). If the wait elapses
@@ -199,13 +276,19 @@ For each bullet, incl. every nit:
 
 ### 3e. Commit, push, re-green CI (best-effort)
 `uv run pre-commit run --files <changed>` → relevant tests → commit specific
-files → push. The push resets the reviewer labels/status (expected). Then make a
-best-effort pass at greening CI on the new HEAD before re-triggering, so you
-don't waste a round on a failure you just introduced — but if CI stays red for a
-reason you can't fix, still re-trigger the review (same rule as Phase 1: red CI
-never blocks the review). Looping back to 3a posts a fresh `@sdk-review` comment
-on the PR — that comment is the visible "re-running the review now" signal the
-3c′ acknowledgement promised, so the handoff is observable end to end.
+files → **run the push guard** → push. You are past 3c here, so the guard
+normally clears immediately; run it anyway — a human may have tagged
+`@sdk-review` while you were fixing, and that review is as real as yours.
+
+The push resets the reviewer labels/status (expected). Then make a best-effort
+pass at greening CI on the new HEAD **before** re-triggering, so you don't waste
+a round on a failure you just introduced, and fold any fix it needs into this
+same round rather than pushing again after the next verdict (**Commit + push
+rules** §2) — but if CI stays red for a reason you can't fix, still re-trigger
+the review (same rule as Phase 1: red CI never blocks the review). Looping back
+to 3a posts a fresh `@sdk-review` comment on the PR — that comment is the visible
+"re-running the review now" signal the 3c′ acknowledgement promised, so the
+handoff is observable end to end.
 
 ### 3f. Repeat → 3a.
 
@@ -267,6 +350,9 @@ Print: `[Phase 4 complete] merge_ready=<yes|no>`
   `READY_TO_MERGE`, then hand back to a human.
 - **The reviewer stays read-only.** You are the only writer; it runs in its own
   sandbox and you consume its comment output.
+- **Never push under a review in flight.** The trigger→verdict window is a
+  no-push window; `sdk_resolve_push_guard.py --wait` gates every push. A push
+  inside it discards the verdict as stale and burns the round.
 - **A round isn't done until the review answers.** Posting `@sdk-review` only
   triggers the reviewer's separate sandbox — block for its reply (Phase 3b)
   before ending the run or emitting the summary. Never exit the same turn you

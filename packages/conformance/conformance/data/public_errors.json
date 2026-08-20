@@ -1,0 +1,26 @@
+{
+  "public_error_names": [
+    "AlreadyExistsError",
+    "AppError",
+    "AppPermissionDeniedError",
+    "AppTimeoutError",
+    "AuthError",
+    "CancelledError",
+    "ColdStartRaceError",
+    "DaprSidecarUnreachableError",
+    "DataIntegrityError",
+    "DependencyUnavailableError",
+    "DiskFullError",
+    "InternalError",
+    "InvalidInputError",
+    "NotFoundError",
+    "ObjectStoreDownloadError",
+    "ObjectStoreReadError",
+    "PreconditionError",
+    "RateLimitedError",
+    "ResourceExhaustedError",
+    "SourceUnavailableError",
+    "TaskStalledError",
+    "UnimplementedError"
+  ]
+}

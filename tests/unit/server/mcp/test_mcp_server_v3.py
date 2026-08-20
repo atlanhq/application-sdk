@@ -1,161 +1,157 @@
 """Unit tests for MCPServer.register_tools_from_registry() (v3 discovery path).
 
-Verifies that the v3 task-registry-based tool discovery works the same way as
-the v2 ``register_tools()`` path: visible ``@mcp_tool``-decorated ``@task``
-methods are registered, hidden ones are skipped, and plain tasks (no decorator)
-are ignored.
+These tests run against **real fastmcp** — there is no FastMCP mock in this
+module. A real ``App`` subclass registers itself with the real ``AppRegistry`` /
+``TaskRegistry``, and the server is driven through fastmcp's in-memory client
+transport (``fastmcp.Client(server)``), so the advertised JSON schema is the one
+fastmcp actually generates and every call goes through fastmcp's own argument
+validation and result serialization. Nothing external is involved: no port, no
+subprocess, no Temporal server.
+
+Why no mock: mocking FastMCP is what let three breaks ship. A ``MagicMock``
+accepts any constructor kwarg (so the fastmcp 2.x ``on_duplicate_tools=``
+survived the 3.x bump), auto-creates any method (so the removed ``get_tools()``
+still "worked"), and never builds a tool schema (so ``self`` leaking into every
+tool's schema was invisible). Each of those is asserted here behaviourally.
 
 Test Case Summary:
-+--------------------------------------+----------------------------------------------+
-| Test                                 | Purpose                                      |
-+--------------------------------------+----------------------------------------------+
-| test_visible_tool_registered         | @mcp_tool(visible=True) task registers       |
-| test_hidden_tool_skipped             | @mcp_tool(visible=False) task is skipped     |
-| test_plain_task_skipped              | task without @mcp_tool is skipped            |
-| test_multiple_tools                  | multiple decorated tasks all register        |
-| test_empty_registry                  | app with no tasks registers nothing          |
-| test_custom_name_and_description     | name/description overrides pass through      |
-+--------------------------------------+----------------------------------------------+
++-------------------------------------------+-------------------------------------------+
+| Test                                      | Purpose                                   |
++-------------------------------------------+-------------------------------------------+
+| test_only_visible_decorated_tasks_exposed | visible @mcp_tool tasks are the only      |
+|                                           | tools: hidden, plain and inherited        |
+|                                           | @task methods are absent                  |
+| test_schema_omits_self                    | tool schema carries `input` only — `self` |
+|                                           | must not leak (real fastmcp schema gen)   |
+| test_name_and_description_from_decorator  | decorator name/description reach the wire |
+| test_call_returns_task_result             | a real MCP call executes the task body    |
+| test_each_call_binds_fresh_app_instance   | per-call App instantiation, mirroring the |
+|                                           | Temporal activity path                    |
+| test_duplicate_tool_name_is_an_error      | on_duplicate="error" is really wired      |
+|                                           | (fastmcp's default only warns)            |
+| test_http_app_exposes_mcp_route           | http_app() builds on the pinned fastmcp / |
+|                                           | starlette pair and serves /mcp            |
+| test_app_with_no_tasks_registers_nothing  | unknown app registers no tools            |
++-------------------------------------------+-------------------------------------------+
 """
 
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+import json
 
 import pytest
+from fastmcp import Client
 
 from application_sdk.server.mcp import MCPServer
-from application_sdk.server.mcp.decorators import mcp_tool
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_task_meta(func: Any, name: str = "") -> MagicMock:
-    """Return a minimal TaskMetadata-like mock."""
-    meta = MagicMock()
-    meta.name = name or func.__name__
-    meta.func = func
-    return meta
-
-
-# ---------------------------------------------------------------------------
-# Sample callables decorated with @mcp_tool
-# ---------------------------------------------------------------------------
-
-
-@mcp_tool(name="fetch_schemas", description="Fetch all schemas")
-async def _fetch_schemas(self: Any, input: Any) -> Any:
-    """Fetch schemas task."""
-    return None
-
-
-@mcp_tool(name="hidden_op", description="Hidden op", visible=False)
-async def _hidden_op(self: Any, input: Any) -> Any:
-    """Hidden task."""
-    return None
-
-
-async def _plain_task(self: Any, input: Any) -> Any:
-    """Task with no @mcp_tool decorator."""
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Fixture
-# ---------------------------------------------------------------------------
+from tests.unit.server.mcp.conftest import APP_NAME, ProbeApp
 
 
 @pytest.fixture
-def mcp_server() -> MCPServer:
-    with patch("application_sdk.server.mcp.server.FastMCP") as mock_fastmcp:
-        mock_inner = MagicMock()
-        mock_inner.get_tools = AsyncMock(return_value={})
-        mock_fastmcp.return_value = mock_inner
-        return MCPServer(application_name="test-app")
+async def mcp_server(probe: ProbeApp) -> MCPServer:
+    """A real MCPServer with the probe app's tools registered."""
+    server = MCPServer(application_name=APP_NAME)
+    await server.register_tools_from_registry(APP_NAME)
+    return server
 
 
 # ---------------------------------------------------------------------------
-# Tests
+# Discovery — what the client actually sees
 # ---------------------------------------------------------------------------
 
 
-class TestRegisterToolsFromRegistry:
-    async def test_visible_tool_registered(self, mcp_server: MCPServer) -> None:
-        tasks = [_make_task_meta(_fetch_schemas)]
+class TestToolDiscovery:
+    async def test_only_visible_decorated_tasks_exposed(
+        self, mcp_server: MCPServer
+    ) -> None:
+        """visible=True @mcp_tool tasks, and nothing else.
 
-        with patch(
-            "application_sdk.app.registry.TaskRegistry.get_instance"
-        ) as mock_reg:
-            mock_reg.return_value.get_tasks_for_app.return_value = tasks
-            await mcp_server.register_tools_from_registry("test-app")
+        The probe app also carries a hidden tool, an undecorated @task, and the
+        @task methods it inherits from App (cleanup_files, upload, ...) — none
+        of which may be advertised.
+        """
+        async with Client(mcp_server.server) as client:
+            names = {tool.name for tool in await client.list_tools()}
 
-        mcp_server.server.tool.assert_called_once()  # type: ignore[union-attr]
-        call_kwargs = mcp_server.server.tool.call_args.kwargs  # type: ignore[union-attr]
-        assert call_kwargs["name"] == "fetch_schemas"
-        assert call_kwargs["description"] == "Fetch all schemas"
+        assert names == {"fetch_schemas"}
 
-    async def test_hidden_tool_skipped(self, mcp_server: MCPServer) -> None:
-        tasks = [_make_task_meta(_hidden_op)]
+    async def test_schema_omits_self(self, mcp_server: MCPServer) -> None:
+        """The tool schema must carry the task's Input and nothing else.
 
-        with patch(
-            "application_sdk.app.registry.TaskRegistry.get_instance"
-        ) as mock_reg:
-            mock_reg.return_value.get_tasks_for_app.return_value = tasks
-            await mcp_server.register_tools_from_registry("test-app")
+        TaskMetadata.func is the unbound method; handing it to FastMCP directly
+        put ``self`` in the schema as a required argument and every call died
+        with "Missing required argument: self". This asserts against the schema
+        fastmcp really generates, which is what makes it a regression test.
+        """
+        async with Client(mcp_server.server) as client:
+            tool = next(
+                t for t in await client.list_tools() if t.name == "fetch_schemas"
+            )
 
-        mcp_server.server.tool.assert_not_called()  # type: ignore[union-attr]
+        assert set(tool.inputSchema["properties"]) == {"input"}
+        assert tool.inputSchema["required"] == ["input"]
+        assert "self" not in json.dumps(tool.inputSchema)
 
-    async def test_plain_task_skipped(self, mcp_server: MCPServer) -> None:
-        tasks = [_make_task_meta(_plain_task)]
+    async def test_name_and_description_from_decorator(
+        self, mcp_server: MCPServer
+    ) -> None:
+        async with Client(mcp_server.server) as client:
+            tool = next(
+                t for t in await client.list_tools() if t.name == "fetch_schemas"
+            )
 
-        with patch(
-            "application_sdk.app.registry.TaskRegistry.get_instance"
-        ) as mock_reg:
-            mock_reg.return_value.get_tasks_for_app.return_value = tasks
-            await mcp_server.register_tools_from_registry("test-app")
+        assert tool.description == "Fetch all schemas"
 
-        mcp_server.server.tool.assert_not_called()  # type: ignore[union-attr]
 
-    async def test_multiple_tools(self, mcp_server: MCPServer) -> None:
-        tasks = [
-            _make_task_meta(_fetch_schemas),
-            _make_task_meta(_hidden_op),
-            _make_task_meta(_plain_task),
-        ]
+# ---------------------------------------------------------------------------
+# Execution — a real MCP call, end to end in-process
+# ---------------------------------------------------------------------------
 
-        with patch(
-            "application_sdk.app.registry.TaskRegistry.get_instance"
-        ) as mock_reg:
-            mock_reg.return_value.get_tasks_for_app.return_value = tasks
-            await mcp_server.register_tools_from_registry("test-app")
 
-        # Only _fetch_schemas is visible
-        assert mcp_server.server.tool.call_count == 1  # type: ignore[union-attr]
+class TestToolExecution:
+    async def test_call_returns_task_result(self, mcp_server: MCPServer) -> None:
+        async with Client(mcp_server.server) as client:
+            result = await client.call_tool("fetch_schemas", {"input": {"value": "a"}})
 
-    async def test_empty_registry(self, mcp_server: MCPServer) -> None:
-        with patch(
-            "application_sdk.app.registry.TaskRegistry.get_instance"
-        ) as mock_reg:
-            mock_reg.return_value.get_tasks_for_app.return_value = []
-            await mcp_server.register_tools_from_registry("test-app")
+        assert result.structured_content is not None
+        assert result.structured_content["result"] == "schemas:a"
 
-        mcp_server.server.tool.assert_not_called()  # type: ignore[union-attr]
-        mcp_server.server.get_tools.assert_called_once()  # type: ignore[union-attr]
+    async def test_each_call_binds_fresh_app_instance(
+        self, mcp_server: MCPServer, probe: ProbeApp
+    ) -> None:
+        """Each call runs against its own App instance, as on the Temporal path."""
+        async with Client(mcp_server.server) as client:
+            await client.call_tool("fetch_schemas", {"input": {"value": "a"}})
+            await client.call_tool("fetch_schemas", {"input": {"value": "b"}})
 
-    async def test_custom_name_and_description(self, mcp_server: MCPServer) -> None:
-        @mcp_tool(name="my_custom_tool", description="My custom description")
-        async def _custom(self: Any, input: Any) -> Any:
-            return None
+        assert len(probe.instances) == 2
+        assert all(isinstance(i, probe.app_cls) for i in probe.instances)
+        assert probe.instances[0] is not probe.instances[1]
 
-        tasks = [_make_task_meta(_custom)]
 
-        with patch(
-            "application_sdk.app.registry.TaskRegistry.get_instance"
-        ) as mock_reg:
-            mock_reg.return_value.get_tasks_for_app.return_value = tasks
-            await mcp_server.register_tools_from_registry("test-app")
+# ---------------------------------------------------------------------------
+# fastmcp wiring — the API surface the mocks used to hide
+# ---------------------------------------------------------------------------
 
-        call_kwargs = mcp_server.server.tool.call_args.kwargs  # type: ignore[union-attr]
-        assert call_kwargs["name"] == "my_custom_tool"
-        assert call_kwargs["description"] == "My custom description"
+
+class TestFastMCPWiring:
+    async def test_duplicate_tool_name_is_an_error(self, mcp_server: MCPServer) -> None:
+        """``on_duplicate="error"`` has to reach the real FastMCP constructor.
+
+        fastmcp's default is to warn and replace, so a second registration
+        raising is the observable proof the kwarg landed — the fastmcp 2.x
+        spelling (``on_duplicate_tools=``) is a TypeError on 3.x and never gets
+        this far.
+        """
+        with pytest.raises(ValueError, match="already exists"):
+            await mcp_server.register_tools_from_registry(APP_NAME)
+
+    async def test_http_app_exposes_mcp_route(self, mcp_server: MCPServer) -> None:
+        """http_app() must build against the pinned fastmcp/starlette pair."""
+        http_app = await mcp_server.get_http_app()
+
+        assert "/mcp" in {getattr(route, "path", "") for route in http_app.routes}
+
+    async def test_app_with_no_tasks_registers_nothing(self) -> None:
+        server = MCPServer(application_name="unregistered-app")
+
+        await server.register_tools_from_registry("unregistered-app")
+
+        assert await server.server.list_tools() == []

@@ -14,12 +14,14 @@ from unittest.mock import patch
 import pytest
 
 from application_sdk.testing.e2e._errors import (
+    AppNotReadyError,
     AtlanAEWorkflowAlreadyActiveError,
     AtlanApiHttpError,
     AtlanApiTimeoutError,
     DAGProgressStalledError,
     NoWorkerOnTaskQueueError,
 )
+from application_sdk.testing.e2e._poll import fake_clock
 from application_sdk.testing.e2e.client import (
     _MAX_RETRY_AFTER_SECONDS,
     _REQUEST_MAX_ATTEMPTS,
@@ -30,6 +32,7 @@ from application_sdk.testing.e2e.client import (
     DAGRunResult,
     DAGRunStatus,
     _is_already_active_run,
+    _is_app_not_ready,
     _is_credential_name_conflict,
     _requested_retry_after,
     _retry_gap,
@@ -100,7 +103,7 @@ class TestPollNativeStatusStallGuard:
         stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
 
         with patch.object(client, "get_native_status", return_value=stuck):
-            with patch("time.sleep"):
+            with fake_clock():
                 with pytest.raises(NoWorkerOnTaskQueueError) as exc:
                     client.poll_native_status(
                         _RUN_ID,
@@ -121,7 +124,7 @@ class TestPollNativeStatusStallGuard:
         stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.SCHEDULED)
 
         with patch.object(client, "get_native_status", return_value=stuck):
-            with patch("time.sleep"):
+            with fake_clock():
                 with pytest.raises(NoWorkerOnTaskQueueError):
                     client.poll_native_status(
                         _RUN_ID,
@@ -138,7 +141,7 @@ class TestPollNativeStatusStallGuard:
         stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
 
         with patch.object(client, "get_native_status", return_value=stuck):
-            with patch("time.sleep"):
+            with fake_clock():
                 with pytest.raises(NoWorkerOnTaskQueueError) as exc:
                     client.poll_native_status(
                         _RUN_ID,
@@ -159,7 +162,7 @@ class TestPollNativeStatusStallGuard:
         side_effects = [running] * 6 + [done]
 
         with patch.object(client, "get_native_status", side_effect=side_effects):
-            with patch("time.sleep"):
+            with fake_clock():
                 result = client.poll_native_status(
                     _RUN_ID,
                     interval_seconds=10,
@@ -176,7 +179,7 @@ class TestPollNativeStatusStallGuard:
         stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
 
         with patch.object(client, "get_native_status", return_value=stuck):
-            with patch("time.sleep"):
+            with fake_clock():
                 result = client.poll_native_status(
                     _RUN_ID,
                     interval_seconds=10,
@@ -192,7 +195,7 @@ class TestPollNativeStatusStallGuard:
         stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
 
         with patch.object(client, "get_native_status", return_value=stuck):
-            with patch("time.sleep"):
+            with fake_clock():
                 result = client.poll_native_status(
                     _RUN_ID,
                     interval_seconds=10,
@@ -208,7 +211,7 @@ class TestPollNativeStatusStallGuard:
         stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
 
         with patch.object(client, "get_native_status", return_value=stuck):
-            with patch("time.sleep"):
+            with fake_clock():
                 result = client.poll_native_status(
                     _RUN_ID,
                     interval_seconds=10,
@@ -231,7 +234,7 @@ class TestPollNativeStatusProgressWatchdog:
         stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
 
         with patch.object(client, "get_native_status", return_value=stuck):
-            with patch("time.sleep"):
+            with fake_clock():
                 with pytest.raises(DAGProgressStalledError) as exc:
                     client.poll_native_status(
                         _RUN_ID,
@@ -250,7 +253,7 @@ class TestPollNativeStatusProgressWatchdog:
         stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
 
         with patch.object(client, "get_native_status", return_value=stuck):
-            with patch("time.sleep"):
+            with fake_clock():
                 result = client.poll_native_status(
                     _RUN_ID,
                     interval_seconds=10,
@@ -270,7 +273,7 @@ class TestPollNativeStatusProgressWatchdog:
         with patch.object(
             client, "get_native_status", side_effect=[running, running, done]
         ):
-            with patch("time.sleep"):
+            with fake_clock():
                 result = client.poll_native_status(
                     _RUN_ID,
                     interval_seconds=10,
@@ -304,7 +307,7 @@ class TestSkippedStatus:
         skipped = _result(DAGRunStatus.SKIPPED, DAGNodeStatus.PENDING)
 
         with patch.object(client, "get_native_status", return_value=skipped):
-            with patch("time.sleep"):
+            with fake_clock():
                 result = client.poll_native_status(
                     _RUN_ID,
                     interval_seconds=10,
@@ -326,7 +329,7 @@ class TestPollNativeStatusTransientHandling:
         side_effects = [err, err, ok]
 
         with patch.object(client, "get_native_status", side_effect=side_effects):
-            with patch("time.sleep"):
+            with fake_clock():
                 result = client.poll_native_status(
                     _RUN_ID,
                     interval_seconds=1,
@@ -343,7 +346,7 @@ class TestPollNativeStatusTransientHandling:
         side_effects = [_http_error()] * max_failures
 
         with patch.object(client, "get_native_status", side_effect=side_effects):
-            with patch("time.sleep"):
+            with fake_clock():
                 with pytest.raises(AtlanApiHttpError):
                     client.poll_native_status(
                         _RUN_ID,
@@ -367,7 +370,7 @@ class TestPollNativeStatusTransientHandling:
         side_effects = [err, err, running, err, err, ok]
 
         with patch.object(client, "get_native_status", side_effect=side_effects):
-            with patch("time.sleep"):
+            with fake_clock():
                 result = client.poll_native_status(
                     _RUN_ID,
                     interval_seconds=1,
@@ -385,7 +388,7 @@ class TestPollNativeStatusTransientHandling:
             patch.object(
                 client, "get_native_status", side_effect=ValueError("unexpected")
             ),
-            patch("time.sleep"),
+            fake_clock(),
             pytest.raises(ValueError, match="unexpected"),
         ):
             client.poll_native_status(
@@ -704,7 +707,7 @@ class TestPollNativeStatusHonoursRetryAfter:
             patch.object(
                 client, "get_native_status", side_effect=[err, _succeeded_result()]
             ),
-            patch("time.sleep") as mock_sleep,
+            fake_clock() as clock,
         ):
             result = client.poll_native_status(
                 _RUN_ID,
@@ -713,7 +716,7 @@ class TestPollNativeStatusHonoursRetryAfter:
                 max_transient_failures=5,
             )
         assert result.status == DAGRunStatus.SUCCEEDED
-        mock_sleep.assert_called_once_with(120)
+        assert clock.slept == [120]
 
     def test_hintless_error_keeps_the_poll_cadence(self):
         client = _make_client()
@@ -723,7 +726,7 @@ class TestPollNativeStatusHonoursRetryAfter:
                 "get_native_status",
                 side_effect=[_http_error(), _succeeded_result()],
             ),
-            patch("time.sleep") as mock_sleep,
+            fake_clock() as clock,
         ):
             client.poll_native_status(
                 _RUN_ID,
@@ -731,7 +734,7 @@ class TestPollNativeStatusHonoursRetryAfter:
                 timeout_seconds=600,
                 max_transient_failures=5,
             )
-        mock_sleep.assert_called_once_with(10)
+        assert clock.slept == [10]
 
     def test_long_backoff_counts_against_the_poll_timeout(self):
         """Honouring a long wait must not let the loop outlive timeout_seconds."""
@@ -743,7 +746,7 @@ class TestPollNativeStatusHonoursRetryAfter:
         )
         with (
             patch.object(client, "get_native_status", side_effect=[err] * 10),
-            patch("time.sleep") as mock_sleep,
+            fake_clock() as clock,
             pytest.raises(AtlanApiTimeoutError),
         ):
             client.poll_native_status(
@@ -755,7 +758,7 @@ class TestPollNativeStatusHonoursRetryAfter:
         # Each honoured sleep is clamped to the remaining timeout budget:
         # 120s requested against a 200s deadline sleeps 120s, then only 80s,
         # so the loop exits exactly at the deadline rather than overshooting.
-        assert [call.args[0] for call in mock_sleep.call_args_list] == [120, 80]
+        assert clock.slept == [120, 80]
 
     def test_honoured_wait_is_clamped_to_the_remaining_timeout(self):
         """timeout_seconds < retry_after: the first sleep stops at the deadline."""
@@ -767,7 +770,7 @@ class TestPollNativeStatusHonoursRetryAfter:
         )
         with (
             patch.object(client, "get_native_status", side_effect=[err] * 10),
-            patch("time.sleep") as mock_sleep,
+            fake_clock() as clock,
             pytest.raises(AtlanApiTimeoutError),
         ):
             client.poll_native_status(
@@ -778,7 +781,7 @@ class TestPollNativeStatusHonoursRetryAfter:
             )
         # 50s remain and the origin asked for 120s: one clamped 50s sleep
         # reaches the deadline exactly; the loop never sleeps past it.
-        assert [call.args[0] for call in mock_sleep.call_args_list] == [50]
+        assert clock.slept == [50]
 
     def test_honoured_backoff_is_budgeted_across_the_poll_loop(self):
         """A tenant repeating retry_after: 120 exhausts the shared budget, then
@@ -792,7 +795,7 @@ class TestPollNativeStatusHonoursRetryAfter:
         )
         with (
             patch.object(client, "get_native_status", side_effect=[err] * 10),
-            patch("time.sleep") as mock_sleep,
+            fake_clock() as clock,
             pytest.raises(AtlanApiHttpError),
         ):
             client.poll_native_status(
@@ -807,7 +810,7 @@ class TestPollNativeStatusHonoursRetryAfter:
         # 110 + 110 + 80 = 300), then the fixed 10s cadence once the budget
         # is spent — no unbounded 120s waits. The fifth error hits the
         # transient-failure cap and re-raises.
-        assert [call.args[0] for call in mock_sleep.call_args_list] == [
+        assert clock.slept == [
             120,
             120,
             80,
@@ -992,6 +995,109 @@ class TestSubmitWorkflowCredentialRetry:
             with pytest.raises(AtlanApiHttpError):
                 client.submit_workflow(
                     self._payload_with_cred(), retries=1, retry_sleep_seconds=0
+                )
+
+
+# Heracles echoes a refused dial to the tenant app pod back as an HTTP 500
+# carrying the Go net error verbatim (FND-402).
+_REFUSED_BODY = {
+    "error": "dial tcp 10.0.0.5:8000: connect: connection refused",
+}
+
+
+class TestAppNotReadyDetection:
+    """_is_app_not_ready: the tenant-app cold-start shape, and only that shape."""
+
+    def test_refused_dial_detected_in_dict_and_str_body(self):
+        assert _is_app_not_ready(500, _REFUSED_BODY) is True
+        assert (
+            _is_app_not_ready(
+                502, "… dial tcp 10.0.0.5:8000: connect: Connection Refused"
+            )
+            is True
+        )
+
+    def test_bare_connection_refused_substring_is_not_app_not_ready(self):
+        # The match requires the refused-dial-to-:8000 sequence, not the bare
+        # substring: a genuine terminal 5xx whose body merely mentions a refused
+        # connection (e.g. an upstream DB dial surfaced through Heracles) must
+        # not be mis-named AppNotReadyError.
+        assert _is_app_not_ready(500, "… connect: Connection Refused") is False
+        assert (
+            _is_app_not_ready(
+                500, {"err": "upstream db dial: connection refused on :5432"}
+            )
+            is False
+        )
+
+    def test_other_submit_failures_are_not_app_not_ready(self):
+        # A genuine AE 5xx, a 4xx, the already-active conflict, and any 2xx must
+        # not read as a cold start — each has its own terminal handling.
+        assert _is_app_not_ready(500, {"err": "internal error"}) is False
+        assert _is_app_not_ready(400, {"message": "bad payload"}) is False
+        assert _is_app_not_ready(500, _MASKED_409_BODY) is False
+        assert _is_app_not_ready(200, {"run_id": "r"}) is False
+
+    def test_4xx_carrying_the_markers_is_not_app_not_ready(self):
+        # The status gate is 5xx-only, so a request-side rejection AE decided
+        # without dialling the pod stays a terminal AtlanApiHttpError even when
+        # its body happens to carry all three markers (e.g. an echoed-back
+        # payload). Heracles reports the real refused dial as a 500.
+        assert _is_app_not_ready(400, _REFUSED_BODY) is False
+        assert _is_app_not_ready(404, _REFUSED_BODY) is False
+        assert _is_app_not_ready(499, _REFUSED_BODY) is False
+        assert _is_app_not_ready(500, _REFUSED_BODY) is True
+
+
+class TestSubmitWorkflowAppColdStart:
+    """A cold-starting tenant app pod: retried by the existing loop, then named."""
+
+    def test_refused_dial_is_retried_by_the_existing_5xx_retry(self):
+        """No second loop needed — a refused dial IS a retryable 5xx."""
+        client = _make_client()
+        refused = (500, _REFUSED_BODY)
+        with (
+            patch.object(
+                client,
+                "_request",
+                side_effect=[refused, refused, (200, {"data": {"run_id": "run-warm"}})],
+            ),
+            patch("time.sleep"),
+        ):
+            run_id = client.submit_workflow(
+                {"metadata": {"name": "wf"}}, retries=60, retry_sleep_seconds=0
+            )
+        assert run_id == "run-warm"
+
+    def test_budget_exhausted_raises_app_not_ready_with_typed_fields(self):
+        """Terminal cold start is named, not surfaced as an opaque 500."""
+        client = _make_client()
+        refused = (500, _REFUSED_BODY)
+        with (
+            patch.object(client, "_request", side_effect=[refused] * 3),
+            patch("time.sleep"),
+        ):
+            with pytest.raises(AppNotReadyError) as excinfo:
+                client.submit_workflow(
+                    {"metadata": {"name": "wf"}}, retries=2, retry_sleep_seconds=0
+                )
+        err = excinfo.value
+        # attempts/elapsed_seconds are queryable fields, not just prose — same
+        # shape as DaprSidecarUnreachableError.
+        assert err.attempts == 3
+        assert err.elapsed_seconds is not None
+        assert "never accepted connections on :8000" in err.message
+
+    def test_genuine_5xx_still_raises_atlan_api_http_error(self):
+        """The cold-start naming never swallows a real AE failure."""
+        client = _make_client()
+        with (
+            patch.object(client, "_request", side_effect=[(500, {"err": "boom"})] * 2),
+            patch("time.sleep"),
+        ):
+            with pytest.raises(AtlanApiHttpError):
+                client.submit_workflow(
+                    {"metadata": {"name": "wf"}}, retries=1, retry_sleep_seconds=0
                 )
 
 

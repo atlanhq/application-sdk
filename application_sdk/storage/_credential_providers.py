@@ -7,12 +7,47 @@ are always available regardless of which extras a connector installs.
 
 from __future__ import annotations
 
-from typing import Any
+from datetime import timezone
+from typing import TYPE_CHECKING, Any
 
 import boto3
 from azure.identity import CertificateCredential
 from obstore.auth.azure import AzureCredentialProvider
 from obstore.auth.boto3 import StsCredentialProvider
+
+if TYPE_CHECKING:
+    from obstore.store import S3Credential
+
+
+class _UtcExpiryStsCredentialProvider(StsCredentialProvider):
+    """``StsCredentialProvider`` that normalises the STS expiry to stdlib UTC.
+
+    obstore's Rust binding requires ``expires_at`` to carry exactly
+    ``datetime.timezone.utc``. botocore deserialises STS timestamps with
+    dateutil, so a live AssumeRole response carries ``dateutil.tz.tzutc()``.
+    obstore's Python-side validation only checks ``tzinfo is not None``, so the
+    value passes there and is rejected at the Rust boundary::
+
+        UnauthenticatedError: The operation lacked valid authentication
+        credentials for path External AWS credential provider:
+        ValueError: expected datetime.timezone.utc
+
+    The failure is deterministic, so the retry budget is exhausted without
+    progress. Only the AssumeRole path is affected — obstore's
+    ``Boto3CredentialProvider`` builds its own expiry with
+    ``datetime.now(timezone.utc)``.
+
+    ``astimezone`` preserves the instant, so the credential's real lifetime is
+    unchanged; only the ``tzinfo`` representation is converted.
+    """
+
+    def __call__(self) -> S3Credential:
+        """Fetch credentials, with ``expires_at`` converted to stdlib UTC."""
+        credential = super().__call__()
+        expires_at = credential.get("expires_at")
+        if expires_at is not None:
+            credential["expires_at"] = expires_at.astimezone(timezone.utc)
+        return credential
 
 
 def make_s3_assume_role_provider(
@@ -54,7 +89,7 @@ def make_s3_assume_role_provider(
     if external_id:
         sts_kwargs["ExternalId"] = external_id
 
-    return StsCredentialProvider(session, **sts_kwargs)
+    return _UtcExpiryStsCredentialProvider(session, **sts_kwargs)
 
 
 def make_azure_certificate_provider(

@@ -98,6 +98,38 @@ class AdminRoleNotResolvedError(PreconditionError):
 
 
 @dataclass(kw_only=True)
+class AppNotReadyError(PreconditionError):
+    """The tenant-installed app pod did not accept connections before AE submit.
+
+    ``prepare-tenant`` installs the app and LM reports the deployment
+    reconciled, but the pod can still be tens of seconds away from serving HTTP
+    on ``:8000`` when the leg reaches the AE submit. At submit, Heracles POSTs
+    the credential config to
+    ``http://<conn>.<conn>-app.svc.cluster.local:8000/workflows/v1/config/...``
+    against that pod; a not-yet-serving pod surfaces as
+    ``AE submit failed: HTTP 500 ... dial tcp :8000: connect: connection
+    refused``.
+
+    Raised by :meth:`AEWorkflowClient.submit_workflow` only when its retry
+    budget is exhausted *and* the last response still read as connection-
+    refused (:func:`_is_app_not_ready`) — i.e. the terminal form of the race,
+    so the failure names "app never became ready" instead of an opaque 500. A
+    race that resolves within the budget returns a run_id and never reaches
+    this type. This mirrors
+    :class:`~application_sdk.errors.leaves.DaprSidecarUnreachableError`, the
+    same "waited the whole cold-start budget, done waiting" signal for the Dapr
+    sidecar, and carries the same ``attempts`` / ``elapsed_seconds`` fields so
+    the budget that expired is a queryable field rather than only prose.
+    """
+
+    code: ClassVar[str] = "PRECONDITION_APP_NOT_READY"
+    expected_state: str | None = "tenant app pod serving HTTP on :8000"
+    actual_state: str | None = "refusing connections on :8000"
+    attempts: int | None = None
+    elapsed_seconds: float | None = None
+
+
+@dataclass(kw_only=True)
 class NoWorkerOnTaskQueueError(PreconditionError):
     """No worker started any DAG node within the stall-grace window.
 

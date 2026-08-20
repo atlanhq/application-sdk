@@ -612,6 +612,66 @@ def test_tests_yaml_drift_message_names_the_resync_flag(
     assert "delete" not in msg.lower()
 
 
+def test_tests_yaml_force_external_runtime_not_flagged(tmp_path: pathlib.Path) -> None:
+    """A forced external runtime is a recognised param, not drift (FND-604).
+
+    It has to be both: preserved by --resync *and* invisible to this checker.
+    Flagging it would tell an app whose main.py genuinely needs external daprd
+    that its own working config is non-conformant.
+    """
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "tests.yaml"
+    wf.write_text(render("tests.yaml", app_name="mysql", force_external_runtime="true"))
+    findings = scan_path(wf, tmp_path)
+    assert findings == [], [f.message for f in findings]
+
+
+def test_tests_yaml_explicit_secrets_mapping_not_flagged(
+    tmp_path: pathlib.Path,
+) -> None:
+    """An explicit ``secrets:`` mapping is a recognised param, not drift.
+
+    It is the norm across the migrated fleet, not an oddity: ``secrets: inherit``
+    can neither compose nor rename, so any connector with a real source system
+    has to map its credentials by name.
+    """
+    block = (
+        "    secrets:\n"
+        "      E2E_SOURCE_ENV_JSON: |\n"
+        '        {"E2E_WIDGET_HOST": ${{ toJSON(secrets.E2E_WIDGET_HOST) }}}'
+    )
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "tests.yaml"
+    wf.write_text(render("tests.yaml", app_name="mysql", secrets_block=block))
+    findings = scan_path(wf, tmp_path)
+    assert findings == [], [f.message for f in findings]
+
+
+def test_tests_yaml_unpreservable_declaration_explained_in_the_finding(
+    tmp_path: pathlib.Path,
+) -> None:
+    """When --resync will refuse, the finding that recommends it must say so.
+
+    Otherwise the message promises a re-render that then does not happen, and
+    the app owner has to run the command to find out why — the same
+    invisibility that let FND-604 recur.
+    """
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "tests.yaml"
+    wf.write_text(
+        render("tests.yaml", app_name="mysql")
+        + "\n  tests-passed:\n    runs-on: ubuntu-latest\n"
+    )
+    findings = scan_path(wf, tmp_path)
+    assert len(findings) == 1
+    msg = findings[0].message
+    assert "tests-passed" in msg
+    assert "REFUSES" in msg
+
+
 def test_tests_yaml_absent_message_does_not_name_the_resync_flag(
     tmp_path: pathlib.Path,
 ) -> None:

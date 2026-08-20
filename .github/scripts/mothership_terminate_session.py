@@ -20,10 +20,18 @@ nobody. Every branch is reported as an annotation instead.
 Branching logic lives here (a tested script) rather than inlined in the
 workflow YAML, per docs/standards/ci.md.
 
+A run can boot more than one sandbox: `sdk_review_dispatch.py` re-dispatches
+once on a different model when the first sandbox dies on a hard error, and each
+attempt gets its OWN session id (mothership reads a reused id as a follow-up and
+tries to resume the dead conversation). The workflow cannot know which attempt
+was live when the cancel landed, so this stops every id the dispatcher could
+have used — the ids are derived from the same helper, and an id that never
+existed comes back 404, which is already handled as "nothing to stop".
+
 Environment:
     MOTHERSHIP_URL   base URL, e.g. https://mothership.atlan.dev
     HARNESS_TOKEN    bearer token for the sandbox API
-    SESSION_ID       session to stop, from the workflow's `session` step
+    SESSION_ID       base session id, from the workflow's `session` step
 """
 
 from __future__ import annotations
@@ -32,7 +40,15 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Callable
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+from sdk_review_dispatch import (  # noqa: E402  (needs the sys.path bootstrap)
+    MAX_DISPATCH_ATTEMPTS,
+    attempt_session_id,
+)
 
 TIMEOUT_SECONDS = 30
 BODY_PREVIEW_CHARS = 500
@@ -114,8 +130,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
-    print(f"Job cancelled — asking mothership to stop session {session_id}.")
-    print(terminate(base_url, token, session_id))
+    for attempt in range(1, MAX_DISPATCH_ATTEMPTS + 1):
+        sid = attempt_session_id(session_id, attempt)
+        print(f"Job cancelled — asking mothership to stop session {sid}.")
+        print(terminate(base_url, token, sid))
     return 0
 
 

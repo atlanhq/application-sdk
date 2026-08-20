@@ -38,6 +38,16 @@ auto-merge loop is what the SDK-evolution rebuild was undoing).
 > the same turn you posted the trigger or before you have consumed a review reply
 > this run. (This is the exact failure to never repeat: trigger the review, then
 > exit before it answers — leaving every finding unaddressed.)
+>
+> **And that window is a no-push window.** The reviewer works from the HEAD it saw
+> when it started. Push between your trigger and its verdict and the verdict
+> arrives stamped for a sha that is no longer HEAD; `sdk_review_approve.py`
+> compares the two, declines every stamp (no labels, no approval, no status), and
+> the round is spent for nothing. Gate **every** push on
+> `python3 .github/scripts/sdk_resolve_push_guard.py --pr "$PR_NUMBER" --wait` —
+> exit 10 means hold the change for the next round. One push per round, and land
+> any CI fix you already know about *before* you trigger, never after the verdict
+> comes back. Details: ORCHESTRATION **Commit + push rules**.
 
 1. **Minimal, targeted fixes only** — address the finding; no drive-by refactor.
 2. **Prove-false is allowed; a re-raised dismissal ends the run** — a finding you
@@ -50,7 +60,8 @@ auto-merge loop is what the SDK-evolution rebuild was undoing).
 3. **Expect the reset churn** — every push fires `reset-on-push` (strips
    `sdk-review-*` labels, resets the `sdk-review` status) and re-runs CI. That
    is normal. Key your loop off the *reviewer's findings + CI*, never off the
-   labels/status you just reset.
+   labels/status you just reset. What is NOT normal is churning a review you have
+   in flight — see the no-push window above.
 4. **CI never gates the review** — greening CI is best-effort and only a
    head start / round-saver, NOT an entry condition. If CI won't go green, still
    run `@sdk-review` (the review is valuable on red CI and often explains the

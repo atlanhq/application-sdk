@@ -52,13 +52,16 @@ if TYPE_CHECKING:
 from application_sdk.errors.base import AppError
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.e2e._errors import (
+    AppNotReadyError,
     AtlanAEWorkflowAlreadyActiveError,
     AtlanApiHttpError,
     AtlanApiResponseInvariantError,
     AtlanApiTimeoutError,
     DAGProgressStalledError,
+    MissingHarnessClassAttrError,
     NoWorkerOnTaskQueueError,
 )
+from application_sdk.testing.e2e._poll import _HEARTBEAT_SECONDS, until_deadline
 
 logger = get_logger(__name__)
 
@@ -108,12 +111,12 @@ _REQUEST_BACKOFF_SECONDS = 3
 _MAX_RETRY_AFTER_SECONDS = 120
 _RETRY_AFTER_BUDGET_SECONDS = 300
 
-# Cadence for "still polling" heartbeat log lines in
-# ``poll_native_status`` — lineage stages take 2-5 min on small
-# datasets and the status string doesn't change during that time, so
-# the loop would otherwise look wedged in CI output. Long enough that
-# we don't drown the log on a fast happy-path run.
-_HEARTBEAT_SECONDS = 30
+# ``_HEARTBEAT_SECONDS`` (imported from ``_poll``) is the cadence for "still
+# polling" heartbeat log lines in ``poll_native_status`` — lineage stages take
+# 2-5 min on small datasets and the status string doesn't change during that
+# time, so the loop would otherwise look wedged in CI output. That loop throttles
+# its own richer progress line to the same cadence and disables the generic
+# heartbeat, rather than emitting two "still waiting" lines.
 
 # Per-status glyphs for the poll-loop log line — gives the operator a
 # quick visual scan of "what's done / what's running" without parsing
@@ -324,6 +327,108 @@ def _is_already_active_run(status: int, body: Any) -> bool:
         return False
     haystack = body if isinstance(body, str) else repr(body)
     return _ALREADY_ACTIVE_CODE.casefold() in haystack.casefold()
+
+
+# A tenant app pod that LM reports as reconciled can still be tens of seconds
+# from serving HTTP on :8000. At submit, Heracles POSTs the credential config to
+# http://<conn>.<conn>-app.svc.cluster.local:8000/workflows/v1/config/... against
+# that pod and echoes a refused dial back as an HTTP 500 carrying the Go net
+# error — e.g. "dial tcp 10.x.x.x:8000: connect: connection refused" (FND-402:
+# s3/gcs/mongodbatlas failed this way while cloudsql/iceberg passed in the same
+# window).
+#
+# Unlike _ALREADY_ACTIVE_CODE this has no stable error code to match — the
+# string originates in Go's net package, passes through Heracles unstructured,
+# and never acquires one — so this is necessarily a prose match. Same caveat as
+# _is_credential_name_conflict: if the wire text changes the match silently
+# stops firing and the race resurfaces as a generic retryable 5xx, which is the
+# pre-FND-402 behaviour (safe, just slower to diagnose) rather than a new
+# failure mode.
+#
+# This does NOT gate whether the submit is retried — submit_workflow's
+# `retryable` predicate already retries any non-already-active 5xx, this shape
+# included. It exists only to (a) justify the long cold-start budget and (b)
+# name the terminal failure AppNotReadyError instead of a bare 500.
+#
+# The match requires the refused-dial-to-:8000 sequence, not the bare
+# `connection refused` substring: a genuine terminal 5xx whose body merely
+# mentions a refused connection (e.g. an upstream DB dial surfaced through
+# Heracles) must not be mis-named AppNotReadyError. Requiring `dial tcp` +
+# `:8000` + `connection refused` together restricts the match to a refused dial
+# to the tenant app pod.
+_APP_NOT_READY_MARKERS = ("dial tcp", ":8000", "connection refused")
+
+
+def _is_app_not_ready(status: int, body: Any) -> bool:
+    """True when a submit response reads as a not-yet-serving tenant app pod.
+
+    Deliberately narrow (refused dial to :8000 only): a refused dial never
+    reached the pod, so no run was created and the wait is unambiguously a cold
+    start. A genuine 5xx, a 4xx, the already-active conflict, or a 5xx that only
+    mentions a refused connection in passing must not read as this.
+    """
+    # 5xx only. Heracles reports the refused dial as a 500, and a 4xx is a
+    # request-side rejection AE decided without dialling the pod — so a 4xx
+    # whose body happens to carry the markers (e.g. echoed-back config) is a
+    # terminal AtlanApiHttpError, not this race.
+    if status < 500:
+        return False
+    haystack = body if isinstance(body, str) else repr(body)
+    haystack = haystack.casefold()
+    return all(marker in haystack for marker in _APP_NOT_READY_MARKERS)
+
+
+def cold_start_submit_kwargs(
+    timeout_seconds: int,
+    poll_interval_seconds: int,
+) -> dict[str, int]:
+    """Re-size :meth:`AEWorkflowClient.submit_workflow`'s retry to a cold start.
+
+    Shared by both full-DAG harnesses (``BaseE2ETest.run_full_dag`` and the
+    deprecated ``BaseFullDAGE2ETest.run_full_dag``) so a DIRECT-mode submit
+    against a freshly-installed tenant app gets the same budget in either.
+
+    A refused dial to a still-booting tenant app pod arrives as a generic
+    retryable 5xx, so ``submit_workflow`` already retries it (see
+    :func:`_is_app_not_ready`) — only its default 4x5s budget is too short for a
+    pod cold start. Widening that existing loop keeps ONE retry path for the
+    submit, which matters because the submit is non-idempotent: a second loop
+    wrapped around it would re-enter the inner retry per outer attempt (5x the
+    POSTs it reports) and would bypass ``retry_after`` honouring and the
+    credential-name rotation that make each re-POST safe.
+
+    Args:
+        timeout_seconds: Total cold-start budget (the harness'
+            ``app_ready_timeout_seconds``). 0 or negative returns no overrides,
+            leaving ``submit_workflow``'s own defaults in place.
+        poll_interval_seconds: Gap between submit attempts (the harness'
+            ``app_ready_poll_interval_seconds``).
+
+    Returns:
+        ``retries`` / ``retry_sleep_seconds`` kwargs for ``submit_workflow``,
+        or an empty dict when the budget is disabled.
+
+    Raises:
+        MissingHarnessClassAttrError: when ``timeout_seconds`` is positive but
+            ``poll_interval_seconds`` is not — the retry count integer-divides
+            by the interval, so a zero or negative interval would crash with
+            ``ZeroDivisionError`` rather than gate the submit.
+    """
+    if timeout_seconds <= 0:
+        return {}
+    if poll_interval_seconds <= 0:
+        raise MissingHarnessClassAttrError(
+            message=(
+                "app_ready_poll_interval_seconds must be > 0 when "
+                f"app_ready_timeout_seconds={timeout_seconds} is set; got "
+                f"app_ready_poll_interval_seconds={poll_interval_seconds}"
+            ),
+            field="app_ready_poll_interval_seconds",
+        )
+    return {
+        "retries": timeout_seconds // poll_interval_seconds,
+        "retry_sleep_seconds": poll_interval_seconds,
+    }
 
 
 class DAGNodeStatus(str, Enum):
@@ -826,7 +931,19 @@ class AEWorkflowClient:
           :class:`AtlanAEWorkflowAlreadyActiveError`.
 
         Genuine 5xx that are *not* the already-active conflict remain retryable.
+
+        A tenant app pod that is still cold-starting also answers as a generic
+        retryable 5xx (see :func:`_is_app_not_ready`), so the retry above
+        already covers it — but the default 4x5s budget expires long before a
+        pod boots. Callers that submit against a freshly-installed tenant app
+        (both harnesses' ``run_full_dag``) therefore pass a cold-start-sized
+        ``retries`` / ``retry_sleep_seconds``, built by
+        :func:`cold_start_submit_kwargs`; on exhaustion, a last response
+        that still reads as connection-refused is surfaced as
+        :class:`AppNotReadyError` rather than an opaque
+        :class:`AtlanApiHttpError`, so the failure names the cause. FND-402.
         """
+        started = time.monotonic()
         status, body = self._post_with_retry(
             "/api/service/package-workflows?submit=true",
             body=payload,
@@ -869,6 +986,21 @@ class AEWorkflowClient:
             raise AtlanApiResponseInvariantError(
                 message=f"AE submit returned no run_id\nresponse={body!r}",
                 expectation="run_id present in submit response",
+            )
+        if _is_app_not_ready(status, body):
+            elapsed = time.monotonic() - started
+            raise AppNotReadyError(
+                message=(
+                    "the tenant app pod never accepted connections on :8000 "
+                    f"across {retries + 1} submit attempt(s) over {elapsed:.0f}s. "
+                    "Heracles POSTs the credential config to the tenant-deployed "
+                    "pod at AE submit and it kept refusing the connection ('dial "
+                    "tcp :8000: connect: connection refused'). The deployment "
+                    "reconciled (prepare-tenant went green) but the pod never "
+                    f"started serving HTTP in time.\nresponse={body!r}"
+                ),
+                attempts=retries + 1,
+                elapsed_seconds=elapsed,
             )
         raise AtlanApiHttpError(
             message=f"AE submit failed: HTTP {status}\nresponse={body!r}",
@@ -970,20 +1102,27 @@ class AEWorkflowClient:
         it exists to turn an indefinite hang into a fast, self-terminating
         failure with the last-seen node states, instead of a manual cancel.
         """
-        elapsed = 0
         last_summary: str | None = None
         last_result: DAGRunResult | None = None
         transient_streak = 0
         # Seconds spent waiting *beyond* the poll interval because the origin
         # asked for longer — same accounting ``_post_with_retry`` keeps, so
         # both retry loops bound honoured backoff at _RETRY_AFTER_BUDGET_SECONDS.
-        honoured_seconds = 0
-        last_log_elapsed = 0  # seconds since the last info log fired
+        honoured_seconds = 0.0
+        last_log_elapsed = 0.0  # seconds since the last info log fired
         any_node_started = False  # any node reached Running/terminal (stall guard)
         last_progress_elapsed = (
-            0  # elapsed at the last node-state transition (progress watchdog)
+            0.0  # elapsed at the last node-state transition (progress watchdog)
         )
-        while elapsed < timeout_seconds:
+        for attempt in until_deadline(
+            timeout_seconds,
+            interval_seconds,
+            label=f"AE run {run_id}",
+            # This loop emits its own richer progress line (per node-state change
+            # plus a heartbeat at the same cadence); the generic one would double it.
+            heartbeat_seconds=0,
+        ):
+            elapsed = attempt.elapsed
             try:
                 result = self.get_native_status(run_id)
             except AppError as e:
@@ -1001,18 +1140,19 @@ class AEWorkflowClient:
                 # rather than the poll cadence: an overloaded tenant answering
                 # "retry_after: 120" would otherwise burn the whole
                 # max_transient_failures streak inside its own wait window.
-                # ``elapsed`` advances by the real wait, so timeout_seconds
-                # still bounds the loop.
+                # The loop's own clock advances by the real wait, so
+                # timeout_seconds still bounds it.
                 gap = _retry_gap(
                     e.retry_after_seconds if isinstance(e, AtlanApiHttpError) else None,
                     default_seconds=interval_seconds,
                     budget_left=_RETRY_AFTER_BUDGET_SECONDS - honoured_seconds,
                 )
                 honoured_seconds += gap.seconds - interval_seconds
-                # Never sleep past the deadline: a 120s honoured wait against
-                # a 50s remaining budget must not block the full 120s before
-                # the timeout is re-checked.
-                sleep_for = min(gap.seconds, max(timeout_seconds - elapsed, 0))
+                # ``sleep_next`` clamps to the residual budget, so a 120s
+                # honoured wait against a 50s remaining budget does not block
+                # the full 120s before the timeout is re-checked — and it
+                # reports back the gap actually taken, for the log below.
+                sleep_for = attempt.sleep_next(gap.seconds)
                 logger.warning(
                     "native-status transient error (streak %d/%d): %s — sleeping %ds%s and retrying",
                     transient_streak,
@@ -1022,8 +1162,6 @@ class AEWorkflowClient:
                     gap.origin_note,
                     exc_info=True,
                 )
-                time.sleep(sleep_for)
-                elapsed += sleep_for
                 continue
             transient_streak = 0
             last_result = result
@@ -1055,7 +1193,7 @@ class AEWorkflowClient:
                 logger.info(
                     "%s AE run [%3ds] %s — %s",
                     run_glyph,
-                    elapsed,
+                    int(elapsed),
                     result.status.value,
                     summary,
                 )
@@ -1114,8 +1252,6 @@ class AEWorkflowClient:
                         f"{timeout_seconds}s."
                     ),
                 )
-            time.sleep(interval_seconds)
-            elapsed += interval_seconds
         # Timeout: return the last observation so callers can include
         # node-level state in the failure message rather than just
         # "timed out after Xs".
@@ -1219,24 +1355,30 @@ class AEWorkflowClient:
         """
         if max_not_found_attempts_override is not None:
             max_not_found_attempts = max_not_found_attempts_override
-        elapsed = 0
-        not_found_streak = 0
         # `max_forbidden_attempts` kept on the signature for back-compat
         # but unused now that the search path doesn't surface 403.
         del max_forbidden_attempts
-        while elapsed < timeout_seconds:
+        for attempt in until_deadline(
+            timeout_seconds,
+            interval_seconds,
+            label=f"Atlas Connection {qualified_name}",
+            # The per-poll probe line below already reports progress every
+            # iteration; a heartbeat would duplicate it.
+            heartbeat_seconds=0,
+        ):
             found = self.connection_exists_in_atlas_via_search(qualified_name)
             # conformance: ignore[L006] short, bounded poll (timeout_seconds) with modest iteration count, not a hot loop; the per-iteration probe result is the primary diagnostic signal when an E2E run fails to converge
             logger.info(
                 "Atlas Connection probe [%ds] qn=%s exists=%s",
-                elapsed,
+                int(attempt.elapsed),
                 qualified_name,
                 found,
             )
             if found:
                 return True
-            not_found_streak += 1
-            if not_found_streak >= max_not_found_attempts:
+            # A found probe returns immediately, so every attempt reached here is
+            # an empty search and the attempt number *is* the consecutive streak.
+            if attempt.number >= max_not_found_attempts:
                 logger.error(
                     "Atlas Connection probe found nothing %d times in a row "
                     "(%ds elapsed) — stopping early. The Connection never "
@@ -1244,12 +1386,10 @@ class AEWorkflowClient:
                     "but the entities did not reach the asset server. Check "
                     "publish metrics vs the storage bucket the worker wrote "
                     "to and the one publish reads from.",
-                    not_found_streak,
-                    elapsed,
+                    attempt.number,
+                    int(attempt.elapsed),
                 )
                 return False
-            time.sleep(interval_seconds)
-            elapsed += interval_seconds
         return False
 
     def count_assets_under_connection(

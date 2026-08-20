@@ -32,6 +32,10 @@ Public API::
         # Errors
         CredentialError, CredentialNotFoundError,
         CredentialParseError, CredentialValidationError,
+
+        # agent_json ingress normalisation
+        normalize_agent_json, lift_agent_json, declared_agent_spec_type,
+        AGENT_JSON_ALIASES,
     )
 """
 
@@ -53,6 +57,12 @@ from application_sdk.credentials.errors import (
     CredentialValidationError,
 )
 from application_sdk.credentials.git import GitSshCredential, GitTokenCredential
+from application_sdk.credentials.ingress import (
+    AGENT_JSON_ALIASES,
+    declared_agent_spec_type,
+    lift_agent_json,
+    normalize_agent_json,
+)
 from application_sdk.credentials.oauth import OAuthTokenError, OAuthTokenService
 from application_sdk.credentials.ref import (
     CredentialRef,
@@ -91,6 +101,11 @@ __all__ = [
     "CredentialRef",
     "CredentialResolvable",
     "AgentCredentialSpec",
+    # agent_json ingress normalisation
+    "normalize_agent_json",
+    "lift_agent_json",
+    "declared_agent_spec_type",
+    "AGENT_JSON_ALIASES",
     # Factory functions
     "api_key_ref",
     "basic_ref",

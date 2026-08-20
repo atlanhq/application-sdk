@@ -96,46 +96,56 @@ the updated file as `github-actions[bot]`.
 
 ## Phase 4 — Validate coverage
 
+Checks every public module that declares `__all__` — package `__init__` files *and*
+submodules. Checking only the `__init__` files is what let the manifest omit
+`application_sdk.execution.heartbeat` (and with it `run_in_thread`) while reporting
+full coverage (FND-439).
+
 ```bash
 uv run --with griffe==2.1.0 python - <<'EOF'
-import ast, json
+import ast, json, sys
 from pathlib import Path
 
-SUBPACKAGES = ["app","clients","common","contracts","credentials","execution",
-               "handler","infrastructure","observability","outputs","server",
-               "storage","templates","testing","transformers"]
+sys.path.insert(0, ".claude/skills/capability-manifest/references")
+# The same walk and the same skip rule the dump uses, so the two cannot disagree.
+from extractor import _rendered_as_contract, discover_public_modules
 
 with open("/tmp/capability-manifest/normalized.json") as f:
     data = json.load(f)
 
-total_all = 0
-total_in_manifest = 0
-for pkg in SUBPACKAGES:
-    init = Path("application_sdk") / pkg / "__init__.py"
-    if not init.exists(): continue
-    tree = ast.parse(init.read_text())
-    all_names = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            for t in node.targets:
-                if isinstance(t, ast.Name) and t.id == "__all__":
-                    if isinstance(node.value, (ast.List, ast.Tuple)):
-                        all_names = [e.value for e in node.value.elts
-                                     if isinstance(e, ast.Constant)]
-    if not all_names: continue
-    in_manifest = {s["name"] for s in data["subpackages"].get(pkg, {}).get("symbols", [])}
-    missing = [n for n in all_names if n not in in_manifest]
-    total_all += len(all_names)
-    total_in_manifest += len(all_names) - len(missing)
-    if missing:
-        print(f"  MISSING from {pkg}: {missing}")
+total = covered = as_contract = 0
+gaps = []
+for subpkg, dotted, all_names in discover_public_modules():
+    emitted = {s["name"] for s in data["subpackages"].get(subpkg, {}).get("symbols", [])}
+    total += len(all_names)
+    for name in all_names:
+        if name in emitted:
+            covered += 1
+        elif _rendered_as_contract(dotted, name, data["contracts"]):
+            # Deliberately absent from Section 2: Section 3 renders it with its fields.
+            as_contract += 1
+        else:
+            gaps.append(f"{dotted}.{name}")
 
 n_contracts = sum(len(v) for v in data["contracts"].values())
-print(f"Coverage: {total_in_manifest}/{total_all} __all__ entries in manifest")
+print(f"Coverage: {covered}/{total} __all__ entries in Section 2")
+print(f"          + {as_contract} rendered in the Contracts section instead")
 print(f"Contracts: {n_contracts} models across {len(data['contracts'])} namespaces")
 print(f"Subpackages: {len(data['subpackages'])}")
+print(f"UNEXPLAINED GAPS: {gaps or 'none'}")
 EOF
 ```
+
+`covered + rendered-in-Contracts` must equal `total`, leaving `UNEXPLAINED GAPS: none`.
+Every name is accounted for by name rather than by a prose caveat about which shortfall
+is expected, so a real omission cannot hide behind the contract re-exports.
+
+There is no "module skipped" outcome to check for: `dump` exits non-zero if a module
+declares `__all__` and griffe cannot see it (an ancestor directory missing an
+`__init__.py` makes it an implicit namespace package, which griffe does not descend
+into). Runtime introspection is deliberately *not* used as a fallback there — an export
+behind an optional extra would then appear or vanish with the installed extras, breaking
+the drift check for anyone who ran `uv sync --all-extras`.
 
 ---
 

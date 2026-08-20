@@ -6,6 +6,13 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.22.0] - 2026-08-18
+
+### Features
+
+- render triggers.events filter_rules (DISTR-502) (#2965) ([c52af19](https://github.com/atlanhq/application-sdk/commit/c52af19))
+- add typed object-row Repeater widget (#3256) ([29e3d26](https://github.com/atlanhq/application-sdk/commit/29e3d26))
+
 ## [0.21.1] - 2026-08-12
 
 ### Bug fixes

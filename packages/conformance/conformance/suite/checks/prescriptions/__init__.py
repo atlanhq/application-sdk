@@ -94,6 +94,7 @@ from ._error_code_prefix import (
 from ._file_reference import check_p010
 from ._framework_transfer import check_p008
 from ._getattr_contract_field import check_p026
+from ._prefix_transfer import check_p044
 from ._qualified_name import check_p028
 from ._store_construction import check_p009
 from ._typed_boundaries import check_p013_p014
@@ -138,6 +139,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
     findings_p015 = check_p015(tree, file, directives)
     findings_p026 = check_p026(tree, file, directives)
     findings_p028 = check_p028(tree, file, directives)
+    findings_p044 = check_p044(tree, file, directives)
 
     return (
         p001._findings
@@ -150,11 +152,12 @@ def scan_text(text: str, file: str) -> list[Finding]:
         + findings_p015
         + findings_p026
         + findings_p028
+        + findings_p044
     )
 
 
 def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single Python file (P001 + P002 + P008–P012 + P015 + P026 + P028).
+    """Scan a single Python file (P001 + P002 + P008–P012 + P015 + P026 + P028 + P044).
 
     P003, P013, P014 and P027 require :func:`scan_all` for cross-file resolution.
     """
@@ -239,7 +242,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         p002_checker.visit(tree)
         findings.extend(p002_checker._findings)
 
-        # P008–P012, P015, P026, P028 (per-file)
+        # P008–P012, P015, P026, P028, P044 (per-file)
         findings.extend(check_p008(tree, rel_str, directives))
         findings.extend(check_p009(tree, rel_str, directives))
         findings.extend(check_p010(tree, rel_str, directives))
@@ -248,6 +251,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         findings.extend(check_p015(tree, rel_str, directives))
         findings.extend(check_p026(tree, rel_str, directives))
         findings.extend(check_p028(tree, rel_str, directives))
+        findings.extend(check_p044(tree, rel_str, directives))
 
         # Class registry for P003 and P013/P014 — de-alias base names so aliased
         # imports of leaf/base classes don't hide the real ancestry.

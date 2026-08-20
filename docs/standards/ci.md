@@ -297,7 +297,7 @@ A `uses:` reusable workflow does **not** bring its own repo's files into the
 caller's checkout. To run an SDK script from a reusable that other repos call,
 sparse-checkout it into a side path and invoke from there — the
 `.sdk-scripts` pattern used by `release-version-bump.yaml` and
-`renovate-pkl-sync.yaml`:
+`generated-freshness.yaml`:
 
 ```yaml
 - uses: actions/checkout@<sha>   # consumer repo (the working tree the script acts on)

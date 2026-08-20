@@ -41,7 +41,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from types import ModuleType
-from typing import TYPE_CHECKING, Annotated, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, TypeVar, cast
 from uuid import uuid4
 
 import orjson
@@ -52,6 +52,7 @@ from fastapi import Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
+from pydantic import ValidationError
 from temporalio.client import WorkflowFailureError
 
 from application_sdk._runtime.offload import run_in_thread
@@ -61,6 +62,7 @@ from application_sdk.common.task_queue import (
 )
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
 from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
+from application_sdk.credentials.ingress import lift_agent_json
 from application_sdk.errors import AppError
 from application_sdk.errors.categories import FailureCategory
 from application_sdk.handler.base import Handler, HandlerError
@@ -140,6 +142,45 @@ def _record_proxy_failure(
     logger.warning(log_message, *log_args, exc_info=exc_info)
 
 
+ModelT = TypeVar("ModelT", bound=PydanticBaseModel)
+
+
+class _RequestContractError(Exception):
+    """A request body did not fit its typed contract at ingress → 422.
+
+    The marker *is* the enforcement. The 422 handler is registered on this
+    type, not on pydantic's ``ValidationError``, so an endpoint gets a
+    contract-shaped answer only by validating through
+    :func:`_validate_request` — which is also the only place that decides a
+    failure is the caller's fault. A ``ValidationError`` raised anywhere else
+    (inside an endpoint's error boundary, in handler business logic, in an
+    output contract) keeps that endpoint's own 500 and can never be
+    mistaken for a malformed request.
+
+    Which endpoints answer 422 is therefore visible in the call sites rather
+    than asserted in prose, and the default for a new endpoint is the safe
+    one: a bare ``model_validate`` still yields a 500.
+    """
+
+    def __init__(self, cause: ValidationError) -> None:
+        super().__init__(str(cause))
+        # The pydantic failure, kept so the handler can name the fields.
+        self.cause = cause
+
+
+def _validate_request(model: type[ModelT], body: dict[str, Any]) -> ModelT:
+    """Validate an already-normalised request body into its typed contract.
+
+    Raises :class:`_RequestContractError` so the app-level handler answers 422
+    naming the offending field. Use this for anything a *caller* controls; use
+    ``model_validate`` directly where a failure would be an internal bug.
+    """
+    try:
+        return model.model_validate(body)
+    except ValidationError as exc:
+        raise _RequestContractError(exc) from exc
+
+
 _CREDENTIAL_KEYS = frozenset(
     {
         "host",
@@ -152,104 +193,6 @@ _CREDENTIAL_KEYS = frozenset(
         "extra",
     }
 )
-
-
-_AGENT_JSON_KEYS = ("agent_json", "agentJson", "agent-json")
-
-
-def _coerce_agent_json(value: Any) -> dict[str, Any] | None:
-    """Return *value* as an agent-json dict, or ``None`` if it isn't one.
-
-    Form fields cross the wire as JSON strings, so an agent-json binding may
-    arrive either already-parsed (``dict``) or as a serialized string."""
-    if isinstance(value, dict):
-        return value if value else None
-    if isinstance(value, str) and value.strip():
-        try:
-            parsed = json.loads(value)
-        except (ValueError, TypeError):
-            return None
-        return parsed if isinstance(parsed, dict) and parsed else None
-    return None
-
-
-def _rank_agent_json(raw: Any, key: str) -> int:
-    """Preference score for competing agent-json bindings (higher wins).
-
-    A request can carry several agent-json copies at once, and they are *not*
-    interchangeable. The FE normalizes its form into duplicate keys: the live
-    ``agent-json`` (hyphen) holds the current form object, while ``agent_json``
-    (underscore) is a serialized string snapshot that lags behind edits. Picking
-    the wrong one silently runs the check against stale credentials. So prefer a
-    parsed object over a serialized string (freshness), and the canonical hyphen
-    ``agent-json`` over the underscore/camel aliases (tie-break)."""
-    return (2 if isinstance(raw, dict) else 0) + (1 if key == "agent-json" else 0)
-
-
-def _lift_agent_json(body: dict[str, Any]) -> dict[str, Any]:
-    """Surface the freshest agent-json binding to the top level for SDR detection.
-
-    The three endpoints detect SDR (customer-infra) runs by reading a *top-level*
-    ``agent_json`` off the typed input. Heracles, however, forwards the FE payload
-    verbatim: the agent-json arrives nested inside ``metadata``/``connection_config``
-    (the form's ``agent-json`` field → app ``metadata``) or inside ``credentials``
-    (the credential object), and the FE may include *several* copies at once (a
-    live object plus a stale serialized string, under hyphen and underscore keys).
-
-    Pick the highest-ranked copy (see :func:`_rank_agent_json`) across the top
-    level and every container, surface it as top-level ``agent_json`` (overriding
-    any stale top-level alias Pydantic would otherwise resolve first), and strip
-    every agent-json key from the containers so credential flattening never turns
-    one into a bogus pair. No-op when none is found (direct-mode requests)."""
-    best_rank = -1
-    best_aj: dict[str, Any] | None = None
-
-    for key in _AGENT_JSON_KEYS:
-        if key in body:
-            aj = _coerce_agent_json(body[key])
-            rank = _rank_agent_json(body[key], key)
-            if aj is not None and rank > best_rank:
-                best_rank, best_aj = rank, aj
-
-    for container in ("metadata", "connection_config", "credentials"):
-        c = body.get(container)
-        if isinstance(c, dict):
-            for key in _AGENT_JSON_KEYS:
-                if key in c:
-                    aj = _coerce_agent_json(c[key])
-                    rank = _rank_agent_json(c[key], key)
-                    if aj is not None and rank > best_rank:
-                        best_rank, best_aj = rank, aj
-        elif isinstance(c, list):  # v3 credentials: list[{key, value}]
-            for item in c:
-                if isinstance(item, dict) and item.get("key") in _AGENT_JSON_KEYS:
-                    raw = item.get("value")
-                    aj = _coerce_agent_json(raw)
-                    rank = _rank_agent_json(raw, item["key"])
-                    if aj is not None and rank > best_rank:
-                        best_rank, best_aj = rank, aj
-
-    if best_aj is None:
-        return body
-
-    result: dict[str, Any] = {}
-    for k, v in body.items():
-        if k in _AGENT_JSON_KEYS:
-            continue  # drop stale top-level aliases; re-added canonically below
-        if k in ("metadata", "connection_config") and isinstance(v, dict):
-            result[k] = {kk: vv for kk, vv in v.items() if kk not in _AGENT_JSON_KEYS}
-        elif k == "credentials" and isinstance(v, list):
-            result[k] = [
-                i
-                for i in v
-                if not (isinstance(i, dict) and i.get("key") in _AGENT_JSON_KEYS)
-            ]
-        elif k == "credentials" and isinstance(v, dict):
-            result[k] = {kk: vv for kk, vv in v.items() if kk not in _AGENT_JSON_KEYS}
-        else:
-            result[k] = v
-    result["agent_json"] = best_aj
-    return result
 
 
 # v2-compat: remove when Heracles sends credentials in v3 list[{key, value}] format.
@@ -297,7 +240,7 @@ def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
 
 def _normalize_preflight_request(body: dict[str, Any]) -> dict[str, Any]:
     """Normalize preflight-specific compatibility fields before validation."""
-    normalized = _normalize_credentials(_lift_agent_json(body))
+    normalized = _normalize_credentials(lift_agent_json(body))
     has_metadata = "metadata" in normalized and normalized["metadata"] is not None
     has_connection_config = (
         "connection_config" in normalized
@@ -1312,6 +1255,24 @@ def _register_workflow_routes(
 
         except HTTPException:
             raise
+        except ValidationError as e:
+            # /start validates the app's own input contract, which the caller
+            # does not own — so this is an internal failure, not a malformed
+            # request, and it answers a sanitized 500 with the real cause in
+            # the log. It cannot reach the 422 handler (that one is registered
+            # on _RequestContractError, which only _validate_request raises);
+            # catching here is what turns Starlette's plain-text 500 into the
+            # boundary's own logged, sanitized one.
+            # conformance: ignore[L009] boundary handler logs the real exception (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record of the actual failure.
+            logger.error(
+                "Workflow input validation failed for app %s: %s",
+                app_name,
+                e,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=500, detail="Failed to start workflow"
+            ) from None
         except TypeError as e:
             # conformance: ignore[L009] boundary handler logs the real exception (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record of the actual failure.
             logger.error(
@@ -2620,9 +2581,22 @@ def create_app_handler_service(
             asynccontextmanager,
         )
 
-        from application_sdk.server.mcp import (  # noqa: PLC0415 — cold path: only when ENABLE_MCP set
-            MCPServer,
-        )
+        try:
+            from application_sdk.server.mcp import (  # noqa: PLC0415 — cold path: only when ENABLE_MCP set
+                MCPServer,
+            )
+        except ModuleNotFoundError as e:
+            # Only the mcp extra's own dependency (fastmcp) being absent means
+            # "extra not installed". Any other ModuleNotFoundError in the import
+            # chain is an unrelated broken import — re-raise it unchanged so the
+            # user isn't sent to reinstall the extra when the fault is elsewhere.
+            if e.name != "fastmcp" and not (e.name or "").startswith("fastmcp."):
+                raise
+            raise RuntimeError(
+                "ENABLE_MCP is set but the MCP dependencies are not installed. "
+                "Install the SDK with the 'mcp' extra "
+                "(e.g. `uv add 'atlan-application-sdk[mcp]'`) or unset ENABLE_MCP."
+            ) from e
 
         _mcp_server = MCPServer(application_name=app_name)
 
@@ -2663,6 +2637,60 @@ def create_app_handler_service(
     )
     app.add_middleware(LogMiddleware)
 
+    @app.exception_handler(_RequestContractError)
+    async def _handle_request_contract_error(
+        request: Request, exc: Exception
+    ) -> JSONResponse:
+        """Turn a request-body contract failure into a 422 naming the field.
+
+        The form endpoints validate their own body (they have to normalise v2
+        wire shapes first), so FastAPI's own ``RequestValidationError`` handling
+        never sees it: an unhandled ``ValidationError`` becomes Starlette's
+        plain-text ``Internal Server Error``, which reaches the caller as an
+        opaque JSON-decode failure with no hint of which field was wrong. The
+        offending field name is the whole diagnosis, so say it.
+
+        Registered on :class:`_RequestContractError`, never on pydantic's
+        ``ValidationError``: reaching here takes an explicit
+        :func:`_validate_request` call, so a 422 always means "the request did
+        not fit the contract" and no other validation failure in the process
+        can be reported as the caller's fault. See the marker's docstring.
+
+        Pydantic's ``input`` and ``ctx`` are omitted: the rejected value can be
+        a credential, and the field path plus the reason is what a caller can
+        act on.
+        """
+        errors = (
+            exc.cause.errors(
+                include_url=False, include_input=False, include_context=False
+            )
+            if isinstance(exc, _RequestContractError)
+            else []
+        )
+        detail = [
+            {
+                "field": ".".join(str(part) for part in error["loc"]),
+                "message": error["msg"],
+                "type": error["type"],
+            }
+            for error in errors
+        ]
+        fields = ", ".join(item["field"] for item in detail if item["field"]) or "body"
+        logger.warning(
+            "Rejected a malformed request to %s for app %s: invalid field(s) %s",
+            request.url.path,
+            app_name,
+            fields,
+        )
+        return JSONResponse(
+            status_code=422,
+            content={
+                "success": False,
+                "message": f"Invalid request: {fields}",
+                "detail": detail,
+            },
+        )
+
     def _create_context(credentials: list[HandlerCredential]) -> HandlerContext:
         return HandlerContext(
             app_name=app_name,
@@ -2678,8 +2706,8 @@ def create_app_handler_service(
 
     @app.post("/workflows/v1/auth")
     async def test_auth(request: Request) -> JSONResponse:
-        body = _normalize_credentials(_lift_agent_json(await request.json()))
-        auth_input = AuthInput.model_validate(body)
+        body = _normalize_credentials(lift_agent_json(await request.json()))
+        auth_input = _validate_request(AuthInput, body)
         credentials = [
             HandlerCredential(key=c.key, value=c.value) for c in auth_input.credentials
         ]
@@ -2776,7 +2804,7 @@ def create_app_handler_service(
     @app.post("/workflows/v1/check")
     async def preflight_check(request: Request) -> JSONResponse:
         body = _normalize_preflight_request(await request.json())
-        preflight_input = PreflightInput.model_validate(body)
+        preflight_input = _validate_request(PreflightInput, body)
         credentials = [
             HandlerCredential(key=c.key, value=c.value)
             for c in preflight_input.credentials
@@ -2906,8 +2934,8 @@ def create_app_handler_service(
 
     @app.post("/workflows/v1/metadata")
     async def fetch_metadata(request: Request) -> JSONResponse:
-        body = _normalize_credentials(_lift_agent_json(await request.json()))
-        metadata_input = MetadataInput.model_validate(body)
+        body = _normalize_credentials(lift_agent_json(await request.json()))
+        metadata_input = _validate_request(MetadataInput, body)
         # The widget routing key (``metadataTemplateKey`` / ``type`` on the
         # wire) now lands in its documented home, ``metadata_template_key``,
         # via the field's validation alias. Mirror it onto ``object_filter``

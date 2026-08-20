@@ -19,7 +19,37 @@ import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from conformance.suite.schema.disposition import RuleScope
+
 _LEDGER_RELPATH = ("data", "contract_schema.lock.json")
+
+
+def regen_command(scope: RuleScope | None = None) -> str:
+    """Return the ledger-regeneration command to prescribe, pinned to *this* version.
+
+    The version pin is the point.  ``detect`` runs from an ephemeral, unpinned
+    install (``uvx atlan-application-sdk-conformance`` — see
+    ``.github/actions/run-conformance-detect/action.yaml``), while a bare
+    ``uv run atlan-application-sdk-conformance`` in a consumer app resolves that
+    repo's *locked* dev dependency.  Those are two different versions whenever
+    the repo's lock lags the latest release, and the generator's output is
+    version-dependent: the SDK contract-base registry it reads
+    (``_sdk_contract_mixins``) grows as the SDK gains fields.  A B006 finding
+    raised by the newer checker then has a prescribed remedy that the older
+    generator cannot satisfy — it rewrites the ledger byte-identically and the
+    finding survives, which is how FND-607 sent a developer to a dead end on a
+    BLOCK-tier rule.  Pinning to :data:`conformance.__version__` makes the
+    remedy reproduce the checker's own field set.
+
+    In the SDK repo (*scope* is :attr:`RuleScope.SDK`) the suite is in-tree and
+    ``uv run`` is the only correct invocation — a published-wheel pin there would
+    regenerate against whatever was last released, not the working tree.
+    """
+    from conformance import __version__
+
+    if scope is RuleScope.SDK:
+        return "uv run atlan-application-sdk-conformance gen-contract-ledger"
+    return f"uvx atlan-application-sdk-conformance=={__version__} gen-contract-ledger"
 
 
 def _ledger_path() -> Path:
@@ -120,7 +150,7 @@ def load_ledger(
         print(
             f"warning: contract ledger is malformed JSON ({exc}); "
             "B005/B006 contract-compat checks are disabled until it is regenerated "
-            "(`atlan-application-sdk-conformance gen-contract-ledger`).",
+            f"(`{regen_command()}`).",
             file=sys.stderr,
         )
         return ContractLedger(version=LEDGER_VERSION, fields=[])
