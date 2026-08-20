@@ -128,8 +128,9 @@ class BaseFullDAGE2ETest:
         argo_template_name: Cluster-scoped WorkflowTemplate name
             (e.g. ``atlan-mysql``). Must match what the tenant has
             installed.
-        mode: :data:`RunMode.AGENT` for tier 4, :data:`RunMode.DIRECT`
-            for tier 5.
+        mode: :data:`RunMode.AGENT` for tier 4 (the default), or
+            :data:`RunMode.DIRECT` for tier 5. DIRECT is opt-in: see the
+            attribute's own comment for why the default is AGENT.
         app_service_url: HTTP URL the AE workflow's extract activity
             falls back to. Metadata-only in agent mode; used for
             credential injection in direct mode.
@@ -159,7 +160,9 @@ class BaseFullDAGE2ETest:
     connector_short_name: ClassVar[str] = ""
     argo_package_name: ClassVar[str] = ""
     argo_template_name: ClassVar[str] = ""
-    mode: ClassVar[RunMode] = RunMode.DIRECT
+    # Mirrors BaseE2ETest.mode -- see that attribute's comment. Kept in step
+    # so the two harnesses cannot disagree about what an omitted mode means.
+    mode: ClassVar[RunMode] = RunMode.AGENT
     app_service_url: ClassVar[str] = ""
 
     # --- optional class attrs ------------------------------------------

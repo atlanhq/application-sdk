@@ -819,6 +819,89 @@ class TestExtractTaskQueue:
         assert _T()._extract_task_queue() == "atlan-openapi-e2e-full-ci-42"
 
 
+class TestDefaultRunMode:
+    """AGENT is the default mode, and DIRECT is opt-in tier 5 (FND-656).
+
+    The two modes fail very differently when a subclass forgets the attribute:
+    AGENT derives the CI worker's own queue from env the CI action always
+    exports, while DIRECT addresses the tenant's deployed pod — and a mismatch
+    there does not fail, it hangs to the e2e job's ceiling with no worker ever
+    claiming the work. So the default has to be the one whose failure is visible.
+    """
+
+    def test_default_is_agent(self) -> None:
+        assert BaseE2ETest.mode is RunMode.AGENT
+
+    def test_deprecated_full_dag_harness_agrees(self) -> None:
+        """Two harnesses disagreeing about what an omitted mode means is worse
+        than either choice.
+
+        Compared by ``.value``, not identity: ``application_sdk.testing.full_dag``
+        defines its OWN ``RunMode`` enum rather than re-exporting the e2e one, so
+        the two ``AGENT`` members are distinct objects and ``is`` is always False
+        across them. That duplication predates this change and is why the
+        comparison looks indirect.
+        """
+        from application_sdk.testing.full_dag.base import (  # noqa: PLC0415
+            BaseFullDAGE2ETest,
+        )
+
+        assert BaseFullDAGE2ETest.mode.value == BaseE2ETest.mode.value == "agent"
+
+    def test_build_ae_payload_requires_mode_explicitly(self) -> None:
+        """``build_ae_payload`` takes no default for ``mode`` — and must not gain
+        one.
+
+        A default there would be a second, independent answer to "what does an
+        omitted mode mean", sitting next to the class attribute above. Requiring
+        it means the only place that decision is made is the test class.
+        """
+        import inspect  # noqa: PLC0415
+
+        from application_sdk.testing.e2e.payload import (  # noqa: PLC0415
+            build_ae_payload,
+        )
+
+        param = inspect.signature(build_ae_payload).parameters["mode"]
+        assert param.default is inspect.Parameter.empty
+
+    def test_build_seed_dag_default_matches_the_class_default(self) -> None:
+        """``build_seed_dag`` DOES carry a default, and both in-tree callers pass
+        ``mode=self.mode`` explicitly — so it only governs an external caller,
+        which must not get a different answer from the class attribute."""
+        import inspect  # noqa: PLC0415
+
+        from application_sdk.testing.e2e.payload import build_seed_dag  # noqa: PLC0415
+
+        default = inspect.signature(build_seed_dag).parameters["mode"].default
+        assert default is BaseE2ETest.mode
+
+    def test_a_subclass_that_omits_mode_gets_the_agent_queue(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The regression this default exists to prevent: a suite with no `mode`
+        line lands on the CI worker's queue, not a tenant queue nothing polls."""
+        monkeypatch.setenv("ATLAN_APPLICATION_NAME", "openapi")
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "e2e-full-ci-42")
+
+        class _NoModeDeclared(BaseE2ETest):
+            connector_short_name = "openapi"
+            argo_package_name = "@atlan/openapi"
+            argo_template_name = "atlan-openapi"
+            app_service_url = "http://openapi.svc"
+
+            def _mustache_substitutions(self) -> MustacheSubstitutions:
+                return MustacheSubstitutions(connection=_make_connection_ref())
+
+        assert _NoModeDeclared()._extract_task_queue() == "atlan-openapi-e2e-full-ci-42"
+
+    def test_explicit_direct_still_wins(self) -> None:
+        """Tier 5 is opt-in, not removed. The three fleet suites that set DIRECT
+        do so with a documented rationale and must be unaffected."""
+        assert _ConcreteE2ETest.mode is RunMode.DIRECT
+        assert _ConcreteE2ETest()._extract_task_queue() == "atlan-openapi-production"
+
+
 class TestAgentSpecDerivation:
     """AGENT mode derives the agent identity — and therefore the extract queue —
     from the worker's ATLAN_APPLICATION_NAME + ATLAN_DEPLOYMENT_NAME env, so a

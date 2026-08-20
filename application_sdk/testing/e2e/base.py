@@ -135,8 +135,9 @@ class BaseE2ETest:
         connector_short_name: ``openapi``, ``mysql``, ``mssql``, etc.
         argo_package_name: ``@atlan/<connector>``.
         argo_template_name: Cluster-scoped WorkflowTemplate name.
-        mode: :data:`RunMode.AGENT` for tier 4, :data:`RunMode.DIRECT`
-            for tier 5.
+        mode: :data:`RunMode.AGENT` for tier 4 (the default), or
+            :data:`RunMode.DIRECT` for tier 5. DIRECT is opt-in: see the
+            attribute's own comment for why the default is AGENT.
         app_service_url: HTTP URL the AE workflow's extract activity
             falls back to.
 
@@ -166,7 +167,26 @@ class BaseE2ETest:
     connector_short_name: ClassVar[str] = ""
     argo_package_name: ClassVar[str] = ""
     argo_template_name: ClassVar[str] = ""
-    mode: ClassVar[RunMode] = RunMode.DIRECT
+    # AGENT is the default, deliberately (FND-656).
+    #
+    # This used to default to DIRECT, and the two modes fail very differently
+    # when a subclass forgets the attribute. Under DIRECT the harness dispatches
+    # the extract node to the tenant's own deployed pod; under AGENT it derives
+    # the CI worker's own queue from ATLAN_APPLICATION_NAME +
+    # ATLAN_DEPLOYMENT_NAME, which the CI action always exports. A suite that
+    # omits `mode` therefore used to silently address a tenant queue it had no
+    # reason to expect, and a mismatch there does not fail -- it HANGS, to the
+    # e2e job's 120-minute ceiling, with no worker ever claiming the work.
+    #
+    # AGENT is also what the fleet actually runs: every connector suite checked
+    # sets it explicitly, and the three that set DIRECT do so with a documented
+    # tier-5 rationale. So the default now matches the common case, and the
+    # failure mode of forgetting the attribute is a wrong-but-visible queue in
+    # CI rather than an invisible stall.
+    #
+    # DIRECT remains fully supported as tier 5 -- it is now opt-in rather than
+    # inherited. Setting it explicitly is the signal that a suite means it.
+    mode: ClassVar[RunMode] = RunMode.AGENT
     app_service_url: ClassVar[str] = ""
 
     # --- source-availability tier --------------------------------------

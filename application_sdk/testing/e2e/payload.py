@@ -177,7 +177,11 @@ def build_seed_dag(
     qi_mine_output_type: str = "json",
     qi_input_prefix_field: str = "view_data_prefix",
     lake_provider: str = "aws",
-    mode: RunMode = RunMode.DIRECT,
+    # Kept in step with BaseE2ETest.mode's default (FND-656). The harness
+    # always passes mode= explicitly, so this only governs a direct caller --
+    # and a direct caller that omits it is exactly the case that must not get
+    # a silently different mode from the class default it sits beside.
+    mode: RunMode = RunMode.AGENT,
     agent: AgentSpec | None = None,
     database: DatabaseSpec | None = None,
 ) -> dict[str, Any]:
