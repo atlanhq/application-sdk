@@ -6,6 +6,12 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.22.1] - 2026-08-20
+
+### Bug fixes
+
+- pin the B006 ledger remedy to the checker's own version (FND-607) (#3284) ([88a2419](https://github.com/atlanhq/application-sdk/commit/88a2419))
+
 ## [0.22.0] - 2026-08-18
 
 ### Features
