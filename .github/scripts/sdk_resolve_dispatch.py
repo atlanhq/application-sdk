@@ -160,6 +160,9 @@ OOB_SINCE_SKEW_SECONDS = 120
 
 SUMMARY_START = "=== SDK RESOLVE SUMMARY ==="
 SUMMARY_END = "=== END SUMMARY ==="
+# Summary rows only a run that reached Phase 4 can carry. Any one of them is
+# proof of work; their absence is proof the resolver never got there.
+TERMINAL_SUMMARY_KEYS = ("final_verdict", "merge_ready", "stopped_reason")
 # Rows rendered into the GitHub step summary, in order.
 SUMMARY_ROWS = (
     "rounds",
@@ -438,20 +441,42 @@ def mine_summary(st: SSEState) -> dict[str, str]:
 def run_completed(st: SSEState) -> bool:
     """True when the resolver actually finished its work.
 
-    The transport `complete` event is the normal success signal, but mothership
-    sometimes ends the resolve stream cleanly (EOF) without it. The resolver
-    emits its Phase 4 `=== SDK RESOLVE SUMMARY ===` block as its very last action
-    (ORCHESTRATION Phase 4), so a mined summary carrying a terminal key is
-    end-of-run evidence independent of the sentinel — treat that as completed. A
-    stream truncated mid-work carries no summary block and is still a failure, so
-    this never masks a genuinely incomplete run.
+    Proof of work is the Phase 4 `=== SDK RESOLVE SUMMARY ===` block, which the
+    resolver emits as its very last action (ORCHESTRATION Phase 4) — never the
+    transport `complete` sentinel. The sentinel reports only that the sandbox
+    stopped, and a sandbox can stop having done nothing at all: two dispatches
+    ended `status=completed` after 3-5 min having posted no `@sdk-review`
+    trigger, no status comment and no report, and pushed nothing, yet both runs
+    went green because the sentinel alone decided the exit code. Conversely,
+    mothership sometimes ends a fully successful stream cleanly (EOF) with no
+    sentinel at all. So the summary decides in both directions; the sentinel
+    decides only whether the sandbox is still alive, which is
+    `sandbox_terminated_abnormally`'s job.
     """
     if st.errored:
         return False
-    if st.completed:
-        return st.status == "completed"
+    if st.completed and st.status != "completed":
+        # A terminal status the sandbox itself calls a failure. `process_line`
+        # leaves `errored` False for a `complete` carrying status=error with an
+        # empty error object, so the check above does not cover this — and
+        # without it a run that streamed its Phase 4 summary and *then* died
+        # would render as merge-ready in the step summary while `decide_exit`
+        # returned 1. Terminal status and proof of work are both consulted, so
+        # the two never diverge.
+        return False
     summary = mine_summary(st)
-    return any(k in summary for k in ("final_verdict", "merge_ready", "stopped_reason"))
+    return any(k in summary for k in TERMINAL_SUMMARY_KEYS)
+
+
+def resolved_nothing(st: SSEState) -> bool:
+    """True for a no-op run: the sandbox reported success but did no work.
+
+    Distinct from every other failure shape in that nothing went wrong at the
+    transport or provider layer — the model simply ended its turn before
+    working through the ORCHESTRATION. Nothing was pushed and nothing was
+    posted, so re-dispatching is both safe and the only way forward.
+    """
+    return st.completed and st.status == "completed" and not run_completed(st)
 
 
 def _rounds_completed(summary: dict[str, str]) -> int | None:
@@ -561,6 +586,11 @@ def render_step_summary(
             "✅ completed out-of-band — our stream dropped, but the resolver's "
             "Phase-4 hand-off comment was found on the PR"
         )
+    elif resolved_nothing(st):
+        outcome = (
+            "❌ no-op run — the sandbox reported success but did no work (no "
+            "Phase-4 summary, nothing pushed); safe to re-run `@sdk-resolve`"
+        )
     elif not ok:
         outcome = "❌ run failed"
     elif merge_ready:
@@ -653,6 +683,18 @@ def decide_exit(st: SSEState) -> tuple[int, str]:
         return 1, "::error::Stream ended without a 'complete' event"
     if st.status != "completed":
         return 1, f"::error::Sandbox final status={st.status} (expected 'completed')"
+    if resolved_nothing(st):
+        # The sentinel says the sandbox exited happily; the missing Phase 4
+        # summary says it never did the work. Fail, so the retry ladder below
+        # gets a chance on a different model instead of the run going green
+        # over a resolve that pushed nothing and posted nothing.
+        return (
+            1,
+            "::error::Sandbox reported status=completed but emitted no Phase 4 "
+            "summary — the resolver ended its turn without working through the "
+            "ORCHESTRATION (no @sdk-review trigger, no report, nothing pushed). "
+            "Treating as a failed run.",
+        )
     return 0, f"SDK Resolve completed (cost={st.cost})."
 
 
@@ -717,8 +759,16 @@ def sandbox_terminated_abnormally(st: SSEState) -> bool:
     hand-off, and whether re-dispatching is safe. A dead sandbox will post
     nothing more; a live one behind a cut stream is still working, and
     re-dispatching against it would double-run the resolver.
+
+    A no-op run (`resolved_nothing`) belongs on the dead side: the sentinel
+    proves the sandbox has stopped, so it will post nothing more and a
+    re-dispatch cannot double-run it.
     """
-    return st.errored or (st.completed and st.status != "completed")
+    if st.errored:
+        return True
+    if not st.completed:
+        return False  # no sentinel — our stream was cut, the sandbox may live on
+    return st.status != "completed" or resolved_nothing(st)
 
 
 def oob_poll_budget(st: SSEState) -> int:
@@ -743,6 +793,11 @@ def is_retryable_fault(st: SSEState) -> bool:
     """
     if st.err_code in NEVER_RETRY_ERR_CODES:
         return False
+    if resolved_nothing(st):
+        # A no-op run carries no error code at all, so the code ladder below
+        # cannot see it. The fault is the model ending its turn early, which is
+        # precisely the kind a different model can plausibly survive.
+        return True
     if st.err_code in RETRYABLE_ERR_CODES:
         return True
     if st.err_code not in UNINFORMATIVE_ERR_CODES:
@@ -775,10 +830,14 @@ def retry_decision(st: SSEState, attempt: int, seconds_left: float) -> tuple[boo
             f"only {int(seconds_left)}s of the job budget remain, below the "
             f"{RETRY_MIN_REMAINING_SECONDS}s a retry needs to finish a round"
         )
+    cause = (
+        "the sandbox reported success but emitted no Phase 4 summary (no-op run)"
+        if resolved_nothing(st)
+        else f"code={st.err_code or 'none'} looks like a model/provider fault"
+    )
     return True, (
-        f"code={st.err_code or 'none'} looks like a model/provider fault — "
-        f"re-dispatching on {RETRY_MAIN_MODEL} (attempt {attempt + 1} of "
-        f"{MAX_DISPATCH_ATTEMPTS})"
+        f"{cause} — re-dispatching on {RETRY_MAIN_MODEL} (attempt {attempt + 1} "
+        f"of {MAX_DISPATCH_ATTEMPTS})"
     )
 
 
@@ -985,13 +1044,13 @@ def main() -> int:
         if not should_retry:
             print(f"::warning::Not re-dispatching: {reason}")
             break
-        print(f"::warning::Re-dispatching after a dead sandbox: {reason}")
+        print(f"::warning::Re-dispatching on a fresh sandbox: {reason}")
         attempt += 1
 
     if code != 0 and len(attempts) > 1:
         message += (
             f" (retried on {attempt_model(len(attempts))} after "
-            f"{attempt_model(1)} died; both attempts failed)"
+            f"{attempt_model(1)} failed; both attempts failed)"
         )
 
     write_step_summary(
