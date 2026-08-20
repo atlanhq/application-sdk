@@ -610,6 +610,38 @@ def test_extract_secrets_block_stops_at_the_next_sibling_key() -> None:
     assert extract_secrets_block(text) == "    secrets:\n      A: ${{ secrets.A }}"
 
 
+def test_extract_secrets_block_stops_at_a_same_indent_comment() -> None:
+    """A comment below the block at ``secrets:``'s own indent belongs to what
+    follows, not to the mapping.
+
+    The child walk bounds itself on the structural view, where a comment line
+    is blank — and a blank line never outdents, so the walk used to pass
+    through a same-indent comment and splice the next section's heading into
+    the rendered ``jobs.tests`` secrets block. A comment indented *deeper* than
+    ``secrets:`` is still part of the block (it documents a child key), so only
+    the same/shallower-indent case is a boundary.
+    """
+    text = (
+        f"jobs:\n  tests:\n{_REUSABLE_USES}\n"
+        "    secrets:\n      A: ${{ secrets.A }}\n"
+        "    # comment for the next job\n"
+        "  next-job:\n    runs-on: ubuntu-latest\n"
+    )
+    assert extract_secrets_block(text) == "    secrets:\n      A: ${{ secrets.A }}"
+
+
+def test_extract_secrets_block_keeps_a_deeper_indented_comment() -> None:
+    """A comment inside the mapping's indentation is part of the block."""
+    text = (
+        f"jobs:\n  tests:\n{_REUSABLE_USES}\n"
+        "    secrets:\n      # why A is enough\n      A: ${{ secrets.A }}\n"
+        "  next-job:\n    runs-on: ubuntu-latest\n"
+    )
+    assert extract_secrets_block(text) == (
+        "    secrets:\n      # why A is enough\n      A: ${{ secrets.A }}"
+    )
+
+
 def test_extract_tests_yaml_params_carries_both_fnd604_values() -> None:
     text = render(
         "tests.yaml",

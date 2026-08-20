@@ -459,8 +459,18 @@ def extract_secrets_block(text: str) -> str:
     lines = text.splitlines()
     # Children: every following line that is blank (interior blank lines are
     # part of the block) or indented deeper than `secrets:` itself.
+    # Boundaries come off the structural view, but a comment line is blank
+    # there, and `_outdents` never treats a blank line as a boundary — so a
+    # comment at `secrets:`'s own indent or shallower would be walked through
+    # and spliced into the block (it belongs to whatever follows). Stop on the
+    # original line: a same/shallower-indent comment ends the block just as a
+    # same/shallower-indent key does.
     end = start + 1
     while end < len(structural) and not _outdents(structural, end, indent + 1):
+        if lines[end].strip().startswith("#"):
+            comment_indent = len(lines[end]) - len(lines[end].lstrip())
+            if comment_indent <= indent:
+                break
         end += 1
     # A mapping needs at least one child. Without this, a `secrets:` line with
     # nothing under it — which YAML reads as null, not as a mapping — would be
