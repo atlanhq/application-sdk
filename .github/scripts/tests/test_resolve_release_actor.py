@@ -121,7 +121,7 @@ class TestPushAttribution:
 
 
 class TestNonPushAttribution:
-    @pytest.mark.parametrize("event", ["workflow_dispatch", "release", "schedule"])
+    @pytest.mark.parametrize("event", ["workflow_dispatch", "schedule"])
     def test_attributes_to_whoever_triggered_the_run(self, event: str):
         """A deliberate trigger names its own owner — no lookup, no fallback."""
         calls: list = []
@@ -131,6 +131,35 @@ class TestNonPushAttribution:
             == "who-dispatched"
         )
         assert calls == []
+
+
+class TestReleaseAttribution:
+    """`release: published` is never triggered by a human.
+
+    The tag is cut by tag-and-release when a release-labelled PR merges, so the
+    Release is authored by the Fleet App bot and the publish run's triggering
+    actor is that bot. Trusting it attributed every tagged release to
+    `atlan-app-fleet`. GITHUB_SHA is the tagged commit — the merge commit of
+    that PR — so the same two hops recover the human who merged it.
+    """
+
+    def test_attributes_to_the_merger_not_the_publishing_bot(self):
+        run = fake_gh({
+            f"repos/{REPO}/commits/{SHA}/pulls": COMMIT_PULLS_RESPONSE,
+            f"repos/{REPO}/pulls/3240": SINGLE_PULL_RESPONSE,
+        })
+        assert (
+            actor.resolve_actor("release", REPO, SHA, "atlan-app-fleet[bot]", run)
+            == "a-human"
+        )
+
+    def test_falls_back_to_the_bot_rather_than_failing_the_publish(self):
+        """A tag pushed by hand has no PR. Degrading beats blocking a release."""
+        run = fake_gh({f"repos/{REPO}/commits/{SHA}/pulls": []})
+        assert (
+            actor.resolve_actor("release", REPO, SHA, "atlan-app-fleet[bot]", run)
+            == "atlan-app-fleet[bot]"
+        )
 
 
 class TestCreatedByValue:

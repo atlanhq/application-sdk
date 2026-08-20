@@ -5,11 +5,11 @@ The Global Marketplace shows ``created_by`` in the Slack approval message for a
 release, so it needs to name the *human who owns the change* — not whatever
 identity happened to move the bits.
 
-For every event except ``push`` that is simply the triggering actor: a
-``workflow_dispatch``, ``release`` or ``schedule`` run was started deliberately
-by someone, and that someone is the answer.
+For ``workflow_dispatch`` and ``schedule`` that is simply the triggering actor:
+the run was started deliberately by someone, and that someone is the answer.
 
-``push`` (the merge-to-main auto-publish flow) is the hard case. Version-bump
+``push`` (merge-to-main auto-publish) and ``release`` (the tag flow) are the
+hard cases, and they share a fix. Version-bump
 PRs are opened by the Atlan Fleet App bot, so the PR *author* is a bot and the
 person who owns the release is the one who **merged** it. That name is only
 reachable in two hops:
@@ -56,6 +56,18 @@ import sys
 from typing import Callable
 
 PUSH_EVENT = "push"
+RELEASE_EVENT = "release"
+
+# Events whose triggering actor is not the person who owns the release, so the
+# human has to be recovered from the PR behind the SHA.
+#
+# ``push`` is the merge-to-main auto-publish flow. ``release`` is the tag flow:
+# the tag is cut by ``tag-and-release`` when a release-labelled PR merges, so
+# the GitHub Release is authored by the Fleet App bot and ``triggering_actor``
+# on the resulting ``release: published`` run is that bot — never a human. In
+# both cases GITHUB_SHA is the merge commit of the PR that caused the release,
+# so the same two-hop lookup recovers the person who merged it.
+_PR_DERIVED_EVENTS = (PUSH_EVENT, RELEASE_EVENT)
 
 
 def _run_gh(args: list) -> str:
@@ -129,13 +141,13 @@ def resolve_actor(
 ) -> str:
     """The login to attribute the release to."""
     run = run or _run_gh
-    if event_name != PUSH_EVENT:
+    if event_name not in _PR_DERIVED_EVENTS:
         return triggering_actor
     number = pr_number_for_sha(repo, sha, run)
     if number is None:
         print(
             f"::notice::no PR associated with {sha[:12]} — "
-            f"attributing to the pushing actor",
+            f"attributing to the triggering actor",
             file=sys.stderr,
         )
         return triggering_actor
@@ -143,7 +155,7 @@ def resolve_actor(
     if merger is None:
         print(
             f"::warning::PR #{number} for {sha[:12]} reports no merged_by — "
-            f"attributing to the pushing actor",
+            f"attributing to the triggering actor",
             file=sys.stderr,
         )
         return triggering_actor
