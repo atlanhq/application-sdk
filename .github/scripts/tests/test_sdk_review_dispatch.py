@@ -94,7 +94,7 @@ def test_payload_pins_all_three_model_lanes():
     # Leaving any lane unset silently falls back to mothership's Claude
     # defaults, and `small_fast_model` unset resolves to `model`.
     p = _payload()
-    assert p["model"] == "x-ai/grok-4.6"
+    assert p["model"] == "kimi-k3"
     assert p["small_fast_model"] == "gpt-5.6-luna"
     assert p["env_vars"]["CLAUDE_CODE_SUBAGENT_MODEL"] == "gpt-5.6-luna"
     encoded = json.loads(json.dumps(p))
@@ -754,7 +754,7 @@ def _errored(code: str = "429", msg: str = "rate limited") -> sd.SSEState:
 def test_the_retry_runs_a_different_main_model():
     """A same-model re-dispatch re-hits the same model-level fault.
 
-    Every provider in a model's group serves the same model, so mothership's
+    Every provider in the `kimi-k3` group serves the same model, so mothership's
     own intra-group fallback cannot help. Swapping the model is the whole point.
     """
     assert sd.attempt_model(1) == sd.MAIN_MODEL

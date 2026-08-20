@@ -110,39 +110,24 @@ STREAM_TRANSPORT_ERRORS = (
 # the sandbox looks stalled. Re-armed by every content-bearing event.
 IDLE_WARN_SECONDS = 300
 
-# Models this lane runs on. The main lane is pinned to Grok 4.6 by operator
-# request, replacing kimi-k3 (which was itself chosen on cost per TASK, not per
-# token: index 57.2, ~$0.85/task vs claude-opus-5 at 60.5, ~$2.40). Two things
-# have to hold on the proxy side or every dispatch dies on turn one, and the
-# codes tell you which: 404 means `x-ai/grok-4.6` is not in the
-# llmproxy.atlan.dev catalog, 403 means the `sdk_review` gateway key does not
-# allowlist it.
-#
-# KNOWN RISK, carried deliberately: xAI does NOT prompt-cache on the
-# Anthropic `/v1/messages` route Claude Code uses (verified in the LiteLLM
-# ledger when mothership pinned its PR reviewer to x-ai/grok-4.5 in Jul 2026 —
-# Cache Hit False even with Claude Code sending cache_control), so a multi-turn
-# agentic reviewer re-bills its full context every turn. That is why mothership
-# reverted its own grok pin. This lane has the same shape, so watch the
-# per-review cost before treating the switch as settled.
-#
-# The fast lane stays on gpt-5.6-luna. `small_fast_model` must be pinned
-# explicitly: mothership's model_routing_env does `fast = small_fast_model or
-# model`, so pinning `model` alone would drag the background lane onto the main
-# model too.
-MAIN_MODEL = "x-ai/grok-4.6"
+# Models this lane runs on. Chosen on cost per TASK, not per token: kimi-k3
+# (index 57.2, ~$0.85/task) vs claude-opus-5 (60.5, ~$2.40) and gpt-5.6-luna
+# (51.2, $0.20/Mtok in) vs claude-haiku-4-5 (29.6, $1.00/Mtok) — better and
+# cheaper on the fast lane. `small_fast_model` must be pinned explicitly:
+# mothership's model_routing_env does `fast = small_fast_model or model`, so
+# pinning `model` alone would put the background lane on kimi-k3 too.
+MAIN_MODEL = "kimi-k3"
 FAST_MODEL = "gpt-5.6-luna"
 IDLE_TIMEOUT_SECONDS = 1800
 
 # --- Re-dispatch when the sandbox dies on a hard error ----------------------
 # One retry, on a DIFFERENT main model — the port of the resolve lane's
 # FND-641. Mothership's intra-group provider fallback already exists and fires
-# on a 429, but every provider in a model's group serves the SAME model, so a
-# same-model re-dispatch just re-hits the same model-level fault (observed on
-# resolve while the main lane was kimi-k3: the 429 fell through to Moonshot AI,
-# which returned 400 "the message at position 21 with role 'assistant' must not
-# be empty" — same model, same bug). Swapping the model is the whole point of
-# the retry.
+# on a 429, but every provider in the `kimi-k3` group serves the SAME model, so
+# a same-model re-dispatch just re-hits the same model-level fault (observed on
+# resolve: the 429 fell through to Moonshot AI, which returned 400 "the message
+# at position 21 with role 'assistant' must not be empty" — same model, same
+# bug). Swapping the model is the whole point of the retry.
 MAX_DISPATCH_ATTEMPTS = 2
 # Attempt 2's main model: mothership's own DEFAULT_CLAUDE_MODEL, named
 # explicitly rather than by omitting `model` from the payload, so a test can
@@ -179,7 +164,7 @@ RETRYABLE_ERR_CODES = frozenset(
 # does carry information — "401 upstream auth failed" mentions upstream and is
 # nonetheless a permanent fault that would fail identically on any model.
 RETRYABLE_ERR_PATTERNS = (
-    "must not be empty",  # the empty-assistant-turn fault (first seen on kimi-k3)
+    "must not be empty",  # the kimi-k3 empty-assistant-turn fault
     "rate-limited",
     "rate limited",
     "overloaded",
