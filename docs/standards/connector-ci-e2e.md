@@ -93,6 +93,42 @@ cancelled connector run is not even safe, because `prepare-tenant` carries
 `if: always()` and finishes installing onto the tenants it had already leased on
 its way out.
 
+### No dispatch for a commit the PR has moved past
+
+The claim above keys on the SHA, which makes it blind by construction to the
+*sequential* duplicate: commit A's `PR Checks` run is still working its way
+towards the dispatch when commit B lands. Two SHAs, two uncontested claims, two
+full fan-outs — nothing duplicated in the CAS's terms, everything duplicated in
+the tenants'. The lease then behaves exactly as advertised and **queues**, so the
+head commit waits out the obsolete commit's entire install-plus-legs cycle. On
+PR #3322 that was 3m38s, 10m12s and 12m of pure lease wait across three
+connectors, all of it behind a commit already superseded by a bot push 59
+seconds later (FND-696).
+
+So the guard also asks whether `check-sha` is still the head of the PR it came
+from, and skips if it is not:
+
+* **One API call, on the `pull_request` path only.** A merge-queue entry's SHA is
+  not any PR's head and cannot fall behind, so `--pr-number` is empty there and
+  the check does not run.
+* **Skip, not cancel.** At that point the stale run has not dispatched yet, so
+  there is nothing to cancel — and cancelling a connector run that *has* started
+  is unsafe for the `prepare-tenant` reason above.
+* **Unreadable means "not superseded".** A stale run costs tenant time; a
+  wrongly-skipped head commit costs the PR its e2e outright.
+* The stale run's own `Connector Tests Gate` would otherwise wait 130 minutes for
+  a check nobody is going to create, so `poll_check_runs_gate.py` takes the same
+  `--pr-number` and stops as soon as it can see that its SHA is no longer the
+  head. It exits **0**: no verdict is required from a commit that is no longer
+  under review, and a red there is a false alarm on an abandoned run that
+  automation reads as a real failure. Only the head commit's gate can satisfy a
+  required check.
+
+It does **not** close the window where the stale run dispatched first — a push
+landing more than a couple of minutes behind the previous one. That case is a
+live connector run holding a lease it legitimately took, and the queue is the
+right answer to it.
+
 ## SDR composite action inputs
 
 ```yaml

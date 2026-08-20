@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""At most one LIVE connector e2e dispatch per ``(dispatching SHA, app)``.
+"""At most one LIVE connector e2e dispatch per ``(dispatching SHA, app)``, and
+none at all for a SHA the PR has already moved past.
 
 Why this exists
 ---------------
@@ -95,6 +96,30 @@ That direction is deliberate and it is the opposite of the tenant lease's:
   is, in any case, exactly the pre-existing behaviour.
 
 So the worst case for a broken guard is the status quo.
+
+The other duplication: one PR, two head SHAs
+--------------------------------------------
+The CAS keys on the SHA, so it is blind by construction to the *sequential*
+duplicate: commit A's ``PR Checks`` run is still working its way towards the
+dispatch when commit B lands, and both then dispatch — two different SHAs, two
+uncontested claims, two full fan-outs. Nothing is duplicated in the CAS's terms
+and everything is duplicated in the tenants' terms. The connector-side lease
+behaves correctly and that is precisely the problem: it QUEUES, so commit B waits
+out commit A's entire install-plus-legs cycle before touching a tenant. On PR
+#3322 that cost 3m38s, 10m12s and 12m of pure lease wait across three connectors,
+all of it spent behind a commit that was already history (FND-696).
+
+The fix is one API call on the ``pull_request`` path: if ``--sha`` is no longer
+the head of ``--pr-number``, skip. Not cancellation — the stale run has not
+dispatched yet when this runs, so there is nothing to cancel, and cancelling a
+connector run that HAS started is unsafe anyway for the ``prepare-tenant``
+reason above. Unreadable answers dispatch, in keeping with the fail-open posture:
+a stale run costs tenant time, a wrongly-skipped head commit costs the PR its
+e2e.
+
+It does not close the window where the stale run dispatched first (a push more
+than ~2min behind the previous one). That case is a live connector run holding a
+lease it legitimately took, and the queue is the right answer to it.
 
 Pruning
 -------
@@ -574,6 +599,30 @@ def run_is_live(repo: str, run_id: int) -> bool:
     return response.body.get("status") != _COMPLETED
 
 
+def pr_head_sha(repo: str, number: int) -> str | None:
+    """The head SHA the PR currently points at, or None if it could not be read.
+
+    None is "unknown", never "no head": every caller treats an unreadable answer
+    as "not superseded" and dispatches, because the only thing worse than paying
+    for a stale e2e run is a PR head whose e2e silently never ran.
+    """
+    response = gh_request("GET", f"repos/{repo}/pulls/{number}")
+    if response.status >= 400 or not isinstance(response.body, dict):
+        print(
+            f"::warning::could not read pull request #{number} "
+            f"(HTTP {response.status}); dispatching without the stale-head check."
+        )
+        return None
+    head = response.body.get("head")
+    if not isinstance(head, dict) or not isinstance(head.get("sha"), str):
+        print(
+            f"::warning::pull request #{number} reported no head sha; "
+            "dispatching without the stale-head check."
+        )
+        return None
+    return head["sha"].strip().lower()
+
+
 def open_pr_heads(repo: str) -> set[str] | None:
     """Head SHAs of every open PR, or None if the list could not be read.
 
@@ -787,6 +836,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--app", required=True, help="Target connector repo name.")
     parser.add_argument(
+        "--pr-number",
+        default="",
+        help="Number of the pull request whose head --sha is, on the "
+        "pull_request path. Empty (the merge_group path) disables the "
+        "stale-head check: a queue entry has no PR head to fall behind.",
+    )
+    parser.add_argument(
         "--check-run-name",
         required=True,
         help="The check run the claimer creates before dispatching, e.g. "
@@ -824,6 +880,52 @@ def main(argv: list[str] | None = None) -> int:
             os.environ.get("GITHUB_OUTPUT"),
         )
         return 0
+
+    # ── Is this SHA still the thing under review? ────────────────────────────
+    # The CAS below is keyed on (app, SHA), so it cannot see the OTHER shape of
+    # duplication: one PR, two live head SHAs. A push that lands while the
+    # previous commit's PR Checks run is still on its way to this step leaves two
+    # runs dispatching two full fan-outs, and the connector-side tenant lease
+    # then does exactly what it promises — it queues the current SHA behind the
+    # obsolete one's whole install-plus-legs cycle. Measured on PR #3322: 3m38s
+    # of lease wait in one connector, 10m12s in another, 12m in a third, every
+    # second of it spent waiting for a commit nobody was going to merge
+    # (FND-696).
+    #
+    # So: if this run's SHA is no longer the PR's head, the dispatch is dropped
+    # here rather than serialised there. Cheaper than cancellation, and it needs
+    # no write permission — at this point the stale run has not dispatched yet,
+    # so there is nothing to cancel. (Once it HAS dispatched, this check cannot
+    # help; the connector run is live and the lease queue is the right answer.)
+    #
+    # One API call, and unreadable means "not superseded": the failure that
+    # matters is skipping the head commit's only dispatch, so every doubt
+    # resolves towards dispatching.
+    pr_number = args.pr_number.strip()
+    if pr_number.isdigit():
+        head = pr_head_sha(args.repo, int(pr_number))
+        if head is not None and head != sha:
+            print(
+                f"::notice::skipping the {args.app} dispatch: {sha[:8]} is no "
+                f"longer the head of PR #{pr_number} ({head[:8]} is). The tenant "
+                "belongs to the head commit's run."
+            )
+            summarise(
+                f"- **{args.app}**: stale dispatch skipped — `{sha[:8]}` was "
+                f"superseded by `{head[:8]}` on PR #{pr_number}."
+            )
+            write_outputs(
+                {
+                    "claimed": "false",
+                    "state": "superseded",
+                    # Empty on purpose: no claim was taken, and naming a ref this
+                    # run never wrote would read as one it holds.
+                    "claim-ref": "",
+                    "holder-run-id": "",
+                },
+                os.environ.get("GITHUB_OUTPUT"),
+            )
+            return 0
 
     ref = claim_ref(args.app, sha)
     try:

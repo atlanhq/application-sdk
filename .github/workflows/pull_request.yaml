@@ -656,6 +656,11 @@ jobs:
     permissions:
       contents: read
       checks: read
+      # Reading this PR's current head, so a poll for checks that will never
+      # exist stops early. Missing, the read 403s, the poll warns and waits the
+      # full budget — the old behaviour, which is why this is easy to drop and
+      # never notice.
+      pull-requests: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -694,13 +699,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MATRIX_JSON: ${{ needs.matrix-builder.outputs.matrix }}
           SHA: ${{ github.event_name == 'merge_group' && github.sha || github.event.pull_request.head.sha }}
+          # Lets this stop early instead of waiting out the full 130min for
+          # checks that will never exist: when SHA is no longer this PR's head,
+          # the dispatch guard declined to dispatch for it (FND-696). Empty on
+          # the merge_group path, which keeps the previous behaviour there.
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           NAMES_JSON=$(jq -c '[.include[] | "Connector E2E run / " + .repo_name]' <<< "$MATRIX_JSON")
           python3 .github/scripts/poll_check_runs_gate.py \
             --repo "${{ github.repository }}" \
             --sha "$SHA" \
-            --names-json "$NAMES_JSON"
+            --names-json "$NAMES_JSON" \
+            --pr-number "$PR_NUMBER"
 
   # Real-cloud storage integration tests (S3 / Azure / GCS) — exercise
   # create_store_from_binding + CloudStore against real buckets/vaults using the

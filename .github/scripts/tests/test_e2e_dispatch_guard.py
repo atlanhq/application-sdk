@@ -619,6 +619,136 @@ def test_a_malformed_sha_still_dispatches(
     assert http.calls == []
 
 
+# --- the other duplication: one PR, two head SHAs --------------------------
+#
+# The CAS is keyed on the SHA, so two live commits on one PR are two legitimate
+# claims and both fan out. Nothing is duplicated in the CAS's terms; the cost
+# lands a repo away, where the tenant lease queues the head commit behind the
+# obsolete commit's entire install-plus-legs cycle (FND-696). These tests pin
+# both directions: a superseded SHA must not reach a tenant, and every doubt
+# about whether it IS superseded must still dispatch.
+
+_HEAD = "d47789e0" + "1" * 32
+
+
+def test_a_superseded_sha_does_not_dispatch(
+    http: FakeHTTP, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = _outputs(tmp_path, monkeypatch)
+    http.route("GET", "/pulls/3322", (200, {"head": {"sha": _HEAD}}))
+
+    assert main(_argv(**{"--pr-number": "3322"})) == 0
+
+    outputs = _read(out)
+    assert outputs["claimed"] == "false"
+    assert outputs["state"] == "superseded"
+    # No claim was taken, so naming one would read as a ref this run holds.
+    assert outputs["claim-ref"] == ""
+    # And it stands down completely: no CAS, no prune, no check-run read. The
+    # unstubbed-request guard in FakeHTTP is what proves it — one call, total.
+    assert len(http.calls) == 1
+
+
+def test_the_head_sha_dispatches(
+    http: FakeHTTP, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = _outputs(tmp_path, monkeypatch)
+    http.route("GET", "/pulls/3322", (200, {"head": {"sha": SHA}}))
+    http.route("GET", "/git/ref/", (404, {"message": "Not Found"}))
+    http.route("POST", "/git/blobs", (201, {"sha": BLOB}))
+    http.route("POST", "/git/refs", (201, {"ref": REF}))
+    http.route("GET", "/matching-refs/", (200, [{"ref": REF}]))
+    http.route("GET", "/pulls?", (200, []))
+
+    assert main(_argv(**{"--pr-number": "3322"})) == 0
+
+    assert _read(out)["state"] == "claimed"
+
+
+def test_a_head_sha_in_a_different_case_is_not_superseded(
+    http: FakeHTTP, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One SHA in two spellings must not read as two commits — that would skip
+    the head commit's own dispatch, the one failure worse than a stale run."""
+    out = _outputs(tmp_path, monkeypatch)
+    http.route("GET", "/pulls/3322", (200, {"head": {"sha": SHA.upper()}}))
+    http.route("GET", "/git/ref/", (404, {"message": "Not Found"}))
+    http.route("POST", "/git/blobs", (201, {"sha": BLOB}))
+    http.route("POST", "/git/refs", (201, {"ref": REF}))
+    http.route("GET", "/matching-refs/", (200, [{"ref": REF}]))
+    http.route("GET", "/pulls?", (200, []))
+
+    assert main(_argv(**{"--pr-number": "3322"})) == 0
+
+    assert _read(out)["state"] == "claimed"
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        (404, {"message": "Not Found"}),
+        (500, {"message": "boom"}),
+        _PERMISSION_DENIED,
+        _RATE_LIMIT,
+        # Shape change: a 200 that says nothing about the head.
+        (200, {"number": 3322}),
+        (200, {"head": {"ref": "bump-version-main"}}),
+    ],
+)
+def test_an_unreadable_pr_head_still_dispatches(
+    http: FakeHTTP, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, answer
+) -> None:
+    """Unknown is not stale. Every doubt resolves towards dispatching, because a
+    stale run costs tenant time and a wrongly-skipped head commit costs the PR
+    its e2e outright."""
+    out = _outputs(tmp_path, monkeypatch)
+    http.route("GET", "/pulls/3322", answer)
+    http.route("GET", "/git/ref/", (404, {"message": "Not Found"}))
+    http.route("POST", "/git/blobs", (201, {"sha": BLOB}))
+    http.route("POST", "/git/refs", (201, {"ref": REF}))
+    http.route("GET", "/matching-refs/", (200, [{"ref": REF}]))
+    http.route("GET", "/pulls?", (200, []))
+
+    assert main(_argv(**{"--pr-number": "3322"})) == 0
+
+    assert _read(out)["claimed"] == "true"
+
+
+@pytest.mark.parametrize("number", ["", "  ", "not-a-number"])
+def test_no_pr_number_skips_the_check_entirely(
+    http: FakeHTTP, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, number
+) -> None:
+    """The merge_group path. A queue entry's SHA is not any PR's head, so there
+    is nothing for it to fall behind — and asking would spend an API call to
+    learn that a 404 means "carry on"."""
+    out = _outputs(tmp_path, monkeypatch)
+    http.route("GET", "/git/ref/", (404, {"message": "Not Found"}))
+    http.route("POST", "/git/blobs", (201, {"sha": BLOB}))
+    http.route("POST", "/git/refs", (201, {"ref": REF}))
+    http.route("GET", "/matching-refs/", (200, [{"ref": REF}]))
+    http.route("GET", "/pulls?", (200, []))
+
+    assert main(_argv(**{"--pr-number": number})) == 0
+
+    assert _read(out)["state"] == "claimed"
+    assert http.count("GET", "/pulls/3322") == 0
+
+
+def test_the_stale_head_check_runs_before_the_claim(
+    http: FakeHTTP, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Order, not preference. Claiming first and standing down after would leave
+    a claim ref behind that no run will ever dispatch for, and the next
+    contender on that SHA would have to reap it."""
+    _outputs(tmp_path, monkeypatch)
+    http.route("GET", "/pulls/3322", (200, {"head": {"sha": _HEAD}}))
+
+    assert main(_argv(**{"--pr-number": "3322"})) == 0
+
+    assert http.count("POST", "/git/refs") == 0
+    assert http.count("POST", "/git/blobs") == 0
+
+
 def test_the_token_never_reaches_curls_command_line(http: FakeHTTP) -> None:
     """Anything else on the runner can read /proc/<pid>/cmdline while a request
     is in flight, so the credential goes through stdin (-K -) instead."""
@@ -831,6 +961,20 @@ def test_the_guard_uses_this_repos_own_token(action: dict) -> None:  # type: ign
     assert env["REPO"] == "${{ github.repository }}"
     assert env["SHA"] == "${{ inputs.check-sha }}"
     assert env["NAME"] == "${{ inputs.check-run-name }}"
+
+
+def test_the_pr_number_comes_from_the_event(action: dict) -> None:  # type: ignore[type-arg]
+    """Two properties in one expression. It must come from the EVENT, not an
+    input, or a caller could name a PR whose head has nothing to do with
+    `check-sha` — and the guard would then skip against a stranger's commit. And
+    it is empty on the merge_group path, which is exactly what disables the
+    stale-head check for a queue entry that has no PR head to fall behind."""
+    step = _step(action, "Claim the dispatch slot")
+    assert step["env"]["PR_NUMBER"] == "${{ github.event.pull_request.number }}"
+    assert "--pr-number" in step["run"], (
+        "the env var alone does nothing; without the flag the stale-head check "
+        "is silently off and every superseded commit fans out again"
+    )
 
 
 def test_the_caller_grants_what_the_guard_needs() -> None:

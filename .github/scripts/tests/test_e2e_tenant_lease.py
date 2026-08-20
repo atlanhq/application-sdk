@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import base64
 import json
+import select
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1563,3 +1565,54 @@ def test_main_release_gives_back_the_whole_set(
 
     assert main(_argv_clouds("release", "aws,gcp")) == 0
     assert http.count("DELETE", "/git/refs/") == 2
+
+
+# --- the wait has to be visible while it is waiting ------------------------
+
+
+_LEASE_SCRIPT = (
+    Path(__file__).parent.parent.parent
+    / "actions"
+    / "e2e-tenant-lease"
+    / "e2e_tenant_lease.py"
+)
+
+
+def test_the_wait_log_streams_rather_than_arriving_at_exit() -> None:
+    """Python block-buffers stdout when it is a pipe, and an Actions log is
+    always a pipe. Without the import-time line-buffering this module sets, a run
+    that queued for ten minutes showed an EMPTY step for ten minutes and then
+    printed all ten minutes of "waiting for ..." at once — indistinguishable from
+    a wedged step, and duly read as a deadlock (FND-696).
+
+    Asserted through a real pipe rather than by reading the source: the property
+    is "the line arrives before the process does", and only a subprocess can say
+    that.
+    """
+    program = (
+        "import sys, time\n"
+        f"sys.path.insert(0, {str(_LEASE_SCRIPT.parent)!r})\n"
+        # Importing is the whole point: the buffering is configured at import,
+        # so nothing here may print before it.
+        "import e2e_tenant_lease  # noqa: F401\n"
+        "print('[1/180] waiting for the tenant')\n"
+        # Long enough that an exit flush cannot be what delivered the line.
+        "time.sleep(120)\n"
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-c", program],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        ready, _, _ = select.select([proc.stdout], [], [], 30)
+        assert ready, (
+            "nothing reached the log while the process was still running, so a "
+            "waiting lease is invisible for as long as it waits"
+        )
+        assert proc.stdout is not None
+        assert "waiting for the tenant" in proc.stdout.readline()
+    finally:
+        proc.kill()
+        proc.wait(timeout=30)
