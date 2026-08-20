@@ -8,3 +8,4 @@ rules:
   - rules/app-parallel-001.md
   - rules/app-secrets-001.md
   - rules/app-observability-001.md
+  - rules/app-tests-001.md
