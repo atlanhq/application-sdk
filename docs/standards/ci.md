@@ -438,7 +438,38 @@ any contender decides, and nothing enforces that. Use an atomic primitive and
 derive nothing from ids. The cost is fairness — acquisition becomes a scramble,
 so bound starvation with the wait budget below rather than with a queue position.
 
-Three consequences to design for:
+**But when one run needs SEVERAL of these locks, it must take them in a fixed
+order — and that is a different rule, not a contradiction of the one above.**
+The lease job used to be a per-cloud matrix that acquired every cloud's lease in
+parallel and held each for the whole run while blocking on the rest. That is
+textbook hold-and-wait, and it deadlocked the first time two runs queued behind
+one holder (FND-646): the holder released all three leases at once, the two
+waiters raced for the freed set and **split** it — one took aws + azure, the
+other gcp — and each then blocked on what the other held for the whole 90-minute
+wait budget. Any time two or more runs are queued behind a holder, a parallel
+matrix makes that split the *expected* outcome, not a rare interleaving.
+
+The fix is resource ordering: one job takes every lock it needs, one at a time,
+in an order that is a **pure function of the resource names** (`sorted()`). Two
+runs can then never hold locks the other needs out of order, so the worst case
+degrades from mutual blocking to plain serialisation. Note what is and is not
+being ordered — the CAS still grants every lease, and the order governs only the
+sequence in which *one* run takes several of them. That is why this does not
+re-open the rejected-ordering trap above.
+
+Consequences worth spelling out:
+
+* The wait budget becomes a **total** across the set, not per resource, or N
+  locks can outlast the job timeout by N times over and the runner's bare
+  "cancelled after Nm" replaces the actionable error.
+* Acquisition has to be **all-or-nothing**: a run that cannot get the whole set
+  hands back what it took, immediately, rather than waiting for its cleanup job.
+* Derive the order from the names only. Run id, arrival order, or the caller's
+  list order all make two contenders disagree about which lock comes first,
+  which is the entire guarantee.
+* Release can stay parallel. It cannot block, so there is no wait to order.
+
+Three further consequences to design for:
 
 * A waiting run occupies a runner, so give the wait a budget and fail loudly past
   it, **naming the holder**. A contention outcome must never be phrased as a test
