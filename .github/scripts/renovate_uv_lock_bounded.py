@@ -611,12 +611,13 @@ def main(argv: list[str] | None = None) -> int:
         "--caller-owns-commit",
         action="store_true",
         help="The caller controls what gets committed, so a bound that admits "
-        "nothing is an ordinary no-op: write the baseline back and exit 0, and "
-        "let the caller commit that. Set by bound_lock_branch.py (FND-376), whose "
-        "workflow owns the push. Leave it off under Renovate's postUpgradeTasks, "
-        "where Renovate commits the working tree itself and substitutes its own "
-        "unbounded artifact whenever this command leaves the tree matching HEAD — "
-        "there, admitting nothing has to fail visibly instead.",
+        "nothing is an ordinary no-op: write back the bounded resolve, whose "
+        "versions match the baseline, and exit 0, and let the caller commit "
+        "that. Set by bound_lock_branch.py (FND-376), whose workflow owns the "
+        "push. Leave it off under Renovate's postUpgradeTasks, where Renovate "
+        "commits the working tree itself and substitutes its own unbounded "
+        "artifact whenever this command leaves the tree matching HEAD — there, "
+        "admitting nothing has to fail visibly instead.",
     )
     parser.add_argument(
         "--baseline-ref",
@@ -749,24 +750,35 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    if after == before and renovate_versions != before and not args.caller_owns_commit:
+    if after == before and renovate_versions != before:
         moved = ", ".join(
             f"{name} {before.get(name, 'absent')} -> {version}"
             for name, version in sorted(renovate_versions.items())
             if before.get(name) != version
         )
-        withhold(lock_path, baseline, args.window)
-        print(
-            f"The bound admits nothing today, but Renovate's own unbounded "
-            f"resolve moved: {moved}. Leaving the tree matching HEAD would hand "
-            "Renovate's copy straight to the branch — a valid lock that passes "
-            "every check while carrying releases minutes old — so the lock is "
-            "left deliberately un-installable instead and this run fails. "
-            "Nothing needs fixing in the repo: the window will admit these "
-            f"versions once they are `{args.window}` old.",
-            file=sys.stderr,
-        )
-        return 1
+        if args.caller_owns_commit:
+            # Informational only: this lane commits whatever we write, so a hold
+            # is a no-op rather than a refusal. Keep the window's contents in
+            # the log so a net-empty PR still explains itself.
+            print(
+                f"The bound admits nothing today; Renovate's unbounded resolve "
+                f"moved: {moved}. The caller owns the commit, so this is an "
+                "ordinary no-op rather than a hold.",
+                file=sys.stderr,
+            )
+        else:
+            withhold(lock_path, baseline, args.window)
+            print(
+                f"The bound admits nothing today, but Renovate's own unbounded "
+                f"resolve moved: {moved}. Leaving the tree matching HEAD would "
+                "hand Renovate's copy straight to the branch — a valid lock "
+                "that passes every check while carrying releases minutes old — "
+                "so the lock is left deliberately un-installable instead and "
+                "this run fails. Nothing needs fixing in the repo: the window "
+                f"will admit these versions once they are `{args.window}` old.",
+                file=sys.stderr,
+            )
+            return 1
 
     lock_path.write_text(strip_options(lock_path.read_text()))
 
