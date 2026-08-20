@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "check_e2e_scaffold.py"
 _spec = importlib.util.spec_from_file_location("check_e2e_scaffold", _SCRIPT)
@@ -171,3 +172,62 @@ def test_error_offers_the_opt_out(
     scaffold.main(["--root", str(tmp_path)])
 
     assert "enable-e2e: false" in capsys.readouterr().err
+
+
+# ── The paths are a COPY of the caller's pins — keep them pinned ─────────────
+# The whole value of this check is that it predicts what the e2e job will do, and
+# it does that by duplicating two strings the job passes to the sdr-e2e action.
+# Nothing in Python links the two files, so the failure mode is silent and
+# expensive: someone repoints `config-dir` or `secrets-script`, and every repo
+# gets a discovery-time check demanding a file no longer used while the real
+# failure moves back into the leg. These read the workflow and compare.
+
+
+def _e2e_action_inputs() -> dict:  # type: ignore[type-arg]
+    """The `with:` block tests-reusable.yaml hands the sdr-e2e action."""
+    reusable = yaml.safe_load(
+        (
+            Path(__file__).resolve().parents[3]
+            / ".github/workflows/tests-reusable.yaml"
+        ).read_text(encoding="utf-8")
+    )
+    for step in reusable["jobs"]["e2e"]["steps"]:
+        if "sdr-e2e" in str(step.get("uses", "")):
+            return step["with"]
+    raise AssertionError("the e2e job no longer invokes the sdr-e2e action")
+
+
+def test_the_checked_config_dir_is_the_one_the_caller_pins() -> None:
+    assert _e2e_action_inputs()["config-dir"] == scaffold.FULL_DAG_CONFIG_DIR, (
+        "tests-reusable.yaml's e2e job pins a different config-dir than this "
+        "check requires, so the check now demands a directory nothing reads and "
+        "the real resolution failure is back inside the leg"
+    )
+
+
+def test_the_checked_secrets_script_is_the_one_the_caller_pins() -> None:
+    assert _e2e_action_inputs()["secrets-script"] == scaffold.FULL_DAG_SECRETS_SCRIPT, (
+        "tests-reusable.yaml's e2e job pins a different secrets-script than this "
+        "check requires — the check would pass repos the action then fails, and "
+        "fail repos the action would have accepted"
+    )
+
+
+def test_the_scaffold_check_runs_in_discover_e2e() -> None:
+    """Position is the point: in the leg it is worth nothing, because that is
+    where the failure already happens."""
+    reusable = yaml.safe_load(
+        (
+            Path(__file__).resolve().parents[3]
+            / ".github/workflows/tests-reusable.yaml"
+        ).read_text(encoding="utf-8")
+    )
+    runs = [
+        str(step.get("run", "")) for step in reusable["jobs"]["discover-e2e"]["steps"]
+    ]
+
+    assert any("check_e2e_scaffold.py" in run for run in runs), (
+        "the scaffold precondition must run in discover-e2e — the first job on "
+        "the e2e path, before two image builds, a tenant lease and a tenant "
+        "install have been spent"
+    )
