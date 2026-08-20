@@ -42,7 +42,9 @@ logger = get_logger(__name__)
 
 #: Bump on any change to the record's fields or their meaning. Rows are read
 #: months after they were written, mixed across SDK versions.
-SIZING_SCHEMA_VERSION = 1
+#: 2 — added started_at / pod / concurrency_max / is_attributable. A v1 row cannot
+#: say whether its peak was pod-wide, so v1 and v2 must not be pooled.
+SIZING_SCHEMA_VERSION = 2
 
 
 class SizingObservabilitySink(AtlanObservability[Any]):
@@ -66,6 +68,10 @@ class SizingObservabilitySink(AtlanObservability[Any]):
         # Derived here so every consumer computes them identically.
         row["mean_cpu_cores"] = record.mean_cpu_cores
         row["peak_per_input_byte"] = record.peak_per_input_byte
+        # Written out rather than left for the reader to derive from
+        # concurrency_max: it is the flag that decides which model a row feeds,
+        # and a consumer that forgets to apply it pools two different quantities.
+        row["is_attributable"] = record.is_attributable
         return row
 
     def export_record(self, record: Any) -> None:
