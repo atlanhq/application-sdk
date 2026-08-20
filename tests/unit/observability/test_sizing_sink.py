@@ -39,6 +39,9 @@ def _observation(**overrides) -> SizingObservation:
         "input_bytes": 2 * 1024**3,
         "input_file_count": 24,
         "input_basis": "reported",
+        "started_at": 1755690000.0,
+        "pod": "ae-heavy-7f9c",
+        "concurrency_max": 1,
     }
     base.update(overrides)
     return SizingObservation(**base)
@@ -112,6 +115,20 @@ class TestProcessRecord:
         row = sink.process_record(_observation(input_bytes=None, cpu_seconds=None))
         assert row["peak_per_input_byte"] is None
         assert row["mean_cpu_cores"] is None
+
+    def test_carries_the_join_keys(self, sink):
+        """pod + started_at + duration is how overlap is rebuilt at analysis time."""
+        row = sink.process_record(_observation())
+        assert row["pod"] == "ae-heavy-7f9c"
+        assert row["started_at"] == 1755690000.0
+        assert row["duration_seconds"] == 47.2
+
+    def test_attributability_is_written_not_derived(self, sink):
+        """A consumer that forgets the flag would pool activity and pod peaks."""
+        assert sink.process_record(_observation())["is_attributable"] is True
+        row = sink.process_record(_observation(concurrency_max=6))
+        assert row["concurrency_max"] == 6
+        assert row["is_attributable"] is False
 
     def test_export_record_is_a_no_op(self, sink):
         """Histograms come from record_observation, not from the batching sink."""

@@ -57,6 +57,14 @@ class SizingObservation:
     input_file_count: int | None = None
     input_basis: str | None = None
 
+    # Attribution context. These three make the row self-describing: with
+    # ``pod`` + ``started_at`` + ``duration_seconds`` the analysis can join rows that
+    # overlapped and recover the in-flight set and its combined input itself, so no
+    # in-process bookkeeping of who-ran-with-whom is needed.
+    started_at: float | None = None
+    pod: str | None = None
+    concurrency_max: int = 1
+
     @property
     def mean_cpu_cores(self) -> float | None:
         """CPU consumed per wall-clock second.
@@ -67,6 +75,15 @@ class SizingObservation:
         if self.cpu_seconds is None or self.duration_seconds <= 0:
             return None
         return self.cpu_seconds / self.duration_seconds
+
+    @property
+    def is_attributable(self) -> bool:
+        """Whether the peak belongs to this activity alone.
+
+        False means the reading is pod-wide — still useful, but for fitting a pod
+        envelope, not an activity's.
+        """
+        return self.concurrency_max <= 1
 
     @property
     def peak_per_input_byte(self) -> float | None:
@@ -91,6 +108,9 @@ class SizingObservation:
         outcome: str,
         duration_seconds: float,
         input_size: InputSize | None = None,
+        started_at: float | None = None,
+        pod: str | None = None,
+        concurrency_max: int = 1,
     ) -> SizingObservation:
         return cls(
             activity_type=activity_type,
@@ -110,6 +130,9 @@ class SizingObservation:
             input_bytes=input_size.bytes if input_size else None,
             input_file_count=input_size.file_count if input_size else None,
             input_basis=input_size.basis if input_size else None,
+            started_at=started_at,
+            pod=pod,
+            concurrency_max=concurrency_max,
         )
 
     def has_data(self) -> bool:
@@ -208,6 +231,9 @@ def record_observation(observation: SizingObservation) -> None:
             "temporal.task_queue": observation.task_queue,
             "outcome": observation.outcome,
             "peak.source": observation.peak_source,
+            # Without this a dashboard averages per-activity peaks together with
+            # pod-wide ones, which is two different quantities under one name.
+            "attributable": str(observation.is_attributable).lower(),
         }
         if observation.input_bytes is not None:
             _input_mib().record(
