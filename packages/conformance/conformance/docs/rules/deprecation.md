@@ -214,8 +214,17 @@ an in-repo base class or an SDK-provided mixin (e.g. `PublishInputMixin`) is jus
 ledger-tracked as one declared directly on the contract, so adopting a new mixin can
 also trigger this on the fields it contributes.
 
-Fix: run `uv run atlan-application-sdk-conformance gen-contract-ledger` and commit the
-updated ledger in the same PR as the contract change.
+Fix: run the exact command the finding names — in a consumer app that is `uvx
+atlan-application-sdk-conformance==<version> gen-contract-ledger`, version-pinned to the
+checker that raised it — and commit the updated ledger in the same PR as the contract
+change.  Keep the pin.  CI runs `detect` from an unpinned `uvx` install while a bare `uv
+run` resolves the app's *locked* conformance dev dependency, and the generator's output
+depends on its version: the SDK contract-base field registry it reads grows as the SDK
+gains fields.  Regenerating with an older locked version therefore rewrites the ledger
+byte-identically and leaves the finding standing with no diff to commit — a dead end on
+a BLOCK-tier rule, which is what FND-607 hit.  In the SDK repo itself the suite is
+in-tree, so there the command is `uv run atlan-application-sdk-conformance
+gen-contract-ledger`.
 
 The generator is append-only — it appends new live fields and refreshes `status` from
 source but never deletes an entry or rewrites a recorded `type`.  Regenerating after a
