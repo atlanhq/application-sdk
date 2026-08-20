@@ -164,6 +164,30 @@ def test_resolved_nothing_is_false_for_every_other_stream_shape():
     assert sr.resolved_nothing(_completed_stream()) is False
 
 
+def test_a_summary_does_not_outrank_a_failed_terminal_status():
+    # `process_line` leaves `errored` False for a `complete` carrying
+    # status=error with an empty error object. Without consulting the terminal
+    # status, a run that streamed its Phase 4 summary and *then* died would
+    # render as merge-ready while `decide_exit` returned 1 — the exit code and
+    # the step summary must never disagree.
+    st = _stream(
+        "event: response",
+        f"data: {json.dumps({'text': _SUMMARY_BLOCK})}",
+        "",
+        "event: complete",
+        'data: {"status": "error"}',
+    )
+    assert st.errored is False and st.status == "error"
+    assert sr.run_completed(st) is False
+    assert sr.decide_exit(st)[0] == 1
+    out = sr.render_step_summary(st, "1234", "http://run")
+    assert "merge-ready" not in out
+    assert "run failed" in out
+    # Still not a no-op: the sandbox reported a failure, so it keeps the
+    # error-code retry path rather than the no-op one.
+    assert sr.resolved_nothing(st) is False
+
+
 def test_noop_run_is_a_stopped_sandbox_with_a_short_poll():
     # The sentinel proves the sandbox stopped, so it will post nothing more:
     # poll briefly for a hand-off that landed just before, then move on. The

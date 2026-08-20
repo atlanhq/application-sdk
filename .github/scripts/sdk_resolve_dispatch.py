@@ -455,6 +455,15 @@ def run_completed(st: SSEState) -> bool:
     """
     if st.errored:
         return False
+    if st.completed and st.status != "completed":
+        # A terminal status the sandbox itself calls a failure. `process_line`
+        # leaves `errored` False for a `complete` carrying status=error with an
+        # empty error object, so the check above does not cover this — and
+        # without it a run that streamed its Phase 4 summary and *then* died
+        # would render as merge-ready in the step summary while `decide_exit`
+        # returned 1. Terminal status and proof of work are both consulted, so
+        # the two never diverge.
+        return False
     summary = mine_summary(st)
     return any(k in summary for k in TERMINAL_SUMMARY_KEYS)
 
