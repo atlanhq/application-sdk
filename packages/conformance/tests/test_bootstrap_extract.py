@@ -906,15 +906,111 @@ def test_quoted_force_external_runtime_is_read(quote: str) -> None:
 def test_quoted_app_name_is_not_renamed(quote: str) -> None:
     """A quoted ``"app-name"`` must be carried, not reverted to the default.
 
-    ``_APP_NAME_RE`` anchored on the bare spelling, so a quoted key read as
-    absent and ``--resync`` rendered ``app-name: "app"`` — renaming the app in
-    its own CI config with no refusal.
+    The read-back was anchored on the bare spelling of the *key*, so a quoted
+    key read as absent and the identity guard then skipped the resync — leaving
+    the app's CI config permanently un-resyncable.
     """
     canonical = render("tests.yaml", app_name="widget")
     text = canonical.replace(
         '      app-name: "widget"', f'      {quote}app-name{quote}: "widget"', 1
     )
     assert extract_tests_yaml_params(text)["app_name"] == "widget"
+
+
+@pytest.mark.parametrize(
+    "value", ["widget", "'widget'", '"widget"'], ids=["bare", "single", "double"]
+)
+def test_app_identity_value_spelling_round_trips(value: str) -> None:
+    """Every valid spelling of the app-identity *values* must be carried.
+
+    The key dimension was fixed first; the two readers still demanded a
+    double-quoted *value*, so a hand-written ``app-name: widget`` read as absent.
+    The identity guard then skipped every ``--resync`` of that file ("drifted too
+    far"), leaving the repo's CI config permanently stale — the same
+    hand-written-spelling class as the services-script line, which two real repos
+    hit. Asserted through the round trip, not just the read, so a value that is
+    read but then re-rendered differently still fails.
+    """
+    canonical = render("tests.yaml", app_name="widget")
+    text = canonical.replace(
+        '      app-name: "widget"', f"      app-name: {value}", 1
+    ).replace(
+        '      app-image-name: "atlan-widget-app"',
+        f"      app-image-name: {value.replace('widget', 'atlan-widget-app')}",
+        1,
+    )
+    params = extract_tests_yaml_params(text)
+    assert params["app_name"] == "widget"
+    assert params["app_image_name"] == "atlan-widget-app"
+    rendered = render("tests.yaml", **params)
+    # The value is carried, the re-render is the canonical spelling, and the
+    # guard sees nothing dropped.
+    assert '      app-name: "widget"' in rendered
+    assert unpreserved_tests_yaml_declarations(text, rendered) == []
+
+
+@pytest.mark.parametrize(
+    "value", ["false", "'false'", '"false"'], ids=["bare", "single", "double"]
+)
+def test_enable_e2e_value_spelling_round_trips(value: str) -> None:
+    """A quoted ``enable-e2e`` must be carried, not dropped to the default.
+
+    Same anchored-on-one-value-spelling defect as the app-identity pair: the
+    reader took only a bare ``true``/``false``, so a quoted ``"false"`` read as
+    absent and the re-render omitted the line — which, left unguarded, would
+    re-enable e2e on a repo that had turned it off. The round-trip guard did
+    refuse it, so the resync failed loudly rather than silently; reading the
+    value is what lets it succeed instead.
+    """
+    canonical = render("tests.yaml", app_name="widget", enable_e2e="false")
+    text = canonical.replace("      enable-e2e: false", f"      enable-e2e: {value}", 1)
+    params = extract_tests_yaml_params(text)
+    assert params["enable_e2e"] == "false"
+    rendered = render("tests.yaml", **params)
+    assert "      enable-e2e: false" in rendered
+    assert unpreserved_tests_yaml_declarations(text, rendered) == []
+
+
+def test_unreadable_enable_e2e_value_is_left_to_the_guard() -> None:
+    """A non-boolean ``enable-e2e`` is not guessed at.
+
+    Reading it as ``"true"``/``"false"`` either way would re-render a value the
+    file does not declare. Omitting it instead lets the round-trip guard refuse
+    the resync, which is the fail-safe direction.
+    """
+    canonical = render("tests.yaml", app_name="widget", enable_e2e="false")
+    text = canonical.replace("      enable-e2e: false", "      enable-e2e: maybe", 1)
+    assert "enable_e2e" not in extract_tests_yaml_params(text)
+
+
+@pytest.mark.parametrize("quote", ['"', "'"], ids=["double", "single"])
+def test_extract_field_quoted_value_keeps_spaces(quote: str) -> None:
+    """A quoted value containing spaces survives whole.
+
+    Stopping at the first whitespace would hand the caller a truncated value —
+    a silent rewrite of the very declaration the reader exists to preserve.
+    """
+    assert extract_field(f"k: {quote}a b{quote}\n", "k") == "a b"
+
+
+def test_extract_field_bare_value_stops_at_whitespace() -> None:
+    """A bare value still ends at the first whitespace, so a trailing comment
+    stays out of it."""
+    assert extract_field("k: v # note\n", "k") == "v"
+
+
+def test_commented_out_app_name_is_not_read_back() -> None:
+    """A commented-out ``app-name`` must not satisfy the read-back.
+
+    It names a value the file no longer declares; reading it would re-render the
+    app under a name it had removed. ``structural_lines`` blanks the comment, so
+    the scoped read cannot see it and the identity guard skips instead.
+    """
+    canonical = render("tests.yaml", app_name="widget")
+    text = canonical.replace(
+        '      app-name: "widget"', '      # app-name: "widget"', 1
+    )
+    assert "app_name" not in extract_tests_yaml_params(text)
 
 
 def test_declared_keys_normalises_a_quoted_key() -> None:

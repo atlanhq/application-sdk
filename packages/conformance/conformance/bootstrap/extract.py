@@ -60,19 +60,18 @@ _COMMENT_LINE_RE = re.compile(r"^[ \t]*#.*$", re.MULTILINE)
 # "@<pinned>".
 _ACTION_PIN_RE = re.compile(r"@[0-9a-f]{40}(?:[ \t]+#[^\n]*)?")
 
-# tests.yaml's per-repo customised values, read back off a scaffolded file.
-# Anchored like _SERVICES_SCRIPT_RE below so a *commented-out* line (the shape
-# a renamed app most often leaves behind) can't satisfy the read-back — the
-# --resync identity guard in particular must skip rather than re-render from a
-# value the file no longer declares.
-_APP_NAME_RE = re.compile(
-    r'^\s+(?:app-name|"app-name"|\'app-name\'):\s+"([^"]+)"\s*$', re.MULTILINE
-)
-_APP_IMAGE_NAME_RE = re.compile(
-    r'^\s+(?:app-image-name|"app-image-name"|\'app-image-name\'):\s+"([^"]+)"\s*$',
-    re.MULTILINE,
-)
-_ENABLE_E2E_RE = re.compile(r"enable-e2e:\s+(true|false)")
+# tests.yaml's `app-name`, `app-image-name` and `enable-e2e` used to be read by
+# regexes anchored on one value spelling (`: "([^"]+)"` / a bare `true|false`).
+# They are inputs of the reusable job, so they are now read like
+# `force-external-runtime`: `extract_field` scoped to that job's `with:` block.
+# An anchored regex only ever recognised the spelling the template emits, so a
+# repo that hand-wrote a bare or single-quoted value read as *absent* and could
+# never be re-synced — the same "a hand-written spelling defeats the read-back"
+# class as _SERVICES_SCRIPT_RE below, which two real repos hit.
+# The *commented-out* line that anchoring was there to exclude is excluded more
+# strongly by the new path: `reusable_job_with_block` is built from
+# `structural_lines`, which blanks comment lines outright.
+
 # Matches an *uncommented* services-script line in the with: block, quoted or
 # bare. Bare matters: the two repos that actually run a services script
 # (atlan-mongodbatlas-app, atlan-tableau-app) hand-wrote it unquoted, pre-dating
@@ -236,15 +235,22 @@ def extract_tests_yaml_params(text: str) -> dict[str, str]:
     a redundant-but-honest declaration is churn, not remediation.
     """
     params: dict[str, str] = {}
-    m = _APP_NAME_RE.search(text)
-    if m:
-        params["app_name"] = m.group(1)
-    m = _APP_IMAGE_NAME_RE.search(text)
-    if m:
-        params["app_image_name"] = m.group(1)
-    m = _ENABLE_E2E_RE.search(text)
-    if m:
-        params["enable_e2e"] = m.group(1)
+    # Inputs of the reusable job, so read from its own `with:` block through the
+    # quote-tolerant `extract_field` — see the note above the regexes this
+    # replaced, and `extract_force_external_runtime` for the same pairing.
+    with_block = reusable_job_with_block(text)
+    if with_block:
+        app_name = extract_field(with_block, "app-name")
+        if app_name:
+            params["app_name"] = app_name
+        app_image_name = extract_field(with_block, "app-image-name")
+        if app_image_name:
+            params["app_image_name"] = app_image_name
+        # Only the two booleans are meaningful; anything else is unreadable and
+        # is left to the round-trip guard to refuse rather than guessed at.
+        enable_e2e = extract_field(with_block, "enable-e2e")
+        if enable_e2e in ("true", "false"):
+            params["enable_e2e"] = enable_e2e
     m = _SERVICES_SCRIPT_RE.search(text)
     if m:
         # Quoted and bare forms capture into different groups; exactly one is set.
@@ -740,14 +746,28 @@ def extract_field(text: str, field: str) -> str:
     extractors and ``bootstrap``'s re-run autodetection call this, so a
     template format change can't leave one caller silently out of sync with
     the other.
+
+    A *quoted* value is read to its closing quote, so one containing spaces
+    survives whole. Stopping at the first whitespace instead would truncate it
+    and hand the caller a different value than the file declares — the same
+    silent-loss class this function exists to avoid, one dimension over. A bare
+    value still ends at the first whitespace, which is what keeps a trailing
+    ``# comment`` out of it.
     """
     for line in text.splitlines():
         m = re.match(
-            rf"^\s*(?:{re.escape(field)}|\"{re.escape(field)}\"|'{re.escape(field)}'):\s*(\S+)",
+            rf"^\s*(?:{re.escape(field)}|\"{re.escape(field)}\"|'{re.escape(field)}'):\s*"
+            r"(?:\"(?P<dq>[^\"]*)\"|'(?P<sq>[^']*)'|(?P<bare>\S+))",
             line,
         )
-        if m:
-            return m.group(1).strip("\"'")
+        if m is None:
+            continue
+        # An unterminated quote matches no quoted arm and falls to `bare`, where
+        # the strip keeps the pre-existing reading of that near-invalid form.
+        for group in ("dq", "sq"):
+            if m.group(group) is not None:
+                return m.group(group)
+        return m.group("bare").strip("\"'")
     return ""
 
 
