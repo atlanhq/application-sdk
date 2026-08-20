@@ -148,6 +148,21 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+# A waiting lease is the longest-running step in the whole e2e run, and its only
+# outward sign of life is the per-attempt "waiting for ..." line. Python
+# block-buffers stdout when it is a pipe, which an Actions log always is, so
+# without this NOTHING appears until the process exits: a run that queued for ten
+# minutes showed a blank step for ten minutes and then printed all ten minutes of
+# progress at once. That is indistinguishable from a wedged step to anyone
+# watching, and it is why the queue got read as a deadlock (FND-696).
+#
+# hasattr rather than a bare call: this runs at import, and a stdout that some
+# other harness has replaced with a plain writable object would otherwise make
+# the whole lease unimportable — trading an invisible wait for an unserialised
+# tenant, which is the failure this module exists to prevent.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
+
 # The lease ref lives outside refs/heads and refs/tags on purpose: a branch would
 # fire `push` events (and show up in the branch list), a tag would pollute the
 # release surface. A custom namespace is inert — nothing watches it.
