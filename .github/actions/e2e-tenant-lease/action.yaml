@@ -12,11 +12,15 @@ description: |
   first and does not work.
 
   Requires `contents: write` (to create and delete the ticket ref) and
-  `actions: read` (to tell a live holder from a dead one). Without them the
-  action warns and disables the lease rather than failing — each e2e leg
-  re-asserts the installed version independently (FND-31), so the lease reduces
-  contention rather than being the thing that makes a wrong-version run
-  detectable.
+  `actions: read` (to tell a live holder from a dead one). Without them `acquire`
+  FAILS, naming the missing grant.
+
+  It used to warn and proceed lease-less instead. That fail-open was never real:
+  `prepare-tenant` verifies its own tenant's lease before installing, finds none,
+  and reds every install leg two jobs later with an error that cannot be acted on
+  (FND-702). Note that a caller's `permissions:` block is exhaustive rather than
+  additive, so a caller that declares one must declare every scope the reusable
+  workflow's jobs use — declaring less is what CAUSES this failure.
 
 inputs:
   mode:
@@ -129,13 +133,10 @@ outputs:
     value: ${{ steps.lease.outputs.acquired }}
   state:
     description: |
-      "acquired"; "disabled" (no ref-write permission — the run proceeds
-      unserialised); "timeout" (the tenant stayed busy); or "rate-limited" (the
-      API never cleared, which fails rather than proceeding unserialised).
-
-      Worth asserting in anger rather than trusting a green job: "disabled" is a
-      deliberate fail-open, so a lease that is not working at all still leaves
-      the job green with only a warning.
+      "acquired"; "denied" (no ref-write permission in the calling workflow);
+      "timeout" (the tenant stayed busy); or "rate-limited" (the API never
+      cleared). Only "acquired" exits 0 — every other state fails the step, so a
+      green lease job means a lease was genuinely taken.
     value: ${{ steps.lease.outputs.state }}
   lease-ref:
     description: |

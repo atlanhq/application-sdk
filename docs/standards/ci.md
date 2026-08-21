@@ -524,8 +524,37 @@ Three further consequences to design for:
   failure.
 * Ref writes need `contents: write`, so put acquire/release in their own small
   jobs and leave the jobs that execute test code read-only.
-* If the lease fails open when it cannot be taken (the right default when a
-  separate assertion already catches the underlying hazard), then a broken lease
-  looks exactly like a working one — green, with a warning. **Assert the acquire
-  step's `state` output in anger** when verifying, rather than concluding from an
-  absence of red.
+* **A fail-open is only a fail-open if every consumer downstream agrees.** This
+  lease used to warn and return `disabled` when it could not write refs, on the
+  reasoning that failing an ungrantable lease would turn a safety improvement
+  into a fleet-wide red. It did not proceed: the install job verifies its own
+  tenant's lease before installing, needs only `contents: read` to do it, finds
+  nothing, and reds — so the run went red anyway, two jobs later, with an error
+  saying "re-run this job" when re-running could not help (FND-702). The posture
+  was not being chosen; it was being *reversed* by a consumer, at the cost of the
+  one message that could have explained it. Before writing a fail-open, walk
+  every consumer of the thing you are failing open on and check that it tolerates
+  the degraded value; if any one of them does not, the fail-open is fiction, and
+  the honest version is to fail where the cause is still in hand.
+
+### Declare the permissions a reusable workflow needs, in the caller
+
+A called workflow's `permissions` can only **equal or narrow** its caller's, so a
+job in the reusable declaring `contents: write` is a ceiling, never a grant. A
+caller with no block at all satisfies it purely from the repository's
+`default_workflow_permissions` — which means tightening that setting, an ordinary
+hardening step, silently strips the grant from every adopted repo at once, with
+nothing in the resulting failure pointing at the cause.
+
+So the canonical scaffolded `tests.yaml` declares the set explicitly. Two things
+make that edit easy to get wrong:
+
+* **A `permissions:` block is exhaustive, not additive.** Every scope it omits
+  becomes `none`. A well-meaning `permissions: {contents: read}` on the caller is
+  strictly *worse* than declaring nothing, because it clamps a job whose
+  repository default would have carried it.
+* **Derive the set from the reusable, in a test.** `test_tests_yaml_permissions`
+  reads every `permissions:` block in `tests-reusable.yaml`, takes the strongest
+  level each scope is used at, and asserts the scaffolded caller declares exactly
+  that — so adding a scope to a job of the reusable fails there rather than
+  silently arriving as `none` in every connector.
