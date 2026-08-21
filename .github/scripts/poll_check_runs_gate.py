@@ -180,6 +180,46 @@ def gh_api_conditional(path: str, *, etag: str | None = None):
     return status_code, new_etag, body_json
 
 
+def check_run_age_key(check_run: dict) -> tuple[str, int]:
+    """Sort key that orders same-named check runs oldest-first.
+
+    ``started_at`` is the semantic answer and GitHub renders it as a Zulu
+    ISO-8601 stamp, which sorts correctly as a plain string. It is the primary
+    key rather than ``id`` because it is the field that means "when this attempt
+    began"; ``id`` only breaks ties (same-second creations, or a missing
+    ``started_at``), where its monotonicity is what makes it usable at all.
+    """
+    started_at = check_run.get("started_at")
+    check_id = check_run.get("id")
+    return (
+        started_at if isinstance(started_at, str) else "",
+        check_id if isinstance(check_id, int) else 0,
+    )
+
+
+def remember_newest(latest: dict[str, dict], check_run: dict) -> None:
+    """Keep only the newest check run per name in ``latest``.
+
+    A SHA can carry SEVERAL check runs under one name: create_check_run.py POSTs
+    a new one per dispatch rather than PATCHing the old one, so every re-dispatch
+    for the same commit — the supported way to retry a failed connector leg, see
+    e2e_dispatch_guard.py's ``is_my_run`` — leaves the previous attempt's check
+    behind alongside the new one.
+
+    This used to be a bare ``latest[name] = check_run``, i.e. whichever entry the
+    API happened to list last. The listing order of that endpoint is not
+    documented, so on a retried SHA the gate could resolve to the SUPERSEDED
+    attempt and report the old failure against a leg that had since passed (or
+    the reverse). Newest wins, explicitly.
+    """
+    name = check_run["name"]
+    incumbent = latest.get(name)
+    if incumbent is None or check_run_age_key(check_run) >= check_run_age_key(
+        incumbent
+    ):
+        latest[name] = check_run
+
+
 def list_all_check_runs(repo: str, sha: str) -> list[dict]:
     """Full, uncached fetch of every check run on `sha` across all pages.
 
@@ -246,7 +286,7 @@ def wait_for_checks(
             check_runs = list_all_check_runs(repo, sha)
             for check_run in check_runs:
                 if check_run.get("name") in expected_names:
-                    latest[check_run["name"]] = check_run
+                    remember_newest(latest, check_run)
         else:
             status_code, etag, body = gh_api_conditional(path, etag=etag)
             if status_code == 200 and body is not None:
@@ -267,7 +307,7 @@ def wait_for_checks(
                     check_runs = list_all_check_runs(repo, sha)
                 for check_run in check_runs:
                     if check_run.get("name") in expected_names:
-                        latest[check_run["name"]] = check_run
+                        remember_newest(latest, check_run)
             elif status_code != 304:
                 raise SystemExit(
                     f"::error::unexpected status {status_code} polling {path}"

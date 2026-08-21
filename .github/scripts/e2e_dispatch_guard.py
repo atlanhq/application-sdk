@@ -816,6 +816,20 @@ def resolve(
             f"'{check_run_name}' check on this commit carries the verdict, and "
             "this run's connector gate reads that same check."
         )
+        # Without this the message reads as "nothing to do here", and the only
+        # re-trigger people find is a fresh commit. There IS one on this commit:
+        # the claiming run may dispatch again (``is_my_run`` compares run ids
+        # only, so a re-run of it bumps the attempt and is allowed through),
+        # while any OTHER run lands here and skips. The whole run, not
+        # ``--failed``: a leg that dispatched fine and then failed downstream
+        # leaves this job green, so ``--failed`` re-runs the gate alone and it
+        # re-reads the very check that is already red.
+        print(
+            f"::notice::to re-run {app} e2e on {sha[:8]} without a new commit, "
+            f"re-run the claiming run itself: gh run rerun {claimant.run_id} "
+            "(the whole run — not --failed). Only that run is allowed to "
+            "re-dispatch this commit."
+        )
         return "duplicate", claimant
 
     if run_is_live(repo, claimant.run_id):

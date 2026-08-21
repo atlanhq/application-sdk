@@ -670,3 +670,146 @@ def test_the_gate_may_read_the_pull_request() -> None:
     merging with it, so dropping this does not fail loudly — the read 403s, the
     poll warns, and it waits the full budget exactly as it used to."""
     assert _connector_gate()["permissions"]["pull-requests"] == "read"
+
+
+# --- newest-wins among same-named check runs ------------------------------
+#
+# A retried commit carries MORE THAN ONE check run per name: create_check_run.py
+# POSTs a fresh one per dispatch instead of PATCHing the previous attempt, so
+# re-running the claiming run (the supported same-commit retry — see
+# e2e_dispatch_guard.py's is_my_run) leaves the old attempt's check alongside the
+# new one. The gate used to keep whichever the API listed LAST, and that
+# endpoint's ordering is undocumented, so the verdict it reported was a coin
+# flip between the two attempts. Both listing orders are pinned below, because
+# either one alone passes with the broken implementation half the time.
+
+STALE_FAIL = {
+    "name": NAMES[0],
+    "status": "completed",
+    "conclusion": "failure",
+    "started_at": "2026-08-21T00:53:41Z",
+    "id": 100,
+}
+FRESH_PASS = {
+    "name": NAMES[0],
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-08-21T01:41:00Z",
+    "id": 200,
+}
+OTHER_LEG_PASS = {
+    "name": NAMES[1],
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-08-21T01:41:00Z",
+    "id": 201,
+}
+
+
+@pytest.mark.parametrize(
+    "newest_first", [False, True], ids=["oldest-first", "newest-first"]
+)
+def test_wait_for_checks_keeps_the_newest_of_two_same_named_checks(
+    monkeypatch, newest_first
+):
+    listing = [FRESH_PASS, STALE_FAIL] if newest_first else [STALE_FAIL, FRESH_PASS]
+    monkeypatch.setattr(
+        mod,
+        "run",
+        lambda cmd, **kw: _http_response(
+            200, '"v1"', _check_runs_body([*listing, OTHER_LEG_PASS])
+        ),
+    )
+
+    assert (
+        mod.wait_for_checks(REPO, SHA, NAMES, sleep=lambda s: None) is True
+    ), "the superseded attempt's failure was reported over the retry that passed"
+
+
+@pytest.mark.parametrize(
+    "newest_first", [False, True], ids=["oldest-first", "newest-first"]
+)
+def test_wait_for_checks_does_not_let_a_stale_pass_mask_a_fresh_failure(
+    monkeypatch, newest_first
+):
+    """The other direction, which matters more: newest-wins must not have been
+    implemented as "prefer the passing one"."""
+    stale_pass = {**STALE_FAIL, "conclusion": "success"}
+    fresh_fail = {**FRESH_PASS, "conclusion": "failure"}
+    listing = [fresh_fail, stale_pass] if newest_first else [stale_pass, fresh_fail]
+    monkeypatch.setattr(
+        mod,
+        "run",
+        lambda cmd, **kw: _http_response(
+            200, '"v1"', _check_runs_body([*listing, OTHER_LEG_PASS])
+        ),
+    )
+
+    assert (
+        mod.wait_for_checks(REPO, SHA, NAMES, sleep=lambda s: None) is False
+    ), "a superseded pass masked the retry's failure"
+
+
+def test_wait_for_checks_waits_when_the_newest_attempt_is_still_running(monkeypatch):
+    """A concluded older attempt must not satisfy the gate while the retry that
+    superseded it is still in flight — that declares a verdict from a run nobody
+    is waiting on any more.
+
+    The stale attempt is the PASSING one and is listed last, so the old
+    last-wins code returns True here immediately. Making it the failing one
+    instead would give False either way and prove nothing.
+    """
+    stale_pass = {**STALE_FAIL, "conclusion": "success"}
+    running_retry = {
+        "name": NAMES[0],
+        "status": "in_progress",
+        "started_at": "2026-08-21T01:41:00Z",
+        "id": 200,
+    }
+    monkeypatch.setattr(
+        mod,
+        "run",
+        lambda cmd, **kw: _http_response(
+            200, '"v1"', _check_runs_body([running_retry, stale_pass, OTHER_LEG_PASS])
+        ),
+    )
+
+    assert (
+        mod.wait_for_checks(
+            REPO,
+            SHA,
+            NAMES,
+            interval_seconds=1,
+            timeout_seconds=2,
+            sleep=lambda s: None,
+        )
+        is False
+    ), "a superseded pass satisfied the gate while the retry was still running"
+
+
+def test_check_run_age_key_breaks_ties_on_id_and_tolerates_no_timestamp():
+    same_second_old = {"name": NAMES[0], "started_at": "2026-08-21T01:41:00Z", "id": 1}
+    same_second_new = {"name": NAMES[0], "started_at": "2026-08-21T01:41:00Z", "id": 2}
+    assert mod.check_run_age_key(same_second_new) > mod.check_run_age_key(
+        same_second_old
+    )
+    # A check run with no started_at must still be orderable rather than blow up
+    # the whole poll on a TypeError comparing None to str.
+    assert mod.check_run_age_key({"name": NAMES[0], "id": 5}) == ("", 5)
+    assert mod.check_run_age_key({"name": NAMES[0]}) == ("", 0)
+
+
+def test_remember_newest_is_the_only_way_latest_is_populated():
+    """Guards the fix itself. Every behavioural test above still passes if only
+    ONE of the two assignment sites is converted, so a future edit that
+    re-introduces a bare ``latest[name] = check_run`` in either branch would
+    silently restore the coin flip."""
+    source = (Path(__file__).parent.parent / "poll_check_runs_gate.py").read_text()
+    poll_body = source.split("def wait_for_checks(", 1)[1]
+    assert "latest[check_run[" not in poll_body, (
+        "wait_for_checks assigns into `latest` directly again — route it through "
+        "remember_newest() so same-named check runs stay newest-wins"
+    )
+    assert (
+        poll_body.count("remember_newest(latest, check_run)") == 2
+    ), "both the conditional-GET and the full-pagination branch must dedupe"

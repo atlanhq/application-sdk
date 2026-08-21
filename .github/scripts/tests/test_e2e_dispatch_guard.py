@@ -280,6 +280,31 @@ def test_a_completed_dispatch_for_this_sha_is_still_skipped(http: FakeHTTP) -> N
     assert _resolve(run_id=1)[0] == "duplicate"
 
 
+def test_the_skip_names_the_re_run_that_can_actually_re_dispatch(
+    http: FakeHTTP, capsys
+) -> None:
+    """The skip used to end at "its check carries the verdict", which reads as
+    "nothing to do" — so the only retry anyone found was pushing a throwaway
+    commit. There IS one on this commit, but only for the CLAIMING run
+    (``is_my_run`` compares run ids), and nothing said so.
+
+    The whole run, not ``--failed``: a leg that dispatched fine and then failed
+    downstream leaves this job green, so ``--failed`` re-runs the gate alone and
+    it re-reads the same red check.
+    """
+    _stub_taken(http, 999)
+    http.route("GET", "/check-runs", (200, _checks((CHECK, "completed"))))
+
+    assert _resolve(run_id=1)[0] == "duplicate"
+
+    printed = capsys.readouterr().out
+    assert "gh run rerun 999" in printed, (
+        "the skip must name the claiming run's id — that run is the only one the "
+        "guard lets re-dispatch this SHA"
+    )
+    assert "not --failed" in printed
+
+
 def test_this_runs_own_claim_permits_a_re_dispatch(http: FakeHTTP) -> None:
     """Attempt is recorded for the log, not the decision: re-running the dispatch
     job is how an operator retries a transient dispatch failure, and a claim that
