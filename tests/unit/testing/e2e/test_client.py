@@ -249,8 +249,22 @@ class TestPollNativeStatusProgressWatchdog:
                         stall_grace_seconds=None,  # isolate the progress watchdog
                         progress_stall_seconds=30,
                     )
-        # Message surfaces the wedged node's state for the operator.
-        assert "extract=" in str(exc.value)
+        # The wedged node's state reaches the operator as the attached typed
+        # result, not as a name=status list in the message: naming the task
+        # queue and the child workflow needs the harness's seed DAG, so the
+        # harness renders and the client only carries the observation.
+        assert "No DAG node changed state for 30s" in str(exc.value)
+        attached = exc.value.result
+        assert attached is not None
+        assert [n.name for n in attached.nodes] == ["extract"]
+        assert attached.progress_stalled is True
+        assert attached.progress_stalled_after_seconds == 30.0
+        assert attached.stopped_watching is True
+        # The watchdog is not the ceiling; conflating them would make the
+        # renderer print "at the 600s poll ceiling" for a 30s stall.
+        assert attached.timed_out is False
+        assert attached.seconds_since_last_progress is not None
+        assert attached.seconds_since_last_progress >= 30.0
 
     def test_disabled_when_progress_stall_none(self):
         """progress_stall_seconds=None disables the watchdog: a wedged-Running
@@ -1776,7 +1790,12 @@ class TestPollNativeStatusCeilingStamp:
 
 
 class TestNotStartedNodes:
-    """Pending/Scheduled is "never dispatched", which is not a failure."""
+    """Pending/Scheduled is a status, not a dispatch fact — and not a failure.
+
+    AE holds a node at Pending whether nothing picked it up or its child
+    workflow is running, so the set says the node has not *failed*; it does not
+    say the node never started.
+    """
 
     @pytest.mark.parametrize("status", [DAGNodeStatus.PENDING, DAGNodeStatus.SCHEDULED])
     def test_not_started_statuses(self, status: DAGNodeStatus):

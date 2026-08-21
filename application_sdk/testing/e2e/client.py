@@ -722,10 +722,16 @@ class DAGRunResult:
     # instead of reporting the last-seen node states as node failures. ``None``
     # on every result that came back from a terminal run.
     timed_out_after_seconds: float | None = None
+    # Set only on the observation attached to a ``DAGProgressStalledError``: the
+    # progress watchdog stopped the poll early, so like
+    # ``timed_out_after_seconds`` this is where the harness stopped watching
+    # rather than a verdict. Carries the window that was breached.
+    progress_stalled_after_seconds: float | None = None
     # Elapsed poll time since the last node-state transition, at the moment the
-    # ceiling was hit. This is the DAG-wide watchdog clock (the same quantity
-    # ``dag_progress_stall_seconds`` bounds), not a per-node age: it answers
-    # "how long has this DAG been frozen in the state printed below".
+    # poll stopped watching — the ceiling or the progress watchdog. This is the
+    # DAG-wide watchdog clock (the same quantity ``dag_progress_stall_seconds``
+    # bounds), not a per-node age: it answers "how long has this DAG been frozen
+    # in the state printed below".
     seconds_since_last_progress: float | None = None
 
     @property
@@ -736,6 +742,24 @@ class DAGRunResult:
     def timed_out(self) -> bool:
         """True when this observation is the poll loop's ceiling, not a verdict."""
         return self.timed_out_after_seconds is not None
+
+    @property
+    def progress_stalled(self) -> bool:
+        """True when the progress watchdog ended the poll, not a verdict."""
+        return self.progress_stalled_after_seconds is not None
+
+    @property
+    def stopped_watching(self) -> bool:
+        """True when the poll stopped before the DAG reached a terminal state.
+
+        The union of the two early exits — the poll ceiling
+        (:attr:`timed_out`) and the progress watchdog
+        (:attr:`progress_stalled`). Either way the node states are the last
+        observation and not a verdict, which is the distinction a diagnostic
+        has to make; the watchdog is now the one that fires first on any suite
+        whose ceiling is at or below 1800s.
+        """
+        return self.timed_out or self.progress_stalled
 
     @property
     def failed_nodes(self) -> list[DAGNodeResult]:
@@ -1770,18 +1794,26 @@ class AEWorkflowClient:
                 and any_node_started
                 and (elapsed - last_progress_elapsed) >= progress_stall_seconds
             ):
-                node_states = (
-                    ", ".join(f"{n.name}={n.status.value}" for n in result.nodes)
-                    or "(no nodes)"
-                )
+                # Stamp the stall onto the observation and attach it, rather
+                # than rendering a ``name=status`` list here: naming the task
+                # queue and the child workflow needs the seed DAG's routing,
+                # which only the harness holds. One renderer, two entry points.
                 raise DAGProgressStalledError(
                     message=(
                         f"No DAG node changed state for {progress_stall_seconds}s for "
-                        f"run {run_id} (top-level status={result.status.value}; nodes: "
-                        f"{node_states}). A node started but is not progressing — most "
-                        "often wedged on a slow/failing step (e.g. extract stuck on an "
-                        f"object-store upload). Failing fast instead of polling the full "
-                        f"{timeout_seconds}s."
+                        f"run {run_id} (top-level status={result.status.value}). A node "
+                        "started but is not progressing — most often wedged on a "
+                        "slow/failing step (e.g. extract stuck on an object-store "
+                        "upload). Failing fast instead of polling the full "
+                        f"{timeout_seconds}s. Last-seen node states are attached as "
+                        "``result``."
+                    ),
+                    result=replace(
+                        result,
+                        progress_stalled_after_seconds=float(progress_stall_seconds),
+                        seconds_since_last_progress=max(
+                            0.0, elapsed - last_progress_elapsed
+                        ),
                     ),
                 )
         # Timeout: return the last observation so callers can include

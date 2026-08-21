@@ -18,6 +18,7 @@ import pytest
 
 from application_sdk.contracts.types import ConnectionRef
 from application_sdk.testing.e2e._errors import (
+    DAGProgressStalledError,
     ManifestDagMissingError,
     ManifestFileNotFoundError,
     MissingHarnessClassAttrError,
@@ -1160,6 +1161,27 @@ def _timed_out_result(
     )
 
 
+def _stalled_result(
+    nodes: list[DAGNodeResult],
+    *,
+    window: float = 600.0,
+    stalled: float | None = 612.0,
+) -> DAGRunResult:
+    """The observation attached to a ``DAGProgressStalledError``.
+
+    The watchdog stop, not the ceiling: ``timed_out`` stays False so a
+    diagnostic cannot mislabel a 600s stall as the 1800s ceiling.
+    """
+    return DAGRunResult(
+        run_id="run-1",
+        workflow_slug="slug",
+        status=DAGRunStatus.RUNNING,
+        nodes=nodes,
+        progress_stalled_after_seconds=window,
+        seconds_since_last_progress=stalled,
+    )
+
+
 class TestCaptureNodeDispatch:
     """The seed DAG is the only local source for a node's task queue —
     ``native-status`` reports statuses, not routing."""
@@ -1269,6 +1291,19 @@ class TestDagOutcomeHeadline:
         )
         assert harness._dag_outcome_headline(result) == "AE status=Failed"
 
+    def test_watchdog_stop_names_the_window_not_the_ceiling(self) -> None:
+        """The watchdog closes first on any suite whose ceiling is <= 1800s, so
+        this is the headline the FND-708 shape actually produces."""
+        harness = _ConcreteE2ETest()
+        headline = harness._dag_outcome_headline(
+            _stalled_result([_node("lineage-publish", DAGNodeStatus.PENDING)])
+        )
+        assert "600s watchdog window closed before the poll ceiling" in headline
+        assert "AE status=Running" in headline
+        assert "no DAG node changed state for the last 612s" in headline
+        # Reporting a ceiling here would be a lie: the poll never reached it.
+        assert "did not complete within" not in headline
+
 
 class TestDescribeDagNodes:
     """The three states that used to render identically as
@@ -1344,6 +1379,30 @@ class TestDescribeDagNodes:
         )
         assert "STILL RUNNING at the 1800s poll ceiling" in line
         assert "atlan-publish-production" in line
+
+    def test_pending_node_at_the_watchdog_stop_names_its_queue(self) -> None:
+        """Same diagnosis, reached via the watchdog instead of the ceiling — this
+        is the path the FND-708 shape now takes."""
+        harness = self._harness()
+        line = harness._describe_dag_nodes(
+            _stalled_result([_node("lineage-publish", DAGNodeStatus.PENDING)])
+        )
+        assert "AE reports Pending when the 600s progress watchdog closed" in line
+        assert "atlan-publish-production" in line
+        assert "app_name=publish" in line
+        assert "'run-1-lineage-publish'" in line
+        assert "poll ceiling" not in line
+
+    def test_running_at_the_watchdog_stop_names_the_queue_too(self) -> None:
+        """A node wedged Running is the shape the watchdog was built for, so it
+        must not fall through to ``status=Running error=None``."""
+        harness = self._harness()
+        line = harness._describe_dag_nodes(
+            _stalled_result([_node("publish", DAGNodeStatus.RUNNING)])
+        )
+        assert "STILL RUNNING when the 600s progress watchdog closed" in line
+        assert "atlan-publish-production" in line
+        assert "status=Running error=None" not in line
 
     def test_running_without_a_timeout_is_not_dressed_up(self) -> None:
         """Only a ceiling makes "still running" meaningful; a terminal run's
@@ -1445,3 +1504,74 @@ class TestFullDagAssertionMessage:
         assert "publish: succeeded in 152s" in message
         # The old header called every non-successful node a failure.
         assert "Failed nodes:" not in message
+
+
+class TestProgressStallDiagnostics:
+    """The watchdog raises rather than returning, so the diagnostic has to be
+    wired into the exception path too — otherwise the shape this work exists to
+    explain is the one shape that skips the explanation."""
+
+    def _harness(self, monkeypatch: pytest.MonkeyPatch) -> _ConcreteE2ETest:
+        harness = _ConcreteE2ETest()
+        harness.ae_poll_timeout_seconds = 1800
+        harness.client = MagicMock()
+        harness.client.submit_workflow.return_value = "run-1"
+        harness.connection_qualified_name = "default/openapi/1"
+        harness._node_dispatch = {
+            "lineage-publish": NodeDispatch(
+                app_name="publish", task_queue="atlan-publish-production"
+            )
+        }
+        monkeypatch.setattr(
+            _ConcreteE2ETest, "_bootstrap_workflow", lambda self: "slug"
+        )
+        monkeypatch.setattr(
+            _ConcreteE2ETest, "_build_ae_payload", lambda self, slug: {"slug": slug}
+        )
+        return harness
+
+    def test_stall_reraises_with_the_full_per_node_breakdown(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The FND-708 shape via the watchdog: upstream succeeded, a later node
+        frozen. The operator must get the queue and the child workflow here, not
+        just ``name=status``."""
+        harness = self._harness(monkeypatch)
+        harness.client.poll_native_status.side_effect = DAGProgressStalledError(
+            message="No DAG node changed state for 600s for run run-1",
+            result=_stalled_result(
+                [
+                    _node(
+                        "extract",
+                        DAGNodeStatus.SUCCEEDED,
+                        started_at_ms=0,
+                        completed_at_ms=98_000,
+                    ),
+                    _node("lineage-publish", DAGNodeStatus.PENDING),
+                ]
+            ),
+        )
+        with pytest.raises(DAGProgressStalledError) as exc:
+            harness.run_full_dag()
+        message = str(exc.value)
+        assert "600s watchdog window closed before the poll ceiling" in message
+        assert "AE reports Pending when the 600s progress watchdog closed" in message
+        assert "atlan-publish-production" in message
+        assert "app_name=publish" in message
+        assert "'run-1-lineage-publish'" in message
+        # Where the DAG got to is what points at the stuck node's upstream.
+        assert "extract: succeeded in 98s" in message
+        # The typed result stays attached for programmatic callers.
+        assert exc.value.result is not None
+        assert exc.value.result.progress_stalled is True
+
+    def test_stall_without_an_attached_result_propagates_unchanged(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Nothing to render from, so re-raising would only lose the original."""
+        harness = self._harness(monkeypatch)
+        original = DAGProgressStalledError(message="stalled, no result attached")
+        harness.client.poll_native_status.side_effect = original
+        with pytest.raises(DAGProgressStalledError) as exc:
+            harness.run_full_dag()
+        assert exc.value is original

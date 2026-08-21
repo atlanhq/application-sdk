@@ -53,6 +53,7 @@ from application_sdk.common.task_queue import (
 from application_sdk.contracts.types import ConnectionRef
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.e2e._errors import (
+    DAGProgressStalledError,
     HarnessMethodNotImplementedError,
     ManifestDagMissingError,
     ManifestFileNotFoundError,
@@ -1128,12 +1129,15 @@ class BaseE2ETest:
     def _dag_outcome_headline(self, ae_result: DAGRunResult) -> str:
         """One line saying what the DAG did, before the per-node breakdown.
 
-        A timed-out poll is NOT a verdict on the nodes: it says the harness
-        stopped watching. Saying so explicitly is the difference between "the
-        node failed" (look for a bug in the node's code) and "the node was never
-        dispatched" (look for the worker that should have picked it up).
+        A poll that stopped early is NOT a verdict on the nodes: it says the
+        harness stopped watching. Saying so explicitly is the difference between
+        "the node failed" (look for a bug in the node's code) and "the node was
+        never dispatched" (look for the worker that should have picked it up).
+        Both early exits get that treatment — the poll ceiling and the progress
+        watchdog, which is the one that fires first on any suite whose ceiling
+        is at or below 1800s.
         """
-        if not ae_result.timed_out:
+        if not ae_result.stopped_watching:
             return f"AE status={ae_result.status.value}"
         stalled = ae_result.seconds_since_last_progress
         stall_note = (
@@ -1141,6 +1145,13 @@ class BaseE2ETest:
             if stalled is not None
             else ""
         )
+        if ae_result.progress_stalled:
+            return (
+                f"DAG stopped making progress: the "
+                f"{int(ae_result.progress_stalled_after_seconds or 0)}s watchdog "
+                f"window closed before the poll ceiling "
+                f"(AE status={ae_result.status.value}){stall_note}"
+            )
         return (
             f"DAG did not complete within "
             f"{int(ae_result.timed_out_after_seconds or 0)}s "
@@ -1155,6 +1166,25 @@ class BaseE2ETest:
         app_note = f", app_name={dispatch.app_name}" if dispatch.app_name else ""
         return f"task queue '{dispatch.task_queue}'{app_note}, per the seed DAG"
 
+    def _stop_point_clause(self, ae_result: DAGRunResult) -> str:
+        """`` at the Xs poll ceiling`` / `` when the Xs watchdog closed``, or ``""``.
+
+        Names which early exit produced this observation, so a node line can say
+        where the harness stopped without each branch re-deriving it — and so a
+        600s watchdog stop is never reported as the 1800s ceiling.
+        """
+        if ae_result.progress_stalled:
+            return (
+                " when the "
+                f"{int(ae_result.progress_stalled_after_seconds or 0)}s progress "
+                "watchdog closed"
+            )
+        if ae_result.timed_out:
+            return (
+                f" at the {int(ae_result.timed_out_after_seconds or 0)}s poll ceiling"
+            )
+        return ""
+
     def _describe_dag_node(self, node: DAGNodeResult, ae_result: DAGRunResult) -> str:
         """One breakdown line for a node, in terms of what an operator should do.
 
@@ -1165,9 +1195,13 @@ class BaseE2ETest:
           not say whether anything picked it up, so the line names the queue and
           the child workflow to read, and asserts no cause (see
           :attr:`~application_sdk.testing.e2e.client.DAGNodeStatus.is_not_started`);
-        * dispatched but never finished (``Running`` at the ceiling) — the worker
-          took it and stopped making progress, so the queue is named too;
+        * dispatched but never finished (``Running`` where the poll stopped) —
+          the worker took it and stopped making progress, so the queue is named
+          too;
         * ran and failed — the error message is the whole story.
+
+        Both places the poll can stop early read the same: the ceiling and the
+        progress watchdog only differ in the clause naming which one closed.
         """
         stalled = ae_result.seconds_since_last_progress
         stall_clause = (
@@ -1175,6 +1209,7 @@ class BaseE2ETest:
             if stalled is not None
             else ""
         )
+        stop_point = self._stop_point_clause(ae_result)
         if node.status.is_success:
             duration = node.duration_seconds
             timing = f" in {int(duration)}s" if duration is not None else ""
@@ -1182,13 +1217,8 @@ class BaseE2ETest:
         if node.status.is_skipped:
             return f"  - {node.name}: {node.status.value} (AE did not run it)"
         if node.status.is_not_started:
-            at_ceiling = (
-                f" at the {int(ae_result.timed_out_after_seconds or 0)}s poll ceiling"
-                if ae_result.timed_out
-                else ""
-            )
             return (
-                f"  - {node.name}: AE reports {node.status.value}{at_ceiling} — "
+                f"  - {node.name}: AE reports {node.status.value}{stop_point} — "
                 f"{self._dispatch_note(node.name)}{stall_clause}. AE holds a node "
                 f"at {node.status.value} whether nothing picked it up OR its child "
                 "workflow is running, so read the child workflow "
@@ -1197,10 +1227,9 @@ class BaseE2ETest:
                 "app's workers); an execution means it is running or retrying "
                 "(check its history for heartbeat timeouts)."
             )
-        if node.status is DAGNodeStatus.RUNNING and ae_result.timed_out:
+        if node.status is DAGNodeStatus.RUNNING and ae_result.stopped_watching:
             return (
-                f"  - {node.name}: STILL RUNNING at the "
-                f"{int(ae_result.timed_out_after_seconds or 0)}s poll ceiling — "
+                f"  - {node.name}: STILL RUNNING{stop_point} — "
                 f"dispatched to {self._dispatch_note(node.name)}{stall_clause}. A "
                 "worker took it and stopped making progress (or died holding it)."
             )
@@ -1299,14 +1328,36 @@ class BaseE2ETest:
         )
         logger.info("AE submit returned run_id=%s", run_id)
 
-        ae_result = self.client.poll_native_status(
-            run_id,
-            interval_seconds=self.ae_poll_interval_seconds,
-            timeout_seconds=self.ae_poll_timeout_seconds,
-            stall_grace_seconds=self.ae_stall_grace_seconds,
-            stall_task_queue=self._extract_task_queue(),
-            progress_stall_seconds=self._resolved_progress_stall_seconds(),
-        )
+        try:
+            ae_result = self.client.poll_native_status(
+                run_id,
+                interval_seconds=self.ae_poll_interval_seconds,
+                timeout_seconds=self.ae_poll_timeout_seconds,
+                stall_grace_seconds=self.ae_stall_grace_seconds,
+                stall_task_queue=self._extract_task_queue(),
+                progress_stall_seconds=self._resolved_progress_stall_seconds(),
+            )
+        except DAGProgressStalledError as stalled:
+            # The watchdog is the exit that fires first on any suite whose
+            # ceiling is at or below 1800s — i.e. the FND-708 shape reaches the
+            # operator here, not through the ceiling return. Raising it bare
+            # skipped the per-node diagnosis entirely, so re-raise the same
+            # typed error with the breakdown the ceiling path already prints.
+            if stalled.result is None:
+                raise
+            raise DAGProgressStalledError(
+                message=(
+                    f"Full-DAG e2e stalled for connector={self.connector_short_name}\n"
+                    f"AE run_id={stalled.result.run_id} "
+                    f"slug={stalled.result.workflow_slug}\n"
+                    f"{self._dag_outcome_headline(stalled.result)}\n"
+                    f"DAG nodes:\n{self._describe_dag_nodes(stalled.result)}"
+                ),
+                result=stalled.result,
+                # Keeps the client-level raise in ``cause_repr`` on the wire
+                # envelope, not only in the traceback.
+                cause=stalled,
+            ) from stalled
 
         # Log-only, outcome-neutral. Placed after the poll so Elasticsearch
         # indexing lag cannot masquerade as an absence. See

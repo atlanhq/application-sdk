@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from application_sdk.errors.leaves import (
     AppTimeoutError,
@@ -15,6 +15,10 @@ from application_sdk.errors.leaves import (
     PreconditionError,
     UnimplementedError,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle guard, typing only
+    # client imports this module, so the reverse import is deferred.
+    from application_sdk.testing.e2e.client import DAGRunResult
 
 # ---------------------------------------------------------------------------
 # Atlan API client errors (Family B)
@@ -205,12 +209,21 @@ class DAGProgressStalledError(PreconditionError):
     The window is set comfortably above legitimately slow single nodes (lineage
     on deep queues can sit Running for many minutes), so a healthy run never
     trips it.
+
+    ``result`` carries the last observation the poll made, stamped with
+    ``progress_stalled_after_seconds``. Raising bare left this path with only a
+    ``name=status`` list, so the caller that owns the diagnostic renderer (it
+    needs the seed DAG's routing, which the client does not have) could not
+    name the task queue or the child workflow to read. Attaching the typed
+    result lets that one renderer serve the watchdog stop and the poll ceiling
+    alike.
     """
 
     code: ClassVar[str] = "PRECONDITION_DAG_PROGRESS_STALLED"
     expected_state: str | None = (
         "at least one DAG node state transition within the progress window"
     )
+    result: DAGRunResult | None = None
 
 
 @dataclass(kw_only=True)
