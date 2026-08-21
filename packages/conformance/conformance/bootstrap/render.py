@@ -89,9 +89,12 @@ RETIRED_WORKFLOWS: tuple[str, ...] = ("docstring-coverage.yaml",)
 # was exactly that — the vendored Python script failed pydocstyle ``D`` and
 # got re-wrapped by ``ruff format`` at a 100-column line length, leaving a
 # connector with a permanently red pre-commit and ``checks.yml``.
-# ``tests/test_bootstrap_scaffold_lint.py`` lints every force-written
-# artifact under a config stricter than this repo's; keep new templates
-# inside it.
+# ``tests/test_bootstrap_scaffold_lint.py`` holds that line for every
+# force-written artifact: the template-rendered ones (these two plus the
+# MANAGED_WORKFLOWS shims and the remediate SKILL.md) under a config
+# stricter than this repo's, and ``.github/ci-system-deps.txt``, whose
+# bytes come from the ``--system-deps`` flag rather than a template,
+# separately. Keep new templates inside it.
 MANAGED_ACTION_FILES: tuple[tuple[str, str], ...] = (
     (
         ".github/actions/run-conformance-detect/action.yaml",

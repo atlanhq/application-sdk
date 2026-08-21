@@ -26,9 +26,11 @@ import pathlib
 import shutil
 import subprocess
 import sys
+import tomllib
 
 import pytest
 from conformance.bootstrap.render import MANAGED_ACTION_FILES, MANAGED_WORKFLOWS, render
+from conformance.cli import _cmd_bootstrap
 
 # The strictest ruff lint selection seen in the fleet, plus "I" (import
 # order), because fleet repos also run isort. A repo tightening its config
@@ -50,13 +52,45 @@ _PY_SCAFFOLDS = tuple(
     (dest, template) for dest, template in MANAGED_ACTION_FILES if dest.endswith(".py")
 )
 
-# Every always-overwrite artifact, as (repo-relative dest, template name).
-# renovate.json and .gitignore are excluded on purpose: those are
-# write-if-absent, so a consumer can edit them and keep the edit.
-_FORCE_WRITTEN = (
+# Every always-overwrite artifact that comes from a template, as
+# (repo-relative dest, template name).
+#
+# renovate.json, .gitignore and contract_schema.lock.json are excluded on
+# purpose: those are write-if-absent, so a consumer can edit them and keep
+# the edit. `.github/ci-system-deps.txt` is force-written but has no
+# template — its bytes are the `--system-deps` flag value — so it is
+# covered separately, by
+# test_force_written_system_deps_file_is_whitespace_clean below.
+_TEMPLATE_RENDERED_FORCE_WRITTEN = (
     *MANAGED_ACTION_FILES,
     *((f".github/workflows/{name}", name) for name in MANAGED_WORKFLOWS),
     (".claude/skills/remediate/SKILL.md", "remediate.md"),
+)
+
+# Per-repo render parameters to check the templates under, beyond the
+# defaults. bootstrap renders these with **kwargs, so a conditional block
+# only taken by an opted-in repo is a shape the default render never
+# exercises — and a whitespace defect inside one would reach exactly the
+# repos that opted in, and no others.
+#
+# Only the parameters that reach an always-overwrite template are listed:
+# `system_deps` (checks.yml), `use_ghcr_base` (build-and-publish.yaml),
+# `exit_zero` (conformance.yaml) and the app naming. tests.yaml's and
+# renovate.json's parameters are absent because those files are not in
+# _TEMPLATE_RENDERED_FORCE_WRITTEN — they are write-if-absent, so a
+# consumer's edit survives.
+_RENDER_PARAMS: tuple[tuple[str, dict[str, str]], ...] = (
+    ("defaults", {}),
+    (
+        "every-opt-in",
+        {
+            "app_name": "widget",
+            "app_image_name": "atlan-widget-app",
+            "system_deps": "libkrb5-dev gcc",
+            "use_ghcr_base": "true",
+            "exit_zero": "true",
+        },
+    ),
 )
 
 
@@ -64,6 +98,17 @@ def _ruff_cmd() -> list[str]:
     """Return the argv prefix that runs ruff in this environment."""
     exe = shutil.which("ruff")
     return [exe] if exe else [sys.executable, "-m", "ruff"]
+
+
+def _pinned_ruff_version() -> str:
+    """Return the ruff version this package's dev group pins."""
+    pyproject = pathlib.Path(__file__).resolve().parents[1] / "pyproject.toml"
+    dev = tomllib.loads(pyproject.read_text(encoding="utf-8"))["dependency-groups"][
+        "dev"
+    ]
+    pins = [spec.split("==", 1)[1] for spec in dev if spec.startswith("ruff==")]
+    assert len(pins) == 1, f"expected exactly one exact ruff pin, got {pins}"
+    return pins[0]
 
 
 def _write_scaffold(
@@ -75,13 +120,27 @@ def _write_scaffold(
     return path
 
 
-def test_ruff_is_installed() -> None:
-    """Fail loudly rather than let the guards below vanish into a skip."""
+def test_ruff_is_the_pinned_version() -> None:
+    """Resolve ruff and prove it is the pinned one, not whatever is on PATH.
+
+    Two failure modes in one assertion. Missing ruff would otherwise turn
+    every guard below into a silent skip; an *ambient* ruff earlier on PATH
+    than the synced venv's would make the verdict a function of whatever the
+    machine happens to have installed — the exact thing the exact pin exists
+    to prevent. Under `uv run` the venv wins, so this holds in CI.
+    """
     proc = subprocess.run([*_ruff_cmd(), "--version"], capture_output=True, text=True)
     assert proc.returncode == 0, (
         "ruff is not runnable here, so the scaffold lint guards cannot run. It "
         "is a pinned dev-group dependency of this package — `uv sync "
-        "--all-extras --all-groups`, which is what CI does."
+        f"--all-extras --all-groups`, which is what CI does. {proc.stderr}"
+    )
+    pin = _pinned_ruff_version()
+    assert proc.stdout.split() == ["ruff", pin], (
+        f"resolved ruff is {proc.stdout.strip()!r}, but this package pins "
+        f"ruff=={pin}. The scaffold guards would report a verdict from a "
+        f"binary the pin never selected. Run under `uv run` in "
+        f"packages/conformance so the synced venv's ruff comes first on PATH."
     )
 
 
@@ -182,18 +241,14 @@ def test_python_scaffold_lines_fit_the_tightest_wrap(
     )
 
 
-@pytest.mark.parametrize("dest_rel,template", _FORCE_WRITTEN)
-def test_force_written_scaffold_is_whitespace_clean(
-    dest_rel: str, template: str
-) -> None:
-    """Hold the pre-commit-hooks staples for every force-written file.
+def _assert_whitespace_clean(dest_rel: str, content: str) -> None:
+    """Hold the pre-commit-hooks staples for one force-written file.
 
     trailing-whitespace, end-of-file-fixer and mixed-line-ending are the
-    hooks fleet repos run alongside ruff; a file bootstrap keeps
-    rewriting has to satisfy them too, whatever its type — YAML and
-    Markdown included, not just the vendored Python.
+    hooks fleet repos run alongside ruff; a file bootstrap keeps rewriting
+    has to satisfy them too, whatever its type — YAML and Markdown
+    included, not just the vendored Python.
     """
-    content = render(template)
     assert "\r" not in content, f"{dest_rel} contains a CR (mixed line endings)"
     assert "\t" not in content, f"{dest_rel} contains a tab"
     assert content.endswith("\n"), f"{dest_rel} does not end with a newline"
@@ -204,3 +259,33 @@ def test_force_written_scaffold_is_whitespace_clean(
         if line != line.rstrip()
     ]
     assert not trailing, f"{dest_rel} has trailing whitespace on lines {trailing}"
+
+
+@pytest.mark.parametrize("params_id,params", _RENDER_PARAMS, ids=lambda v: v)
+@pytest.mark.parametrize("dest_rel,template", _TEMPLATE_RENDERED_FORCE_WRITTEN)
+def test_force_written_scaffold_is_whitespace_clean(
+    dest_rel: str,
+    template: str,
+    params_id: str,
+    params: dict[str, str],
+) -> None:
+    _assert_whitespace_clean(f"{dest_rel} [{params_id}]", render(template, **params))
+
+
+def test_force_written_system_deps_file_is_whitespace_clean(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cover the one force-written artifact with no template.
+
+    `.github/ci-system-deps.txt` is written from the `--system-deps` flag,
+    so its bytes are the operator's, not a template's. Every producer
+    normalises (the arg parser re-joins on single spaces; both autodetect
+    readers go through `sanitize_package_list`) — this pins that premise at
+    the file, driving the messiest spelling the CLI accepts through the real
+    bootstrap path.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--system-deps=  libkrb5-dev   gcc\n"])
+    dest = tmp_path / ".github" / "ci-system-deps.txt"
+    assert dest.exists(), "bootstrap wrote no ci-system-deps.txt for a non-empty flag"
+    _assert_whitespace_clean(".github/ci-system-deps.txt", dest.read_text())
