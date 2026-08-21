@@ -18,6 +18,7 @@ from application_sdk.testing.e2e._errors import (
     AtlanAEWorkflowAlreadyActiveError,
     AtlanApiHttpError,
     AtlanApiTimeoutError,
+    AutomationEngineNotDispatchingError,
     DAGProgressStalledError,
     NoWorkerOnTaskQueueError,
     RequestDelivery,
@@ -139,6 +140,31 @@ class TestPollNativeStatusStallGuard:
                         stall_grace_seconds=30,
                         stall_task_queue="atlan-openapi-e2e-full-ci-42",
                     )
+
+    def test_pending_run_is_attributed_to_ae_not_the_app(self):
+        """A top-level run still Pending was never dispatched by AE.
+
+        Nothing reached the app's task queue, so blaming a missing worker or a
+        wrong agent_name sends triage at the wrong system. Must raise the AE
+        error and must not name the app's queue.
+        """
+        client = _make_client()
+        never_dispatched = _result(DAGRunStatus.PENDING, DAGNodeStatus.PENDING)
+
+        with patch.object(client, "get_native_status", return_value=never_dispatched):
+            with fake_clock():
+                with pytest.raises(AutomationEngineNotDispatchingError) as exc:
+                    client.poll_native_status(
+                        _RUN_ID,
+                        interval_seconds=10,
+                        timeout_seconds=600,
+                        stall_grace_seconds=30,
+                        stall_task_queue="atlan-openapi-e2e-full-ci-42",
+                    )
+        message = str(exc.value)
+        assert "atlan-openapi-e2e-full-ci-42" not in message
+        assert "agent_spec()" not in message
+        assert "automation engine" in message.lower()
 
     def test_generic_queue_hint_when_stall_task_queue_empty(self):
         """With no stall_task_queue supplied, the error falls back to the
