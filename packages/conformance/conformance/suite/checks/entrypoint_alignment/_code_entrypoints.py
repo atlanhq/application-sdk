@@ -106,6 +106,76 @@ def _extract_ep_name(
     return None, False
 
 
+def _extract_app_name(class_node: ast.ClassDef) -> str | None:
+    """The app name this class registers under, when statically knowable.
+
+    Mirrors the SDK's derivation: a literal ``name = "..."`` wins; an absent
+    attribute falls back to the kebab-cased class name. A non-literal
+    assignment returns ``None`` — no identity claim can be made.
+    """
+    for stmt in class_node.body:
+        value: ast.expr | None = None
+        if isinstance(stmt, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "name"
+            for target in stmt.targets
+        ):
+            value = stmt.value
+        elif (
+            isinstance(stmt, ast.AnnAssign)
+            and isinstance(stmt.target, ast.Name)
+            and stmt.target.id == "name"
+        ):
+            value = stmt.value
+        if value is None:
+            continue
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            return value.value or _method_name_to_kebab(class_node.name)
+        return None
+    return _method_name_to_kebab(class_node.name)
+
+
+def _extract_legacy_aliases(
+    class_node: ast.ClassDef,
+) -> tuple[dict[str, str], bool]:
+    """Parse a class body for a literal ``legacy_workflow_types`` declaration.
+
+    Returns ``(aliases, is_unresolved)``: the ``{alias: entry-point name}``
+    pairs when the assignment is a dict literal of string constants, or
+    ``is_unresolved=True`` when the attribute is assigned something the scan
+    cannot statically read (a variable, a comprehension, …).
+    """
+    for stmt in class_node.body:
+        value: ast.expr | None = None
+        if isinstance(stmt, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "legacy_workflow_types"
+            for target in stmt.targets
+        ):
+            value = stmt.value
+        elif (
+            isinstance(stmt, ast.AnnAssign)
+            and isinstance(stmt.target, ast.Name)
+            and stmt.target.id == "legacy_workflow_types"
+        ):
+            value = stmt.value
+        if value is None:
+            continue
+        if not isinstance(value, ast.Dict):
+            return {}, True
+        aliases: dict[str, str] = {}
+        for key, val in zip(value.keys, value.values):
+            if (
+                isinstance(key, ast.Constant)
+                and isinstance(key.value, str)
+                and isinstance(val, ast.Constant)
+                and isinstance(val.value, str)
+            ):
+                aliases[key.value] = val.value
+            else:
+                return {}, True
+        return aliases, False
+    return {}, False
+
+
 # ---------------------------------------------------------------------------
 # Result data structures
 # ---------------------------------------------------------------------------
@@ -131,6 +201,18 @@ class AppClassLocation:
     filename: str
     node: ast.ClassDef
 
+    app_name: str | None = None
+    """The app's registered name: the literal ``name = "..."`` class attribute,
+    or the kebab-cased class name when the attribute is absent (mirroring the
+    SDK's derivation). ``None`` when the attribute exists but is not a string
+    literal, so no identity claim can be made statically."""
+
+    legacy_aliases: dict[str, str] = field(default_factory=dict)
+    """This class's literal ``legacy_workflow_types`` pairs:
+    ``{alias: entry-point name}``. Scoped per class — pooling declarations
+    across App classes would let one app's declaration route another's
+    entry point."""
+
 
 @dataclass
 class UnresolvedLocation:
@@ -148,6 +230,9 @@ class CodeEntrypointScan:
     entrypoints: list[EntrypointLocation] = field(default_factory=list)
     app_classes: list[AppClassLocation] = field(default_factory=list)
     unresolved: list[UnresolvedLocation] = field(default_factory=list)
+    unresolved_aliases: list[AppClassLocation] = field(default_factory=list)
+    """App subclasses whose ``legacy_workflow_types`` assignment the scan
+    cannot statically read (a variable, a comprehension, …)."""
 
     def name_set(self) -> frozenset[str]:
         """Return the set of all wire names found in code."""
@@ -187,9 +272,16 @@ def scan_file_for_entrypoints(
                 else:
                     base_name = None
                 if base_name in app_aliases:
-                    result.app_classes.append(
-                        AppClassLocation(filename=filename, node=node)
+                    aliases, is_unresolved = _extract_legacy_aliases(node)
+                    location = AppClassLocation(
+                        filename=filename,
+                        node=node,
+                        app_name=_extract_app_name(node),
+                        legacy_aliases={} if is_unresolved else aliases,
                     )
+                    result.app_classes.append(location)
+                    if is_unresolved:
+                        result.unresolved_aliases.append(location)
                     break
 
         # ── @entrypoint-decorated method detection ────────────────────────────
@@ -216,6 +308,10 @@ def scan_file_for_entrypoints(
                 )
             elif ep_name is not None:
                 result.entrypoints.append(
-                    EntrypointLocation(name=ep_name, filename=filename, node=deco)
+                    EntrypointLocation(
+                        name=ep_name,
+                        filename=filename,
+                        node=deco,
+                    )
                 )
             break  # Only the first @entrypoint decorator on a method counts.

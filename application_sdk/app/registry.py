@@ -1,5 +1,6 @@
 """App and Task discovery and registration."""
 
+import os
 import types
 import warnings
 from collections.abc import Mapping
@@ -11,6 +12,7 @@ if TYPE_CHECKING:
     from application_sdk.app.task import TaskMetadata
 
 
+from application_sdk.app.entrypoint import build_workflow_type_index
 from application_sdk.contracts.base import validate_is_contract
 from application_sdk.errors import (
     APP_ALREADY_REGISTERED,
@@ -36,15 +38,37 @@ class AppMetadata:
     tags: dict[str, str] = field(default_factory=dict)
     passthrough_modules: frozenset[str] = field(default_factory=frozenset)
     entry_points: "Mapping[str, EntryPointMetadata]" = field(default_factory=dict)
+    legacy_workflow_types: Mapping[str, str] = field(default_factory=dict)
+    """Inbound-only Temporal type aliases declared on the App class itself:
+    ``{alias: entry-point name}``. Validated wholesale by
+    :func:`~application_sdk.app.entrypoint.build_workflow_type_index`."""
     deprecated: bool = False
     deprecation_message: str | None = None
+    workflow_types: "Mapping[str, EntryPointMetadata]" = field(
+        default_factory=dict, init=False
+    )
+    """Every Temporal workflow type this app registers — each entry point's
+    canonical type plus the app's declared ``legacy_workflow_types`` aliases —
+    mapped to its entry point. Derived — the worker registers these keys and
+    result-type resolution reads them back, so registration and resolution
+    cannot drift."""
 
     def __post_init__(self) -> None:
-        # Freeze entry_points so callers cannot mutate it post-construction.
+        # Freeze the mappings so callers cannot mutate them post-construction.
         # frozen=True prevents direct assignment; object.__setattr__ bypasses that.
         object.__setattr__(
             self, "entry_points", types.MappingProxyType(self.entry_points)
         )
+        # Validates the declaration wholesale (container, entries, collisions).
+        index = build_workflow_type_index(
+            self.name, self.entry_points, self.legacy_workflow_types
+        )
+        object.__setattr__(
+            self,
+            "legacy_workflow_types",
+            types.MappingProxyType(dict(self.legacy_workflow_types or {})),
+        )
+        object.__setattr__(self, "workflow_types", types.MappingProxyType(index))
 
     @property
     def qualified_name(self) -> str:
@@ -156,6 +180,7 @@ class AppRegistry:
         tags: dict[str, str] | None = None,
         passthrough_modules: set[str] | None = None,
         entry_points: "dict[str, EntryPointMetadata] | None" = None,
+        legacy_workflow_types: Mapping[str, str] | None = None,
         allow_override: bool = False,
     ) -> AppMetadata:
         """Register an App.
@@ -170,6 +195,8 @@ class AppRegistry:
             tags: Optional tags for categorization.
             passthrough_modules: Modules to pass through sandbox for this App.
             entry_points: Entry point metadata keyed by entry point name.
+            legacy_workflow_types: Inbound-only Temporal type aliases
+                (``{alias: entry-point name}``).
             allow_override: If True, allow re-registration (for testing).
 
         Returns:
@@ -200,6 +227,9 @@ class AppRegistry:
             tags=tags or {},
             passthrough_modules=frozenset(passthrough_modules or set()),
             entry_points=entry_points or {},
+            legacy_workflow_types=(
+                legacy_workflow_types if legacy_workflow_types is not None else {}
+            ),
         )
 
         self._apps[name][version] = metadata
@@ -343,6 +373,7 @@ class AppRegistry:
             description=metadata.description,
             tags=metadata.tags,
             entry_points=metadata.entry_points,
+            legacy_workflow_types=metadata.legacy_workflow_types,
             deprecated=True,
             deprecation_message=message,
         )
@@ -504,11 +535,18 @@ def resolve_pool_queue(pool: str) -> str | None:
         pool: Validated lowercase kebab-case pool name
             (e.g. ``"heavy"``, ``"cold-tier"``).
 
+    Runs inside the Temporal workflow sandbox: ``_wrap_instance_tasks`` builds a
+    wrapper for every task at activation, and the wrapper factory resolves the
+    pool. ``os`` must therefore stay imported at module level. This module is a
+    sandbox passthrough, but passthrough is applied at import time — a deferred
+    ``import os`` inside this function runs while a workflow is executing and
+    resolves to the sandbox's restricted proxy, so ``os.environ.get`` raises
+    ``RestrictedWorkflowAccessError`` and every app declaring a ``@task(pool=...)``
+    fails its first workflow activation, whether or not that task is ever called.
+
     Returns:
         Resolved task-queue string, or ``None`` if unresolvable.
     """
-    import os  # noqa: PLC0415
-
     env_key = f"ATLAN_POOL_{pool.upper().replace('-', '_')}_QUEUE"
     explicit = os.environ.get(env_key)
     if explicit:

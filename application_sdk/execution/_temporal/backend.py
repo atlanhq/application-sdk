@@ -24,6 +24,7 @@ from temporalio.runtime import (
     TelemetryFilter,
 )
 
+from application_sdk.app.entrypoint import canonical_workflow_type
 from application_sdk.constants import (
     ENABLE_ATLAN_UPLOAD,
     TEMPORAL_PROMETHEUS_BIND_ADDRESS,
@@ -152,6 +153,20 @@ def _stamp_start_correlation(input_data: Any, context: "AppContext") -> str:
     return correlation_id
 
 
+def _workflow_name_for(app_cls: "type[App]", ep_meta: Any | None) -> str:
+    """The Temporal workflow type to dispatch *app_cls* on.
+
+    Always the canonical convention-derived type. ``legacy_workflow_types``
+    aliases are inbound-only — the SDK never dispatches on one, so the
+    ``temporal.workflow.type`` telemetry dimension counts exactly the external
+    callers that have not migrated. ``ep_meta`` is ``None`` for a caller that
+    named no entry point, which keeps the historical bare app-name dispatch.
+    """
+    if ep_meta is None:
+        return app_cls._app_name
+    return canonical_workflow_type(app_cls._app_name, ep_meta)
+
+
 class TemporalExecutorBackend:
     """Temporal-based executor backend for running Apps as workflows."""
 
@@ -182,8 +197,10 @@ class TemporalExecutorBackend:
             retry_policy: Retry policy for the workflow.
             execution_timeout: Optional timeout for the workflow execution.
             entry_point: Entry point name for multi-entry-point apps.
-                When provided, the workflow name is ``"{app_name}:{entry_point}"``.
-                When omitted, defaults to the app name (single-entry-point apps).
+                When provided, the workflow is dispatched on that entry point's
+                canonical type ``"{app_name}:{entry_point}"`` — never on a
+                ``legacy_workflow_types`` alias, which is inbound-only. When
+                omitted, defaults to the app name (single-entry-point apps).
         """
         from uuid import uuid4  # noqa: PLC0415 — stdlib uuid; lazy use
 
@@ -200,9 +217,6 @@ class TemporalExecutorBackend:
             else f"{prefix}-{short_id}"
         )
 
-        workflow_name = (
-            f"{app_cls._app_name}:{entry_point}" if entry_point else app_cls._app_name
-        )
         ep_meta = (
             app_cls._app_metadata.entry_points.get(entry_point) if entry_point else None
         )
@@ -212,6 +226,7 @@ class TemporalExecutorBackend:
             )
 
             raise UnknownEntryPointError(resource_identifier=entry_point)
+        workflow_name = _workflow_name_for(app_cls, ep_meta)
         output_type = (
             ep_meta.output_type
             if ep_meta is not None
@@ -246,8 +261,10 @@ class TemporalExecutorBackend:
             context: App execution context.
             retry_policy: Retry policy for the workflow.
             entry_point: Entry point name for multi-entry-point apps.
-                When provided, the workflow name is ``"{app_name}:{entry_point}"``.
-                When omitted, defaults to the app name (single-entry-point apps).
+                When provided, the workflow is dispatched on that entry point's
+                canonical type ``"{app_name}:{entry_point}"`` — never on a
+                ``legacy_workflow_types`` alias, which is inbound-only. When
+                omitted, defaults to the app name (single-entry-point apps).
         """
         from uuid import uuid4  # noqa: PLC0415 — stdlib uuid; lazy use
 
@@ -264,9 +281,16 @@ class TemporalExecutorBackend:
             else f"{prefix}-{short_id}"
         )
 
-        workflow_name = (
-            f"{app_cls._app_name}:{entry_point}" if entry_point else app_cls._app_name
+        ep_meta = (
+            app_cls._app_metadata.entry_points.get(entry_point) if entry_point else None
         )
+        if entry_point is not None and ep_meta is None:
+            from application_sdk.execution._temporal._backend_errors import (  # noqa: PLC0415
+                UnknownEntryPointError,
+            )
+
+            raise UnknownEntryPointError(resource_identifier=entry_point)
+        workflow_name = _workflow_name_for(app_cls, ep_meta)
         handle = await self._client.start_workflow(
             workflow_name,
             args=[input_data],

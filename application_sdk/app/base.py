@@ -8,9 +8,10 @@ import re
 import shutil
 import sys
 import threading
+import types
 import warnings
 from abc import ABC
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -50,7 +51,11 @@ from application_sdk.app.context import (
     TaskExecutionContext,
     _is_atlan_logger,
 )
-from application_sdk.app.entrypoint import EntryPointMetadata
+from application_sdk.app.entrypoint import (
+    EntryPointMetadata,
+    canonical_workflow_type,
+    workflow_type_class_segment,
+)
 from application_sdk.app.registry import AppMetadata, resolve_pool_queue
 from application_sdk.app.task import get_task_metadata, is_task, task
 from application_sdk.constants import (
@@ -714,6 +719,28 @@ class App(ABC):
     tags: ClassVar[dict[str, str] | None] = None
     passthrough_modules: ClassVar[set[str] | None] = None
 
+    legacy_workflow_types: ClassVar[Mapping[str, str]] = types.MappingProxyType({})
+    """Inbound-only Temporal workflow type aliases: ``{alias: entry-point name}``.
+
+    Declare a legacy type that external callers still dispatch (e.g. a bare
+    pre-migration name like ``"KeifuWorkflow"``) so the worker keeps accepting
+    it. The alias is accepted, never produced: every SDK-initiated dispatch
+    emits the canonical ``{app-name}:{entry-point-name}`` type, so the
+    ``temporal.workflow.type`` telemetry dimension counts exactly the callers
+    that have not migrated. Delete an alias only when that count reaches zero.
+
+    Not inherited: registration reads each subclass's own declaration, so an
+    App subclassing an aliased App starts with no aliases — the alias names a
+    wire contract of one specific app, and silently re-registering it under a
+    second app's name would fail worker startup with a cross-app collision.
+
+    This is a temporary compatibility surface for migrations, not a naming
+    lever — the canonical type cannot be changed. The declaration is due to
+    move to the app contract manifest once the contract toolkit carries a
+    ``legacy_workflow_types`` block; this class attribute is the interim (and,
+    for apps without a contract tree, permanent) declaration site.
+    """
+
     preflight_gate_mode: ClassVar[Literal["hard", "soft"]] = "soft"
     """Preflight gate posture. ``"soft"`` (default) never blocks — a
     ``NOT_READY`` verdict lets the run proceed and is emitted as
@@ -833,6 +860,9 @@ class App(ABC):
             input_type=default_ep.input_type,
             output_type=default_ep.output_type,
             entry_points=entry_points,
+            # Own-class read on purpose: aliases name one specific app's wire
+            # contract and must not propagate to subclasses through the MRO.
+            legacy_workflow_types=cls.__dict__.get("legacy_workflow_types", {}),
         )
 
     @property
@@ -1674,10 +1704,11 @@ class App(ABC):
 # module from _ep_registration and re-exported via __all__ for backward compat.
 
 
-# Cache generated workflow classes keyed by (app_cls, entry_point_name) so
-# generate_workflow_class() is idempotent across repeated calls (e.g. tests
-# or worker re-creation) and never registers the same Temporal workflow twice.
-_workflow_class_cache: dict[tuple[type, str], type] = {}
+# Cache generated workflow classes keyed by (app_cls, entry_point_name,
+# workflow_type) so generate_workflow_class() is idempotent across repeated
+# calls (e.g. tests or worker re-creation) and never registers the same Temporal
+# workflow twice.
+_workflow_class_cache: dict[tuple[type, str, str], type] = {}
 
 
 def _validate_interaction_signature(
@@ -2083,7 +2114,11 @@ def _validate_workflow_input(raw_input: Any, input_type: type[Input]) -> Input:
         ) from e
 
 
-def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> type:
+def generate_workflow_class(
+    app_cls: "type[App]",
+    ep: "EntryPointMetadata",
+    workflow_name: str | None = None,
+) -> type:
     """Generate a Temporal workflow class for one entry point.
 
     Creates a @workflow.defn-decorated class whose run() sets up App context,
@@ -2092,17 +2127,21 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
     Args:
         app_cls: The App subclass.
         ep: The entry point to generate a workflow class for.
+        workflow_name: The Temporal workflow type to register this class under.
+            An entry point carrying ``legacy_workflow_types`` aliases registers
+            under more than one name, so the caller picks; defaults to the
+            canonical type.
 
     Returns:
         A Temporal workflow class decorated with @workflow.defn.
     """
-    cache_key = (app_cls, ep.name)
+    if workflow_name is None:
+        workflow_name = canonical_workflow_type(app_cls._app_name, ep)
+
+    cache_key = (app_cls, ep.name, workflow_name)
     if cache_key in _workflow_class_cache:
         return _workflow_class_cache[cache_key]
 
-    workflow_name = (
-        app_cls._app_name if ep.implicit else f"{app_cls._app_name}:{ep.name}"
-    )
     entry_method_name = ep.method_name
     entrypoint_name = ep.name
     input_type = ep.input_type
@@ -2114,7 +2153,9 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
         input_type_supports_gate,
     )
 
-    if not input_type_supports_gate(input_type):
+    canonical_type = canonical_workflow_type(app_name, ep)
+    alias_of_canonical = None if workflow_name == canonical_type else canonical_type
+    if alias_of_canonical is None and not input_type_supports_gate(input_type):
         _task_logger.warning(
             "Preflight gate will not run for entrypoint '%s' (%s): input type %s does "
             "not declare the credential-routing fields (extraction_method, "
@@ -2136,6 +2177,17 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
         # deferred imports: inside Temporal sandbox (workflow.unsafe.imports_passed_through context)
         # BLDX-878: inter-app calls deactivated pending review.
         # from application_sdk.app.client import WorkflowAppClient
+
+        if alias_of_canonical:
+            _safe_log(
+                "warning",
+                f"Workflow started on legacy type '{workflow_name}'; the "
+                f"canonical type is '{alias_of_canonical}'. This alias is a "
+                f"temporary migration surface — move the caller to the "
+                f"canonical type.",
+                legacy_workflow_type=workflow_name,
+                canonical_workflow_type=alias_of_canonical,
+            )
 
         # Fail fast on a malformed / wrong-typed payload, before any setup runs.
         # Enforces the entry point's typed contract at the workflow boundary.
@@ -2333,8 +2385,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             # BLDX-878: inter-app calls deactivated pending review.
             # app_instance._client = None
 
-    safe_name = workflow_name.replace("-", "_").replace(":", "_")
-    cls_name = f"_Workflow_{safe_name}"
+    cls_name = f"_Workflow_{workflow_type_class_segment(workflow_name)}"
 
     # Temporal's _is_unbound_method_on_cls checks:
     #   fn.__qualname__.rsplit(".", 1)[0] == cls.__name__
