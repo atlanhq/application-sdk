@@ -28,9 +28,12 @@ import os
 import sys
 from collections.abc import Mapping
 
-# Secrets the scan cannot run without under any configuration: the composite
-# does a `docker login cgr.dev` with them before it can build the image.
-ALWAYS_REQUIRED = ("CHAINGUARD_USERNAME", "CHAINGUARD_PASSWORD")
+# Nothing is needed unconditionally any more. CHAINGUARD_USERNAME /
+# CHAINGUARD_PASSWORD used to sit here, and were the whole problem: they exist
+# only as repo-level secrets on application-sdk, so no caller could ever supply
+# them, and no caller builds from cgr.dev in the first place. Both are gone from
+# the reusable's contract and the composite's login is now conditional.
+ALWAYS_REQUIRED: tuple[str, ...] = ()
 
 # Only needed as the fallback for the cross-repo allowlist checkout and the
 # BuildKit private-dependency secret. When the fleet App token minted, nothing
@@ -38,10 +41,10 @@ ALWAYS_REQUIRED = ("CHAINGUARD_USERNAME", "CHAINGUARD_PASSWORD")
 REQUIRED_WITHOUT_APP_TOKEN = "ORG_PAT_GITHUB"
 
 REMEDY = (
-    "Fix the caller's trivy.yml: replace its explicit `secrets:` block with "
-    "`secrets: inherit`, as the reusable's usage docstring recommends. An "
-    "explicit block passes only the secrets it names, and every name it omits "
-    "arrives here empty."
+    "Fix the caller: pass `secrets: inherit` instead of an explicit `secrets:` "
+    "block, or add the missing name to the block. An explicit block passes only "
+    "the secrets it names, and every name it omits arrives here empty. Better "
+    "still, migrate to build-and-scan.yaml -- this workflow is deprecated."
 )
 
 

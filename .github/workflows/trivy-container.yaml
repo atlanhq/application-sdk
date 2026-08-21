@@ -1,28 +1,43 @@
-# Trivy container scan. This can be reused across all the applications.
-#
-# Runs Trivy, checks findings against the centralized base-allowlist in the SDK
-# repo (.security/base-allowlist.json), posts a summary comment on PRs, and
-# fails on new/expired entries.
-#
-# Usage:
+# DEPRECATED -- use build-and-scan.yaml instead. Removal: 3.0.
 #
 #   jobs:
-#     build:
-#       uses: atlanhq/application-sdk/.github/workflows/trivy-container.yaml@main
+#     scan:
+#       uses: atlanhq/application-sdk/.github/workflows/build-and-scan.yaml@main
 #       secrets: inherit
+#
+# build-and-scan.yaml is the scan that actually gates PRs across the fleet. It
+# does the same job (build, Trivy, allowlist gate, PR comment) and additionally
+# reads the Dockerfile path from the caller's atlan.yaml rather than hardcoding
+# ./Dockerfile, so it works on the repos that keep theirs at install/Dockerfile
+# or deploy/Dockerfile. It emits `scan / Trivy Scan` and `scan / Security Gate`.
+#
+# Why this one is being retired (FND-447): across all 166 active atlan-*-app
+# repos it had 33 callers and not one working run. Two independent causes:
+#
+#   1. It demanded CHAINGUARD_USERNAME / CHAINGUARD_PASSWORD as required
+#      secrets. Those exist only as *repo-level* secrets on application-sdk, so
+#      no caller could ever supply them -- `secrets: inherit` forwards by name
+#      and the names are absent everywhere else. The org-level pair is named
+#      CHAINGUARD_DOCKER_* and is rejected by cgr.dev (FORBIDDEN).
+#   2. No connector app needs cgr.dev at all. They build from
+#      registry.atlan.com, docker.io and registry.access.redhat.com; only
+#      application-sdk's own Dockerfile is FROM cgr.dev. So the login this
+#      workflow insisted on was both unsatisfiable and pointless.
+#
+# The Chainguard secrets are gone from the contract below, and the composite's
+# login step is now conditional, so the SDK's own pull_request.yaml job keeps
+# using its repo-level credentials while callers here need nothing.
+#
+# The remaining secret is declared `required: false` on purpose and validated by
+# the "Verify secret contract" step instead. `required: true` turns a caller
+# that omits it into a workflow-parse error: the run ends as `startup_failure`
+# with zero jobs and therefore no check run at all, which no required check can
+# gate on and nobody can see. That is what hid cause 1 for months. See
+# .github/scripts/check_trivy_secret_contract.py for the full rationale.
 #
 # This workflow mints a fleet App token (falling back to the caller's
 # ORG_PAT_GITHUB) for the cross-repo allowlist checkout and the
-# private-dependency BuildKit secret. Callers passing named secrets
-# explicitly instead of `inherit` keep working unchanged on their own
-# ORG_PAT_GITHUB.
-#
-# Every secret below is declared `required: false` on purpose, and validated by
-# the "Verify secret contract" step instead. `required: true` turns a caller
-# that omits the secret into a workflow-parse error: the run ends as
-# `startup_failure` with zero jobs and therefore no check run at all, which no
-# required check can gate on and nobody can see (FND-447). See
-# .github/scripts/check_trivy_secret_contract.py for the full rationale.
+# private-dependency BuildKit secret.
 
 name: Atlan Application Trivy container scan
 
@@ -32,12 +47,6 @@ on:
       ORG_PAT_GITHUB:
         required: false
         description: "Fallback PAT, used if the fleet App token can't be minted. Enforced by the 'Verify secret contract' step, and only when the App token did not mint -- nothing reads it otherwise."
-      CHAINGUARD_USERNAME:
-        required: false
-        description: "Chainguard registry username. Needed unconditionally (the composite logs in to cgr.dev before it can build); enforced by the 'Verify secret contract' step, not by `required: true`."
-      CHAINGUARD_PASSWORD:
-        required: false
-        description: "Chainguard registry password. Same handling as CHAINGUARD_USERNAME above."
       FLEET_APP_ID:
         required: false
         description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller — auto-available via 'secrets: inherit'. Declared here so the contract is self-documenting."
@@ -118,8 +127,6 @@ jobs:
       # after -- a visible failure carrying a check run, not startup_failure.
       - name: Verify secret contract
         env:
-          CHAINGUARD_USERNAME: ${{ secrets.CHAINGUARD_USERNAME }}
-          CHAINGUARD_PASSWORD: ${{ secrets.CHAINGUARD_PASSWORD }}
           ORG_PAT_GITHUB: ${{ secrets.ORG_PAT_GITHUB }}
           APP_TOKEN_MINTED: ${{ steps.app-token.outputs.token }}
         run: python3 _sdk/.github/scripts/check_trivy_secret_contract.py
@@ -129,8 +136,9 @@ jobs:
       - id: trivy-scan
         uses: "atlanhq/application-sdk/.github/actions/trivy-container@main"
         with:
-          chainguard-username: ${{ secrets.CHAINGUARD_USERNAME }}
-          chainguard-password: ${{ secrets.CHAINGUARD_PASSWORD }}
+          # No chainguard-* here on purpose: the login is skipped, since no
+          # caller of this workflow builds from cgr.dev and none could supply
+          # the credentials anyway. See the header.
           github-token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
           skip-files: ${{ inputs.skip-files }}
           fail-on-vulns: 'false'

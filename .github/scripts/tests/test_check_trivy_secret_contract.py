@@ -14,21 +14,12 @@ import check_trivy_secret_contract as guard
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _MODULE_PATH = _REPO_ROOT / ".github" / "scripts" / "check_trivy_secret_contract.py"
 _WORKFLOW_PATH = _REPO_ROOT / ".github" / "workflows" / "trivy-container.yaml"
+_COMPOSITE_PATH = _REPO_ROOT / ".github" / "actions" / "trivy-container" / "action.yaml"
 
 # A caller using `secrets: inherit`, with the fleet App token minted.
 FULLY_CONFIGURED = {
-    "CHAINGUARD_USERNAME": "user",
-    "CHAINGUARD_PASSWORD": "pass",
     "ORG_PAT_GITHUB": "pat",
     "APP_TOKEN_MINTED": "ghs_token",
-}
-
-# The FND-447 shape: an explicit `secrets:` block passing only ORG_PAT_GITHUB.
-EXPLICIT_BLOCK_ONLY_PAT = {
-    "CHAINGUARD_USERNAME": "",
-    "CHAINGUARD_PASSWORD": "",
-    "ORG_PAT_GITHUB": "pat",
-    "APP_TOKEN_MINTED": "",
 }
 
 
@@ -36,23 +27,14 @@ class TestMissingSecrets:
     def test_fully_configured_caller_has_nothing_missing(self):
         assert guard.missing_secrets(FULLY_CONFIGURED) == []
 
-    def test_reports_both_chainguard_secrets_for_the_fnd447_shape(self):
-        assert guard.missing_secrets(EXPLICIT_BLOCK_ONLY_PAT) == [
-            "CHAINGUARD_USERNAME",
-            "CHAINGUARD_PASSWORD",
-        ]
+    def test_org_pat_required_when_the_app_token_did_not_mint(self):
+        env = FULLY_CONFIGURED | {"APP_TOKEN_MINTED": "", "ORG_PAT_GITHUB": ""}
+        assert guard.missing_secrets(env) == ["ORG_PAT_GITHUB"]
 
     def test_unset_variable_counts_as_missing_not_only_empty(self):
         # GitHub renders an unpassed secret as "", but a caller-side typo in the
         # step's env mapping omits the variable entirely. Both must be caught.
-        assert guard.missing_secrets({"APP_TOKEN_MINTED": "ghs_token"}) == [
-            "CHAINGUARD_USERNAME",
-            "CHAINGUARD_PASSWORD",
-        ]
-
-    def test_org_pat_required_when_the_app_token_did_not_mint(self):
-        env = FULLY_CONFIGURED | {"APP_TOKEN_MINTED": "", "ORG_PAT_GITHUB": ""}
-        assert guard.missing_secrets(env) == ["ORG_PAT_GITHUB"]
+        assert guard.missing_secrets({}) == ["ORG_PAT_GITHUB"]
 
     def test_org_pat_not_required_when_the_app_token_minted(self):
         # Nothing reads ORG_PAT_GITHUB once the App token exists, so demanding
@@ -63,15 +45,23 @@ class TestMissingSecrets:
         env = FULLY_CONFIGURED | {"APP_TOKEN_MINTED": "  ", "ORG_PAT_GITHUB": ""}
         assert guard.missing_secrets(env) == ["ORG_PAT_GITHUB"]
 
+    def test_chainguard_secrets_are_no_longer_demanded(self):
+        # They exist only as repo-level secrets on application-sdk, so no caller
+        # could ever supply them, and no caller builds from cgr.dev anyway.
+        # Demanding them is what killed all 33 callers (FND-447).
+        assert guard.ALWAYS_REQUIRED == ()
+        assert guard.missing_secrets(FULLY_CONFIGURED) == []
+
 
 class TestFailureMessage:
     def test_names_every_missing_secret(self):
-        message = guard.failure_message(["CHAINGUARD_USERNAME", "ORG_PAT_GITHUB"])
-        assert "CHAINGUARD_USERNAME" in message
-        assert "ORG_PAT_GITHUB" in message
+        assert "ORG_PAT_GITHUB" in guard.failure_message(["ORG_PAT_GITHUB"])
 
     def test_points_the_operator_at_secrets_inherit(self):
-        assert "secrets: inherit" in guard.failure_message(["CHAINGUARD_PASSWORD"])
+        assert "secrets: inherit" in guard.failure_message(["ORG_PAT_GITHUB"])
+
+    def test_points_the_operator_at_the_replacement_workflow(self):
+        assert "build-and-scan.yaml" in guard.failure_message(["ORG_PAT_GITHUB"])
 
 
 # ── The reusable must stay incapable of startup_failure ──────────────────────
@@ -98,6 +88,13 @@ class TestWorkflowContract:
             "and no check run. Declare it `required: false` and let "
             "check_trivy_secret_contract.py enforce it inside the job instead."
         )
+
+    def test_the_chainguard_secrets_are_gone_from_the_contract(self):
+        # Re-adding either name resurrects a requirement no caller can satisfy:
+        # they are repo-level secrets on application-sdk, invisible elsewhere.
+        secrets = self._workflow()[True]["workflow_call"]["secrets"]
+        assert "CHAINGUARD_USERNAME" not in secrets
+        assert "CHAINGUARD_PASSWORD" not in secrets
 
     def test_every_enforced_secret_is_declared_by_the_workflow(self):
         # A secret the script demands but the workflow never declares can never
@@ -148,3 +145,36 @@ class TestWorkflowContract:
             "the secret check must precede the scan composite, or the operator "
             "sees docker/login-action's cryptic error instead of the remedy."
         )
+
+    def test_the_reusable_does_not_pass_chainguard_to_the_composite(self):
+        steps = self._workflow()["jobs"]["build"]["steps"]
+        scan = next(s for s in steps if "trivy-container" in s.get("uses", ""))
+        assert "chainguard-username" not in scan.get("with", {})
+        assert "chainguard-password" not in scan.get("with", {})
+
+    def test_the_header_directs_readers_to_the_replacement(self):
+        # This workflow is deprecated; a reader arriving here from a caller must
+        # find build-and-scan.yaml without having to dig.
+        header = _WORKFLOW_PATH.read_text().split("name:")[0]
+        assert "DEPRECATED" in header
+        assert "build-and-scan.yaml" in header
+
+
+# ── The composite must not fail a build that does not need cgr.dev ───────────
+
+
+class TestCompositeContract:
+    def _composite(self) -> dict:
+        return yaml.safe_load(_COMPOSITE_PATH.read_text())
+
+    def test_chainguard_inputs_are_optional(self):
+        inputs = self._composite()["inputs"]
+        assert inputs["chainguard-username"]["required"] is False
+        assert inputs["chainguard-password"]["required"] is False
+
+    def test_the_login_step_is_conditional_on_a_username(self):
+        # docker/login-action errors on an empty username, so an unconditional
+        # login turns "this build does not need cgr.dev" into a hard failure.
+        steps = self._composite()["runs"]["steps"]
+        login = next(s for s in steps if "Chainguard" in s.get("name", ""))
+        assert login.get("if") == "inputs.chainguard-username != ''"
