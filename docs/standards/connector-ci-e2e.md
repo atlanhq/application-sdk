@@ -450,6 +450,22 @@ workflow it is manual because removing an app from a tenant is a deployment, and
 it holds no lease, for the same reason: lease tickets are refs in the repo a run
 belongs to, and this one runs in application-sdk (FND-250).
 
+**One precondition, and it is per tenant.** Heracles has to *proxy* the uninstall
+route (`uninstallTenantApp` in its `api/marketplace.json`). A tenant predating that
+answers the router's `HTTP 400 "Path was not found"` — byte-identical to what an
+invented path returns — and the driver reports `route-missing`: residue, whose fix
+is the tenant's Heracles version and not anything about the app, the request, or
+the sweep workflow.
+
+Worth stating because it nearly shipped as a silent false green. The router's
+message contains the substring `not found`, and the first implementation reused
+install's deliberately-loose `not_found` match, so an unproxied tenant reported
+*"nothing to remove, cleared"* on every run and left the pin in place forever.
+`not_installed` therefore keys on the enveloped `status_code: 404` and never on the
+message. Install's loose match stays loose on purpose — there a false positive
+costs one retry, not a permanent miss — which is exactly why the two predicates are
+now separate.
+
 Three things neither path can do, and none of them is a gap:
 
 | Not done | Why | Whose problem |

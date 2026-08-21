@@ -323,10 +323,15 @@ class InstallOutcome:
 #: pin for the app afterwards, which is the whole point of the subcommand; the
 #: rest mean it might, and the caller reports them as residue.
 #:
-#: ``refused`` and ``unreachable`` are kept apart because they need different
-#: humans: ``refused`` is LM declining (a wrong deployment name, a 4xx it will
-#: keep giving), ``unreachable`` is the call or the reconcile not completing (a
-#: transient the next run's cleanup will retry for free).
+#: The three residue outcomes are kept apart because they need different humans,
+#: and none of them is a retry of another:
+#:
+#: * ``refused`` — LM declining (a system app, a non-``default`` deployment); a
+#:   4xx it will keep giving, so a different route or a different ticket.
+#: * ``unreachable`` — the call or the reconcile not completing; a transient the
+#:   next run's cleanup retries for free.
+#: * ``route-missing`` — the tenant's Heracles does not proxy uninstall at all.
+#:   Nothing about the app or the request will change it; the tenant has to move.
 _CLEARED_OUTCOMES = frozenset({"removed", "not-installed"})
 
 
@@ -951,7 +956,13 @@ class _MarketplaceReply:
 
     @property
     def not_found(self) -> bool:
-        """The release is not resolvable in LM's tenant-catalog snapshot yet."""
+        """The release is not resolvable in LM's tenant-catalog snapshot yet.
+
+        The message match is deliberately loose, and safe here for one reason
+        only: this drives a RETRY, so a false positive costs one more attempt.
+        Do not reuse it anywhere a false positive is terminal — see
+        :attr:`not_installed`, which needs the same idea and cannot use this.
+        """
         return self.status_code == 404 or "not found" in self.message.lower()
 
     @property
@@ -959,17 +970,43 @@ class _MarketplaceReply:
         return not self.failed and "already installed" in self.message.lower()
 
     @property
+    def route_missing(self) -> bool:
+        """Heracles does not proxy this path on this tenant.
+
+        Verified live, and it is NOT a variant of :attr:`not_installed`: the
+        router answers ``HTTP 400`` with ``"Path was not found"``, byte-identical
+        to what a path invented on the spot returns, while a route that IS
+        proxied hands back LM's own envelope (``HTTP 200`` carrying an in-body
+        ``status_code``). So this means "the tenant cannot do this at all", and
+        for an uninstall that means the version pin is still there.
+
+        It has to be checked BEFORE :attr:`not_installed`, and be its own outcome
+        rather than folded into ``refused``: the fix is a Heracles version on the
+        tenant, not anything about the app or the request.
+        """
+        return self.status_code == 400 and "path was not found" in self.message.lower()
+
+    @property
     def not_installed(self) -> bool:
         """Uninstall's benign 404: there is no install record left to remove.
 
-        The same status code as install's :attr:`not_found`, read oppositely, and
-        the difference is load-bearing. On install a 404 means "LM's
-        tenant-catalog snapshot has not caught up with a fresh publish" and the
-        right response is to retry for minutes; on uninstall it means the tenant
-        is already in the state being asked for, and retrying would burn the
-        whole budget waiting for something that has already happened.
+        Keyed on the STATUS CODE alone, deliberately, and not on
+        :attr:`not_found` — which is the same idea one layer looser, and whose
+        looseness is safe only on the install path.
+
+        There, a false positive costs a retry. Here it is a terminal success, so
+        a false positive silently reports "nothing to remove" and leaves the pin
+        exactly where it was — the failure mode this whole subcommand exists to
+        remove. A live probe found precisely that: Heracles' router 400 says
+        ``"Path was not found"``, whose substring ``not found`` made an unproxied
+        route read as an already-clean tenant, on every run, forever.
+
+        LM's real answer is unambiguous and does not need the message: an
+        enveloped ``status_code: 404`` with ``status: "error"`` (``HTTP 200``
+        over the wire), or a genuine ``404``, which the parse folds to the same
+        value.
         """
-        return self.not_found
+        return self.status_code == 404
 
     @property
     def system_app(self) -> bool:
@@ -1566,6 +1603,20 @@ def _uninstall_one(
     except TenantApiError as exc:
         return UninstallOutcome(app_id, "unreachable", f"uninstall call failed: {exc}")
 
+    if reply.route_missing:
+        # Checked first: the router 400 carries "not found" in its text, and this
+        # is the tenant saying it cannot do this at all rather than that there is
+        # nothing to do. Residue, and residue whose fix is on the tenant.
+        return UninstallOutcome(
+            app_id,
+            "route-missing",
+            "this tenant's Heracles does not proxy the uninstall route "
+            f"({reply.message!r}, HTTP {reply.http_status} — the same answer an "
+            "invented path returns), so the version pin is still there. The "
+            "proxy landed in heracles' api/marketplace.json as "
+            "`uninstallTenantApp`; a tenant predating it cannot be cleaned up "
+            "over the API at all.",
+        )
     if reply.not_installed:
         # The tenant is already in the state being asked for. Terminal success,
         # not a retryable miss — see _MarketplaceReply.not_installed.
@@ -1813,7 +1864,10 @@ def main(argv: list[str] | None = None) -> int:
                 "out of the registry cache, and LM's health check is "
                 "namespace-scoped — so it will fail EVERY future install to this "
                 "tenant, for any repo. Clear it with the E2E Tenant Uninstall "
-                "workflow.",
+                "workflow — EXCEPT a `route-missing`, which that workflow cannot "
+                "fix either: it means this tenant's Heracles does not proxy the "
+                "uninstall route, so nothing clears the pin over the API until "
+                "the tenant moves forward.",
                 file=sys.stderr,
             )
             return 1

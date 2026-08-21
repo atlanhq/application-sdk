@@ -144,6 +144,74 @@ def test_the_read_back_is_what_decides_and_not_the_202(
     assert "sdr-test-abc12345" in outcomes[0].detail
 
 
+# ── The router 400 that nearly read as "already clean" ───────────────────────
+#
+# Found by probing a live tenant, not by reading code, and it is the sharpest
+# regression risk in this subcommand: the first implementation keyed
+# `not_installed` on install's loose `"not found" in message` match, and Heracles'
+# router 400 says "Path was not found". A tenant that does not proxy the route
+# therefore reported "not-installed / cleared", green, on every run, forever —
+# leaving the pin exactly where it was. The failure mode FND-709 exists to remove,
+# reintroduced inside the fix for it.
+
+
+def _router_400() -> Response:
+    """Heracles' verbatim answer for a path it does not proxy.
+
+    Captured live against a real tenant, alongside a control: an invented path
+    returns this byte-for-byte, while a route that IS proxied returns LM's
+    envelope (HTTP 200, in-body `status_code`, `status: "error"`). So the shape
+    below is the router, not LM, and not the app.
+    """
+    return Response(
+        status=400, body={"status_code": 400, "message": "Path was not found"}
+    )
+
+
+def test_an_unproxied_route_is_residue_and_not_a_clean_tenant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _wire(
+        monkeypatch,
+        StubTransport(routes=[StubRoute("POST", "/uninstall", _router_400())]),
+    )
+    outcome = app.uninstall(_args())[0]
+
+    assert outcome.outcome == "route-missing"
+    assert (
+        outcome.cleared is False
+    ), "a tenant that cannot uninstall at all must never report its pin cleared"
+    # And the detail has to point at the tenant, not at the app or the request:
+    # nothing about either will ever change this answer.
+    assert "Heracles" in outcome.detail
+
+
+def test_not_installed_ignores_the_message_and_keys_on_the_code() -> None:
+    """The predicate, directly, because this is where the false green came from.
+
+    LM's real 404 is an enveloped `status_code`, which needs no message match. A
+    message-based match cannot tell it from the router's 400.
+    """
+    router = app._MarketplaceReply.parse(_router_400())
+    assert router.route_missing is True
+    assert router.not_installed is False
+
+    lm = app._MarketplaceReply.parse(_reply("error", 404, "App with ID '…' not found"))
+    assert lm.not_installed is True
+    assert lm.route_missing is False
+
+    # A 404 whose message says nothing useful is still a 404.
+    assert app._MarketplaceReply.parse(_reply("error", 404, "")).not_installed is True
+
+    # And the loose predicate install retries on must NOT be what drives this:
+    # it matches the router 400, which is exactly the bug.
+    assert router.not_found is True, (
+        "install's not_found is deliberately loose (a false positive costs one "
+        "retry). This assertion documents that looseness so nobody re-points "
+        "not_installed at it."
+    )
+
+
 # ── Benign non-deployments ───────────────────────────────────────────────────
 
 
