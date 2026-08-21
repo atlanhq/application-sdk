@@ -12,7 +12,7 @@ runs (``processAutomationEngineWorkflow``). The harness's local seed DAG
 establishes the workflow record, not the graph. So the DAG contract a full-DAG
 e2e exercises is whatever is installed on that tenant.
 
-Two subcommands:
+Three subcommands:
 
 ``install``
     Register a tenant-targeted GM version for the PR image, install it, wait for
@@ -28,6 +28,35 @@ Two subcommands:
     can replace it between the install and the assertions. There is no
     cross-job lease in GitHub Actions that closes that window, so the drift is
     turned into a loud failure instead of a silent wrong-version pass.
+
+``uninstall``
+    Give the tenant back. FND-709: ``install`` writes ``releaseChannel:
+    "specific"`` plus a ``releaseId`` into the app's HelmRelease values, and
+    nothing ever removed it — so every connector that ran e2e left a permanent
+    per-connector version pin on every tenant it touched (30 of them on one
+    cloud's tenant, one per connector, accumulated over three days). That is a
+    hazard rather than clutter: LM's deployment health check is namespace-scoped
+    (DISTR-901), so a single stale ``sdr-test-*`` pod that has aged out of the
+    registry cache fails EVERY future install to that tenant, for repos that had
+    nothing to do with the run that created it.
+
+    Deleting the HelmRelease is what clears the pin — ``releaseChannel``,
+    ``releaseId`` and ``image.tag`` all live in its values, so they go with it.
+    That is step one of LM's ``AppDeploymentWorkflow(operation=UNINSTALL)``;
+    steps two and three wait for the workload to be gone and delete the
+    ``AtlanAppInstalled`` record.
+
+    Residue always exits non-zero: this reports honestly on what it left behind,
+    and the one caller that must not go red on it — the e2e cleanup, in a job
+    whose whole purpose is handing the tenant back — tolerates it with
+    ``continue-on-error`` at the call site instead.
+
+    Two things it deliberately cannot do. It cannot touch a **system** app (LM
+    answers 409; those are reconciler-owned — FND-438), and it does not delete
+    the app's **namespace** (which carries ``helm.sh/resource-policy: keep`` and
+    would need cluster-wide RBAC). Neither weakens the point: ``helm uninstall``
+    removes the Deployments and pods, and a bare namespace with no unhealthy pods
+    in it does not fail anybody's install.
 
 Credentials
 -----------
@@ -82,6 +111,7 @@ from e2e_tenant_api import (
     INSTALL_PATH,
     PUBLISH_PATH,
     RELEASE_SCAN_PATH,
+    UNINSTALL_PATH,
     Response,
     TenantApiError,
     TenantClient,
@@ -115,6 +145,16 @@ _INSTALL_RETRY_POLL_SECONDS = 20
 DEFAULT_INSTALL_RETRY_SECONDS = 600
 DEFAULT_DEPLOYMENT_TIMEOUT_SECONDS = 600
 
+#: Budget for the UNINSTALL deployment to reconcile, and much smaller than the
+#: install's on purpose. It is a Flux HelmRelease delete plus a wait for the
+#: workload to go, with no image pull, no registry, and no catalog-snapshot lag to
+#: sit behind — so the install's 600s would only ever be spent by a wedged
+#: uninstall, and this wait is spent while the tenant LEASE IS STILL HELD (the
+#: cleanup has to finish before the tenant is handed to the next run, or that
+#: run's fresh install is what gets deleted). Long enough for the normal case,
+#: short enough that a wedged one hands the tenant back rather than sitting on it.
+DEFAULT_UNINSTALL_TIMEOUT_SECONDS = 300
+
 #: Keys an install/info response may carry the installed version under. LM has
 #: not committed to one name across versions, so check the plausible set rather
 #: than hard-coding a guess that silently reads None and compares equal to None.
@@ -143,6 +183,16 @@ _VERSION_KEYS = (
 #: Nests to search for the installed-version payload. ``installed`` is LM's real
 #: envelope; the others are tolerated aliases.
 _VERSION_NESTS = ("installed", "install", "installation", "deployment", "data")
+
+#: The subset of :data:`_VERSION_NESTS` whose PRESENCE means the tenant still holds
+#: an install record, used by :func:`_confirm_uninstalled` to answer "is the record
+#: gone?" when no version string can be read out of it.
+#:
+#: Deliberately not the whole tuple. ``deployment`` describes a reconcile that may
+#: well be the uninstall's own, and ``data`` is just Heracles' envelope wrapper
+#: (already unwrapped by ``Response.data()``) — treating either as an install
+#: record would report residue on a tenant that is genuinely clean.
+_INSTALL_STATE_NESTS = ("installed", "install", "installation")
 
 #: Placeholders LM emits in place of a version. NOT versions, and treating them as
 #: one is worse than reading nothing: it turns "this tenant cannot tell us what it
@@ -279,6 +329,43 @@ class InstallOutcome:
         }
 
 
+#: What an uninstall attempt settled to. Two of these mean the tenant carries no
+#: pin for the app afterwards, which is the whole point of the subcommand; the
+#: rest mean it might, and the caller reports them as residue.
+#:
+#: The three residue outcomes are kept apart because they need different humans,
+#: and none of them is a retry of another:
+#:
+#: * ``refused`` — LM declining (a system app, a non-``default`` deployment); a
+#:   4xx it will keep giving, so a different route or a different ticket.
+#: * ``unreachable`` — the call or the reconcile not completing; a transient the
+#:   next run's cleanup retries for free.
+#: * ``route-missing`` — the tenant's Heracles does not proxy uninstall at all.
+#:   Nothing about the app or the request will change it; the tenant has to move.
+_CLEARED_OUTCOMES = frozenset({"removed", "not-installed"})
+
+
+@dataclass(frozen=True)
+class UninstallOutcome:
+    """What one app's uninstall attempt did, per app rather than per run.
+
+    One of these per app id because the sweep path takes a list, and a single
+    aggregated verdict would hide exactly the case worth seeing: 29 pins cleared
+    and one refused reads as a failure, and the one that needs a human is the one
+    named in ``detail``.
+    """
+
+    app_id: str
+    outcome: str
+    detail: str = ""
+    deployment_id: str = ""
+
+    @property
+    def cleared(self) -> bool:
+        """True when the tenant carries no version pin for this app afterwards."""
+        return self.outcome in _CLEARED_OUTCOMES
+
+
 def _env(*names: str) -> str:
     """Return the first non-empty value among ``names``.
 
@@ -358,6 +445,33 @@ def resolve_app_id(explicit: str) -> str:
             "marketplace yet, so there is nothing to install or verify against."
         )
     return str(app_id).strip()
+
+
+def resolve_app_ids(value: str) -> list[str]:
+    """Parse a comma- or space-separated app-id list, or fall back to atlan.yaml.
+
+    One flag rather than a ``--app-id`` / ``--app-ids`` pair, because the two call
+    sites want opposite defaults and a pair would let a caller pass both and have
+    one silently win. The e2e cleanup runs in the app repo and passes nothing, so
+    the id comes from ``atlan.yaml`` exactly as the install's did — the two cannot
+    disagree about which app was installed. The manual sweep runs in
+    application-sdk, where there is no ``atlan.yaml`` to read, and names the apps
+    explicitly.
+
+    Duplicates are dropped in first-seen order: the sweep list is hand-written, a
+    repeated id would uninstall twice, and the second attempt's benign 404 would
+    read in the report as though the app had never been installed.
+    """
+    tokens = [token.strip() for token in value.replace(",", " ").split()]
+    supplied = [token for token in tokens if token]
+    if not supplied:
+        supplied = [resolve_app_id("")]
+    ordered: list[str] = []
+    for app_id in supplied:
+        validated = validate_app_id(app_id)
+        if validated not in ordered:
+            ordered.append(validated)
+    return ordered
 
 
 def _clients(base_url: str) -> tuple[TenantClient, TenantClient]:
@@ -794,8 +908,8 @@ def _publish(client: TenantClient, request: PublishRequest) -> tuple[str, str]:
 
 
 @dataclass(frozen=True)
-class _InstallReply:
-    """LM's install response, whose HTTP status is not the whole story.
+class _MarketplaceReply:
+    """LM's install/uninstall response, whose HTTP status is not the whole story.
 
     ``POST /tenant/default/apps/{id}/install`` answers **HTTP 200 with an
     error-shaped envelope** for its two non-deploying outcomes
@@ -806,6 +920,15 @@ class _InstallReply:
 
     So ``response.ok`` alone would read a 404 as a success. The in-body
     ``status_code`` is authoritative and is what this parses.
+
+    ONE reader for both routes on purpose. ``/uninstall`` is the same handler
+    family and answers in the same envelope (202 plus a ``deployment_id`` on the
+    happy path), so a second parser would be a second place for the "trust
+    ``status_code``, not ``response.ok``" rule to be forgotten. What differs
+    between the two routes is only *which* of the outcome properties below is the
+    benign one, and that is the caller's decision rather than this class's — see
+    :attr:`not_installed`, where install and uninstall read the same 404
+    oppositely.
     """
 
     http_status: int
@@ -816,7 +939,7 @@ class _InstallReply:
     rendered_body: str
 
     @classmethod
-    def parse(cls, response: Response) -> _InstallReply:
+    def parse(cls, response: Response) -> _MarketplaceReply:
         data = response.data() if isinstance(response.body, dict) else {}
         raw_code = data.get("status_code")
         # `message` is LM's 200-envelope field; `detail` is what Heracles/FastAPI
@@ -843,12 +966,69 @@ class _InstallReply:
 
     @property
     def not_found(self) -> bool:
-        """The release is not resolvable in LM's tenant-catalog snapshot yet."""
+        """The release is not resolvable in LM's tenant-catalog snapshot yet.
+
+        The message match is deliberately loose, and safe here for one reason
+        only: this drives a RETRY, so a false positive costs one more attempt.
+        Do not reuse it anywhere a false positive is terminal — see
+        :attr:`not_installed`, which needs the same idea and cannot use this.
+        """
         return self.status_code == 404 or "not found" in self.message.lower()
 
     @property
     def already_installed(self) -> bool:
         return not self.failed and "already installed" in self.message.lower()
+
+    @property
+    def route_missing(self) -> bool:
+        """Heracles does not proxy this path on this tenant.
+
+        Verified live, and it is NOT a variant of :attr:`not_installed`: the
+        router answers ``HTTP 400`` with ``"Path was not found"``, byte-identical
+        to what a path invented on the spot returns, while a route that IS
+        proxied hands back LM's own envelope (``HTTP 200`` carrying an in-body
+        ``status_code``). So this means "the tenant cannot do this at all", and
+        for an uninstall that means the version pin is still there.
+
+        It has to be checked BEFORE :attr:`not_installed`, and be its own outcome
+        rather than folded into ``refused``: the fix is a Heracles version on the
+        tenant, not anything about the app or the request.
+        """
+        return self.status_code == 400 and "path was not found" in self.message.lower()
+
+    @property
+    def not_installed(self) -> bool:
+        """Uninstall's benign 404: there is no install record left to remove.
+
+        Keyed on the STATUS CODE alone, deliberately, and not on
+        :attr:`not_found` — which is the same idea one layer looser, and whose
+        looseness is safe only on the install path.
+
+        There, a false positive costs a retry. Here it is a terminal success, so
+        a false positive silently reports "nothing to remove" and leaves the pin
+        exactly where it was — the failure mode this whole subcommand exists to
+        remove. A live probe found precisely that: Heracles' router 400 says
+        ``"Path was not found"``, whose substring ``not found`` made an unproxied
+        route read as an already-clean tenant, on every run, forever.
+
+        LM's real answer is unambiguous and does not need the message: an
+        enveloped ``status_code: 404`` with ``status: "error"`` (``HTTP 200``
+        over the wire), or a genuine ``404``, which the parse folds to the same
+        value.
+        """
+        return self.status_code == 404
+
+    @property
+    def system_app(self) -> bool:
+        """LM refuses to uninstall a system app (``is_system_app``) with a 409.
+
+        Permanent and by design rather than transient: system apps are
+        reconciler-owned and would be re-installed if removed, so this route can
+        never clear one. Reported, never retried — and the reason a system-app
+        version pin belongs to FND-438 rather than to this path. It cannot arise
+        for a connector, which is every app this driver installs.
+        """
+        return self.status_code == 409
 
 
 def _install(
@@ -880,7 +1060,7 @@ def _install(
     attempt = 0
     while True:
         attempt += 1
-        reply = _InstallReply.parse(
+        reply = _MarketplaceReply.parse(
             client.post(
                 INSTALL_PATH.format(app_id=path_segment(app_id)),
                 body={"version_id": version_id, "force_install": True},
@@ -1413,6 +1593,226 @@ def verify(args: argparse.Namespace) -> str:
     return installed
 
 
+def _confirm_uninstalled(client: TenantClient, app_id: str) -> str:
+    """Return "" when the tenant CONFIRMS the app is gone, else why it did not.
+
+    Fail-closed, and deliberately not :func:`_installed_version`. That helper folds
+    every non-2xx, every unreadable body and every placeholder version into ``""``
+    because its callers read ``""`` as "install it", where a wrong empty costs one
+    redundant install. Here ``""`` is the assertion that the version pin is gone,
+    so the same fold would report a version it never managed to read as a cleared
+    tenant — and with ``continue-on-error`` on the ``release-tenant`` step, that is
+    silent: the pin stays, and the next repo's install is what pays for it.
+
+    That is the same false-green class this subcommand already closes on the POST
+    side, where Heracles' router ``400 Path was not found`` is its own
+    ``route-missing`` outcome rather than a benign "nothing to remove"
+    (:attr:`_MarketplaceReply.route_missing`). The read-back needs the same
+    posture, so only two answers count as evidence of removal:
+
+    * a genuine ``404`` — LM has no install record for this app, and
+    * a ``200`` carrying neither a readable version nor an install-state record.
+
+    Everything else is a read that proves nothing — a 5xx, an expired credential,
+    a body that is not JSON, a transport error, or an ``installed`` block whose
+    version is unreadable — and the caller reports it as residue rather than
+    claiming the tenant is clean.
+    """
+    try:
+        response = client.get(APP_INFO_PATH.format(app_id=path_segment(app_id)))
+    except TenantApiError as exc:
+        # The GET is inside the try for the same reason the POST is: _uninstall_one
+        # promises never to raise, and one app's transport error must not abandon
+        # the rest of the sweep.
+        return f"could not read the app's info back to confirm removal: {exc}"
+
+    if response.status == 404:
+        return ""
+    if not response.ok:
+        return (
+            f"app info answered HTTP {response.status} rather than the 404 that "
+            "would show the install record is gone, so this tenant is unread, not "
+            "confirmed clean, and the pin may still be there"
+        )
+    if not isinstance(response.body, dict):
+        return (
+            f"app info answered HTTP {response.status} with a non-JSON body, which "
+            "confirms nothing about the install record, so the pin may still be there"
+        )
+
+    data = response.data()
+    version = _extract_version(data) or resolve_version_via_catalog(data)
+    if version:
+        return (
+            f"the tenant still reports {version} installed after the uninstall "
+            "completed, so the HelmRelease — and the releaseChannel/releaseId "
+            "pin in its values — may still be there"
+        )
+    record = next(
+        (
+            nest
+            for nest in _INSTALL_STATE_NESTS
+            if isinstance(data.get(nest), dict) and data.get(nest)
+        ),
+        "",
+    )
+    if record:
+        # The confusing case, so print what the payload actually held rather than
+        # leaving whoever reads the residue report to guess — same diagnostic
+        # _installed_version prints when it cannot read a version.
+        _print_block(
+            "app info (install record still present, no version could be read)",
+            "\n".join(describe_info(data)) or "<no identifying fields present>",
+            _INFO_DIAGNOSTIC_MAX_LINES,
+            "head",
+        )
+        return (
+            f"the tenant still carries an {record!r} record for this app after the "
+            "uninstall completed, with no readable version in it, so the pin may "
+            "still be there"
+        )
+    return ""
+
+
+def _uninstall_one(
+    post_client: TenantClient,
+    read_client: TenantClient,
+    app_id: str,
+    *,
+    timeout_seconds: int,
+) -> UninstallOutcome:
+    """Remove one app's installation from the tenant, and say what happened.
+
+    Never raises: every path returns an :class:`UninstallOutcome`. The caller is
+    a cleanup step, so "what is left behind" is the answer it needs about EVERY
+    app in the list — one app's transport error must not abandon the rest.
+    """
+    try:
+        reply = _MarketplaceReply.parse(
+            post_client.post(UNINSTALL_PATH.format(app_id=path_segment(app_id)))
+        )
+    except TenantApiError as exc:
+        return UninstallOutcome(app_id, "unreachable", f"uninstall call failed: {exc}")
+
+    if reply.route_missing:
+        # Checked first: the router 400 carries "not found" in its text, and this
+        # is the tenant saying it cannot do this at all rather than that there is
+        # nothing to do. Residue, and residue whose fix is on the tenant.
+        return UninstallOutcome(
+            app_id,
+            "route-missing",
+            "this tenant's Heracles does not proxy the uninstall route "
+            f"({reply.message!r}, HTTP {reply.http_status} — the same answer an "
+            "invented path returns), so the version pin is still there. The "
+            "proxy landed in heracles' api/marketplace.json as "
+            "`uninstallTenantApp`; a tenant predating it cannot be cleaned up "
+            "over the API at all.",
+        )
+    if reply.not_installed:
+        # The tenant is already in the state being asked for. Terminal success,
+        # not a retryable miss — see _MarketplaceReply.not_installed.
+        return UninstallOutcome(
+            app_id, "not-installed", reply.message or "no install record on the tenant"
+        )
+    if reply.system_app:
+        return UninstallOutcome(
+            app_id,
+            "refused",
+            "LM refuses to uninstall a system app (409). System apps are "
+            "reconciler-owned, so this route can never clear their version pin — "
+            f"that is FND-438's territory. message={reply.message!r}",
+        )
+    if reply.failed:
+        return UninstallOutcome(
+            app_id,
+            "refused",
+            f"status={reply.status!r} status_code={reply.status_code} "
+            f"message={reply.message!r} (HTTP {reply.http_status}). A 400 here is "
+            "LM rejecting a non-`default` deployment name — customer-infra / SDR "
+            "uninstall is not implemented in LM yet, and only the `default` "
+            f"deployment is reachable. response={reply.rendered_body}",
+        )
+
+    if reply.deployment_id:
+        print(f"uninstall accepted, deployment_id={reply.deployment_id}")
+        try:
+            _poll_deployment(read_client, reply.deployment_id, timeout_seconds)
+        except (TenantAppError, TenantApiError) as exc:
+            # DeploymentFailed and a timeout are the same answer here, unlike on
+            # the install side. There the distinction mattered because LM's
+            # namespace-scoped verdict could be about somebody else's pod and the
+            # version read-back could overrule it; here there is no version to
+            # read back that would prove the HelmRelease is gone, so either way
+            # the honest report is "a pin may remain".
+            return UninstallOutcome(
+                app_id,
+                "unreachable",
+                f"uninstall deployment did not confirm: {exc}",
+                reply.deployment_id,
+            )
+    else:
+        # LM answered success without starting a deployment. Not treated as done:
+        # the read-back below is the only direct evidence either way.
+        print(
+            "::notice::uninstall reported success but started no deployment; "
+            "relying on the read-back below"
+        )
+
+    # Direct evidence, and the thing that actually decides — LM's own verdict is
+    # namespace-scoped (DISTR-901), so it can be about somebody else's pod. LM's
+    # third uninstall step deletes the `AtlanAppInstalled` record, so a tenant that
+    # still reports this app has not finished.
+    #
+    # Read back through _confirm_uninstalled rather than _installed_version: "not
+    # installed" is precisely the state being asserted here, so a failed READ must
+    # not be able to answer it. Only a real 404, or a 200 with no install record,
+    # clears the app; every other answer is residue.
+    residue = _confirm_uninstalled(read_client, app_id)
+    if residue:
+        return UninstallOutcome(app_id, "unreachable", residue, reply.deployment_id)
+    return UninstallOutcome(
+        app_id, "removed", "install record and HelmRelease gone", reply.deployment_id
+    )
+
+
+def uninstall(args: argparse.Namespace) -> list[UninstallOutcome]:
+    """Clear this run's version pin from the tenant. Returns one outcome per app.
+
+    Ordering, not just cleanup: the caller must run this while it STILL HOLDS the
+    tenant lease and before it releases it. Handing the tenant over first means
+    the next run's install can land between the HelmRelease delete and the record
+    delete, and LM's reinstall suppression is explicitly not a second backstop —
+    ``trigger_uninstall`` and ``_trigger_install`` share one ``is_app_uninstalled``
+    lookup that fails open, so neither blocks the other on a bad read.
+    """
+    base_url = validate_tenant_base_url(args.base_url)
+    app_ids = resolve_app_ids(args.app_ids)
+    post_client, read_client = _clients(base_url)
+
+    outcomes: list[UninstallOutcome] = []
+    for app_id in app_ids:
+        print(f"--- uninstalling {app_id} ---")
+        outcome = _uninstall_one(
+            post_client, read_client, app_id, timeout_seconds=args.timeout_seconds
+        )
+        level = "notice" if outcome.cleared else "warning"
+        print(f"::{level}::{app_id}: {outcome.outcome} — {outcome.detail}")
+        outcomes.append(outcome)
+    return outcomes
+
+
+def _uninstall_outputs(outcomes: list[UninstallOutcome]) -> dict[str, str]:
+    """Render the per-app outcomes for ``$GITHUB_OUTPUT`` and the step summary."""
+    return {
+        "cleared": ",".join(o.app_id for o in outcomes if o.cleared),
+        "residual": ",".join(o.app_id for o in outcomes if not o.cleared),
+        "deployment_ids": ",".join(
+            o.deployment_id for o in outcomes if o.deployment_id
+        ),
+        "outcomes": ";".join(f"{o.app_id}={o.outcome}" for o in outcomes),
+    }
+
+
 def _write_outputs(outputs: dict[str, str]) -> None:
     """Append to ``$GITHUB_OUTPUT``, or print when running outside Actions.
 
@@ -1498,12 +1898,67 @@ def main(argv: list[str] | None = None) -> int:
     _add_common(p_verify)
     p_verify.add_argument("--expected", required=True)
 
+    p_uninstall = sub.add_parser(
+        "uninstall", help="remove the installation, clearing the version pin"
+    )
+    # NOT _add_common: this subcommand takes a LIST where the others take one id,
+    # and offering both would let a caller pass both and have one silently win.
+    p_uninstall.add_argument("--base-url", required=True, help="https://<tenant>")
+    p_uninstall.add_argument(
+        "--app-ids",
+        default="",
+        help=(
+            "GM app UUIDs, comma- or space-separated. Omit to read the single "
+            "app_id from atlan.yaml in the cwd, which is what the e2e cleanup "
+            "does so its id has the same source as the install's."
+        ),
+    )
+    p_uninstall.add_argument(
+        "--timeout-seconds",
+        type=int,
+        default=DEFAULT_UNINSTALL_TIMEOUT_SECONDS,
+        help=(
+            "Budget for the uninstall deployment to reconcile. Spent while the "
+            "tenant lease is still held, so it is deliberately much shorter than "
+            "the install's."
+        ),
+    )
+    # No --best-effort flag. Residue always exits non-zero here, and the ONE
+    # caller that must not go red — the e2e cleanup, which runs in a job whose
+    # whole purpose is handing the tenant back and must never red a run whose
+    # tests passed — says so with `continue-on-error: true` at its call site.
+    # Keeping the tolerance in the workflow rather than in a flag means it is
+    # visible to whoever reads the step, it covers the failure paths a residue
+    # flag would not (an unreachable tenant, a rotated credential), and this
+    # script stays honest about what it left behind.
+
     args = parser.parse_args(argv)
 
     try:
         if args.command == "install":
             outcome = install(args)
             _write_outputs(outcome.as_outputs())
+        elif args.command == "uninstall":
+            outcomes = uninstall(args)
+            _write_outputs(_uninstall_outputs(outcomes))
+            residual = [o for o in outcomes if not o.cleared]
+            if not residual:
+                return 0
+            print(
+                f"::error::{len(residual)} of {len(outcomes)} app(s) may still "
+                "carry a version pin on this tenant: "
+                + ", ".join(f"{o.app_id} ({o.outcome})" for o in residual)
+                + ". Each one is a candidate ImagePullBackOff once its image ages "
+                "out of the registry cache, and LM's health check is "
+                "namespace-scoped — so it will fail EVERY future install to this "
+                "tenant, for any repo. Clear it with the E2E Tenant Uninstall "
+                "workflow — EXCEPT a `route-missing`, which that workflow cannot "
+                "fix either: it means this tenant's Heracles does not proxy the "
+                "uninstall route, so nothing clears the pin over the API until "
+                "the tenant moves forward.",
+                file=sys.stderr,
+            )
+            return 1
         else:
             _write_outputs({"installed_version": verify(args)})
     except (TenantAppError, TenantApiError) as exc:

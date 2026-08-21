@@ -111,15 +111,16 @@ inputs:
       the pre-lease span (discovery, image build, manifest merge, runner queue
       time) counts against it.
 
-      Must exceed the longest legitimate hold: the install plus the leg ceiling.
-      Sized against the workflow's own job timeouts by a test, so raising either
-      forces this up rather than silently eating the margin. Errs long on
-      purpose — breaking a live holder's lease puts a second installer on the
-      tenant, which is the race the lease exists to close, whereas breaking one
-      late costs a blocked tenant that a waiter is already reporting loudly.
-      0 disables the backstop.
+      Must exceed the longest legitimate hold: the install, the leg ceiling, and
+      since FND-709 the uninstall that clears the run's version pin before the
+      lease is handed back. Sized against the workflow's own job timeouts by a
+      test, so raising any of them forces this up rather than silently eating the
+      margin. Errs long on purpose — breaking a live holder's lease puts a second
+      installer on the tenant, which is the race the lease exists to close,
+      whereas breaking one late costs a blocked tenant that a waiter is already
+      reporting loudly. 0 disables the backstop.
     required: false
-    default: "14400"
+    default: "18000"
   on-timeout:
     description: |
       "fail" (default) — go red naming the holding run. "warn" — proceed

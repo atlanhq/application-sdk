@@ -392,6 +392,93 @@ A timeout is never downgraded this way — an accepted-but-unreconciled deploy i
 nobody else's fault, and it is the silent wrong-version failure this whole
 mechanism exists to remove.
 
+### Giving the tenant back: clearing the version pin (FND-709)
+
+The orphaned pod above is not bad luck; the install path was **manufacturing**
+one per connector per tenant.
+
+`Prepare tenant` installs through LM, which writes `releaseChannel: "specific"`
+plus a `releaseId` into the app's HelmRelease values. Nothing removed it, so the
+pin was permanent and per connector. Measured on one cloud's e2e tenant: 46 of 106
+HelmReleases on `releaseChannel: specific`, **30 of them carrying `sdr-test-*`
+tags** — the deterministic e2e test-image tag — accumulated one per connector over
+three days.
+
+Each one is a future `ImagePullBackOff` the moment its image ages out of the
+registry cache, and by the rule in the section above that fails **every** install
+to that tenant, for repos that had nothing to do with the run that created it.
+That is the shape FND-131 spent several runs diagnosing.
+
+**`release-tenant` now clears its own run's pin before it releases the lease.** It
+runs `e2e_tenant_app.py uninstall`, which POSTs LM's uninstall route — the sibling
+of the install one, over the same plain HTTPS — and LM's
+`AppDeploymentWorkflow(operation=UNINSTALL)` deletes the Flux HelmRelease, waits
+for the workload to be gone, and deletes the `AtlanAppInstalled` record. Deleting
+the HelmRelease is what clears the pin: `releaseChannel`, `releaseId` and
+`image.tag` all live in its values.
+
+Four properties of that job, each load-bearing:
+
+- **Uninstall first, release second.** Handing the tenant over first lets the next
+  run's install land between LM's HelmRelease delete and its record delete, and
+  LM's reinstall suppression is explicitly *not* a second backstop —
+  `trigger_uninstall` and `_trigger_install` share one `is_app_uninstalled` lookup
+  that fails open, so on a bad read neither blocks the other. The lease is the only
+  thing that closes that window, which is why `release-tenant` is now part of the
+  span the lease TTL has to clear.
+- **Gated on this run holding *this cloud's* lease.** `release-tenant`'s `if:` is
+  deliberately wide — it runs for clouds this run never leased, so a leg holding
+  nothing can still hand back what it does hold. The release is safe under that
+  widening on its own (the driver re-checks ownership per ref). An uninstall is
+  not: run for a cloud this run never held, it deletes whatever the actual holder
+  just installed.
+- **It cannot red a run whose tests passed.** Every step that can fail carries
+  `continue-on-error`, and no job needs `release-tenant`. The residue is still
+  visible: the driver reports it as an `::error::` annotation, exits non-zero, and
+  the step shows as failed-but-continued.
+- **The version no-op is gone, on purpose.** `Prepare tenant` can no longer
+  short-circuit on *"tenant already runs `<version>` — nothing to do"*, so every
+  run pays a full install, including a re-run of the same commit (the
+  `sdr-test-<hash>` tag is deterministic, so that no-op used to fire). Accepted,
+  and it cuts both ways: that short-circuit is exactly why FND-281 found a dirty
+  tenant could never be detected — a run that installs nothing observes nothing.
+
+**Clearing what is already there, or a pin the automatic path could not.** The
+`E2E Tenant Uninstall` workflow (`workflow_dispatch`, in application-sdk) takes a
+list of `app_id`s and a cloud — or `all` — and sweeps them. Like the install
+workflow it is manual because removing an app from a tenant is a deployment, and
+it holds no lease, for the same reason: lease tickets are refs in the repo a run
+belongs to, and this one runs in application-sdk (FND-250).
+
+**One precondition, and it is per tenant.** Heracles has to *proxy* the uninstall
+route (`uninstallTenantApp` in its `api/marketplace.json`). A tenant predating that
+answers the router's `HTTP 400 "Path was not found"` — byte-identical to what an
+invented path returns — and the driver reports `route-missing`: residue, whose fix
+is the tenant's Heracles version and not anything about the app, the request, or
+the sweep workflow.
+
+Worth stating because it nearly shipped as a silent false green. The router's
+message contains the substring `not found`, and the first implementation reused
+install's deliberately-loose `not_found` match, so an unproxied tenant reported
+*"nothing to remove, cleared"* on every run and left the pin in place forever.
+`not_installed` therefore keys on the enveloped `status_code: 404` and never on the
+message. Install's loose match stays loose on purpose — there a false positive
+costs one retry, not a permanent miss — which is exactly why the two predicates are
+now separate.
+
+Three things neither path can do, and none of them is a gap:
+
+| Not done | Why | Whose problem |
+|---|---|---|
+| System apps | LM answers 409 (`is_system_app`) — they are reconciler-owned and would be reinstalled | FND-438 |
+| Non-`default` deployments | LM rejects 400; customer-infra / SDR uninstall is unimplemented there. The e2e install path only ever targets `default` | — |
+| Deleting the namespace | It carries `helm.sh/resource-policy: keep`, and removing it needs cluster-wide RBAC. `helm uninstall` takes the Deployments and pods, and a bare namespace with no unhealthy pods fails nobody's install | — |
+
+`app_configs` ConfigMaps and install-hook credential Secrets also survive — LM
+applies them out-of-band with `kubectl apply`, so `helm uninstall` leaves them.
+LM's position is that they are harmless and overwritten on reinstall; sweeping
+them is an LM follow-up.
+
 Each entry may also carry `"deployment_name"` when that tenant's system apps
 (publish / quality / lineage) are not registered under `production`. It reaches
 the harness as `E2E_TENANT_DEPLOYMENT_NAME`, which
@@ -846,6 +933,9 @@ pass/fail already blocks publish while the 85% threshold only annotates.
 - SDR composite action: [`.github/actions/sdr-e2e/action.yaml`](../../.github/actions/sdr-e2e/action.yaml)
 - Full-DAG reusable workflow: [`.github/workflows/e2e-full-reusable.yaml`](../../.github/workflows/e2e-full-reusable.yaml)
 - Cross-repo dispatcher action: [`.github/actions/e2e-apps/action.yaml`](../../.github/actions/e2e-apps/action.yaml)
+- Tenant install / uninstall driver: [`.github/scripts/e2e_tenant_app.py`](../../.github/scripts/e2e_tenant_app.py)
+- Manual install escape hatch: [`.github/workflows/e2e-tenant-install.yaml`](../../.github/workflows/e2e-tenant-install.yaml)
+- Version-pin sweep: [`.github/workflows/e2e-tenant-uninstall.yaml`](../../.github/workflows/e2e-tenant-uninstall.yaml)
 - Test harness: [`application_sdk/testing/full_dag/`](../../application_sdk/testing/full_dag/)
 - Series of merged PRs that built this:
   - [#1669](https://github.com/atlanhq/application-sdk/pull/1669) — SDR composite + pytest base

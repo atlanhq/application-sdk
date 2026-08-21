@@ -580,6 +580,10 @@ _PROSE_ONLY_FILES = {
     # invokes it. The "no live mention" assertion below is what keeps that true:
     # if it ever starts invoking the script, it stops being excluded.
     ".github/workflows/e2e-tenant-install.yaml",
+    # FND-709, and for exactly the same reason as its install twin above: the
+    # version-pin sweep resolves a tenant in two passes and cites this script as
+    # the explanation, in a comment.
+    ".github/workflows/e2e-tenant-uninstall.yaml",
 }
 
 # The script and its own tests are the implementation, not callers of it. Both
