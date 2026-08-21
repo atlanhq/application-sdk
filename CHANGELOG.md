@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.28.3 (August 21, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.28.2...v3.28.3
+
+### Bug Fixes
+
+- recover an ambiguous submit instead of failing the leg (#3328) (by @cmgrote in [e714bb8](https://github.com/atlanhq/application-sdk/commit/e714bb8))
+- name the wedged queue instead of blaming the node (FND-708) (#3345) (by @cmgrote in [875f088](https://github.com/atlanhq/application-sdk/commit/875f088))
+- sandbox-safe pool resolution and e2e stall attribution (#3343) (by @fyzanshaik-atlan in [194b51f](https://github.com/atlanhq/application-sdk/commit/194b51f))
+
+
 ## v3.28.2 (August 20, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.28.1...v3.28.2
