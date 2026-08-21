@@ -29,6 +29,17 @@ _TRACEBACK_MAX_LEN = 8000
 # trailing `@` in a no-space query string — the safe failure direction for a
 # secret redactor.
 _URL_USERINFO_RE = re.compile(r"([a-z][a-z0-9+.-]*://)(?:[^@\s]+@)+", re.IGNORECASE)
+# Shared alternation of secret-bearing key tokens, matched case-insensitively
+# as a substring — so ``client_secret`` is caught via ``secret``. Reused by
+# both the ``key=value`` form and the ``'key': 'value'`` mapping-repr form so
+# the two stay in sync. ``client_id`` is intentionally absent: it is a public
+# identifier, not a credential, and dropping it removes "which client failed"
+# from auth errors (same rationale as ``uid`` below).
+_SECRET_KEY_ALTERNATION = (
+    r"(?:api_key|access_token|auth_token|password|passwd|pwd|secret"
+    r"|credential|private_key)"
+)
+
 # Matches secret query params: api_key=value → api_key=***
 # ``pwd`` covers ODBC/DSN keyword syntax (``UID=sa;PWD=…``), which no other
 # keyword here matches — ODBC connectors do not use ``password=``.
@@ -46,16 +57,44 @@ _URL_USERINFO_RE = re.compile(r"([a-z][a-z0-9+.-]*://)(?:[^@\s]+@)+", re.IGNOREC
 # the tail of ``run_guid=`` and ``correlation_uuid=`` — redacting the exact
 # correlation IDs an on-call needs.
 _SECRET_PARAM_RE = re.compile(
-    r"(?i)((?:api_key|access_token|auth_token|password|passwd|pwd|secret|credential|private_key)=)(?:\{[^}]*\}|[^\s&,;#]+)",
+    rf"(?i)({_SECRET_KEY_ALTERNATION}=)(?:\{{[^}}]*\}}|[^\s&,;#]+)",
+)
+
+# Matches secrets in mapping / JSON repr form, so a credentials dict rendered
+# into a message or traceback is scrubbed too — this is the shape that leaked
+# in AUT-1113 (a token payload printed by loguru diagnose):
+#   {'client_secret': 'xyz'}  → {'client_secret': '***'}
+#   {"api_key": "xyz"}        → {"api_key": "***"}
+# The key is a quoted string containing a sensitive token; the value is the
+# following quoted string of the SAME quote char (``\3`` backref). The value
+# body ``(?:\\.|[^\\])*?`` handles escaped quotes (``\'``) so a value that
+# embeds a quote — which Python ``repr`` emits as ``'a\'b'`` for a secret
+# containing one — does not end the match early and leak its tail. The two
+# branches are disjoint on their first character (``\\.`` always starts with a
+# backslash, ``[^\\]`` never does), so there is exactly one way to consume any
+# prefix — no partitions to explore, so no catastrophic backtracking on a long
+# backslash run in an unterminated value (``redact_secrets`` runs on
+# semi-untrusted driver-error text on the logging path). Lazy ``*?`` keeps the
+# match ending at the first delimiter, avoiding greedy over-redaction across
+# sibling keys. Best-effort: only quoted str values are matched (``b'...'`` /
+# unquoted are not). ``client_id`` is not matched (see the alternation note
+# above), so "which client" stays visible.
+_SECRET_MAPPING_RE = re.compile(
+    rf"(?i)((['\"])[\w.\- ]*{_SECRET_KEY_ALTERNATION}[\w.\- ]*\2\s*:\s*)"
+    rf"(['\"])(?:\\.|[^\\])*?\3",
 )
 
 
 def redact_secrets(text: str) -> str:
-    """Redact URL userinfo and known secret query-params from a string.
+    """Redact URL userinfo and known secrets from a string.
+
+    Handles three shapes: URL userinfo (``scheme://user:pass@``), ``key=value``
+    query/connection-string params, and ``'key': 'value'`` mapping/JSON repr.
 
     Use this when logging strings that may embed credentials but are not a
     single cause exception — e.g. a formatted traceback whose frames are worth
-    keeping but whose driver messages embed connection-string passwords.
+    keeping but whose driver messages embed connection-string passwords, or a
+    message that rendered a credentials dict.
 
     ``text`` must be a ``str`` — callers holding an exception or other object
     should stringify first (the sibling :func:`sanitize_cause_repr` does this
@@ -63,6 +102,7 @@ def redact_secrets(text: str) -> str:
     """
     text = _URL_USERINFO_RE.sub(r"\1***@", text)
     text = _SECRET_PARAM_RE.sub(r"\1***", text)
+    text = _SECRET_MAPPING_RE.sub(r"\1\3***\3", text)
     return text
 
 
