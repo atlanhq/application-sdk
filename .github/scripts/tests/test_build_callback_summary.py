@@ -253,18 +253,24 @@ def test_the_callback_and_the_gate_judge_the_same_inputs(reusable) -> None:
 
 @pytest.mark.parametrize("job_name", ["report-to-sdk", "tests-passed"])
 def test_every_judged_job_is_also_needed(reusable, job_name: str) -> None:
-    """`needs.<job>.result` is empty for a job absent from `needs`.
+    """Any `needs.<job>.…` reference is empty for a job absent from `needs`.
 
     Empty is not one of the driver's pass states, so a missing `needs` entry
     would fail closed rather than green — but it would fail EVERY run, and the
     fix under pressure would be to drop the input rather than add the need. Pin
     both halves together.
+
+    Matched on the job name alone rather than on `.result`, because not every
+    judged value is a result: `superseded` reads `needs.<job>.outputs.…`, where
+    a missing need is WORSE than fail-closed. It renders empty, empty reads as
+    "the skip is unexplained", and the gate then reds every stood-down run with
+    the anomaly it was told to suppress (FND-701).
     """
     job = reusable["jobs"][job_name]
     needed = set(job["needs"])
     for value in _gate_step(job)["with"].values():
-        referenced = str(value).split("needs.")[1].split(".result")[0]
+        referenced = str(value).split("needs.")[1].split(".")[0]
         assert referenced in needed, (
             f"{job_name} judges `{referenced}` but does not need it, so its "
-            "result is always empty"
+            "value is always empty"
         )

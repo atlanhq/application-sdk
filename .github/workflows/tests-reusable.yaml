@@ -1448,10 +1448,78 @@ jobs:
   # Same gate as prepare-tenant: no install, no contention worth serialising —
   # the legs of a non-installing run cannot lose a version race because nothing
   # changes the version under them.
+  # ── Is the SDK commit under test still the one under review? ─────────────
+  # The SDK-side dispatch guard drops a fan-out whose SHA has already been
+  # superseded (e2e_dispatch_guard.py, FND-696), but it can only see the window
+  # UP TO the dispatch. A push landing after it leaves this run already in
+  # flight for a commit nobody will merge, and the tenant lease below then does
+  # exactly what it promises — it QUEUES, so the live commit waits out this
+  # run's entire install-plus-legs cycle. On application-sdk PR #3322 that was
+  # 3m38s, 10m12s and 12m of pure lease wait across three connectors.
+  #
+  # This job is the second half of that fix (FND-701), and it is worth being
+  # precise about which half. A dispatched run that has ALREADY leased cannot be
+  # helped: cancelling it is unsafe, because prepare-tenant carries
+  # `if: always()` and finishes installing onto the tenants it holds on its way
+  # out — so for that run the queue is the right answer. A run that has
+  # dispatched but NOT yet leased is a different thing entirely. It is still
+  # building the image and running unit and integration tests — 2m30s on the
+  # openapi leg of #3322, dispatched 21:07:38 and leased 21:10:10 — and it holds
+  # nothing at all, so it can stand down for free.
+  #
+  # Placed here rather than earlier on purpose: the answer is only worth as much
+  # as its freshness, so it is asked as close to the lease as the DAG allows.
+  #
+  # It cannot fail this run. The script exits 0 on every path and answers
+  # "false" to every doubt, and the gates below read the OUTPUT rather than the
+  # job result, so even an outright job failure leaves the lease happening —
+  # which is the pre-existing behaviour.
+  sdk-head-recheck:
+    name: Recheck the dispatched SDK ref
+    needs: [merge-e2e-image]
+    if: inputs.install-app-to-tenant && needs.merge-e2e-image.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # Nothing beyond the default. Every read is of public data in
+      # application-sdk — a ref, the blob it points at, and a pull request — and
+      # a connector's own github.token can already do that.
+      contents: read
+    outputs:
+      superseded: ${{ steps.recheck.outputs.superseded }}
+    steps:
+      - name: Recheck the dispatched SDK ref
+        id: recheck
+        uses: atlanhq/application-sdk/.github/actions/e2e-dispatch-recheck@main
+        with:
+          sdk-ref: ${{ inputs.application-sdk-ref }}
+          # The claim ref the SDK wrote is keyed on the connector REPOSITORY
+          # name, which is what its dispatch matrix iterates over — not the
+          # short app-name. Derived from github.repository so the two cannot
+          # disagree, and so a connector whose app-name and repo differ (every
+          # one of them: "openapi" vs "atlan-openapi-app") still finds its claim.
+          app: ${{ github.event.repository.name }}
+
   lease-tenant:
     name: Tenant lease
-    needs: [discover-e2e, merge-e2e-image]
-    if: inputs.install-app-to-tenant && needs.merge-e2e-image.result == 'success'
+    needs: [discover-e2e, merge-e2e-image, sdk-head-recheck]
+    # `always()` here is load-bearing and is what makes the recheck fail-open. A
+    # job's `needs` gate is evaluated separately from its `if:`, and without a
+    # status-check function GitHub applies an implicit success() over every need
+    # — so a recheck job that died on infrastructure would SKIP the lease, and a
+    # skipped lease skips the install and greens the run vacuously. Lifting the
+    # implicit check and reading the OUTPUT instead means an absent answer (job
+    # failed, job skipped, output never written) leases exactly as before.
+    #
+    # Because always() lifts that implicit check, discover-e2e and
+    # merge-e2e-image have to be named explicitly; they were previously carried
+    # by it. Same shape and same reason as prepare-tenant and the e2e legs below.
+    if: |
+      always() &&
+      inputs.install-app-to-tenant &&
+      needs.discover-e2e.result == 'success' &&
+      needs.merge-e2e-image.result == 'success' &&
+      needs.sdk-head-recheck.outputs.superseded != 'true'
     runs-on: ubuntu-latest
     # Above the action's own 90-minute wait budget, which is now a budget for the
     # WHOLE ordered set rather than per cloud — so this still bounds the job, and
@@ -1805,9 +1873,24 @@ jobs:
     # so the version check self-skips. A silently passing wrong-version run, from
     # the job added to make wrong-version runs impossible.
     needs:
-      [discover-e2e, build-e2e-image, merge-e2e-image, lease-tenant, prepare-tenant]
+      [
+        discover-e2e,
+        build-e2e-image,
+        merge-e2e-image,
+        sdk-head-recheck,
+        lease-tenant,
+        prepare-tenant,
+      ]
+    # The superseded clause is gated on the OUTPUT, never on the job result, and
+    # it has to be: a skipped lease-tenant is the benign value in the clauses
+    # below (it is the install-app-to-tenant:false path), so without this the
+    # legs would run against a tenant nobody installed onto with
+    # expected-app-version empty — a silently passing wrong-version run, the
+    # exact FND-31 failure. Reading the output also keeps a failed recheck
+    # fail-open: no answer means carry on (FND-701).
     if: |
       always() &&
+      needs.sdk-head-recheck.outputs.superseded != 'true' &&
       needs.discover-e2e.result == 'success' &&
       needs.discover-e2e.outputs.count != '0' &&
       (needs.lease-tenant.result == 'success' || needs.lease-tenant.result == 'skipped') &&
@@ -2218,6 +2301,7 @@ jobs:
         discover-e2e,
         build-e2e-image,
         merge-e2e-image,
+        sdk-head-recheck,
         lease-tenant,
         prepare-tenant,
         e2e,
@@ -2346,6 +2430,13 @@ jobs:
           lease-tenant-result: ${{ needs.lease-tenant.result }}
           prepare-tenant-result: ${{ needs.prepare-tenant.result }}
           e2e-result: ${{ needs.e2e.result }}
+          # Explains a skipped matrix as a deliberate stand-down rather than the
+          # misconfiguration the matrix-skipped anomaly exists to catch. Empty
+          # (the recheck job skipped, or it failed and wrote no answer) reads as
+          # "not explained", which is the correct default: the anomaly is what
+          # stops a future re-wiring of the e2e `if` from greening the gate by
+          # skipping it (FND-701).
+          superseded: ${{ needs.sdk-head-recheck.outputs.superseded }}
 
       # Body only — this step emits no verdict; the completion step below takes
       # the gate's. Its CLI stays frozen: this script is checked out from the
@@ -2646,6 +2737,7 @@ jobs:
         discover-e2e,
         build-e2e-image,
         merge-e2e-image,
+        sdk-head-recheck,
         lease-tenant,
         prepare-tenant,
         e2e,
@@ -2689,6 +2781,13 @@ jobs:
           lease-tenant-result: ${{ needs.lease-tenant.result }}
           prepare-tenant-result: ${{ needs.prepare-tenant.result }}
           e2e-result: ${{ needs.e2e.result }}
+          # Explains a skipped matrix as a deliberate stand-down rather than the
+          # misconfiguration the matrix-skipped anomaly exists to catch. Empty
+          # (the recheck job skipped, or it failed and wrote no answer) reads as
+          # "not explained", which is the correct default: the anomaly is what
+          # stops a future re-wiring of the e2e `if` from greening the gate by
+          # skipping it (FND-701).
+          superseded: ${{ needs.sdk-head-recheck.outputs.superseded }}
 
       - name: Post unified test-summary comment on PR
         if: always() && github.event_name == 'pull_request'

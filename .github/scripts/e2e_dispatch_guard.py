@@ -392,9 +392,30 @@ def _denied(response: Response) -> bool:
     return response.status in (401, 403, 404) and not _rate_limited(response)
 
 
-def create_claim_blob(repo: str, run_id: int, attempt: int, now: float) -> str:
-    """Write the claim record the ref will point at. Returns the blob sha."""
-    payload = {"run_id": run_id, "attempt": attempt, "claimed_at": now}
+def create_claim_blob(
+    repo: str, run_id: int, attempt: int, now: float, pr_number: int | None = None
+) -> str:
+    """Write the claim record the ref will point at. Returns the blob sha.
+
+    ``pr_number`` is written for a reader a repo away. The connector run this
+    dispatch is about to start is handed only a SHA, and a SHA is not enough to
+    find its PR once the branch has moved: ``GET /commits/{sha}/pulls`` answers
+    with an empty list for a commit a force-push has passed, which is exactly the
+    case worth detecting. So the claim — the record that authorises the dispatch —
+    also carries the identity needed to retract it, and the connector's
+    pre-lease recheck reads it back (``e2e-dispatch-recheck``, FND-701).
+
+    Omitted rather than null when there is no PR (the merge_group path), so a
+    reader cannot tell "no PR" apart from "a claim written before this field
+    existed" — and does not need to: both mean "do not stand down".
+    """
+    payload: dict[str, object] = {
+        "run_id": run_id,
+        "attempt": attempt,
+        "claimed_at": now,
+    }
+    if pr_number is not None:
+        payload["pr_number"] = pr_number
     response = gh_request(
         "POST",
         f"repos/{repo}/git/blobs",
@@ -747,6 +768,7 @@ def resolve(
     check_run_name: str,
     run_id: int,
     attempt: int,
+    pr_number: int | None = None,
     clock=time.time,
 ) -> tuple[str, Claimant | None]:
     """Decide whether this run should dispatch.
@@ -757,7 +779,7 @@ def resolve(
     """
     target = read_claim_target(repo, ref)
     if target is None:
-        blob = create_claim_blob(repo, run_id, attempt, clock())
+        blob = create_claim_blob(repo, run_id, attempt, clock(), pr_number)
         if try_claim(repo, ref, blob) == "claimed":
             return "claimed", None
         # Somebody won the race between the read and the CAS. The CAS was the
@@ -808,7 +830,7 @@ def resolve(
         "and finished without dispatching; reclaiming the slot."
     )
     delete_ref(repo, ref)
-    blob = create_claim_blob(repo, run_id, attempt, clock())
+    blob = create_claim_blob(repo, run_id, attempt, clock(), pr_number)
     if try_claim(repo, ref, blob) == "claimed":
         return "reclaimed", None
     # Another contender reclaimed it first. It will dispatch; this one must not.
@@ -950,6 +972,12 @@ def main(argv: list[str] | None = None) -> int:
             check_run_name=args.check_run_name,
             run_id=args.run_id,
             attempt=args.run_attempt,
+            # Recorded in the claim so the connector run this is about to start
+            # can find its way back to the PR and recheck the head immediately
+            # before it queues for a tenant (FND-701). None on the merge_group
+            # path, where the same `--pr-number` is empty for the same reason:
+            # a queue entry's SHA is not any PR's head.
+            pr_number=int(pr_number) if pr_number.isdigit() else None,
         )
     except GuardUnavailable as unavailable:
         print(
