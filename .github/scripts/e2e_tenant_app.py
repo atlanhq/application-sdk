@@ -184,6 +184,16 @@ _VERSION_KEYS = (
 #: envelope; the others are tolerated aliases.
 _VERSION_NESTS = ("installed", "install", "installation", "deployment", "data")
 
+#: The subset of :data:`_VERSION_NESTS` whose PRESENCE means the tenant still holds
+#: an install record, used by :func:`_confirm_uninstalled` to answer "is the record
+#: gone?" when no version string can be read out of it.
+#:
+#: Deliberately not the whole tuple. ``deployment`` describes a reconcile that may
+#: well be the uninstall's own, and ``data`` is just Heracles' envelope wrapper
+#: (already unwrapped by ``Response.data()``) — treating either as an install
+#: record would report residue on a tenant that is genuinely clean.
+_INSTALL_STATE_NESTS = ("installed", "install", "installation")
+
 #: Placeholders LM emits in place of a version. NOT versions, and treating them as
 #: one is worse than reading nothing: it turns "this tenant cannot tell us what it
 #: runs" into "this tenant runs something called 'unknown'", which reads like a
@@ -1583,6 +1593,87 @@ def verify(args: argparse.Namespace) -> str:
     return installed
 
 
+def _confirm_uninstalled(client: TenantClient, app_id: str) -> str:
+    """Return "" when the tenant CONFIRMS the app is gone, else why it did not.
+
+    Fail-closed, and deliberately not :func:`_installed_version`. That helper folds
+    every non-2xx, every unreadable body and every placeholder version into ``""``
+    because its callers read ``""`` as "install it", where a wrong empty costs one
+    redundant install. Here ``""`` is the assertion that the version pin is gone,
+    so the same fold would report a version it never managed to read as a cleared
+    tenant — and with ``continue-on-error`` on the ``release-tenant`` step, that is
+    silent: the pin stays, and the next repo's install is what pays for it.
+
+    That is the same false-green class this subcommand already closes on the POST
+    side, where Heracles' router ``400 Path was not found`` is its own
+    ``route-missing`` outcome rather than a benign "nothing to remove"
+    (:attr:`_MarketplaceReply.route_missing`). The read-back needs the same
+    posture, so only two answers count as evidence of removal:
+
+    * a genuine ``404`` — LM has no install record for this app, and
+    * a ``200`` carrying neither a readable version nor an install-state record.
+
+    Everything else is a read that proves nothing — a 5xx, an expired credential,
+    a body that is not JSON, a transport error, or an ``installed`` block whose
+    version is unreadable — and the caller reports it as residue rather than
+    claiming the tenant is clean.
+    """
+    try:
+        response = client.get(APP_INFO_PATH.format(app_id=path_segment(app_id)))
+    except TenantApiError as exc:
+        # The GET is inside the try for the same reason the POST is: _uninstall_one
+        # promises never to raise, and one app's transport error must not abandon
+        # the rest of the sweep.
+        return f"could not read the app's info back to confirm removal: {exc}"
+
+    if response.status == 404:
+        return ""
+    if not response.ok:
+        return (
+            f"app info answered HTTP {response.status} rather than the 404 that "
+            "would show the install record is gone, so this tenant is unread, not "
+            "confirmed clean, and the pin may still be there"
+        )
+    if not isinstance(response.body, dict):
+        return (
+            f"app info answered HTTP {response.status} with a non-JSON body, which "
+            "confirms nothing about the install record, so the pin may still be there"
+        )
+
+    data = response.data()
+    version = _extract_version(data) or resolve_version_via_catalog(data)
+    if version:
+        return (
+            f"the tenant still reports {version} installed after the uninstall "
+            "completed, so the HelmRelease — and the releaseChannel/releaseId "
+            "pin in its values — may still be there"
+        )
+    record = next(
+        (
+            nest
+            for nest in _INSTALL_STATE_NESTS
+            if isinstance(data.get(nest), dict) and data.get(nest)
+        ),
+        "",
+    )
+    if record:
+        # The confusing case, so print what the payload actually held rather than
+        # leaving whoever reads the residue report to guess — same diagnostic
+        # _installed_version prints when it cannot read a version.
+        _print_block(
+            "app info (install record still present, no version could be read)",
+            "\n".join(describe_info(data)) or "<no identifying fields present>",
+            _INFO_DIAGNOSTIC_MAX_LINES,
+            "head",
+        )
+        return (
+            f"the tenant still carries an {record!r} record for this app after the "
+            "uninstall completed, with no readable version in it, so the pin may "
+            "still be there"
+        )
+    return ""
+
+
 def _uninstall_one(
     post_client: TenantClient,
     read_client: TenantClient,
@@ -1667,21 +1758,18 @@ def _uninstall_one(
             "relying on the read-back below"
         )
 
-    # Direct evidence, mirroring what install() does with its version read-back.
-    # LM's third uninstall step deletes the `AtlanAppInstalled` record, so a
-    # tenant that still reports a version for this app has not finished — and an
-    # empty read is meaningful HERE in a way it is not on the install path,
-    # because "not installed" is precisely the state being asserted.
-    still = _installed_version(read_client, app_id)
-    if still:
-        return UninstallOutcome(
-            app_id,
-            "unreachable",
-            f"the tenant still reports {still} installed after the uninstall "
-            "completed, so the HelmRelease — and the releaseChannel/releaseId "
-            "pin in its values — may still be there",
-            reply.deployment_id,
-        )
+    # Direct evidence, and the thing that actually decides — LM's own verdict is
+    # namespace-scoped (DISTR-901), so it can be about somebody else's pod. LM's
+    # third uninstall step deletes the `AtlanAppInstalled` record, so a tenant that
+    # still reports this app has not finished.
+    #
+    # Read back through _confirm_uninstalled rather than _installed_version: "not
+    # installed" is precisely the state being asserted here, so a failed READ must
+    # not be able to answer it. Only a real 404, or a 200 with no install record,
+    # clears the app; every other answer is residue.
+    residue = _confirm_uninstalled(read_client, app_id)
+    if residue:
+        return UninstallOutcome(app_id, "unreachable", residue, reply.deployment_id)
     return UninstallOutcome(
         app_id, "removed", "install record and HelmRelease gone", reply.deployment_id
     )

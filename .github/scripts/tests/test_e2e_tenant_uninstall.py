@@ -144,6 +144,169 @@ def test_the_read_back_is_what_decides_and_not_the_202(
     assert "sdr-test-abc12345" in outcomes[0].detail
 
 
+# ── The read-back must fail CLOSED ───────────────────────────────────────────
+#
+# Same class of bug as the router 400 below, one layer further in: `install`'s
+# `_installed_version` folds every non-2xx, every unreadable body and every
+# placeholder version into "", because ITS caller reads "" as "install it" and a
+# wrong empty costs one redundant install. Reusing it to assert "the pin is gone"
+# inverts that: a 500, an expired credential or a dropped connection reads as a
+# clean tenant. With `continue-on-error` on the `release-tenant` step, that is
+# silent — the pin survives and the next repo's install pays for it.
+#
+# So only a real 404, or a 200 with no install record, may report `removed`.
+
+
+@pytest.mark.parametrize("status", [401, 403, 500, 502, 504])
+def test_a_failed_read_back_is_residue_and_not_a_clean_tenant(
+    monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    """Any non-404 failure on the info GET proves nothing about the install
+    record, so it is residue. A 404 is the only failure that IS evidence."""
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute(
+                    "POST", "/uninstall", _reply("success", 202, deployment_id="d1")
+                ),
+                StubRoute(
+                    "GET", "/deployments/", _ok({"deployment_status": "SUCCEEDED"})
+                ),
+                StubRoute("GET", "/info", Response(status=status, body={})),
+            ]
+        ),
+    )
+    outcome = app.uninstall(_args())[0]
+
+    assert outcome.outcome == "unreachable"
+    assert outcome.cleared is False
+    assert str(status) in outcome.detail
+
+
+def test_a_transport_error_on_the_read_back_is_residue_not_removed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The GET is wrapped in the same try/except as the POST: _uninstall_one
+    promises never to raise, and a dropped connection while confirming must not
+    escape as an exception NOR report the pin cleared."""
+
+    def _explode(
+        _self: object,
+        method: str,
+        path: str,
+        **_kwargs: object,
+    ) -> Response:
+        if method == "POST":
+            return _reply("success", 202, deployment_id="d1")
+        if "/deployments/" in path:
+            return _ok({"deployment_status": "SUCCEEDED"})
+        raise TenantApiError(f"{method} {path} could not reach the tenant")
+
+    monkeypatch.setattr(TenantClient, "request", _explode)
+    outcome = app.uninstall(_args())[0]
+
+    assert outcome.outcome == "unreachable"
+    assert outcome.cleared is False
+    assert "could not read the app's info back" in outcome.detail
+
+
+def test_an_install_record_with_no_readable_version_is_residue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`version_text: unknown` is a placeholder, not a version — so the version
+    read comes back empty while the install record is plainly still there. The
+    record's PRESENCE decides, not whether a version could be read out of it."""
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute(
+                    "POST", "/uninstall", _reply("success", 202, deployment_id="d1")
+                ),
+                StubRoute(
+                    "GET", "/deployments/", _ok({"deployment_status": "SUCCEEDED"})
+                ),
+                StubRoute(
+                    "GET", "/info", _ok({"installed": {"version_text": "unknown"}})
+                ),
+            ]
+        ),
+    )
+    outcome = app.uninstall(_args())[0]
+
+    assert outcome.outcome == "unreachable"
+    assert outcome.cleared is False
+    assert "'installed'" in outcome.detail
+
+
+def test_a_non_json_read_back_is_residue(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An HTML error page from a proxy is a 200 whose body is not an object. It
+    confirms nothing, so it cannot report the pin cleared."""
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute(
+                    "POST", "/uninstall", _reply("success", 202, deployment_id="d1")
+                ),
+                StubRoute(
+                    "GET", "/deployments/", _ok({"deployment_status": "SUCCEEDED"})
+                ),
+                StubRoute(
+                    "GET", "/info", Response(status=200, body="<html>502</html>")
+                ),
+            ]
+        ),
+    )
+    outcome = app.uninstall(_args())[0]
+
+    assert outcome.outcome == "unreachable"
+    assert outcome.cleared is False
+    assert "non-JSON" in outcome.detail
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"catalog": {"app_version": {"version": "sdr-test-abc12345"}}},
+        {"installed": {}},
+        {"deployment": {"deployment_status": "SUCCEEDED"}},
+    ],
+    ids=["empty", "catalog-only", "empty-record", "deployment-only"],
+)
+def test_a_200_with_no_install_record_is_removed(
+    monkeypatch: pytest.MonkeyPatch, payload: dict[str, object]
+) -> None:
+    """The other side of failing closed: these must NOT be reported as residue.
+
+    `catalog` describes the app in general and is present whether or not it is
+    installed (`resolve_version_via_catalog` only reads it when an `installed`
+    UUID matches), `deployment` may be the uninstall's own reconcile, and an empty
+    record carries no install. Reporting any of them as residue would red every
+    clean uninstall and train whoever reads the report to ignore it.
+    """
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute(
+                    "POST", "/uninstall", _reply("success", 202, deployment_id="d1")
+                ),
+                StubRoute(
+                    "GET", "/deployments/", _ok({"deployment_status": "SUCCEEDED"})
+                ),
+                StubRoute("GET", "/info", _ok(payload)),
+            ]
+        ),
+    )
+    outcome = app.uninstall(_args())[0]
+
+    assert outcome.outcome == "removed"
+    assert outcome.cleared is True
+
+
 # ── The router 400 that nearly read as "already clean" ───────────────────────
 #
 # Found by probing a live tenant, not by reading code, and it is the sharpest
