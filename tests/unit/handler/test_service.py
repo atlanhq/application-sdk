@@ -1249,19 +1249,21 @@ class TestStartWorkflowRouting:
         finally:
             patcher.stop()
 
-    def test_legacy_workflow_type_prefers_registered_type_over_sibling_name(
+    def test_body_workflow_type_alias_selects_but_dispatches_canonical(
         self,
     ) -> None:
-        """The deprecated body field carries a Temporal type, not an EP name."""
+        """D2: a legacy alias in the deprecated body field reaches its entry
+        point, and the dispatch still emits the canonical type."""
         from unittest.mock import AsyncMock, MagicMock, patch
 
         from application_sdk.app.base import App
         from application_sdk.app.entrypoint import entrypoint
 
-        class _AmbiguousApp(App):
+        class _AliasApp(App):
             name = "routing-test"
+            legacy_workflow_types = {"LegacyRoutingWorkflow": "legacy"}
 
-            @entrypoint(name="legacy", workflow_type="target")
+            @entrypoint(name="legacy")
             async def legacy(self, input: _RoutingInput) -> _RoutingOutput:
                 return _RoutingOutput()
 
@@ -1272,7 +1274,7 @@ class TestStartWorkflowRouting:
         svc = create_app_handler_service(
             _TestHandler(),
             app_name="routing-test",
-            app_class=_AmbiguousApp,
+            app_class=_AliasApp,
             temporal_host="temporal:7233",
         )
         mock_handle = MagicMock(id="wf-123", result_run_id="run-abc")
@@ -1287,29 +1289,31 @@ class TestStartWorkflowRouting:
             with pytest.warns(DeprecationWarning, match="workflow_type.*deprecated"):
                 response = client.post(
                     "/workflows/v1/start",
-                    json={"workflow_type": "target", "name": "x"},
+                    json={"workflow_type": "LegacyRoutingWorkflow", "name": "x"},
                 )
 
         assert response.status_code == 200
-        assert mock_client.start_workflow.await_args.args[0] == "target"
+        assert mock_client.start_workflow.await_args.args[0] == "routing-test:legacy"
 
-    def test_entrypoint_query_dispatches_workflow_type_override(self) -> None:
+    def test_entrypoint_query_dispatches_canonical_despite_alias(self) -> None:
+        """C1: declaring an alias never changes what /start dispatches."""
         from unittest.mock import AsyncMock, MagicMock, patch
 
         from application_sdk.app.base import App
         from application_sdk.app.entrypoint import entrypoint
 
-        class _OverrideApp(App):
+        class _AliasedExtractApp(App):
             name = "routing-test"
+            legacy_workflow_types = {"LegacyExtractWorkflow": "extract"}
 
-            @entrypoint(workflow_type="LegacyExtractWorkflow")
+            @entrypoint
             async def extract(self, input: _RoutingInput) -> _RoutingOutput:
                 return _RoutingOutput()
 
         svc = create_app_handler_service(
             _TestHandler(),
             app_name="routing-test",
-            app_class=_OverrideApp,
+            app_class=_AliasedExtractApp,
             temporal_host="temporal:7233",
         )
         mock_handle = MagicMock(id="wf-123", result_run_id="run-abc")
@@ -1326,7 +1330,7 @@ class TestStartWorkflowRouting:
             )
 
         assert response.status_code == 200
-        assert mock_client.start_workflow.await_args.args[0] == "LegacyExtractWorkflow"
+        assert mock_client.start_workflow.await_args.args[0] == "routing-test:extract"
 
     def test_query_param_takes_precedence_over_body_workflow_type(self) -> None:
         """?entrypoint= wins over body 'workflow_type' when both are provided."""
@@ -1385,78 +1389,30 @@ class TestStartWorkflowRouting:
         finally:
             patcher.stop()
 
-    def test_name_equals_type_selector_precedence_is_pinned(self) -> None:
-        """Pin selector precedence when one string is both a name and a type.
+    def test_alias_equal_to_a_sibling_name_is_impossible(self) -> None:
+        """A11: the shape that made selector precedence ambiguous is rejected.
 
-        ``?entrypoint=`` resolves name-first with workflow-type fallback; the
-        deprecated body ``workflow_type`` resolves type-first with name fallback.
-        So a string equal to one entry point's name AND a sibling's override
-        workflow_type selects different entry points depending on the surface.
-        This pins that asymmetry so a future "convergence" refactor is a
-        deliberate, test-breaking choice rather than a silent behaviour change.
+        One string serving as both an entry-point name and a sibling's legacy
+        alias would make ``?entrypoint=`` and the deprecated body field resolve
+        differently. Registration refuses the shape, so no precedence rule is
+        needed — this pins that refusal.
         """
-        from unittest.mock import AsyncMock, MagicMock, patch
-
         from application_sdk.app.base import App
-        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.app.entrypoint import EntryPointContractError, entrypoint
 
-        class _CollisionApp(App):
-            # 'keifu' is BOTH this entry point's name...
-            @entrypoint(name="keifu")
-            async def keifu(self, input: _RoutingInput) -> _RoutingOutput:
-                return _RoutingOutput()
+        with pytest.raises(EntryPointContractError, match="entry point name"):
 
-            # ...AND the override workflow_type of this sibling entry point.
-            @entrypoint(name="extract", workflow_type="keifu")
-            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
-                return _RoutingOutput()
+            class _CollisionApp(App):
+                name = "selector-collision"
+                legacy_workflow_types = {"keifu": "extract"}
 
-        handler = _TestHandler()
-        svc = create_app_handler_service(
-            handler,
-            app_name="selector-collision",
-            app_class=_CollisionApp,
-            temporal_host="temporal:7233",
-        )
-        mock_client = MagicMock()
-        mock_handle = MagicMock()
-        mock_handle.id = "wf-coll"
-        mock_handle.result_run_id = "run-coll"
-        mock_client.start_workflow = AsyncMock(return_value=mock_handle)
-        patcher = patch(
-            "application_sdk.handler.service._get_temporal_client",
-            new=AsyncMock(return_value=mock_client),
-        )
-        patcher.start()
-        tc = TestClient(svc, raise_server_exceptions=False)
-        try:
-            # Canonical surface: ?entrypoint=keifu resolves name-first → the
-            # entry point NAMED 'keifu' (canonical type ends ':keifu').
-            r1 = tc.post("/workflows/v1/start?entrypoint=keifu", json={"name": "x"})
-            assert r1.status_code == 200
-            started1 = mock_client.start_workflow.call_args[0][0]
-            assert started1.endswith(
-                ":keifu"
-            ), f"?entrypoint=keifu must pick the name match, got {started1!r}"
+                @entrypoint(name="keifu")
+                async def keifu(self, input: _RoutingInput) -> _RoutingOutput:
+                    return _RoutingOutput()
 
-            mock_client.start_workflow.reset_mock()
-
-            # Deprecated surface: body workflow_type=keifu resolves type-first →
-            # the entry point whose OVERRIDE type is 'keifu' (the 'extract' EP).
-            import warnings as _w
-
-            with _w.catch_warnings():
-                _w.simplefilter("ignore", DeprecationWarning)
-                r2 = tc.post("/workflows/v1/start", json={"workflow_type": "keifu"})
-            assert r2.status_code == 200
-            started2 = mock_client.start_workflow.call_args[0][0]
-            # The override is primary, so dispatch uses the bare type 'keifu',
-            # not the canonical ':extract' form.
-            assert started2.split(":")[-1] == "keifu" and not started2.endswith(
-                ":keifu"
-            ), f"body workflow_type=keifu must pick the type match, got {started2!r}"
-        finally:
-            patcher.stop()
+                @entrypoint(name="extract")
+                async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                    return _RoutingOutput()
 
     def test_unknown_entrypoint_query_param_returns_400(self) -> None:
         """Providing an unrecognised ?entrypoint= returns 400 without leaking names."""
@@ -5497,8 +5453,9 @@ class TestEventTriggerEndpoint:
 
             class _EvEpApp(App):
                 name = "ev-ep"
+                legacy_workflow_types = {"LegacyEventWorkflow": "ingest"}
 
-                @entrypoint(default=True, workflow_type="LegacyEventWorkflow")
+                @entrypoint(default=True)
                 async def ingest(self, input: _RoutingInput) -> _RoutingOutput:
                     return _RoutingOutput()
 
@@ -5527,7 +5484,7 @@ class TestEventTriggerEndpoint:
                 )
             assert response.status_code == 200
             dispatched = mock_client.start_workflow.await_args.args[0]
-            assert dispatched == "LegacyEventWorkflow"
+            assert dispatched == "ev-ep:ingest"
             registered = set(AppRegistry.get_instance().get("ev-ep").workflow_types)
             assert dispatched in registered
         finally:

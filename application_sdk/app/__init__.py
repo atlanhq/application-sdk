@@ -69,8 +69,6 @@ from application_sdk.app.entrypoint import (
     canonical_workflow_type,
     entrypoint,
     entrypoint_module_segment,
-    primary_workflow_type,
-    workflow_types_for,
 )
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import TaskMetadata, task
@@ -275,7 +273,6 @@ __all__ = [
     "entrypoint_module_segment",
     "mcp_tool",
     "now",
-    "primary_workflow_type",
     "query",
     "signal",
     "sleep",
@@ -283,5 +280,4 @@ __all__ = [
     "update",
     "uuid4",
     "wait_condition",
-    "workflow_types_for",
 ]

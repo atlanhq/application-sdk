@@ -532,17 +532,17 @@ subdirs). A code `@entrypoint` the DAG never routes to is flagged. When the mani
 declares no such routes (legacy), the check falls back to permitting at most one
 `@entrypoint`.
 
-* **`workflow_type` overrides (CNCT-199):** an `@entrypoint` that pins `workflow_type=`
-is routed by that verbatim string, not by a colon-qualified `"<app>:<wire>"` route. A
-bare (colon-free) DAG node whose `workflow_type` equals the override counts as a route
-**only when it is provably local**: its `app_name` equals the entry point's app, or —
-when the node carries no `app_name` at all — its `task_queue` matches a queue this app's
-own routes use. A bare node that names a *different* app is foreign even on a shared
-queue and does not route the override (a same-named foreign platform node such as
-`PublishWorkflow` must not launder an unrouted entry point).
+* **Legacy workflow type aliases (CNCT-199):** an app may declare `legacy_workflow_types
+= {"<alias>": "<entry-point name>"}` on its `App` class — inbound-only Temporal types
+external callers still dispatch. A bare (colon-free) DAG node whose `workflow_type`
+equals a declared alias routes the alias's target entry point: the declaration itself
+proves the node is this app's own, so no app-name or task-queue identity heuristic
+applies. A bare node **not** declared as an alias is a platform/other-app node (such as
+`PublishWorkflow`) and routes nothing.
 
-* **Non-literal `name=`:** a `@entrypoint(name=variable)` that cannot be statically
-resolved is flagged as unverifiable.
+* **Non-literal `name=` or `legacy_workflow_types`:** a `@entrypoint(name=variable)` or
+a `legacy_workflow_types` assignment that is not a dict literal of string constants
+cannot be statically resolved and is flagged as unverifiable.
 
 * **No `app/generated/`:** the repo is not a native-app-contract repo; this rule is a
 no-op.

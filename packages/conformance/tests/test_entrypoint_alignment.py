@@ -496,8 +496,6 @@ def test_p016_aliased_entrypoint_import(tmp_path: Path) -> None:
 def _write_single_manifest_with_routes(
     tmp_path: Path,
     workflow_types: list[str],
-    *,
-    local_bare_workflow_types: frozenset[str] = frozenset(),
 ) -> None:
     """Write app/generated/manifest.json (single mode) whose DAG declares the
     given ``workflow_type`` values (``"<app>:<wire>"`` for routes)."""
@@ -505,16 +503,10 @@ def _write_single_manifest_with_routes(
 
     gen = tmp_path / "app" / "generated"
     gen.mkdir(parents=True)
-    dag = {}
-    for i, workflow_type in enumerate(workflow_types):
-        is_local = ":" in workflow_type or workflow_type in local_bare_workflow_types
-        dag[f"node{i}"] = {
-            "workflow_type": workflow_type,
-            "inputs": {
-                "app_name": "app" if is_local else "foreign-app",
-                "task_queue": "atlan-app" if is_local else "atlan-foreign-app",
-            },
-        }
+    dag = {
+        f"node{i}": {"workflow_type": workflow_type}
+        for i, workflow_type in enumerate(workflow_types)
+    }
     (gen / "manifest.json").write_text(json.dumps({"dag": dag}))
 
 
@@ -648,34 +640,27 @@ def test_p016_single_mode_workflow_type_outside_dag_ignored(tmp_path: Path) -> N
 # ---------------------------------------------------------------------------
 
 
-def test_p016_single_mode_bare_override_is_recognised_as_a_route(
-    tmp_path: Path,
-) -> None:
-    """A bare workflow_type override is routed by that verbatim string.
+def test_p016_declared_alias_is_recognised_as_a_route(tmp_path: Path) -> None:
+    """F1: a bare DAG node matching a declared legacy alias routes its entry point.
 
-    Without resolving the override, the colon-free DAG node reads as a foreign
-    platform node, the entry point looks unrouted, and P016 fires a false
-    positive on an app that is correctly wired.
+    Without resolving the declaration, the colon-free DAG node reads as a
+    foreign platform node, the entry point looks unrouted, and P016 fires a
+    false positive on an app that is correctly wired.
     """
     _write_single_manifest_with_routes(
-        tmp_path,
-        ["app:extract-metadata", "KeifuWorkflow"],
-        local_bare_workflow_types=frozenset({"KeifuWorkflow"}),
+        tmp_path, ["app:extract-metadata", "KeifuWorkflow"]
     )
     paths = _write_py(
         tmp_path,
         {
-            # The bare local node carries app_name="app" in the manifest, so the
-            # code app must name itself "app" too: locality is proven by an
-            # app_name match, not by the pooled-target heuristic that previously
-            # let a mismatched app_name pass.
             "app/connector.py": dedent("""\
                 from application_sdk.app import App, entrypoint
                 class MyApp(App):
                     name = "app"
+                    legacy_workflow_types = {"KeifuWorkflow": "keifu"}
                     @entrypoint(name="extract-metadata")
                     async def extract_metadata(self, input: Input) -> Output: ...
-                    @entrypoint(name="keifu", workflow_type="KeifuWorkflow")
+                    @entrypoint(name="keifu")
                     async def keifu(self, input: Input) -> Output: ...
             """)
         },
@@ -684,10 +669,8 @@ def test_p016_single_mode_bare_override_is_recognised_as_a_route(
     assert _p016_ids(findings) == []
 
 
-def test_p016_single_mode_override_absent_from_manifest_still_flags(
-    tmp_path: Path,
-) -> None:
-    """An override the DAG never declares is genuine drift and still fires."""
+def test_p016_alias_absent_from_manifest_still_flags(tmp_path: Path) -> None:
+    """An alias the DAG never dispatches does not route — genuine drift fires."""
     _write_single_manifest_with_routes(
         tmp_path, ["app:extract-metadata", "SomeOtherWorkflow"]
     )
@@ -697,9 +680,10 @@ def test_p016_single_mode_override_absent_from_manifest_still_flags(
             "app/connector.py": dedent("""\
                 from application_sdk.app import App, entrypoint
                 class MyApp(App):
+                    legacy_workflow_types = {"KeifuWorkflow": "keifu"}
                     @entrypoint(name="extract-metadata")
                     async def extract_metadata(self, input: Input) -> Output: ...
-                    @entrypoint(name="keifu", workflow_type="KeifuWorkflow")
+                    @entrypoint(name="keifu")
                     async def keifu(self, input: Input) -> Output: ...
             """)
         },
@@ -712,7 +696,7 @@ def test_p016_single_mode_override_absent_from_manifest_still_flags(
 def test_p016_foreign_bare_node_does_not_rescue_an_unrelated_entrypoint(
     tmp_path: Path,
 ) -> None:
-    """A platform node like PublishWorkflow must not launder an unrouted EP."""
+    """F2: an undeclared platform node like PublishWorkflow is not a route."""
     _write_single_manifest_with_routes(
         tmp_path, ["app:extract-metadata", "PublishWorkflow"]
     )
@@ -734,19 +718,21 @@ def test_p016_foreign_bare_node_does_not_rescue_an_unrelated_entrypoint(
     assert len(msgs) == 1 and "rogue" in msgs[0]
 
 
-def test_p016_multi_mode_override_does_not_move_the_wire_name(
-    tmp_path: Path,
-) -> None:
-    """workflow_type moves Temporal registration only — subdir names still match."""
+def test_p016_multi_mode_aliases_do_not_move_the_wire_name(tmp_path: Path) -> None:
+    """Aliases move Temporal registration only — subdir names still match."""
     findings = _run(
         tmp_path,
         {
             "app/connector.py": dedent("""\
                 from application_sdk.app import App, entrypoint
                 class MyApp(App):
-                    @entrypoint(name="query-intelligence", workflow_type="QueryIntelligenceWorkflow")
+                    legacy_workflow_types = {
+                        "QueryIntelligenceWorkflow": "query-intelligence",
+                        "KeifuWorkflow": "keifu",
+                    }
+                    @entrypoint(name="query-intelligence")
                     async def query_intelligence(self, input: Input) -> Output: ...
-                    @entrypoint(name="keifu", workflow_type="KeifuWorkflow")
+                    @entrypoint(name="keifu")
                     async def keifu(self, input: Input) -> Output: ...
             """)
         },
@@ -755,63 +741,14 @@ def test_p016_multi_mode_override_does_not_move_the_wire_name(
     assert _p016_ids(findings) == []
 
 
-def test_p016_override_naming_a_platform_node_does_not_launder_the_route(
-    tmp_path: Path,
-) -> None:
-    """A same-named node on another app/queue does not route the local EP."""
-    _write_single_manifest_with_routes(
-        tmp_path, ["app:extract-metadata", "PublishWorkflow"]
-    )
-    paths = _write_py(
-        tmp_path,
-        {
-            "app/connector.py": dedent("""\
-                from application_sdk.app import App, entrypoint
-                class MyApp(App):
-                    name = "app"
-                    @entrypoint(name="extract-metadata")
-                    async def extract_metadata(self, input: Input) -> Output: ...
-                    @entrypoint(name="rogue", workflow_type="PublishWorkflow")
-                    async def rogue(self, input: Input) -> Output: ...
-            """)
-        },
-    )
-    findings = scan_all(paths, tmp_path)
-    msgs = [f.message for f in findings if f.rule_id == "P016"]
-    assert len(msgs) == 1 and "rogue" in msgs[0]
+def test_p016_alias_routing_ignores_node_identity_fields(tmp_path: Path) -> None:
+    """F3: routing is by declaration — node app_name/task_queue play no part.
 
-
-def test_p016_non_literal_workflow_type_does_not_rescue(tmp_path: Path) -> None:
-    """A non-literal workflow_type cannot be resolved statically, so no rescue."""
-    _write_single_manifest_with_routes(
-        tmp_path, ["app:extract-metadata", "KeifuWorkflow"]
-    )
-    paths = _write_py(
-        tmp_path,
-        {
-            "app/connector.py": dedent("""\
-                from application_sdk.app import App, entrypoint
-                WT = "KeifuWorkflow"
-                class MyApp(App):
-                    @entrypoint(name="extract-metadata")
-                    async def extract_metadata(self, input: Input) -> Output: ...
-                    @entrypoint(name="keifu", workflow_type=WT)
-                    async def keifu(self, input: Input) -> Output: ...
-            """)
-        },
-    )
-    findings = scan_all(paths, tmp_path)
-    msgs = [f.message for f in findings if f.rule_id == "P016"]
-    assert len(msgs) == 1 and "keifu" in msgs[0]
-
-
-def test_p016_app_nameless_bare_node_on_shared_queue_still_routes(
-    tmp_path: Path,
-) -> None:
-    """A bare node carrying no app_name routes via the shared local queue.
-
-    This is the legitimate shape the queue arm exists for: the DAG node names
-    no owning app, so the shared task queue is the only locality signal.
+    The declaration is the app's assertion that the bare type is its own; the
+    old app-name/task-queue locality heuristics (and the foreign-node hole they
+    carried) are gone. A node whose identity fields name another app still
+    routes when its type is declared, and an undeclared node never routes
+    regardless of what queue it shares.
     """
     import json
 
@@ -823,7 +760,47 @@ def test_p016_app_nameless_bare_node_on_shared_queue_still_routes(
                 "workflow_type": "app:extract-metadata",
                 "inputs": {"app_name": "app", "task_queue": "shared-queue"},
             },
-            "override": {
+            "aliased": {
+                "workflow_type": "OverrideWorkflow",
+                "inputs": {"app_name": "other-app", "task_queue": "shared-queue"},
+            },
+        }
+    }
+    (gen / "manifest.json").write_text(json.dumps(manifest))
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/connector.py": dedent("""\
+                from application_sdk.app import App, entrypoint
+                class MyApp(App):
+                    name = "app"
+                    legacy_workflow_types = {"OverrideWorkflow": "keifu"}
+                    @entrypoint(name="extract-metadata")
+                    async def extract_metadata(self, input: Input) -> Output: ...
+                    @entrypoint(name="keifu")
+                    async def keifu(self, input: Input) -> Output: ...
+            """)
+        },
+    )
+    findings = scan_all(paths, tmp_path)
+    assert _p016_ids(findings) == []
+
+
+def test_p016_undeclared_bare_node_on_shared_queue_does_not_route(
+    tmp_path: Path,
+) -> None:
+    """F3: without a declaration, a shared queue proves nothing."""
+    import json
+
+    gen = tmp_path / "app" / "generated"
+    gen.mkdir(parents=True)
+    manifest = {
+        "dag": {
+            "local": {
+                "workflow_type": "app:extract-metadata",
+                "inputs": {"app_name": "app", "task_queue": "shared-queue"},
+            },
+            "foreign": {
                 "workflow_type": "OverrideWorkflow",
                 "inputs": {"task_queue": "shared-queue"},
             },
@@ -839,50 +816,7 @@ def test_p016_app_nameless_bare_node_on_shared_queue_still_routes(
                     name = "app"
                     @entrypoint(name="extract-metadata")
                     async def extract_metadata(self, input: Input) -> Output: ...
-                    @entrypoint(name="keifu", workflow_type="OverrideWorkflow")
-                    async def keifu(self, input: Input) -> Output: ...
-            """)
-        },
-    )
-    findings = scan_all(paths, tmp_path)
-    assert _p016_ids(findings) == []
-
-
-def test_p016_foreign_bare_node_on_shared_queue_does_not_route(tmp_path: Path) -> None:
-    """A foreign bare node that shares the local task queue is still foreign.
-
-    The queue arm proves locality only when the node carries no ``app_name``;
-    a node that names another app must not satisfy the override even when its
-    ``task_queue`` matches a local route's queue, or P016 goes silent on a
-    genuinely unrouted entry point.
-    """
-    import json
-
-    gen = tmp_path / "app" / "generated"
-    gen.mkdir(parents=True)
-    manifest = {
-        "dag": {
-            "local": {
-                "workflow_type": "app:extract-metadata",
-                "inputs": {"app_name": "app", "task_queue": "shared-queue"},
-            },
-            "foreign": {
-                "workflow_type": "OverrideWorkflow",
-                "inputs": {"app_name": "other-app", "task_queue": "shared-queue"},
-            },
-        }
-    }
-    (gen / "manifest.json").write_text(json.dumps(manifest))
-    paths = _write_py(
-        tmp_path,
-        {
-            "app/connector.py": dedent("""\
-                from application_sdk.app import App, entrypoint
-                class MyApp(App):
-                    name = "app"
-                    @entrypoint(name="extract-metadata")
-                    async def extract_metadata(self, input: Input) -> Output: ...
-                    @entrypoint(name="rogue", workflow_type="OverrideWorkflow")
+                    @entrypoint(name="rogue")
                     async def rogue(self, input: Input) -> Output: ...
             """)
         },
@@ -890,3 +824,34 @@ def test_p016_foreign_bare_node_on_shared_queue_does_not_route(tmp_path: Path) -
     findings = scan_all(paths, tmp_path)
     msgs = [f.message for f in findings if f.rule_id == "P016"]
     assert len(msgs) == 1 and "rogue" in msgs[0]
+
+
+def test_p016_non_literal_alias_declaration_is_flagged(tmp_path: Path) -> None:
+    """A non-literal legacy_workflow_types cannot be resolved statically.
+
+    The scan emits an explicit unresolved finding, and the entry point the
+    unreadable alias would have routed still reads as unrouted.
+    """
+    _write_single_manifest_with_routes(
+        tmp_path, ["app:extract-metadata", "KeifuWorkflow"]
+    )
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/connector.py": dedent("""\
+                from application_sdk.app import App, entrypoint
+                ALIASES = {"KeifuWorkflow": "keifu"}
+                class MyApp(App):
+                    legacy_workflow_types = ALIASES
+                    @entrypoint(name="extract-metadata")
+                    async def extract_metadata(self, input: Input) -> Output: ...
+                    @entrypoint(name="keifu")
+                    async def keifu(self, input: Input) -> Output: ...
+            """)
+        },
+    )
+    findings = scan_all(paths, tmp_path)
+    msgs = [f.message for f in findings if f.rule_id == "P016"]
+    assert len(msgs) == 2
+    assert any("legacy_workflow_types" in m for m in msgs)
+    assert any("keifu" in m for m in msgs)

@@ -106,21 +106,46 @@ def _extract_ep_name(
     return None, False
 
 
-def _extract_workflow_type(deco: ast.expr) -> str | None:
-    """Parse a decorator expression for a literal ``workflow_type=`` override.
+def _extract_legacy_aliases(
+    class_node: ast.ClassDef,
+) -> tuple[dict[str, str], bool]:
+    """Parse a class body for a literal ``legacy_workflow_types`` declaration.
 
-    An entry point carrying an override registers a Temporal workflow type that
-    does not follow the ``<app>:<wire>`` convention, so the manifest declares
-    that verbatim string instead. Returns ``None`` when absent or non-literal.
+    Returns ``(aliases, is_unresolved)``: the ``{alias: entry-point name}``
+    pairs when the assignment is a dict literal of string constants, or
+    ``is_unresolved=True`` when the attribute is assigned something the scan
+    cannot statically read (a variable, a comprehension, …).
     """
-    if not (isinstance(deco, ast.Call) and isinstance(deco.func, ast.Name)):
-        return None
-    for kw in deco.keywords:
-        if kw.arg == "workflow_type":
-            if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
-                return kw.value.value
-            return None
-    return None
+    for stmt in class_node.body:
+        value: ast.expr | None = None
+        if isinstance(stmt, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "legacy_workflow_types"
+            for target in stmt.targets
+        ):
+            value = stmt.value
+        elif (
+            isinstance(stmt, ast.AnnAssign)
+            and isinstance(stmt.target, ast.Name)
+            and stmt.target.id == "legacy_workflow_types"
+        ):
+            value = stmt.value
+        if value is None:
+            continue
+        if not isinstance(value, ast.Dict):
+            return {}, True
+        aliases: dict[str, str] = {}
+        for key, val in zip(value.keys, value.values):
+            if (
+                isinstance(key, ast.Constant)
+                and isinstance(key.value, str)
+                and isinstance(val, ast.Constant)
+                and isinstance(val.value, str)
+            ):
+                aliases[key.value] = val.value
+            else:
+                return {}, True
+        return aliases, False
+    return {}, False
 
 
 # ---------------------------------------------------------------------------
@@ -139,15 +164,6 @@ class EntrypointLocation:
     node: ast.AST
     """The ``@entrypoint`` decorator node — anchored here so ``# conformance: ignore``
     on the line directly above the decorator suppresses the finding correctly."""
-
-    workflow_type: str | None = None
-    """Literal ``workflow_type=`` override, when the entry point declares one.
-
-    The manifest names this verbatim rather than the ``<app>:<wire>`` form, so
-    the route matcher needs it to recognise the DAG node as this entry point's."""
-
-    app_name: str | None = None
-    """Literal or convention-derived name of the containing App class."""
 
 
 @dataclass
@@ -168,12 +184,27 @@ class UnresolvedLocation:
 
 
 @dataclass
+class UnresolvedAliasLocation:
+    """A ``legacy_workflow_types`` assignment the scan cannot statically read."""
+
+    filename: str
+    node: ast.ClassDef
+    """The App subclass carrying the non-literal declaration."""
+
+
+@dataclass
 class CodeEntrypointScan:
     """Accumulated results of scanning all Python files for ``@entrypoint`` decorations."""
 
     entrypoints: list[EntrypointLocation] = field(default_factory=list)
     app_classes: list[AppClassLocation] = field(default_factory=list)
     unresolved: list[UnresolvedLocation] = field(default_factory=list)
+    legacy_aliases: dict[str, str] = field(default_factory=dict)
+    """Literal ``legacy_workflow_types`` pairs from every App subclass:
+    ``{alias: entry-point name}``. A DAG node dispatching one of these bare
+    types routes the target entry point — the declaration itself proves the
+    node is this app's, so no app/queue identity heuristic is needed."""
+    unresolved_aliases: list[UnresolvedAliasLocation] = field(default_factory=list)
 
     def name_set(self) -> frozenset[str]:
         """Return the set of all wire names found in code."""
@@ -201,36 +232,6 @@ def scan_file_for_entrypoints(
     if not ep_aliases and not app_aliases:
         return  # No SDK imports in this file — skip entirely.
 
-    method_app_names: dict[int, str | None] = {}
-    for class_node in (
-        node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
-    ):
-        app_name = _method_name_to_kebab(class_node.name)
-        for stmt in class_node.body:
-            value: ast.expr | None = None
-            if isinstance(stmt, ast.Assign) and any(
-                isinstance(target, ast.Name) and target.id == "name"
-                for target in stmt.targets
-            ):
-                value = stmt.value
-            elif (
-                isinstance(stmt, ast.AnnAssign)
-                and isinstance(stmt.target, ast.Name)
-                and stmt.target.id == "name"
-            ):
-                value = stmt.value
-            if value is not None:
-                if not isinstance(value, ast.Constant) or not isinstance(
-                    value.value, str
-                ):
-                    app_name = ""
-                elif value.value:
-                    app_name = value.value
-                break
-        for stmt in class_node.body:
-            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                method_app_names[id(stmt)] = app_name or None
-
     for node in ast.walk(tree):
         # ── App subclass detection ────────────────────────────────────────────
         if app_aliases and isinstance(node, ast.ClassDef):
@@ -246,6 +247,13 @@ def scan_file_for_entrypoints(
                     result.app_classes.append(
                         AppClassLocation(filename=filename, node=node)
                     )
+                    aliases, is_unresolved = _extract_legacy_aliases(node)
+                    if is_unresolved:
+                        result.unresolved_aliases.append(
+                            UnresolvedAliasLocation(filename=filename, node=node)
+                        )
+                    else:
+                        result.legacy_aliases.update(aliases)
                     break
 
         # ── @entrypoint-decorated method detection ────────────────────────────
@@ -276,8 +284,6 @@ def scan_file_for_entrypoints(
                         name=ep_name,
                         filename=filename,
                         node=deco,
-                        workflow_type=_extract_workflow_type(deco),
-                        app_name=method_app_names.get(id(node)),
                     )
                 )
             break  # Only the first @entrypoint decorator on a method counts.

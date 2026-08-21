@@ -26,7 +26,7 @@ from collections import Counter
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.findings import Finding
 
-from ._code_entrypoints import CodeEntrypointScan, EntrypointLocation
+from ._code_entrypoints import CodeEntrypointScan
 from ._contract_entrypoints import ContractEntrypointScan
 
 _RULE_ID = "P016"
@@ -44,36 +44,21 @@ def _synthetic_node() -> ast.AST:
     return node
 
 
-def _override_is_routed(
-    ep: EntrypointLocation, contract: ContractEntrypointScan
-) -> bool:
-    workflow_type = ep.workflow_type
-    app_name = ep.app_name
-    if not workflow_type or not app_name:
-        return False
+def _alias_routed_names(
+    code: CodeEntrypointScan, contract: ContractEntrypointScan
+) -> frozenset[str]:
+    """Entry-point names routed through a declared legacy alias.
 
-    local_targets = {
+    A bare DAG node (no ``<app>:`` prefix) is a platform/other-app node —
+    unless the app's own ``legacy_workflow_types`` declares that exact string,
+    in which case the worker registers it and the node dispatches the declared
+    entry point. The declaration proves locality; no app or task-queue identity
+    heuristic is needed.
+    """
+    return frozenset(
         target
-        for candidate_type, candidate_app, candidate_queue in contract.workflow_targets
-        if ":" in candidate_type
-        for target in (candidate_app, candidate_queue)
-        if target is not None
-    }
-    return any(
-        candidate_type == workflow_type
-        and (
-            candidate_app == app_name
-            # The queue arm proves locality only for a node that carries no
-            # app_name at all: a foreign node keeps its own app_name, so a
-            # shared task queue must not route it (it would silence P016 on a
-            # genuinely unrouted entry point).
-            or (
-                candidate_app is None
-                and candidate_queue is not None
-                and candidate_queue in local_targets
-            )
-        )
-        for candidate_type, candidate_app, candidate_queue in contract.workflow_targets
+        for alias, target in code.legacy_aliases.items()
+        if alias in contract.dag_workflow_types
     )
 
 
@@ -114,16 +99,37 @@ def check_p016(
         Parsed ``# conformance: ignore[...]`` directives, keyed by relative
         file path, so inline suppression works for code-side findings.
 
-    In single mode the route set is widened with the entry points whose
-    ``workflow_type`` override the manifest declares verbatim. Such a DAG node
-    carries no colon, so ``contract.routes`` cannot see it and the entry point
-    would otherwise read as unrouted against a node that in fact reaches it.
+    In single mode the route set is widened with the entry points targeted by
+    a declared ``legacy_workflow_types`` alias the manifest DAG dispatches
+    verbatim. Such a DAG node carries no colon, so ``contract.routes`` cannot
+    see it and the entry point would otherwise read as unrouted against a node
+    that in fact reaches it.
     """
     findings: list[Finding] = []
 
     # ── No-op when there is no contract to check against ─────────────────────
     if contract.mode == "absent":
         return findings
+
+    # ── Unresolved legacy_workflow_types (always emit, regardless of mode) ───
+    for unresolved_alias in code.unresolved_aliases:
+        findings.append(
+            make_finding(
+                filename=unresolved_alias.filename,
+                rule_id=_RULE_ID,
+                node=unresolved_alias.node,
+                message=(
+                    "legacy_workflow_types is not a dict literal of string "
+                    "constants — static alignment cannot see which DAG nodes "
+                    "the aliases route. Declare it inline, e.g. "
+                    'legacy_workflow_types = {"LegacyType": "entry-point-name"}. '
+                    "Suppress with '# conformance: ignore[P016] <reason>' if unavoidable."
+                ),
+                directives=directives_by_file.get(
+                    unresolved_alias.filename, _empty_directives()
+                ),
+            )
+        )
 
     # ── Unresolved name= (always emit, regardless of mode) ───────────────────
     for unresolved in code.unresolved:
@@ -173,9 +179,7 @@ def check_p016(
 
     # ── Single-entry-point mode ──────────────────────────────────────────────
     if contract.mode == "single":
-        routes = contract.routes | {
-            ep.name for ep in code.entrypoints if _override_is_routed(ep, contract)
-        }
+        routes = contract.routes | _alias_routed_names(code, contract)
         if routes:
             # Route/card split (BLDX-1342): a secondary @entrypoint is valid when
             # the DAG declares it as a route (workflow_type "<app>:<wire>"), even

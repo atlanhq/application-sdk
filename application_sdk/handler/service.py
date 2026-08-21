@@ -54,7 +54,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
 from temporalio.client import WorkflowFailureError
 
-from application_sdk.app.entrypoint import primary_workflow_type
+from application_sdk.app.entrypoint import canonical_workflow_type
 from application_sdk.common.task_queue import (
     resolve_manifest_tokens,
     task_queue_from_env,
@@ -823,7 +823,6 @@ def _resolve_app_entrypoint(
     selected_entrypoint: str | None,
     *,
     unknown_ep_status: int = 400,
-    workflow_type_selector: bool = False,
 ) -> tuple[Any, Any]:
     """Look up the app in the registry and resolve the target entry point.
 
@@ -833,16 +832,15 @@ def _resolve_app_entrypoint(
     Args:
         app_name: Registered app name (from WorkflowClientConfig).
         selected_entrypoint: An entry-point selector, or ``None`` to use the
-            default. Query selectors resolve as an entry-point name first;
-            legacy body selectors resolve as a registered Temporal workflow
-            type first. Either form falls back to the other namespace.
+            default. Resolved as an entry-point name first; on a miss it is
+            tried against the app's registered Temporal workflow types
+            (canonical and ``legacy_workflow_types`` aliases), since a caller
+            reading a manifest holds a workflow type rather than an entry-point
+            name. The order is never ambiguous — registration rejects an alias
+            that equals an entry-point name.
         unknown_ep_status: HTTP status to use when an explicitly named
             entrypoint does not exist.  ``400`` for /start (bad request),
             ``404`` for /input-contract (resource not found).
-        workflow_type_selector: Resolve ``selected_entrypoint`` as a registered
-            Temporal workflow type before trying an entry-point name. Used only
-            for the deprecated request-body ``workflow_type`` field; the
-            canonical ``?entrypoint=`` selector remains name-first.
 
     Returns:
         ``(app_meta, ep)`` — the :class:`AppMetadata` and the resolved
@@ -873,10 +871,6 @@ def _resolve_app_entrypoint(
     entry_points = app_meta.entry_points
 
     if selected_entrypoint:
-        if workflow_type_selector:
-            by_workflow_type = app_meta.workflow_types.get(selected_entrypoint)
-            if by_workflow_type is not None:
-                return app_meta, by_workflow_type
         if selected_entrypoint not in entry_points:
             by_workflow_type = app_meta.workflow_types.get(selected_entrypoint)
             if by_workflow_type is not None:
@@ -1216,15 +1210,11 @@ def _register_workflow_routes(
             # private callers should be updated before this SDK version is rolled
             # out to apps with multiple entry points.
             _, ep = _resolve_app_entrypoint(
-                _workflow_config.app_name,
-                selected_entrypoint,
-                workflow_type_selector=(
-                    entrypoint_param is None and legacy_workflow_type is not None
-                ),
+                _workflow_config.app_name, selected_entrypoint
             )
 
             input_type = ep.input_type
-            workflow_name = primary_workflow_type(_workflow_config.app_name, ep)
+            workflow_name = canonical_workflow_type(_workflow_config.app_name, ep)
 
             if input_type is None:
                 raise HTTPException(
@@ -1877,7 +1867,7 @@ def _register_workflow_routes(
             set_correlation_context(CorrelationContext(correlation_id=correlation_id))
 
             handle = await client.start_workflow(
-                primary_workflow_type(app_cls._app_name, ep)
+                canonical_workflow_type(app_cls._app_name, ep)
                 if ep is not None
                 else _workflow_config.app_name,
                 args=[input_data],

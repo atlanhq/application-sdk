@@ -24,7 +24,7 @@ from temporalio.runtime import (
     TelemetryFilter,
 )
 
-from application_sdk.app.entrypoint import primary_workflow_type
+from application_sdk.app.entrypoint import canonical_workflow_type
 from application_sdk.constants import (
     ENABLE_ATLAN_UPLOAD,
     TEMPORAL_PROMETHEUS_BIND_ADDRESS,
@@ -156,14 +156,15 @@ def _stamp_start_correlation(input_data: Any, context: "AppContext") -> str:
 def _workflow_name_for(app_cls: "type[App]", ep_meta: Any | None) -> str:
     """The Temporal workflow type to dispatch *app_cls* on.
 
-    Routes through the entry point's registered primary type so an app carrying
-    a ``workflow_type`` override is dispatched on the name its worker actually
-    registers.  ``ep_meta`` is ``None`` for a caller that named no entry point,
-    which keeps the historical bare app-name dispatch.
+    Always the canonical convention-derived type. ``legacy_workflow_types``
+    aliases are inbound-only — the SDK never dispatches on one, so the
+    ``temporal.workflow.type`` telemetry dimension counts exactly the external
+    callers that have not migrated. ``ep_meta`` is ``None`` for a caller that
+    named no entry point, which keeps the historical bare app-name dispatch.
     """
     if ep_meta is None:
         return app_cls._app_name
-    return primary_workflow_type(app_cls._app_name, ep_meta)
+    return canonical_workflow_type(app_cls._app_name, ep_meta)
 
 
 class TemporalExecutorBackend:
@@ -197,8 +198,8 @@ class TemporalExecutorBackend:
             execution_timeout: Optional timeout for the workflow execution.
             entry_point: Entry point name for multi-entry-point apps.
                 When provided, the workflow is dispatched on that entry point's
-                primary registered type — ``"{app_name}:{entry_point}"`` unless
-                the entry point declares a ``workflow_type`` override. When
+                canonical type ``"{app_name}:{entry_point}"`` — never on a
+                ``legacy_workflow_types`` alias, which is inbound-only. When
                 omitted, defaults to the app name (single-entry-point apps).
         """
         from uuid import uuid4  # noqa: PLC0415 — stdlib uuid; lazy use
@@ -261,8 +262,8 @@ class TemporalExecutorBackend:
             retry_policy: Retry policy for the workflow.
             entry_point: Entry point name for multi-entry-point apps.
                 When provided, the workflow is dispatched on that entry point's
-                primary registered type — ``"{app_name}:{entry_point}"`` unless
-                the entry point declares a ``workflow_type`` override. When
+                canonical type ``"{app_name}:{entry_point}"`` — never on a
+                ``legacy_workflow_types`` alias, which is inbound-only. When
                 omitted, defaults to the app name (single-entry-point apps).
         """
         from uuid import uuid4  # noqa: PLC0415 — stdlib uuid; lazy use

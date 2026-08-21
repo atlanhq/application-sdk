@@ -106,7 +106,7 @@ class LifecycleMultiApp(App):
         raise ValueError("intentional failure in run_fail")
 
 
-# --- workflow_type override (CNCT-199) ---
+# --- legacy workflow type aliases (CNCT-199) ---
 
 
 class OverrideInput(Input):
@@ -121,8 +121,9 @@ class OverrideApp(App):
     """Multi-entry-point app preserving a bare legacy type on one entry point."""
 
     name = "override-app"
+    legacy_workflow_types = {"LegacyBareWorkflow": "modern-name"}
 
-    @entrypoint(default=True, workflow_type="LegacyBareWorkflow")
+    @entrypoint(default=True)
     async def modern_name(self, input: OverrideInput) -> OverrideOutput:
         return OverrideOutput(length=len(input.value))
 
@@ -267,12 +268,12 @@ async def test_on_complete_called_after_entrypoint_failure(
 @pytest.mark.parametrize(
     "workflow_type",
     ["LegacyBareWorkflow", "override-app:modern-name"],
-    ids=["override", "canonical-alias"],
+    ids=["legacy-alias", "canonical"],
 )
-async def test_override_and_alias_both_dispatch(
+async def test_alias_and_canonical_both_dispatch(
     run_worker, temporal_client, task_queue, reregister_app, workflow_type
 ):
-    """M4.1: both registered types reach the entry point and return its Output.
+    """G1: both registered types reach the entry point and return its Output.
 
     Dispatches by raw Temporal type rather than through the executor, because
     the point is that a caller holding either name finds a handler. A type no
@@ -292,10 +293,10 @@ async def test_override_and_alias_both_dispatch(
 
 
 @pytest.mark.integration
-async def test_executor_dispatches_override_by_entry_point_name(
+async def test_executor_dispatches_canonical_despite_alias(
     run_worker, executor, task_queue, reregister_app
 ):
-    """The public executor bridge must start the override the worker registers."""
+    """C1: the executor emits the canonical type even when an alias exists."""
     reregister_app(OverrideApp)
     async with run_worker():
         context = AppContext(app_name=OverrideApp._app_name, app_version="1.0.0")
@@ -308,6 +309,50 @@ async def test_executor_dispatches_override_by_entry_point_name(
         )
     assert isinstance(result, OverrideOutput)
     assert result.length == 4
+
+
+@pytest.mark.integration
+async def test_alias_run_logs_the_deprecation_signal(
+    run_worker, temporal_client, task_queue, reregister_app
+):
+    """E1: a run arriving on the alias names itself in the logs; a canonical
+    run stays silent.
+
+    Asserted through a directly-attached loguru sink: the SDK's logger adapter
+    emits through loguru, so the records never reach stdlib handlers and the
+    default sink flushes asynchronously.
+    """
+    from loguru import logger as loguru_logger
+
+    messages: list[str] = []
+    sink_id = loguru_logger.add(lambda m: messages.append(str(m)), level="WARNING")
+    try:
+        reregister_app(OverrideApp)
+        async with run_worker():
+            await temporal_client.execute_workflow(
+                "LegacyBareWorkflow",
+                OverrideInput(value="abcd"),
+                id=f"ovr-dep-{uuid4().hex[:8]}",
+                task_queue=task_queue,
+                result_type=OverrideOutput,
+            )
+            assert any(
+                "legacy type 'LegacyBareWorkflow'" in m for m in messages
+            ), "alias run must log the deprecation signal"
+
+            messages.clear()
+            await temporal_client.execute_workflow(
+                "override-app:modern-name",
+                OverrideInput(value="abcd"),
+                id=f"ovr-can-{uuid4().hex[:8]}",
+                task_queue=task_queue,
+                result_type=OverrideOutput,
+            )
+            assert not any(
+                "legacy type" in m for m in messages
+            ), "canonical run must not log the deprecation signal"
+    finally:
+        loguru_logger.remove(sink_id)
 
 
 @pytest.mark.integration

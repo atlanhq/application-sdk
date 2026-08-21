@@ -68,18 +68,15 @@ def _make_app_cls(
     return _MockApp
 
 
-def _make_ep_meta(
-    name: str, *, output_type: type = dict, workflow_type: str | None = None
-) -> Any:
+def _make_ep_meta(name: str, *, output_type: type = dict) -> Any:
     """Stand-in EntryPointMetadata carrying the fields workflow naming reads.
 
-    ``implicit``/``workflow_type`` must be spelled out — a bare MagicMock makes
-    both truthy, which is not how a real entry point behaves.
+    ``implicit`` must be spelled out — a bare MagicMock makes it truthy,
+    which is not how a real entry point behaves.
     """
     ep_meta = mock.MagicMock(
         output_type=output_type,
         implicit=False,
-        workflow_type=workflow_type,
     )
     ep_meta.name = name
     return ep_meta
@@ -152,12 +149,14 @@ class TestTemporalExecutorBackendExecute:
         assert wf_name == "mep:extract"
 
     @pytest.mark.asyncio
-    async def test_execute_with_entry_point_uses_workflow_type_override(self) -> None:
-        ep_meta = _make_ep_meta("extract", workflow_type="LegacyExtractWorkflow")
+    async def test_execute_never_dispatches_on_a_legacy_alias(self) -> None:
+        """C1: aliases are inbound-only — SDK dispatch always emits canonical."""
+        ep_meta = _make_ep_meta("extract")
         client = mock.MagicMock()
         client.execute_workflow = mock.AsyncMock(return_value=None)
         backend = TemporalExecutorBackend(client=client)
         app_cls = _make_app_cls(name="mep", entry_points={"extract": ep_meta})
+        app_cls.legacy_workflow_types = {"LegacyExtractWorkflow": "extract"}
         ctx = mock.MagicMock(app_name="mep", correlation_id="x")
 
         await backend.execute(
@@ -168,7 +167,7 @@ class TestTemporalExecutorBackendExecute:
             entry_point="extract",
         )
 
-        assert client.execute_workflow.await_args.args[0] == "LegacyExtractWorkflow"
+        assert client.execute_workflow.await_args.args[0] == "mep:extract"
 
     @pytest.mark.asyncio
     async def test_execute_with_unknown_entry_point_raises_value_error(self) -> None:
@@ -296,13 +295,15 @@ class TestTemporalExecutorBackendStart:
         assert client.start_workflow.await_args.args[0] == "ep:do"
 
     @pytest.mark.asyncio
-    async def test_start_uses_workflow_type_override(self) -> None:
+    async def test_start_never_dispatches_on_a_legacy_alias(self) -> None:
+        """C1: aliases are inbound-only — SDK dispatch always emits canonical."""
         handle = mock.MagicMock(id="abc")
         client = mock.MagicMock()
         client.start_workflow = mock.AsyncMock(return_value=handle)
         backend = TemporalExecutorBackend(client=client)
-        ep_meta = _make_ep_meta("do", workflow_type="LegacyDoWorkflow")
+        ep_meta = _make_ep_meta("do")
         app_cls = _make_app_cls(name="ep", entry_points={"do": ep_meta})
+        app_cls.legacy_workflow_types = {"LegacyDoWorkflow": "do"}
         ctx = mock.MagicMock(app_name="ep", correlation_id="c")
 
         await backend.start(
@@ -313,7 +314,7 @@ class TestTemporalExecutorBackendStart:
             entry_point="do",
         )
 
-        assert client.start_workflow.await_args.args[0] == "LegacyDoWorkflow"
+        assert client.start_workflow.await_args.args[0] == "ep:do"
 
     @pytest.mark.asyncio
     async def test_start_with_unknown_entry_point_raises(self) -> None:

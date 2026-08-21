@@ -12,7 +12,10 @@ if TYPE_CHECKING:
     from application_sdk.app.task import TaskMetadata
 
 
-from application_sdk.app.entrypoint import build_workflow_type_index
+from application_sdk.app.entrypoint import (
+    EntryPointContractError,
+    build_workflow_type_index,
+)
 from application_sdk.contracts.base import validate_is_contract
 from application_sdk.errors import (
     APP_ALREADY_REGISTERED,
@@ -43,9 +46,11 @@ class AppMetadata:
     workflow_types: "Mapping[str, EntryPointMetadata]" = field(
         default_factory=dict, init=False
     )
-    """Every Temporal workflow type this app registers, mapped to its entry
-    point. Derived — the worker registers these keys and result-type resolution
-    reads them back, so registration and resolution cannot drift."""
+    """Every Temporal workflow type this app registers — each entry point's
+    canonical type plus the app's declared ``legacy_workflow_types`` aliases —
+    mapped to its entry point. Derived — the worker registers these keys and
+    result-type resolution reads them back, so registration and resolution
+    cannot drift."""
 
     def __post_init__(self) -> None:
         # Freeze entry_points so callers cannot mutate it post-construction.
@@ -53,11 +58,18 @@ class AppMetadata:
         object.__setattr__(
             self, "entry_points", types.MappingProxyType(self.entry_points)
         )
+        legacy = getattr(self.app_cls, "legacy_workflow_types", None) or {}
+        if not isinstance(legacy, Mapping):
+            raise EntryPointContractError(
+                f"App '{self.name}': legacy_workflow_types must be a mapping of "
+                f"alias strings to entry-point name strings, got "
+                f"{type(legacy).__name__}."
+            )
         object.__setattr__(
             self,
             "workflow_types",
             types.MappingProxyType(
-                build_workflow_type_index(self.name, self.entry_points)
+                build_workflow_type_index(self.name, self.entry_points, legacy)
             ),
         )
 

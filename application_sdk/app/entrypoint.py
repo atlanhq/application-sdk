@@ -97,8 +97,8 @@ class EntryPointMetadata:
 
     Entry points are independently-triggerable execution paths on an App.
     Each entry point registers its canonical Temporal workflow type at worker
-    startup. A ``workflow_type`` override adds a second, primary registration
-    that dispatches to the same entry point.
+    startup; ``App.legacy_workflow_types`` may register additional inbound-only
+    aliases that dispatch to the same entry point.
     """
 
     name: str
@@ -122,13 +122,6 @@ class EntryPointMetadata:
     always treated as the default regardless of this flag; for multi-entry-point
     apps, at most one entry point may set ``default=True`` (validated at
     registration)."""
-
-    workflow_type: str | None = None
-    """Temporal workflow type to register instead of the ``{app-name}:{name}``
-    convention. Moves Temporal registration only — the entry point is still
-    selected by ``name`` on ``?entrypoint=``, and task activity names are
-    unaffected. The canonical name stays registered as an alias, so callers on
-    either name reach this entry point. See :func:`workflow_types_for`."""
 
 
 def _method_name_to_kebab(name: str) -> str:
@@ -188,33 +181,18 @@ def canonical_workflow_type(app_name: str, ep: EntryPointMetadata) -> str:
     return app_name if ep.implicit else f"{app_name}:{ep.name}"
 
 
-def workflow_types_for(app_name: str, ep: EntryPointMetadata) -> tuple[str, ...]:
-    """Every Temporal workflow type *ep* registers, primary first.
-
-    Without an override this is just the canonical name. With one, the override
-    is primary — new runs start on it — and the canonical name stays registered
-    as an alias so a caller already using it still reaches this entry point.
-    An override that merely restates the canonical name registers once.
-    """
-    canonical = canonical_workflow_type(app_name, ep)
-    if ep.workflow_type is None or ep.workflow_type == canonical:
-        return (canonical,)
-    return (ep.workflow_type, canonical)
-
-
-def primary_workflow_type(app_name: str, ep: EntryPointMetadata) -> str:
-    """The Temporal workflow type new runs of *ep* should start on."""
-    return workflow_types_for(app_name, ep)[0]
-
-
 def build_workflow_type_index(
-    app_name: str, entry_points: Mapping[str, EntryPointMetadata]
+    app_name: str,
+    entry_points: Mapping[str, EntryPointMetadata],
+    legacy_workflow_types: Mapping[str, str] | None = None,
 ) -> dict[str, EntryPointMetadata]:
     """Map every registered Temporal workflow type back to its entry point.
 
-    The worker registers one generated class per key, and result-type resolution
-    reads the same index — so what is registered and what can be resolved cannot
-    drift apart.
+    The index holds each entry point's canonical convention-derived type plus
+    every declared legacy alias. The worker registers one generated class per
+    key, and result-type resolution reads the same index — so what is
+    registered and what can be resolved cannot drift apart. SDK-initiated
+    dispatch always emits the canonical type; an alias is inbound-only.
 
     Uniqueness is enforced on two axes. The Temporal type is the registration
     key, but dispatch under the sandbox goes through the generated class name,
@@ -222,38 +200,70 @@ def build_workflow_type_index(
     distinct types whose classes would overwrite each other in the module
     namespace, and one would silently run the other's entry point.
 
+    Args:
+        app_name: The app's registered name.
+        entry_points: Entry points keyed by entry-point name.
+        legacy_workflow_types: ``{alias: entry-point name}`` — legacy Temporal
+            workflow types external callers still dispatch, from
+            ``App.legacy_workflow_types``.
+
     Raises:
-        EntryPointContractError: If two entry points claim the same type, or if
-            two distinct types fold to the same generated class name. The first
-            also covers an override colliding with another entry point's
-            canonical name or with the implicit bare app name, since every such
-            name is a key here.
+        EntryPointContractError: If an alias restates a canonical type, targets
+            an unknown entry point, shadows an entry-point name, is not a
+            usable Temporal type string, or if two distinct types fold to the
+            same generated class name.
     """
     index: dict[str, EntryPointMetadata] = {}
     by_class_segment: dict[str, str] = {}
+
+    def claim_class_segment(workflow_type: str) -> None:
+        segment = workflow_type_class_segment(workflow_type)
+        twin = by_class_segment.get(segment)
+        if twin is not None and twin != workflow_type:
+            raise EntryPointContractError(
+                f"App '{app_name}': Temporal workflow types '{twin}' and "
+                f"'{workflow_type}' both generate the workflow class "
+                f"'_Workflow_{segment}', so one would silently dispatch to "
+                f"the other. Hyphens and colons both become underscores — "
+                f"pick a legacy type that differs by more than those."
+            )
+        by_class_segment[segment] = workflow_type
+
     for ep in entry_points.values():
-        for workflow_type in workflow_types_for(app_name, ep):
-            claimed = index.get(workflow_type)
-            if claimed is not None and claimed is not ep:
-                raise EntryPointContractError(
-                    f"App '{app_name}': entry points '{claimed.name}' and "
-                    f"'{ep.name}' both register Temporal workflow type "
-                    f"'{workflow_type}'. Each registered type must resolve to "
-                    f"exactly one entry point — change one @entrypoint's "
-                    f"workflow_type."
-                )
-            segment = workflow_type_class_segment(workflow_type)
-            twin = by_class_segment.get(segment)
-            if twin is not None and twin != workflow_type:
-                raise EntryPointContractError(
-                    f"App '{app_name}': Temporal workflow types '{twin}' and "
-                    f"'{workflow_type}' both generate the workflow class "
-                    f"'_Workflow_{segment}', so one would silently dispatch to "
-                    f"the other. Hyphens and colons both become underscores — "
-                    f"pick a workflow_type that differs by more than those."
-                )
-            by_class_segment[segment] = workflow_type
-            index[workflow_type] = ep
+        canonical = canonical_workflow_type(app_name, ep)
+        claim_class_segment(canonical)
+        index[canonical] = ep
+
+    for alias, target in (legacy_workflow_types or {}).items():
+        if not isinstance(alias, str) or not isinstance(target, str):
+            raise EntryPointContractError(
+                f"App '{app_name}': legacy_workflow_types must map alias "
+                f"strings to entry-point name strings, got "
+                f"{alias!r}: {target!r}."
+            )
+        _validate_legacy_workflow_type(alias)
+        if alias in index:
+            raise EntryPointContractError(
+                f"App '{app_name}': legacy workflow type '{alias}' restates "
+                f"the canonical type of entry point '{index[alias].name}'. "
+                f"Canonical types are always registered — declare only the "
+                f"legacy names that differ from them."
+            )
+        if alias in entry_points:
+            raise EntryPointContractError(
+                f"App '{app_name}': legacy workflow type '{alias}' equals the "
+                f"entry point name '{alias}'. Aliases and entry point names "
+                f"must stay disjoint so a selector is never ambiguous."
+            )
+        ep = entry_points.get(target)  # type: ignore[assignment]
+        if ep is None:
+            raise EntryPointContractError(
+                f"App '{app_name}': legacy workflow type '{alias}' targets "
+                f"unknown entry point '{target}'. Available entry points: "
+                f"{sorted(entry_points)}."
+            )
+        claim_class_segment(alias)
+        index[alias] = ep
     return index
 
 
@@ -334,8 +344,8 @@ def _validate_entrypoint_signature(
     return input_type, output_type
 
 
-def _validate_workflow_type_override(ep_name: str, workflow_type: str) -> None:
-    """Reject a workflow_type override that cannot be registered.
+def _validate_legacy_workflow_type(alias: str) -> None:
+    """Reject a legacy workflow type that cannot be registered.
 
     Deliberately looser than the entry-point name check. Temporal puts no
     charset restriction on a workflow type, and the shapes a migrating app must
@@ -353,32 +363,27 @@ def _validate_workflow_type_override(ep_name: str, workflow_type: str) -> None:
     embedded in ``_Workflow_<segment>``.
 
     A ``:`` is deliberately accepted. The cross-worker Temporal workflow-type
-    namespace is intentionally global, and a colon-qualified override such as
-    ``teradata-app:crawler`` is exactly the shape a migrating app must preserve
-    (a colon does not make a type canonical — only the ``{app}:{ep}``
-    *convention* does, and an override exists precisely to sit outside it).
+    namespace is intentionally global, and a colon-qualified legacy type such
+    as ``teradata-app:crawler`` is exactly the shape a migrating app must
+    preserve (a colon does not make a type canonical — only the ``{app}:{ep}``
+    *convention* does, and an alias exists precisely to sit outside it).
     Same-worker collisions are rejected at startup by
     :func:`build_workflow_type_index`; cross-worker duplication is a deployment
     concern, not something a per-app validator can or should police.
     """
-    if not isinstance(workflow_type, str):
+    if not alias:
         raise EntryPointContractError(
-            f"Entry point '{ep_name}': workflow_type must be a string, got "
-            f"{type(workflow_type).__name__}."
+            "legacy_workflow_types: an alias must be a non-empty string."
         )
-    if not workflow_type:
+    if any(char.isspace() or not char.isprintable() for char in alias):
         raise EntryPointContractError(
-            f"Entry point '{ep_name}': workflow_type must be a non-empty string."
+            f"legacy_workflow_types: alias must not contain whitespace or "
+            f"control characters, got {alias!r}."
         )
-    if any(char.isspace() or not char.isprintable() for char in workflow_type):
+    if not any(char.isalnum() for char in alias):
         raise EntryPointContractError(
-            f"Entry point '{ep_name}': workflow_type must not contain whitespace "
-            f"or control characters, got {workflow_type!r}."
-        )
-    if not any(char.isalnum() for char in workflow_type):
-        raise EntryPointContractError(
-            f"Entry point '{ep_name}': workflow_type {workflow_type!r} is not a "
-            f"usable Temporal workflow type — it carries no letters or digits."
+            f"legacy_workflow_types: alias {alias!r} is not a usable Temporal "
+            f"workflow type — it carries no letters or digits."
         )
 
 
@@ -387,13 +392,12 @@ def entrypoint(
     *,
     name: str | None = None,
     default: bool = False,
-    workflow_type: str | None = None,
 ) -> F | Callable[[F], F]:
     """Decorator to mark a method as an independently-triggerable entry point.
 
     Each entry point registers its canonical Temporal workflow type at worker
-    startup. A ``workflow_type`` override also registers a primary alias;
-    multiple entry points on the same App share @task methods as activities.
+    startup. Multiple entry points on the same App share @task methods as
+    activities.
 
     Entry points are triggered via HTTP POST /workflows/v1/start?entrypoint=<name>.
     The body field 'workflow_type' is also accepted as a transitional fallback.
@@ -401,8 +405,8 @@ def entrypoint(
     Workflow naming:
     - An implicit ``run()`` entry point: ``{app-name}``.
     - An explicit ``@entrypoint``: ``{app-name}:{entry-point-name}``.
-    - With ``workflow_type=``: the override is primary and the convention-derived
-      name above remains registered as an alias.
+    - A legacy type external callers still dispatch is declared on the App
+      class as an inbound-only alias — see ``App.legacy_workflow_types``.
 
     Example::
 
@@ -432,18 +436,6 @@ def entrypoint(
             caller omits ``?entrypoint=``. At most one entry point per app may set
             this (validated at registration). A single-entry-point app does not
             need it; its only entry point is the default implicitly.
-        workflow_type: Register this Temporal workflow type instead of the
-            ``{app-name}:{name}`` convention. Use it only to preserve a workflow
-            type external callers already dispatch — a multi-entry-point app
-            otherwise has no way to keep an established bare type. The canonical
-            name stays registered as an alias, so adopting this cannot break a
-            caller already on it. Registration is all that moves: ``?entrypoint=``
-            still selects by ``name``, and task activity names are unaffected.
-
-            Example::
-
-                @entrypoint(name="keifu", workflow_type="KeifuWorkflow")
-                async def keifu(self, input: KeifuInput) -> KeifuOutput: ...
 
     Raises:
         EntryPointContractError: If the method doesn't follow the contract pattern.
@@ -459,8 +451,6 @@ def entrypoint(
                 f"Entry point name '{ep_name}' is not a valid identifier. "
                 "Use only letters, digits, hyphens, and underscores."
             )
-        if workflow_type is not None:
-            _validate_workflow_type_override(ep_name, workflow_type)
         input_type, output_type = _validate_entrypoint_signature(fn)
         fn._entrypoint_metadata = EntryPointMetadata(  # type: ignore[attr-defined]
             name=ep_name,
@@ -468,7 +458,6 @@ def entrypoint(
             output_type=output_type,
             method_name=fn_name,
             default=default,
-            workflow_type=workflow_type,
         )
         return fn
 

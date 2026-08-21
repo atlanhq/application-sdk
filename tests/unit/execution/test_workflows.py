@@ -118,12 +118,16 @@ class TestGetAllAppWorkflows:
         from application_sdk.app.entrypoint import EntryPointContractError, entrypoint
 
         class FirstApp(App):
-            @entrypoint(workflow_type="SharedWorkflow")
+            legacy_workflow_types = {"SharedWorkflow": "extract"}
+
+            @entrypoint
             async def extract(self, input: _WfInput) -> _WfOutput:
                 return _WfOutput()
 
         class SecondApp(App):
-            @entrypoint(workflow_type="SharedWorkflow")
+            legacy_workflow_types = {"SharedWorkflow": "extract"}
+
+            @entrypoint
             async def extract(self, input: _WfInput) -> _WfOutput:
                 return _WfOutput()
 
@@ -134,12 +138,16 @@ class TestGetAllAppWorkflows:
         from application_sdk.app.entrypoint import EntryPointContractError, entrypoint
 
         class ColonApp(App):
-            @entrypoint(workflow_type="shared:type")
+            legacy_workflow_types = {"shared:type": "extract"}
+
+            @entrypoint
             async def extract(self, input: _WfInput) -> _WfOutput:
                 return _WfOutput()
 
         class HyphenApp(App):
-            @entrypoint(workflow_type="shared-type")
+            legacy_workflow_types = {"shared-type": "extract"}
+
+            @entrypoint
             async def extract(self, input: _WfInput) -> _WfOutput:
                 return _WfOutput()
 
@@ -150,7 +158,9 @@ class TestGetAllAppWorkflows:
         from application_sdk.app.entrypoint import EntryPointContractError, entrypoint
 
         class ReservedApp(App):
-            @entrypoint(workflow_type="sdr:test_auth")
+            legacy_workflow_types = {"sdr:test_auth": "extract"}
+
+            @entrypoint
             async def extract(self, input: _WfInput) -> _WfOutput:
                 return _WfOutput()
 

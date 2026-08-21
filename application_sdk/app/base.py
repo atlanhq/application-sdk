@@ -10,7 +10,7 @@ import sys
 import threading
 import warnings
 from abc import ABC
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -51,7 +51,7 @@ from application_sdk.app.context import (
 )
 from application_sdk.app.entrypoint import (
     EntryPointMetadata,
-    primary_workflow_type,
+    canonical_workflow_type,
     workflow_type_class_segment,
 )
 from application_sdk.app.registry import AppMetadata, resolve_pool_queue
@@ -697,6 +697,23 @@ class App(ABC):
     description: ClassVar[str] = ""
     tags: ClassVar[dict[str, str] | None] = None
     passthrough_modules: ClassVar[set[str] | None] = None
+
+    legacy_workflow_types: ClassVar[Mapping[str, str]] = {}
+    """Inbound-only Temporal workflow type aliases: ``{alias: entry-point name}``.
+
+    Declare a legacy type that external callers still dispatch (e.g. a bare
+    pre-migration name like ``"KeifuWorkflow"``) so the worker keeps accepting
+    it. The alias is accepted, never produced: every SDK-initiated dispatch
+    emits the canonical ``{app-name}:{entry-point-name}`` type, so the
+    ``temporal.workflow.type`` telemetry dimension counts exactly the callers
+    that have not migrated. Delete an alias only when that count reaches zero.
+
+    This is a temporary compatibility surface for migrations, not a naming
+    lever — the canonical type cannot be changed. The declaration is due to
+    move to the app contract manifest once the contract toolkit carries a
+    ``legacy_workflow_types`` block; this class attribute is the interim (and,
+    for apps without a contract tree, permanent) declaration site.
+    """
 
     preflight_gate_mode: ClassVar[Literal["hard", "soft"]] = "soft"
     """Preflight gate posture. ``"soft"`` (default) never blocks — a
@@ -2076,14 +2093,15 @@ def generate_workflow_class(
         app_cls: The App subclass.
         ep: The entry point to generate a workflow class for.
         workflow_name: The Temporal workflow type to register this class under.
-            An entry point with a ``workflow_type`` override registers under
-            more than one name, so the caller picks; defaults to the primary.
+            An entry point carrying ``legacy_workflow_types`` aliases registers
+            under more than one name, so the caller picks; defaults to the
+            canonical type.
 
     Returns:
         A Temporal workflow class decorated with @workflow.defn.
     """
     if workflow_name is None:
-        workflow_name = primary_workflow_type(app_cls._app_name, ep)
+        workflow_name = canonical_workflow_type(app_cls._app_name, ep)
 
     cache_key = (app_cls, ep.name, workflow_name)
     if cache_key in _workflow_class_cache:
@@ -2100,8 +2118,9 @@ def generate_workflow_class(
         input_type_supports_gate,
     )
 
-    is_primary_registration = workflow_name == primary_workflow_type(app_name, ep)
-    if is_primary_registration and not input_type_supports_gate(input_type):
+    canonical_registration_name = canonical_workflow_type(app_name, ep)
+    is_canonical_registration = workflow_name == canonical_registration_name
+    if is_canonical_registration and not input_type_supports_gate(input_type):
         _task_logger.warning(
             "Preflight gate will not run for entrypoint '%s' (%s): input type %s does "
             "not declare the credential-routing fields (extraction_method, "
@@ -2123,6 +2142,17 @@ def generate_workflow_class(
         # deferred imports: inside Temporal sandbox (workflow.unsafe.imports_passed_through context)
         # BLDX-878: inter-app calls deactivated pending review.
         # from application_sdk.app.client import WorkflowAppClient
+
+        if not is_canonical_registration:
+            _safe_log(
+                "warning",
+                f"Workflow started on legacy type '{workflow_name}'; the "
+                f"canonical type is '{canonical_registration_name}'. This alias "
+                f"is a temporary migration surface — move the caller to the "
+                f"canonical type.",
+                legacy_workflow_type=workflow_name,
+                canonical_workflow_type=canonical_registration_name,
+            )
 
         # Fail fast on a malformed / wrong-typed payload, before any setup runs.
         # Enforces the entry point's typed contract at the workflow boundary.
