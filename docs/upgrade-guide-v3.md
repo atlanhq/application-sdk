@@ -1016,6 +1016,86 @@ async def fetch(self, input: MyInput) -> MyOutput:
 
 ---
 
+## Step 11b: The stall watchdog
+
+What if you do nothing? The SDK now runs a **stall watchdog** inside every activity: it watches for observable
+forward progress, and reports when an attempt goes quiet for longer than
+`max_no_progress_seconds` (900s). At the same time `timeout_seconds`
+(`start_to_close`) becomes a **24h backstop** you never tune, instead of a duration you
+guess.
+
+**There is no migration task here.** This step exists to tell you that, precisely.
+
+### On upgrade, no failure *semantics* change (the default timeout and telemetry do)
+
+- You land in **`warn` mode**, which cannot fail an activity. It observes and reports.
+- `heartbeat_timeout_seconds` keeps its meaning and its 60s default. Crash, OOM and
+  node-loss detection is unchanged.
+- No existing knob changes meaning, so there is no coupled default to bump.
+- The one thing that *does* change immediately is in your favour: with the backstop at
+  24h, a legitimately long run stops dying at a guessed ceiling.
+
+What you gain is a report about your own code — the sites that go quiet, and the long
+opaque calls the SDK is currently vouching for unbounded. Reading it is optional and
+can wait; the app stays correct indefinitely without it.
+
+### The added cost is telemetry
+
+Two histograms and the occasional INFO log line. Warn-mode findings are deliberately
+**never** WARNING-level — a stall observation under a fleet-wide default is an expected
+observation, not an alert.
+
+If you need most of that gone, `ATLAN_PROGRESS_WATCHDOG=off` — or
+`progress_watchdog="off"` on a single `@task` — is the kill-switch: no gap is reported
+and nothing is ever failed. It is not the normal state, and it also switches off the
+report you would otherwise use later. Note it is not *completely* inert — hold
+observations still record, since those are a work-list entry rather than a watchdog
+action — and it does not shorten a wedged attempt, which is bounded by
+`timeout_seconds` either way.
+
+### One knob did change value: `timeout_seconds`
+
+`ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS` now defaults to **86400** (24 h) instead of 600.
+Nothing changes for a task that passes `timeout_seconds=` explicitly — which, if your app
+weight-classed its tasks, is most of them. Those explicit numbers are now the thing worth
+deleting: they are the guesses ADR-0018 exists to remove, and with the backstop in place
+a legitimately long attempt no longer needs one to survive. Delete them at your own pace;
+nothing forces it.
+
+The one consequence to be aware of is on the other side of the trade: a *wedged* attempt
+is no longer killed by a small ceiling, so while your app is in `warn` its containment is
+the `AtlanAppTaskStalled` alert plus a human rather than an automatic kill. Detection
+improves — a wedge is now visible one budget in, where before it was only ever killed by
+luck. See [ADR-0018 → Migration](adr/0018-progress-aware-heartbeat.md#migration--backward-compatibility--what-if-i-do-nothing)
+for why that trade is the one being made.
+
+### Declaring holds is an eventual optimisation, not an upgrade task
+
+Wrapping opaque calls in `holding_progress()` is work you take on when you want the
+stronger guarantee — a wedge caught in minutes rather than at the backstop — at a time
+of your choosing, guided by your own warn report. It is not a precondition for taking
+the version.
+
+### Which code shapes eventually need action
+
+Relevant only if and when you flip an app to `enforce`:
+
+| Your existing code | In `warn` (today) | In `enforce` | Action |
+|---|---|---|---|
+| Streaming through SDK writers / `ObjectStore` transfers / template page loops | silent | covered — hooks mark progress | none |
+| Already calls `self.heartbeat(...)` | silent | covered — a beat marks progress | none |
+| Opaque blocking call via `run_in_thread` | reported as a long unbounded hold | covered — unbounded auto-hold; the backstop is the only bound | optional: declare an allowance to get a real bound |
+| **A custom async loop doing its own I/O** | reported as a no-progress gap | **false-killed** if any gap exceeds the budget | add a beat or a hold |
+| **An opaque single `await` against your source** (your own async client) | reported as a no-progress gap | **false-killed at the tail** | wrap in `holding_progress()` — expected in nearly every connector |
+
+The last two rows are why `enforce` is a per-app decision verified against a
+large-tenant profile, not a smoke test.
+
+See [Progress and Stalls](concepts/progress-and-stalls.md) for the three knobs, how to
+read your warn report, and how to size an allowance.
+
+---
+
 ## Step 12: App Lifecycle Hooks
 
 v3 adds structured lifecycle hooks that replace ad-hoc cleanup logic that was

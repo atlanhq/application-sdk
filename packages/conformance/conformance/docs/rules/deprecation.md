@@ -158,7 +158,10 @@ sunset (keep it, stop consuming), or leave it unchanged. A rename must be expres
 deprecate/sunset the old field + add a new field. The committed
 contract_schema.lock.json ledger (append-only, regenerated in-PR) provides the baseline
 so the check is single-checkout and offline. BLOCK from day 0: backwards-compat is a
-property that must already hold; there is no warn-first window.
+property that must already hold; there is no warn-first window. Customer impact:
+deployed tenants keep emitting the old payload shape after the app upgrades under them,
+so the customer's first run on the new version fails or silently mis-parses — a break
+they hit with zero changes on their side.
 
 Fires when a ledger entry for an entrypoint contract field is either:
 
@@ -199,7 +202,10 @@ removes it will see no ledger entry and pass silently. B006 closes that gap — 
 field not in the ledger means the ledger was not regenerated after the field was added.
 Because the generator is append-only (it can never delete entries or change a recorded
 type), regeneration is always safe: it can only add. BLOCK because a stale ledger
-defeats the backwards-compat guarantee.
+defeats the backwards-compat guarantee. Customer impact: an unledgered field is one PR
+away from B005's customer-facing break shipping unnoticed — the removal that corrupts
+deployed tenants' payloads passes CI clean because the guard had nothing to compare
+against.
 
 Fires when a live entrypoint contract field has no corresponding entry in
 `contract_schema.lock.json`.  This means the ledger was not regenerated after the field
@@ -208,8 +214,17 @@ an in-repo base class or an SDK-provided mixin (e.g. `PublishInputMixin`) is jus
 ledger-tracked as one declared directly on the contract, so adopting a new mixin can
 also trigger this on the fields it contributes.
 
-Fix: run `uv run atlan-application-sdk-conformance gen-contract-ledger` and commit the
-updated ledger in the same PR as the contract change.
+Fix: run the exact command the finding names — in a consumer app that is `uvx
+atlan-application-sdk-conformance==<version> gen-contract-ledger`, version-pinned to the
+checker that raised it — and commit the updated ledger in the same PR as the contract
+change.  Keep the pin.  CI runs `detect` from an unpinned `uvx` install while a bare `uv
+run` resolves the app's *locked* conformance dev dependency, and the generator's output
+depends on its version: the SDK contract-base field registry it reads grows as the SDK
+gains fields.  Regenerating with an older locked version therefore rewrites the ledger
+byte-identically and leaves the finding standing with no diff to commit — a dead end on
+a BLOCK-tier rule, which is what FND-607 hit.  In the SDK repo itself the suite is
+in-tree, so there the command is `uv run atlan-application-sdk-conformance
+gen-contract-ledger`.
 
 The generator is append-only — it appends new live fields and refreshes `status` from
 source but never deletes an entry or rewrites a recorded `type`.  Regenerating after a

@@ -13,7 +13,6 @@ Usage::
 
     # Render a parameterised template
     content = render("build-and-publish.yaml", unit_tests_workflow="tests.yaml")
-    content = render("docstring-coverage.yaml", package_name="app")
 """
 
 from __future__ import annotations
@@ -52,10 +51,26 @@ MANAGED_WORKFLOWS: tuple[str, ...] = (
     "vulnerability-scan.yml",
     "build-and-publish.yaml",
     "stale.yml",
-    "docstring-coverage.yaml",
     "auto-fix.yml",
     "generated-freshness.yaml",
 )
+
+# Workflow shims bootstrap once managed and now actively removes (relative to
+# ``.github/workflows/``).  A retired name must be deleted rather than merely
+# dropped from ``MANAGED_WORKFLOWS``: bootstrap wrote these files into every
+# consumer repo, so dropping the template alone leaves ~54 copies behind, each
+# still firing on every PR.  ``bootstrap`` deletes them on its next run and
+# C002 reports any that are still present, so the retirement propagates by the
+# same path that installed them.
+#
+# ``docstring-coverage.yaml`` (FND-381): its shim called
+# ``atlanhq/application-sdk/.github/workflows/docstring-coverage.yaml@main``,
+# which never existed — docstring coverage lives here as a *composite action*
+# (``.github/actions/docstring-coverage/``), not a reusable workflow, so the
+# shim's shape was wrong outright.  Every call therefore failed at startup:
+# conclusion ``failure``, zero jobs, no check run, no logs.  Retired rather
+# than repointed — the check is not wanted on connectors.
+RETIRED_WORKFLOWS: tuple[str, ...] = ("docstring-coverage.yaml",)
 
 # Non-workflow files that must also be vendored into every consumer repo,
 # keyed by (repo-root-relative dest path, template filename in templates/).
@@ -97,7 +112,6 @@ _STATIC_TEMPLATES: frozenset[str] = frozenset(
 def render(
     name: str,
     *,
-    package_name: str = "app",
     unit_tests_workflow: str = "tests.yaml",
     app_name: str = "app",
     app_image_name: str = "",
@@ -106,6 +120,10 @@ def render(
     system_deps: str = "",
     exit_zero: str = "false",
     automerge: str = "true",
+    unit_coverage_fail_under: str = "",
+    use_ghcr_base: str = "",
+    force_external_runtime: str = "",
+    secrets_block: str = "",
 ) -> str:
     """Render template *name* with the given substitution variables.
 
@@ -113,6 +131,12 @@ def render(
     Parameterised templates:
 
     - ``build-and-publish.yaml``: ``unit_tests_workflow`` (default ``"tests.yaml"``)
+      and ``use_ghcr_base`` (default ``""`` — no line, so the SDK's own default
+      applies; ``"true"`` renders the opt-in as a bare
+      ``use_ghcr_base: true``). Same same-line ``<% if %>`` hugging as
+      ``checks.yml`` below, for the same reason: an un-taken block on its own
+      lines would leave a blank line and read as C002 drift in every repo that
+      hasn't opted in.
     - ``conformance.yaml``: ``exit_zero`` (default ``"false"``; set to ``"true"``
       for soft-enforcement rollouts where violations are tracked but do not block
       merges — flip to ``"false"`` when the app is ready for hard gating).
@@ -125,7 +149,6 @@ def render(
       newline, and that one blank line would read as C002 drift in every
       already-bootstrapped repo. ``test_bootstrap`` locks the empty render
       byte-for-byte.
-    - ``docstring-coverage.yaml``: ``package_name`` (default ``"app"``)
     - ``renovate.json``: ``automerge`` (default ``"true"``; set to ``"false"``
       to disable Renovate auto-merge during initial rollouts — the preset's
       ``automerge: true`` packageRules are overridden by a catch-all rule so
@@ -133,7 +156,24 @@ def render(
     - ``tests.yaml``: ``app_name`` (default ``"app"``), ``app_image_name``
       (default derived as ``"atlan-<app_name>-app"``), ``enable_e2e``
       (default ``"true"``), ``services_script`` (default ``""`` — renders the
-      services-script line commented out; supply a path to render it active).
+      services-script line commented out; supply a path to render it active),
+      ``unit_coverage_fail_under`` (default ``""`` — no line, so the SDK's own
+      floor applies; supply a percent to render this app's higher floor, hugged
+      onto the same line as its ``<% if %>`` tags like ``checks.yml``'s step so
+      the no-override render is unchanged). The coverage line renders bare and
+      as the first entry of the ``with:`` block — deliberately the exact shape
+      the apps that already raised their floor hand-wrote, so those files match
+      this canonical instead of reporting C002 drift for having opted up. A
+      surrounding explanatory comment, or any other position, would guarantee
+      the mismatch.  ``force_external_runtime`` (default ``""`` — no line;
+      ``"true"`` renders a bare ``force-external-runtime: true`` immediately
+      after the coverage line) and ``secrets_block`` (default ``""`` — renders
+      the canonical ``secrets: inherit``; supply a verbatim block, as
+      ``bootstrap.extract.extract_secrets_block`` reads one off disk, to render
+      an app's explicit ``secrets:`` mapping in its place) are the two values
+      FND-604 added, hugged onto their tags' lines for the same byte-identity
+      reason.  ``secrets_block`` carries no trailing newline of its own — the
+      template's line supplies it, so the no-override render is unchanged.
     - ``.gitignore``: static template, no substitution.
 
     All other keyword arguments are accepted but unused, so callers can pass
@@ -149,7 +189,6 @@ def render(
 
     tmpl = _ENV.from_string(raw)
     return tmpl.render(
-        package_name=package_name,
         unit_tests_workflow=unit_tests_workflow,
         app_name=app_name,
         app_image_name=app_image_name,
@@ -158,4 +197,8 @@ def render(
         system_deps=system_deps,
         exit_zero=exit_zero,
         automerge=automerge,
+        unit_coverage_fail_under=unit_coverage_fail_under,
+        use_ghcr_base=use_ghcr_base,
+        force_external_runtime=force_external_runtime,
+        secrets_block=secrets_block,
     )

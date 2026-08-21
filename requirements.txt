@@ -32,10 +32,10 @@ azure-core==1.41.0
     # via azure-identity
 azure-identity==1.25.3
     # via atlan-application-sdk
-boto3==1.43.70
+boto3==1.43.75
     # via atlan-application-sdk
-boto3-stubs==1.43.70
-botocore==1.43.70
+boto3-stubs==1.43.75
+botocore==1.43.75
     # via
     #   boto3
     #   s3transfer
@@ -51,7 +51,7 @@ cffi==2.1.1 ; platform_python_implementation != 'PyPy'
     # via cryptography
 cfgv==3.5.0
     # via pre-commit
-charset-normalizer==3.5.0
+charset-normalizer==3.5.1
     # via requests
 click==8.4.2
     # via
@@ -89,11 +89,11 @@ fastapi-cli==0.0.32
     # via fastapi
 fastapi-cloud-cli==0.23.0
     # via fastapi-cli
-fastar==0.11.0
+fastar==0.12.0
     # via
     #   fastapi
     #   fastapi-cloud-cli
-filelock==3.32.2
+filelock==3.32.3
     # via
     #   python-discovery
     #   virtualenv
@@ -127,10 +127,10 @@ httpx-retries==0.6.0
     # via
     #   atlan-application-sdk
     #   pyatlan
-hypothesis==6.165.5
+hypothesis==6.165.10
 identify==2.6.19
     # via pre-commit
-idna==3.18
+idna==3.19
     # via
     #   anyio
     #   email-validator
@@ -240,7 +240,7 @@ opentelemetry-util-http==0.62b1
     # via
     #   opentelemetry-instrumentation-asgi
     #   opentelemetry-instrumentation-fastapi
-orjson==3.11.9
+orjson==3.12.0
     # via atlan-application-sdk
 packaging==26.3
     # via
@@ -251,7 +251,7 @@ packaging==26.3
     #   pytest-rerunfailures
 pastel==0.2.1
     # via poethepoet
-platformdirs==4.11.2
+platformdirs==4.11.3
     # via virtualenv
 pluggy==1.6.0
     # via pytest
@@ -275,7 +275,7 @@ pyasn1==0.6.4
     # via pyasn1-modules
 pyasn1-modules==0.4.2
     # via google-auth
-pyatlan==9.11.0
+pyatlan==10.0.0
     # via atlan-application-sdk
 pycparser==3.0 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
     # via cffi
@@ -294,7 +294,7 @@ pydantic-extra-types==2.11.1
     # via fastapi
 pydantic-settings==2.15.0
     # via fastapi
-pygments==2.20.0
+pygments==2.21.0
     # via
     #   pytest
     #   rich
@@ -307,8 +307,8 @@ pytest==9.1.1
     #   pytest-socket
     #   pytest-timeout
 pytest-asyncio==1.4.0
-pytest-rerunfailures==16.5
-pytest-socket==0.8.0
+pytest-rerunfailures==16.6
+pytest-socket==0.8.1
 pytest-timeout==2.4.0
 python-dateutil==2.9.0.post0
     # via
@@ -316,7 +316,7 @@ python-dateutil==2.9.0.post0
     #   pyatlan
 python-discovery==1.5.2
     # via virtualenv
-python-dotenv==1.2.2
+python-dotenv==1.2.3
     # via
     #   atlan-application-sdk
     #   pydantic-settings
@@ -380,7 +380,7 @@ typer==0.27.1
     # via
     #   fastapi-cli
     #   fastapi-cloud-cli
-types-protobuf==7.34.1.20260518
+types-protobuf==7.34.1.20260816
     # via temporalio
 types-s3transfer==0.16.0
     # via boto3-stubs
@@ -420,7 +420,7 @@ urllib3==2.7.0
     #   botocore
     #   requests
     #   sentry-sdk
-uvicorn==0.52.2
+uvicorn==0.52.4
     # via
     #   fastapi
     #   fastapi-cli

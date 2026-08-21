@@ -64,6 +64,103 @@ def test_catalog_all_have_rationale() -> None:
     ), f"Rules missing rationale (add a rationale= to each RuleDefinition): {missing}"
 
 
+def test_catalog_block_rules_state_customer_impact() -> None:
+    """Every BLOCK-tier rationale must state its customer failure mode.
+
+    Tier is the criticality model (FND-221): block = customer risk, warn =
+    good-to-have. That semantic only stays auditable if each BLOCK rule's
+    rationale says concretely how the violation becomes a customer issue — a
+    rule that cannot state one does not belong at BLOCK (FND-311).
+    """
+    rules = load_catalog()
+    missing = [
+        rule.id
+        for rule in rules
+        if rule.tier is EnforcementTier.BLOCK
+        and "Customer impact:" not in rule.rationale
+    ]
+    assert not missing, (
+        f"BLOCK rules whose rationale has no 'Customer impact:' line: {missing} — "
+        "state how the violation turns into a customer issue, or keep the rule at WARN"
+    )
+
+
+#: Phrases that *argue for* the WARN tier, as opposed to merely mentioning it.
+#: A BLOCK rule may legitimately say "hence BLOCK, not WARN" or "promoted from
+#: warn to block" — that is a tier reference. These are justifications, and a
+#: BLOCK rule carrying one publishes a doc page whose tier column and body
+#: disagree (``gen-rule-docs`` renders both from the same definition).
+#:
+#: Word-boundary regexes, not bare substrings: ``"this is a warn"`` as a
+#: substring also matches "this is a warn*ing* sign", which never argues for
+#: the WARN tier. ``\b`` keeps the match on the standalone phrase. A boundary
+#: is only added on a side where the phrase actually begins/ends with a word
+#: char — anchoring ``\b`` against a leading/trailing backtick or paren would
+#: force a word char that isn't there and the phrase would never match.
+def _word_boundary(phrase: str) -> re.Pattern[str]:
+    left = r"\b" if phrase[0].isalnum() else ""
+    right = r"\b" if phrase[-1].isalnum() else ""
+    return re.compile(left + re.escape(phrase) + right)
+
+
+_WARN_JUSTIFYING_PHRASES = tuple(
+    _word_boundary(phrase)
+    for phrase in (
+        "this is a warn",
+        "land as ``warn``",
+        "warn (not block)",
+        "warn (new-rule tier policy)",
+        "warn (per the new-rule tier policy)",
+    )
+)
+
+
+def test_catalog_block_rules_carry_no_warn_justifying_prose() -> None:
+    """A BLOCK rule's own prose must not argue for WARN.
+
+    Promotions are easy to do halfway: flip the tier and leave the paragraph
+    that explains why the rule is only a warning. The generated doc renders
+    tier and prose side by side, so the result is a page that contradicts
+    itself — and nothing else catches it. P030 hit exactly this in FND-311;
+    this generalises that rule-specific pin to the whole catalog.
+    """
+    rules = load_catalog()
+    offenders = [
+        (rule.id, phrase.pattern)
+        for rule in rules
+        if rule.tier is EnforcementTier.BLOCK
+        for phrase in _WARN_JUSTIFYING_PHRASES
+        if phrase.search(f"{rule.rationale}\n{rule.full_description}".lower())
+    ]
+    assert not offenders, (
+        "BLOCK rules whose prose still argues for WARN: "
+        f"{offenders} — rewrite the paragraph to say why the rule blocks, or "
+        "return the rule to WARN"
+    )
+
+
+def test_warn_justifying_phrases_do_not_over_match() -> None:
+    """Regression pin for the word-boundary fix.
+
+    "This is a warning sign …" is ordinary English, not a WARN-tier
+    justification — a bare substring match on ``"this is a warn"`` trips it.
+    The word-boundary regexes must not.
+    """
+    prose = "This is a warning sign for operators".lower()
+    assert not any(p.search(prose) for p in _WARN_JUSTIFYING_PHRASES)
+    # Every real justifying phrase still matches its own canonical form — a
+    # boundary fix that silences a true positive would gut the guard.
+    canonical = (
+        "this is a warn, not a block",
+        "should land as ``warn`` here",
+        "tier is warn (not block)",
+        "tier is warn (new-rule tier policy)",
+        "tier is warn (per the new-rule tier policy)",
+    )
+    for phrase, prose in zip(_WARN_JUSTIFYING_PHRASES, canonical):
+        assert phrase.search(prose), f"{phrase.pattern!r} stopped matching {prose!r}"
+
+
 def test_catalog_all_have_scope() -> None:
     """Every rule must declare a valid RuleScope (sdk / app / both)."""
     rules = load_catalog()
@@ -226,6 +323,11 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # which the SDK never declares (fleet SDR sweep).
     # P042: hand-rolled upload_to_atlan bridge in an SDR app — same gating as
     # P030, which it was split out of.
+    # P043/P045: error-seam — apps must build control flow on the SDK's public
+    # error surface (application_sdk.errors.__all__), not on an internal error
+    # class that can move, or stop being the one a boundary raises, in a minor
+    # release. The SDK is the publisher of that surface, so neither rule grades
+    # it (CONNECT-970).
     assert app_scoped == {
         "B001",
         "B007",
@@ -233,6 +335,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P040",
         "P041",
         "P042",
+        "P043",
+        "P044",
+        "P045",
         "C002",
         "D001",
         "D002",
@@ -463,6 +568,11 @@ def test_catalog_p_series_present() -> None:
     standing in for App.upload(), split out of P030 so the "bytes move but the
     SDK contract is reimplemented" shape carries its own severity, its own
     remediation, and a retirement date (the v4.0 removal of upload_to_atlan).
+    P043/P045 are the error-seam rules — NonPublicErrorControlFlow and
+    PrivateErrorClassImport. Only ``application_sdk.errors.__all__`` is the
+    public error contract; an ``except`` on an internal class silently stops
+    matching when the SDK changes which class a boundary surfaces, because the
+    replacement is a sibling rather than a subclass (CONNECT-970).
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -511,6 +621,9 @@ def test_catalog_p_series_present() -> None:
         "P040",
         "P041",
         "P042",
+        "P043",
+        "P044",
+        "P045",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
@@ -899,3 +1012,96 @@ def test_validate_catalog_raises_on_duplicate() -> None:
     )
     with pytest.raises(ValueError, match="duplicate rule ID"):
         validate_catalog([r1, r2])
+
+
+# ── orthogonal_gate wiring ────────────────────────────────────────────────
+#
+# A gate name is only useful if something implements it. Declaring
+# ``orthogonal_gate="docker-buidl"`` on a rule, or adding a new gate name without
+# a matching prose contract, otherwise fails *silently at remediation time*:
+# ``orthogonal-gate.prose.md`` fails closed on an unknown value, so every fix for
+# that rule reverts and residues with nothing to distinguish it from a genuinely
+# un-fixable finding. These tests move that failure to CI.
+
+
+def _gate_dispatch_prose() -> str:
+    from importlib.resources import files
+
+    return (
+        files("conformance")
+        .joinpath("programs/functions/orthogonal-gate.prose.md")
+        .read_text()
+    )
+
+
+def test_every_declared_gate_is_dispatched_by_the_prose() -> None:
+    """Each distinct orthogonal_gate value appears in the dispatch contract."""
+    dispatch = _gate_dispatch_prose()
+    declared = {r.orthogonal_gate for r in load_catalog() if r.orthogonal_gate}
+    missing = sorted(g for g in declared if f'"{g}"' not in dispatch)
+    assert not missing, (
+        f"orthogonal_gate value(s) {missing} are declared on rules but never "
+        "dispatched in programs/functions/orthogonal-gate.prose.md — the "
+        "dispatcher fails closed, so every fix for those rules would revert"
+    )
+
+
+def test_delegating_gates_have_a_prose_contract() -> None:
+    """A gate that delegates has a functions/<gate>-gate.prose.md to delegate to."""
+    from importlib.resources import files
+
+    # "tests" and "skip" are handled inline by the dispatcher; the rest delegate.
+    inline = {"tests", "skip"}
+    declared = {r.orthogonal_gate for r in load_catalog() if r.orthogonal_gate}
+    for gate in sorted(declared - inline):
+        contract = files("conformance").joinpath(
+            f"programs/functions/{gate}-gate.prose.md"
+        )
+        assert contract.is_file(), (
+            f"orthogonal_gate={gate!r} delegates, but "
+            f"programs/functions/{gate}-gate.prose.md does not exist"
+        )
+
+
+def test_i_series_uses_the_docker_build_gate() -> None:
+    """Every I-series rule is gated by an actual image build.
+
+    The dockerfile area was propose-only precisely because no gate validated a
+    Dockerfile change: ``"tests"`` is blind there (a Dockerfile edit cannot move
+    the Python suite) and ``"skip"``'s parse check has no Dockerfile parser. If any
+    I rule loses this gate, the area silently returns to accepting unverified
+    fixes under ``--apply-unverifiable``.
+    """
+    i_rules = [r for r in load_catalog() if r.id.startswith("I")]
+    assert i_rules, "no I-series rules found — the guard below would be vacuous"
+    wrong = {
+        r.id: r.orthogonal_gate for r in i_rules if r.orthogonal_gate != "docker-build"
+    }
+    assert not wrong, f"I-series rules not gated by docker-build: {wrong}"
+
+
+def test_docker_build_is_accepted_by_the_model() -> None:
+    """The Literal admits the gate name, and a typo fails at definition time."""
+    rule = RuleDefinition(
+        id="I999",
+        name="Probe",
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.STATIC,
+        scope=RuleScope.APP,
+        category="dockerfile-probe",
+        orthogonal_gate="docker-build",
+    )
+    assert rule.orthogonal_gate == "docker-build"
+    props = rule.to_reporting_descriptor().properties
+    assert props["atlan/orthogonalGate"] == "docker-build"
+
+    with pytest.raises(ValidationError):
+        RuleDefinition(
+            id="I998",
+            name="Typo",
+            tier=EnforcementTier.BLOCK,
+            mechanism=RuleMechanism.STATIC,
+            scope=RuleScope.APP,
+            category="dockerfile-probe",
+            orthogonal_gate="docker-buidl",
+        )

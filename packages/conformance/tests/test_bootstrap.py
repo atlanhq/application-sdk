@@ -9,12 +9,19 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 
 import pytest
-from conformance.bootstrap.args import parse_bootstrap_args
+from conformance.bootstrap import extract as extract_mod
+from conformance.bootstrap.args import BOOTSTRAP_USAGE, FLAGS, parse_bootstrap_args
 from conformance.bootstrap.autodetect import derive_app_name_from_dir
 from conformance.bootstrap.command import _bootstrap_file
-from conformance.bootstrap.render import MANAGED_ACTION_FILES, MANAGED_WORKFLOWS, render
+from conformance.bootstrap.render import (
+    MANAGED_ACTION_FILES,
+    MANAGED_WORKFLOWS,
+    RETIRED_WORKFLOWS,
+    render,
+)
 from conformance.cli import _cmd_bootstrap
 
 # ---------------------------------------------------------------------------
@@ -89,26 +96,34 @@ def test_bootstrap_file_does_not_rewrite_unchanged_content(
 
 
 def test_parse_bootstrap_args_defaults() -> None:
-    # "" for package_name/unit_tests_workflow means "not explicitly set" —
-    # _cmd_bootstrap auto-detects each from an existing managed workflow file,
-    # falling back to "app"/"tests.yaml" respectively (mirrors app_name and
-    # services_script below).
+    # "" for unit_tests_workflow means "not explicitly set" — _cmd_bootstrap
+    # auto-detects it from an existing managed workflow file, falling back to
+    # "tests.yaml" (mirrors app_name and services_script below).
     result = parse_bootstrap_args([])
     assert result == {
-        "package_name": "",
         "unit_tests_workflow": "",
         "app_name": "",
         "app_image_name": "",
         "enable_e2e": "true",
         "services_script": "",
         "system_deps": "",
+        # "" = inherit the SDK's own floor / registry default, i.e. render no
+        # line at all — so an app that never opted up is byte-identical to the
+        # canonical and C002 stays silent.
+        "unit_coverage_fail_under": "",
+        "use_ghcr_base": "",
         "enforce": "",
+        "conformance_blocking": "",
+        "renovate_automerge": "",
+        # Presence flag: "false" unless --resync is passed, so a bare
+        # re-run never rewrites the write-if-absent tests.yaml scaffold.
+        "resync": "false",
     }
 
 
 def test_parse_bootstrap_args_space_separated() -> None:
-    result = parse_bootstrap_args(["--package-name", "myapp"])
-    assert result["package_name"] == "myapp"
+    result = parse_bootstrap_args(["--unit-tests-workflow", "ci.yaml"])
+    assert result["unit_tests_workflow"] == "ci.yaml"
 
 
 def test_parse_bootstrap_args_equals_form() -> None:
@@ -118,10 +133,43 @@ def test_parse_bootstrap_args_equals_form() -> None:
 
 def test_parse_bootstrap_args_both_flags() -> None:
     result = parse_bootstrap_args(
-        ["--package-name", "connector", "--unit-tests-workflow", "ci.yaml"]
+        ["--app-name", "connector", "--unit-tests-workflow", "ci.yaml"]
     )
-    assert result["package_name"] == "connector"
+    assert result["app_name"] == "connector"
     assert result["unit_tests_workflow"] == "ci.yaml"
+
+
+# --------------------------------------------------------------------------
+# Retired flags: a caller still passing one must not be broken by it (the
+# invocation lives in app-repo runbooks and CI steps we don't control), but
+# must be told. Warn on stderr, ignore the flag AND its value, carry on.
+# --------------------------------------------------------------------------
+
+
+def test_retired_flag_space_form_is_ignored_with_a_warning(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    result = parse_bootstrap_args(["--package-name", "myapp", "--app-name", "mysql"])
+    assert "package_name" not in result
+    # The value must be consumed too, not left to be read as another flag.
+    assert result["app_name"] == "mysql"
+    err = capsys.readouterr().err
+    assert "--package-name" in err
+    assert "was removed" in err
+
+
+def test_retired_flag_equals_form_is_ignored_with_a_warning(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    result = parse_bootstrap_args(["--package-name=myapp", "--app-name", "mysql"])
+    assert result["app_name"] == "mysql"
+    assert "--package-name" in capsys.readouterr().err
+
+
+def test_retired_flag_alone_still_parses(capsys: pytest.CaptureFixture[str]) -> None:
+    result = parse_bootstrap_args(["--package-name", "myapp"])
+    assert result["app_name"] == ""
+    assert "--package-name" in capsys.readouterr().err
 
 
 def test_parse_bootstrap_args_app_name() -> None:
@@ -529,6 +577,75 @@ def test_parse_bootstrap_args_enforce_invalid(
     assert "--enforce" in capsys.readouterr().err
 
 
+# ---------------------------------------------------------------------------
+# The two granular 0-touch levers (--conformance-blocking /
+# --renovate-automerge), which --enforce is the shorthand for. See FND-347:
+# the tests gate being a required check is a third, separate lever that none
+# of these three flags governs.
+# ---------------------------------------------------------------------------
+
+
+def test_every_flag_is_documented_in_usage() -> None:
+    """Each flag must appear in --help.
+
+    BOOTSTRAP_USAGE is the authoritative flag documentation (the parser's own
+    docstring says so), and a lever nobody can find in --help is not
+    separately expressible in any useful sense.
+    """
+    undocumented = [flag for flag in FLAGS if flag not in BOOTSTRAP_USAGE]
+    assert not undocumented
+
+
+@pytest.mark.parametrize(
+    "flag,dest",
+    [
+        ("--conformance-blocking", "conformance_blocking"),
+        ("--renovate-automerge", "renovate_automerge"),
+    ],
+)
+@pytest.mark.parametrize("value", ["true", "false"])
+def test_parse_bootstrap_args_granular_levers(flag: str, dest: str, value: str) -> None:
+    assert parse_bootstrap_args([flag, value])[dest] == value
+    assert parse_bootstrap_args([f"{flag}={value}"])[dest] == value
+
+
+@pytest.mark.parametrize(
+    "flag",
+    ["--conformance-blocking", "--renovate-automerge", "--enforce", "--use-ghcr-base"],
+)
+def test_parse_bootstrap_args_tristate_invalid_names_its_own_flag(
+    flag: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A bad value must be reported against the flag that carried it.
+
+    The three tri-state flags share one validation loop, so a shared error
+    message that always said ``--enforce`` would misdirect anyone who passed
+    a granular lever — the exact confusion these separate names exist to
+    prevent.
+    """
+    with pytest.raises(SystemExit) as exc_info:
+        parse_bootstrap_args([flag, "maybe"])
+    assert exc_info.value.code == 2
+    err = capsys.readouterr().err
+    assert flag in err
+    assert "'maybe'" in err
+
+
+@pytest.mark.parametrize(
+    "flag",
+    ["--conformance-blocking", "--renovate-automerge", "--enforce", "--use-ghcr-base"],
+)
+def test_parse_bootstrap_args_tristate_missing_value(
+    flag: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        parse_bootstrap_args([flag])
+    assert exc_info.value.code == 2
+    err = capsys.readouterr().err
+    assert flag in err
+    assert "requires a value" in err
+
+
 _EXIT_ZERO_SCHEDULE_PREFIX = (
     "exit-zero: ${{ github.event_name == 'schedule' "
     "|| github.event_name == 'workflow_dispatch' || "
@@ -664,17 +781,6 @@ def test_no_jinja2_placeholders_in_rendered_output() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_docstring_coverage_default_package_name() -> None:
-    content = render("docstring-coverage.yaml")
-    assert 'package_name: "app"' in content
-
-
-def test_docstring_coverage_custom_package_name() -> None:
-    content = render("docstring-coverage.yaml", package_name="myconnector")
-    assert 'package_name: "myconnector"' in content
-    assert "myconnector" in content
-
-
 def test_build_and_publish_default_unit_tests_workflow() -> None:
     content = render("build-and-publish.yaml")
     assert 'unit_tests_workflow_file: "tests.yaml"' in content
@@ -689,15 +795,11 @@ def test_cmd_bootstrap_custom_args_propagate(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    _cmd_bootstrap(
-        ["--package-name", "myapp", "--unit-tests-workflow", "run-tests.yaml"]
-    )
-    docstring = (
-        tmp_path / ".github" / "workflows" / "docstring-coverage.yaml"
-    ).read_text()
+    _cmd_bootstrap(["--app-name", "myapp", "--unit-tests-workflow", "run-tests.yaml"])
     build = (tmp_path / ".github" / "workflows" / "build-and-publish.yaml").read_text()
-    assert 'package_name: "myapp"' in docstring
+    tests = (tmp_path / ".github" / "workflows" / "tests.yaml").read_text()
     assert 'unit_tests_workflow_file: "run-tests.yaml"' in build
+    assert 'app-name: "myapp"' in tests
 
 
 # ---------------------------------------------------------------------------
@@ -899,6 +1001,126 @@ def test_cmd_bootstrap_enforce_true_force_overwrites_existing_renovate(
 
 
 # ---------------------------------------------------------------------------
+# Granular levers, end to end: each moves exactly one of the two files, and
+# --enforce still moves both (FND-347)
+# ---------------------------------------------------------------------------
+
+
+def _conformance_text(root: pathlib.Path) -> str:
+    return (root / ".github" / "workflows" / "conformance.yaml").read_text()
+
+
+def test_cmd_bootstrap_conformance_blocking_false_leaves_renovate_hard(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--conformance-blocking false stops conformance blocking and nothing else.
+
+    This is the state --enforce could not express: observe-mode conformance
+    with Renovate auto-merge still on.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--conformance-blocking", "false"])
+    assert _EXIT_ZERO_SOFT in _conformance_text(tmp_path)
+    assert '"automerge": false' not in (tmp_path / "renovate.json").read_text()
+
+
+def test_cmd_bootstrap_renovate_automerge_false_leaves_conformance_blocking(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--renovate-automerge false takes the human back into the merge, and
+    leaves conformance blocking CI."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--renovate-automerge", "false"])
+    assert _EXIT_ZERO_HARD in _conformance_text(tmp_path)
+    assert '"automerge": false' in (tmp_path / "renovate.json").read_text()
+
+
+def test_cmd_bootstrap_granular_lever_overrides_enforce_shorthand(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit granular lever wins over the shorthand for that lever only."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "false", "--renovate-automerge", "true"])
+    # Shorthand still governs the lever that wasn't named explicitly.
+    assert _EXIT_ZERO_SOFT in _conformance_text(tmp_path)
+    assert '"automerge": false' not in (tmp_path / "renovate.json").read_text()
+
+
+def test_cmd_bootstrap_granular_lever_inherits_detected_enforce(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lever left unset inherits the *detected* --enforce, not the hard default.
+
+    Passing only --renovate-automerge on a soft-mode repo must not silently
+    flip conformance back to blocking: the unnamed lever keeps whatever the
+    repo's existing conformance.yaml says.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "false"])
+    _cmd_bootstrap(["--renovate-automerge", "true"])
+    assert _EXIT_ZERO_SOFT in _conformance_text(tmp_path)
+    assert '"automerge": false' not in (tmp_path / "renovate.json").read_text()
+
+
+def test_cmd_bootstrap_renovate_automerge_force_updates_existing_file(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--renovate-automerge force-updates an existing renovate.json.
+
+    renovate.json is write-if-absent, so without this the flag that governs
+    exactly that file would be a no-op on every repo that already has one.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    rj = tmp_path / "renovate.json"
+    assert '"automerge": false' not in rj.read_text()
+    _cmd_bootstrap(["--renovate-automerge", "false"])
+    assert '"automerge": false' in rj.read_text()
+
+
+def test_cmd_bootstrap_conformance_blocking_does_not_force_renovate(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--conformance-blocking must not rewrite renovate.json.
+
+    It governs the other file, and renovate.json is write-if-absent — a
+    customised one stays customised.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    rj = tmp_path / "renovate.json"
+    rj.write_text('{"customised": true}\n')
+    _cmd_bootstrap(["--conformance-blocking", "false"])
+    assert rj.read_text() == '{"customised": true}\n'
+    assert not (tmp_path / "renovate.json.bak").exists()
+
+
+def test_cmd_bootstrap_no_lever_touches_the_tests_gate(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No enforcement lever changes tests.yaml (FND-347).
+
+    The tests gate becoming a required check is a branch-protection setting
+    with no prerequisite here; if any of these flags started rendering
+    tests.yaml differently, the gate milestone would once again be behind the
+    0-touch bar.
+    """
+    monkeypatch.chdir(tmp_path)
+    canonical = render("tests.yaml", app_name=tmp_path.name)
+    for flags in (
+        ["--enforce", "false"],
+        ["--enforce", "true"],
+        ["--conformance-blocking", "false"],
+        ["--renovate-automerge", "false"],
+    ):
+        wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+        if wf.exists():
+            wf.unlink()
+        _cmd_bootstrap(flags)
+        assert wf.read_text() == canonical, f"tests.yaml varied with {flags}"
+
+
+# ---------------------------------------------------------------------------
 # tests.yaml scaffold — write-if-absent semantics
 # ---------------------------------------------------------------------------
 
@@ -940,6 +1162,562 @@ def test_cmd_bootstrap_tests_yaml_recreated_when_deleted(
     _cmd_bootstrap([])
     assert wf.exists()
     assert wf.read_text() == render("tests.yaml", app_name="myapp")
+
+
+# ---------------------------------------------------------------------------
+# Write-if-absent scaffolds — --resync
+#
+# These scaffolds are write-if-absent so apps can customise them, which left
+# their C002 drift with no proportionate remediation: the only way to pull an
+# old repo's structure forward was to delete the file and re-scaffold,
+# discarding every per-repo value with it. These lock the flag that closes
+# that gap — and, just as importantly, lock what it must NOT change.
+# ---------------------------------------------------------------------------
+
+
+def _drifted_tests_yaml(**params: str) -> str:
+    """Return a canonical tests.yaml with a structural line removed.
+
+    Deleting a line (rather than adding one) reproduces the real drift shape:
+    a repo scaffolded by an older bootstrap is *missing* what newer templates
+    added, which is exactly what C002 reports across the fleet.
+    """
+    canonical = render("tests.yaml", **params)
+    lines = canonical.splitlines(keepends=True)
+    return "".join(line for line in lines if "secrets: inherit" not in line)
+
+
+def test_resync_restores_the_canonical(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(_drifted_tests_yaml(app_name="app"))
+    _cmd_bootstrap(["--resync"])
+    assert wf.read_text() == render("tests.yaml", app_name="app")
+
+
+def test_resync_clears_the_c002_finding(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The end-to-end property the flag exists for.
+
+    Asserted through the checker rather than by comparing bytes to a render:
+    a resync that produced a file the checker still called drifted would be
+    worse than useless, and only C002 itself can rule that out.
+    """
+    from conformance.suite.checks.bootstrap_drift import scan_path
+
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(_drifted_tests_yaml(app_name="app"))
+    assert scan_path(wf, tmp_path), "fixture is not actually drifted"
+    _cmd_bootstrap(["--resync"])
+    assert scan_path(wf, tmp_path) == []
+
+
+def test_resync_preserves_per_repo_params(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Params are read off the file, not off the flags/autodetection.
+
+    ``enable_e2e`` is the sharp case: it is never autodetected, so a resync
+    that rendered from kwargs would silently switch e2e back on in a repo
+    that turned it off — re-enabling a live-tenant suite nobody asked for.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    params = {
+        "app_name": "widget",
+        "app_image_name": "atlan-custom-widget-app",
+        "enable_e2e": "false",
+    }
+    wf.write_text(_drifted_tests_yaml(**params))
+    _cmd_bootstrap(["--resync"])
+    assert wf.read_text() == render("tests.yaml", **params)
+
+
+def test_resync_backs_up_the_previous_content(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hand edit outside the extracted params is replaced, but recoverable."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    drifted = _drifted_tests_yaml(app_name="app") + "\n# a hand-added comment\n"
+    wf.write_text(drifted)
+    _cmd_bootstrap(["--resync"])
+    assert "# a hand-added comment" not in wf.read_text()
+    assert (
+        tmp_path / ".github" / "workflows" / "tests.yaml.bak"
+    ).read_text() == drifted
+
+
+def test_resync_backup_is_gitignored(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The backup must never be committable.
+
+    It lands inside .github/workflows/, so an un-ignored copy would show up in
+    every subsequent PR diff of a repo that ran the flag once.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    assert "*.bak" in (tmp_path / ".gitignore").read_text().splitlines()
+
+
+def test_resync_is_a_noop_when_already_canonical(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No drift → no write, and no stray .bak."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    before = wf.read_text()
+    _cmd_bootstrap(["--resync"])
+    assert wf.read_text() == before
+    assert not (tmp_path / ".github" / "workflows" / "tests.yaml.bak").exists()
+
+
+@pytest.mark.parametrize(
+    ("label", "mutate"),
+    [
+        ("canonical", lambda text: text),
+        ("structural-line-removed", lambda text: _drifted_tests_yaml(app_name="app")),
+        ("hand-added-comment", lambda text: text + "\n# hand-added\n"),
+        (
+            "repinned-action",
+            lambda text: re.sub(r"@[0-9a-f]{40}", "@" + "a" * 40, text),
+        ),
+    ],
+)
+def test_resync_writes_exactly_when_c002_flags(
+    label: str,
+    mutate: object,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The flag's trigger condition must be C002's finding condition.
+
+    Both sides go through ``strip_action_pins``, so a pin difference is drift
+    to neither — but the property that matters is the equivalence itself, not
+    which comparison implements it: a resync that wrote on something C002
+    calls clean would churn the file (and leave a .bak) on every run against
+    a finding nobody raised, and one that stayed silent on something C002
+    flags would leave the finding standing.
+    """
+    from conformance.suite.checks.bootstrap_drift import scan_path
+
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(mutate(wf.read_text()))  # type: ignore[operator]
+    before = wf.read_text()
+
+    flagged = bool(scan_path(wf, tmp_path))
+    _cmd_bootstrap(["--resync"])
+    wrote = wf.read_text() != before
+
+    assert wrote == flagged, f"{label}: resync wrote={wrote}, C002 flagged={flagged}"
+    bak = tmp_path / ".github" / "workflows" / "tests.yaml.bak"
+    assert bak.exists() == flagged
+
+
+def test_bare_rerun_never_resyncs(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The flag is opt-in — the write-if-absent contract is unchanged without it."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(_drifted_tests_yaml(app_name="app"))
+    drifted = wf.read_text()
+    _cmd_bootstrap([])
+    assert wf.read_text() == drifted
+
+
+def test_resync_scaffolds_when_absent(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Passing the flag on a repo with no tests.yaml still just scaffolds it."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--resync"])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    assert wf.read_text() == render(
+        "tests.yaml", app_name=derive_app_name_from_dir(tmp_path)
+    )
+    assert not (tmp_path / ".github" / "workflows" / "tests.yaml.bak").exists()
+
+
+def test_resync_rejects_a_value(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """It is a presence flag; `--resync=true` is an error, not a silent no-op."""
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        _cmd_bootstrap(["--resync=true"])
+    assert exc.value.code == 2
+
+
+def test_resync_reported_in_json_manifest(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Both writes reach touched_files, so a remediation pass can scope a revert."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(_drifted_tests_yaml(app_name="app"))
+    capsys.readouterr()
+    _cmd_bootstrap(["--resync", "--json"])
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert ".github/workflows/tests.yaml" in payload["touched"]
+    assert ".github/workflows/tests.yaml.bak" in payload["touched"]
+
+
+# ---------------------------------------------------------------------------
+# FND-604: --resync must not silently drop per-repo CI wiring.
+#
+# It did, on 6 of 10 wave-D repos: an explicit `secrets:` mapping downgraded to
+# `secrets: inherit` (which cannot compose the E2E_SOURCE_ENV_JSON the
+# integration and e2e legs read) and a dropped `force-external-runtime: true`
+# (boot then raises DaprNotDetectedError — FND-65). Nothing failed here; CI went
+# red two tiers later with what read as a source-system credential error. These
+# lock both halves of the fix: the two values now survive, and anything else the
+# canonical has no place for stops the resync instead of being deleted.
+# ---------------------------------------------------------------------------
+
+
+# An explicit mapping, in the shape the wave-D repos hand-wrote (synthetic
+# credential names). Deliberately carries a preceding comment and a block
+# scalar: both are things a naive line-based preserve would mangle.
+_EXPLICIT_SECRETS_BLOCK = """\
+    # Mapped explicitly instead of `secrets: inherit`: inherit cannot compose.
+    secrets:
+      SDR_TEST_TENANT: ${{ secrets.SDR_TEST_TENANT }}
+      E2E_SOURCE_ENV_JSON: |
+        {"ATLAN_APP_MODULE": "app.widget:WidgetApp",
+         "E2E_WIDGET_HOST": ${{ toJSON(secrets.E2E_WIDGET_HOST) }}}"""
+
+
+def _customised_tests_yaml() -> str:
+    """A drifted tests.yaml carrying both values FND-604 found being deleted.
+
+    Written the way the apps wrote them rather than by rendering the template
+    back at itself: the forced runtime sits at a position the canonical does not
+    use and under its own explanatory comment (both real — the fleet hand-wrote
+    it in two different places), and the explicit mapping replaces `inherit`
+    entirely. A fixture rendered from the template would pass on a preserve that
+    only works for the exact bytes the template emits.
+    """
+    canonical = render("tests.yaml", app_name="app")
+    body = "".join(
+        line
+        for line in canonical.splitlines(keepends=True)
+        if "secrets: inherit" not in line
+    )
+    body = body.replace(
+        '      app-image-name: "atlan-app-app"\n',
+        '      app-image-name: "atlan-app-app"\n'
+        "      # main.py still expects external daprd at :3500 / Temporal at :7233.\n"
+        "      force-external-runtime: true\n",
+    )
+    return body + _EXPLICIT_SECRETS_BLOCK + "\n"
+
+
+def test_resync_keeps_an_explicit_secrets_mapping(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The downgrade that broke 6 repos: `secrets:` → `secrets: inherit`.
+
+    Asserted on the mapping's contents, not just on the absence of `inherit`:
+    the credential NAMES are the payload, and E2E_SOURCE_ENV_JSON is the one
+    the reusable exports before the app server and pytest start.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(_customised_tests_yaml())
+    _cmd_bootstrap(["--resync"])
+    after = wf.read_text()
+    assert _EXPLICIT_SECRETS_BLOCK in after
+    # Line-exact: the block's own comment mentions `secrets: inherit` by name.
+    assert "    secrets: inherit\n" not in after
+
+
+def test_resync_keeps_force_external_runtime(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Dropping this line makes the connector's main.py fail to boot (FND-65)."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(_customised_tests_yaml())
+    _cmd_bootstrap(["--resync"])
+    assert "force-external-runtime: true" in wf.read_text()
+
+
+def test_resync_of_a_customised_file_still_lands_the_structural_catch_up(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Preserving the two values must not cost the catch-up they blocked.
+
+    A fix that merely refused on every customised file would leave the whole
+    migrated fleet — where an explicit `secrets:` mapping is the norm, not the
+    exception — permanently unable to pull a structural update.
+    """
+    from conformance.suite.checks.bootstrap_drift import scan_path
+
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(_customised_tests_yaml())
+    assert scan_path(wf, tmp_path), "fixture is not actually drifted"
+    _cmd_bootstrap(["--resync"])
+    assert scan_path(wf, tmp_path) == []
+
+
+def test_resync_is_idempotent_on_a_customised_file(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second run must be a no-op, or the fleet churns a .bak on every run."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(_customised_tests_yaml())
+    _cmd_bootstrap(["--resync"])
+    once = wf.read_text()
+    (tmp_path / ".github" / "workflows" / "tests.yaml.bak").unlink()
+    _cmd_bootstrap(["--resync"])
+    assert wf.read_text() == once
+    assert not (tmp_path / ".github" / "workflows" / "tests.yaml.bak").exists()
+
+
+def _tests_yaml_with_an_extra_job() -> str:
+    """A drifted tests.yaml keeping a second job, as several migrated repos do.
+
+    The realistic remaining case: the job's name is what the repo's branch
+    protection requires, so deleting it takes the required check with it.
+    """
+    return _drifted_tests_yaml(app_name="app") + (
+        "\n  tests-passed:\n"
+        "    needs: [tests]\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - run: echo ok\n"
+    )
+
+
+def test_resync_refuses_rather_than_deleting_an_unrecognised_declaration(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The generalising half of the fix, and the safer default FND-604 asked for.
+
+    Carrying the two known values forward only covers the two known values; the
+    refusal covers whatever the next unrecognised per-repo value turns out to
+    be, without having had to anticipate it.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(_tests_yaml_with_an_extra_job())
+    before = wf.read_text()
+    _cmd_bootstrap(["--resync"])
+    assert wf.read_text() == before
+    assert not (tmp_path / ".github" / "workflows" / "tests.yaml.bak").exists()
+
+
+def test_resync_refusal_names_what_it_refused_over(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A refusal that doesn't say what it saw is the silent loss in a costume.
+
+    The whole failure mode was invisibility: the removals only showed up in a
+    deliberate diff against HEAD, so the message has to carry the finding.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(_tests_yaml_with_an_extra_job())
+    capsys.readouterr()
+    _cmd_bootstrap(["--resync"])
+    out = capsys.readouterr().out
+    assert "skipped" in out
+    assert "tests-passed" in out
+
+
+def test_resync_refusal_touches_nothing(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A refused file must not appear in the --json touched-files manifest.
+
+    A remediation pass scopes its commit (and its revert) to that list, so a
+    path reported as touched but left unchanged would put an unrelated hand edit
+    inside the pass's write scope.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(_tests_yaml_with_an_extra_job())
+    capsys.readouterr()
+    _cmd_bootstrap(["--resync", "--json"])
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert ".github/workflows/tests.yaml" not in payload["touched"]
+
+
+# --- --resync's second target: renovate.json -------------------------------
+
+
+def _drifted_renovate_json(automerge: str) -> str:
+    """Return a canonical renovate.json with a structural key removed.
+
+    Drops `$schema` specifically: it is a key newer templates added, so its
+    absence is the real "repo scaffolded by an older bootstrap" shape, and it
+    is not the key the auto-merge mode is read from — so the fixture exercises
+    structural drift without also destroying the value the resync must
+    preserve.
+    """
+    payload = json.loads(render("renovate.json", automerge=automerge))
+    payload.pop("$schema")
+    return json.dumps(payload, indent=2) + "\n"
+
+
+def test_drifted_renovate_json_fixture_is_actually_drifted() -> None:
+    """Guard the fixture itself.
+
+    A re-serialised canonical can round-trip byte-identical, which would make
+    every test below vacuously pass by resyncing a file that was never
+    drifted.
+    """
+    for automerge in ("true", "false"):
+        assert _drifted_renovate_json(automerge) != render(
+            "renovate.json", automerge=automerge
+        )
+
+
+@pytest.mark.parametrize("automerge", ["true", "false"])
+def test_resync_restores_renovate_json_keeping_its_mode(
+    automerge: str, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The auto-merge mode is read off the file, never re-decided.
+
+    Parametrised over both modes because getting this wrong in the soft
+    direction is the expensive one: silently flipping a repo to auto-merge
+    turns a human-gated dependency lane into a 0-touch one.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([f"--renovate-automerge={automerge}"])
+    dest = tmp_path / "renovate.json"
+    dest.write_text(_drifted_renovate_json(automerge))
+    _cmd_bootstrap(["--resync"])
+    assert dest.read_text() == render("renovate.json", automerge=automerge)
+
+
+def test_resync_clears_the_renovate_json_c002_finding(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from conformance.suite.checks.bootstrap_drift import scan_path
+
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    dest = tmp_path / "renovate.json"
+    dest.write_text(_drifted_renovate_json("true"))
+    assert scan_path(dest, tmp_path), "fixture is not actually drifted"
+    _cmd_bootstrap(["--resync"])
+    assert scan_path(dest, tmp_path) == []
+
+
+def test_explicit_mode_flag_beats_resync(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--renovate-automerge` CHANGES the mode; `--resync` PRESERVES it.
+
+    Passing both is an intentional mode change, so the explicit flag must win
+    — otherwise the resync's read-back-off-disk value would silently make the
+    explicit flag a no-op.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--renovate-automerge=false"])
+    dest = tmp_path / "renovate.json"
+    dest.write_text(_drifted_renovate_json("false"))
+    _cmd_bootstrap(["--renovate-automerge=true", "--resync"])
+    assert dest.read_text() == render("renovate.json", automerge="true")
+
+
+# --- identity guards: skip rather than rewrite from guessed defaults --------
+
+
+def test_resync_skips_renovate_json_that_is_not_valid_json(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unreadable mode must not resolve to the auto-merge canonical.
+
+    `extract_renovate_automerge` answers "true" for anything it can't parse —
+    right for its other callers, but here it would turn an unparseable
+    soft-mode file into a repo where Renovate merges without a human.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--renovate-automerge=false"])
+    dest = tmp_path / "renovate.json"
+    dest.write_text("{ this is not json\n")
+    _cmd_bootstrap(["--resync"])
+    assert dest.read_text() == "{ this is not json\n"
+    assert not (tmp_path / "renovate.json.bak").exists()
+
+
+def test_resync_skips_tests_yaml_with_no_readable_app_name(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file drifted past its own name gets a human, not a rename.
+
+    Without the guard, `render` falls back to app_name="app" and the resync
+    quietly renames the app in every downstream CI input while reporting
+    success.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    nameless = "\n".join(
+        line
+        for line in render("tests.yaml", app_name="widget").splitlines()
+        if "app-name:" not in line
+    )
+    wf.write_text(nameless)
+    _cmd_bootstrap(["--resync"])
+    assert wf.read_text() == nameless
+    assert not (tmp_path / ".github" / "workflows" / "tests.yaml.bak").exists()
+
+
+def test_resync_skips_tests_yaml_with_only_a_commented_app_name(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A commented-out `app-name:` must not satisfy the identity guard.
+
+    That is the most common shape of a renamed app — the old line left
+    commented out. An unanchored extractor would read the stale value off the
+    comment and rewrite every downstream CI input to it while reporting
+    success; the anchored one treats the file as having no parseable app-name
+    and skips instead.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    renamed = "\n".join(
+        f"# {line}" if "app-name:" in line else line
+        for line in render("tests.yaml", app_name="widget").splitlines()
+    )
+    wf.write_text(renamed)
+    _cmd_bootstrap(["--resync"])
+    assert wf.read_text() == renamed
+    assert not (tmp_path / ".github" / "workflows" / "tests.yaml.bak").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -1349,81 +2127,82 @@ def test_cmd_bootstrap_restores_step_from_ci_deps_file_when_checks_stripped(
 
 
 # ---------------------------------------------------------------------------
-# Auto-detection: package-name from docstring-coverage.yaml,
-# unit-tests-workflow from build-and-publish.yaml
+# Retired workflows (FND-381): bootstrap installed these fleet-wide, so
+# retiring one has to actively DELETE the copies it wrote. Dropping the
+# template alone would leave ~54 repos with a workflow that still fires on
+# every PR.
 # ---------------------------------------------------------------------------
 
 
-def test_cmd_bootstrap_reads_package_name_from_docstring_coverage(
+def test_retired_and_managed_sets_are_disjoint() -> None:
+    """A name in both would be written and deleted in the same run."""
+    assert not set(RETIRED_WORKFLOWS) & set(MANAGED_WORKFLOWS)
+
+
+def test_retired_workflows_have_no_template() -> None:
+    """The template must go with the registry entry, or bootstrap could still
+    render a file it is meanwhile removing."""
+    for name in RETIRED_WORKFLOWS:
+        with pytest.raises(FileNotFoundError):
+            render(name)
+
+
+def test_cmd_bootstrap_removes_a_retired_workflow(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """bootstrap reuses the existing package_name when --package-name is absent."""
     wf_dir = tmp_path / ".github" / "workflows"
     wf_dir.mkdir(parents=True)
-    (wf_dir / "docstring-coverage.yaml").write_text(
-        'jobs:\n  docstring-coverage:\n    with:\n      package_name: "myconnector"\n'
-    )
+    for name in RETIRED_WORKFLOWS:
+        (wf_dir / name).write_text("name: legacy\n")
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap([])
-    docstring = (wf_dir / "docstring-coverage.yaml").read_text()
-    assert 'package_name: "myconnector"' in docstring
+    for name in RETIRED_WORKFLOWS:
+        assert not (wf_dir / name).exists()
 
 
-def test_cmd_bootstrap_defaults_package_name_when_absent(
+def test_cmd_bootstrap_does_not_recreate_a_retired_workflow(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Without an existing docstring-coverage.yaml, package-name defaults to app."""
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap([])
-    docstring = (
-        tmp_path / ".github" / "workflows" / "docstring-coverage.yaml"
-    ).read_text()
-    assert 'package_name: "app"' in docstring
+    _cmd_bootstrap([])
+    for name in RETIRED_WORKFLOWS:
+        assert not (tmp_path / ".github" / "workflows" / name).exists()
 
 
-def test_cmd_bootstrap_defaults_package_name_when_file_exists_but_field_missing(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+def test_cmd_bootstrap_retired_workflow_absent_is_not_touched(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys
 ) -> None:
-    """An existing docstring-coverage.yaml with no package_name: line falls back
-    to "app", the same as the file-absent case -- the presence of the file alone
-    must not be mistaken for a match."""
+    """A repo that never had the file must not report it at all — neither as a
+    removal nor as an unchanged path, since it does not and will not exist."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--json"])
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    for name in RETIRED_WORKFLOWS:
+        rel = f".github/workflows/{name}"
+        assert rel not in payload["touched"]
+        assert rel not in payload["unchanged"]
+
+
+def test_cmd_bootstrap_json_reports_a_removal_as_touched(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """touched_files drives what a remediation pass stages -- a deletion is a
+    change to that path and has to appear there, not under ``unchanged``."""
     wf_dir = tmp_path / ".github" / "workflows"
     wf_dir.mkdir(parents=True)
-    (wf_dir / "docstring-coverage.yaml").write_text(
-        "jobs:\n  docstring-coverage:\n    with:\n      other_field: true\n"
-    )
+    for name in RETIRED_WORKFLOWS:
+        (wf_dir / name).write_text("name: legacy\n")
     monkeypatch.chdir(tmp_path)
-    _cmd_bootstrap([])
-    docstring = (wf_dir / "docstring-coverage.yaml").read_text()
-    assert 'package_name: "app"' in docstring
+    _cmd_bootstrap(["--json"])
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    for name in RETIRED_WORKFLOWS:
+        assert f".github/workflows/{name}" in payload["touched"]
 
 
-def test_cmd_bootstrap_explicit_package_name_overrides_autodetect(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Explicit --package-name takes priority over the auto-detected value."""
-    wf_dir = tmp_path / ".github" / "workflows"
-    wf_dir.mkdir(parents=True)
-    (wf_dir / "docstring-coverage.yaml").write_text('package_name: "myconnector"\n')
-    monkeypatch.chdir(tmp_path)
-    _cmd_bootstrap(["--package-name", "override"])
-    docstring = (wf_dir / "docstring-coverage.yaml").read_text()
-    assert 'package_name: "override"' in docstring
-
-
-def test_cmd_bootstrap_reads_unquoted_package_name_from_docstring_coverage(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """An unquoted package_name: value (valid YAML) is still auto-detected."""
-    wf_dir = tmp_path / ".github" / "workflows"
-    wf_dir.mkdir(parents=True)
-    (wf_dir / "docstring-coverage.yaml").write_text(
-        "jobs:\n  docstring-coverage:\n    with:\n      package_name: myconnector\n"
-    )
-    monkeypatch.chdir(tmp_path)
-    _cmd_bootstrap([])
-    docstring = (wf_dir / "docstring-coverage.yaml").read_text()
-    assert 'package_name: "myconnector"' in docstring
+# ---------------------------------------------------------------------------
+# Auto-detection: unit-tests-workflow from build-and-publish.yaml
+# ---------------------------------------------------------------------------
 
 
 def test_cmd_bootstrap_reads_unit_tests_workflow_from_build_and_publish(
@@ -1830,3 +2609,218 @@ def test_managed_action_template_matches_canonical_source(
 def test_derive_falls_back_to_app_for_bare_atlan(tmp_path: pathlib.Path) -> None:
     # "atlan-app" → strip prefix → "app" → strip suffix ("app" doesn't end with "-app") → "app"
     assert derive_app_name_from_dir(tmp_path / "atlan-app") == "app"
+
+
+# ---------------------------------------------------------------------------
+# App-owned overrides that C002 must allow (FND-361)
+#
+# Two per-app opt-*ups*: a raised unit-coverage floor in tests.yaml, and the
+# GHCR base-image redirect in build-and-publish.yaml. Both were being reported
+# as drift, which made a connector doing the stricter/newer thing look
+# non-conformant — and in the use_ghcr_base case a bare re-run silently
+# reverted the opt-in, because that shim is always-overwrite.
+# ---------------------------------------------------------------------------
+
+
+def _bp_workflow(root: pathlib.Path) -> pathlib.Path:
+    return root / ".github" / "workflows" / "build-and-publish.yaml"
+
+
+def test_use_ghcr_base_flag_renders_the_opt_in(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--use-ghcr-base", "true"])
+    assert "      use_ghcr_base: true\n" in _bp_workflow(tmp_path).read_text()
+
+
+def test_bare_rerun_preserves_the_ghcr_base_opt_in(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The regression that made the opt-in unusable.
+
+    build-and-publish.yaml is always-overwrite, so before the value was read
+    back off the file, every subsequent bootstrap run deleted the app's opt-in
+    and sent its image build back to Harbor.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--use-ghcr-base", "true"])
+    _cmd_bootstrap([])
+    assert "use_ghcr_base: true" in _bp_workflow(tmp_path).read_text()
+
+
+def test_bare_rerun_preserves_a_hand_written_ghcr_base_opt_in(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The shape the first adopter actually wrote: the line under a comment.
+
+    The comment itself is replaced by the re-render (this file is managed), but
+    the opt-in it documents must survive — that is the value, and losing it is
+    a silent registry change nobody asked for.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    bp = _bp_workflow(tmp_path)
+    bp.write_text(
+        bp.read_text().replace(
+            "    secrets: inherit",
+            "      # Canary for the GHCR base-image redirect.\n"
+            "      use_ghcr_base: true\n    secrets: inherit",
+        )
+    )
+    _cmd_bootstrap([])
+    assert "use_ghcr_base: true" in bp.read_text()
+
+
+def test_explicit_false_removes_the_ghcr_base_opt_in(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Autodetection preserves; an explicit flag decides. Otherwise there is no
+    way back to Harbor short of hand-editing a managed file."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--use-ghcr-base", "true"])
+    _cmd_bootstrap(["--use-ghcr-base", "false"])
+    assert "use_ghcr_base" not in _bp_workflow(tmp_path).read_text()
+
+
+def test_ghcr_base_opt_in_leaves_no_c002_finding(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The property the ticket is about: opting up is not drift."""
+    from conformance.suite.checks.bootstrap_drift import scan_path
+
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--use-ghcr-base", "true"])
+    assert scan_path(_bp_workflow(tmp_path), tmp_path) == []
+
+
+def test_unit_coverage_flag_renders_the_floor(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--unit-coverage-fail-under", "90"])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    assert '      unit-coverage-fail-under: "90"\n' in wf.read_text()
+
+
+def test_unit_coverage_flag_rejects_a_non_numeric_value(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        _cmd_bootstrap(["--unit-coverage-fail-under", "high"])
+    assert exc.value.code == 2
+
+
+def test_unit_coverage_flag_rejects_a_value_above_100(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Coverage is a percent — 101+ is nonsensical, not a stricter bar."""
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        _cmd_bootstrap(["--unit-coverage-fail-under", "101"])
+    assert exc.value.code == 2
+
+
+def test_unit_coverage_flag_accepts_100(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """100 is the highest meaningful percent — the upper bound is inclusive."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--unit-coverage-fail-under", "100"])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    assert '      unit-coverage-fail-under: "100"\n' in wf.read_text()
+
+
+def test_unit_coverage_flag_rejects_a_value_below_the_sdk_floor(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Writing a sub-floor value would scaffold a file C002 immediately flags,
+    whose only remediation deletes the line the caller just asked for."""
+    monkeypatch.setattr(extract_mod, "SDK_UNIT_COVERAGE_FLOOR", 40)
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        _cmd_bootstrap(["--unit-coverage-fail-under", "20"])
+    assert exc.value.code == 2
+    assert "below the SDK's own floor" in capsys.readouterr().err
+
+
+def test_resync_preserves_a_raised_coverage_floor(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half of the ticket: --resync must not silently un-raise the bar.
+
+    The structural catch-up has to land while the app's stricter floor stays —
+    before this, --resync fixed the drift by dropping the line, so running the
+    remediation cost the app its coverage gate.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(
+        _drifted_tests_yaml(app_name="app").replace(
+            '      app-name: "app"\n',
+            '      unit-coverage-fail-under: "90"\n      app-name: "app"\n',
+        )
+    )
+    _cmd_bootstrap(["--resync"])
+    assert wf.read_text() == render(
+        "tests.yaml", app_name="app", unit_coverage_fail_under="90"
+    )
+
+
+def test_resync_drops_a_coverage_floor_below_the_sdk_floor(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The one value --resync deliberately does not carry forward.
+
+    An app may raise its coverage floor above the SDK's, not use its own
+    workflow to duck under it — so the re-render drops the line and the app
+    inherits the SDK floor. The C002 message says this will happen.
+    """
+    monkeypatch.setattr(extract_mod, "SDK_UNIT_COVERAGE_FLOOR", 40)
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(
+        _drifted_tests_yaml(app_name="app").replace(
+            '      app-name: "app"\n',
+            '      unit-coverage-fail-under: "20"\n      app-name: "app"\n',
+        )
+    )
+    _cmd_bootstrap(["--resync"])
+    assert "unit-coverage-fail-under" not in wf.read_text()
+
+
+# ---------------------------------------------------------------------------
+# Premise pin: the SDK's own floor
+# ---------------------------------------------------------------------------
+
+
+def test_sdk_unit_coverage_floor_matches_the_reusable_workflow_default() -> None:
+    """``SDK_UNIT_COVERAGE_FLOOR`` must equal tests-reusable.yaml's own default.
+
+    The constant is a copy — this package ships standalone into consumer repos,
+    where application-sdk's workflows aren't on disk — so the copy is pinned
+    against the real input default here, in the monorepo where both exist. If
+    the SDK raises its floor and this constant isn't moved with it, apps could
+    keep declaring a floor below the fleet-wide bar with no finding at all.
+    Skipped when the monorepo tree isn't checked out (isolated sdist build),
+    matching the vendored-template guard above.
+    """
+    workflow = _MONOREPO_ROOT / ".github" / "workflows" / "tests-reusable.yaml"
+    if not workflow.exists():
+        pytest.skip(f"monorepo source not checked out: {workflow}")
+    text = workflow.read_text(encoding="utf-8")
+    block = text.split("unit-coverage-fail-under:", 1)
+    assert len(block) == 2, "tests-reusable.yaml no longer declares the input"
+    m = re.search(r'default:\s*"?(\d+)"?', block[1])
+    assert m is not None, "the input no longer declares a numeric default"
+    assert int(m.group(1)) == extract_mod.SDK_UNIT_COVERAGE_FLOOR, (
+        "tests-reusable.yaml's unit-coverage-fail-under default has moved to "
+        f"{m.group(1)} — update SDK_UNIT_COVERAGE_FLOOR in "
+        "conformance/bootstrap/extract.py to match, or C002 will keep "
+        "preserving per-app floors below the SDK's own."
+    )

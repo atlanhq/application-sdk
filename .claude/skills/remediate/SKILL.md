@@ -15,9 +15,49 @@ description: >
   with the OpenProse skill to use the full Reactor-ready contract semantics; or
   invoke the program directly via the instructions below.
 
-argument-hint: "[--area error-handling|deprecation|dependency|prescriptions|optimizations|dockerfile|tests|logging|ci|contract-toolkit|security] [--strict] [path]"
+argument-hint: "[--area error-handling|deprecation|dependency|prescriptions|optimizations|dockerfile|tests|logging|ci|contract-toolkit|security] [--rule L004[,E002]] [--strict] [--apply-unverifiable] [path]"
 
 inputs:
+  - name: rule
+    description: >
+      Comma-separated list of exact rule IDs to restrict the run to, e.g.
+      "L004" or "L001,L011".  Threaded through as the program's `rule_ids`
+      input and applied by `detect-violations` as a **post-filter** on
+      `result.rule_id` — the runner has no `--rule` flag, and its `--series`
+      matches a single series *letter*, so `--series L004` silently activates
+      zero checks and yields an empty report.  Pass the narrowest `--area`
+      whose series covers the requested IDs so the runner does less work.
+
+      This is what makes one-rule-per-run possible, and it is also the only way
+      to express "blocking tier first": tier is a **per-rule** property (D001
+      and D009 are BLOCK inside an otherwise-WARN series), so it cannot be
+      selected through the area/series axis at all.
+    required: false
+    default: ""
+  - name: apply-unverifiable
+    description: >
+      When present, the prescriptions (P), dockerfile (I) and security (S)
+      areas apply their fixes instead of only drafting them.
+
+      For the **I-series** this is now a genuinely gated fix: every I rule
+      carries `orthogonal_gate = "docker-build"`, which builds the touched
+      Dockerfile, and the failure modes the area was originally worried about
+      (layer ordering, entrypoint interactions, build- vs run-time env) are all
+      build-time-visible.  When docker is unavailable the gate returns
+      `passed = false`, so the fix reverts rather than passing by default.
+
+      For the **P- and S-series** the gates remain structurally blind — P001's
+      `MaxItems` is a declarative marker no test can observe, and no gate can
+      prove a relocated credential still resolves.  Those results are therefore
+      force-classified `unverifiable`, always routed to residue, and accepted
+      only with a cited source for the chosen value; S-series additionally
+      delivers as a draft with a named reviewer.  An uncited fix is never
+      applied at all.
+
+      Omitted (the default), all three areas behave byte-identically to before
+      this input existed.
+    required: false
+    default: false
   - name: area
     description: >
       Comma-separated list of areas to remediate.  Defaults to every area the
@@ -28,7 +68,9 @@ inputs:
       mechanically pinned (SHA-resolve + repin) but always escalated to
       residue for mandatory human sign-off — assisted, not autonomous,
       remediation; C003's missing-entry case and drifted `tests.yaml`/
-      `renovate.json` still route to residue with no fix attempted; security
+      `renovate.json` still route to residue rather than being auto-applied —
+      the two drifted scaffolds with a `bootstrap --resync` remedy quoted for
+      the human, the rest with no fix attempted; security
       is suggest-only — every S-series finding is routed to residue with a
       drafted fix, never auto-applied).
       Example: --area deprecation
@@ -60,7 +102,10 @@ outputs:
   - name: residue_report
     description: >
       Structured markdown report of findings that need human review, written
-      to remediation/runs/residue.md.
+      to remediation/runs/residue.md.  Items from an area that requires draft
+      delivery (S-series under --apply-unverifiable) carry deliver_as_draft in
+      their own column, so a human applying proposals sees that anything
+      delivered from them ships as a draft PR with a named reviewer.
 
 gates:
   - deterministic_recheck: >
@@ -119,7 +164,17 @@ Runs an iterative, gated remediation loop over the conformance suite's findings:
 /remediate --area error-handling --strict
 /remediate application_sdk              # restrict to application_sdk/ subtree only
 /remediate --area error-handling application_sdk
+/remediate --rule L004                  # exactly one rule (one-rule-per-run)
+/remediate --rule L001,L011             # a specific set of rules
+/remediate --area dockerfile --apply-unverifiable   # let I-series apply (docker-build gated)
+/remediate --apply-unverifiable         # P/I/S apply instead of only proposing
 ```
+
+**Rule argument**: restricts the run to exact rule IDs.  Applied as a post-filter
+on `result.rule_id` — the runner's `--series` matches a series *letter*, so
+`--series L004` activates zero checks.  Combine with the narrowest `--area` so the
+runner scans less.  Because tier is per-rule and not per-series, `--rule` is also
+the only way to express "the blocking rules first".
 
 **Path argument**: a repo-root-relative path prefix that filters *which findings
 are remediated*.  It does **not** change what the runner scans — the runner
@@ -144,14 +199,14 @@ dispatches each finding to its area prescription.
 | error-handling | E | ✅ Implemented | Mechanical (E005, E016) auto-fixed; judgment (E002, E013, others) modelled + routed to residue |
 | deprecation | B | ✅ Implemented | B001 guided fix (incl. legacy transformer → asset-mapper, BLDX-1399); B003/B004 detect-only → residue |
 | dependency | D | ✅ Implemented | Guided + mechanical fixes; judgment routed to residue |
-| prescriptions | P | ✅ Suggest-only | Findings modelled + routed to residue |
+| prescriptions | P | ✅ Suggest-only (applies under `--apply-unverifiable`) | Default: findings modelled + routed to residue. With `--apply-unverifiable`: applied through the full gated loop, but the gates are **blind** (`MaxItems` is a declarative marker no test can observe), so results are force-classified `unverifiable`, always routed to residue, and only accepted with a cited source for the bound |
 | optimizations | O | ✅ Implemented | Below-the-bar recommendations |
-| dockerfile | I | ✅ Suggest-only | Findings modelled + routed to residue |
+| dockerfile | I | ✅ Suggest-only (applies **gated** under `--apply-unverifiable`) | Default: findings modelled + routed to residue. With `--apply-unverifiable`: applied through the full loop, verified by `orthogonal_gate = "docker-build"` — a real `docker build` of the touched Dockerfile. This is the gate whose absence was the stated reason the area was propose-only, so I-series fixes here are genuinely verified, not unverifiable. Docker unavailable ⇒ gate returns `passed = false` and the fix reverts (never a pass-by-default) |
 | tests | T | ✅ Strict-only | WARNING-tier; strict mode |
 | logging | L | ✅ Implemented | Mechanical (L004, L007, L015, L017, L020) auto-fixed; judgment (L001, L002, L005, others) modelled + routed to residue |
-| ci | C | ✅ Partial | C002 (managed-file drift) and C003's absent-`.gitignore` case both mechanical via the same `bootstrap` re-sync, invoked directly for either finding. C001 (unpinned action) mechanical SHA-resolve + repin, always escalated to residue for sign-off (external lookup). C003 missing-entry and drifted `tests.yaml`/`renovate.json` → residue |
+| ci | C | ✅ Partial | C002 (managed-file drift) and C003's absent-`.gitignore` case both mechanical via the same `bootstrap` re-sync, invoked directly for either finding. C001 (unpinned action) mechanical SHA-resolve + repin, always escalated to residue for sign-off (external lookup). C003 missing-entry and drifted `tests.yaml`/`renovate.json` → residue, quoting `bootstrap --resync` (preserves each file's recognized values — tests.yaml's params, renovate.json's auto-merge mode; since FND-604 it refuses outright rather than dropping a declaration it cannot carry forward, so read its output for a `skipped:` line. Still not auto-applied: hand comments and a changed value on a canonical key are replaced, and the `.bak` is gitignored, so that loss would be invisible in the diff) |
 | contract-toolkit | K | ✅ Strict-only | K001/K002 guided migration to App.pkl; verified by pkl-eval gate |
-| security | S | ✅ Suggest-only | S001/S002 (hardcoded credential / raw env access) drafted as proposed fixes routed to residue for mandatory human sign-off — never auto-applied, since no orthogonal gate can confirm a secret-relocation fix resolves the same credential |
+| security | S | ✅ Suggest-only (applies under `--apply-unverifiable`) | Default: S001/S002 (hardcoded credential / raw env access) drafted as proposed fixes routed to residue for mandatory human sign-off — never auto-applied, since no orthogonal gate can confirm a secret-relocation fix resolves the same credential. With `--apply-unverifiable`: applied, but force-classified `unverifiable`, always residued, **delivered as a draft** with a named reviewer, and accepted only with a cited relocation target (secret-store path or env-var NAME). A secret **value** is never read into an edit, comment, fixture, commit message or PR body under either mode |
 
 To add a new area prescription: author `<programs-dir>/areas/<name>.prose.md`
 and add a dispatch branch to `<programs-dir>/functions/remediate-finding.prose.md`.
@@ -180,6 +235,7 @@ so app-only series no-op on the SDK):
 let before = call detect-violations
   scope: .
   series: E,L,C,P,O,D,B,I,T,K,S
+  rule_ids: <--rule argument split on commas, if any>
   target: if strict then "failing+warning" else "failing"
   path_prefix: <path argument, if any>
 ```
@@ -225,6 +281,7 @@ Call `detect-violations` again and copy the result to `after.sarif`:
 let after = call detect-violations
   scope: .
   series: E,L,C,P,O,D,B,I,T,K,S
+  rule_ids: <--rule argument split on commas, if any>
   target: if strict then "failing+warning" else "failing"
   path_prefix: <path argument, if any>
 ```

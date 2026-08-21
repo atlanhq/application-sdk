@@ -91,19 +91,26 @@ jobs:
       # Acknowledge with an eyes reaction AND a visible comment carrying the
       # run link, so the requester has an immediate status handle to follow
       # (the sandbox loop runs out-of-band for many minutes).
-      - name: Acknowledge + link the run
+      # Split in two on purpose. The reaction is cosmetic and best-effort; the
+      # comment carrying the run link is the actual status handle. When both
+      # lived in one script, a transient failure on the reaction meant the
+      # requester got neither — and no way to find the run.
+      - name: Acknowledge with a reaction
+        if: github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          REACTION: eyes
+        run: python3 .github/scripts/react_to_comment.py
+
+      - name: Link the run
         if: github.event_name == 'issue_comment'
         env:
           GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
-            await github.rest.reactions.createForIssueComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              comment_id: context.payload.comment.id,
-              content: 'eyes',
-            });
             const body = [
               `<!-- SDK_RESOLVE_STARTED -->`,
               `🤖 **SDK Resolve started.** Driving this PR toward merge-ready — fixing CI + every \`@sdk-review\` finding, then requesting human review.`,
@@ -208,6 +215,16 @@ jobs:
           echo "::error::All 3 VPN connection attempts failed. PR has been notified — see comment posted above."
           exit 1
 
+      # The script dispatches ONCE, then re-dispatches at most once more on a
+      # DIFFERENT main model when the sandbox died on a model/provider fault and
+      # posted no out-of-band hand-off (FND-641). Both attempts' costs are logged
+      # separately and rendered in the step summary. Everything else — a cut
+      # stream, a dropped RPC to the sandbox, an auth or prompt fault, an
+      # elicitation — stays fail-fast: unlike the review lane, a second resolver
+      # would push to the same branch, so an unproven death is never retried
+      # here (FND-647). A dropped RPC instead buys the long out-of-band poll,
+      # which recovers the run without a second sandbox. See
+      # MAX_DISPATCH_ATTEMPTS / retry_decision() in the script.
       - name: Dispatch SDK Resolve to mothership Rover Direct API
         env:
           MOTHERSHIP_URL: ${{ vars.MOTHERSHIP_URL }}

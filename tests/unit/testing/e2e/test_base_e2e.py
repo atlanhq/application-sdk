@@ -20,6 +20,7 @@ from application_sdk.contracts.types import ConnectionRef
 from application_sdk.testing.e2e._errors import (
     ManifestDagMissingError,
     ManifestFileNotFoundError,
+    MissingHarnessClassAttrError,
     MissingHarnessEnvError,
 )
 from application_sdk.testing.e2e.base import BaseE2ETest
@@ -889,3 +890,83 @@ class TestAgentJsonOverrideReachesPayload:
         # And the flat routing rows the cluster template reads follow it.
         assert params["agent-json.auth-type"] == "keypair"
         assert params["agent-json.host"] == "db.example.com"
+
+
+# ---------------------------------------------------------------------------
+# _submit_retry_kwargs — tenant-app cold-start budget (FND-402)
+# ---------------------------------------------------------------------------
+
+
+class TestSubmitRetryKwargs:
+    """The cold-start budget handed to submit_workflow's existing retry loop."""
+
+    def test_budget_is_expressed_as_retries_times_interval(self) -> None:
+        """300s / 5s → 60 retries at 5s, so the loop spans the pod cold start."""
+        harness = _ConcreteE2ETest()
+        assert harness._submit_retry_kwargs() == {
+            "retries": 60,
+            "retry_sleep_seconds": 5,
+        }
+
+    def test_overridden_budget_is_honoured(self) -> None:
+        """A connector may shrink the budget per-repo."""
+        harness = _ConcreteE2ETest()
+        harness.app_ready_timeout_seconds = 90
+        harness.app_ready_poll_interval_seconds = 10
+        assert harness._submit_retry_kwargs() == {
+            "retries": 9,
+            "retry_sleep_seconds": 10,
+        }
+
+    def test_zero_budget_defers_to_submit_workflow_defaults(self) -> None:
+        """0 passes no overrides at all, rather than retries=0."""
+        harness = _ConcreteE2ETest()
+        harness.app_ready_timeout_seconds = 0
+        assert harness._submit_retry_kwargs() == {}
+
+    def test_zero_poll_interval_raises_a_typed_error(self) -> None:
+        """A positive timeout with a 0 poll interval must not ZeroDivisionError."""
+        harness = _ConcreteE2ETest()
+        harness.app_ready_timeout_seconds = 300
+        harness.app_ready_poll_interval_seconds = 0
+        with pytest.raises(
+            MissingHarnessClassAttrError, match="app_ready_poll_interval_seconds"
+        ):
+            harness._submit_retry_kwargs()
+
+    def test_negative_poll_interval_raises_a_typed_error(self) -> None:
+        """A negative poll interval is rejected the same way as 0."""
+        harness = _ConcreteE2ETest()
+        harness.app_ready_timeout_seconds = 300
+        harness.app_ready_poll_interval_seconds = -5
+        with pytest.raises(
+            MissingHarnessClassAttrError, match="app_ready_poll_interval_seconds"
+        ):
+            harness._submit_retry_kwargs()
+
+    def test_run_full_dag_passes_the_budget_to_submit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The budget actually reaches the submit — not just computed and dropped."""
+        harness = _ConcreteE2ETest()
+        harness.client = MagicMock()
+        harness.client.submit_workflow.return_value = "run-1"
+        harness.connection_qualified_name = "default/test/1234567890"
+        monkeypatch.setattr(
+            _ConcreteE2ETest, "_bootstrap_workflow", lambda self: "slug"
+        )
+        monkeypatch.setattr(
+            _ConcreteE2ETest, "_build_ae_payload", lambda self, slug: {"slug": slug}
+        )
+        # Stop right after the submit — the polls beyond it are covered elsewhere.
+        harness.client.poll_native_status.side_effect = RuntimeError(
+            "stop after submit"
+        )
+        with pytest.raises(RuntimeError, match="stop after submit"):
+            harness.run_full_dag()
+        _, kwargs = harness.client.submit_workflow.call_args
+        assert kwargs == {
+            "slug": "slug",
+            "retries": 60,
+            "retry_sleep_seconds": 5,
+        }

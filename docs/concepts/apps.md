@@ -224,7 +224,10 @@ async with self.holding_progress("full table scan", timeout=7200):
 
 For opaque *async* calls (the connector's own async client) there is no SDK-owned seam to auto-hold, so wrap those in `holding_progress` directly. Expect to need it: interleaved streaming reads (fetch a page, write a batch, repeat) are already covered by the SDK's own writer and transfer loops, but almost every connector makes at least one genuinely opaque single call — one large metadata query, one slow list/export that returns everything at once.
 
-See [ADR-0018](../adr/0018-progress-aware-heartbeat.md) for the design.
+See [Progress and Stalls](progress-and-stalls.md) for the whole picture — what counts as
+progress, how to size the allowance from your own data, and how to read the report the
+watchdog produces for your app — and [ADR-0018](../adr/0018-progress-aware-heartbeat.md)
+for the design.
 
 ## Lifecycle Hooks
 
@@ -247,6 +250,23 @@ Two cleanup tasks and two transfer tasks are available on every `App`:
 
 - `upload(UploadInput(...))` — pushes a local file or directory to object storage. Routes to the Atlan-owned `atlan-objectstore` (`infra.upstream_storage`) in SDR deployments; falls back to the customer-owned `objectstore` (`infra.storage`) in local dev. This is the explicit hand-off step that downstream Atlan system apps (publish, lineage, quality) consume. See [file-reference.md](file-reference.md) and [ADR-0014](../adr/0014-two-store-storage-architecture.md).
 - `download(DownloadInput(...))` — pulls a file or directory from object storage to a local path.
+
+**`upload()` does not require the files on the calling pod.** When `local_path`
+is absent — a cross-pod hand-off where the tasks that produced the tree ran on
+other workers, or a caller that only has a `FileReference` — pass
+`UploadInput(ref=...)` and the upload streams from the deployment store at
+`ref.storage_path` instead of the local filesystem. Pass `storage_path` too to
+pin the destination and the copy is key-preserving; leave it off and the
+artifacts land under the canonical run prefix for the tier. A key-preserving
+copy whose source and destination are the same object is recognised as already
+satisfied (`reason="skipped:same_object"`) rather than moving bytes — but a
+`ref` pointing at a key that was never written still fails loudly with
+`StorageNotFoundError`. A partially-present local directory gets both — the
+local files plus anything present only in the store — but only when the
+destination is a *different* store (an SDR hand-off to the upstream store);
+within a single store the local tree stays authoritative. See
+[file-reference.md](file-reference.md) and
+[ADR-0014](../adr/0014-two-store-storage-architecture.md).
 
 Both transfer tasks validate the bytes they move. An upload confirms the local file did not shrink while it was read and that the store recorded what was sent, and records a `{key}.sha256` sidecar; a download confirms it wrote as many bytes as the store declared and, when a sidecar exists, that the content hashes to it. An artifact whose producer died mid-write therefore fails at the transfer boundary with a non-retryable `StorageIntegrityError` naming the file and both digests, rather than reaching a parser as an unattributable `Malformed JSON`. The checks live in the transfer primitives, so every path — these tasks, `FileReference` persist/materialize, prefix transfers, the writer chunk uploads — is covered by the same code. See [storage.md](storage.md#transfer-integrity).
 
@@ -415,7 +435,13 @@ raising a typed error whose category is plumbing-side (`RateLimitedError`,
 makes hard mode fail *closed* on a blip, which is the mirror-image bug.
 
 Two queryable events come out of the gate. The per-run **outcome** event carries `outcome`,
-`gate_mode`, `gate_classification` and the per-check `check_matrix`. A boot-time **posture** event
+`gate_mode`, `gate_classification` and the per-check `check_matrix`. On a `gate_broken` fail-open
+its `reason` names the *underlying* fault — the SDK unwraps Temporal's `ActivityError`/`ApplicationError`
+to the real error type (e.g. `DaprSidecarUnreachableError`), not the wrapper — so a persistent
+platform fault is separable from a transient blip on the dashboard. A deadline overrun carries no
+error type to unwrap, so it reports which deadline fired instead: `Timeout:START_TO_CLOSE` (one
+attempt outran its own budget — what a dependency wait wider than the gate's `start_to_close` looks
+like), `Timeout:SCHEDULE_TO_CLOSE` (the retry window closed), or `Timeout:HEARTBEAT`. A boot-time **posture** event
 (`Preflight gate posture`) is emitted once per gate-registered app — soft ones included — carrying
 `app_name`, `gate_mode` and `gate_timeout_seconds`. The posture event is the denominator the outcome
 events cannot supply: an app that never reaches a verdict emits no outcome row at all, so "which

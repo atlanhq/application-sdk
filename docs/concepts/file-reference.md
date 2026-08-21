@@ -360,6 +360,7 @@ await self.upload(input: UploadInput) -> UploadOutput
 ```python
 class UploadInput(BaseModel):
     local_path: str = ""                       # path to the file or directory on disk
+    ref: FileReference | None = None           # upload from a store key instead of local disk
     tier: StorageTier = StorageTier.RETAINED   # where to store it
     storage_path: str | None = None            # override the full destination key
     storage_subdir: str | None = None          # append a subdir under the run prefix
@@ -369,7 +370,8 @@ class UploadInput(BaseModel):
 
 | Field | Required | Description |
 |---|---|---|
-| `local_path` | Yes | Path to the file or directory to upload. Defaults to `""` (must be set before calling `App.upload()`). |
+| `local_path` | One of `local_path` / `ref` | Path to the file or directory to upload. Defaults to `""`. |
+| `ref` | One of `local_path` / `ref` | Existing `FileReference` to upload **from**: its `storage_path` is the deployment-store source key used when `local_path` is absent on this pod. See [Uploading without a local copy](#uploading-without-a-local-copy). Symmetric with `DownloadInput.ref`. |
 | `tier` | No (default `RETAINED`) | Tier that controls the destination prefix and cleanup policy. |
 | `storage_path` | No | Fully-qualified destination key. Overrides the auto-generated path. Use this when you need an exact fixed path (e.g. `argo-artifacts/spec.json`). |
 | `storage_subdir` | No | Subdirectory appended under the run prefix. Useful for grouping related uploads without spelling out the full path. |
@@ -402,6 +404,52 @@ artifacts/apps/{app_name}/workflows/{run_id}/{storage_subdir}/{filename}
 
 TRANSIENT and PERSISTENT tiers ignore `storage_subdir`.
 
+### Uploading without a local copy
+
+`App.upload()` does **not** require the artifacts to be on the calling pod. When
+`local_path` is absent, it streams from the deployment store at
+`ref.storage_path` instead of the local filesystem — so it works when the tasks
+that produced the tree ran on other workers (KEDA-scaled SDR), when the writer
+deleted its local copy (`use_consolidation=True`), or when the caller only ever
+had a `FileReference`:
+
+```python
+# The transformed tree is in the deployment store; this pod never held it.
+result = await self.upload(
+    UploadInput(
+        ref=staged_ref,                    # source: deployment store at staged_ref.storage_path
+        storage_path=staged_ref.storage_path,  # pin the destination → key-preserving
+        tier=StorageTier.RETAINED,
+    )
+)
+```
+
+Two behaviours worth knowing:
+
+- **Pin `storage_path` to the ref's own prefix** and the copy is key-preserving —
+  each key keeps its name in the destination store. Leave it off and the
+  artifacts land under the canonical prefix for the tier (see the table above).
+- **A copy whose source and destination are the same object is already
+  satisfied**: it is recognised and skipped (`reason="skipped:same_object"`)
+  rather than moving bytes. That is what makes the two-store dual write free in
+  this shape. A `ref` pointing at a key that was never written is *not* silently
+  treated as satisfied — it fails with `StorageNotFoundError`.
+
+A **partially**-present local directory gets both halves **when the destination
+is a different store** — i.e. an SDR hand-off to the upstream store: the local
+files are uploaded and anything present only in the deployment store is
+streamed, so the destination copy is complete regardless of which pod produced
+what. Within a single store the local directory stays authoritative and
+store-only files are not merged in; there is no second store to reconcile
+against, so a partial local tree publishes as partial.
+
+Deriving the ref is automatic — passing `local_path` alone gives you the same
+fallback, since the SDK derives `ref` from it. Pass `ref` explicitly when the
+source key is not the mirror of a local path. Either way, the artifact must have
+reached the deployment store in the first place: that happens when a `@task`
+**returns** a `FileReference` (the interceptor persists it), and a ref created
+with `is_durable=True` opts out of that copy — leaving nothing to fall back to.
+
 ### UploadOutput
 
 ```python
@@ -415,7 +463,7 @@ class UploadOutput(BaseModel):
 |---|---|
 | `ref` | Durable `FileReference` with `is_durable=True` and `storage_path` set. `file_count` reflects the number of files uploaded (1 for a single file, N for a directory). |
 | `synced` | `True` if at least one file was transferred to the store. `False` when all files were skipped (e.g. `skip_if_exists=True` and every file already matched its SHA-256 sidecar). |
-| `reason` | Short string describing the transfer outcome. Typical values: `"uploaded"`, `"skipped:hash_match"`, `"empty"`. Useful for logging. |
+| `reason` | Short string describing the transfer outcome. Typical values: `"uploaded"`, `"skipped:hash_match"`, `"skipped:same_object"` (source and destination are the same object — see [Uploading without a local copy](#uploading-without-a-local-copy)), `"empty"`. Useful for logging. |
 
 The returned `ref` is already durable — you can pass it as a `FileReference` field on a subsequent task's Input.
 

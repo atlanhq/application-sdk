@@ -1,9 +1,9 @@
 """Workflow trigger and status helpers for K8s e2e tests."""
 
-import asyncio
 from typing import Any
 
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.testing.e2e._poll import until_deadline_async
 from application_sdk.testing.e2e.portforward import kube_http_call
 
 logger = get_logger(__name__)
@@ -69,10 +69,9 @@ async def wait_for_workflow(
     Raises:
         TimeoutError: If the workflow does not complete within ``timeout``.
     """
-    import time  # noqa: PLC0415 — stdlib time; lazy use only
-
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+    async for attempt in until_deadline_async(
+        timeout, poll_interval, label=f"workflow {workflow_id}"
+    ):
         response = await kube_http_call(
             namespace=namespace,
             service=service,
@@ -86,8 +85,13 @@ async def wait_for_workflow(
         logger.debug("Workflow %s status: %s", workflow_id, status)
         if status in _TERMINAL_STATES:
             return data
-        await asyncio.sleep(poll_interval)
+        if attempt.is_last:
+            raise TimeoutError(
+                f"Workflow {workflow_id} did not reach a terminal state within "
+                f"{timeout}s ({attempt.number} attempts, {attempt.elapsed:.0f}s "
+                f"elapsed; last status={status or 'unknown'})"
+            )
 
-    raise TimeoutError(
-        f"Workflow {workflow_id} did not reach a terminal state within {timeout}s"
+    raise AssertionError(  # pragma: no cover — the is_last branch always fires first
+        f"poll loop for workflow {workflow_id} ended without a final attempt"
     )

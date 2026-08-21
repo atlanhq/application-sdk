@@ -20,6 +20,21 @@ description: >
 - `series` (string, default `"E,L,C,P,O,D,B,I,T,K,S"`) — comma-separated list of
   rule-series letters to run, e.g. `"E"` for error-handling only or `"E,L"` for
   error-handling and logging.
+- `rule_ids` (list of string, optional) — restrict results to these exact rule
+  IDs, e.g. `["L004"]` or `["L001", "L011"]`.  Applied as a **post-filter** on
+  `result.rule_id`, for the same reason `path_prefix` is: the runner's `--series`
+  flag matches a single series *letter*, so `--series L004` silently activates
+  **zero** checks and produces an empty report rather than an L004-only one.
+  Rule-level scoping therefore cannot be pushed down to the runner and must be
+  done on the parsed output.  When omitted, all rules in the requested series are
+  returned.
+
+  Callers should still pass the narrowest `series` that covers `rule_ids` (the
+  first letter of each ID) so the runner does less work; the filter then removes
+  the rest of that series.  Tier is a **per-rule** property, not a per-series
+  one (D001 and D009 are BLOCK inside a series that is otherwise WARN), so a
+  caller that needs "only this rule" — or "only the blocking rules" — has no way
+  to express it through `series` alone.  This parameter is that way.
 - `target` (string, default `"failing"`) — which dispositions to return.
   `"failing"` returns only FAILING results (BLOCK-tier, gate-blocking).
   `"failing+warning"` (used by strict mode) also includes WARNING results
@@ -96,6 +111,18 @@ is `"failing+warning"`).
 `result.locations[0].physical_location.artifact_location.uri` does not start
 with the prefix string (normalise both sides with `str.lstrip("./")` before
 comparing so that `"./application_sdk/foo.py"` matches `"application_sdk"`).
+
+**Rule ID filtering**: if `rule_ids` is set and non-empty, discard any result
+whose `result.rule_id` is not in it.  Compare exactly — rule IDs are already
+canonical (`^[A-Z]\d{3}$`), so no normalisation is needed; upper-case any
+caller-supplied value once before comparing so a `--rule l004` argument still
+matches.
+
+Apply this filter **after** the disposition filter and independently of
+`path_prefix` — the two compose, so a caller can ask for "L004, only under
+`app/`".  An empty or absent `rule_ids` means "no rule filter", never "match
+nothing"; an ID that matches no result returns an empty `findings` list, which
+is the correct answer (that rule is clean) and must not be reported as an error.
 
 Tag each result's area by reading the first letter of `result.rule_id`:
 `E` → `error-handling`, `L` → `logging`, `C` → `ci`, `P` → `prescriptions`,

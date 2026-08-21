@@ -7,9 +7,9 @@ Three subcommands:
   render     -- Render markdown manifest from normalized JSON + purposes YAML
 
 Usage (from repo root):
-  uv run --with griffe python .claude/skills/capability-manifest/references/extractor.py dump
-  uv run --with griffe python .claude/skills/capability-manifest/references/extractor.py normalize /tmp/capability-manifest/raw.json
-  uv run --with griffe python .claude/skills/capability-manifest/references/extractor.py render /tmp/capability-manifest/normalized.json .claude/skills/capability-manifest/references/subpackage-purposes.yaml
+  uv run --with griffe==2.1.0 python .claude/skills/capability-manifest/references/extractor.py dump
+  uv run --with griffe==2.1.0 python .claude/skills/capability-manifest/references/extractor.py normalize /tmp/capability-manifest/raw.json
+  uv run --with griffe==2.1.0 python .claude/skills/capability-manifest/references/extractor.py render /tmp/capability-manifest/normalized.json .claude/skills/capability-manifest/references/subpackage-purposes.yaml
 """
 
 from __future__ import annotations
@@ -34,27 +34,11 @@ REPO_ROOT = (
 )  # .claude/skills/capability-manifest/references/extractor.py
 PKG_ROOT = REPO_ROOT / "application_sdk"
 
-# Subpackages to index (those that can have __all__).
-# Packages (directories with __init__.py) and top-level modules (single .py files) are both supported.
-SUBPACKAGES = [
-    "app",
-    "clients",
-    "common",
-    "contracts",
-    "credentials",
-    "errors",  # top-level module: application_sdk/errors.py
-    "execution",
-    "handler",
-    "infrastructure",
-    "main",  # top-level module: application_sdk/main.py
-    "observability",
-    "outputs",
-    "server",
-    "storage",
-    "templates",
-    "testing",
-    "transformers",
-]
+# Subpackages are not hand-listed: every public module that declares ``__all__`` is
+# discovered by walking the tree (see ``discover_public_modules``). A hand-maintained
+# list is exactly how the manifest came to omit ``application_sdk.execution.heartbeat``
+# (FND-439) — and how it silently omitted the ``dev`` and ``validation`` subpackages,
+# which no list-keeper had added.
 
 # Names treated as decorators (returned callables)
 DECORATOR_NAMES = {"task", "entrypoint", "on_event"}
@@ -101,7 +85,7 @@ def get_source_date(sha: str) -> str:
 def get_sdk_version() -> str:
     """Read __version__ from application_sdk/version.py (no import needed)."""
     version_file = PKG_ROOT / "version.py"
-    for line in version_file.read_text().splitlines():
+    for line in version_file.read_text(encoding="utf-8").splitlines():
         if line.startswith("__version__"):
             return line.split("=")[1].strip().strip('"').strip("'")
     return "unknown"
@@ -133,7 +117,12 @@ def extract_all_from_init(pkg_path: Path) -> list[str]:
 
     if not source_file.exists():
         return []
-    tree = ast.parse(source_file.read_text())
+    # Explicit UTF-8: without it Windows reads source through cp1252 and any
+    # non-Latin-1 character in the file — an em dash in a docstring is enough —
+    # raises UnicodeDecodeError. Latent while only a handful of __init__ files
+    # were parsed on Linux; every public module is parsed now, on every platform
+    # the unit suite runs (FND-439).
+    tree = ast.parse(source_file.read_text(encoding="utf-8"))
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
             for target in node.targets:
@@ -146,6 +135,79 @@ def extract_all_from_init(pkg_path: Path) -> list[str]:
                             and isinstance(elt.value, str)
                         ]
     return []
+
+
+def discover_public_modules() -> list[tuple[str, str, list[str]]]:
+    """Find every public module under ``application_sdk`` that declares ``__all__``.
+
+    ``__all__`` in a submodule is an author declaring a public surface, so the manifest
+    has to read it. Only indexing package ``__init__`` files is what made
+    ``from application_sdk.execution.heartbeat import run_in_thread`` invisible here
+    (FND-439): the offload seam moved to ``application_sdk._runtime.offload`` under
+    ADR-0019 and is re-exported from ``execution/heartbeat.py``, so it is named in a
+    submodule ``__all__`` and nowhere in a package ``__init__``.
+
+    Returns:
+        ``(subpackage, dotted_module_path, __all__ names)`` triples, ordered by
+        subpackage, then by module depth so a package ``__init__`` always precedes its
+        own submodules — which is what lets the caller treat the shortest import path
+        as canonical.
+
+    A module is public when no component of its dotted path starts with ``_``. That
+    excludes the substrate (``_runtime``), ``execution._temporal``,
+    ``infrastructure._dapr`` and friends by construction: they are deliberately private
+    homes for symbols whose public path is a re-export somewhere else.
+    """
+    found: list[tuple[str, int, str, list[str]]] = []
+    for path in sorted(PKG_ROOT.rglob("*.py")):
+        parts = list(path.relative_to(PKG_ROOT).parts)
+        mod_parts = (
+            parts[:-1]
+            if parts[-1] == "__init__.py"
+            else parts[:-1] + [parts[-1].removesuffix(".py")]
+        )
+        if not mod_parts:
+            continue  # application_sdk/__init__.py — the root, not a subpackage
+        if any(part.startswith("_") for part in mod_parts):
+            continue
+        names = extract_all_from_init(path)
+        if not names:
+            continue
+        dotted = "application_sdk." + ".".join(mod_parts)
+        found.append((mod_parts[0], len(mod_parts), dotted, names))
+
+    found.sort()
+    return [(subpkg, dotted, names) for subpkg, _, dotted, names in found]
+
+
+def _navigate_module(griffe_root: Any, dotted_path: str) -> Any:
+    """Walk griffe's member graph to the module named by *dotted_path*, or None."""
+    obj = griffe_root
+    for part in dotted_path.split(".")[1:]:  # skip 'application_sdk'
+        if obj is None or not hasattr(obj, "members"):
+            return None
+        obj = obj.members.get(part)
+    return obj
+
+
+def _rendered_as_contract(
+    module_path: str, name: str, contracts: dict[str, list[dict[str, Any]]]
+) -> bool:
+    """True if *name* is already rendered, with its fields, in the Contracts section.
+
+    Only consulted for submodules, never for a package ``__init__``. A submodule that
+    re-exports a contract already rendered under an ancestor namespace — every name in
+    ``templates/contracts/incremental_sql.py``, for instance — would otherwise be
+    emitted a second time as a bare class signature, which is strictly less than the
+    Contracts section already says. The package ``__init__`` listing is deliberately
+    left duplicated: it is the top-level index an agent scans first, and thinning it
+    would cost more than the repetition does.
+    """
+    return any(
+        (module_path == ns or module_path.startswith(ns + "."))
+        and any(model["name"] == name for model in models)
+        for ns, models in contracts.items()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -571,30 +633,6 @@ def cmd_dump() -> None:
         "subpackages": {},
     }
 
-    for subpkg_name in SUBPACKAGES:
-        griffe_subpkg = pkg.members.get(subpkg_name)
-        if griffe_subpkg is None:
-            eprint(f"  WARNING: {subpkg_name} not found in griffe output")
-            continue
-
-        # Support both packages (directory) and top-level modules (single .py file)
-        pkg_path = PKG_ROOT / subpkg_name
-        all_names = extract_all_from_init(pkg_path)
-        if not all_names:
-            eprint(f"  INFO: {subpkg_name} has no __all__; skipping")
-            continue
-
-        eprint(f"  {subpkg_name}: {len(all_names)} exports")
-
-        symbols: list[dict[str, Any]] = [
-            _symbol_for(name, griffe_subpkg.members.get(name)) for name in all_names
-        ]
-
-        output["subpackages"][subpkg_name] = {
-            "all": all_names,
-            "symbols": symbols,
-        }
-
     # Collect contracts
     eprint("Collecting contract models...")
     contracts_data: dict[str, list[dict[str, Any]]] = {}
@@ -707,6 +745,74 @@ def cmd_dump() -> None:
 
     output["contracts"] = contracts_data
 
+    # Subpackages are collected after contracts so a submodule re-export of an
+    # already-rendered contract can be skipped (see ``_rendered_as_contract``). The
+    # output key order is fixed by the dict literal above, so this stays a no-op for
+    # the emitted JSON.
+    eprint("Collecting public symbols...")
+    modules_by_subpkg: dict[str, list[tuple[str, list[str]]]] = {}
+    for subpkg_name, dotted, all_names in discover_public_modules():
+        modules_by_subpkg.setdefault(subpkg_name, []).append((dotted, all_names))
+
+    for subpkg_name, modules in sorted(modules_by_subpkg.items()):
+        root_path = "application_sdk." + subpkg_name
+        symbols: list[dict[str, Any]] = []
+        by_name: dict[str, dict[str, Any]] = {}
+        root_all: list[str] = []
+
+        for dotted, all_names in modules:
+            griffe_mod = _navigate_module(pkg, dotted)
+            if griffe_mod is None:
+                # Hard failure, never a skip. This module declares ``__all__``, so it
+                # has public surface, and silently omitting it is the exact bug this
+                # walk exists to fix (FND-439). In practice it means an ancestor
+                # directory has no ``__init__.py``, making it an implicit namespace
+                # package that griffe does not descend into. Introspecting it at
+                # runtime instead was tried and rejected: an export behind an optional
+                # extra (``server.mcp.MCPServer`` needs ``fastmcp``) would then appear
+                # or vanish with the installed extras, so the drift check would fail
+                # for anyone who ran the documented `uv sync --all-extras`.
+                eprint(
+                    f"  ERROR: {dotted} declares __all__ but is not in griffe's "
+                    "graph — add an __init__.py to it and to every parent directory "
+                    "up to application_sdk/, then re-run."
+                )
+                sys.exit(1)
+            is_root = dotted == root_path
+            if is_root:
+                root_all = all_names
+
+            for name in all_names:
+                if not is_root and _rendered_as_contract(dotted, name, contracts_data):
+                    continue
+                existing = by_name.get(name)
+                if existing is not None:
+                    # Same name, second public path. The first one wins the entry —
+                    # modules arrive shortest-first, so that is the canonical import —
+                    # and the rest are named on it, because "which paths resolve" is
+                    # the question that sent an agent hunting through source in the
+                    # first place.
+                    if dotted not in existing["also_exported_from"]:
+                        existing["also_exported_from"].append(dotted)
+                    continue
+                symbol = _symbol_for(name, griffe_mod.members.get(name))
+                symbol["module"] = dotted
+                symbol["also_exported_from"] = []
+                by_name[name] = symbol
+                symbols.append(symbol)
+
+        if not symbols:
+            continue
+        n_submodules = sum(1 for dotted, _ in modules if dotted != root_path)
+        eprint(
+            f"  {subpkg_name}: {len(symbols)} exports "
+            f"({len(root_all)} from the package, {n_submodules} submodule(s) walked)"
+        )
+        output["subpackages"][subpkg_name] = {
+            "all": root_all,
+            "symbols": symbols,
+        }
+
     print(json.dumps(output, indent=2))  # noqa: T201
     eprint("Dump complete.")
 
@@ -719,7 +825,7 @@ def cmd_dump() -> None:
 def cmd_normalize(raw_json_path: str) -> None:
     """Filter/sort the raw dump, print normalized JSON to stdout."""
     eprint(f"Normalizing {raw_json_path}...")
-    with open(raw_json_path) as f:
+    with open(raw_json_path, encoding="utf-8") as f:
         raw = json.load(f)
 
     # Meta passes through unchanged
@@ -761,7 +867,7 @@ def cmd_normalize(raw_json_path: str) -> None:
 def _load_purposes(yaml_path: str) -> dict[str, str]:
     """Load subpackage purposes from YAML (simple hand-rolled parser — avoids PyYAML dep)."""
     purposes: dict[str, str] = {}
-    with open(yaml_path) as f:
+    with open(yaml_path, encoding="utf-8") as f:
         for line in f:
             line = line.rstrip()
             if not line or line.startswith("#"):
@@ -777,7 +883,7 @@ def _load_purposes(yaml_path: str) -> dict[str, str]:
 def cmd_render(normalized_json_path: str, purposes_yaml_path: str) -> None:
     """Render the markdown manifest from normalized JSON + purposes YAML, print to stdout."""
     eprint(f"Rendering from {normalized_json_path}...")
-    with open(normalized_json_path) as f:
+    with open(normalized_json_path, encoding="utf-8") as f:
         data = json.load(f)
 
     purposes = _load_purposes(purposes_yaml_path)
@@ -830,7 +936,9 @@ def cmd_render(normalized_json_path: str, purposes_yaml_path: str) -> None:
         purpose = purposes.get(
             subpkg_name, purposes.get(full_name, "_(no description)_")
         )
-        n_exports = len(subpackages[subpkg_name]["all"])
+        # Every emitted symbol, not just the package ``__init__``'s ``__all__`` —
+        # submodule exports are real public surface and are counted as such.
+        n_exports = len(subpackages[subpkg_name]["symbols"])
         lines.append(f"| `{full_name}` | {purpose} | {n_exports} |")
 
     lines.append("")
@@ -879,9 +987,16 @@ def cmd_render(normalized_json_path: str, purposes_yaml_path: str) -> None:
                 summary = sym["summary"]
                 filepath = sym["filepath"]
                 prefix = "@" if kind == KIND_DECORATOR else ""
+                # The module the symbol is exported from, which is not always the
+                # subpackage root: a submodule ``__all__`` is public surface too.
+                module = sym.get("module", full_name)
+                also = sym.get("also_exported_from") or []
                 lines.append(f"#### `{prefix}{name}`")
                 lines.append("")
-                lines.append(f"- **Import:** `from {full_name} import {name}`")
+                lines.append(f"- **Import:** `from {module} import {name}`")
+                if also:
+                    paths = ", ".join(f"`{path}`" for path in also)
+                    lines.append(f"- **Also importable from:** {paths}")
                 if sig:
                     lines.append(f"- **Signature:** `{sig}`")
                 lines.append(f"- **Summary:** {summary}")

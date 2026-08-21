@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from application_sdk.contracts.base import Input, Output
 from application_sdk.handler.base import DefaultHandler, Handler, HandlerError
@@ -32,9 +33,10 @@ from application_sdk.handler.contracts import (
 )
 from application_sdk.handler.service import (
     _flatten_to_pairs,
-    _lift_agent_json,
     _normalize_credentials,
-    _rank_agent_json,
+    _normalize_preflight_request,
+    _RequestContractError,
+    _validate_request,
     _wrap_response,
     create_app_handler_service,
 )
@@ -7166,83 +7168,193 @@ class TestDefaultEntrypoint:
             patcher.stop()
 
 
-class TestAgentJsonLift:
-    """`_lift_agent_json` / `_rank_agent_json`: surface the freshest agent-json.
+class TestAgentJsonIngressOnTheHandlerPath:
+    """The handler path's end of the ``agent_json`` ingress normaliser.
 
-    Heracles forwards the FE payload verbatim, so the agent-json binding can
-    arrive nested (metadata / connection_config / credentials) and in several
-    competing copies at once — a live hyphen `agent-json` object next to a stale
-    underscore `agent_json` serialized string. The lift must surface the freshest
-    copy at the canonical top-level ``agent_json`` key for downstream consumers.
+    The normaliser itself is pinned in
+    ``tests/unit/credentials/test_ingress.py``; this covers what the request
+    path adds — the normalized body must be accepted by the typed input, and a
+    body that is genuinely malformed must come back as a 422 naming the field
+    rather than a plain-text 500.
     """
 
-    _FRESH = {"agent-name": "acme", "basic.username": "USERNAME", "host": "h"}
-    _STALE = '{"agent-name": "acme", "basic.username": "username", "host": "h"}'
+    _PLACEHOLDER = {
+        "agent-name": "agent-name",
+        "aws-auth-method": "aws-auth-method",
+        "host": "host",
+        "port": "port",
+        "secret-manager": "secret-manager",
+    }
 
-    def test_rank_prefers_object_over_string_and_hyphen_over_underscore(self) -> None:
-        assert _rank_agent_json({}, "agent-json") > _rank_agent_json({}, "agent_json")
-        assert _rank_agent_json({}, "agent_json") > _rank_agent_json("{}", "agent-json")
-        # object beats string even when the string uses the canonical hyphen key
-        assert _rank_agent_json({}, "agent_json") > _rank_agent_json("{}", "agent_json")
+    def test_placeholder_widget_body_still_validates(self) -> None:
+        """The regression: the normalized body must be accepted by the typed input.
 
-    def test_sage_shape_picks_fresh_object_over_stale_string(self) -> None:
-        # /sage: heracles forwards formData -> metadata carrying BOTH copies.
-        body = {
-            "credentials": {"connectorConfigName": "atlan-connectors-mssql"},
-            "metadata": {
-                "agent_json": self._STALE,
-                "agent-json": self._FRESH,
-                "extraction-method": "agent",
-            },
-        }
-        out = _lift_agent_json(body)
-        assert out["agent_json"] == self._FRESH
-        assert out["agent_json"]["basic.username"] == "USERNAME"
-        # both agent-json keys stripped from the container
-        assert "agent_json" not in out["metadata"]
-        assert "agent-json" not in out["metadata"]
-        assert out["metadata"]["extraction-method"] == "agent"
-
-    def test_serialized_string_used_as_fallback_when_no_object(self) -> None:
-        out = _lift_agent_json({"metadata": {"agent_json": self._STALE}})
-        assert out["agent_json"]["basic.username"] == "username"
-
-    def test_top_level_fresh_hyphen_overrides_stale_underscore(self) -> None:
-        out = _lift_agent_json({"agent_json": self._STALE, "agent-json": self._FRESH})
-        assert out["agent_json"] == self._FRESH
-        # stale aliases are dropped; only the canonical top-level key remains
-        assert "agent-json" not in out
-
-    def test_agent_json_inside_credentials_dict(self) -> None:
-        out = _lift_agent_json(
-            {"credentials": {"agent-json": self._FRESH, "connectorConfigName": "x"}}
-        )
-        assert out["agent_json"] == self._FRESH
-        assert "agent-json" not in out["credentials"]
-        assert out["credentials"]["connectorConfigName"] == "x"
-
-    def test_agent_json_inside_v3_credentials_list(self) -> None:
-        out = _lift_agent_json(
+        A rendered-but-unfilled agent widget submits every field name as its own
+        value. ``port`` is ``AgentCredentialSpec``'s only non-str field, so the
+        payload coerces to a dict but fails typed validation — promoting it made
+        every direct-mode request whose form renders the widget 500.
+        """
+        body = _normalize_preflight_request(
             {
-                "credentials": [
-                    {"key": "agent-json", "value": self._FRESH},
-                    {"key": "connectorConfigName", "value": "x"},
-                ]
+                "connector": "oracle",
+                "entrypoint": "miner",
+                "credentials": {"extra": {}},
+                "metadata": {
+                    "agent_json": json.dumps(self._PLACEHOLDER),
+                    "agent-json": json.dumps(self._PLACEHOLDER),
+                    "extraction_method": "query_history",
+                },
             }
         )
-        assert out["agent_json"] == self._FRESH
-        assert all(c["key"] != "agent-json" for c in out["credentials"])
+        validated = PreflightInput.model_validate(body)  # must not raise
+        assert validated.agent_json is None
 
-    def test_direct_mode_body_unchanged(self) -> None:
-        body = {"credentials": {"host": "h", "username": "u"}}
-        assert _lift_agent_json(body) == body
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            "/workflows/v1/auth",
+            "/workflows/v1/check",
+            "/workflows/v1/metadata",
+        ],
+    )
+    def test_malformed_body_is_a_422_naming_the_field(self, endpoint: str) -> None:
+        """A body that does not fit the contract must say which field.
 
-    def test_empty_agent_json_ignored(self) -> None:
-        assert "agent_json" not in _lift_agent_json({"metadata": {"agent-json": {}}})
-        assert "agent_json" not in _lift_agent_json({"metadata": {"agent_json": ""}})
+        The endpoints validate their own body (they normalise v2 wire shapes
+        first), so an unhandled ValidationError used to become Starlette's
+        plain-text 500 — reaching the caller as an opaque JSON-decode error with
+        no hint of the offending field. That is why the placeholder bug above
+        took a full investigation to pin.
 
-    def test_unparseable_string_ignored(self) -> None:
-        assert "agent_json" not in _lift_agent_json({"metadata": {"agent_json": "{"}})
+        Parameterized over the three ingress endpoints (auth / check /
+        metadata): all route through the same ``_validate_request`` call and
+        their contracts share ``timeout_seconds: int``, so the same malformed
+        body proves each route answers a field-named 422 (route-drift
+        protection, not just the shared mechanism).
+        """
+        client = _make_client()
+        response = client.post(
+            endpoint,
+            json={"credentials": [], "timeout_seconds": "not-a-number"},
+        )
+
+        assert response.status_code == 422
+        body = response.json()
+        assert body["success"] is False
+        assert "timeout_seconds" in body["message"]
+        assert body["detail"][0]["field"] == "timeout_seconds"
+        # The rejected value may be a credential — never echo it back.
+        assert "not-a-number" not in json.dumps(body)
+
+    def test_real_spec_reaches_the_typed_input(self) -> None:
+        body = _normalize_preflight_request(
+            {
+                "credentials": {"extra": {}},
+                "metadata": {
+                    "agent-json": {
+                        "agent-name": "acme-agent",
+                        "secret-path": "arn:aws:secretsmanager:us-east-1:1:secret:x",
+                        "host": "db.example.com",
+                        "port": 1521,
+                    }
+                },
+            }
+        )
+        validated = PreflightInput.model_validate(body)
+        assert validated.agent_json is not None
+        assert validated.agent_json.agent_name == "acme-agent"
+        assert validated.agent_json.is_populated()
+
+    def test_only_an_explicit_ingress_call_can_answer_422(self) -> None:
+        """The structural half of the rule the docstrings describe.
+
+        A 422 requires ``_validate_request``, which is the only thing that
+        raises the marker the handler is registered on. A bare
+        ``model_validate`` — a future endpoint validating inside its own error
+        boundary, an output contract, a handler's own model — raises plain
+        pydantic and so cannot be reported as the caller's fault. Without this,
+        "which endpoints validate outside their boundary" is a convention held
+        up by prose, and forgetting it silently returns a wrong 422.
+        """
+        bad = {"timeout_seconds": "not-a-number"}
+
+        with pytest.raises(_RequestContractError) as ingress:
+            _validate_request(PreflightInput, bad)
+        # The pydantic failure is carried, not flattened — the handler needs
+        # the field paths.
+        assert ingress.value.cause.errors()[0]["loc"] == ("timeout_seconds",)
+
+        # ...and the bare call is untouched: still plain pydantic.
+        with pytest.raises(ValidationError):
+            PreflightInput.model_validate(bad)
+
+    def test_a_stray_validation_error_is_not_a_422(self) -> None:
+        """A ValidationError escaping a route is a 500, whatever raises it.
+
+        Starlette routes any escaping exception to a registered handler, so
+        registering the 422 on pydantic's ``ValidationError`` would have turned
+        every internal validation failure — anywhere in the app, including a
+        handler's own models — into "the request did not fit the contract".
+        """
+
+        class _StrayValidationHandler(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                # Business logic validating something of its own, mid-request.
+                outer_model = type(input)
+                outer_model.model_validate({"timeout_seconds": "not-a-number"})
+                raise AssertionError("unreachable")
+
+        client = TestClient(
+            create_app_handler_service(
+                _StrayValidationHandler(), app_name="stray-validation"
+            ),
+            raise_server_exceptions=False,
+        )
+        response = client.post("/workflows/v1/check", json={"credentials": []})
+
+        assert response.status_code == 500
+        assert response.json()["detail"] == "Internal server error"
+
+    def test_start_internal_validation_failure_stays_a_500(self) -> None:
+        """``/start`` validates its body *inside* its error boundary.
+
+        The app-level 422 handler exists for the form endpoints (auth /
+        preflight / metadata), which validate *outside* any boundary. A
+        ValidationError escaping ``/start``'s boundary is an internal bug, so
+        ``/start`` re-raises it past the 422 handler — it must surface as the
+        sanitized 500 the boundary answers, never as "the request did not fit
+        the contract".
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _StartValidationApp(App):
+            @entrypoint
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        svc = create_app_handler_service(
+            _TestHandler(),
+            app_name="start-validation",
+            app_class=_StartValidationApp,
+            temporal_host="temporal:7233",
+        )
+        patcher = patch(
+            "application_sdk.handler.service._get_temporal_client",
+            new=AsyncMock(return_value=MagicMock()),
+        )
+        patcher.start()
+        try:
+            # Input.correlation_id is a `str`; pydantic v2 rejects an int, so
+            # model_validate raises inside the /start try block.
+            response = TestClient(svc, raise_server_exceptions=False).post(
+                "/workflows/v1/start", json={"correlation_id": 123}
+            )
+            assert response.status_code == 500
+        finally:
+            patcher.stop()
 
 
 class TestManifestPostTransport:

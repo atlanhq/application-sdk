@@ -18,6 +18,7 @@ from opentelemetry.trace.span import TraceFlags
 from application_sdk.constants import (
     APPLICATION_NAME,
     DEPLOYMENT_NAME,
+    ENABLE_LOG_DIAGNOSE,
     ENABLE_OBSERVABILITY_STORE_SINK,
     ENABLE_OTLP_LOGS,
     ENABLE_OTLP_WORKFLOW_LOGS,
@@ -819,12 +820,28 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         # descriptor classify benign records as INFO instead of ERROR. Records
         # at WARNING and below go to stdout; ERROR/CRITICAL/exception records
         # stay on stderr. Matches uvicorn/gunicorn conventions.
+        # `diagnose` is passed explicitly because loguru defaults it to True: it
+        # annotates each traceback frame with the *values* of the names on its source
+        # line, so a credential dict passed to a failing call renders its contents
+        # onto the console. ENABLE_LOG_DIAGNOSE defaults to False, and gates only the
+        # annotation — `backtrace` is untouched, so every frame, including those
+        # beyond the catch point, is kept either way.
+        #
+        # Volume was the symptom that surfaced this: value annotation accounted for
+        # 48% of the bytes in a CI unit-test job's 16 MB log, nearly all of it from
+        # tests that exercise an error path, log the expected exception, and pass.
+        #
+        # The OTLP and object-store sink takes no such flag: it reads structured
+        # fields off the record and builds its own traceback via
+        # `_format_exception_stacktrace`, which never carried local values. So this
+        # changes console output only; nothing queryable downstream moves.
         _ERROR_LEVEL_NO = SEVERITY_MAPPING["ERROR"]
         self.logger.add(
             sys.stdout,
             format=get_log_format,
             level=SEVERITY_MAPPING[LOG_LEVEL],
             colorize=colorize,
+            diagnose=ENABLE_LOG_DIAGNOSE,
             filter=lambda record: record["level"].no < _ERROR_LEVEL_NO,
         )
         self.logger.add(
@@ -832,6 +849,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             format=get_log_format,
             level=max(SEVERITY_MAPPING[LOG_LEVEL], _ERROR_LEVEL_NO),
             colorize=colorize,
+            diagnose=ENABLE_LOG_DIAGNOSE,
         )
 
         # OTLP log export — primary exporter to OTEL_EXPORTER_OTLP_ENDPOINT,

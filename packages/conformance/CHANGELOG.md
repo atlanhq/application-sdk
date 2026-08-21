@@ -2,6 +2,60 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.21.0] - 2026-08-18
+
+### Features
+
+- make application_sdk.errors the enforced public error contract (CONNECT-970) (#3266) ([0e8508e](https://github.com/atlanhq/application-sdk/commit/0e8508e))
+- add P044 for app-level prefix transfers (FND-433) (#3263) ([bf1287e](https://github.com/atlanhq/application-sdk/commit/bf1287e))
+
+### Bug fixes
+
+- resolve D003 import names from the target repo's env (FND-433) (#3260) ([a290191](https://github.com/atlanhq/application-sdk/commit/a290191))
+
+### Other changes
+
+- chore(contract-toolkit): release v0.22.0 (#3261) ([9a5bf21](https://github.com/atlanhq/application-sdk/commit/9a5bf21))
+
+## [0.20.1] - 2026-08-17
+
+### Bug fixes
+
+- feed e2e evidence and cross-CSP coverage to the test-readiness scorecard (FND-33, FND-34) (#3245) ([752808d](https://github.com/atlanhq/application-sdk/commit/752808d))
+- give the commits shim a real reusable, retire docstring-coverage (FND-381) (#3236) ([ca132f2](https://github.com/atlanhq/application-sdk/commit/ca132f2))
+
+## [0.20.0] - 2026-08-17
+
+### Features
+
+- graduate P030 + seven WARN rules to BLOCK; customer-impact line required in every BLOCK rationale (FND-311) (#3169) ([34c541a](https://github.com/atlanhq/application-sdk/commit/34c541a))
+
+## [0.19.1] - 2026-08-14
+
+### Bug fixes
+
+- let apps own their coverage floor and GHCR base opt-in (FND-361) (#3215) ([6bef6a9](https://github.com/atlanhq/application-sdk/commit/6bef6a9))
+
+## [0.19.0] - 2026-08-14
+
+### Features
+
+- add bootstrap --resync for scaffold drift (FND-356) (#3210) ([42b5a53](https://github.com/atlanhq/application-sdk/commit/42b5a53))
+- add granular 0-touch levers under --enforce (FND-347) (#3206) ([ee37002](https://github.com/atlanhq/application-sdk/commit/ee37002))
+- lane-model fleet preset + per-PR delivered-deps in the fleet scanner (#3129) ([893c6ba](https://github.com/atlanhq/application-sdk/commit/893c6ba))
+
+### Bug fixes
+
+- update dependency @openprose/reactor-devtools to ^0.3.0 (#3167) ([17d2774](https://github.com/atlanhq/application-sdk/commit/17d2774))
+- update github/codeql-action digest to ff2f1c6 (#3196) ([c79c926](https://github.com/atlanhq/application-sdk/commit/c79c926))
+- make CI toolchain downloads survive a CDN outage (FND-287) (#3176) ([e28e9f8](https://github.com/atlanhq/application-sdk/commit/e28e9f8))
+
+### Other changes
+
+- refactor(runtime): move the offload and progress seams to a dependency-neutral substrate (FND-316) (#3189) ([55bda27](https://github.com/atlanhq/application-sdk/commit/55bda27))
+- chore(contract-toolkit): release v0.21.1 (#3144) ([b6a467e](https://github.com/atlanhq/application-sdk/commit/b6a467e))
+- chore(contract-toolkit): release v0.21.0 (#3126) ([f87e56b](https://github.com/atlanhq/application-sdk/commit/f87e56b))
+
 ## [0.18.0] - 2026-08-11
 
 ### Features

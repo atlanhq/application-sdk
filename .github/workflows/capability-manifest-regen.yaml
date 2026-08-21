@@ -23,6 +23,12 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  # The reactions endpoint is `/issues/comments/{id}/reactions` — a PR comment
+  # is an issue comment, so `pull-requests: write` does not cover it. Without
+  # this the ack 403s on every run; the helper now warns and exits 0 rather
+  # than failing the job, which would make a permanently missing ack the
+  # silent steady state.
+  issues: write
 
 jobs:
   regen:
@@ -81,17 +87,38 @@ jobs:
               body: 'ℹ️ `/regen-manifest` is skipped on version-bump branches.',
             });
 
+      # Sparse, and ahead of the full checkout below, so the ack stays the
+      # first thing the requester sees.
+      #
+      # `path:` is load-bearing — this MUST NOT share a git dir with the full
+      # checkout below. actions/checkout writes `core.sparseCheckout=true` into
+      # `.git/config` (local scope), then the next checkout runs
+      # `git sparse-checkout disable` (which parks `false` in the *worktree*
+      # config) followed by `git config --local --unset-all
+      # extensions.worktreeConfig` — that unset makes the worktree config inert,
+      # so `core.sparseCheckout` reverts to true from local config and the
+      # narrow pattern is re-applied by the subsequent `git checkout --force`.
+      # Net effect: the workspace stays sparse, `pyproject.toml` is absent, and
+      # `uv run poe` fails with "Failed to spawn: poe" (FND-637).
+      - name: Checkout reaction helper
+        if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: .ack
+          sparse-checkout: .github/scripts/react_to_comment.py
+          sparse-checkout-cone-mode: false
+
+      # Best-effort: the reaction is cosmetic, so a transient reactions-API
+      # failure must not take the regen run down with it. The script exits 0
+      # whatever happens.
       - name: React to comment
         if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        with:
-          script: |
-            await github.rest.reactions.createForIssueComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              comment_id: context.payload.comment.id,
-              content: 'rocket',
-            });
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          REACTION: rocket
+        run: python3 .ack/.github/scripts/react_to_comment.py
 
       - name: Mint fleet App token
         id: app-token
@@ -110,10 +137,10 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           fetch-depth: 0
 
-      - uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
         with:
-          version: "0.12.3"
+          version: "0.12.5"
 
       - name: Regenerate capability manifest
         if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'

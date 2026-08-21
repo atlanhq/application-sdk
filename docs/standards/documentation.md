@@ -6,6 +6,7 @@ When modifying SDK code, update corresponding conceptual documentation under `do
 *   `application_sdk/app/**` -> `docs/concepts/apps.md`
 *   `application_sdk/templates/**` -> `docs/concepts/tasks.md`
 *   `application_sdk/execution/**` -> `docs/concepts/apps.md`
+*   `application_sdk/execution/progress*.py`, `application_sdk/execution/heartbeat.py` (watchdog paths) -> `docs/concepts/progress-and-stalls.md`
 *   `application_sdk/handler/**` -> `docs/concepts/handlers.md`
 *   `application_sdk/server/**` -> `docs/concepts/server.md`
 *   `application_sdk/clients/**` -> `docs/concepts/clients.md`

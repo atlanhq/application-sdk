@@ -41,11 +41,11 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from application_sdk._runtime.offload import run_in_thread
+from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.common._listing import safe_list_directory
 from application_sdk.constants import MAX_CONCURRENT_STORAGE_TRANSFERS
 from application_sdk.contracts.types import FileReference, StorageTier
-from application_sdk.execution.heartbeat import run_in_thread
-from application_sdk.execution.progress import current_progress_tracker
 from application_sdk.observability.logger_adaptor import get_logger
 
 # The batch key listers are imported at top level, unlike the other
@@ -133,11 +133,23 @@ async def _upload_from_store(
     source_key: str,
     target_store: ObjectStore,
     target_key: str,
+    *,
+    source_listed: bool = False,
 ) -> tuple[bool, str]:
     """Upload a single file from *source_store* to *target_store*.
 
     Implements steps 1 and 3 of the three-step upload strategy:
 
+    * Step 0 — same-object guard: when *source_store* and *target_store* are the
+      same store and the keys are identical, the object already is its own
+      destination — **provided it is there**.  Presence is taken from
+      *source_listed*, or established with one HEAD when the key came from a
+      caller-supplied ``FileReference``; only then does this return immediately,
+      without even the two sidecar GETs the SHA-256 dedup would cost.  An absent
+      object falls through to the copy path below and raises
+      ``StorageNotFoundError`` like any other leg would.  This is the
+      key-preserving deployment→deployment leg of the ADR-0014 dual write
+      (FND-536).
     * Step 1 — cross-store SHA-256 dedup: skips the transfer when both stores
       already hold the same content at their respective keys.
     * Step 3 — deployment-store fallback: downloads to a temporary local file
@@ -145,12 +157,36 @@ async def _upload_from_store(
       the source's sidecar, the upload against what the target reports back,
       and ``upload_file`` writes the target's own sidecar (FND-306).
 
+    Args:
+        source_store: Store to read *source_key* from.
+        source_key: Key to copy.
+        target_store: Store to write *target_key* to.
+        target_key: Destination key.
+        source_listed: ``True`` when the caller obtained *source_key* by listing
+            *source_store*, which proves the object is there.  Lets the
+            same-object guard skip its existence HEAD; leave ``False`` whenever
+            the key came from a caller-supplied ``FileReference``.
+
     Returns ``(transferred, reason)``.
     """
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         download_file_chunked,
+        exists,
         upload_file,
     )
+
+    if source_store is target_store and source_key == target_key:
+        # Copying an object onto itself: no bytes to move and no sidecar to
+        # compare. But "satisfied" must mean the object is actually there — a
+        # stale FileReference pinned to a key that was never written would
+        # otherwise buy a durable-looking success out of nothing. When the key
+        # came from a listing that is already proven; otherwise one HEAD settles
+        # it, and an absent object falls through to the copy path below, which
+        # fails with the same not-found error any other leg would raise.
+        if source_listed or await exists(source_key, source_store, normalize=False):
+            # Still progress for the heartbeat — one key resolved.
+            current_progress_tracker().mark_progress("storage.copy_file")
+            return False, "skipped:same_object"
 
     if await _cross_store_sha256_match(
         source_store, source_key, target_store, target_key
@@ -657,7 +693,11 @@ async def upload(
                 )
             async with sem:
                 ok, _ = await _upload_from_store(
-                    source_resolved, source_key, resolved, target_key
+                    source_resolved,
+                    source_key,
+                    resolved,
+                    target_key,
+                    source_listed=True,  # came from _list_source_data_keys
                 )
                 return ok
 
@@ -722,6 +762,7 @@ async def upload(
                         source_key,
                         resolved,
                         f"{fallback_prefix}/{rel}" if fallback_prefix else rel,
+                        source_listed=True,  # came from _list_source_data_keys
                     )
                     return ok
 

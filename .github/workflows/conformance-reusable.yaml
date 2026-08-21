@@ -93,7 +93,13 @@ on:
         default: ""
         type: string
       event_name:
-        description: "Caller's github.event_name (push / pull_request / merge_group); reusable workflows always see 'workflow_call' internally"
+        description: >
+          Caller's github.event_name (push / pull_request / merge_group).
+          Taken as an input, not read from the context, so a caller can
+          declare push semantics deliberately — the SDK's sdk-gate.yaml
+          does exactly that. (A called reusable workflow does see the
+          caller's real event in github.event_name, not 'workflow_call';
+          the input is a choice, not a workaround.)
         required: false
         default: ""
         type: string
@@ -404,9 +410,9 @@ jobs:
 
       - name: "Set up uv"
         if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all
-        uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.3"
+          version: "0.12.5"
 
       # Only the D-series leg materialises the caller's environment (the detect
       # action's needs-env `uv sync`); the other series run from an isolated
@@ -517,9 +523,9 @@ jobs:
           fetch-depth: 0
 
       - name: "Set up uv"
-        uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.3"
+          version: "0.12.5"
 
       - name: "Guard contract_schema.lock.json (published package)"
         if: inputs.conformance-ref == ''

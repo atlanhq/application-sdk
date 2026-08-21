@@ -10,10 +10,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
-from application_sdk.testing.full_dag import BaseFullDAGE2ETest, RunMode
+from application_sdk.testing.full_dag import BaseFullDAGE2ETest, RunMode, base
 from application_sdk.testing.full_dag._errors import (
     HarnessMethodNotImplementedError,
     ManifestDagMissingError,
@@ -516,3 +517,61 @@ def test_seed_dag_relative_path_resolved_against_cwd(
     dag = instance._seed_dag_from_manifest(extract_task_queue="atlan-mysql-test")
     assert "extract" in dag
     assert dag["extract"]["app_name"] == "mysql"
+
+
+class TestFullDAGColdStartBudget:
+    """The deprecated harness sizes its submit retry like the e2e one (FND-402).
+
+    DIRECT-mode legs on this alias submit against the same freshly-installed
+    tenant app pod, so they need the same cold-start budget — the default 4x5s
+    would fail the leg on the boot race instead of waiting it out.
+    """
+
+    def test_run_full_dag_passes_the_cold_start_budget_to_submit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _bootstrap_env(monkeypatch)
+        harness = _make_test()()
+        harness.setup_method()
+        harness.client = MagicMock()
+        harness.client.submit_workflow.return_value = "run-1"
+        monkeypatch.setattr(
+            type(harness), "_bootstrap_workflow", lambda self: "slug", raising=False
+        )
+        monkeypatch.setattr(base, "build_ae_payload", lambda **kwargs: {"slug": "s"})
+        # Stop right after the submit — the polls beyond it are covered elsewhere.
+        harness.client.poll_native_status.side_effect = RuntimeError(
+            "stop after submit"
+        )
+        with pytest.raises(RuntimeError, match="stop after submit"):
+            harness.run_full_dag()
+        _, kwargs = harness.client.submit_workflow.call_args
+        assert kwargs == {
+            "slug": "slug",
+            "retries": 60,
+            "retry_sleep_seconds": 5,
+        }
+
+    def test_zero_budget_defers_to_submit_workflow_defaults(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """0 passes no budget overrides at all, matching BaseE2ETest. The slug
+        is threaded regardless — it is not part of the cold-start budget."""
+        _bootstrap_env(monkeypatch)
+        cls = _make_test()
+        cls.app_ready_timeout_seconds = 0
+        harness = cls()
+        harness.setup_method()
+        harness.client = MagicMock()
+        harness.client.submit_workflow.return_value = "run-1"
+        monkeypatch.setattr(
+            cls, "_bootstrap_workflow", lambda self: "slug", raising=False
+        )
+        monkeypatch.setattr(base, "build_ae_payload", lambda **kwargs: {"slug": "s"})
+        harness.client.poll_native_status.side_effect = RuntimeError(
+            "stop after submit"
+        )
+        with pytest.raises(RuntimeError, match="stop after submit"):
+            harness.run_full_dag()
+        _, kwargs = harness.client.submit_workflow.call_args
+        assert kwargs == {"slug": "slug"}

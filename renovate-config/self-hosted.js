@@ -41,15 +41,57 @@ module.exports = {
   // on merge). A disabled manager never extracts, so no workflow file is touched.
   "github-actions": { enabled: false },
 
-  // Authorize ONLY the pkl-sync driver as a post-upgrade command. (This option
-  // was renamed from `allowedPostUpgradeCommands` to `allowedCommands`.) It is
-  // matched against the raw command string in the shared preset's
-  // postUpgradeTasks. The command is a bare PATH executable with NO ${VARS}:
+  // Authorize exactly one post-upgrade command, nothing else. (This option was
+  // renamed from `allowedPostUpgradeCommands` to `allowedCommands`.)
+  //
+  // The pkl-sync driver: a bare PATH executable with NO ${VARS}, because
   // Renovate does not shell-expand post-upgrade commands, so any ${VAR} would be
-  // passed literally (the pilot caught exactly that). The workflow installs the
-  // driver as /usr/local/bin/renovate-pkl-sync. Child processes the driver
-  // spawns (pkl, uvx ruff, git) need no entry — only top-level commands are vetted.
+  // passed literally (the pilot caught exactly that). The workflow installs it as
+  // /usr/local/bin/renovate-pkl-sync. Child processes the driver spawns (pkl,
+  // uvx ruff, git) need no entry — only top-level commands are vetted.
+  //
+  // The entry is matched against the raw command strings in the shared preset's
+  // postUpgradeTasks; keep the two in step. A command the allowlist does not
+  // match is skipped with a log line and nothing else, so the failure is silent
+  // — .github/scripts/check_renovate_allowed_commands.py guards the pairing.
+  //
+  // The release-age driver: applies the org §5 cooldown to the lock-refresh lane
+  // by re-resolving under `--exclude-newer` and then stripping uv's `[options]`
+  // block, so the lock's CONTENT is bounded while its recorded resolver settings
+  // stay default and `uv sync --locked` still validates downstream. See the
+  // lockFileMaintenance description in default.json for why the bound lives in
+  // this command rather than in every repo's pyproject.toml.
+  //
+  // An earlier `uv lock --exclude-newer` entry here (FND-367) was reverted, and
+  // the reason is worth keeping in view rather than repeating: a command this
+  // allowlist does not match is skipped with a log line and nothing else. When a
+  // config-resolution race meant that entry was not yet live, the lock refreshed
+  // unbounded and pulled a package published three minutes earlier, with no red
+  // check anywhere to show for it. A control whose failure mode is silent is not
+  // a control. Two things now stand behind this pairing: the preset sets
+  // statusCheckWhen.artifactError=always so a skipped/failed task publishes a red
+  // renovate/artifacts context, and renovate-auto-approve-reusable.yml withholds
+  // the atlan-ci approval unless that context is green — so a silently unbounded
+  // lock cannot auto-merge. .github/scripts/check_renovate_allowed_commands.py
+  // asserts the preset↔allowlist pairing in CI so the drift is caught earlier
+  // still. Keep the regex in step with the preset's command string, exactly.
   allowedCommands: [
     "^renovate-pkl-sync --contract-dir contract --regenerate (true|false) --no-commit$",
+    // Fully literal, deliberately: the window and the exempt set are policy, so
+    // changing either must edit this file as well as the preset, and the guard
+    // test fails until both agree. Avoid character classes and backslashes in
+    // these entries — a `]` truncates the allowlist the guard parses, and a
+    // backslash means something different to the JS string literal than to the
+    // regex ("\d" is just "d" in JS, silently breaking the pattern at runtime).
+    "^renovate-uv-lock-bounded --window P3D --exempt atlan-application-sdk --exempt atlan-application-sdk-conformance --exempt pyatlan$",
+    // The contract-ledger driver (FND-607): regenerates contract_schema.lock.json
+    // at the conformance version the branch just locked, so a release that adds a
+    // field to the SDK contract-base registry does not red B006 across the fleet
+    // on the very lane that adopts it. Argument-free on purpose — the version has
+    // to be read from uv.lock because Renovate does not shell-expand these
+    // commands, so there is no way to interpolate it into the string. The
+    // anchored empty-argument pattern is therefore also the tightest one
+    // available: nothing an upgrade could influence reaches the command line.
+    "^renovate-contract-ledger$",
   ],
 };

@@ -52,12 +52,18 @@ name: tests-reusable
 #   A caller-supplied `test-paths` scopes the INTEGRATION job only; the unit job
 #   always runs tests/unit/.
 #
-# GitHub check name hierarchy (caller → tests-reusable):
+# GitHub check name hierarchy as the UI displays it (caller → tests-reusable):
 #   Tests / tests / Unit         (every event)
 #   Tests / tests / Integration  (merge queue if the base branch has one, else
 #                                 on the PR; skipped when there is no suite)
 #   Tests / tests / End-to-end   (label / dispatch)
 #   Tests / tests / Tests Gate   (aggregator — the required check)
+#
+# Branch protection does NOT use those display strings. A ruleset's
+# required_status_checks `context` is the check-run name, which omits the
+# workflow name: require `tests / Tests Gate` — the caller's job id, then this
+# job's name. (Verified against atlan-mysql-app's live `main` ruleset, which
+# also carries `suite / Conformance Gate`; an inline job is a single segment.)
 #
 # Nested reusable depth: caller → tests-reusable = 2 (GitHub max is 4).
 # secrets: inherit chains from the caller; the inlined e2e job reads secrets.*.
@@ -131,7 +137,7 @@ on:
       install-app-to-tenant:
         required: false
         type: boolean
-        default: false
+        default: true
         description: |
           Install the app under test onto each cloud's e2e tenant before the
           legs run, and fail a leg whose tenant is not on that version (FND-31).
@@ -144,10 +150,21 @@ on:
           tenant — which is nobody's PR — and a manifest/DAG/entrypoint change
           can go green against an older contract, or red for an unrelated reason.
 
-          Off by default because turning it on makes tenant health a gate: a
-          tenant that cannot be installed to reds the leg rather than quietly
-          testing the wrong version. Adopt it per repo once that trade is
-          understood.
+          ON by default since FND-128. It shipped opt-in (FND-31) for one
+          reason: `E2E_TENANT_MATRIX_JSON` was shared with a handful of repos,
+          and without it the install cannot resolve a tenant at all. That secret
+          is now org-wide, so the prerequisite that justified per-repo adoption
+          is gone — and leaving it opt-in meant every un-adopted repo ran the
+          cross-CSP matrix against whatever version each tenant already served,
+          which is three legs of wrong-version green instead of one.
+
+          Set it to false to opt OUT, for the case this default cannot serve: an
+          app that genuinely cannot be installed onto the e2e tenants (not
+          published to GM, or a tenant carrying an orphan that fails every
+          install — FND-131). That is a real escape hatch and it stays; what
+          changed is which way round the default points. Opting out restores the
+          pre-FND-31 behaviour, wrong-version risk included, so prefer fixing
+          the tenant.
       e2e-clouds:
         required: false
         type: string
@@ -163,11 +180,17 @@ on:
           discover_e2e_suites.py's DEFAULT_CLOUDS — deliberately NOT restated
           here, so adding a fourth CSP is one edit rather than one per repo, and
           so an app forwarding an untouched dispatch input doesn't opt out of
-          the matrix by accident.
+          the matrix by accident — intersected with the clouds the tenant secret
+          actually carries (FND-354). Removing a cloud's entry from
+          E2E_TENANT_MATRIX_JSON is therefore the fleet-wide way to take it out
+          of the rotation while its tenant is down: one secret edit, no PR,
+          effective next run, and warned about in the log of every run it
+          narrows. A cloud named HERE is never narrowed away — it reaches the
+          per-leg resolver and fails there, because naming it asserts it should
+          run.
 
           Narrow it to re-run one cloud ("aws"), or pass "none" to collapse back
-          to the single legacy tenant — the escape hatch when a tenant is down
-          and the fleet should not be blocked on it. Forced to "none" when
+          to the single legacy tenant. Forced to "none" when
           E2E_TENANT_MATRIX_JSON is not shared with the calling repo, which is
           what keeps un-onboarded repos on their existing behaviour.
       timeout-minutes:
@@ -247,11 +270,13 @@ on:
           exports every raw field VERBATIM as E2E_<DATASOURCE>_<FIELD> env
           before the secrets bundle is written (no canonical shape imposed:
           the connector's own secrets script maps fields onto its config,
-          whatever its auth variant). DATAFORGE-FIRST with automatic fallback:
-          the fetch runs AFTER the E2E_SOURCE_ENV_JSON export and overwrites
-          it on success; the whole dataforge chain (VPN, fetch) is
-          continue-on-error, so when dataforge is unavailable the repo's own
-          creds — or the connector's hermetic source — carry the run.
+          whatever its auth variant). REPO-CREDS-FIRST: the fetch runs ONLY when
+          no E2E_SOURCE_ENV_JSON was provided (every dataforge step gates on it),
+          so a connector with repo creds never dials the VPN — dataforge is the
+          fallback for connectors that have no repo creds, not the primary. The
+          whole dataforge chain (VPN, fetch) is continue-on-error, so when
+          dataforge is unavailable the connector's hermetic source carries the
+          run.
           READ-ONLY against the source: the job only fetches credentials —
           it never seeds, curates, or mutates the instance. Curating the
           dataset is the instance owner's one-time setup (see the
@@ -286,15 +311,26 @@ on:
         type: string
         default: "true"
         description: |
-          Whether this connector can run its e2e suite against a local
+          Whether this connector can run its suite against a local
           hermetic source (a seeded sibling container) when neither the
           dataforge fetch nor E2E_SOURCE_ENV_JSON produced credentials.
           Set "false" for SaaS-style connectors with no hermetic option:
           the source-resolution step then FAILS FAST with an explicit
           "no e2e source available" error instead of letting the leg limp
           to the extract node and die minutes later on a cryptic
-          empty-credential auth failure. Only consulted when
-          dataforge-datasource is set.
+          empty-credential auth failure. Only consulted when neither
+          credential path resolved (a dataforge fetch or E2E_SOURCE_ENV_JSON
+          short-circuits ahead of it).
+          ONE input, BOTH tiers — e2e and integration read this same value, so
+          a connector cannot be fatal in one tier and forgiving in the other.
+          Note the consequence of the "true" default on the INTEGRATION tier,
+          which is the merge gate: a connector with no hermetic source that
+          leaves this at the default turns an unresolved source into a green
+          job rather than a failure. Connectors that cannot seed a local
+          source — every SaaS-style one — should set "false" when they opt into
+          dataforge-datasource. The default stays "true" because the majority
+          of callers are containerizable and must not be reddened by a
+          dataforge/VPN outage; opting out is the control for the rest.
       private-git-deps:
         required: false
         type: boolean
@@ -719,6 +755,11 @@ jobs:
     permissions:
       pull-requests: write
       contents: read
+      # For the dataforge fetch's OIDC path (no stored dataforge secret): the
+      # runner mints a per-run identity token the fetch script exchanges for a
+      # 1h credentials:read token. Harmless when the dataforge inputs are unset.
+      # Mirrors the e2e job — both tiers resolve the SAME pinned instance.
+      id-token: write
     outputs:
       summary: ${{ steps.integration.outputs.summary }}
     env:
@@ -726,6 +767,11 @@ jobs:
       # Surfaced as env because a step-level `if:` cannot read the secrets
       # context, and the export steps below are gated on it being set.
       E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
+      # Pinned dataforge instance UUID (dataforge-mode "resource"). The e2e job
+      # reads the same secret, so pinning it makes both tiers fetch byte-identical
+      # source credentials from one locked instance, never two. Empty when the
+      # caller does not use dataforge; the fetch chain below then self-skips.
+      DATAFORGE_RESOURCE_ID: ${{ secrets.DATAFORGE_RESOURCE_ID }}
       # Same reason: the rewrite step gates on the credential, not the flag.
       GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
     steps:
@@ -759,12 +805,15 @@ jobs:
           git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
           git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
 
-      # Connector SOURCE credentials (E2E_SOURCE_ENV_JSON). Exported here rather
-      # than passed to the composite action below, because every action this
-      # workflow calls is pinned @main: an input added on a feature branch is
-      # silently ignored until it lands. Sparse-checks-out only .github/scripts.
-      - name: Fetch SDK CI scripts (source-credential export)
-        if: env.E2E_SOURCE_ENV_JSON != ''
+      # Connector SOURCE credentials (E2E_SOURCE_ENV_JSON) and, when the caller
+      # sets dataforge-datasource, the dataforge fetch scripts + the VPN action.
+      # Exported/run here rather than passed to the composite action below,
+      # because every action this workflow calls is pinned @main: an input added
+      # on a feature branch is silently ignored until it lands. Sparse-checks-out
+      # .github/scripts and globalprotect-connect (the latter needed only on the
+      # dataforge path — a couple of extra files otherwise).
+      - name: Fetch SDK CI scripts (source-credential export + dataforge fetch)
+        if: env.E2E_SOURCE_ENV_JSON != '' || inputs.dataforge-datasource != ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
@@ -778,10 +827,16 @@ jobs:
           # Enterprise Server (no effect on github.com callers), and actionlint
           # <=1.7.7 predates them, so it reports a false "property not defined".
           ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/scripts
+            .github/actions/globalprotect-connect
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          # No `token:` here: application-sdk is public, so the run's own
+          # github.token reads it regardless of whether the caller supplies
+          # ORG_PAT_GITHUB — preferring the org-wide PAT for a same-repo,
+          # public checkout would only burn its shared rate limit for no
+          # benefit. Matches the e2e job's equivalent checkout.
           persist-credentials: false
 
       # Two invocations, and the order is the security property. `E2E_SOURCE_ENV_JSON`
@@ -804,6 +859,108 @@ jobs:
             --json "$E2E_SOURCE_ENV_JSON" --mask-only
           python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
             --json "$E2E_SOURCE_ENV_JSON" >> "$GITHUB_ENV"
+
+      # ── source resolution (FND-205), integration tier ───────────────────
+      # Precedence is REPO-CREDS-FIRST, to keep the VPN off the hot path: when
+      # the caller provides E2E_SOURCE_ENV_JSON (repo creds, exported above), the
+      # whole dataforge chain below self-skips — every fetch step gates on
+      # `E2E_SOURCE_ENV_JSON == ''` — so no VPN is dialled. Only when there are
+      # NO repo creds does an opted-in connector (dataforge-datasource set) fetch
+      # from dataforge over the VPN. Mirrors the e2e job step-for-step and reads
+      # the SAME dataforge-datasource + DATAFORGE_RESOURCE_ID, so the two tiers
+      # resolve the identical pinned instance whenever they do reach dataforge.
+      #
+      # The fetch steps are continue-on-error so a transient dataforge/VPN blip
+      # (the VPN connect already retries 3x) doesn't redden the job by itself.
+      # The "Resolve source" step below is the compensating control: it FAILS the
+      # job when a source was expected but NONE resolved — no repo creds, no
+      # dataforge creds, and the connector declared no hermetic container
+      # (dataforge-hermetic-fallback: false). A connector that CAN seed one and
+      # left the input at its "true" default degrades to that seeded source
+      # instead — the fetch was still attempted, so the VPN was dialled, but a
+      # blip there no longer decides the job. Apps that set neither
+      # dataforge-datasource nor E2E_SOURCE_ENV_JSON self-skip the whole chain,
+      # fail-fast included.
+      # READ-ONLY: the job only fetches credentials; it never seeds or mutates
+      # the instance (curation is the instance owner's one-time setup).
+      #
+      # Atlan's internal ELBs share Docker's default 172.17/16 bridge subnet;
+      # re-subnet Docker BEFORE the tunnel so containers keep working while
+      # 172.17/16 routes via tun0.
+      - name: Move docker networks off Atlan's 172.17/16 (dataforge path)
+        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == ''
+        continue-on-error: true
+        run: |
+          set -e
+          sudo mkdir -p /etc/docker
+          echo '{"bip": "192.168.49.1/24", "default-address-pools": [{"base": "192.168.128.0/17", "size": 24}]}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+
+      # dataforge's api host and the provisioned sources admit only the VPN
+      # egress IPs. This repo's own globalprotect-connect action (unmodified),
+      # from the job.workflow_sha sparse checkout — same provenance pinning as
+      # the scripts above.
+      - name: Connect to GlobalProtect VPN (dataforge path)
+        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == ''
+        continue-on-error: true
+        uses: ./application-sdk-scripts/.github/actions/globalprotect-connect
+        with:
+          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+          mothership-url: https://api.dataforge.atlan.dev
+
+      # Dataforge-sourced connector credentials. The fetch's stdout is captured
+      # into a shell variable — values never reach the log — and handed to
+      # export_extra_env.py, whose mask-first two-pass protocol is the audited
+      # path into $GITHUB_ENV. One fetch feeds both passes, so the masked strings
+      # and the written strings can never diverge. Auth is the run's GitHub OIDC
+      # token exchanged at dataforge — no stored dataforge secret (needs the
+      # job's id-token permission, added above, and a dataforge workload binding
+      # for the repo).
+      - name: Fetch connector source credentials from dataforge
+        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == ''
+        continue-on-error: true
+        env:
+          DF_DATASOURCE: ${{ inputs.dataforge-datasource }}
+          DF_MODE: ${{ inputs.dataforge-mode }}
+          DF_ENV_TIER: ${{ inputs.dataforge-env-tier }}
+          DF_OUTPUT_PREFIX: ${{ inputs.dataforge-output-prefix }}
+        run: |
+          set -euo pipefail
+          DF_ENV_JSON="$(python3 application-sdk-scripts/.github/scripts/fetch_dataforge_source.py \
+            --datasource "$DF_DATASOURCE" \
+            --mode "$DF_MODE" \
+            --resource-id "$DATAFORGE_RESOURCE_ID" \
+            --env-tier "$DF_ENV_TIER" \
+            --output-prefix "$DF_OUTPUT_PREFIX")"
+          python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
+            --json "$DF_ENV_JSON" --mask-only
+          python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
+            --json "$DF_ENV_JSON" >> "$GITHUB_ENV"
+
+      # The compensating control for the continue-on-error fetch above: this step
+      # has no continue-on-error, so it reports the resolved source and — when
+      # nothing resolved (E2E_SOURCE_DATASOURCE breadcrumb absent AND no
+      # E2E_SOURCE_ENV_JSON) — fails the job one minute in, with the fix in the
+      # message, instead of letting the leg limp on empty credentials.
+      #
+      # Whether "nothing resolved" is fatal is the CALLER's declaration, exactly
+      # as in the e2e job: hermetic-fallback is wired to
+      # dataforge-hermetic-fallback (default "true"), so a connector that can run
+      # its suite against a locally seeded source degrades to it, and a connector
+      # that cannot MUST set "false" to get the hard error. That default is
+      # deliberate — the two tiers read one input, so a connector cannot be fatal
+      # in one and forgiving in the other — but it does mean a source-less
+      # connector left on the default greens this merge-gating job on code it
+      # never exercised against a real source. The opt-out is the control; see the
+      # dataforge-hermetic-fallback input description. Reuses the e2e job's
+      # script verbatim.
+      - name: Resolve integration source
+        if: inputs.dataforge-datasource != '' || env.E2E_SOURCE_ENV_JSON != ''
+        env:
+          DF_HERMETIC_FALLBACK: ${{ inputs.dataforge-hermetic-fallback }}
+        run: python3 application-sdk-scripts/.github/scripts/resolve_e2e_source.py
 
       # Unit runs in its own job; integration defaults to tests/integration/.
       # A caller test-paths override scopes THIS job only. The ternary is a
@@ -879,6 +1036,24 @@ jobs:
       # e2e-full-reusable.yaml's plan-clouds has always guarded on the count for
       # exactly this reason.
       cloud-count: ${{ steps.discover-clouds.outputs.count }}
+      # The same cloud dimension as a flat list, for lease-tenant — which is ONE
+      # job that takes every cloud's lease in order rather than a matrix leg per
+      # cloud (FND-646), so it needs the list and not a matrix.
+      #
+      # Emitted from the SAME action call as `cloud-matrix` above, not from the
+      # suite fan-out's `clouds` below. The two calls resolve identically today
+      # and a test pins that, but a lease set that missed a cloud the install
+      # then ran against would be an unserialised install rather than a visible
+      # failure — so this takes the distinction out of play entirely.
+      cloud-list: ${{ steps.discover-clouds.outputs.clouds }}
+      # The resolved cloud list as a flat string, for the scorecard's descriptive
+      # `observed` field (FND-34). Taken from the SAME action call that emitted
+      # the matrix, so "what we recorded as covered" and "what actually ran"
+      # cannot disagree — the failure mode that makes a coverage metric worse
+      # than no metric. Empty means no cloud dimension: the legs ran against the
+      # single legacy tenant. The scorecard records that as `observed: []`, which
+      # is distinct from omitting the field when e2e never ran at all.
+      clouds: ${{ steps.discover.outputs.clouds }}
     env:
       # Job-level so the step-level `if:` below can read it — a step condition
       # cannot reference the `secrets` context directly.
@@ -928,18 +1103,58 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "::error::install-app-to-tenant is on but E2E_TENANT_MATRIX_JSON is not available to this repository, so no tenant ID can be resolved and a release cannot be scoped to any tenant. GM matches allowed_tenants EXACTLY against the tenant's vcluster instance name (e.g. 'markeznp37') — not its hostname — and the legacy single-tenant fallback (SDR_TEST_TENANT) has no matrix entry to carry that value, so there is nothing to fall back to. Either share E2E_TENANT_MATRIX_JSON with this repository, with a 'tenant_id' field on each cloud's entry (see docs/standards/connector-ci-e2e.md), or leave install-app-to-tenant off and use the E2E Tenant Install workflow, whose tenant_id input covers the one-off case. Failing at discovery rather than at prepare-tenant so this costs seconds instead of two image builds."
+          echo "::error::the tenant-install path is on (the default since FND-128) but E2E_TENANT_MATRIX_JSON is not available to this repository, so no tenant ID can be resolved and a release cannot be scoped to any tenant. GM matches allowed_tenants EXACTLY against the tenant's vcluster instance name (e.g. 'markeznp37') — not its hostname — and the legacy single-tenant fallback (SDR_TEST_TENANT) has no matrix entry to carry that value, so there is nothing to fall back to. Either share E2E_TENANT_MATRIX_JSON with this repository, with a 'tenant_id' field on each cloud's entry (see docs/standards/connector-ci-e2e.md), or set 'install-app-to-tenant: false' in this repo's tests.yaml and use the E2E Tenant Install workflow, whose tenant_id input covers the one-off case. Failing at discovery rather than at prepare-tenant so this costs seconds instead of two image builds."
           exit 1
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
+      # ── Which clouds the secret actually carries (FND-354) ─────────────────
+      # Sparse-checked-out rather than folded into the discover action, and
+      # `ref: job.workflow_sha` rather than @main, for the reason the source-
+      # credential export gives at length: an action pinned @main cannot see a
+      # change until it lands, whereas a script pulled at the workflow's own SHA
+      # is testable on the branch that changes it. `repository:` stays hardcoded
+      # so the executed payload's provenance is pinned; application-sdk is
+      # public, so the caller's default token reads it when ORG_PAT_GITHUB is
+      # not shared.
+      - name: Fetch SDK CI scripts (tenant-matrix cloud keys)
+        if: env.HAS_TENANT_MATRIX != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+          persist-credentials: false
+
+      # The KEY LIST, never the blob: the credentials stay with the per-leg
+      # resolver, which is the only thing that needs them. Skipped without the
+      # secret, and a skipped step's output is "" — which discovery reads as
+      # "not known" and narrows nothing, the same as before FND-354.
+      - name: Read the tenant matrix's cloud keys
+        id: matrix-clouds
+        if: env.HAS_TENANT_MATRIX != ''
+        env:
+          E2E_TENANT_MATRIX_JSON: ${{ secrets.E2E_TENANT_MATRIX_JSON }}
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/scripts/e2e_tenant_matrix_clouds.py \
+            --matrix-json "$E2E_TENANT_MATRIX_JSON" >> "$GITHUB_OUTPUT"
+
       - name: Discover suites
         id: discover
         uses: atlanhq/application-sdk/.github/actions/discover-e2e-suites@main
         with:
           test-dir: ${{ inputs.e2e-test-path }}
+          # Narrows the DEFAULTED cloud list to what the secret carries, so
+          # dropping a cloud from E2E_TENANT_MATRIX_JSON takes it out of the
+          # rotation fleet-wide instead of reding one leg in every repo that
+          # runs e2e. A cloud named explicitly in e2e-clouds is NOT narrowed —
+          # it reaches the resolver and still fails there. FND-354.
+          available-clouds: ${{ steps.matrix-clouds.outputs.clouds }}
           # The cloud dimension is only meaningful when the tenant map exists;
           # without it every leg would resolve the same fallback tenant, so N
           # identical runs would masquerade as N clouds of coverage. Collapsing
@@ -969,6 +1184,11 @@ jobs:
         with:
           clouds-only: "true"
           clouds: ${{ secrets.E2E_TENANT_MATRIX_JSON == '' && 'none' || inputs.e2e-clouds }}
+          # Same narrowing as the full matrix above, from the same step output:
+          # prepare-tenant must install onto exactly the clouds the legs then
+          # run against, and a cloud it prepared but no leg used (or vice versa)
+          # is the drift the duplicated `clouds` expression already guards.
+          available-clouds: ${{ steps.matrix-clouds.outputs.clouds }}
 
       # A repo that has not been granted the tenant-matrix secret silently gets
       # one cloud's worth of coverage from a workflow that asked for three.
@@ -1013,9 +1233,10 @@ jobs:
   # can install it, so the build is hoisted here and every leg reuses the
   # reference via sdr-e2e's `prebuilt-image` input.
   #
-  # Only runs on the install path: with install-app-to-tenant off, each leg keeps
-  # building its own image exactly as before, so an unadopted repo sees no change
-  # at all (not even a different build ordering).
+  # Only runs on the install path, which is now the default: a repo that has set
+  # install-app-to-tenant: false keeps building its own image per leg exactly as
+  # before, so opting out restores the previous behaviour down to the build
+  # ordering.
   # Two machines pull this image and they are not the same architecture: this
   # runner, which runs the per-leg worker under docker compose, and the TENANT'S
   # cluster node, which serves the app Heracles fetches the DAG from at submit.
@@ -1137,7 +1358,7 @@ jobs:
 
       # Buildx for `imagetools`, which is a buildx subcommand.
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
 
       - name: Create the multi-arch manifest
         env:
@@ -1205,37 +1426,133 @@ jobs:
   # the order runs reach this job, and a total order gives fairness rather than
   # exclusion. Exclusion needs an atomic primitive — see the module docstring.
   #
-  # Same gate and same cloud matrix as prepare-tenant: no install, no contention
-  # worth serialising — the legs of a non-installing run cannot lose a version
-  # race because nothing changes the version under them.
-  lease-tenant:
-    name: Tenant lease (${{ matrix.cloud || 'default' }})
-    needs: [discover-e2e, merge-e2e-image]
+  # ONE job for every cloud, not a matrix leg per cloud — and that is the fix for
+  # a deadlock, not a tidy-up (FND-646). The matrix acquired each cloud's lease in
+  # PARALLEL and held it for the whole run while blocking on the rest, which is
+  # hold-and-wait. It deadlocked the first time two runs queued behind one holder:
+  # the holder released all three leases at once, the two waiters raced for the
+  # freed set and SPLIT it (one took aws + azure, the other gcp), and each then
+  # blocked on what the other held for the full 90-minute budget. Any time two or
+  # more runs are queued behind a holder, a parallel matrix makes that split the
+  # EXPECTED outcome.
+  #
+  # So this job takes them one at a time, in an order that is a pure function of
+  # the cloud names, and gives back everything it took if it cannot get the whole
+  # set (see acquire_ordered). Resource ordering makes a cycle impossible, so the
+  # worst case degrades from mutual blocking to plain serialisation. Nothing is
+  # ever cancelled: a queued run waits and then proceeds. That matters because
+  # cancelling is not a safe alternative here — prepare-tenant carries
+  # `if: always()`, so a cancelled run finishes installing onto the tenants it
+  # had already leased on its way out.
+  #
+  # Same gate as prepare-tenant: no install, no contention worth serialising —
+  # the legs of a non-installing run cannot lose a version race because nothing
+  # changes the version under them.
+  # ── Is the SDK commit under test still the one under review? ─────────────
+  # The SDK-side dispatch guard drops a fan-out whose SHA has already been
+  # superseded (e2e_dispatch_guard.py, FND-696), but it can only see the window
+  # UP TO the dispatch. A push landing after it leaves this run already in
+  # flight for a commit nobody will merge, and the tenant lease below then does
+  # exactly what it promises — it QUEUES, so the live commit waits out this
+  # run's entire install-plus-legs cycle. On application-sdk PR #3322 that was
+  # 3m38s, 10m12s and 12m of pure lease wait across three connectors.
+  #
+  # This job is the second half of that fix (FND-701), and it is worth being
+  # precise about which half. A dispatched run that has ALREADY leased cannot be
+  # helped: cancelling it is unsafe, because prepare-tenant carries
+  # `if: always()` and finishes installing onto the tenants it holds on its way
+  # out — so for that run the queue is the right answer. A run that has
+  # dispatched but NOT yet leased is a different thing entirely. It is still
+  # building the image and running unit and integration tests — 2m30s on the
+  # openapi leg of #3322, dispatched 21:07:38 and leased 21:10:10 — and it holds
+  # nothing at all, so it can stand down for free.
+  #
+  # Placed here rather than earlier on purpose: the answer is only worth as much
+  # as its freshness, so it is asked as close to the lease as the DAG allows.
+  #
+  # It cannot fail this run. The script exits 0 on every path and answers
+  # "false" to every doubt, and the gates below read the OUTPUT rather than the
+  # job result, so even an outright job failure leaves the lease happening —
+  # which is the pre-existing behaviour.
+  sdk-head-recheck:
+    name: Recheck the dispatched SDK ref
+    needs: [merge-e2e-image]
     if: inputs.install-app-to-tenant && needs.merge-e2e-image.result == 'success'
-    strategy:
-      # One cloud's queue being stuck must not cancel the others.
-      fail-fast: false
-      matrix: ${{ fromJson(needs.discover-e2e.outputs.cloud-count != '0' && needs.discover-e2e.outputs.cloud-matrix || '{"include":[{"cloud":""}]}') }}
     runs-on: ubuntu-latest
-    # Above the action's own 90-minute wait budget, so a run that queues for the
-    # full budget still reaches the script's own error — which names the holding
-    # run — instead of being replaced by a bare "job cancelled after Nm".
+    timeout-minutes: 5
+    permissions:
+      # Nothing beyond the default. Every read is of public data in
+      # application-sdk — a ref, the blob it points at, and a pull request — and
+      # a connector's own github.token can already do that.
+      contents: read
+    outputs:
+      superseded: ${{ steps.recheck.outputs.superseded }}
+    steps:
+      - name: Recheck the dispatched SDK ref
+        id: recheck
+        uses: atlanhq/application-sdk/.github/actions/e2e-dispatch-recheck@main
+        with:
+          sdk-ref: ${{ inputs.application-sdk-ref }}
+          # The claim ref the SDK wrote is keyed on the connector REPOSITORY
+          # name, which is what its dispatch matrix iterates over — not the
+          # short app-name. Derived from github.repository so the two cannot
+          # disagree, and so a connector whose app-name and repo differ (every
+          # one of them: "openapi" vs "atlan-openapi-app") still finds its claim.
+          app: ${{ github.event.repository.name }}
+
+  lease-tenant:
+    name: Tenant lease
+    needs: [discover-e2e, merge-e2e-image, sdk-head-recheck]
+    # `always()` here is load-bearing and is what makes the recheck fail-open. A
+    # job's `needs` gate is evaluated separately from its `if:`, and without a
+    # status-check function GitHub applies an implicit success() over every need
+    # — so a recheck job that died on infrastructure would SKIP the lease, and a
+    # skipped lease skips the install and greens the run vacuously. Lifting the
+    # implicit check and reading the OUTPUT instead means an absent answer (job
+    # failed, job skipped, output never written) leases exactly as before.
+    #
+    # Because always() lifts that implicit check, discover-e2e and
+    # merge-e2e-image have to be named explicitly; they were previously carried
+    # by it. Same shape and same reason as prepare-tenant and the e2e legs below.
+    if: |
+      always() &&
+      inputs.install-app-to-tenant &&
+      needs.discover-e2e.result == 'success' &&
+      needs.merge-e2e-image.result == 'success' &&
+      needs.sdk-head-recheck.outputs.superseded != 'true'
+    runs-on: ubuntu-latest
+    # Above the action's own 90-minute wait budget, which is now a budget for the
+    # WHOLE ordered set rather than per cloud — so this still bounds the job, and
+    # a run that queues for the full budget still reaches the script's own error
+    # (which names the holding run) instead of a bare "job cancelled after Nm".
     timeout-minutes: 100
     permissions:
       # Ref writes create and delete the lease ticket. Scoped to THIS job on
       # purpose: the long-running e2e legs below keep read-only contents, so the
       # write capability lives only in a job that runs no test code.
+      #
+      # A called workflow's permissions can only EQUAL or NARROW the caller's, so
+      # this declaration is a ceiling and not a grant: if the calling repo's
+      # `tests:` job has no `contents: write` — because it declares a narrower
+      # `permissions:` block, or because the repo default is read-only — the
+      # acquire below fails, by design and with an error naming the grant
+      # (FND-702). The canonical scaffolded tests.yaml declares the whole set for
+      # exactly this reason.
       contents: write
       # Tell a live holder from a dead one, which is what makes a cancelled run's
       # abandoned ticket self-healing.
       actions: read
     steps:
-      - name: Acquire the tenant lease
+      - name: Acquire the tenant leases
         uses: atlanhq/application-sdk/.github/actions/e2e-tenant-lease@main
         with:
           mode: acquire
           app: ${{ inputs.app-name }}
-          cloud: ${{ matrix.cloud }}
+          # The clouds prepare-tenant will install onto, from the same discovery
+          # call that built its matrix. Empty is the single-tenant fallback path
+          # and the action leases "default" for it, which is what prepare-tenant's
+          # own fallback leg (`cloud: ""`) verifies.
+          clouds: ${{ needs.discover-e2e.outputs.cloud-list }}
 
   # ── Install the app under test onto each cloud's tenant ──────────────────
   # One leg per CLOUD, not per suite × cloud: the installation is tenant-scoped
@@ -1251,18 +1568,32 @@ jobs:
     # Gated on lease-tenant having RUN, not on it having succeeded, and then each
     # leg confirms its OWN cloud's lease in its first step.
     #
-    # `needs.lease-tenant.result` is the matrix AGGREGATE, so `== 'success'` means
-    # "some cloud's lease succeeded", never "this leg's did". Observed live: one
-    # cloud's acquire failed on a transient TLS error and the aggregate then
-    # skipped the install for the two clouds whose leases HAD been taken — a run
-    # holding two tenants that installed onto neither.
+    # Since lease-tenant became a single ordered job (FND-646) its `.result` is
+    # exact rather than a matrix aggregate — but `!= 'skipped'` still has to
+    # stay, and now for a sharper reason than the one it was written for.
+    # Acquisition is all-or-nothing, so a FAILED lease means this run holds
+    # nothing; tightening this to `== 'success'` would SKIP the install, and the
+    # e2e legs deliberately tolerate a skipped prepare-tenant (see
+    # test_e2e_tolerates_skipped_but_not_failed_prepare). They would then run
+    # against whatever version the tenant happens to serve — the exact FND-31
+    # failure. Letting the install run and FAIL on its own lease check is what
+    # stops the legs.
+    #
+    # It was originally widened because `.result` was the matrix aggregate:
+    # `== 'success'` meant "some cloud's lease succeeded", never "this leg's
+    # did". Observed live — one cloud's acquire failed on a transient TLS error
+    # and the aggregate then skipped the install for the two clouds whose leases
+    # HAD been taken, a run holding two tenants that installed onto neither.
+    # Ordered acquisition removes that failure mode at source; the per-cloud
+    # verify step below stays anyway, because it is the only thing that makes the
+    # install's precondition true per TENANT rather than per job.
     #
     # `always()` is what makes the widening actually do anything, and it is easy
     # to omit: without a status-check function GitHub applies an implicit
     # success() over every `needs` entry and skips the job BEFORE this `if:` is
-    # consulted, so a failed lease leg would still skip the install everywhere
-    # and the per-cloud verify step below would never run. Same shape and same
-    # reason as the e2e legs' gate — see test_e2e_tolerates_skipped_but_not_failed_prepare.
+    # consulted, so a failed lease would still skip the install and the per-cloud
+    # verify step below would never run. Same shape and same reason as the e2e
+    # legs' gate.
     #
     # Because always() lifts that implicit success(), discover-e2e and
     # merge-e2e-image have to be named explicitly here; they were previously
@@ -1407,9 +1738,15 @@ jobs:
       # leave prepare-tenant green having done nothing, the tenant on whatever
       # version it happened to be running, and every leg reding on its version
       # check instead — one confusing failure per leg in place of one clear
-      # failure here. `install-app-to-tenant: true` is a deliberate opt-in, and a
-      # caller that has opted in without the tenant matrix cannot install at all,
+      # failure here. A caller without the tenant matrix cannot install at all,
       # so this is a misconfiguration to surface, not a path to degrade into.
+      #
+      # Reachable only via `--clouds none` now that the install path is the
+      # default and the matrix secret is org-wide: FND-203 (#3142) fails the
+      # install path at discovery when no matrix is shared, so the un-onboarded
+      # case no longer arrives here. What still can is an operator dispatching
+      # with e2e_clouds: none, which resolves the single legacy tenant — and that
+      # tenant has no matrix entry to carry a tenant_id.
       #
       # A step-level `if:` on the env context rather than a shell `test`, so the
       # branch lives in the expression layer and the `run:` stays straight-line
@@ -1507,9 +1844,10 @@ jobs:
   e2e:
     name: End-to-end (${{ matrix.name }})
     # The image jobs and prepare-tenant are in `needs` so the legs cannot start
-    # before them, but all are SKIPPED on the default path
-    # (install-app-to-tenant off — every existing caller). That combination needs
-    # `always() &&`:
+    # before them, but all are SKIPPED for a caller that has set
+    # install-app-to-tenant: false. That combination needs `always() &&`, and
+    # still does after FND-128 flipped the default — an opt-out is now the
+    # skipped-needs path this reasoning is about:
     #
     # A job's `needs` gate is evaluated SEPARATELY from its `if:`. Without a
     # status-check function, GitHub applies an implicit success() over every
@@ -1543,9 +1881,24 @@ jobs:
     # so the version check self-skips. A silently passing wrong-version run, from
     # the job added to make wrong-version runs impossible.
     needs:
-      [discover-e2e, build-e2e-image, merge-e2e-image, lease-tenant, prepare-tenant]
+      [
+        discover-e2e,
+        build-e2e-image,
+        merge-e2e-image,
+        sdk-head-recheck,
+        lease-tenant,
+        prepare-tenant,
+      ]
+    # The superseded clause is gated on the OUTPUT, never on the job result, and
+    # it has to be: a skipped lease-tenant is the benign value in the clauses
+    # below (it is the install-app-to-tenant:false path), so without this the
+    # legs would run against a tenant nobody installed onto with
+    # expected-app-version empty — a silently passing wrong-version run, the
+    # exact FND-31 failure. Reading the output also keeps a failed recheck
+    # fail-open: no answer means carry on (FND-701).
     if: |
       always() &&
+      needs.sdk-head-recheck.outputs.superseded != 'true' &&
       needs.discover-e2e.result == 'success' &&
       needs.discover-e2e.outputs.count != '0' &&
       (needs.lease-tenant.result == 'success' || needs.lease-tenant.result == 'skipped') &&
@@ -1707,20 +2060,22 @@ jobs:
           python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
             --json "$E2E_SOURCE_ENV_JSON" >> "$GITHUB_ENV"
 
-      # ── dataforge-first source resolution (FND-205) ───────────────────────
-      # Order = precedence: the explicit E2E_SOURCE_ENV_JSON exported above is
-      # the FALLBACK; a successful dataforge fetch below overwrites it (the
-      # later $GITHUB_ENV write wins). Every dataforge step here is
-      # continue-on-error — when the fetch cannot complete (VPN, binding,
-      # dataforge down), the repo's own creds or the connector's hermetic
-      # source carry the run instead of failing it.
+      # ── source resolution (FND-205) ───────────────────────────────────────
+      # Precedence is REPO-CREDS-FIRST, to keep the VPN off the hot path: when
+      # the caller provides E2E_SOURCE_ENV_JSON (repo creds, exported above),
+      # the whole dataforge chain self-skips — every step gates on
+      # `E2E_SOURCE_ENV_JSON == ''` — so no VPN is dialled. Only with NO repo
+      # creds does an opted-in leg (dataforge-datasource set) fetch from
+      # dataforge over the VPN. Every dataforge step is continue-on-error — when
+      # the fetch cannot complete (VPN, binding, dataforge down), the connector's
+      # hermetic source carries the run instead of failing it.
       #
       # Atlan's internal ELBs share Docker's default 172.17/16 bridge subnet;
       # re-subnet Docker BEFORE the tunnel so containers keep working while
       # 172.17/16 routes via tun0 (deleting the docker0 route instead breaks
       # buildx — atlan-postgres-app run 31571886125).
       - name: Move docker networks off Atlan's 172.17/16 (dataforge path)
-        if: inputs.dataforge-datasource != ''
+        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == ''
         continue-on-error: true
         run: |
           set -e
@@ -1738,7 +2093,7 @@ jobs:
       # displace each other's sessions — the fetch then falls back to repo
       # creds by design. A better run strategy is tracked on FND-279.
       - name: Connect to GlobalProtect VPN (dataforge path)
-        if: inputs.dataforge-datasource != ''
+        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == ''
         continue-on-error: true
         uses: ./application-sdk-scripts/.github/actions/globalprotect-connect
         with:
@@ -1756,7 +2111,7 @@ jobs:
       # dataforge secret (needs the job's id-token permission and a
       # dataforge workload binding for the repo).
       - name: Fetch connector source credentials from dataforge
-        if: inputs.dataforge-datasource != ''
+        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == ''
         continue-on-error: true
         env:
           DF_DATASOURCE: ${{ inputs.dataforge-datasource }}
@@ -1809,9 +2164,9 @@ jobs:
       # (SDK-PR dispatch); the plain-label path (empty ref) otherwise has no uv
       # and fails with `uv: command not found`. Install it unconditionally here.
       - name: Install uv
-        uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.3"
+          version: "0.12.5"
           enable-cache: true
 
       - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main
@@ -1895,17 +2250,23 @@ jobs:
   release-tenant:
     name: Release tenant lease (${{ matrix.cloud || 'default' }})
     needs: [discover-e2e, lease-tenant, prepare-tenant, e2e]
-    # Gated on lease-tenant having RUN, not on it having succeeded. `.result` on a
-    # matrix job is the aggregate, so `== 'success'` meant one cloud's acquire
-    # timing out skipped the release for EVERY cloud — including the legs that did
-    # acquire, whose leases would then wait for the next contender's reaper
-    # instead of being handed back. That directly contradicts this job's own
-    # reason for existing.
+    # Still a per-cloud MATRIX while the acquire is one ordered job (FND-646), and
+    # deliberately so: release cannot block, is ownership-checked, and is
+    # idempotent, so there is no hold-and-wait to remove here — and one leg per
+    # cloud keeps a single wedged DELETE from holding the others' tenants.
+    #
+    # Gated on lease-tenant having RUN, not on it having succeeded. When acquire
+    # was a matrix, `== 'success'` meant one cloud's acquire timing out skipped
+    # the release for EVERY cloud, including those that had acquired — their
+    # leases then waited for the next contender's reaper instead of being handed
+    # back. The ordered acquire hands its own leases back on the way out of a
+    # failure, so this is now a backstop rather than the primary path, but it must
+    # stay one: a lease job that dies outright releases nothing.
     #
     # Safe to widen because the release driver checks ownership before deleting:
-    # a leg that never acquired reads a lease that is not its own (or none at all)
-    # and no-ops. Not gated on the legs' outcome either — a failed leg must still
-    # give the tenant back.
+    # a leg for a cloud this run never held reads a lease that is not its own (or
+    # none at all) and no-ops. Not gated on the legs' outcome either — a failed
+    # leg must still give the tenant back.
     if: always() && needs.lease-tenant.result != 'skipped'
     strategy:
       fail-fast: false
@@ -1948,6 +2309,7 @@ jobs:
         discover-e2e,
         build-e2e-image,
         merge-e2e-image,
+        sdk-head-recheck,
         lease-tenant,
         prepare-tenant,
         e2e,
@@ -2035,12 +2397,25 @@ jobs:
           SDK_REF: ${{ inputs.application-sdk-ref }}
         run: echo "::warning::Dispatching application-sdk ref ${SDK_REF} predates the callback scripts; used main's copy instead. Merge main into that SDK branch to silence this."
 
+      # `pattern` + merge-multiple, not the bare `name`. Since FND-6 the e2e
+      # matrix suffixes each leg's artifact with the leg name, so the exact
+      # un-suffixed name matched nothing and this download quietly no-opped
+      # under continue-on-error — build_callback_summary.py then fell back to
+      # its plain body on every cross-CSP run.
+      #
+      # merge-multiple is right HERE and wrong in the scorecard job, for the
+      # same reason in both places: it flattens every leg into one directory, so
+      # same-named files overwrite. What this step wants is exactly one rendered
+      # pr-comment-body.md; what the scorecard wants is every leg's junit kept
+      # apart. The body is one arbitrary leg's, which is why the authoritative
+      # verdict is the gate line appended below rather than anything in it.
       - name: Download connector e2e results
         if: needs.e2e.result != 'skipped'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         continue-on-error: true
         with:
-          name: sdr-integration-tests-${{ inputs.app-name }}-results
+          pattern: sdr-integration-tests-${{ inputs.app-name }}*-results
+          merge-multiple: true
           path: connector-results
 
       # THE verdict. Same action, same inputs as the Tests Gate job below, so
@@ -2063,6 +2438,13 @@ jobs:
           lease-tenant-result: ${{ needs.lease-tenant.result }}
           prepare-tenant-result: ${{ needs.prepare-tenant.result }}
           e2e-result: ${{ needs.e2e.result }}
+          # Explains a skipped matrix as a deliberate stand-down rather than the
+          # misconfiguration the matrix-skipped anomaly exists to catch. Empty
+          # (the recheck job skipped, or it failed and wrote no answer) reads as
+          # "not explained", which is the correct default: the anomaly is what
+          # stops a future re-wiring of the e2e `if` from greening the gate by
+          # skipping it (FND-701).
+          superseded: ${{ needs.sdk-head-recheck.outputs.superseded }}
 
       # Body only — this step emits no verdict; the completion step below takes
       # the gate's. Its CLI stays frozen: this script is checked out from the
@@ -2123,28 +2505,88 @@ jobs:
             --details-url "$RUN_URL"
 
   # ── Test-readiness scorecard (per-tier aggregation) ──────────────────────
-  # Combines the unit + integration jobs' evidence (junit + coverage.json) into
-  # one quantified scorecard artifact. Non-PR only (push / merge_group), where
-  # both tiers actually ran — on a PR integration is skipped, so a scorecard
-  # would misreport it. Best-effort and NOT part of the Tests Gate: a failure
-  # here (or an older published conformance predating the per-tier CLI) only
-  # warns. e2e is intentionally not fed — it runs label/dispatch-gated via a
-  # non-junit SDR artifact, so the scorecard marks the e2e tier not-applicable
-  # (no grade cap) rather than dragging every run to a capped B.
+  # Combines the unit + integration + e2e jobs' evidence (junit + coverage.json)
+  # into one quantified scorecard artifact. Non-PR only (push / merge_group),
+  # where unit and integration actually ran — on a PR integration is skipped, so
+  # a scorecard would misreport it. Best-effort and NOT part of the Tests Gate: a
+  # failure here (or an older published conformance predating the per-tier CLI)
+  # only warns.
+  #
+  # ── Why e2e evidence is sparse, and why that is the design (FND-33) ──────
+  # This job runs on push/merge_group; discover-e2e/e2e run on
+  # `workflow_dispatch + run_e2e=true` or an `e2e`-labelled PR. The two barely
+  # intersect: only a dispatched run on the default branch carries both. Three
+  # ways out were considered and this is the one that survives contact with how
+  # the artifact is consumed:
+  #
+  #   * Also run on the e2e-labelled PR path — DEAD. update-dashboard.yaml picks
+  #     the newest DEFAULT-BRANCH Tests run carrying a live scorecard artifact,
+  #     so a PR-run scorecard is never ingested. Worse, on a PR the integration
+  #     job is skipped, so such a scorecard would publish a zeroed integration
+  #     tier: a fabricated regression, which is exactly what this job's `if:`
+  #     already exists to prevent.
+  #   * A separate durable e2e record connector-pulse reads independently —
+  #     a larger build, and premature: nothing yet needs e2e evidence at a
+  #     cadence the scorecard cannot supply.
+  #   * Accept sparsity, and make ABSENCE HONEST — this. When e2e did not run,
+  #     the tier stays `applicable: false` and the `e2e-present` gate stays
+  #     `na`: excluded from the aggregate, no grade cap, not scored zero.
+  #
+  # The consequence to hold onto: a routine push emits a scorecard that says
+  # "e2e not measured", never "e2e failing". connector-pulse must render the
+  # e2e tier's absence as unknown, not as a zero.
+  #
+  # The cross-CSP fields are what carry rollout visibility between those sparse
+  # runs (FND-34): `configured` is derivable from the tenant-matrix secret alone
+  # and so lands on EVERY emission, while `observed` rides along only when e2e
+  # ran. Both are descriptive — no Check reads them and no Gate caps on them, so
+  # recording them cannot move any app's grade.
   scorecard:
     name: Test-readiness scorecard
-    needs: [unit, detect-integration, integration]
+    # discover-e2e and e2e join `needs` so their evidence and their resolved
+    # cloud list are reachable. `always()` is already in the `if:` below, which
+    # is what keeps a SKIPPED e2e (the routine case) from skipping this job —
+    # a job's `needs` gate is evaluated separately from its `if:`, and without a
+    # status-check function GitHub applies an implicit success() that a skipped
+    # need does not satisfy.
+    needs: [unit, detect-integration, integration, discover-e2e, e2e]
     if: always() && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
+    env:
+      # Job-level so the step-level `if:` below can read it — a step condition
+      # cannot reference the `secrets` context directly. Same shape as
+      # discover-e2e, deliberately: both answer "is this repo wired for the
+      # cross-CSP matrix", and two different answers would be a bug.
+      HAS_TENANT_MATRIX: ${{ secrets.E2E_TENANT_MATRIX_JSON != '' && 'true' || '' }}
     steps:
       - name: Install uv
-        uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.3"
+          version: "0.12.5"
           enable-cache: true
+
+      # The SDK's arg builder and the discovery driver. `ref: job.workflow_sha`
+      # rather than @main for the reason discover-e2e gives at length: a script
+      # pulled at the workflow's own SHA is testable on the branch that changes
+      # it, whereas an action pinned @main cannot see a change until it lands.
+      # `repository:` stays hardcoded so the executed payload's provenance is
+      # pinned; application-sdk is public, so the caller's default token reads it
+      # when ORG_PAT_GITHUB is not shared.
+      - name: Fetch SDK CI scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: |
+            .github/scripts
+            .github/actions/discover-e2e-suites
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+          token: ${{ secrets.ORG_PAT_GITHUB || github.token }}
+          persist-credentials: false
 
       # Both downloads are best-effort: unit always uploads its artifact, but
       # integration is absent when it had no suite / was skipped — the CLI then
@@ -2163,26 +2605,106 @@ jobs:
           name: integration-test-results
           path: integration-evidence
 
+      # `pattern:` with merge-multiple LEFT OFF, and that is the whole point:
+      # the e2e matrix emits one artifact per suite × cloud leg (FND-6) and each
+      # carries a junit at the SAME inner path, so merging would have the legs
+      # overwrite each other and the scorecard would silently score one leg as
+      # if it were the run. Unmerged, each lands under its own artifact-named
+      # directory and the CLI's glob picks up all of them.
+      #
+      # The pattern also matches the legacy un-suffixed name, so a caller still
+      # emitting a single e2e artifact is covered by the same expression.
+      #
+      # Best-effort: no e2e run means no artifacts, `download-artifact` fails,
+      # and the glob below resolves to nothing — which the CLI reads as "e2e not
+      # applicable", never as "e2e scored zero".
+      - name: Download e2e evidence (one artifact per leg)
+        if: needs.e2e.result != 'skipped'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        continue-on-error: true
+        with:
+          pattern: sdr-integration-tests-${{ inputs.app-name }}*-results
+          path: e2e-evidence
+
+      # ── What this repo is WIRED for, whether or not e2e ran (FND-34) ───────
+      # The rollout signal. It needs no e2e run — only the tenant matrix's key
+      # list and the requested fan-out — so it lands on every scorecard emission,
+      # which is what makes an un-onboarded repo distinguishable from a covered
+      # one at the point of central visibility. The `::warning::` in
+      # discover-e2e is the only other signal, and it is per-run, ephemeral, and
+      # buried in one app repo's Actions log.
+      - name: Read the tenant matrix's cloud keys
+        id: matrix-clouds
+        if: inputs.enable-e2e && env.HAS_TENANT_MATRIX != ''
+        env:
+          E2E_TENANT_MATRIX_JSON: ${{ secrets.E2E_TENANT_MATRIX_JSON }}
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/scripts/e2e_tenant_matrix_clouds.py \
+            --matrix-json "$E2E_TENANT_MATRIX_JSON" >> "$GITHUB_OUTPUT"
+
+      # The same driver, the same `clouds` expression and the same narrowing as
+      # discover-e2e — so `configured` is the list discovery WOULD resolve, not
+      # an independent re-derivation that could drift from it. Duplicated
+      # verbatim for the reason the second discover call in discover-e2e gives:
+      # a hand-rolled equivalent is new untested logic doing what the driver
+      # already does.
+      #
+      # continue-on-error because this must never redden a reporting job:
+      # `--clouds-only` exits non-zero when narrowing would leave no clouds at
+      # all, and the step's `outcome` is then the "not known" signal that omits
+      # the field entirely.
+      - name: Resolve the clouds this repo is configured for
+        id: configured-clouds
+        if: inputs.enable-e2e
+        continue-on-error: true
+        env:
+          CLOUDS: ${{ secrets.E2E_TENANT_MATRIX_JSON == '' && 'none' || inputs.e2e-clouds }}
+          AVAILABLE_CLOUDS: ${{ steps.matrix-clouds.outputs.clouds }}
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/actions/discover-e2e-suites/discover_e2e_suites.py \
+            --clouds-only \
+            --clouds "$CLOUDS" \
+            --available-clouds "$AVAILABLE_CLOUDS" >> "$GITHUB_OUTPUT"
+
       - name: Generate test-readiness scorecard
         shell: bash
         env:
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
+          OUT: results/test-readiness.json
+          UNIT_JUNIT: unit-evidence/results/test-results.xml
+          UNIT_COVERAGE: unit-evidence/coverage.json
+          INTEGRATION_JUNIT: integration-evidence/results/test-results.xml
+          INTEGRATION_COVERAGE: integration-evidence/coverage.json
+          # Quoted through to the CLI, which expands it: the legs' artifact
+          # directories are only known at download time, and expanding it in the
+          # shell would need a loop this file is not allowed to contain
+          # (docs/standards/ci.md).
+          E2E_JUNIT_GLOB: e2e-evidence/*/results/sdr-test-results.xml
+          E2E_RESULT: ${{ needs.e2e.result }}
+          CONFIGURED_CLOUDS: ${{ steps.configured-clouds.outputs.clouds }}
+          CONFIGURED_KNOWN: ${{ steps.configured-clouds.outcome == 'success' }}
+          OBSERVED_CLOUDS: ${{ needs.discover-e2e.outputs.clouds }}
         run: |
           [ -f unit-evidence/results/test-results.xml ] || { echo "no unit junit; skipping scorecard"; exit 0; }
           mkdir -p results
-          # Integration flags may point at missing files (no suite / skipped) —
-          # the CLI scores those as an empty integration tier. Trailing `|| echo`
-          # keeps this non-blocking: an older published conformance without the
-          # per-tier CLI must never redden the run (works once 0.17.0 publishes).
-          uvx atlan-application-sdk-conformance scorecard \
-            --unit-junit unit-evidence/results/test-results.xml \
-            --unit-coverage unit-evidence/coverage.json \
-            --integration-junit integration-evidence/results/test-results.xml \
-            --integration-coverage integration-evidence/coverage.json \
-            --repo "$REPO" \
-            --commit "$SHA" \
-            --out results/test-readiness.json \
+          # All conditional argument-building lives in the tested script, so this
+          # block stays straight-line (docs/standards/ci.md).
+          mapfile -t sc_args < <(python3 application-sdk-scripts/.github/scripts/build_scorecard_args.py)
+          # Trailing `|| echo` keeps this non-blocking: an older published
+          # conformance without the per-tier/e2e CLI must never redden the run.
+          #
+          # There IS a window. `uvx` resolves the newest PUBLISHED conformance,
+          # and --cross-cloud-configured / a repeatable --e2e-junit only exist
+          # from 0.21.0; until that publishes, argparse rejects them, this step
+          # warns, and no scorecard artifact is produced for that run. The
+          # dashboard already tolerates that — update-dashboard.yaml walks back
+          # through the last 20 completed runs for one that still carries a live
+          # scorecard — and the same gap was accepted when the per-tier flags
+          # landed ahead of 0.17.0. It closes on the next conformance release.
+          uvx atlan-application-sdk-conformance scorecard "${sc_args[@]}" \
             || echo "::warning::test-readiness scorecard generation failed (skipped)"
 
       # `upload-artifact` classifies the artifact service's finalize 403 as
@@ -2223,6 +2745,7 @@ jobs:
         discover-e2e,
         build-e2e-image,
         merge-e2e-image,
+        sdk-head-recheck,
         lease-tenant,
         prepare-tenant,
         e2e,
@@ -2266,6 +2789,13 @@ jobs:
           lease-tenant-result: ${{ needs.lease-tenant.result }}
           prepare-tenant-result: ${{ needs.prepare-tenant.result }}
           e2e-result: ${{ needs.e2e.result }}
+          # Explains a skipped matrix as a deliberate stand-down rather than the
+          # misconfiguration the matrix-skipped anomaly exists to catch. Empty
+          # (the recheck job skipped, or it failed and wrote no answer) reads as
+          # "not explained", which is the correct default: the anomaly is what
+          # stops a future re-wiring of the e2e `if` from greening the gate by
+          # skipping it (FND-701).
+          superseded: ${{ needs.sdk-head-recheck.outputs.superseded }}
 
       - name: Post unified test-summary comment on PR
         if: always() && github.event_name == 'pull_request'

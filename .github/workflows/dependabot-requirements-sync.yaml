@@ -15,6 +15,13 @@ jobs:
   sync-requirements:
     name: Sync requirements.txt
     runs-on: ubuntu-latest
+    # One writer per branch. renovate-lock-cooldown.yaml triggers on the same
+    # push to renovate/lock-file-maintenance and pushes to the same branch, so
+    # both running would leave the loser with a non-fast-forward rejection —
+    # and whichever won would have exported requirements.txt from a lock the
+    # other was about to change. That workflow re-exports this file itself,
+    # from the bound lock, in the same commit (FND-376).
+    if: ${{ github.ref != 'refs/heads/renovate/lock-file-maintenance' }}
     steps:
       - name: Mint fleet App token
         # A real (non-github-actions[bot]) identity is required here: the
@@ -28,6 +35,10 @@ jobs:
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
           owner: atlanhq
           repositories: application-sdk
+          # Same reasoning as renovate-lock-cooldown.yaml (FND-395): this job
+          # runs from the pushed branch, so the token it mints should carry only
+          # the permission the job uses. Checkout plus one push is contents.
+          permission-contents: write
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -35,9 +46,9 @@ jobs:
           ref: ${{ github.ref }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.3"
+          version: "0.12.5"
 
       - name: Regenerate requirements.txt
         run: uv export --no-hashes --frozen > requirements.txt

@@ -14,6 +14,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from application_sdk import constants
+from application_sdk.common.atomic import PARTIAL_DIRNAME
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.infrastructure.context import (
     InfrastructureContext,
@@ -26,6 +27,35 @@ from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.formats.parquet import ParquetFileReader, ParquetFileWriter
 from application_sdk.storage.formats.utils import path_gen
 from application_sdk.storage.reference import persist_file_reference
+
+
+def _published_name(where: object) -> str:
+    """Filename a path handed to ``pq.write_table`` publishes under.
+
+    Each chunk is written to ``<dir>/.sdk-partial/<name>.<token>`` and renamed
+    onto ``<dir>/<name>`` once the write succeeds (FND-318), so the staged
+    filename carries a token the published one does not.
+    """
+    staged = Path(str(where))
+    if staged.parent.name != PARTIAL_DIRNAME:
+        return staged.name
+    return staged.name.rsplit(".", 1)[0]
+
+
+def _stub_write_table(table: pa.Table, where: object, **kwargs: object) -> None:
+    """Stand in for ``pq.write_table`` while still producing a file.
+
+    A bare ``MagicMock`` writes nothing, and the writer stages each chunk and
+    renames it into place (FND-318) — so a stub that produces no file makes the
+    writer report, correctly, that the chunk was never written. Touching the
+    path keeps these tests about *which* path the writer resolves without
+    paying for real parquet encoding.
+
+    ``where`` is a buffer rather than a path on the writer's size-estimation
+    call; there is nothing to create in that case.
+    """
+    if isinstance(where, (str, os.PathLike)):
+        Path(where).write_bytes(b"")
 
 
 @pytest.fixture
@@ -295,7 +325,9 @@ class TestParquetFileWriterWriteDataframe:
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
         """Test successful DataFrame writing."""
-        with patch("pyarrow.parquet.write_table") as mock_write_table:
+        with patch(
+            "pyarrow.parquet.write_table", side_effect=_stub_write_table
+        ) as mock_write_table:
             parquet_output = ParquetFileWriter(
                 path=os.path.join(base_output_path, "test"),
                 use_consolidation=False,
@@ -311,7 +343,9 @@ class TestParquetFileWriterWriteDataframe:
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
         """Test DataFrame writing with custom path generation."""
-        with patch("pyarrow.parquet.write_table") as mock_write_table:
+        with patch(
+            "pyarrow.parquet.write_table", side_effect=_stub_write_table
+        ) as mock_write_table:
             parquet_output = ParquetFileWriter(
                 path=base_output_path,
                 start_marker="test_start",
@@ -323,7 +357,13 @@ class TestParquetFileWriterWriteDataframe:
             mock_write_table.assert_called()
             call_args = mock_write_table.call_args
             file_path = call_args[0][1]  # Second positional arg is the file path
-            assert "chunk-" in str(file_path) and ".parquet" in str(file_path)
+            # Mapped back through the per-file staging directory before the
+            # name is read: the chunk is written to
+            # `<dir>/.sdk-partial/<name>.<token>` and renamed onto `<dir>/<name>`
+            # once the write succeeds (FND-318). The generated name is what this
+            # test is about, and it is unchanged.
+            assert "chunk-" in _published_name(file_path)
+            assert _published_name(file_path).endswith(".parquet")
 
     @pytest.mark.asyncio
     async def test_write_error_handling(

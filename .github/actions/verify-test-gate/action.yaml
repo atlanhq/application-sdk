@@ -72,6 +72,24 @@ inputs:
   e2e-result:
     description: needs.e2e.result (matrix aggregate; skipped = not requested).
     required: true
+  superseded:
+    description: |
+      needs.sdk-head-recheck.outputs.superseded — "true" when the run stood its
+      e2e down because the application-sdk commit it was dispatched for is no
+      longer the head of the PR that dispatched it (FND-701).
+
+      That stand-down produces the exact shape of the "matrix skipped despite
+      discovered suites" anomaly: a successful discovery, a skipped matrix, and
+      no install-path failure to explain it. Without this input the gate reds and
+      `report-to-sdk` mirrors conclusion=failure onto the dispatching SDK commit
+      — "your change broke the connector" for a run that deliberately stood down,
+      which is the misattribution the cancelled/failure split exists to prevent.
+
+      Only the literal "true" explains the skip. Optional, defaulting to "false",
+      so callers pinned at @main that have not wired the recheck job keep the
+      previous behaviour — and so an unexplained skip stays an anomaly.
+    required: false
+    default: "false"
 
 outputs:
   passed:
@@ -122,6 +140,7 @@ runs:
         LEASE_TENANT_RESULT: ${{ inputs.lease-tenant-result }}
         PREPARE_TENANT_RESULT: ${{ inputs.prepare-tenant-result }}
         E2E_RESULT: ${{ inputs.e2e-result }}
+        SUPERSEDED: ${{ inputs.superseded }}
       run: |
         set -euo pipefail
         python3 "${{ github.action_path }}/verify_test_gate.py" \
@@ -134,4 +153,5 @@ runs:
           --merge-e2e-image "$MERGE_E2E_IMAGE_RESULT" \
           --lease-tenant "$LEASE_TENANT_RESULT" \
           --prepare-tenant "$PREPARE_TENANT_RESULT" \
-          --e2e "$E2E_RESULT" >> "$GITHUB_OUTPUT"
+          --e2e "$E2E_RESULT" \
+          --superseded "$SUPERSEDED" >> "$GITHUB_OUTPUT"

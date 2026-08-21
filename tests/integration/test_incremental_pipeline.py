@@ -434,3 +434,69 @@ async def test_incremental_diff_with_s3_roundtrip(tmp_path, store, infra):
     # Verify delete records survived roundtrip
     delete_table_files = list(download_dir.rglob("delete/table/*.json"))
     assert len(delete_table_files) == 1
+
+
+# ---------------------------------------------------------------------------
+# Test: transformed-tree recovery from the object store
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_transformed_recovery_from_store_feeds_current_state(
+    tmp_path, monkeypatch, store, infra
+):
+    """A pod that lost its local ``transformed/`` tree recovers a *usable* one.
+
+    This is the FND-340 / CONNECT-817 path: when an activity is rescheduled
+    mid-run (container restart), ``write_current_state`` re-downloads the run's
+    transformed output from the object store. The non-stripping download landed
+    it at ``transformed/artifacts/.../transformed/table/``, so
+    ``get_current_table_scope`` found no ``transformed/table`` and the snapshot
+    died with "No tables found in transformed output".
+    """
+    from application_sdk.common.incremental.state.state_writer import (
+        create_current_state_snapshot,
+        download_transformed_data,
+    )
+    from application_sdk.execution._temporal import activity_utils
+
+    staging = tmp_path / "staging"
+    monkeypatch.setattr(activity_utils, "TEMPORARY_PATH", str(staging))
+    output_path = staging / "artifacts/apps/oracle/workflows/wf-1/run-1"
+    run_prefix = "artifacts/apps/oracle/workflows/wf-1/run-1/transformed"
+
+    # The transform step's output, present in the object store only — this pod
+    # never wrote it locally.
+    remote_source = tmp_path / "remote-source"
+    _write_jsonl(
+        remote_source / "table" / "chunk-0.json",
+        [_table_entity("db/s/t1", "CREATED"), _table_entity("db/s/t2", "NO CHANGE")],
+    )
+    _write_jsonl(
+        remote_source / "column" / "chunk-0.json",
+        [_column_entity("db/s/t1/c1", "db/s/t1")],
+    )
+    _write_jsonl(remote_source / "schema" / "chunk-0.json", [_schema_entity("db/s")])
+    await upload_prefix(local_dir=remote_source, prefix=run_prefix, store=store)
+
+    transformed_dir = await download_transformed_data(str(output_path))
+
+    # Layout: entity directories directly under transformed/, prefix not repeated.
+    assert transformed_dir == output_path / "transformed"
+    assert _count_jsonl(transformed_dir / "table") == 2
+    assert not (transformed_dir / "artifacts").exists()
+
+    # And the layout is usable: real DuckDB scope + snapshot, the step that
+    # raised FileNotFoundError before the fix.
+    result = await create_current_state_snapshot(
+        connection_qualified_name="default/oracle/123",
+        transformed_dir=transformed_dir,
+        previous_state_dir=None,
+        current_state_dir=tmp_path / "current-state",
+        s3_prefix="persistent-artifacts/apps/oracle/connection/123",
+        run_id="run-1",
+        application_name="oracle",
+    )
+
+    assert result.total_files > 0
+    assert (result.current_state_dir / "table" / "chunk-0.json").exists()

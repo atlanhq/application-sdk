@@ -47,7 +47,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "never imports app code, so the two can drift silently. When they drift, "
             "the HTTP create path fails — /manifest?entrypoint=<name> may return 200 "
             "while /input-contract?entrypoint=<name> returns 404 — with no caller-side "
-            "workaround (BLDX-1425)."
+            "workaround (BLDX-1425). "
+            "Customer impact: the customer clicks 'create workflow' in their tenant and "
+            "the setup flow 404s — the app is effectively uninstallable from the "
+            "marketplace, and nothing on the customer's side can route around it."
         ),
         short_description=(
             "Entry-point names in @entrypoint code do not match app/generated/ contract dirs"

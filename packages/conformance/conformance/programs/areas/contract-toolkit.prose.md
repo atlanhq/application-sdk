@@ -37,13 +37,14 @@ findings in the working tree, classified by disposition and remediability.
 The fingerprint-set of all unsuppressed FAILING/WARNING K-series results in the
 current working tree, as reported by `suite.runner --series K`.
 
-All K-series rules are WARN-tier **except K009, K011, and K012 (BLOCK)**.  So in
-**default** mode this facet is empty *unless* a K009 (unresolved scaffold
-placeholder), K011 (missing `app_id`), or K012 (missing `generate` poe task)
-finding is present — those are FAILING results that fail the gate and must be
-remediated in default mode.  In **strict** mode the fingerprint-set also includes the
-unsuppressed WARNING results (K003/K004/K005/K007/K008/K010/K014), which is where the
-rest of K-series remediation runs.
+All K-series rules are WARN-tier **except K003, K009, K011, and K012 (BLOCK)**.
+So in **default** mode this facet is empty *unless* a K003 (pin/lock drift),
+K009 (unresolved scaffold placeholder), K011 (missing `app_id`), or K012
+(missing `generate` poe task) finding is present — those are FAILING results
+that fail the gate and must be remediated in default mode.  In **strict** mode
+the fingerprint-set also includes the unsuppressed WARNING results
+(K004/K005/K007/K008/K010/K014), which is where the rest of K-series
+remediation runs.
 
 The active scope decides which rules can appear: K001–K014 are all `scope=APP`,
 so they surface only on consumer app repos.  The runner auto-detects scope, so
@@ -65,6 +66,11 @@ Postcondition (deterministic validator — never render-attested):
 - `scope` — repository root path (provided by the top-level responsibility at
   expansion time).
 - `mode` — `"default"` or `"strict"` (propagated from the top-level entry).
+- `rule_ids` — optional list of exact rule IDs (propagated from the
+  top-level entry). Forwarded verbatim into every runner invocation this
+  area makes — the loop's detect calls and the suggest-only
+  `detect-violations` calls alike — so a `--rule`-scoped run stays scoped
+  here rather than silently widening to the whole series at this hop.
 
 ### Continuity
 
@@ -79,6 +85,7 @@ Claude Code skill path the skill caller re-invokes on demand.
 call detect-fix-recheck
   scope: scope
   series: "K"
+  rule_ids: rule_ids
   mode: mode
   max_attempts: 5
 ```
@@ -87,10 +94,11 @@ call detect-fix-recheck
 
 _Read by `remediate-finding` when `finding.area == "contract-toolkit"`._
 
-All K-series rules are **WARN-tier except K009, K011, and K012 (BLOCK)** — the
-WARN rules surface only under `--strict` mode, while K009 (unresolved scaffold
-placeholder), K011 (missing `app_id`), and K012 (missing `generate` poe task) are
-FAILING results that must be remediated even in default mode.
+All K-series rules are **WARN-tier except K003, K009, K011, and K012 (BLOCK)** —
+the WARN rules surface only under `--strict` mode, while K003 (pin/lock drift),
+K009 (unresolved scaffold placeholder), K011 (missing `app_id`), and K012
+(missing `generate` poe task) are FAILING results that must be remediated even
+in default mode.
 Before proposing any edit, read the actual lines around `finding.line` in
 `finding.file`.  **Never hand-edit `atlan.yaml`, `app/generated/`, or any other
 generated artifact directly** — those are outputs of `pkl eval`, and K004/K005

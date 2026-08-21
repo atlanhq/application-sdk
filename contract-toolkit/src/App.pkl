@@ -93,6 +93,7 @@ typealias SqlTree = Widgets.SqlTree
 typealias ConditionalInput = Widgets.ConditionalInput
 typealias Condition = Widgets.Condition
 typealias InputRepeater = Widgets.InputRepeater
+typealias Repeater = Widgets.Repeater
 typealias Schedule = Widgets.Schedule
 typealias CustomWidget = Widgets.CustomWidget
 
@@ -2267,14 +2268,63 @@ class EventTriggerConfig {
   ackPaths: Listing<String> = new Listing {}
 }
 
+/// One ingest-time filter rule. Mirrors AE's `FilterRule`: AE applies these when the
+/// event arrives and only persists matching events to the workflow's Iceberg events
+/// table. Rules AND together; `value` list members OR within a rule.
+///
+/// Without filter rules a trigger on a high-volume topic buffers the ENTIRE topic —
+/// on `ATLAS_ENTITIES` that is ~10^8 events/day into one table. Dedicated low-volume
+/// topics (e.g. `keycloak.cdc.*`) legitimately need no rules; a firehose topic does.
+///
+/// `field` is matched against the stored event payload **as it arrives on the wire** —
+/// AE stores the CloudEvent `data` unmodified. Atlas wraps every `ATLAS_ENTITIES`
+/// record in an `EntityNotification` envelope, so those paths must be rooted at
+/// `message.*` (e.g. `message.entity.typeName`), not at the bare attribute.
+///
+/// `operator` is AE's closed set. Comparison is **type-strict**: a String `value` does
+/// not match a numeric or boolean field. There is no prefix/regex/numeric-compare
+/// operator, and rules cannot OR across different fields — express that as multiple
+/// `EventTriggerSpec` entries on the same entrypoint.
+class FilterRuleSpec {
+  field: String(!isEmpty)
+  operator: "eq"|"neq"|"in"|"not_in"|"contains"|"exists"|"not_exists"
+  /// Match value(s). Omitted for `exists` / `not_exists`; required for every other
+  /// operator — AE rejects a null value there, so fail it at eval time instead.
+  value: (String|Listing<String>)?
+
+  hidden _valueShapeCheck: Any =
+    if ((operator == "exists" || operator == "not_exists") && value != null)
+      throw("FilterRuleSpec '\(field)': operator '\(operator)' takes no value; remove `value`.")
+    else if (operator != "exists" && operator != "not_exists" && value == null)
+      throw("FilterRuleSpec '\(field)': operator '\(operator)' requires a `value`.")
+    else null
+}
+
 /// One event trigger on a workflow. Renders to AE's `EventTrigger` shape
-/// (`name`, `source{name,topic}`, `trigger_config{max_retries,ack_paths}`, `status`).
+/// (`name`, `source{name,topic}`, `filter_rules[]`,
+/// `trigger_config{max_retries,ack_paths}`, `status`).
 class EventTriggerSpec {
   name: String
   source: EventSource
+  /// Ingest-time filters. Empty means "persist every event on the topic" — correct for
+  /// a dedicated topic, a footgun on a firehose. See `FilterRuleSpec`.
+  filterRules: Listing<FilterRuleSpec> = new Listing {}
   triggerConfig: EventTriggerConfig = new EventTriggerConfig {}
   status: "ACTIVE"|"PAUSED" = "ACTIVE"
 }
+
+local function renderFilterRule(rule: FilterRuleSpec): Mapping<String, Any> =
+  // Hidden properties are lazy — reference the validator so its `throw` fires at eval
+  // time rather than silently rendering an invalid rule.
+  let (_ruleCheck = rule._valueShapeCheck)
+  new Mapping {
+    ["field"] = rule.field
+    ["operator"] = rule.operator
+    // Omit `value` entirely for exists/not_exists rather than sending null.
+    when (rule.value != null) {
+      ["value"] = rule.value
+    }
+  }
 
 local manifestData: Mapping<String, Any> = new Mapping {
   ["execution_mode"] = "automation-engine"
@@ -2304,6 +2354,11 @@ local manifestData: Mapping<String, Any> = new Mapping {
               ["source"] = new Mapping {
                 ["name"] = e.source.name
                 ["topic"] = e.source.topic
+              }
+              // Omit the key when no rules are declared so manifests for existing
+              // filter-less entrypoints stay byte-identical (AE defaults it to []).
+              when (e.filterRules.length > 0) {
+                ["filter_rules"] = e.filterRules.toList().map((r) -> renderFilterRule(r))
               }
               ["trigger_config"] = new Mapping {
                 ["max_retries"] = e.triggerConfig.maxRetries

@@ -497,11 +497,25 @@ def test_k010_suppressed(tmp_path: Path) -> None:
 
 
 def test_rule_metadata_app_scoped_warn() -> None:
-    for rid in ("K003", "K004", "K005", "K007", "K008", "K010"):
+    for rid in ("K004", "K005", "K007", "K008", "K010"):
         rule = get_rule(rid)
         assert rule.scope == RuleScope.APP
         assert rule.tier == EnforcementTier.WARN
         assert rule.rationale, f"{rid} must have a non-empty rationale"
+
+
+def test_k003_is_block_tier() -> None:
+    """K003 left the WARN hygiene group in FND-311.
+
+    A pin that disagrees with its lock is not a staleness proxy like its K004 /
+    K005 neighbours — it means the committed artifacts were generated from a
+    toolkit version the contract no longer claims, which is the route the
+    K009/K011 customer-facing breakages travel to a tenant.
+    """
+    rule = get_rule("K003")
+    assert rule.scope == RuleScope.APP
+    assert rule.tier == EnforcementTier.BLOCK
+    assert rule.rationale, "K003 must have a non-empty rationale"
 
 
 def test_k009_is_block_tier() -> None:

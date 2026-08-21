@@ -510,8 +510,9 @@ Detection latency is `max_no_progress_seconds` plus at most one loop tick (10s).
 The tracker reaches `run_in_thread` and `holding_progress` through a ContextVar set
 by `activities.py`. There is no such ContextVar today — the controller is passed
 into `TaskExecutionContext` — so this is new plumbing, and it must cover the
-module-level `run_in_thread` (`execution/heartbeat.py:234`), not only the
-`TaskExecutionContext` wrapper, since both are used.
+module-level `run_in_thread` (implemented in `_runtime/offload.py` since
+[ADR-0019](0019-runtime-substrate-layer.md); `execution/heartbeat.py` when this
+was written), not only the `TaskExecutionContext` wrapper, since both are used.
 
 ### Holds: the SDK never invents a duration
 
@@ -953,6 +954,42 @@ Warn mode is what makes this checkable rather than aspirational.
    time*). One hard prerequisite of this step: **the stall metric must be alertable**,
    since it stands in for the kill while nothing enforces. `off` ships alongside as an
    env kill-switch.
+
+   That prerequisite landed as FND-293, and it is three artifacts across two
+   repositories: the `AtlanAppTaskStalled` rule in
+   [`atlanhq/atlan-alerts`](https://github.com/atlanhq/atlan-alerts/blob/main/alerting/rules/App-Platform/atlan-apps-task-stall-alerts.yaml),
+   the [stalled-task runbook](../runbooks/stalled-task.md), and the panels in
+   `docs/static/observability/task-stall-dashboard.json`. The threshold is
+   *seconds of silence accumulated per hour* rather than a count of gaps, because
+   that is the exposure this step accepts: silent attempt-time holding worker
+   slots. One permanently-silent attempt reaches it in about an hour; N concurrent
+   wedges reach it N times faster, so the page arrives soonest exactly when slot
+   exhaustion is the real risk. A *single* gap is deliberately not paged — that is
+   the warn-mode work-list, and paging it fleet-wide would manufacture the noise
+   this ADR exists to reduce. Because the alert and the panels live outside this
+   repository, the exported Prometheus contract is pinned by
+   `tests/unit/execution/test_progress_telemetry_exposition.py` so a rename here
+   cannot silently disable the containment.
+
+   The step itself landed as FND-296. Two details of the shape are worth recording
+   because they are not obvious from the description above:
+
+   - **The flag carries a declaration, not a resolved mode.** `TaskMetadata.progress_watchdog`
+     and the `TaskContext` field are `None` for a task that declares nothing, and the
+     activity worker resolves `None` against `ATLAN_PROGRESS_WATCHDOG` on its own side.
+     That is what makes `off` a kill-switch an operator can throw on a worker without
+     re-dispatching in-flight runs, and what makes a run dispatched by a workflow
+     predating the field land on the fleet default rather than on nothing. `off` in the
+     environment beats a per-task `enforce` for the same reason; the allowance
+     (`ATLAN_MAX_NO_PROGRESS_SECONDS`) deliberately has no such override, since an env
+     var that could silently shrink a declared allowance would be a fleet-wide
+     false-kill generator.
+   - **`app/` cannot import `execution/` at module scope** (`execution/__init__` →
+     `_temporal` → `app.registry` → `app.base` → `app.task`), so `app/task.py` reaches
+     `ProgressWatchdogMode` only inside the validation path that an explicit declaration
+     triggers. This is why the enum stays where [ADR-0019](0019-runtime-substrate-layer.md)
+     put it and the default resolution lives in `execution/progress.py` rather than
+     beside the other `@task` env defaults.
 4. **Ship the conformance rule and the toolkit floor.** Both are independent of the
    `@task` work and both deliver immediately: the floor stops the next app shipping
    a 2h node timeout, and the rule keeps un-held opaque sites visible once teams
@@ -994,7 +1031,8 @@ removal is part of the work, not a follow-up.
 - Whether long stalls actually happen becomes a measured question rather than an
   argued one, fleet-wide, before anything can be killed for it.
 - Streaming connectors get correct behavior with no code changes.
-- Change is localized to `execution/heartbeat.py` (tracker + loop + hold plumbing),
+- Change is localized to `execution/heartbeat.py` (tracker + loop + hold plumbing;
+  the tracker and the offload holds since moved to `_runtime/` — [ADR-0019](0019-runtime-substrate-layer.md)),
   the `activities.py` wiring and cancellation branch, one new error leaf, and
   one-line `mark_progress()` calls in existing SDK write/transfer loops.
 
@@ -1003,7 +1041,13 @@ removal is part of the work, not a follow-up.
   `start_to_close` is accidentally the only thing that kills a wedged activity;
   raising it to a backstop replaces that automatic kill with an alert and a human
   until an app enforces. Accepted deliberately, bounded by measurement — see
-  *Migration*. It makes the stall-metric alert mandatory, not optional.
+  *Migration*. It makes the stall-metric alert mandatory, not optional, and it
+  buys containment at the cost of latency: a wedge is *visible* one budget in and
+  *paged* about an hour in (`AtlanAppTaskStalled`, see *Rollout* step 3), against
+  a 24h backstop. Two residuals survive that alert and are stated in the runbook
+  rather than hidden: a wedge inside an **unbounded hold** emits no gap at all
+  (the hold is vouching for it, by design), and a split-deployment worker with no
+  Pushgateway configured emits nothing the alert can read.
 - Opaque single-operation calls need a declared hold to get the stronger guarantee,
   and `holding_progress()` is expected in nearly every connector rather than being a
   rare escape hatch — though this is now optional work an app schedules for itself,

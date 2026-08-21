@@ -57,7 +57,7 @@ raw type in an opaque SDK type) that no import edit can perform.  All four draft
 proposal for human review and never auto-apply.  (These rules are backed by a
 separate, test-scanning `suite.checks.orchestration` check — see its module docs.)
 
-The storage-seam rules (P008–P012) are also P-series and suggest-only: they
+The storage-seam rules (P008–P012, P044) are also P-series and suggest-only: they
 describe structural workflow refactors (data-flow topology, store-routing
 contracts, durability-field ownership) that no local import rewrite can perform,
 and the orthogonal gate is non-protective for structural regressions not yet
@@ -101,6 +101,16 @@ human review and never auto-apply.  (These rules are backed by
 
 - `scope` — repository root path.
 - `mode` — `"default"` or `"strict"`.
+- `rule_ids` — optional list of exact rule IDs (propagated from the
+  top-level entry). Forwarded verbatim into every runner invocation this
+  area makes — the loop's detect calls and the suggest-only
+  `detect-violations` calls alike — so a `--rule`-scoped run stays scoped
+  here rather than silently widening to the whole series at this hop.
+- `apply_unverifiable` — boolean, default `false`.  When `false`, behaviour is
+  byte-identical to before this parameter existed: propose, never apply.  When
+  `true`, the caller has accepted that **no gate can validate a P-series fix** and
+  has taken responsibility for reviewing the result; see below for the two
+  conditions that responsibility comes with.
 
 ### Continuity
 
@@ -109,24 +119,55 @@ Input-driven: re-render when any `*.py` file under `scope` changes.
 ### Execution
 
 ```prose
-# Suggest-only: detect, draft a fix per finding, route to residue WITHOUT
-# applying.  No gate can validate a P-series fix, so the human is the gate —
-# this area never mutates the working tree (contrast detect-fix-recheck, which
-# applies and keeps edits that pass their gates).
-let violations = call detect-violations
-  scope: scope
-  series: "P"
-  target: if mode == "strict" then "failing+warning" else "failing"
-
-for each finding in violations:
-  let proposal = call remediate-finding
-    finding: finding
+if apply_unverifiable:
+  # Caller-accepted unverifiable mode.  The loop still runs both gates, but the
+  # gates are BLIND here (see the note below), so passing them proves nothing.
+  # Two conditions make this honest rather than a false green:
+  #   1. every result is reported with classification = "unverifiable" (never
+  #      "mechanical"), so no downstream consumer can mistake it for gate-verified;
+  #   2. remediate-finding must populate `result.evidence` (see its Returns
+  #      contract) with the source of the chosen value — a bound taken from
+  #      the contract schema or a documented upstream limit, cited as a
+  #      checkable path/identifier. An arbitrary bound is NOT a fix; return
+  #      empty evidence and let the loop residue it un-applied.
+  call detect-fix-recheck
+    scope: scope
+    series: "P"
+    rule_ids: rule_ids
     mode: mode
+    max_attempts: 5
+    classification_override: "unverifiable"
+    require_cited_evidence: true
 
-  # The proposal is recorded, never applied.  classification is always
-  # "judgment" for P-series, so it lands in the human-review residue.
-  add { finding, proposal } to residue with note "P-series suggest-only: proposed fix drafted for human review; NOT applied (no orthogonal gate validates a MaxItems bound or suppression)"
+else:
+  # Suggest-only: detect, draft a fix per finding, route to residue WITHOUT
+  # applying.  No gate can validate a P-series fix, so the human is the gate —
+  # this area never mutates the working tree (contrast detect-fix-recheck, which
+  # applies and keeps edits that pass their gates).
+  let violations = call detect-violations
+    scope: scope
+    series: "P"
+    rule_ids: rule_ids
+    target: if mode == "strict" then "failing+warning" else "failing"
+
+  for each finding in violations:
+    let proposal = call remediate-finding
+      finding: finding
+      mode: mode
+
+    # The proposal is recorded, never applied.  classification is always
+    # "judgment" for P-series, so it lands in the human-review residue.
+    add { finding, proposal } to residue with note "P-series suggest-only: proposed fix drafted for human review; NOT applied (no orthogonal gate validates a MaxItems bound or suppression)"
 ```
+
+**The gates are blind here — this is why `apply_unverifiable` must be opt-in.**
+P001's `orthogonal_gate` is `"tests"`, and `MaxItems` is a declarative marker that
+is not runtime-enforced, so no behaviour changes with the bound: `recheck-narrowest`
+is satisfied by *any* bound including an absurd one, and the test suite cannot
+observe the difference.  A fix here therefore passes both gates whatever value it
+picks.  Applying it is defensible only because the two conditions above replace the
+gate with something a reviewer can actually check — a stated number and the source
+it came from.  Never let a P-series result be reported as `"mechanical"`.
 
 ### Fix Prescription
 
@@ -241,7 +282,8 @@ is always `"judgment"`:
   stop re-exporting it) — a public-contract refactor. Route to residue with that
   guidance. Do not attempt a mechanical edit.
 
-**Storage-seam rules (P008–P012)** — all suggest-only, scope=app, WARN-tier;
+**Storage-seam rules (P008–P012, P044)** — all suggest-only, scope=app,
+WARN-tier;
 `classification` is always `"judgment"`.  Read the full function/class context
 around `finding.line` before drafting any proposal.
 
@@ -300,6 +342,31 @@ around `finding.line` before drafting any proposal.
   propose renaming the field to clarify the semantics (e.g. `storage_uri`) and
   suppressing P012 with justification; state why the value is stable across
   workers.
+
+- **P044 DirectStoragePrefixTransfer** — app code calls
+  `storage.upload_prefix(...)` / `download_prefix(...)`, moving a whole prefix
+  itself instead of declaring the data on the contract.  These are real SDK
+  functions, so this is not P009's build-your-own-store shape; it is the
+  sanctioned seam used one level below the storage contract.  Draft a proposal
+  that names which of the two supported paths applies, because they are not
+  interchangeable:
+  - **task-to-task data** — replace with a `FileReference` field on the contract
+    (same producing/consuming pattern as P011/P012).  The interceptor persists
+    it after the producing task and materialises it before the consuming one,
+    with a per-file SHA-256 sidecar; that is what makes a partial transfer
+    detectable, which a directory-level non-emptiness check cannot do.
+  - **phase or app hand-off** — replace with `App.upload()` / `App.download()`
+    **hoisted to `run()` or the `@entrypoint`**, one call per phase.  State this
+    explicitly in the proposal: leaving the call where the prefix call sat is a
+    `@task` body, and `App.upload`/`download` are themselves framework tasks, so
+    an in-place substitution trades a P044 finding for a P008 one.  Never
+    propose that.
+  If the transfer is a genuine bulk sync with no contract boundary to hang a
+  reference on (a state directory synced wholesale, a one-off migration script),
+  propose an inline `# conformance: ignore[P044] <reason>` instead and say why
+  no contract boundary exists.  Do not propose a fix that merely moves the
+  prefix call to a different module — the finding is about the level of the
+  abstraction, not its location.
 
 **Client-seam rule (P019)** — suggest-only, scope=both, WARN-tier;
 `classification` is always `"judgment"`.  Read the full function/class context
@@ -393,7 +460,11 @@ drafting.
 
 **SDR-readiness rules (P029/P030, P037/P038/P039, P041, P042)** — all suggest-only,
 scope=app; `classification` is always `"judgment"`.  All gate on
-`self_deployed_runtime: true` in `atlan.yaml`.
+`self_deployed_runtime: true` in `atlan.yaml`.  Suggest-only is about *how the
+loop treats them* — never auto-edit an SDR finding, always draft and route to
+residue — and is independent of tier: P029, P030, P038 and P039 are BLOCK, so
+their residue entries are release-blocking for the app and should be written to
+say so.
 
 - **P029 SdrManifestMissingAgentJson** (BLOCK) — a `manifest.json` under
   `app/generated/` is missing the `agent_json` key in `dag.extract.inputs.args`.
@@ -414,7 +485,7 @@ scope=app; `classification` is always `"judgment"`.  All gate on
   manifest.  Draft the required `app.pkl` addition and route to residue for the
   developer to apply.
 
-- **P030 SdrUploadNotCalled** (WARN) — no real `self.upload(...)` **call**
+- **P030 SdrUploadNotCalled** (BLOCK) — no real `self.upload(...)` **call**
   exists in any app source file outside `tests/` (matched on the AST, so a
   comment or docstring merely *mentioning* it does not clear the finding),
   making the `ENABLE_ATLAN_UPLOAD` gate structurally unreachable — OR a custom
@@ -487,7 +558,7 @@ scope=app; `classification` is always `"judgment"`.  All gate on
   `CredentialRef.from_workflow_args(workflow_args)`, keeping the direct
   `credential_guid` path only as a fallback; route to residue for confirmation.
 
-- **P038 SdrArtifactMisrooted** (WARN) — the object-store output path/prefix
+- **P038 SdrArtifactMisrooted** (BLOCK) — the object-store output path/prefix
   (`artifacts/apps/<identity>/...`) is rooted from the *workflow-input*
   `application_name` field (read as `input_data.get("application_name", ...)`,
   `input_data["application_name"]`, or `input.application_name`) instead of the
@@ -505,7 +576,7 @@ scope=app; `classification` is always `"judgment"`.  All gate on
   `APPLICATION_NAME` / `self._app_name` (or `WORKFLOW_OUTPUT_PATH_TEMPLATE`);
   route to residue for confirmation.
 
-- **P039 SdrAgentJsonDroppedByInputContract** (WARN) — the generated manifest
+- **P039 SdrAgentJsonDroppedByInputContract** (BLOCK) — the generated manifest
   declares `{{agent-json}}` at the extract-args top level (P029 passes), but the
   generated extract-input contract model (`AppInputContract` in a generated
   `_input.py`) subclasses the bare `Input` base, declares no `agent_json` field,

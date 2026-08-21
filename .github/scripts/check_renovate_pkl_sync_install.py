@@ -2,9 +2,10 @@
 """Guard: every sibling module renovate_pkl_sync.py imports must be installed
 onto PATH by the fleet runner's install step in .github/workflows/renovate.yaml.
 
-That step (unlike the reusable renovate-pkl-sync.yaml workflow, which sparse-
-checks out the whole .github/scripts/ directory) copies a single file to
-/usr/local/bin/renovate-pkl-sync with `sudo install`. renovate_pkl_sync.py
+That step copies a single file to /usr/local/bin/renovate-pkl-sync with `sudo
+install`, which is what makes this failure mode possible: the retired
+renovate-pkl-sync.yaml reusable sparse-checked out the whole .github/scripts/
+directory and so carried every sibling for free. renovate_pkl_sync.py
 resolves its sibling imports via `sys.path.insert(0, str(Path(__file__).parent))`,
 so any local module it imports must be copied alongside it in that same step —
 otherwise the bare PATH command raises ModuleNotFoundError at runtime for every

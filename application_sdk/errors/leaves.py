@@ -248,6 +248,82 @@ class ColdStartRaceError(DependencyUnavailableError):
 
 
 @dataclass(kw_only=True)
+class DaprSidecarUnreachableError(ColdStartRaceError):
+    """Terminal form of a cold-start race: the Dapr sidecar never became
+    reachable for the entire cold-start budget, across every attempt.
+
+    Raised by
+    :func:`~application_sdk.infrastructure.retry_past_dapr_cold_start` only at
+    budget exhaustion — the point at which no attempt ever got a usable
+    answer. A transient race that eventually resolves returns normally and
+    never reaches this type, so this type distinguishes a budget-exhausted
+    outage from a still-booting one for diagnosis.
+
+    It stays wire-retryable (inherits ``default_retryable = True``): naming the
+    terminal state does not by itself change retry or fail-open behaviour. An
+    activity-level retry can still recover when a later attempt lands on a
+    healthy worker (a single bad pod in a multi-replica pool), so the retry
+    hint is left on deliberately — the same topology reasoning that keeps a
+    platform fault failing open rather than blocking the run. Choosing to
+    *stop* on this state instead of retrying is a separate policy decision, not
+    made here.
+
+    Distinct from a plain ``ColdStartRaceError`` purely so the two read
+    differently to an operator or a triaging agent: a bare
+    ``ColdStartRaceError`` says "not reachable yet, still waiting"; this says
+    "not reachable for the whole budget, done waiting". Reporting a persistent
+    platform fault as a transient race is the defect this fixes. Subclasses
+    ``ColdStartRaceError`` (not ``DependencyUnavailableError`` directly) so it
+    inherits ``DEPENDENCY_UNAVAILABLE`` — keeping error routing and the
+    preflight gate's ``gate_broken`` classification unchanged — and so every
+    existing ``except ColdStartRaceError`` catch site keeps catching it.
+
+    Carries the diagnosis an operator needs with no secret surface:
+    ``component`` (a Dapr config identifier), ``attempts``, and
+    ``elapsed_seconds`` are all safe to render. The underlying transport error
+    rides the inherited ``cause`` field and is never string-interpolated into
+    the message.
+    """
+
+    component: str | None = None
+    attempts: int | None = None
+    elapsed_seconds: float | None = None
+
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_SIDECAR_UNREACHABLE"
+
+
+@dataclass(kw_only=True)
+class ObjectStoreReadError(DependencyUnavailableError):
+    """Object store listing returned no files matching the expected extension.
+
+    Surfaces the prefix that was searched so operators can immediately tell
+    whether the upstream task wrote to the wrong path, was skipped entirely,
+    or if the configured prefix on this read side is wrong.
+    """
+
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_OBJECT_STORE_READ"
+    message: str = "No matching files found in object store."
+    suggested_action: str | None = (
+        "Verify the upstream task wrote to this prefix and that the "
+        "configured prefix is correct."
+    )
+    service: str | None = "object_store"
+    path: str | None = None
+    file_extension: str | None = None
+
+
+@dataclass(kw_only=True)
+class ObjectStoreDownloadError(DependencyUnavailableError):
+    """No local files found and download from object store failed."""
+
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_OBJECT_STORE_DOWNLOAD"
+    message: str = "No files found locally and failed to download from object store"
+    service: str | None = "object_store"
+    path: str | None = None
+    file_extension: str | None = None
+
+
+@dataclass(kw_only=True)
 class SourceUnavailableError(AppError):
     """Customer-controlled source system is temporarily unreachable.
 
@@ -289,6 +365,54 @@ class ResourceExhaustedError(AppError):
     default_retryable: ClassVar[bool] = True
     code: ClassVar[str] = "RESOURCE_EXHAUSTED"
     audience: ClassVar[Audience] = Audience.PLATFORM
+
+
+@dataclass(kw_only=True)
+class DiskFullError(ResourceExhaustedError):
+    """A local write failed because the filesystem had no room for it (FND-318).
+
+    Raised by the SDK's write boundary (:mod:`application_sdk.common.atomic`)
+    for ``ENOSPC`` and ``EDQUOT`` — either the volume is out of blocks or the
+    writing identity is over its quota. Both mean the same thing to whoever has
+    to act, which is why they share one type.
+
+    A bare ``OSError`` is the failure this replaces. It carries no category, so
+    it lands in whatever broad ``except`` happens to be in the call stack and
+    the run reports some downstream symptom instead — in the incident that
+    motivated this, a truncated JSON artifact that failed in a *consuming*
+    app's parser forty minutes later. A typed error is classified, attributable
+    to the writing step, and alertable.
+
+    **This error is also the operator's signal that the deployment needs more
+    ephemeral storage.** Requests and limits are deployment configuration and
+    are deliberately not requested from either the SDK or the app — neither can
+    know the number. Naming the path, what the write needed, and what was free
+    tells the operator which deployment to raise and by roughly how much,
+    without either codebase guessing.
+
+    **Retryable, inherited deliberately.** Disk pressure is often not ours: a
+    co-tenant's scratch space frees, or a fresh attempt starts on a node that
+    has room. A genuinely undersized deployment re-fails at
+    :func:`~application_sdk.common.atomic.ensure_free_space` in seconds rather
+    than part-way through a long write, so the retries are cheap and each one
+    re-emits the same operator signal.
+    """
+
+    path: str | None = None
+    operation: str | None = None
+    required_bytes: int | None = None
+    free_bytes: int | None = None
+
+    code: ClassVar[str] = "RESOURCE_EXHAUSTED_DISK_FULL"
+    resource: str | None = "disk"
+    # Defaulted on the class rather than passed at each raise site: the
+    # remediation is the same wherever this is raised from, and a raise site
+    # that forgot it would ship the one failure whose whole purpose is telling
+    # an operator what to change with no instruction attached.
+    suggested_action: str | None = (
+        "Raise the ephemeral-storage request/limit on this deployment, or "
+        "reduce the volume this step stages on local disk."
+    )
 
 
 @dataclass(kw_only=True)

@@ -6,6 +6,7 @@ Covers:
 - Byte-drifted managed workflow → one C002 WARN finding
 - Parameterised files with a custom-but-valid value → no finding (structural match)
 - Parameterised files with structural drift beyond the value → finding
+- Retired managed workflow still on disk → finding; absent → no finding
 """
 
 from __future__ import annotations
@@ -14,7 +15,13 @@ import pathlib
 import re
 
 import pytest
-from conformance.bootstrap.render import MANAGED_ACTION_FILES, MANAGED_WORKFLOWS, render
+from conformance.bootstrap import extract as extract_mod
+from conformance.bootstrap.render import (
+    MANAGED_ACTION_FILES,
+    MANAGED_WORKFLOWS,
+    RETIRED_WORKFLOWS,
+    render,
+)
 from conformance.cli import _cmd_bootstrap
 from conformance.suite.checks.bootstrap_drift import (
     _extract_exit_zero,
@@ -85,10 +92,20 @@ def test_discover_returns_all_managed_paths(tmp_path: pathlib.Path) -> None:
 def test_discover_returns_paths_even_when_absent(tmp_path: pathlib.Path) -> None:
     """discover() must not filter out non-existent files."""
     paths = discover(tmp_path)
-    # managed shims + managed action files + tests.yaml + renovate.json scaffolds.
-    assert len(paths) == len(MANAGED_WORKFLOWS) + len(MANAGED_ACTION_FILES) + 2
+    # managed shims + retired shims + managed action files + tests.yaml and
+    # renovate.json scaffolds.
+    assert len(paths) == (
+        len(MANAGED_WORKFLOWS) + len(RETIRED_WORKFLOWS) + len(MANAGED_ACTION_FILES) + 2
+    )
     # None of them exist yet.
     assert all(not p.exists() for p in paths)
+
+
+def test_discover_includes_retired_workflows(tmp_path: pathlib.Path) -> None:
+    """A retired shim must still be discovered, or a repo that never re-runs
+    bootstrap is never told the dead file is there."""
+    names = {p.name for p in discover(tmp_path)}
+    assert set(RETIRED_WORKFLOWS).issubset(names)
 
 
 # ---------------------------------------------------------------------------
@@ -229,18 +246,6 @@ def test_structural_change_alongside_pin_still_flagged(tmp_path: pathlib.Path) -
 # ---------------------------------------------------------------------------
 
 
-def test_docstring_coverage_custom_package_name_not_flagged(
-    tmp_path: pathlib.Path,
-) -> None:
-    """A repo that used --package-name myapp should not be flagged."""
-    wf_dir = tmp_path / ".github" / "workflows"
-    wf_dir.mkdir(parents=True)
-    wf = wf_dir / "docstring-coverage.yaml"
-    wf.write_text(render("docstring-coverage.yaml", package_name="myapp"))
-    findings = scan_path(wf, tmp_path)
-    assert findings == []
-
-
 def test_build_and_publish_custom_unit_tests_workflow_not_flagged(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -251,6 +256,55 @@ def test_build_and_publish_custom_unit_tests_workflow_not_flagged(
     wf.write_text(render("build-and-publish.yaml", unit_tests_workflow="ci.yaml"))
     findings = scan_path(wf, tmp_path)
     assert findings == []
+
+
+def test_build_and_publish_ghcr_base_opt_in_not_flagged(
+    tmp_path: pathlib.Path,
+) -> None:
+    """An app that self-selected the GHCR base redirect must not be flagged.
+
+    Same reasoning as --system-deps below: the only "fix" for a C002 finding
+    here is re-running bootstrap, which would send the app back to Harbor —
+    and the SDK-side default won't flip for a long time, so opting in early has
+    to be a first-class per-repo choice.
+    """
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "build-and-publish.yaml"
+    wf.write_text(render("build-and-publish.yaml", use_ghcr_base="true"))
+    assert scan_path(wf, tmp_path) == []
+
+
+def test_build_and_publish_hand_added_ghcr_base_opt_in_not_flagged(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The opt-in as an app would actually hand-write it into the `with:` block."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "build-and-publish.yaml"
+    wf.write_text(
+        render("build-and-publish.yaml").replace(
+            "    secrets: inherit", "      use_ghcr_base: true\n    secrets: inherit"
+        )
+    )
+    assert scan_path(wf, tmp_path) == []
+
+
+def test_build_and_publish_ghcr_base_opt_in_with_structural_drift_flagged(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Only the opt-in itself is per-repo — other edits are still drift."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "build-and-publish.yaml"
+    wf.write_text(
+        render("build-and-publish.yaml", use_ghcr_base="true").replace(
+            "    secrets: inherit", "      channel: nightly\n    secrets: inherit"
+        )
+    )
+    findings = scan_path(wf, tmp_path)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "C002"
 
 
 def test_checks_custom_system_deps_not_flagged(tmp_path: pathlib.Path) -> None:
@@ -307,20 +361,61 @@ def test_checks_hand_written_system_deps_step_flagged_then_fixed_by_bootstrap(
 # ---------------------------------------------------------------------------
 
 
-def test_docstring_coverage_structural_drift_flagged(tmp_path: pathlib.Path) -> None:
+def test_build_and_publish_structural_drift_flagged(tmp_path: pathlib.Path) -> None:
     """Structural change (not just the value) in a templated file is still flagged."""
     wf_dir = tmp_path / ".github" / "workflows"
     wf_dir.mkdir(parents=True)
-    wf = wf_dir / "docstring-coverage.yaml"
+    wf = wf_dir / "build-and-publish.yaml"
     # Write canonical then inject an extra job-level key.
-    canonical = render("docstring-coverage.yaml")
-    drifted = canonical.replace(
-        "  docstring-coverage:", "  docstring-coverage:\n    timeout-minutes: 5"
-    )
+    canonical = render("build-and-publish.yaml")
+    drifted = canonical.replace("jobs:\n", "jobs:\n  injected:\n    runs-on: ubuntu\n")
+    assert drifted != canonical
     wf.write_text(drifted)
     findings = scan_path(wf, tmp_path)
     assert len(findings) == 1
     assert "drifted" in findings[0].message
+
+
+# ---------------------------------------------------------------------------
+# Retired shims (FND-381): present on disk → finding; gone → silent
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", RETIRED_WORKFLOWS)
+def test_retired_workflow_still_present_is_flagged(
+    tmp_path: pathlib.Path, name: str
+) -> None:
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / name
+    wf.write_text("name: legacy\n")
+    findings = scan_path(wf, tmp_path)
+    assert len(findings) == 1
+    assert "retired" in findings[0].message
+    assert findings[0].file == f".github/workflows/{name}"
+
+
+@pytest.mark.parametrize("name", RETIRED_WORKFLOWS)
+def test_retired_workflow_absent_is_not_flagged(
+    tmp_path: pathlib.Path, name: str
+) -> None:
+    """The inverse of a managed shim: absence is the desired end state, not a
+    finding — otherwise every repo that already converged reports drift."""
+    wf = tmp_path / ".github" / "workflows" / name
+    assert scan_path(wf, tmp_path) == []
+
+
+def test_bootstrapped_repo_has_no_retired_workflow(tmp_path: pathlib.Path) -> None:
+    """End to end: bootstrap removes the file, so the sweep is clean after."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    for name in RETIRED_WORKFLOWS:
+        (wf_dir / name).write_text("name: legacy\n")
+    _bootstrap(tmp_path)
+    findings = []
+    for path in discover(tmp_path):
+        findings.extend(scan_path(path, tmp_path))
+    assert findings == [], [f.message for f in findings]
 
 
 # ---------------------------------------------------------------------------
@@ -396,6 +491,67 @@ def test_tests_yaml_active_services_script_not_flagged(tmp_path: pathlib.Path) -
     assert findings == []
 
 
+def test_tests_yaml_raised_coverage_floor_not_flagged(tmp_path: pathlib.Path) -> None:
+    """An app raising its own unit-coverage floor is a recognised param.
+
+    The whole point of the allowance: a connector that opted UP must not report
+    as drifted, since "fixing" the finding would undo the stricter bar.
+    """
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "tests.yaml"
+    wf.write_text(render("tests.yaml", app_name="mysql", unit_coverage_fail_under="40"))
+    findings = scan_path(wf, tmp_path)
+    assert findings == [], [f.message for f in findings]
+
+
+def test_tests_yaml_hand_added_coverage_floor_not_flagged(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The same allowance for a line added by hand rather than by bootstrap.
+
+    Pinned against the exact shape the fleet already carries — a bare
+    ``unit-coverage-fail-under: "90"`` as the first entry of the ``with:``
+    block, which is what the apps that raised their floor actually wrote. The
+    template renders the line in that position, and bare rather than with a
+    surrounding comment, precisely so those files match the canonical instead
+    of reporting drift for having opted up.
+    """
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "tests.yaml"
+    wf.write_text(
+        render("tests.yaml", app_name="mysql").replace(
+            '      app-name: "mysql"\n',
+            '      unit-coverage-fail-under: "90"\n      app-name: "mysql"\n',
+        )
+    )
+    findings = scan_path(wf, tmp_path)
+    assert findings == [], [f.message for f in findings]
+
+
+def test_tests_yaml_sub_floor_coverage_flagged_and_explained(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A floor BELOW the SDK's stays drift, and the message says why.
+
+    Without the explanation the finding reads as unspecified "structural
+    drift", and the remediation (--resync) silently deletes the app's own line
+    — so the message has to name the value, the SDK floor, and that outcome.
+    """
+    monkeypatch.setattr(extract_mod, "SDK_UNIT_COVERAGE_FLOOR", 40)
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "tests.yaml"
+    wf.write_text(render("tests.yaml", app_name="mysql", unit_coverage_fail_under="20"))
+    findings = scan_path(wf, tmp_path)
+    assert len(findings) == 1
+    msg = findings[0].message
+    assert "unit-coverage-fail-under: 20" in msg
+    assert "40" in msg
+    assert "--resync" in msg
+
+
 def test_tests_yaml_structural_drift_produces_finding(tmp_path: pathlib.Path) -> None:
     """Structural modification (not just param values) → one C002 finding."""
     wf_dir = tmp_path / ".github" / "workflows"
@@ -433,10 +589,17 @@ def test_tests_yaml_finding_is_warn_never_block(tmp_path: pathlib.Path) -> None:
     assert rule.tier == EnforcementTier.WARN
 
 
-def test_tests_yaml_finding_message_mentions_delete_and_bootstrap(
+def test_tests_yaml_drift_message_names_the_resync_flag(
     tmp_path: pathlib.Path,
 ) -> None:
-    """Drift message tells users to delete + re-run bootstrap to remediate."""
+    """Drift message points at the flag that actually fixes it.
+
+    The remediation used to be "delete the file and re-run", which discards
+    every per-repo customisation to land a structural catch-up.
+    ``--resync`` preserves them, so the message must name it — a
+    finding whose stated fix is more destructive than necessary is one people
+    reasonably refuse to act on.
+    """
     wf_dir = tmp_path / ".github" / "workflows"
     wf_dir.mkdir(parents=True)
     wf = wf_dir / "tests.yaml"
@@ -444,8 +607,87 @@ def test_tests_yaml_finding_message_mentions_delete_and_bootstrap(
     findings = scan_path(wf, tmp_path)
     assert len(findings) == 1
     msg = findings[0].message
-    assert "delete" in msg.lower() or "regenerate" in msg.lower()
+    assert "--resync" in msg
     assert "bootstrap" in msg
+    assert "delete" not in msg.lower()
+
+
+def test_tests_yaml_force_external_runtime_not_flagged(tmp_path: pathlib.Path) -> None:
+    """A forced external runtime is a recognised param, not drift (FND-604).
+
+    It has to be both: preserved by --resync *and* invisible to this checker.
+    Flagging it would tell an app whose main.py genuinely needs external daprd
+    that its own working config is non-conformant.
+    """
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "tests.yaml"
+    wf.write_text(render("tests.yaml", app_name="mysql", force_external_runtime="true"))
+    findings = scan_path(wf, tmp_path)
+    assert findings == [], [f.message for f in findings]
+
+
+def test_tests_yaml_explicit_secrets_mapping_not_flagged(
+    tmp_path: pathlib.Path,
+) -> None:
+    """An explicit ``secrets:`` mapping is a recognised param, not drift.
+
+    It is the norm across the migrated fleet, not an oddity: ``secrets: inherit``
+    can neither compose nor rename, so any connector with a real source system
+    has to map its credentials by name.
+    """
+    block = (
+        "    secrets:\n"
+        "      E2E_SOURCE_ENV_JSON: |\n"
+        '        {"E2E_WIDGET_HOST": ${{ toJSON(secrets.E2E_WIDGET_HOST) }}}'
+    )
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "tests.yaml"
+    wf.write_text(render("tests.yaml", app_name="mysql", secrets_block=block))
+    findings = scan_path(wf, tmp_path)
+    assert findings == [], [f.message for f in findings]
+
+
+def test_tests_yaml_unpreservable_declaration_explained_in_the_finding(
+    tmp_path: pathlib.Path,
+) -> None:
+    """When --resync will refuse, the finding that recommends it must say so.
+
+    Otherwise the message promises a re-render that then does not happen, and
+    the app owner has to run the command to find out why — the same
+    invisibility that let FND-604 recur.
+    """
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "tests.yaml"
+    wf.write_text(
+        render("tests.yaml", app_name="mysql")
+        + "\n  tests-passed:\n    runs-on: ubuntu-latest\n"
+    )
+    findings = scan_path(wf, tmp_path)
+    assert len(findings) == 1
+    msg = findings[0].message
+    assert "tests-passed" in msg
+    assert "REFUSES" in msg
+
+
+def test_tests_yaml_absent_message_does_not_name_the_resync_flag(
+    tmp_path: pathlib.Path,
+) -> None:
+    """An absent tests.yaml is scaffolded by a bare re-run — no flag needed.
+
+    Separate message from the drift case: there is nothing on disk to
+    preserve, so telling the user to pass a preservation flag would imply the
+    bare re-run is unsafe when it is exactly the right command.
+    """
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    findings = scan_path(wf_dir / "tests.yaml", tmp_path)
+    assert len(findings) == 1
+    msg = findings[0].message
+    assert "absent" in msg.lower()
+    assert "--resync" not in msg
 
 
 # ---------------------------------------------------------------------------
@@ -491,17 +733,24 @@ def test_renovate_json_finding_is_warn_never_block(tmp_path: pathlib.Path) -> No
     assert get_rule("C002").tier == EnforcementTier.WARN
 
 
-def test_renovate_json_finding_mentions_delete_and_bootstrap(
+def test_renovate_json_drift_message_names_the_resync_flag(
     tmp_path: pathlib.Path,
 ) -> None:
-    """Drift message tells users to delete + re-run bootstrap to remediate."""
+    """Drift message points at the flag that actually fixes it.
+
+    Mirrors the tests.yaml case: the old advice was "delete and re-run", which
+    discards the file wholesale. It must also keep --resync distinct from the
+    mode flags — those CHANGE the auto-merge policy, which is not what a
+    structural catch-up should do.
+    """
     rj = tmp_path / "renovate.json"
     rj.write_text("{}\n")
     findings = scan_path(rj, tmp_path)
     assert len(findings) == 1
     msg = findings[0].message
-    assert "delete" in msg.lower() or "regenerate" in msg.lower()
+    assert "--resync" in msg
     assert "bootstrap" in msg
+    assert "delete" not in msg.lower()
 
 
 def test_all_scaffolds_clean_after_bootstrap(tmp_path: pathlib.Path) -> None:

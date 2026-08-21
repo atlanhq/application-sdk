@@ -11,13 +11,13 @@ from unittest import mock
 
 import pytest
 
+from application_sdk.app import base as app_base
 from application_sdk.app.base import App, _app_state, _app_state_lock
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import get_task_metadata
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.cleanup import CleanupInput, CleanupOutput
 from application_sdk.contracts.types import FileReference
-from application_sdk.execution import heartbeat
 
 
 @dataclass
@@ -195,7 +195,9 @@ class TestCleanupFiles:
         # This drives the real run_in_thread (real executor, real worker
         # thread) and records where the fs call actually ran, so the assertion
         # tracks the property the fix is about rather than merely which
-        # callable was handed to the wrapper.
+        # callable was handed to the wrapper. Patched on ``app.base``, the
+        # consuming module: since ADR-0019 it binds ``run_in_thread`` at module
+        # scope, so patching the substrate module would miss this reference.
         if kind == "dir":
             target = tmp_path / "workflow-artifacts"
             target.mkdir()
@@ -206,7 +208,7 @@ class TestCleanupFiles:
             target.write_text("data")
             expected_func = os.remove
 
-        real_run_in_thread = heartbeat.run_in_thread
+        real_run_in_thread = app_base.run_in_thread
         calls: list[tuple[Any, int]] = []
 
         async def recording_run_in_thread(func: Any, *args: Any, **kwargs: Any) -> Any:
@@ -230,7 +232,7 @@ class TestCleanupFiles:
             "application_sdk.app.base.TaskStateAccessor.get",
             return_value=tracked_refs,
         ):
-            with mock.patch.object(heartbeat, "run_in_thread", recording_run_in_thread):
+            with mock.patch.object(app_base, "run_in_thread", recording_run_in_thread):
                 result = await app.cleanup_files(CleanupInput(extra_paths=extra_paths))
 
         assert not target.exists()

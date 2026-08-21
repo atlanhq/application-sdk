@@ -12,11 +12,15 @@ description: |
   first and does not work.
 
   Requires `contents: write` (to create and delete the ticket ref) and
-  `actions: read` (to tell a live holder from a dead one). Without them the
-  action warns and disables the lease rather than failing — each e2e leg
-  re-asserts the installed version independently (FND-31), so the lease reduces
-  contention rather than being the thing that makes a wrong-version run
-  detectable.
+  `actions: read` (to tell a live holder from a dead one). Without them `acquire`
+  FAILS, naming the missing grant.
+
+  It used to warn and proceed lease-less instead. That fail-open was never real:
+  `prepare-tenant` verifies its own tenant's lease before installing, finds none,
+  and reds every install leg two jobs later with an error that cannot be acted on
+  (FND-702). Note that a caller's `permissions:` block is exhaustive rather than
+  additive, so a caller that declares one must declare every scope the reusable
+  workflow's jobs use — declaring less is what CAUSES this failure.
 
 inputs:
   mode:
@@ -37,6 +41,39 @@ inputs:
     description: |
       Cloud whose tenant this is; the other half of the lease key. Empty is
       valid and means the single-tenant fallback path, keyed as "default".
+
+      Mutually exclusive with `clouds`: passing both non-empty fails rather than
+      picking one, because silently preferring one would leave the other's tenant
+      unserialised while the job still went green.
+    required: false
+    default: ""
+  clouds:
+    description: |
+      Comma-separated clouds to lease as ONE ordered set. `acquire` takes them
+      in a fixed order (sorted by name) under a single total `wait-seconds`
+      budget, and hands back everything it took if it cannot get the whole set;
+      `release` gives the same set back.
+
+      This is what makes a cross-CSP run safe. The per-cloud matrix it replaces
+      acquired every cloud in parallel and held each while blocking on the rest
+      — hold-and-wait, which deadlocked as soon as two runs queued behind one
+      holder and split the freed set between them (FND-646). Ordering by name
+      makes a cycle structurally impossible, and the order MUST stay a pure
+      function of the names: derive it from anything per-run and two contenders
+      disagree about which lock comes first, which is the whole guarantee.
+
+      Names are canonicalised to the lease key before they are ordered, so
+      spelling cannot reorder the locks: `aws, gcp` and `aws,gcp` are one pair of
+      tenants taken in one order, and a difference in case or spacing between two
+      callers cannot invert them.
+
+      Empty falls back to `cloud`, so a caller can pass both unconditionally —
+      no branching shell — and the single-tenant path, where the resolved cloud
+      list is legitimately empty, keeps leasing "default".
+
+      NOT accepted by `verify`, deliberately: each install leg must confirm its
+      OWN tenant, and a set-shaped verify would invite it to check the aggregate
+      again — the approximation `verify` was added to replace.
     required: false
     default: ""
   wait-seconds:
@@ -96,17 +133,27 @@ outputs:
     value: ${{ steps.lease.outputs.acquired }}
   state:
     description: |
-      "acquired"; "disabled" (no ref-write permission — the run proceeds
-      unserialised); "timeout" (the tenant stayed busy); or "rate-limited" (the
-      API never cleared, which fails rather than proceeding unserialised).
-
-      Worth asserting in anger rather than trusting a green job: "disabled" is a
-      deliberate fail-open, so a lease that is not working at all still leaves
-      the job green with only a warning.
+      "acquired"; "denied" (no ref-write permission in the calling workflow);
+      "timeout" (the tenant stayed busy); or "rate-limited" (the API never
+      cleared). Only "acquired" exits 0 — every other state fails the step, so a
+      green lease job means a lease was genuinely taken.
     value: ${{ steps.lease.outputs.state }}
   lease-ref:
-    description: The tenant's lease ref this run raced for.
+    description: |
+      The lease ref the outcome hinged on: the tenant this run raced for in
+      single-cloud mode, and in `clouds` mode the last one taken when the whole
+      set was acquired or the one that blocked otherwise. One specific tenant to
+      name in an error, never a guess about which of the set it was.
     value: ${{ steps.lease.outputs.lease-ref }}
+  lease-refs:
+    description: |
+      Every lease ref this run now holds, comma-separated; empty unless
+      `acquired` is true. Acquisition is all-or-nothing, so this is either the
+      whole requested set or nothing — never a partial hold.
+    value: ${{ steps.lease.outputs.lease-refs }}
+  clouds:
+    description: The clouds this run leased, comma-separated and in acquisition order.
+    value: ${{ steps.lease.outputs.clouds }}
   holder-run-id:
     description: The run holding the lease when this one gave up waiting; else empty.
     value: ${{ steps.lease.outputs.holder-run-id }}
@@ -123,6 +170,7 @@ runs:
         MODE: ${{ inputs.mode }}
         APP: ${{ inputs.app }}
         CLOUD: ${{ inputs.cloud }}
+        CLOUDS: ${{ inputs.clouds }}
         WAIT_SECONDS: ${{ inputs.wait-seconds }}
         POLL_SECONDS: ${{ inputs.poll-seconds }}
         TTL_SECONDS: ${{ inputs.ttl-seconds }}
@@ -143,6 +191,7 @@ runs:
           --repo "$LEASE_REPO" \
           --app "$APP" \
           --cloud "$CLOUD" \
+          --clouds "$CLOUDS" \
           --run-id "$RUN_ID" \
           --run-attempt "$RUN_ATTEMPT" \
           --wait-seconds "$WAIT_SECONDS" \

@@ -1,0 +1,103 @@
+# Safety net for the SDK review approval path: post approvals that were
+# computed but never landed.
+#
+# Why this exists:
+#   `sdk-review-approve-on-verdict.yml` computes the verdict and then posts the
+#   formal approval as `atlan-ci` — the CODEOWNER whose approval satisfies
+#   branch protection on `main`. When that one POST fails (the trigger has been
+#   `atlan-ci` exhausting its 5,000 req/hr primary REST quota) the run dies and
+#   nothing retries it. The PR is left with a review summary, the
+#   `sdk-review-approved` label, and no approving review — and recovery was a
+#   human noticing and running `gh run rerun --failed` by hand.
+#
+#   PR #3162 shrank that window (one `atlan-ci` request per fire instead of ~15,
+#   plus rate-limit-aware retry) but could not close it: primary quota can reset
+#   up to an hour out and the stamper deliberately fails fast rather than hold a
+#   runner that long. This sweep is the durable answer because it does not care
+#   why the stamp was lost.
+#
+# Guards live in .github/scripts/sdk_review_reconcile.py, tested in
+# .github/scripts/tests/. In short: the `sdk-review-approved` label must still
+# be on the PR (every invalidator clears it), the newest mothership-ai[bot]
+# verdict must be READY_TO_MERGE at the PR's live head, there must be no
+# existing bot approval, and the verdict must be old enough that no fast-path
+# run could still be in flight for it.
+#
+# 10-minute cadence. Per tick that is one paginated PR listing plus two reads
+# per `sdk-review-approved` PR — negligible against the fleet App token's own
+# quota, which is the point: a reconciler polling every PR on the `atlan-ci` PAT
+# would become a new source of the exhaustion it exists to recover from. The PAT
+# is spent only on the APPROVE call, once per PR actually approved.
+#
+# Quota-aware: before the first approval of a run it reads `GET /rate_limit` on
+# the approver (free — it does not count against the quota it reports) and
+# attempts nothing if the quota is spent. Taking a 403 to discover that spends a
+# doomed request, and hammering an exhausted primary limit is how it escalates
+# into a secondary/abuse block.
+#
+# A quota-blocked approval is a DEFERRAL: annotated and summarised, but the run
+# stays green, because the next tick after the hourly reset posts it. Going red
+# every ten minutes for an hour would bury the annotation that matters when the
+# problem does not clear on its own. A verdict still unapproved past
+# --stale-after-minutes (90) has outlived a full reset without recovering, and
+# that does red the run.
+
+name: SDK Review — reconcile lost approvals
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report which PRs would be reconciled without approving any"
+        type: boolean
+        default: false
+
+# github.token only needs contents:read for the checkout; every API call the
+# sweep makes runs under the fleet App token minted below, and the one APPROVE
+# runs under the atlan-ci PAT.
+permissions:
+  contents: read
+
+concurrency:
+  group: sdk-review-reconcile
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    name: Re-drive missing atlan-ci approvals
+    runs-on: ubuntu-latest
+    # Without an explicit ceiling this inherits GitHub's 6h default. Paired with
+    # cancel-in-progress: false, a hung run would queue every subsequent tick
+    # behind it instead of just skipping a cycle.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
+      - name: Mint fleet App token
+        # Carries its own rate-limit quota, independent of the `atlan-ci` user
+        # quota that ORG_PAT_GITHUB draws on. Same App the stamper uses.
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+
+      - name: Reconcile lost approvals
+        env:
+          # Every call the sweep makes, and every call the stamper makes except
+          # APPROVE.
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          # The APPROVE call only — atlan-ci is the CODEOWNER whose approval
+          # satisfies branch protection.
+          APPROVER_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+        run: |
+          python3 .github/scripts/sdk_review_reconcile.py \
+            --repo "${{ github.repository }}" \
+            ${{ inputs.dry_run && '--dry-run' || '' }}

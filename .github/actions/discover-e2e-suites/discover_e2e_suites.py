@@ -15,6 +15,14 @@ consumes:
               but nothing found" guard is about suites, and a cloud fan-out over
               zero suites is still zero suites.
   leg-count — number of matrix legs actually emitted (suites × clouds).
+  clouds    — the RESOLVED cloud list, comma-separated ("" for no cloud
+              dimension). The matrix already carries it per leg, but only a
+              consumer that parses the matrix can see it, and "which clouds did
+              this repo actually run against" is a fact the test-readiness
+              scorecard records descriptively (FND-34). Emitting it here means
+              the answer comes from the same ``parse_clouds`` call that decided
+              the fan-out, so the recorded coverage cannot disagree with the
+              coverage that ran.
 
 Cross-CSP fan-out (FND-6)
 -------------------------
@@ -40,6 +48,29 @@ Three ``--clouds`` values, and the reason the empty one is not "no clouds":
   for a caller without the tenant-matrix secret, or an operator deliberately
   falling back to the single legacy tenant.
 
+Defaulted narrows, named does not (FND-354)
+-------------------------------------------
+``--available-clouds`` carries the cloud KEYS that ``E2E_TENANT_MATRIX_JSON``
+actually holds — the key list, never the blob; the credentials stay in
+``resolve_e2e_tenant.py``, which is the only thing that needs them. The two
+``--clouds`` forms treat it differently, and the difference is the point:
+
+* **defaulted** (``""``) → ``DEFAULT_CLOUDS ∩ available``, with a ``::warning::``
+  naming every dropped cloud. Nobody asked for that cloud; ``DEFAULT_CLOUDS``
+  did. Before FND-354 the defaulted list was emitted whole, so removing a cloud
+  from the secret — the one lever that is fleet-wide and needs no PR — made
+  ``resolve_e2e_tenant.py`` hard-fail that leg in *every* e2e-running repo
+  instead of narrowing the fan-out. The obvious incident hatch did the opposite
+  of what an operator reaches for it to do. It now narrows, out loud.
+* **named** (``--clouds aws,azure``) → passed through untouched, so a cloud that
+  is absent from the secret still reaches the resolver and still exits non-zero.
+  Someone asserted that cloud should run; skipping it silently really would be a
+  coverage hole.
+
+Intersection only, never union: a fourth key appearing in the secret does not
+widen the fleet's fan-out behind ``DEFAULT_CLOUDS``'s back. Widening stays a
+deliberate edit here.
+
 ``--clouds-only`` emits the cloud dimension *without* the file dimension, for
 callers that target a whole directory rather than fanning out per file
 (``e2e-full-reusable.yaml``).
@@ -56,6 +87,7 @@ import argparse
 import json
 import re
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 
 _SANITIZE_RE = re.compile(r"[^a-z0-9]+")
@@ -71,6 +103,10 @@ DEFAULT_CLOUDS = ("aws", "azure", "gcp")
 NO_CLOUDS = "none"
 
 
+class CloudSelectionError(ValueError):
+    """The requested cloud fan-out cannot be satisfied."""
+
+
 def _leg_name(path: Path) -> str:
     """Derive a stable, filesystem-safe leg label from a test file path.
 
@@ -84,28 +120,86 @@ def _leg_name(path: Path) -> str:
     return _SANITIZE_RE.sub("-", stem.lower()).strip("-") or "e2e"
 
 
-def parse_clouds(raw: str) -> list[str]:
-    """Return the ordered, de-duplicated cloud list for a ``--clouds`` value.
+def _split_clouds(raw: str) -> list[str]:
+    """Split a comma-separated cloud list into sanitized, de-duplicated keys.
 
-    Accepts the comma-separated form the workflow input carries. ``""`` yields
-    :data:`DEFAULT_CLOUDS` and ``"none"`` yields no clouds — see the module
-    docstring for why round that way. Blank entries inside a list are dropped so
-    a trailing comma is a no-op rather than a leg named "". Order is the
-    caller's, not sorted: the operator writes ``aws,azure,gcp`` and the legs
-    should read in that order.
+    Blank entries are dropped so a trailing comma is a no-op rather than a leg
+    named "". Order is the caller's, not sorted: the operator writes
+    ``aws,azure,gcp`` and the legs should read in that order.
     """
-    stripped = raw.strip()
-    if not stripped:
-        return list(DEFAULT_CLOUDS)
-    if stripped.lower() == NO_CLOUDS:
-        return []
-
     out: list[str] = []
     for token in raw.split(","):
         cloud = _SANITIZE_RE.sub("-", token.strip().lower()).strip("-")
         if cloud and cloud not in out:
             out.append(cloud)
     return out
+
+
+def _defaulted_clouds(available: Iterable[str] | None) -> list[str]:
+    """Return :data:`DEFAULT_CLOUDS` narrowed to what the tenant secret carries.
+
+    *available* is the tenant matrix's key list. Empty or ``None`` means "not
+    known here" — no secret shared with this repo, or a payload that could not
+    be read — and narrowing is then skipped entirely, which is exactly the
+    pre-FND-354 behaviour.
+
+    Narrowing is an intersection, never a union: a key in the secret that is not
+    in :data:`DEFAULT_CLOUDS` does not widen the fan-out. Removing a cloud from
+    the secret is meant to be the fleet-wide incident hatch; adding one is a
+    coverage decision that belongs in this file, where it is reviewed.
+    """
+    have = set(_split_clouds(",".join(available or ())))
+    if not have:
+        return list(DEFAULT_CLOUDS)
+
+    kept = [cloud for cloud in DEFAULT_CLOUDS if cloud in have]
+    dropped = [cloud for cloud in DEFAULT_CLOUDS if cloud not in have]
+    if not kept:
+        raise CloudSelectionError(
+            "E2E_TENANT_MATRIX_JSON carries no cloud from the SDK's default "
+            f"fan-out (default: {', '.join(DEFAULT_CLOUDS)}; secret: "
+            f"{', '.join(sorted(have))}). Narrowing to nothing would emit zero "
+            "legs and green the gate having run no e2e at all, so this fails "
+            "instead. Restore a default cloud's entry in the secret, or pass "
+            "e2e-clouds explicitly to run the clouds the secret does carry."
+        )
+    if dropped:
+        print(
+            "::warning::Cloud fan-out narrowed to what E2E_TENANT_MATRIX_JSON "
+            f"carries: running {', '.join(kept)}; dropped "
+            f"{', '.join(dropped)} (in the SDK default list, absent from the "
+            "secret). This run has LESS cross-CSP coverage than the SDK ships. "
+            "Nothing named these clouds — the default list did — so they are "
+            "narrowed rather than failed; name a cloud in e2e-clouds to make "
+            "its absence a hard failure instead.",
+            file=sys.stderr,
+        )
+    return kept
+
+
+def parse_clouds(raw: str, available: Iterable[str] | None = None) -> list[str]:
+    """Return the ordered, de-duplicated cloud list for a ``--clouds`` value.
+
+    Accepts the comma-separated form the workflow input carries. ``""`` yields
+    :data:`DEFAULT_CLOUDS` and ``"none"`` yields no clouds — see the module
+    docstring for why round that way.
+
+    *available* (the tenant matrix's cloud keys) narrows the **defaulted** list
+    only. An explicitly named cloud is passed through even when it is absent
+    from *available*, so the per-leg resolver still hard-fails on it. That
+    asymmetry is the whole of FND-354 and is pinned by
+    ``test_a_named_absent_cloud_still_reaches_the_resolver``.
+
+    Raises :class:`CloudSelectionError` when narrowing would leave no clouds at
+    all.
+    """
+    stripped = raw.strip()
+    if not stripped:
+        return _defaulted_clouds(available)
+    if stripped.lower() == NO_CLOUDS:
+        return []
+
+    return _split_clouds(raw)
 
 
 def discover(test_dir: str, clouds: list[str] | None = None) -> list[dict[str, str]]:
@@ -182,6 +276,18 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--available-clouds",
+        default="",
+        help=(
+            "Comma-separated cloud keys that E2E_TENANT_MATRIX_JSON actually "
+            "carries — the KEY LIST, never the payload. Narrows the DEFAULTED "
+            "--clouds list (and warns about each cloud it drops) so removing a "
+            "cloud from the secret takes it out of the rotation fleet-wide "
+            "instead of reding a leg in every repo. An explicitly named cloud "
+            "is never narrowed. Empty = unknown; nothing is narrowed."
+        ),
+    )
+    parser.add_argument(
         "--clouds-only",
         action="store_true",
         help=(
@@ -192,7 +298,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
-    clouds = parse_clouds(args.clouds)
+    try:
+        clouds = parse_clouds(args.clouds, _split_clouds(args.available_clouds))
+    except CloudSelectionError as exc:
+        print(f"::error::{exc}", file=sys.stderr)
+        return 1
 
     if args.clouds_only:
         # No suites to count in this mode: the caller runs one pytest target per
@@ -207,6 +317,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"matrix={matrix}")
         print(f"count={len(entries)}")
         print(f"leg-count={len(entries)}")
+        print(f"clouds={','.join(clouds)}")
         return 0
 
     suites = discover(args.test_dir)
@@ -238,6 +349,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"matrix={matrix}")
     print(f"count={len(suites)}")
     print(f"leg-count={len(entries)}")
+    # Empty means "no cloud dimension" — the legacy single-tenant fallback — and
+    # the consumer must be able to tell that apart from "e2e never ran", which is
+    # why the scorecard omits the field entirely in the latter case rather than
+    # recording an empty list.
+    print(f"clouds={','.join(clouds)}")
     return 0
 
 

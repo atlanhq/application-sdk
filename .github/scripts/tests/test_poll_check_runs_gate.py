@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -463,3 +464,209 @@ def test_main_rejects_both_name_and_names_json(monkeypatch):
         assert False, "expected SystemExit (argparse mutually exclusive)"
     except SystemExit:
         pass
+
+
+# --- stopping early when the SHA stops mattering ---------------------------
+#
+# A missing check is waited out for the full 130min, because a connector can
+# legitimately take two hours to report. The one case where that wait is
+# knowably pointless: the dispatch guard declined to dispatch because this SHA
+# is no longer the PR's head, so nothing will ever create the checks (FND-696).
+# These tests pin the boundary — the wait ends only for a MISSING check on a
+# superseded SHA, and never on a doubt.
+
+_HEAD = "d47789e0"
+
+
+def _route(monkeypatch, *, pr_answer, check_runs):
+    """Answer the PR read and the check-run listing separately."""
+    seen = {"pulls": 0}
+
+    def fake_run(cmd, **kwargs):
+        url = cmd[-1]
+        if "/pulls/" in url:
+            seen["pulls"] += 1
+            return pr_answer
+        return _http_response(200, '"v1"', _check_runs_body(check_runs))
+
+    monkeypatch.setattr(mod, "run", fake_run)
+    return seen
+
+
+def test_a_superseded_sha_stops_waiting(monkeypatch):
+    _route(
+        monkeypatch,
+        pr_answer=_http_response(200, None, {"head": {"sha": _HEAD}}),
+        check_runs=[],
+    )
+    with pytest.raises(mod.Superseded) as raised:
+        mod.wait_for_checks(
+            REPO, SHA, NAMES, pr_number=3322, timeout_seconds=7800, sleep=lambda s: None
+        )
+    assert raised.value.head == _HEAD
+
+
+def test_a_superseded_sha_exits_zero_rather_than_failing(monkeypatch):
+    """Green without a verdict is normally the bug; here the commit is no longer
+    under review, so no verdict is required — and a red on an abandoned run is a
+    false alarm that automation reads as a real failure."""
+    _route(
+        monkeypatch,
+        pr_answer=_http_response(200, None, {"head": {"sha": _HEAD}}),
+        check_runs=[],
+    )
+    assert (
+        mod.main(
+            [
+                "--repo",
+                REPO,
+                "--sha",
+                SHA,
+                "--names-json",
+                json.dumps(NAMES),
+                "--pr-number",
+                "3322",
+            ]
+        )
+        == 0
+    )
+
+
+def test_the_head_sha_keeps_waiting(monkeypatch):
+    _route(
+        monkeypatch,
+        pr_answer=_http_response(200, None, {"head": {"sha": SHA}}),
+        check_runs=[],
+    )
+    ok = mod.wait_for_checks(
+        REPO,
+        SHA,
+        NAMES,
+        pr_number=3322,
+        interval_seconds=1,
+        timeout_seconds=2,
+        sleep=lambda s: None,
+    )
+    assert ok is False
+
+
+@pytest.mark.parametrize(
+    "pr_answer",
+    [
+        _http_response(404, None, {"message": "Not Found"}),
+        _http_response(403, None, {"message": "Resource not accessible"}),
+        _http_response(500, None, {"message": "boom"}),
+        _http_response(200, None, {"number": 3322}),
+        _completed_raw(200, "<html>proxy error</html>"),
+    ],
+)
+def test_an_unreadable_pr_head_keeps_waiting(monkeypatch, pr_answer):
+    """Unknown is not superseded. Being wrong here abandons the wait for checks
+    that were genuinely on their way, which loses a real verdict."""
+    _route(monkeypatch, pr_answer=pr_answer, check_runs=[])
+    ok = mod.wait_for_checks(
+        REPO,
+        SHA,
+        NAMES,
+        pr_number=3322,
+        interval_seconds=1,
+        timeout_seconds=2,
+        sleep=lambda s: None,
+    )
+    assert ok is False
+
+
+def test_a_pending_check_is_never_abandoned(monkeypatch):
+    """The distinction that matters. A check that EXISTS has a connector run
+    behind it that will report; only a check that was never created can be known
+    to be never coming. A superseded SHA whose checks are all present must still
+    be waited out, or a real verdict is thrown away."""
+    seen = _route(
+        monkeypatch,
+        pr_answer=_http_response(200, None, {"head": {"sha": _HEAD}}),
+        check_runs=[{"name": n, "status": "in_progress"} for n in NAMES],
+    )
+    ok = mod.wait_for_checks(
+        REPO,
+        SHA,
+        NAMES,
+        pr_number=3322,
+        interval_seconds=1,
+        timeout_seconds=2,
+        sleep=lambda s: None,
+    )
+    assert ok is False
+    assert seen["pulls"] == 0, "a pending check must not even ask about the head"
+
+
+def test_no_pr_number_never_asks(monkeypatch):
+    """The merge_group path, unchanged: a queue entry's SHA is not any PR's head,
+    so asking would spend a call to learn that a 404 means "carry on"."""
+    seen = _route(
+        monkeypatch,
+        pr_answer=_http_response(200, None, {"head": {"sha": _HEAD}}),
+        check_runs=[],
+    )
+    ok = mod.wait_for_checks(
+        REPO, SHA, NAMES, interval_seconds=1, timeout_seconds=2, sleep=lambda s: None
+    )
+    assert ok is False
+    assert seen["pulls"] == 0
+
+
+def test_the_head_is_re_checked_periodically_not_every_poll(monkeypatch):
+    """A push can land mid-wait, so the question is asked again — but at one call
+    per five minutes, not one per poll: this token's budget is 1000 requests an
+    hour for the whole repository."""
+    seen = _route(
+        monkeypatch,
+        pr_answer=_http_response(200, None, {"head": {"sha": SHA}}),
+        check_runs=[],
+    )
+    mod.wait_for_checks(
+        REPO,
+        SHA,
+        NAMES,
+        pr_number=3322,
+        interval_seconds=1,
+        timeout_seconds=25,
+        sleep=lambda s: None,
+    )
+    # Attempt 1, then every tenth: 1, 10, 20 out of 25 attempts.
+    assert seen["pulls"] == 3
+
+
+# --- wiring: the caller has to pass it, and be allowed to ------------------
+
+
+def _connector_gate() -> dict:
+    workflow = Path(__file__).resolve().parents[2] / "workflows" / "pull_request.yaml"
+    return yaml.safe_load(workflow.read_text(encoding="utf-8"))["jobs"][
+        "connector-gate"
+    ]
+
+
+def _poll_step(job: dict) -> dict:
+    for step in job["steps"]:
+        if "poll_check_runs_gate.py" in str(step.get("run", "")):
+            return step
+    raise AssertionError("connector-gate no longer polls check runs")
+
+
+def test_the_gate_passes_the_pr_number_from_the_event() -> None:
+    """From the event, not an input: the number has to belong to the same PR as
+    the SHA being polled, or the early exit would fire against a stranger's
+    commit. Empty on merge_group, which is what leaves that path unchanged."""
+    step = _poll_step(_connector_gate())
+    assert step["env"]["PR_NUMBER"] == "${{ github.event.pull_request.number }}"
+    assert "--pr-number" in step["run"], (
+        "without the flag the early exit is silently off and a superseded run "
+        "waits out the full 130min for checks nobody will ever create"
+    )
+
+
+def test_the_gate_may_read_the_pull_request() -> None:
+    """A job-level permissions block REPLACES the workflow default rather than
+    merging with it, so dropping this does not fail loudly — the read 403s, the
+    poll warns, and it waits the full budget exactly as it used to."""
+    assert _connector_gate()["permissions"]["pull-requests"] == "read"

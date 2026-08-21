@@ -29,6 +29,7 @@ from conformance.scorecard.schema import (
     Aggregate,
     Check,
     CoverageMetrics,
+    CrossCloudCoverage,
     Gate,
     Grade,
     Maturity,
@@ -169,12 +170,16 @@ def build_scorecard(
     commit_sha: str | None,
     tool_version: str,
     generated_at: str,
+    cross_cloud: CrossCloudCoverage | None = None,
 ) -> Scorecard:
     """Assemble a :class:`Scorecard` from raw evidence and a rubric.
 
     Deterministic and IO-free; ``generated_at`` is supplied by the caller.
     ``coverage`` is a per-tier map; ``measured_tiers`` names the tiers exercised
     in this run (drives applicability + aggregate renormalization).
+
+    ``cross_cloud`` is carried through to ``raw`` verbatim and never scored — no
+    check reads it and no gate caps on it (see :class:`CrossCloudCoverage`).
     """
     tiers = [
         _score_tier(
@@ -228,5 +233,5 @@ def build_scorecard(
         aggregate=aggregate,
         tiers=tiers,
         gates=gates,
-        raw=RawMetrics(coverage=coverage, tests=tests),
+        raw=RawMetrics(coverage=coverage, tests=tests, cross_cloud=cross_cloud),
     )

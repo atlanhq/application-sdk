@@ -1,9 +1,12 @@
 import logging
+import os
+import subprocess
 import sys
 import warnings
 from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 from unittest import mock
 
@@ -3160,3 +3163,101 @@ class TestOtlpShutdownFlush:
         finally:
             adapter.logger_provider = None
             la._otlp_shutdown_done.clear()
+
+
+# loguru annotates each traceback frame with the values of the names on its source
+# line, so the canary has to be passed to the failing call to be rendered at all.
+_DIAGNOSE_PROBE = """
+import sys
+
+from application_sdk.observability.logger_adaptor import get_logger
+
+CANARY = "canary-local-value"
+
+
+def _explode(payload):
+    raise RuntimeError("deliberate")
+
+
+def _raise():
+    creds = {"client_secret": CANARY}
+    _explode(creds)
+
+
+logger = get_logger(__name__)
+try:
+    _raise()
+except RuntimeError:
+    logger.error("probe", exc_info=True)
+sys.stderr.flush()
+"""
+
+_DIAGNOSE_CANARY = "canary-local-value"
+
+
+class TestDiagnoseGating:
+    """loguru's ``diagnose`` renders the *values* of the names on each traceback
+    frame's source line, so a credential dict passed to a failing call has its
+    contents printed. It defaults to True in loguru; ``ENABLE_LOG_DIAGNOSE`` gates it
+    off unless explicitly asked for.
+
+    Driven through a subprocess because the adapter binds to the process's real
+    ``sys.stderr`` when it registers sinks, and because the flag is read from the
+    environment at import. The enabled case doubles as the control: it proves the
+    canary reaches a rendered frame and that loguru still annotates values, so the
+    disabled case cannot pass for the wrong reason.
+    """
+
+    def _run_probe(self, tmp_path: Path, env_overrides: dict[str, str]) -> str:
+        probe = tmp_path / "diagnose_probe.py"
+        probe.write_text(_DIAGNOSE_PROBE, encoding="utf-8")
+        env = {
+            **os.environ,
+            # Console sinks only: no exporter, no object store, no network.
+            "ENABLE_OTLP_LOGS": "false",
+            "ENABLE_OBSERVABILITY_STORE_SINK": "false",
+        }
+        env.pop("ATLAN_LOG_DIAGNOSE", None)
+        # Pin the log level, or an ambient one decides whether the probe logs at all:
+        # the stderr sink sits at ``max(LOG_LEVEL, ERROR)``, so a shell or image
+        # carrying ``LOG_LEVEL=CRITICAL`` filters out the probe's ``logger.error`` and
+        # every assertion below fails for a reason unrelated to diagnose.
+        #
+        # Both names are popped before the default is applied, because a bare
+        # ``setdefault`` would not dislodge an ambient ``ATLAN_LOG_LEVEL=CRITICAL`` —
+        # the key is already present, so the default never lands. ``env_overrides`` is
+        # applied afterwards, so the log-level test still controls its own override.
+        env.pop("LOG_LEVEL", None)  # the fallback that ATLAN_LOG_LEVEL supersedes
+        env.pop("ATLAN_LOG_LEVEL", None)
+        env["ATLAN_LOG_LEVEL"] = "ERROR"
+        env.update(env_overrides)
+        result = subprocess.run(
+            [sys.executable, str(probe)],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=str(Path(__file__).resolve().parents[3]),
+        )
+        assert "RuntimeError" in result.stderr, (
+            f"probe never logged the exception:\nstdout={result.stdout}\n"
+            f"stderr={result.stderr}"
+        )
+        return result.stderr
+
+    def test_local_values_are_not_rendered_by_default(self, tmp_path: Path) -> None:
+        stderr = self._run_probe(tmp_path, {})
+        assert _DIAGNOSE_CANARY not in stderr
+        # Frames must survive: ``backtrace`` is untouched, and a traceback without
+        # frames would be its own regression.
+        assert "_explode" in stderr
+
+    def test_local_values_are_rendered_when_explicitly_enabled(
+        self, tmp_path: Path
+    ) -> None:
+        stderr = self._run_probe(tmp_path, {"ATLAN_LOG_DIAGNOSE": "true"})
+        assert _DIAGNOSE_CANARY in stderr
+
+    def test_gate_is_not_derived_from_log_level(self, tmp_path: Path) -> None:
+        """Raising a tenant's verbosity to DEBUG must not re-enable value rendering."""
+        stderr = self._run_probe(tmp_path, {"ATLAN_LOG_LEVEL": "DEBUG"})
+        assert _DIAGNOSE_CANARY not in stderr

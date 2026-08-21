@@ -1,0 +1,78 @@
+name: E2E dispatch recheck
+description: |
+  Ask whether the application-sdk commit this connector run was dispatched for is
+  still the head of the pull request it came from, immediately before the run
+  queues for a tenant (FND-701).
+
+  The SDK-side guard (e2e_dispatch_guard.py, FND-696) drops a dispatch whose SHA
+  has already been superseded, but it can only see the window up to the dispatch.
+  This covers the window after it — the couple of minutes a dispatched connector
+  run spends building and testing before it reaches `lease-tenant`, holding
+  nothing. Standing down there hands the tenant straight to the live commit
+  instead of making it wait out a full install-plus-legs cycle.
+
+  Consumed at @main by every connector, deliberately and for the same reason the
+  tenant lease is: the claim-ref layout this reads has to match the one the
+  dispatching SDK run wrote, so the protocol must not vary with whichever ref a
+  caller happened to check out.
+
+  Needs no permissions beyond reading a public repository. `github.token` in a
+  connector repo can read application-sdk's refs, blobs and pull requests
+  because application-sdk is public; the check disables itself with a warning
+  rather than failing if that ever stops being true.
+
+inputs:
+  sdk-ref:
+    description: |
+      The `application_sdk_ref` this run was dispatched with. Anything that is
+      not a full 40-character commit sha disables the check — the connector's own
+      pull_request/push runs pass empty, and a branch name has no fixed head to
+      fall behind.
+    required: false
+    default: ""
+  app:
+    description: |
+      This connector's repository name (e.g. atlan-openapi-app). It is the `app`
+      component of the dispatch claim ref the SDK wrote, so it must be the REPO
+      name and not the short app-name — `github.repository` minus the owner is
+      the reliable source, since that is what the SDK's dispatch matrix keys on.
+    required: true
+  sdk-repo:
+    description: Repository holding the dispatch claim and the pull request.
+    required: false
+    default: atlanhq/application-sdk
+  github-token:
+    description: |
+      Token used for the reads. Defaults to the calling job's own
+      `github.token`, which is sufficient: every read is of public data in
+      another repository.
+    required: false
+    default: ""
+
+outputs:
+  superseded:
+    description: |
+      "true" only when the dispatching pull request has been positively shown to
+      point at a different head. Every other outcome — no claim record, an
+      unreadable answer, a ref that is not a commit sha — is "false", because
+      wrongly standing down denies a live commit its e2e outright while wrongly
+      carrying on merely costs the tenant time this was written to save.
+    value: ${{ steps.recheck.outputs.superseded }}
+
+runs:
+  using: composite
+  steps:
+    - name: Recheck the dispatched SDK ref
+      id: recheck
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token || github.token }}
+        SDK_REPO: ${{ inputs.sdk-repo }}
+        SDK_REF: ${{ inputs.sdk-ref }}
+        APP: ${{ inputs.app }}
+      run: |
+        set -euo pipefail
+        python3 "${{ github.action_path }}/e2e_dispatch_recheck.py" \
+          --sdk-repo "$SDK_REPO" \
+          --sdk-ref "$SDK_REF" \
+          --app "$APP"

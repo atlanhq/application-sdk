@@ -54,7 +54,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "An unbounded specifier lets an automated tool (Renovate) or a manual bump "
             "pull in a future SDK major without review. The SDK's versioning discipline only "
             "holds if every app has a bound that stops automatic upgrades past the reviewed "
-            "point."
+            "point. "
+            "Customer impact: an unreviewed SDK major rides an automated lockfile bump into "
+            "the next release, and its breaking changes surface as connector failures in "
+            "customer tenants with no app-code diff that explains them — the hardest kind "
+            "of regression to attribute during an incident."
         ),
         short_description=(
             "Application SDK dependency is missing or its version specifier is "
@@ -150,7 +154,7 @@ RULES: tuple[RuleDefinition, ...] = (
         id="D005",
         scope=RuleScope.APP,
         name="UnknownSdkExtra",
-        tier=EnforcementTier.WARN,
+        tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="dependency-pinning",
         autofixable=False,
@@ -159,7 +163,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "uv silently drops an unknown extra, so a typo like "
             "``atlan-application-sdk[dapr]`` (no such extra) installs nothing for that extra "
             "and the missing dependencies surface only at runtime. Validating the reference "
-            "against the SDK's published extras catches the silent-failure at build time."
+            "against the SDK's published extras catches the silent-failure at build time. "
+            "Customer impact: the dependencies the app needs are never installed, so the "
+            "connector raises ImportError on the first real run in the customer's tenant "
+            "— a day-one install failure on an image that passed every build gate, "
+            "because the typo is invisible to the resolver that silently dropped it."
         ),
         short_description=(
             "Reference to an atlan-application-sdk extra the SDK does not publish"
@@ -341,7 +349,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "also drifts from whatever application-sdk version is actually "
             "locked in the app's own uv.lock. The installed SDK wheel already "
             "bundles these files at application_sdk/components/, so the "
-            "network round-trip is both fragile and redundant."
+            "network round-trip is both fragile and redundant. "
+            "Customer impact: the flaky 429 blocks the build pipeline exactly when a "
+            "customer is waiting on a hotfix release, and component YAMLs fetched at a "
+            "drifted ref can ship state/queue configuration the locked SDK was never "
+            "validated against — misbehaving only once deployed in the tenant."
         ),
         short_description=(
             "A poe task fetches Dapr component YAMLs from GitHub instead of "
@@ -372,7 +384,7 @@ RULES: tuple[RuleDefinition, ...] = (
         id="D010",
         scope=RuleScope.APP,
         name="QueryTransformerWithoutDuckdb",
-        tier=EnforcementTier.WARN,
+        tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="runtime-dependencies",
         autofixable=False,
@@ -393,7 +405,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "line). That half is fixed at the root — [daft] aliases [sql] again from "
             "3.28.0 — so this rule now covers the no-extras case it always also "
             "covered. Statically checkable: transformer-usage scan + "
-            "lockfile/pyproject scan."
+            "lockfile/pyproject scan. "
+            "Customer impact: every transform in the customer's crawl dies with "
+            "ImportError, so no metadata reaches their catalog at all — and because "
+            "imports succeed and mocked unit tests pass, the first thing that reveals "
+            "it is the customer's own failed run."
         ),
         short_description=(
             "App imports the SDK query transformer but duckdb is not resolved "
@@ -451,9 +467,16 @@ RULES: tuple[RuleDefinition, ...] = (
             "has to keep in step with the SDK's by hand.  Reach for it only where\n"
             "the extra genuinely cannot be used.\n"
             "\n"
-            "This is a WARN (per the new-rule tier policy), but unlike most WARN\n"
-            "findings it indicates a *guaranteed* runtime failure — treat it as an\n"
-            "error.\n"
+            "This is a ``BLOCK``: the finding names a *guaranteed* runtime failure,\n"
+            "not a risk of one.  It landed as ``WARN`` under the new-rule tier policy\n"
+            'with the note "treat it as an error" — the tier now says that instead of\n'
+            "asking the reader to.\n"
+            "\n"
+            "Note for the ``[daft]``-pinned population above: with a parseable\n"
+            "``uv.lock`` the check walks what the app's own extras actually resolve,\n"
+            "so once the SDK bump to >= 3.28.0 is locked (where ``[daft]`` aliases\n"
+            "``[sql]``) ``duckdb`` is reachable and the finding clears with no\n"
+            "app-side edit.  Bump the SDK; do not reach for a suppression.\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"

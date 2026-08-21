@@ -1375,6 +1375,7 @@ class UIRule {
 | `PasswordInput` | `password` | `str` | Masked input |
 | `NumericInput` | `inputNumber` | `int` | `default`, `placeholderValue` |
 | `InputRepeater` | `inputRepeater` | `list[str]` | Repeatable text inputs. `placeholderText`, `validationRules` |
+| `Repeater` | `Repeater` | `list[dict]` | Repeatable rows of typed child `inputs` compiled into a list of row objects. `defaultRowCount`, `minRows`, `maxRows`, `emitArray`, `allowJsonImport`. Nest in credential `extraFields` via `NamedWidget` |
 
 ##### `validation` (WidgetValidation)
 

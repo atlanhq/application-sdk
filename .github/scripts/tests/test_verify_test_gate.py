@@ -18,7 +18,13 @@ sys.path.insert(
     0, str(Path(__file__).parent.parent.parent / "actions" / "verify-test-gate")
 )
 
-from verify_test_gate import cancelled_only, evaluate, main, render  # noqa: E402
+from verify_test_gate import (  # noqa: E402
+    cancelled_only,
+    evaluate,
+    main,
+    render,
+    stood_down,
+)
 
 # --- passing states --------------------------------------------------------
 
@@ -104,6 +110,161 @@ def test_e2e_skipped_when_discovery_succeeded_is_failure() -> None:
     out = render("success", "success", "success", "success", "skipped")
     assert out["passed"] == "false"
     assert out["e2e-status"] == "❌ Matrix skipped despite discovered suites"
+
+
+# --- the stand-down: an EXPLAINED skipped matrix (FND-701) -----------------
+#
+# The connector-side recheck skips lease-tenant and the e2e legs when the
+# application-sdk commit under test is no longer the head of the PR that
+# dispatched the run. That produces the exact tuple the anomaly above exists to
+# catch — discovery success, matrix skipped, no install-path failure — so the
+# gate needs telling the difference. Getting it wrong in either direction is a
+# real cost: unsuppressed, every stand-down reds the gate AND mirrors
+# conclusion=failure onto the dispatching SDK commit ("your change broke the
+# connector", the FND-218 misattribution); over-suppressed, a future re-wiring of
+# the e2e `if` greens the gate by skipping it.
+
+_STOOD_DOWN = ("success", "success", "success", "success", "skipped")
+
+
+def test_a_stand_down_is_not_an_anomaly() -> None:
+    assert evaluate(*_STOOD_DOWN, superseded="true") == []
+
+
+def test_a_stand_down_greens_the_gate_and_says_why() -> None:
+    """`conclusion` is the part that travels: report-to-sdk feeds it straight
+    into the check run on the dispatching SDK commit."""
+    out = render(*_STOOD_DOWN, superseded="true")
+
+    assert out["passed"] == "true"
+    assert out["conclusion"] == "success"
+    assert out["e2e-status"] == "⊘ Stood down — superseded SDK commit"
+    assert out["overall-status"] == "✅ All passed"
+
+
+@pytest.mark.parametrize(
+    "superseded", ["", "false", "False", "no", "1", "yes", "TRUE "]
+)
+def test_only_a_positive_assertion_explains_the_skip(superseded: str) -> None:
+    """Everything except the literal "true" leaves the anomaly firing. An absent
+    or unparseable value means the recheck job did not answer — it skipped, or it
+    died — and an unanswered skip is still unexplained, which is the state worth
+    reddening. "TRUE " is included because it IS accepted: the value is trimmed
+    and lowercased, and a workflow expression that renders with whitespace must
+    not silently stop explaining."""
+    errors = evaluate(*_STOOD_DOWN, superseded=superseded)
+
+    if stood_down(superseded):
+        assert errors == []
+    else:
+        assert any("matrix was skipped" in error for error in errors)
+
+
+def test_the_anomaly_survives_for_an_unexplained_skip() -> None:
+    """The regression this pairing has to keep passing: the suppression is
+    conditional, not a removal."""
+    errors = evaluate(*_STOOD_DOWN)
+
+    assert len(errors) == 1
+    assert "matrix was skipped" in errors[0]
+
+
+def test_a_stand_down_does_not_excuse_a_real_failure() -> None:
+    """Standing e2e down says nothing about the unit tier. A superseded run whose
+    unit tests failed must still fail the gate — otherwise the stand-down becomes
+    a way to green anything."""
+    errors = evaluate(
+        "failure", "success", "success", "success", "skipped", superseded="true"
+    )
+
+    assert len(errors) == 1
+    assert "unit tests" in errors[0]
+
+
+def test_a_stand_down_leaves_a_cancellation_readable_as_one() -> None:
+    """cancelled_only short-circuits the anomaly tuple to False, on the grounds
+    that the anomaly is never cancellation-attributable. A stand-down is not the
+    anomaly, so it must not take that branch — or a genuinely cancelled unit job
+    would be relabelled "failure" and sent to the wrong reader."""
+    assert (
+        cancelled_only(
+            "cancelled", "success", "success", "success", "skipped", superseded="true"
+        )
+        is True
+    )
+    assert (
+        render(
+            "cancelled", "success", "success", "success", "skipped", superseded="true"
+        )["conclusion"]
+        == "cancelled"
+    )
+
+
+def test_an_install_path_failure_still_names_itself_under_a_stand_down() -> None:
+    """The stand-down suppresses the anomaly, never a named job. A lease that
+    actually failed has to keep saying so — "the tenant was busy" and "the commit
+    was superseded" call for opposite responses."""
+    errors = evaluate(
+        "success",
+        "success",
+        "success",
+        "success",
+        "skipped",
+        "skipped",
+        "success",
+        "success",
+        "skipped",
+        "failure",
+        "true",
+    )
+
+    assert len(errors) == 1
+    assert "the tenant lease" in errors[0]
+
+
+def test_the_flag_defaults_to_unexplained(capsys: pytest.CaptureFixture) -> None:
+    """A caller pinned at @main that has not wired the recheck job keeps the
+    previous behaviour exactly, which is what makes this deployable without
+    touching a single connector repo."""
+    main(
+        [
+            "--unit",
+            "success",
+            "--integration",
+            "success",
+            "--detect-integration",
+            "success",
+            "--discover-e2e",
+            "success",
+            "--e2e",
+            "skipped",
+        ]
+    )
+
+    assert "passed=false" in capsys.readouterr().out
+
+
+def test_the_flag_reaches_the_driver(capsys: pytest.CaptureFixture) -> None:
+    main(
+        [
+            "--unit",
+            "success",
+            "--integration",
+            "success",
+            "--detect-integration",
+            "success",
+            "--discover-e2e",
+            "success",
+            "--e2e",
+            "skipped",
+            "--superseded",
+            "true",
+        ]
+    )
+    out = capsys.readouterr().out
+
+    assert "passed=true" in out
+    assert "e2e-status=⊘ Stood down — superseded SDK commit" in out
 
 
 # --- render() (display strings shared with the summary table) --------------

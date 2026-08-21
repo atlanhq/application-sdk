@@ -1377,21 +1377,78 @@ def _collect_dialect_drivers(py_files: Iterable[Path]) -> set[str]:
     return drivers
 
 
-def _dist_import_names(dist_name: str) -> set[str] | None:
+def _repo_site_packages(root: Path) -> list[str]:
+    """``site-packages`` directories of the *target repo's* own virtualenv.
+
+    D003 asks "is this dependency imported anywhere?", which needs the import
+    names each distribution provides. Resolving those from the *running*
+    interpreter makes the answer a property of whoever invoked the suite rather
+    than of the repo under test: the same repo yields different D003 findings
+    from the SDK's venv, a uvx-provisioned env, and the app's own venv, and the
+    environment that resolves the fewest dependencies produces the fewest
+    findings — i.e. looks the cleanest while analysing the least.
+
+    So prefer the target repo's environment. Empty list when it has none, in
+    which case resolution falls back to the running interpreter as before.
+    """
+    venv = root / ".venv"
+    if not venv.is_dir():
+        return []
+    candidates = [
+        *sorted(venv.glob("lib/python*/site-packages")),
+        venv / "Lib" / "site-packages",  # Windows layout
+    ]
+    return [str(p) for p in candidates if p.is_dir()]
+
+
+def _env_import_names(search_path: list[str]) -> dict[str, set[str]]:
+    """Map normalised distribution name -> provided import names for every
+    distribution installed under *search_path*.
+
+    One pass over the environment, rather than a lookup per dependency, so the
+    cost does not scale with the dependency count. Empty dict when
+    *search_path* is empty — callers then fall back to the running interpreter.
+    """
+    if not search_path:
+        return {}
+    out: dict[str, set[str]] = {}
+    for dist in importlib_metadata.distributions(path=search_path):
+        # Broken/partial metadata directories can yield a nameless dist.
+        name = dist.metadata["Name"] if dist.metadata else None
+        if not name:
+            continue
+        out[_normalise_name(name)] = _provided_import_names(dist)
+    return out
+
+
+def _dist_import_names(
+    dist_name: str, *, env_map: Mapping[str, set[str]] | None = None
+) -> set[str] | None:
     """Return the top-level import names a distribution provides, or ``None``.
 
-    Resolved from installed package metadata: ``top_level.txt`` when present,
-    plus top-level entries derived from the distribution's file list (RECORD).
-    Returns ``None`` when the distribution is not importable in the current
-    environment — the caller then *skips* the dependency (never flags it) and
-    reports it as unanalysed, so a missing env can never produce a false
-    "unused" finding.
+    Resolution order: the target repo's own environment (*env_map*, built by
+    :func:`_env_import_names`), then the running interpreter. The fallback only
+    ever widens coverage — a repo env installed with ``--no-dev`` or a partial
+    sync can still have a dependency resolvable in the invoking interpreter.
+
+    Returns ``None`` when neither can resolve it — the caller then *skips* the
+    dependency (never flags it) and reports it as unanalysed, so a missing env
+    can never produce a false "unused" finding.
     """
+    if env_map is not None:
+        provided = env_map.get(_normalise_name(dist_name))
+        if provided is not None:
+            return provided
     try:
         dist = importlib_metadata.distribution(dist_name)
     except importlib_metadata.PackageNotFoundError:
         return None
+    return _provided_import_names(dist)
 
+
+def _provided_import_names(dist: importlib_metadata.Distribution) -> set[str]:
+    """Top-level import names *dist* provides, from ``top_level.txt`` when
+    present plus top-level entries derived from its file list (RECORD)."""
     names: set[str] = set()
     # Distribution.read_text takes a filename positionally and returns None when
     # absent — a metadata lookup with no decode step, so the read-guard
@@ -1545,7 +1602,13 @@ def scan_all(
     if imported_modules is None:
         imported_modules = _collect_top_level_imports(py_files)
     if dist_import_map is None:
-        dist_import_map = {e.name: _dist_import_names(e.name) for e in dep_entries}
+        # Resolve against the repo under test first (see _repo_site_packages),
+        # so the finding set belongs to the repo and not to whichever
+        # interpreter happened to invoke the suite.
+        env_map = _env_import_names(_repo_site_packages(root))
+        dist_import_map = {
+            e.name: _dist_import_names(e.name, env_map=env_map) for e in dep_entries
+        }
     if dialect_drivers is None:
         dialect_drivers = _collect_dialect_drivers(py_files)
 

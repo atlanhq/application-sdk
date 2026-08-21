@@ -174,6 +174,16 @@ TEMPORAL_PROMETHEUS_BIND_ADDRESS = os.getenv(
 TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS: float = float(
     os.getenv("ATLAN_TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS", "5.0")
 )
+#: Upper bound on the bytes read from the loopback metrics endpoint when
+#: reading sdk-core's poller gauge for diagnostics. The endpoint is local and
+#: diagnostics-only, but a high-cardinality or misbehaving exporter could
+#: otherwise make the observer allocate an unbounded string every interval.
+#: Oversize is treated as unknown (``None``), never as zero. ~1 MiB is far
+#: above a healthy exposition (~460 series) and far below anything that could
+#: pressure the worker.
+TEMPORAL_CORE_METRICS_MAX_BYTES: int = int(
+    os.getenv("ATLAN_TEMPORAL_CORE_METRICS_MAX_BYTES", str(1024 * 1024))
+)
 
 # Prometheus Pushgateway (worker-only deployments)
 #: Pushgateway URL workers push to. Empty disables push (combined-mode
@@ -379,6 +389,18 @@ WORKFLOW_AUTH_CLIENT_SECRET_KEY = os.getenv(
 # the @task decorator. Per-task overrides still take precedence.
 #   ATLAN_HEARTBEAT_TIMEOUT_SECONDS → default heartbeat_timeout_seconds for @task
 #   ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS → default timeout_seconds for @task
+#   ATLAN_SCHEDULE_TO_CLOSE_TIMEOUT_SECONDS → default schedule_to_close_seconds for
+#     @task: the ceiling on a task's total time across every retry. Unset leaves
+#     the retry product unbounded (ADR-0018 → Bounding total time).
+# The stall watchdog's two fleet-wide settings are read in
+# application_sdk/execution/progress.py, because the activity worker running the
+# watchdog is the side that has to resolve them:
+#   ATLAN_PROGRESS_WATCHDOG → PROGRESS_WATCHDOG_MODE (off/warn/enforce, default warn;
+#     'off' is the kill-switch and beats a per-task declaration)
+#   ATLAN_MAX_NO_PROGRESS_SECONDS → MAX_NO_PROGRESS_SECONDS (default 900)
+# The run-length SLA that alerts on an over-long run — the duration signal that
+# replaces the duration kill — is read in application_sdk/execution/run_length.py:
+#   ATLAN_RUN_LENGTH_SLA_SECONDS → RUN_LENGTH_SLA_SECONDS (default 86400, 0 disables)
 # ExecutionSettings owns the graceful shutdown timeout:
 #   - ExecutionSettings.graceful_shutdown_timeout_seconds (TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT)
 
@@ -594,6 +616,17 @@ OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
 )
 #: Whether to enable OpenTelemetry log export
 ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
+#: Whether console tracebacks annotate each frame with the *values* of the names
+#: on its source line (loguru's ``diagnose``). Default is False, unlike loguru's
+#: own default of True: those values reach the console verbatim, so a local
+#: holding a token or a credential dict renders its contents onto a live
+#: worker's stderr. Frames themselves are always kept — ``backtrace`` is
+#: untouched — so only the value annotation is gated.
+#:
+#: Deliberately its own variable rather than a function of ``LOG_LEVEL``: raising
+#: a tenant's log verbosity to DEBUG must not silently re-enable value rendering.
+#: Set to True for local debugging, where the annotation is genuinely useful.
+ENABLE_LOG_DIAGNOSE: bool = os.getenv("ATLAN_LOG_DIAGNOSE", "false").lower() == "true"
 #: Whether to emit SDK logger output during Temporal workflow replay.
 #: Default is False, matching Temporal's native ``workflow.logger`` behaviour.
 #: Set to True to re-enable replay logs for debugging (e.g. when using the

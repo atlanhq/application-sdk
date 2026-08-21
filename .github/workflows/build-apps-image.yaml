@@ -188,7 +188,7 @@ jobs:
           ref: ${{ inputs.ref || github.ref }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
@@ -213,9 +213,21 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-          build-args: |
-            ACCESS_TOKEN_USR=${{ github.actor }}
-            ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
+          # The org PAT reaches the build ONLY as a BuildKit secret, never as a
+          # build arg. Build args are recorded in image config and are readable
+          # via `docker history` by anyone who can pull the image, so the
+          # `ACCESS_TOKEN_USR`/`ACCESS_TOKEN_PWD` args this step used to pass
+          # published the credential rather than merely using it (FND-697). A
+          # `--mount=type=secret` is never written to a layer or to history.
+          #
+          # Dockerfiles cloning a private git dependency (e.g. atlan-query-redaction)
+          # read it via `--mount=type=secret,id=git_token`; this is the same id
+          # build-and-publish-app.yaml and build-and-scan.yaml already provide, so
+          # an app builds identically down either path. Ignored by Dockerfiles that
+          # don't mount it. This job already logs into GHCR with the PAT above, so
+          # there's no benefit to minting a separate App token just for this.
+          secrets: |
+            git_token=${{ secrets.ORG_PAT_GITHUB }}
 
   # ── Job 3: Merge arch digests into a single multi-arch manifest ───────────────
   merge:
@@ -226,7 +238,7 @@ jobs:
 
     steps:
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
@@ -375,7 +387,7 @@ jobs:
       - name: Upload Trivy SARIF to GitHub Security
         if: always() && hashFiles('trivy-results.sarif') != ''
         continue-on-error: true  # codeql telemetry endpoint is not accessible in reusable workflow context
-        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
         with:
           sarif_file: trivy-results.sarif
           category: trivy-container

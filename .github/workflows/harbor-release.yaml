@@ -1,3 +1,32 @@
+# Publishes `app-runtime-base` — the image every Atlan app Dockerfile builds
+# FROM — to Harbor and GHCR under an identical manifest digest.
+#
+# ONE ARCHITECTURE PER JOB, EACH ON A RUNNER NATIVE TO IT.
+#
+# This was a single `ubuntu-latest` job with
+# `platforms: linux/amd64,linux/arm64`, which builds the arm64 half under QEMU
+# — measured across the org at 5-10x native, and already designed against on
+# this repo's other image paths (pull_request.yaml's build-sdk-base-image,
+# tests-reusable.yaml's build-e2e-image). An emulated leg never fails, it is
+# only slow, so nothing reports the regression if a future edit collapses the
+# matrix back onto ubuntu-latest; test_base_image_native_builds pins it.
+#
+# Splitting the build means the two registries can no longer be fed by one
+# `buildx --push`. The shape is now build -> merge:
+#
+#   prepare  computes the tag ladder (harbor_release_tags.py).
+#   build    per-arch, native. Pushes ONLY arch-suffixed staging tags, and only
+#            to GHCR — Harbor's project is the public, partner-facing catalog
+#            and must not accumulate `-amd64`/`-arm64` half-images.
+#   merge    joins the two staging images into an index and writes it under
+#            every ladder tag on BOTH registries
+#            (create_multiarch_manifest.py).
+#
+# Digest parity survives that change: an index's bytes are a function of its
+# child digests, so the same two children pushed to two registries produce the
+# same index digest. resolve_base_redirect.py fails closed on any skew, and
+# docs/standards/build-security.md documents the property and the recovery.
+
 name: Publish Harbor Image (Release)
 
 on:
@@ -14,12 +43,61 @@ permissions:
   actions: read
 
 jobs:
-  push-to-harbor:
+  prepare:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tag_prefix: ${{ steps.tags.outputs.tag_prefix }}
+      version: ${{ steps.tags.outputs.version }}
+      sha: ${{ steps.tags.outputs.sha }}
+      tags: ${{ steps.tags.outputs.tags }}
+      staging_base: ghcr.io/atlanhq/app-runtime-base
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # The prefix branch and the release/pre-release/dispatch ladder were both
+      # inline `if`/`else` shell. docs/standards/ci.md keeps that out of `run:`
+      # blocks so it can be regression-tested — see
+      # tests/test_harbor_release_tags.py.
+      - name: Compute image tags
+        id: tags
+        env:
+          TAG_PREFIX_INPUT: ${{ inputs.tag_prefix }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/harbor_release_tags.py \
+            --event-name "${{ github.event_name }}" \
+            --ref-name "${GITHUB_REF_NAME}" \
+            --sha "${GITHUB_SHA}" \
+            --tag-prefix "${TAG_PREFIX_INPUT:-}"
+
+  build:
+    name: Build (${{ matrix.arch }})
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # Knowing whether ONE arch or BOTH failed is the diagnosis when a build
+      # breaks on an architecture rather than in general.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            # NOT ubuntu-latest — see the note at the top of this file.
+            runner: ubuntu-24.04-arm
     concurrency:
-      group: ${{ github.workflow }}-${{ github.ref }}-harbor
+      # The arch is part of the group on purpose. A job-level `concurrency` on a
+      # matrix job resolves to the SAME group for every leg unless the matrix
+      # context is in the key, so without `${{ matrix.arch }}` the two legs
+      # would cancel each other and the merge below would never find both.
+      group: ${{ github.workflow }}-${{ github.ref }}-harbor-${{ matrix.arch }}
       cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -27,98 +105,10 @@ jobs:
 
       - name: Set up Buildx
         id: buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
 
-      - name: Compute tag prefix
-        id: tag_prefix
-        env:
-          TAG_PREFIX_INPUT: ${{ inputs.tag_prefix }}
-        run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            # Release builds use 'main' as the branch label.
-            # Actual image tags are computed separately in the 'Compute image tags' step.
-            echo "value=main" >> "$GITHUB_OUTPUT"
-          elif [ -n "${TAG_PREFIX_INPUT:-}" ]; then
-            if ! printf '%s' "$TAG_PREFIX_INPUT" | grep -Eq '^[A-Za-z0-9._-]+$'; then
-              echo "Invalid tag_prefix: must match ^[A-Za-z0-9._-]+$" >&2
-              exit 1
-            fi
-            echo "value=${TAG_PREFIX_INPUT}" >> "$GITHUB_OUTPUT"
-          else
-            # Sanitize branch name: replace any char not in [A-Za-z0-9._-] with '-'
-            sanitized=$(printf '%s' "${GITHUB_REF_NAME}" | tr -cs 'A-Za-z0-9._-' '-')
-            echo "value=${sanitized}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Get SDK version
-        id: get_version
-        run: echo "version=$(awk -F'"' '/^version = / {print $2}' pyproject.toml)" >> "$GITHUB_OUTPUT"
-
-      - name: Get short commit SHA
-        id: get_sha
-        run: echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
-
-      - name: Compute image tags
-        id: image_tags
-        env:
-          VERSION: ${{ steps.get_version.outputs.version }}
-          PREFIX: ${{ steps.tag_prefix.outputs.value }}
-          SHA: ${{ steps.get_sha.outputs.sha }}
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          MAJOR=$(echo "$VERSION" | cut -d. -f1)
-          MINOR=$(echo "$VERSION" | cut -d. -f1-2)
-          # Publish the SAME digest to both registries in one buildx push:
-          #   - registry.atlan.com : external/partner + tenant distribution (S3-backed)
-          #   - ghcr.io            : base for our own app CI. Harbor 307-redirects blobs
-          #                          to S3, so every internal base pull bills as S3
-          #                          DataTransfer-Out; GHCR pulls from GitHub-hosted
-          #                          runners are free. One push => both registries
-          #                          reference an identical manifest, so provenance and
-          #                          the Trivy report from secure-build-push-apps describe
-          #                          the same artifact wherever it is pulled from. That
-          #                          report is advisory and amd64-only (the action scans a
-          #                          separate single-platform build and runs in feedback
-          #                          mode) — it is not a gate on either registry.
-          # The push is NOT transactional across registries: if the GHCR leg fails after
-          # the Harbor names have landed, re-run this workflow run rather than cutting a
-          # new release — every tag is re-pushed to both registries, so the floating
-          # aliases cannot stay skewed. See docs/standards/build-security.md.
-          REPOS="registry.atlan.com/public/app-runtime-base ghcr.io/atlanhq/app-runtime-base"
-          : > /tmp/tags.txt
-          for REPO in $REPOS; do
-            if [ "$EVENT_NAME" = "release" ] && echo "$VERSION" | grep -qvF '-'; then
-              # Stable release: publish full alias ladder (exact, minor, major, latest) + immutable sha
-              printf '%s\n' \
-                "${REPO}:latest" \
-                "${REPO}:${VERSION}" \
-                "${REPO}:${MINOR}" \
-                "${REPO}:${MAJOR}" \
-                "${REPO}:sha-${SHA}" >> /tmp/tags.txt
-            elif [ "$EVENT_NAME" = "release" ]; then
-              # Pre-release (rc/alpha/beta): exact version + sha only — no aliases that could
-              # cause :latest or major/minor tags to point at a non-stable image
-              printf '%s\n' \
-                "${REPO}:${VERSION}" \
-                "${REPO}:sha-${SHA}" >> /tmp/tags.txt
-            else
-              # workflow_dispatch: prefix-scoped tags for branch/dev builds
-              printf '%s\n' \
-                "${REPO}:${PREFIX}-latest" \
-                "${REPO}:${PREFIX}-${VERSION}" \
-                "${REPO}:sha-${SHA}" >> /tmp/tags.txt
-            fi
-          done
-          DELIM=$(openssl rand -hex 8)
-          { echo "value<<${DELIM}"; cat /tmp/tags.txt; echo "${DELIM}"; } >> "$GITHUB_OUTPUT"
-
-      - name: Log in to Atlan Harbor Registry
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
-        with:
-          registry: registry.atlan.com
-          username: ${{ secrets.HARBOR_USERNAME }}
-          password: ${{ secrets.HARBOR_PASSWORD }}
-
+      # Harbor is deliberately absent here: this job pushes staging tags to GHCR
+      # only. The merge job holds the Harbor credential.
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
@@ -143,17 +133,75 @@ jobs:
           owner: atlanhq
           repositories: ${{ github.event.repository.name }}
 
-      - name: Build, scan, and push image to Harbor
+      # The Trivy report from this action is advisory (feedback mode, not a
+      # gate). It used to describe amd64 only, because the action scans a
+      # separate native single-platform build and every caller ran on x64 — so
+      # the arm64 half of a released base image was never scanned at all. With
+      # one native job per arch it now scans each arch on its own runner.
+      - name: Build, scan, and push staging image
         id: harbor_docker_build
         uses: ./.github/actions/secure-build-push-apps
         with:
-          branch: ${{ steps.tag_prefix.outputs.value }}
+          branch: ${{ needs.prepare.outputs.tag_prefix }}
           context: .
           file: ./Dockerfile
           push: true
-          platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.image_tags.outputs.value }}
+          platforms: ${{ matrix.platform }}
+          # The action defaults to an UNSCOPED `type=gha`, so without a per-arch
+          # scope the two legs overwrite each other's cache manifest and both go
+          # cold on every later run — silently, since a cache miss only costs
+          # time. `mode=min` matches the action's own default: this change is
+          # about where the build runs, not about how much of it is cached.
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=min,scope=${{ matrix.platform }}
+          tags: ${{ needs.prepare.outputs.staging_base }}:sha-${{ needs.prepare.outputs.sha }}-${{ matrix.arch }}
           github-token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
         env:
           DOCKER_CLIENT_TIMEOUT: 600
           COMPOSE_HTTP_TIMEOUT: 600
+
+  merge:
+    name: Merge & Push Manifest
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      - name: Log in to Atlan Harbor Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: registry.atlan.com
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.ORG_PAT_GITHUB }}
+
+      # One `imagetools create` per repository, each attaching that repository's
+      # whole ladder in a single call — see create_multiarch_manifest.py for why
+      # the grouping matters. Not transactional across registries: if the Harbor
+      # leg lands and the GHCR leg fails, RE-RUN this job rather than cutting a
+      # new release. Every tag is rewritten from the same two staging images, so
+      # the operation is idempotent. See docs/standards/build-security.md.
+      - name: Create and push multi-arch manifests
+        env:
+          TAGS: ${{ needs.prepare.outputs.tags }}
+          STAGING: ${{ needs.prepare.outputs.staging_base }}:sha-${{ needs.prepare.outputs.sha }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/create_multiarch_manifest.py \
+            --tags "${TAGS}" \
+            --source "${STAGING}-amd64" \
+            --source "${STAGING}-arm64" \
+            --inspect

@@ -44,6 +44,17 @@ of the finding as returned by `detect-violations`):
 - `"pkl-eval"` → delegate to `pkl-eval-gate` with `scope = scope`.  Return its
   `passed`, `exit_code`, and `summary` directly.
 
+- `"docker-build"` → delegate to `docker-build-gate` with `scope = scope`,
+  `finding = finding` (its `finding.file` is the authoritative Dockerfile — the
+  file the rule graded) and `touched_files = touched_files`.  Return its
+  `passed`, `exit_code`, and `summary` directly.  Used by the I-series: a Dockerfile change cannot affect
+  the Python test suite, so `"tests"` would be a blind gate that passes on any
+  edit, and `"skip"` would only parse-check a file format that has no parser.
+  Building the image is the narrowest check that actually exercises what was
+  changed.  When docker is unavailable the delegate returns `passed = false`
+  (never a pass-by-default), so the fix reverts and residues as
+  `cannot-verify`.
+
 - `"skip"` → skip the Python/contract test suite (it has no signal to offer for
   a `.github/`/`.gitignore`-only change) but still run a minimal
   **parseability check** over every touched non-Python file, because neither

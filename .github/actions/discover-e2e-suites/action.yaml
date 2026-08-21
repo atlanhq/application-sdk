@@ -30,6 +30,23 @@ inputs:
       caller's matrix by default is the wrong direction to fail in.
     required: false
     default: "none"
+  available-clouds:
+    description: |
+      Comma-separated cloud keys that E2E_TENANT_MATRIX_JSON actually carries.
+      The KEY LIST, never the payload — the credentials belong to the per-leg
+      tenant resolver, which is the only thing that needs them.
+
+      Narrows the DEFAULTED `clouds` list to the intersection, warning about
+      each cloud it drops, so taking a cloud out of the secret narrows the
+      fan-out fleet-wide instead of reding one leg in every e2e-running repo
+      (FND-354). A cloud named explicitly in `clouds` is never narrowed away:
+      it reaches the resolver and still fails there, because somebody asserted
+      it should run.
+
+      Empty (the default) means "not known here" and narrows nothing, which is
+      the pre-FND-354 behaviour a caller without the secret already gets.
+    required: false
+    default: ""
   clouds-only:
     description: |
       "true" emits only the cloud dimension, with no file dimension, for
@@ -48,6 +65,13 @@ outputs:
   leg-count:
     description: Number of matrix legs emitted (suites × clouds).
     value: ${{ steps.discover.outputs.leg-count }}
+  clouds:
+    description: |
+      The resolved cloud list, comma-separated; "" means no cloud dimension
+      (the legacy single-tenant fallback). Emitted from the same `parse_clouds`
+      call that decided the fan-out, so a consumer recording cross-CSP coverage
+      cannot disagree with the coverage that actually ran (FND-34).
+    value: ${{ steps.discover.outputs.clouds }}
 
 runs:
   using: composite
@@ -64,10 +88,12 @@ runs:
       env:
         TEST_DIR: ${{ inputs.test-dir }}
         CLOUDS: ${{ inputs.clouds }}
+        AVAILABLE_CLOUDS: ${{ inputs.available-clouds }}
         CLOUDS_ONLY_FLAG: ${{ inputs.clouds-only == 'true' && '--clouds-only' || '' }}
       run: |
         set -euo pipefail
         python3 "${{ github.action_path }}/discover_e2e_suites.py" \
           --test-dir "$TEST_DIR" \
           --clouds "$CLOUDS" \
+          --available-clouds "$AVAILABLE_CLOUDS" \
           ${CLOUDS_ONLY_FLAG} >> "$GITHUB_OUTPUT"

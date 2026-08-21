@@ -85,6 +85,12 @@ Bounds the restart supervisor that rebuilds the worker after a fatal poll error 
 | `ATLAN_WORKER_MAX_CONSECUTIVE_RESTARTS` | `10` | Consecutive worker-fatal failures tolerated before the supervisor gives up and re-raises, so a persistent misconfiguration still fails loud instead of hot-looping. The counter resets after a healthy run window. |
 | `ATLAN_WORKER_RESTART_BACKOFF_CAP_SECONDS` | `30` | Upper bound (seconds) for the full-jitter exponential backoff between worker restarts. The backoff is raced against shutdown so SIGTERM stays responsive. |
 | `ATLAN_WORKER_HEALTHY_RUN_SECONDS` | `300` | A worker that ran at least this long (seconds) before failing is treated as a fresh incident, resetting the consecutive-failure streak. |
+| `ATLAN_WORKER_POLL_DIAGNOSTIC_INTERVAL_SECONDS` | `60` | How often (seconds) to read Temporal core's live poller gauge and log a state transition, so a worker that is alive but claiming no work is visible in logs and in the `/live` / `/ready` probe details. Purely observational — it never restarts the worker and never flips a probe. Set to `0` to disable. |
+| `ATLAN_TEMPORAL_CORE_METRICS_MAX_BYTES` | `1048576` | Upper bound (bytes) on the metrics payload read from the loopback endpoint when reading Temporal core's poller gauge for the poll-state diagnostic. Guards the observer against an unbounded allocation if the local exporter misbehaves or grows high-cardinality. An oversize payload is reported as *unknown*, never as zero. |
+
+Reading the poller gauge requires Temporal core's Prometheus exporter, bound by
+`ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` (default `127.0.0.1:9464`). When it is
+unavailable the poll state is reported as *unknown*, never as zero.
 
 ### TLS
 
@@ -210,6 +216,7 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ATLAN_LOG_LEVEL` | `INFO` | Log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). **Fallback:** `LOG_LEVEL`. `CRITICAL` is accepted by loguru but prohibited in app code per [ADR-0011](adr/0011-logging-level-guidelines.md). |
+| `ATLAN_LOG_DIAGNOSE` | `false` | Annotate console tracebacks with the **values** of the names on each frame's source line (loguru's `diagnose`). Off by default, unlike loguru's own default: those values print verbatim, so a credential dict passed to a failing call has its contents rendered onto stderr. Useful locally; leave off anywhere real credentials exist. Independent of `ATLAN_LOG_LEVEL` by design — raising verbosity to `DEBUG` does not re-enable it. Traceback frames are unaffected either way. |
 | `ATLAN_LOG_BATCH_SIZE` | `100` | Records buffered before flushing to the object-store sink. |
 | `ATLAN_LOG_FLUSH_INTERVAL_SECONDS` | `10` | Seconds between object-store sink flushes. |
 | `ATLAN_LOG_RETENTION_DAYS` | `30` | Days to retain log files in the object store before cleanup. |

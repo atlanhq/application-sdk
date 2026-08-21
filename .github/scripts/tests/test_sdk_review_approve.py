@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,9 @@ SPEC = importlib.util.spec_from_file_location(
 )
 approve = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
+# Registered before exec: @dataclass resolves annotations through
+# sys.modules[cls.__module__], which is absent for a bare module_from_spec.
+sys.modules["sdk_review_approve"] = approve
 SPEC.loader.exec_module(approve)
 
 
@@ -121,6 +125,51 @@ def is_label_add(argv) -> bool:
 
 def is_rate_limit_probe(argv) -> bool:
     return argv[1] == "api" and argv[2] == "rate_limit"
+
+
+def is_comment_post(argv) -> bool:
+    return (
+        argv[1] == "api"
+        and argv[2] == f"repos/{REPO}/issues/{PR}/comments"
+        and "POST" in argv
+    )
+
+
+def posted_comment_body(gh: FakeGH) -> str:
+    """The body of the single comment POST `gh` recorded."""
+    (argv,) = gh.called(is_comment_post)
+    return next(arg[len("body=") :] for arg in argv if arg.startswith("body="))
+
+
+def starter_comment(
+    head: str = HEAD, run_id: str = "99", finished: bool = False
+) -> dict:
+    """The "review starting" comment `sdk-review.yml` posts, as the API returns it.
+
+    Kept in the shape `sdk_review_gate.inflight_sibling_run` parses, since that
+    is the function the stale-head re-review defers to.
+    """
+    body = (
+        "<!-- SDK_REVIEW_STARTED -->\n"
+        f"<!-- SDK_REVIEW_STARTED_HEAD: {head} -->\n"
+        f"<!-- SDK_REVIEW_STARTED_RUN: {run_id} -->\n"
+        "SDK review starting."
+    )
+    if finished:
+        body += "\n\n\u2014 status `success`"
+    return {"id": 4, "body": body, "user": {"login": "atlan-ci"}}
+
+
+def retrigger_comment(head: str = HEAD, login: str = "atlan-ci") -> dict:
+    return {
+        "id": 6,
+        "body": approve.retrigger_body(OTHER, head),
+        "user": {"login": login},
+    }
+
+
+def comments(*bodies: dict) -> str:
+    return json.dumps([list(bodies)])
 
 
 def base_gh(
@@ -419,12 +468,174 @@ def test_superseded_ready_verdict_dismisses_the_stale_bot_approval(monkeypatch):
     assert gh.called(lambda a: "dismissals" in a[2])
 
 
+# --- the stale-head branch (FND-638) -------------------------------------
+#
+# The refusal to stamp is correct and pinned below; what these add is that the
+# refusal no longer ends the story. Six of sixteen completed runs on one day had
+# their verdict discarded here with only a warning, and the loop then waited on
+# a human who was never told.
+
+
+def stale_head_env() -> dict:
+    """Env for a run whose verdict describes OTHER while the live head is HEAD."""
+    return {"COMMENT_BODY": verdict_comment(head=OTHER)}
+
+
 def test_head_moved_since_review_skips_every_stamp(monkeypatch):
     gh = base_gh()
-    assert run_main(gh, monkeypatch, COMMENT_BODY=verdict_comment(head=OTHER)) == 0
+    assert run_main(gh, monkeypatch, **stale_head_env()) == 0
     assert gh.called(is_approve) == []
     assert gh.called(is_status) == []
     assert gh.called(is_label_add) == []
+
+
+def test_head_moved_requests_a_review_of_the_current_head(monkeypatch):
+    gh = base_gh()
+    assert run_main(gh, monkeypatch, **stale_head_env()) == 0
+    body = posted_comment_body(gh)
+    # `sdk-review.yml`'s job-level `if:` is a startsWith, so the mention has to
+    # be the first thing in the body — markers go at the bottom.
+    assert body.startswith("@sdk-review")
+    assert approve.RETRIGGER_MARKER in body
+    assert f"<!-- SDK_REVIEW_RETRIGGER_HEAD: {HEAD} -->" in body
+
+
+def test_the_review_request_is_posted_as_atlan_ci(monkeypatch):
+    """Not under GH_TOKEN: the reviewer's `if:` admits no identity we hold.
+
+    `sdk-review.yml` accepts `atlan-ci`, `mothership-ai[bot]` and human
+    collaborators; a trigger from the fleet App would be silently ignored. And
+    `sdk-review-dismiss-on-human.yml` excludes `atlan-ci` by name, so this
+    comment cannot be mistaken for the human activity that dismisses approvals.
+    """
+    gh = base_gh()
+    assert run_main(gh, monkeypatch, **stale_head_env()) == 0
+    index = gh.calls.index(gh.called(is_comment_post)[0])
+    assert gh.tokens[index] == "pat-atlan-ci"
+
+
+def test_the_review_request_is_posted_once_per_sha(monkeypatch):
+    """The once-per-sha key is what stops fix->review->fix becoming a loop."""
+    gh = base_gh()
+    gh.on(
+        lambda a: a[2] == f"repos/{REPO}/issues/{PR}/comments",
+        ok(comments(summary_comment(5), retrigger_comment(head=HEAD))),
+    )
+    assert run_main(gh, monkeypatch, **stale_head_env()) == 0
+    assert gh.called(is_comment_post) == []
+
+
+def test_a_forged_retrigger_marker_does_not_suppress_the_request(monkeypatch):
+    """A marker from a non-`atlan-ci` author is not a request this loop made.
+
+    Anyone can comment on a public-repo PR. Without the author check, a forged
+    `SDK_REVIEW_RETRIGGER` marker for the current head would read as
+    `already-requested` and silently suppress the fresh review the stale-head
+    refusal exists to ask for — the exact failure FND-638 was fixing.
+    """
+    gh = base_gh()
+    gh.on(
+        lambda a: a[2] == f"repos/{REPO}/issues/{PR}/comments",
+        ok(
+            comments(
+                summary_comment(5), retrigger_comment(head=HEAD, login="evil-doer")
+            )
+        ),
+    )
+    assert run_main(gh, monkeypatch, **stale_head_env()) == 0
+    assert f"<!-- SDK_REVIEW_RETRIGGER_HEAD: {HEAD} -->" in posted_comment_body(gh)
+
+
+def test_a_request_for_a_different_sha_does_not_block_this_one(monkeypatch):
+    """Keyed on the head, not on "a request was made once on this PR"."""
+    gh = base_gh()
+    gh.on(
+        lambda a: a[2] == f"repos/{REPO}/issues/{PR}/comments",
+        ok(comments(summary_comment(5), retrigger_comment(head=OTHER))),
+    )
+    assert run_main(gh, monkeypatch, **stale_head_env()) == 0
+    assert f"<!-- SDK_REVIEW_RETRIGGER_HEAD: {HEAD} -->" in posted_comment_body(gh)
+
+
+def test_no_request_while_a_run_is_already_reviewing_that_head(monkeypatch):
+    gh = base_gh()
+    gh.on(
+        lambda a: a[2] == f"repos/{REPO}/issues/{PR}/comments",
+        ok(comments(summary_comment(5), starter_comment(head=HEAD))),
+    )
+    assert run_main(gh, monkeypatch, **stale_head_env()) == 0
+    assert gh.called(is_comment_post) == []
+
+
+def test_a_finished_run_on_that_head_does_not_count_as_in_flight(monkeypatch):
+    """A stamped starter means that run reached its end — it will post nothing more."""
+    gh = base_gh()
+    gh.on(
+        lambda a: a[2] == f"repos/{REPO}/issues/{PR}/comments",
+        ok(comments(summary_comment(5), starter_comment(head=HEAD, finished=True))),
+    )
+    assert run_main(gh, monkeypatch, **stale_head_env()) == 0
+    assert gh.called(is_comment_post) != []
+
+
+def test_no_request_when_the_current_head_already_has_a_verdict(monkeypatch):
+    """The fast path can be driven by an older verdict than the PR's newest."""
+    gh = base_gh()
+    gh.on(
+        lambda a: a[2] == f"repos/{REPO}/issues/{PR}/comments",
+        ok(comments(summary_comment(9, body=verdict_comment(head=HEAD)))),
+    )
+    assert run_main(gh, monkeypatch, **stale_head_env()) == 0
+    assert gh.called(is_comment_post) == []
+
+
+def test_no_request_when_the_comment_listing_cannot_be_read(monkeypatch):
+    """Fails closed: an unreadable listing cannot prove a request is absent.
+
+    A duplicate `@sdk-review` costs a full sandbox run; a lost one costs a human
+    typing the mention.
+    """
+    gh = base_gh()
+    gh.on(
+        lambda a: a[2] == f"repos/{REPO}/issues/{PR}/comments",
+        fail("gh: Bad gateway (HTTP 502)"),
+    )
+    assert run_main(gh, monkeypatch, **stale_head_env()) == 0
+    assert gh.called(is_comment_post) == []
+
+
+def test_no_request_without_an_approver_token(monkeypatch):
+    gh = base_gh()
+    assert run_main(gh, monkeypatch, APPROVER_TOKEN="", **stale_head_env()) == 0
+    assert gh.called(is_comment_post) == []
+
+
+def test_a_verdict_without_a_reviewed_head_marker_requests_nothing(monkeypatch):
+    """A different fault: no sha is established, so there is none to review."""
+    gh = base_gh()
+    body = "<!-- SDK_REVIEW -->\n<!-- VERDICT: READY_TO_MERGE -->\n"
+    assert run_main(gh, monkeypatch, COMMENT_BODY=body) == 0
+    assert gh.called(is_comment_post) == []
+
+
+def test_an_unresolvable_head_requests_nothing(monkeypatch):
+    """Also a different fault — and the sha to review is exactly what is missing."""
+    gh = base_gh()
+    gh.on(is_head_lookup, fail("gh: Bad gateway (HTTP 502)"))
+    assert run_main(gh, monkeypatch, **stale_head_env()) == 0
+    assert gh.called(is_comment_post) == []
+
+
+# --- request helpers in isolation ----------------------------------------
+
+
+def test_retrigger_posted_for_ignores_a_marker_without_a_head_stamp():
+    assert not approve.retrigger_posted_for([{"body": approve.RETRIGGER_MARKER}], HEAD)
+
+
+def test_reviewed_at_ignores_a_forged_verdict_from_another_author():
+    forged = summary_comment(11, login="attacker", body=verdict_comment(head=HEAD))
+    assert not approve.reviewed_at([forged], HEAD)
 
 
 def test_newer_verdict_comment_supersedes_this_run(monkeypatch):
@@ -597,10 +808,22 @@ def test_label_guard_reads_the_snapshot_not_the_label_it_just_wrote(monkeypatch)
     """
     gh = slow_gh(labels=[])
     assert run_main(gh, monkeypatch, **slow_env()) == 0
-    # It still reconciles labels (that part is unconditional)...
-    assert gh.called(is_label_add)
-    # ...but the freshly-added label must not satisfy its own guard.
     assert gh.called(is_approve) == []
+
+
+def test_a_fired_label_guard_does_not_resurrect_the_stripped_label(monkeypatch):
+    """Bailing must happen before the label reconcile, not after it.
+
+    `sdk-review-approved` is what every invalidator strips and what
+    sdk_review_reconcile.py's cron gates on. Re-adding it on the way to
+    declining the approval would leave the PR wearing a label with nothing
+    behind it, and the next reconciler tick would read that as a lost stamp and
+    approve a verdict a human had deliberately cleared.
+    """
+    gh = slow_gh(labels=[])
+    assert run_main(gh, monkeypatch, **slow_env()) == 0
+    assert gh.called(is_label_add) == []
+    assert gh.called(lambda a: "DELETE" in a) == []
 
 
 def test_fast_path_does_not_require_the_label(monkeypatch):
@@ -630,6 +853,110 @@ def test_slow_path_skips_freshness_check_since_it_fetched_the_newest(monkeypatch
     gh = slow_gh(labels=["sdk-review-approved"])
     assert run_main(gh, monkeypatch, **slow_env(), TRIGGERING_COMMENT_ID="0") == 0
     assert len(gh.called(is_approve)) == 1
+
+
+# --- an unreadable review listing must fail CLOSED ------------------------
+#
+# Regression from 2026-08-17: GitHub's reviews endpoint began returning 404 for
+# PRs that plainly had reviews. `_paginated` collapsed that to `[]`, which reads
+# as "no approval exists" — the precondition for posting one — so `atlan-ci`
+# re-approved the same PR on every reconciler tick, silently.
+
+
+def test_bot_approval_ids_is_none_when_the_listing_fails():
+    """None and [] must not be the same value: one means "cannot tell"."""
+    gh = base_gh()
+    gh.on(is_review_list, fail("gh: Not Found (HTTP 404)"))
+    assert approve.Client(REPO, PR, gh).bot_approval_ids() is None
+
+
+def test_bot_approval_ids_is_none_when_the_listing_is_unparseable():
+    gh = base_gh()
+    gh.on(is_review_list, ok("{not json"))
+    assert approve.Client(REPO, PR, gh).bot_approval_ids() is None
+
+
+def test_ready_refuses_to_approve_when_the_listing_is_unreadable(monkeypatch, capsys):
+    gh = base_gh(labels=["sdk-review-approved"])
+    gh.on(is_review_list, fail("gh: Not Found (HTTP 404)"))
+
+    assert run_main(gh, monkeypatch) == 1
+    assert gh.called(is_approve) == [], "approving blind is how outages duplicate"
+    assert gh.called(is_status) == []
+    assert "::error::" in capsys.readouterr().out
+
+
+def test_non_ready_fails_loudly_when_stale_approvals_cannot_be_listed(monkeypatch):
+    """Failing to dismiss leaves the merge gate open on a superseded approval.
+
+    The run still writes the failure status: returning before the write would
+    let a prior green `sdk-review` status on this head outlive the verdict that
+    superseded it. The status POST does not depend on the reviews listing, so
+    one degradation does not excuse the other silence."""
+    gh = base_gh()
+    gh.on(is_review_list, fail("gh: Not Found (HTTP 404)"))
+
+    code = run_main(gh, monkeypatch, COMMENT_BODY=verdict_comment("NEEDS_FIXES"))
+    assert code == 1
+    assert gh.called(lambda a: "dismissals" in a[2]) == []
+    (status,) = gh.called(is_status)
+    assert "state=failure" in status
+
+
+def test_non_ready_unreadable_listing_respects_write_status_false(monkeypatch):
+    """The slow path (WRITE_STATUS=false) owns no status writes, even here."""
+    gh = base_gh()
+    gh.on(is_review_list, fail("gh: Not Found (HTTP 404)"))
+
+    code = run_main(
+        gh,
+        monkeypatch,
+        COMMENT_BODY=verdict_comment("NEEDS_FIXES"),
+        WRITE_STATUS="false",
+    )
+    assert code == 1
+    assert gh.called(is_status) == []
+
+
+# --- stamp_verdict() reports what it did ----------------------------------
+
+
+def test_stamp_verdict_reports_an_approval(monkeypatch):
+    gh = base_gh(labels=["sdk-review-approved"])
+    for key, value in {
+        "REPO": REPO,
+        "PR_NUMBER": PR,
+        "COMMENT_BODY": verdict_comment(),
+        "TRIGGERING_COMMENT_ID": "5",
+        "APPROVER_TOKEN": "pat-atlan-ci",
+        "GH_TOKEN": "app-token",
+    }.items():
+        monkeypatch.setenv(key, value)
+
+    outcome = approve.stamp_verdict(runner=gh)
+    assert outcome.action == approve.APPROVED
+    assert outcome.exit_code == 0
+
+
+def test_stamp_verdict_distinguishes_a_declining_guard_from_an_approval(monkeypatch):
+    """Both exit 0; only the action separates them. That distinction is what the
+    reconciler reports on, and inferring it from a re-read was racy."""
+    gh = slow_gh(labels=[])
+    for key, value in {
+        "REPO": REPO,
+        "PR_NUMBER": PR,
+        "COMMENT_BODY": "",
+        "EXPECTED_HEAD": HEAD,
+        "REQUIRE_APPROVED_LABEL": "true",
+        "APPROVER_TOKEN": "pat-atlan-ci",
+        "GH_TOKEN": "app-token",
+    }.items():
+        monkeypatch.setenv(key, value)
+
+    outcome = approve.stamp_verdict(runner=gh)
+    assert outcome.action == approve.SKIPPED
+    assert outcome.exit_code == 0
+    assert "label" in outcome.detail
 
 
 def test_label_delete_404_is_tolerated(capsys):

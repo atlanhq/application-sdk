@@ -13,6 +13,15 @@ Suppress a finding on the violating line or the line directly above it:
 # conformance: ignore[E012] intentional: stdlib interop
 ```
 
+**See also — error-seam rules live in the P-series:** the E-series grades *how* an app
+handles an exception, decidable from the AST alone, and most of it applies to the SDK
+and consumer apps alike.  Rules about *which* error class an app is allowed to couple to
+— `P043` `NonPublicErrorControlFlow` and `P045` `PrivateErrorClassImport` — are seam
+rules: they grade a consumer app against `application_sdk.errors.__all__`, the SDK's
+published error contract, and so are app-scoped and require that surface as input data.
+They are documented alongside the orchestration, storage and client seam rules in
+[prescriptions.md](prescriptions.md#p043).
+
 | ID | Name | Tier | Scope | Category | Autofixable | Since |
 |---|---|---|---|---|---|---|
 | [E001](#e001) | `BareExceptPass` | `block` | `both` | `silent-swallow` | — | 0.2.0 |
@@ -46,7 +55,10 @@ Suppress a finding on the violating line or the line directly above it:
 
 **Rationale:** The hardest class of production bug to debug: no stack trace, no log record, no
 indication anything failed. Every downstream anomaly (wrong results, missing records) is
-diagnosed with no artifact pointing back to the origin.
+diagnosed with no artifact pointing back to the origin. Customer impact: the failure
+surfaces as missing assets or wrong metadata in a tenant with nothing in the logs to
+trace it back — a one-line bug becomes a long-running customer escalation that support
+cannot root-cause.
 
 A bare `except: pass` catches KeyboardInterrupt, SystemExit, and GeneratorExit and
 discards them with no trace.  This is the hardest class of bugs to debug.  Replace with
@@ -63,7 +75,10 @@ even cleanup paths should log at DEBUG.
 
 **Rationale:** A typed catch that discards silently still destroys the event record. Stack traces at
 the point of failure are often the only artifact that survives async and service
-boundaries in a distributed system.
+boundaries in a distributed system. Customer impact: a swallowed per-item failure ships
+an incomplete crawl to the tenant as a clean success — the customer discovers the gap in
+their catalog weeks later, and by then no artifact exists to explain which items were
+lost or why.
 
 A typed catch that still discards silently loses the stack trace entirely. Acceptable
 only for truly trivial best-effort operations where failure is 100% expected AND the
@@ -141,7 +156,9 @@ sanitizer and can leak credentials (JDBC URLs, Authorization headers, OAuth bodi
 
 **Rationale:** A bare except: absorbs KeyboardInterrupt and SystemExit even with a handler body.
 Process-termination signals are silently intercepted and the process may continue in an
-undefined state.
+undefined state. Customer impact: a pod that swallows SIGTERM-driven SystemExit cannot
+drain cleanly, so every rolling restart or node upgrade in a tenant risks killing
+in-flight customer workflows mid-run instead of handing them off.
 
 Like P001 but the block may have a body.  Still catches KeyboardInterrupt and
 SystemExit.  Always specify at least `except Exception:`.
@@ -260,7 +277,10 @@ require `TypeError`/`ValueError` for stdlib interoperability.
 
 **Rationale:** AtlanError subclasses produce no typed wire envelope — they reach AE as opaque strings
 and emit DeprecationWarning at construction. Every new raise site deepens the migration
-debt and blocks the v4.0 removal.
+debt and blocks the v4.0 removal. Customer impact: when the run fails in a tenant, the
+customer sees a generic unclassified error with no category or suggested action, and
+on-call cannot route the incident by failure type — every occurrence needs a human to
+read the raw string.
 
 `AtlanError` and its subclasses emit a `DeprecationWarning` at construction time and
 reach AE as opaque strings.  They produce no typed wire envelope.  Scheduled for removal
@@ -340,7 +360,10 @@ None` (intentional suppression).
 **Rationale:** Evidence fields with secret-bearing suffixes are rejected by the wire layer at runtime.
 Static detection catches the pattern before any code runs, eliminating the window
 between deploy and first invocation where live credentials could be serialised into
-logs, dashboards, or SARIF.
+logs, dashboards, or SARIF. Customer impact: the runtime rejection fires exactly when a
+customer run is already failing, replacing the real error with an opaque secondary crash
+— and the near-miss it guards is the customer's live credential landing in log storage,
+which is a security incident, not a bug.
 
 An error construction call that passes a keyword argument whose name ends in `_secret`,
 `_password`, or `_token` — see `application_sdk.errors.wire` §6.  The wire layer

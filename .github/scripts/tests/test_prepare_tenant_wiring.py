@@ -46,27 +46,41 @@ def jobs(workflow: dict) -> dict:  # type: ignore[type-arg]
     return workflow["jobs"]
 
 
-# ── Opt-in, so unadopted repos are untouched ─────────────────────────────────
+# ── On by default, with a working opt-out ────────────────────────────────────
 
 
-def test_install_is_off_by_default(workflow: dict) -> None:  # type: ignore[type-arg]
-    # Turning this on makes tenant health a gate. 25+ repos consume this
-    # workflow; it must not switch on under them.
+def test_install_is_on_by_default(workflow: dict) -> None:  # type: ignore[type-arg]
+    # Flipped by FND-128. This assertion was `is False`, guarding the opposite
+    # property: the install could not resolve a tenant without
+    # E2E_TENANT_MATRIX_JSON, which was shared with a handful of repos, so
+    # switching it on under the fleet would have reded every e2e leg.
+    #
+    # The secret is now org-wide, which removed that prerequisite and left the
+    # opt-in doing harm instead: an un-adopted repo still fanned out across every
+    # cloud in the matrix and tested whatever version each tenant already served.
+    #
+    # Kept as an assertion rather than deleted, pointing the other way: a silent
+    # revert to opt-in would restore three-clouds-of-wrong-version green, which
+    # no other test in this file would notice.
     #
     # `workflow[True]`: YAML 1.1 resolves the bare key `on` to the boolean true,
     # so safe_load never yields the string "on". Both spellings are accepted here
     # so the guard survives a future quoted `"on":`.
     triggers = workflow.get("on", workflow.get(True))
     spec = triggers["workflow_call"]["inputs"]["install-app-to-tenant"]
-    assert spec["default"] is False
+    assert spec["default"] is True
     assert spec["type"] == "boolean"
 
 
 @pytest.mark.parametrize("job", ["build-e2e-image", "lease-tenant", "prepare-tenant"])
 def test_new_jobs_are_gated_on_the_input(jobs: dict, job: str) -> None:  # type: ignore[type-arg]
+    # Still gated, and it matters more now that the default is on: the gate is
+    # what makes `install-app-to-tenant: false` a real opt-out for an app that
+    # cannot be installed onto the e2e tenants, rather than a flag that reds the
+    # run anyway.
     assert "inputs.install-app-to-tenant" in jobs[job]["if"], (
-        f"{job} must not run when install-app-to-tenant is off — otherwise every "
-        "existing caller pays for a build and an install it did not ask for"
+        f"{job} must not run when install-app-to-tenant is off — otherwise a repo "
+        "that opted out still pays for a build and an install it declined"
     )
 
 
@@ -221,13 +235,35 @@ def test_the_lease_jobs_use_the_shared_action_at_main(
     assert step["with"]["mode"] == mode
 
 
-@pytest.mark.parametrize("job", ["lease-tenant", "release-tenant"])
-def test_the_lease_jobs_key_on_app_and_cloud(jobs: dict, job: str) -> None:  # type: ignore[type-arg]
-    """Acquire and release must name the same tenant, or every run leaks its
+def test_the_release_keys_on_app_and_cloud(jobs: dict) -> None:  # type: ignore[type-arg]
+    """Acquire and release must name the same tenants, or every run leaks its
     ticket and the next contender waits for a holder that has already gone."""
-    with_ = _lease_step(jobs, job)["with"]
+    with_ = _lease_step(jobs, "release-tenant")["with"]
     assert with_["app"] == "${{ inputs.app-name }}"
     assert with_["cloud"] == "${{ matrix.cloud }}"
+
+
+def test_the_acquire_is_one_job_over_an_ordered_cloud_set(jobs: dict) -> None:  # type: ignore[type-arg]
+    """The deadlock fix, asserted as shape (FND-646).
+
+    A per-cloud matrix acquires in PARALLEL and holds each lease while blocking
+    on the rest — hold-and-wait. It deadlocked the first time two runs queued
+    behind one holder: they raced for the freed set, split it, and each blocked on
+    what the other held for the whole wait budget. With two or more runs queued
+    that split is the expected outcome, so the parallel shape must not come back.
+    """
+    lease = jobs["lease-tenant"]
+    assert "strategy" not in lease, (
+        "lease-tenant must acquire every cloud in ONE job, in order; a matrix "
+        "acquires them in parallel and reintroduces hold-and-wait (FND-646)"
+    )
+    with_ = _lease_step(jobs, "lease-tenant")["with"]
+    assert with_["app"] == "${{ inputs.app-name }}"
+    assert with_["clouds"] == "${{ needs.discover-e2e.outputs.cloud-list }}"
+    assert "cloud" not in with_, (
+        "passing both cloud and clouds fails the driver rather than silently "
+        "preferring one; the acquire takes the set"
+    )
 
 
 @pytest.mark.parametrize("job", ["lease-tenant", "release-tenant"])
@@ -519,15 +555,57 @@ def test_the_lease_wait_budget_is_the_operator_facing_signal(jobs: dict) -> None
 
 
 def test_the_lease_and_install_fan_out_over_the_same_clouds(jobs: dict) -> None:  # type: ignore[type-arg]
-    # A lease leg that missed a cloud the install then ran against is an
+    # A cloud the lease missed and the install then ran against is an
     # unserialised install, not a visible failure.
-    assert (
-        jobs["lease-tenant"]["strategy"]["matrix"]
-        == (jobs["prepare-tenant"]["strategy"]["matrix"])
-    )
     assert (
         jobs["release-tenant"]["strategy"]["matrix"]
         == (jobs["prepare-tenant"]["strategy"]["matrix"])
+    )
+
+
+def test_the_lease_set_and_the_install_matrix_come_from_one_discovery(
+    jobs: dict,  # type: ignore[type-arg]
+) -> None:
+    """The acquire takes a LIST and the install fans out over a MATRIX, so they
+    can no longer be compared string-for-string. They are pinned to the same
+    discovery STEP instead — `discover-clouds`, the clouds-only call — because
+    that removes the possibility of disagreement rather than testing for it.
+    """
+    outputs = yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))["jobs"][
+        "discover-e2e"
+    ]["outputs"]
+    assert outputs["cloud-list"] == "${{ steps.discover-clouds.outputs.clouds }}"
+    assert outputs["cloud-matrix"] == "${{ steps.discover-clouds.outputs.matrix }}"
+
+    assert (
+        _lease_step(jobs, "lease-tenant")["with"]["clouds"]
+        == "${{ needs.discover-e2e.outputs.cloud-list }}"
+    )
+    assert "cloud-matrix" in jobs["prepare-tenant"]["strategy"]["matrix"]
+
+
+def test_a_failed_lease_fails_the_install_rather_than_skipping_it(jobs: dict) -> None:  # type: ignore[type-arg]
+    """Load-bearing in the opposite direction to how it reads.
+
+    Acquisition is all-or-nothing, so a failed lease means the run holds nothing
+    — and tightening prepare-tenant's gate to `== 'success'` would SKIP the
+    install. The e2e legs deliberately tolerate a skipped prepare-tenant, so they
+    would then run against whatever version the tenant happens to serve (FND-31).
+    Letting the install run and fail on its own lease check is what stops them.
+    """
+    assert (
+        evaluate(
+            _load_gate("prepare-tenant"),
+            {
+                "inputs": {"install-app-to-tenant": True},
+                "needs": {
+                    "discover-e2e": {"result": "success"},
+                    "merge-e2e-image": {"result": "success"},
+                    "lease-tenant": {"result": "failure"},
+                },
+            },
+        )
+        is True
     )
 
 
@@ -543,17 +621,25 @@ def test_the_gate_is_told_about_the_lease() -> None:
 # ── The two cloud fan-outs must agree ────────────────────────────────────────
 
 
-def test_suite_and_cloud_discovery_use_the_same_clouds_expression() -> None:
+def test_suite_and_cloud_discovery_use_the_same_clouds_expression(jobs: dict) -> None:  # type: ignore[type-arg]
     """A prepare-tenant that missed a cloud the legs then ran against is a
     silent coverage hole, not a visible failure — so the two `clouds:` inputs
-    are asserted identical rather than merely both present."""
-    text = _WORKFLOW.read_text(encoding="utf-8")
+    are asserted identical rather than merely both present.
+
+    Keyed on the discovery action's `with.clouds` rather than on every line
+    reading `clouds:`, which also matched the job OUTPUT of the same name added
+    for the scorecard's cross-CSP record (FND-34) — an unrelated key that has no
+    fan-out to agree with.
+    """
     exprs = [
-        line.split("clouds:", 1)[1].strip()
-        for line in text.splitlines()
-        if line.strip().startswith("clouds:")
+        step["with"]["clouds"]
+        for step in jobs["discover-e2e"]["steps"]
+        if "discover-e2e-suites@" in str(step.get("uses", ""))
     ]
-    assert len(exprs) == 2, f"expected exactly two `clouds:` inputs, found {len(exprs)}"
+    assert len(exprs) == 2, (
+        f"expected exactly two discovery invocations, found {len(exprs)} — the "
+        "suite fan-out and the cloud-only fan-out prepare-tenant installs from"
+    )
     assert exprs[0] == exprs[1], (
         "the suite fan-out and the cloud fan-out resolve different cloud lists; "
         f"{exprs[0]!r} vs {exprs[1]!r}"

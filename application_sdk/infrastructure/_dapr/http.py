@@ -29,7 +29,10 @@ from application_sdk.constants import (
     DEPLOYMENT_NAME,
     LOCAL_ENVIRONMENT,
 )
-from application_sdk.errors.leaves import ColdStartRaceError
+from application_sdk.errors.leaves import (
+    ColdStartRaceError,
+    DaprSidecarUnreachableError,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -355,7 +358,27 @@ async def retry_past_dapr_cold_start(
                 # answered — do NOT arm the gate, a later call should still
                 # wait out the cold start rather than assume steady-state
                 # readiness.
-                raise
+                #
+                # Re-label rather than re-raise the transient marker: the
+                # ColdStartRaceError means "not reachable yet"; exhausting the
+                # whole budget without one usable answer is the terminal
+                # state. Surfacing it as a race is what makes a persistent
+                # platform fault read as a blip. DaprSidecarUnreachableError
+                # stays a ColdStartRaceError subtype, so every upstream
+                # `except ColdStartRaceError` is unaffected; its fields are
+                # secret-free (component id, attempt count, elapsed) and the
+                # transport cause rides `cause`, never the message.
+                raise DaprSidecarUnreachableError(
+                    message=(
+                        f"Dapr sidecar unreachable: component={component} not "
+                        f"reachable after {attempt} attempts over "
+                        f"{DAPR_COLD_START_MAX_WAIT_SECONDS - remaining:.1f}s"
+                    ),
+                    component=component,
+                    attempts=attempt,
+                    elapsed_seconds=DAPR_COLD_START_MAX_WAIT_SECONDS - remaining,
+                    cause=exc.cause,
+                ) from exc
             # Cap the backoff to the remaining budget so the total wait can't
             # overshoot DAPR_COLD_START_MAX_WAIT_SECONDS by a full delay, and
             # cap the exponent so a very large max-wait override can't

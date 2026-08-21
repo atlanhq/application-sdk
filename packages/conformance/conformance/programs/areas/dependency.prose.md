@@ -17,9 +17,9 @@ findings in the working tree, as reported by `suite.runner --series D`.
 #### violations-dependency
 
 The fingerprint-set of all unsuppressed FAILING D-series results.  Extends to
-include WARNING results in strict mode — D002/D003/D004/D005/D006/D007/D008/D010
-are WARN-tier, so they are processed in strict mode; D001 and D009 are BLOCK-tier
-and processed in both modes.
+include WARNING results in strict mode — D002/D003/D004/D006/D007/D008 are
+WARN-tier, so they are processed in strict mode; D001, D005, D009 and D010 are
+BLOCK-tier and processed in both modes.
 
 This facet's fingerprint moves when any D-series finding is resolved (fixed or
 suppressed with justification) or when new ones appear.  An unchanged
@@ -59,6 +59,11 @@ backstop.
 
 - `scope` — repository root path.
 - `mode` — `"default"` or `"strict"`.
+- `rule_ids` — optional list of exact rule IDs (propagated from the
+  top-level entry). Forwarded verbatim into every runner invocation this
+  area makes — the loop's detect calls and the suggest-only
+  `detect-violations` calls alike — so a `--rule`-scoped run stays scoped
+  here rather than silently widening to the whole series at this hop.
 
 ### Continuity
 
@@ -72,6 +77,7 @@ than watching the filesystem.
 call detect-fix-recheck
   scope: scope
   series: "D"
+  rule_ids: rule_ids
   mode: mode
   max_attempts: 5
 ```

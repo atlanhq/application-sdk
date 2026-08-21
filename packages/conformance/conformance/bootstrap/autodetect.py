@@ -15,6 +15,7 @@ from conformance.bootstrap.extract import (
     EXIT_ZERO_RE,
     extract_apt_packages,
     extract_field,
+    extract_use_ghcr_base,
     resolve_renovate_fallback_exit_zero,
     sanitize_package_list,
 )
@@ -66,6 +67,22 @@ def _read_ci_system_deps(path: pathlib.Path) -> str:
     except (OSError, UnicodeDecodeError):
         return ""
     return " ".join(sanitize_package_list(raw))
+
+
+def _read_use_ghcr_base(path: pathlib.Path) -> str:
+    """Return ``"true"`` if *path* (a ``build-and-publish.yaml``) opts into the
+    GHCR base redirect, else ``""``.
+
+    Delegates to ``conformance.bootstrap.extract``'s ``extract_use_ghcr_base``
+    — the same extractor the C002 drift checker uses — so a detected opt-in is
+    re-rendered byte-identically and can't read as drift.
+    """
+    if not path.exists():
+        return ""
+    try:
+        return extract_use_ghcr_base(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return ""
 
 
 def _read_atlan_yaml_name(root: pathlib.Path) -> str:
@@ -161,15 +178,6 @@ def apply_bootstrap_autodetection(kwargs: dict[str, str], root: pathlib.Path) ->
     re-running ``bootstrap`` with no explicit flags reuses a repo's current
     customization instead of resetting it to the hardcoded default.
     """
-    # package-name: existing docstring-coverage.yaml, else "app".
-    if not kwargs["package_name"]:
-        kwargs["package_name"] = (
-            _read_workflow_field(
-                root / ".github" / "workflows" / "docstring-coverage.yaml",
-                "package_name",
-            )
-            or "app"
-        )
     # unit-tests-workflow: existing build-and-publish.yaml, else "tests.yaml".
     if not kwargs["unit_tests_workflow"]:
         kwargs["unit_tests_workflow"] = (
@@ -178,6 +186,17 @@ def apply_bootstrap_autodetection(kwargs: dict[str, str], root: pathlib.Path) ->
                 "unit_tests_workflow_file",
             )
             or "tests.yaml"
+        )
+    # use-ghcr-base: an existing build-and-publish.yaml's opt-in, else unset.
+    # build-and-publish.yaml is always-overwrite, so without this a bare re-run
+    # silently reverts an app that self-selected the GHCR base redirect back to
+    # Harbor -- the same failure mode --system-deps has, and the reason apps
+    # can't be expected to hand-re-add the line after every bootstrap. The
+    # SDK-side default stays false until the fleet has soaked, so opting in
+    # ahead of that flip has to be an app-owned, drift-free choice.
+    if not kwargs["use_ghcr_base"]:
+        kwargs["use_ghcr_base"] = _read_use_ghcr_base(
+            root / ".github" / "workflows" / "build-and-publish.yaml"
         )
     # app-name: atlan.yaml `name:` field, else the repo directory name.
     if not kwargs["app_name"]:

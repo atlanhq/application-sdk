@@ -231,12 +231,27 @@ BUDGET
     re-trigger against an unchanged HEAD comes from a *different* run and
     must still produce a review.
 
+    This guard only catches a replay that re-enters the prompt from the top.
+    A provider-level retry that replays a single assistant *turn* re-executes
+    the `gh api … /comments -f body=…` call directly, with no prompt to
+    re-read — that is how #3276 collected the identical summary five times.
+    Nothing you can write here prevents it, so the workflow cleans up after
+    it: `sdk_review_dedupe_verdicts.py` runs once the stream closes, keeps the
+    newest summary this run posted and minimizes the rest (FND-636). It
+    identifies "this run's" summaries by the `<GHA_RUN_URL>` in the §3e
+    footer, the same key this guard greps — which is another reason that line
+    is not optional. Drop it and the collapse silently stops working.
+
     **Bot-trigger dedupe guard — run immediately after the replay guard.**
-    The `gate` job in `sdk-review.yml` is an *optimization*, not the
-    authority: it runs outside the per-PR concurrency group, so two
-    automated triggers can both pass it concurrently ("no review for this
-    HEAD yet") and both reach the sandbox. The sandbox runs inside the
-    concurrency lock and is the only place that sees true comment state.
+    This is now a *backstop*, not the authority. Since FND-636 the
+    authoritative check is the `Dedupe check` step at the top of
+    `sdk-review-dispatch`, which runs under the per-PR concurrency lock and
+    declines before a sandbox is booted at all — deciding it here meant the
+    sandbox had to start and reason before it could decline, so the run was
+    paid for either way, and a degraded model skipped the check entirely
+    (five duplicate triggers on #3285 became five runs). Keep this guard: it
+    costs one API call, and it still catches the case where the comment
+    landed between the workflow's read and the sandbox's start.
 
     Check: if `COMMENTER` is an automated trigger (`mothership-ai[bot]`
     or `atlan-ci`) **and** the newest summary's `<!-- REVIEWED_HEAD -->`
@@ -254,7 +269,7 @@ BUDGET
       NEWEST_REVIEWED_HEAD=$(grep -oE '<!-- REVIEWED_HEAD: [0-9a-f]{40} -->' /tmp/PRIOR_REVIEW.md \
         | grep -oE '[0-9a-f]{40}' || true)
       if [ -n "$NEWEST_REVIEWED_HEAD" ] && [ "$NEWEST_REVIEWED_HEAD" = "$HEAD_SHA" ]; then
-        echo "SKIP: bot-trigger dedupe — @${COMMENTER} re-triggered on HEAD ${HEAD_SHA} which the newest summary already reviewed. Gate was not authoritative (runs outside the concurrency lock). Stopping without posting."
+        echo "SKIP: bot-trigger dedupe — @${COMMENTER} re-triggered on HEAD ${HEAD_SHA} which the newest summary already reviewed. Backstop for the workflow's locked dedupe check. Stopping without posting."
         # S4: Restore the commit status so the dispatch run's pending state
         # does not linger after this no-op. The dispatch run always sets
         # sdk-review to "pending" before the sandbox starts. If the sandbox
@@ -1275,7 +1290,19 @@ SHA from the prompt header — write the raw hex characters, never the
 literal placeholder text `<HEAD_SHA>`.** The §3f submit step adds a
 shell-level safety net (`sed`) in case the LLM writes the placeholder,
 but the correct value must come from the reviewed HEAD, not a live
-re-fetch. For toolkit scopes, the fourth marker
+re-fetch. The fourth marker `<!-- ANSWERS_TRIGGER: <comment id> -->`
+records **which** `@sdk-review` comment this verdict answers — write
+`COMMENT_ID` from the prompt header verbatim, raw digits only. On a
+`workflow_dispatch` run `COMMENT_ID` is blank; **omit the whole line**
+rather than writing an empty or placeholder value. Two reviews can be
+outstanding on one PR at once (this sandbox runs up to 2h while the
+resolver's per-round wait is 40 min, and a human can re-tag mid-review),
+so a verdict's timestamp alone cannot say which request it answers. The
+resolver's push guard reads this marker to tell "the round I am waiting
+on has answered" from "an earlier round's verdict landed late"; without
+it, it falls back to comparing timestamps and can clear a push while
+this review is still running — stranding the verdict you are about to
+post. For toolkit scopes, the fifth marker
 `<!-- TOOLKIT_ARTIFACT_HASH: <sha256> -->` records the PR-generated
 artifact hash from Phase 1b-toolkit so the next round can carry
 consumer validation forward; omit the line entirely for non-toolkit
@@ -1285,6 +1312,7 @@ scopes.
 <!-- SDK_REVIEW -->
 <!-- VERDICT: READY_TO_MERGE | NEEDS_FIXES | BLOCKED | NEEDS_HUMAN | NEEDS_REBASE -->
 <!-- REVIEWED_HEAD: <HEAD_SHA> -->
+<!-- ANSWERS_TRIGGER: <COMMENT_ID> -->            <!-- omit on workflow_dispatch -->
 <!-- TOOLKIT_ARTIFACT_HASH: <ARTIFACT_HASH> -->   <!-- toolkit scopes only -->
 ## SDK <Review | Re-review> (mothership): PR #<number> — <title>
 <!-- For review_scope=contract-toolkit, write this heading as:
@@ -1444,6 +1472,16 @@ gh api "repos/$REPO/statuses/$HEAD_SHA" \
 # pattern finds no match and the file is unchanged.
 HEAD_SHA_STAMPED=$(jq -r '.headRefOid' /tmp/PR.json)
 sed -i "s|<!-- REVIEWED_HEAD: <HEAD_SHA> -->|<!-- REVIEWED_HEAD: ${HEAD_SHA_STAMPED} -->|" /tmp/review-summary.md
+
+# Same safety net for ANSWERS_TRIGGER. COMMENT_ID is from the prompt
+# header (set it as a shell var, as Phase 0 step 6b does) and is blank
+# on workflow_dispatch — so stamp it, then delete the line outright if
+# the value came out empty. An empty marker is worse than none: the
+# push guard would read it as "this verdict names a round, and it is not
+# yours" and hold the resolver's push for the full stale window.
+# Both seds are idempotent — a correctly-written line matches neither.
+sed -i "s|<!-- ANSWERS_TRIGGER: <COMMENT_ID> -->|<!-- ANSWERS_TRIGGER: ${COMMENT_ID} -->|" /tmp/review-summary.md
+sed -i '/<!-- ANSWERS_TRIGGER: *-->/d' /tmp/review-summary.md
 
 # Summary comment (the body built in 3a, including the
 # <!-- SDK_REVIEW --> marker and the <!-- REVIEW_DATA --> JSON) — LAST:

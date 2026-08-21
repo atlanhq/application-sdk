@@ -19,6 +19,7 @@ sys.path.insert(
 
 from discover_e2e_suites import (  # noqa: E402
     DEFAULT_CLOUDS,
+    CloudSelectionError,
     discover,
     main,
     parse_clouds,
@@ -204,6 +205,50 @@ def test_main_count_is_suites_and_leg_count_is_legs(capsys, tmp_path: Path) -> N
     assert len(_matrix(out)["include"]) == 6
 
 
+def test_main_emits_the_resolved_cloud_list(capsys, tmp_path: Path) -> None:
+    """The `clouds` output is what the scorecard records as observed coverage.
+
+    It comes from the same `parse_clouds` call that built the matrix, so
+    "what we recorded as covered" cannot disagree with "what ran" (FND-34).
+    """
+    e2e = tmp_path / "tests" / "e2e"
+    _mk(e2e, "test_one.py")
+    main(["--test-dir", str(e2e), "--clouds", "aws,azure,gcp"])
+    assert "clouds=aws,azure,gcp" in capsys.readouterr().out.splitlines()
+
+
+def test_main_clouds_output_is_narrowed_like_the_matrix(capsys, tmp_path: Path) -> None:
+    # Recording the REQUESTED list rather than the resolved one would report
+    # coverage the run did not have — worse than reporting none.
+    e2e = tmp_path / "tests" / "e2e"
+    _mk(e2e, "test_one.py")
+    main(["--test-dir", str(e2e), "--clouds", "", "--available-clouds", "aws,gcp"])
+    assert "clouds=aws,gcp" in capsys.readouterr().out.splitlines()
+
+
+def test_main_clouds_output_is_empty_without_a_cloud_dimension(
+    capsys, tmp_path: Path
+) -> None:
+    """The degraded single-tenant fallback records as "", not as absent.
+
+    A consumer must be able to tell "ran against one legacy tenant" from "e2e
+    never ran"; the latter is signalled by the field being omitted upstream.
+    """
+    e2e = tmp_path / "tests" / "e2e"
+    _mk(e2e, "test_one.py")
+    main(["--test-dir", str(e2e), "--clouds", "none"])
+    assert "clouds=" in capsys.readouterr().out.splitlines()
+
+
+def test_clouds_only_also_emits_the_resolved_cloud_list(capsys, tmp_path: Path) -> None:
+    # The scorecard job resolves `configured` through this mode, so the output
+    # has to exist on both paths or the rollout signal is missing exactly where
+    # it is read.
+    rc = main(["--clouds", "aws,azure", "--clouds-only"])
+    assert rc == 0
+    assert "clouds=aws,azure" in capsys.readouterr().out.splitlines()
+
+
 def test_main_logs_the_fan_out_explicitly(capsys, tmp_path: Path) -> None:
     e2e = tmp_path / "tests" / "e2e"
     _mk(e2e, "test_one.py")
@@ -259,3 +304,120 @@ def test_clouds_only_with_empty_uses_the_default_list(capsys, tmp_path: Path) ->
     main(["--test-dir", str(tmp_path), "--clouds", "", "--clouds-only"])
     out = capsys.readouterr().out
     assert [e["cloud"] for e in _matrix(out)["include"]] == list(DEFAULT_CLOUDS)
+
+
+# ── Defaulted narrows to the secret's keys, named does not (FND-354) ─────────
+#
+# The two branches below are the whole of FND-354, and they are exactly the pair
+# a later reader is liable to flatten into one — they "both just check the cloud
+# list". They do the opposite thing on purpose:
+#
+#   defaulted + absent -> dropped with a warning. Nobody named it; DEFAULT_CLOUDS
+#     did. Editing the secret is the only cloud-rotation lever that is fleet-wide
+#     and needs no PR, so it has to narrow rather than red a leg in every repo.
+#   named + absent     -> still emitted, so the per-leg resolver still exits
+#     non-zero. Someone asserted that cloud should run; a silent skip there is a
+#     coverage hole.
+#
+# Delete either and the lever breaks in one direction or the other, silently.
+
+
+def test_a_defaulted_absent_cloud_is_dropped_with_a_warning(capsys) -> None:
+    clouds = parse_clouds("", ["aws", "gcp"])
+    assert clouds == ["aws", "gcp"]
+
+    warning = capsys.readouterr().err
+    assert "::warning::" in warning
+    assert "azure" in warning, "the dropped cloud must be named, not just counted"
+    assert "aws, gcp" in warning, "the surviving fan-out must be stated too"
+
+
+def test_a_named_absent_cloud_still_reaches_the_resolver(capsys) -> None:
+    # No narrowing and no warning: the per-leg tenant resolver is meant to fail
+    # this leg, which is what makes an explicitly named cloud an assertion.
+    assert parse_clouds("aws,azure", ["aws", "gcp"]) == ["aws", "azure"]
+    assert capsys.readouterr().err == ""
+
+
+def test_narrowing_is_silent_when_nothing_is_dropped(capsys) -> None:
+    assert parse_clouds("", list(DEFAULT_CLOUDS)) == list(DEFAULT_CLOUDS)
+    assert "::warning::" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("available", [None, [], [""], ["  "]])
+def test_unknown_availability_narrows_nothing(available) -> None:
+    # "" is what a skipped key-reading step emits — no secret shared with the
+    # repo, or a payload that could not be parsed. Narrowing on that would turn
+    # an unreadable secret into a silently smaller matrix.
+    assert parse_clouds("", available) == list(DEFAULT_CLOUDS)
+
+
+def test_an_extra_key_in_the_secret_does_not_widen_the_fan_out(capsys) -> None:
+    # Intersection, never union. Adding a fourth CSP stays a reviewed edit to
+    # DEFAULT_CLOUDS; a stray key in the secret must not fan out to a cloud the
+    # SDK does not ship.
+    assert parse_clouds("", ["aws", "azure", "gcp", "onprem"]) == list(DEFAULT_CLOUDS)
+    assert "::warning::" not in capsys.readouterr().err
+
+
+def test_availability_does_not_resurrect_the_none_sentinel() -> None:
+    assert parse_clouds("none", ["aws", "azure", "gcp"]) == []
+
+
+def test_narrowing_to_nothing_is_an_error_not_an_empty_matrix() -> None:
+    # Zero legs would leave `count` (the SUITE count) non-zero, so the caller's
+    # "requested but nothing found" guard would not fire and the gate would go
+    # green having run no e2e at all.
+    with pytest.raises(CloudSelectionError) as excinfo:
+        parse_clouds("", ["onprem"])
+    assert "onprem" in str(excinfo.value)
+
+
+def test_main_narrows_the_defaulted_list_from_available_clouds(
+    capsys, tmp_path: Path
+) -> None:
+    e2e = tmp_path / "tests" / "e2e"
+    _mk(e2e, "test_one.py")
+    rc = main(["--test-dir", str(e2e), "--clouds", "", "--available-clouds", "aws,gcp"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert [e["cloud"] for e in _matrix(captured.out)["include"]] == ["aws", "gcp"]
+    assert "leg-count=2" in captured.out.splitlines()
+    assert "::warning::" in captured.err
+
+
+def test_main_does_not_narrow_an_explicit_list(capsys, tmp_path: Path) -> None:
+    e2e = tmp_path / "tests" / "e2e"
+    _mk(e2e, "test_one.py")
+    rc = main(
+        ["--test-dir", str(e2e), "--clouds", "azure", "--available-clouds", "aws,gcp"]
+    )
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert [e["cloud"] for e in _matrix(out)["include"]] == ["azure"]
+
+
+def test_main_exits_non_zero_when_narrowing_empties_the_fan_out(
+    capsys, tmp_path: Path
+) -> None:
+    e2e = tmp_path / "tests" / "e2e"
+    _mk(e2e, "test_one.py")
+    rc = main(["--test-dir", str(e2e), "--clouds", "", "--available-clouds", "onprem"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "::error::" in captured.err
+    # Nothing may be written to $GITHUB_OUTPUT on the failing path, or the
+    # caller reads a matrix from a run that errored.
+    assert captured.out == ""
+
+
+def test_clouds_only_narrows_the_same_way(capsys, tmp_path: Path) -> None:
+    # prepare-tenant installs from this matrix; it must cover exactly the clouds
+    # the legs run against, so the two call sites narrow identically.
+    rc = main(
+        ["--test-dir", str(tmp_path), "--clouds-only", "--available-clouds", "aws,gcp"]
+    )
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert [e["cloud"] for e in _matrix(out)["include"]] == ["aws", "gcp"]
+    assert "count=2" in out.splitlines()

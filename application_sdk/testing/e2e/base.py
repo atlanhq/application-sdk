@@ -59,10 +59,12 @@ from application_sdk.testing.e2e._errors import (
     MissingHarnessClassAttrError,
     MissingHarnessEnvError,
 )
+from application_sdk.testing.e2e._poll import until_deadline
 from application_sdk.testing.e2e.client import (
     AEWorkflowClient,
     DAGNodeStatus,
     DAGRunResult,
+    cold_start_submit_kwargs,
 )
 from application_sdk.testing.e2e.credential import CredentialBody
 from application_sdk.testing.e2e.payload import (
@@ -189,6 +191,50 @@ class BaseE2ETest:
     worker_health_url: ClassVar[str] = "http://localhost:8000/server/health"
     worker_health_timeout_seconds: ClassVar[int] = 120
     worker_health_poll_interval_seconds: ClassVar[int] = 3
+
+    # --- tenant-app cold-start budget (FND-402) ------------------------
+    # The worker_health_* probe above covers the LOCAL CI worker container
+    # (localhost:8000). It does NOT cover the TENANT-installed app pod, which is
+    # a different :8000: at AE submit, Heracles POSTs the credential config to
+    # http://<conn>.<conn>-app.svc.cluster.local:8000/workflows/v1/config/...
+    # against that pod. prepare-tenant installs the app and LM reports the
+    # deployment reconciled, but the pod can still be minutes from serving when
+    # the leg reaches submit — observed live as intermittent
+    # "AE submit failed: HTTP 500 ... dial tcp :8000: connect: connection
+    # refused" (s3/gcs/mongodbatlas failed while cloudsql/iceberg passed in the
+    # same window). The runner has no kubectl route to the remote tenant
+    # vcluster in this path, so the AE submit is the only tenant-facing probe of
+    # the pod — there is nothing to gate on except the submit itself.
+    #
+    # submit_workflow ALREADY retries this: a refused dial arrives as a generic
+    # 5xx, which its `retryable` predicate matches. Only its default budget was
+    # wrong — 4 x 5s ~= 20s, tuned for transient AE overload, not pod cold
+    # start. So run_full_dag re-sizes that existing retry rather than wrapping a
+    # second loop around it; on exhaustion submit_workflow raises
+    # AppNotReadyError when the last response still read as connection-refused.
+    #
+    # 300s (5 min): live gcs e2e (run 32259032704) showed the tenant pod cold-
+    # starting past the initial 120s window but serving well within 300s, so the
+    # AE-submit-500s on gcs/s3/mongodbatlas are a genuine cold-start race, not
+    # dead pods. 5 min gives comfortable margin while still failing a genuinely
+    # unreachable pod in a bounded time. Connectors may override per-repo; 0
+    # restores submit_workflow's own default budget.
+    #
+    # NOTE: this widens the budget for every retryable submit 5xx, not only the
+    # cold-start shape — an AE that is genuinely overloaded now gets the same
+    # 5 min to recover. That is deliberate (AE overload is the other thing that
+    # fails this leg) and bounded: _RETRY_AFTER_BUDGET_SECONDS still caps the
+    # extra waiting a slow origin can request on top of the fixed gap.
+    #
+    # The headline 300s is the fixed-gap floor, not the true worst case. Each of
+    # the retries can additionally honour an origin-requested `retry_after`
+    # (bounded by _RETRY_AFTER_BUDGET_SECONDS = 300s per submit call), and every
+    # attempt costs its own HTTP round-trip, so a genuinely overloaded origin can
+    # stretch the wall-clock bound to ~300s floor + ~300s honoured `retry_after`
+    # + per-request time ≈ 10 min. Plan CI timeouts for the ~10 min bound, not
+    # the 5 min headline.
+    app_ready_timeout_seconds: ClassVar[int] = 300
+    app_ready_poll_interval_seconds: ClassVar[int] = 5
 
     # --- optional class attrs ------------------------------------------
     connection_type: ClassVar[str] = ""
@@ -966,6 +1012,23 @@ class BaseE2ETest:
         )
         return required_ok and no_hard_failure
 
+    def _submit_retry_kwargs(self) -> dict[str, int]:
+        """Re-size ``submit_workflow``'s retry to the tenant-app cold-start budget.
+
+        Thin binding of this harness' ``app_ready_*`` class attrs onto
+        :func:`~application_sdk.testing.e2e.client.cold_start_submit_kwargs`,
+        which carries the rationale and the validation. See
+        ``app_ready_timeout_seconds`` for the budget rationale.
+
+        Raises:
+            MissingHarnessClassAttrError: when ``app_ready_timeout_seconds`` is
+                positive but ``app_ready_poll_interval_seconds`` is not.
+        """
+        return cold_start_submit_kwargs(
+            self.app_ready_timeout_seconds,
+            self.app_ready_poll_interval_seconds,
+        )
+
     def run_full_dag(self) -> FullDAGOutcome:
         """Submit, poll AE, poll Atlas, return the combined outcome."""
         slug = self._bootstrap_workflow()
@@ -988,7 +1051,11 @@ class BaseE2ETest:
             self.mode.value,
             self.connection_qualified_name,
         )
-        run_id = self.client.submit_workflow(payload)
+        # slug= lets an ambiguous submit timeout be resolved by reading AE's own
+        # run list under this slug instead of failing the leg outright.
+        run_id = self.client.submit_workflow(
+            payload, slug=slug, **self._submit_retry_kwargs()
+        )
         logger.info("AE submit returned run_id=%s", run_id)
 
         ae_result = self.client.poll_native_status(
@@ -999,6 +1066,11 @@ class BaseE2ETest:
             stall_task_queue=self._extract_task_queue(),
             progress_stall_seconds=self.dag_progress_stall_seconds,
         )
+
+        # Log-only, outcome-neutral. Placed after the poll so Elasticsearch
+        # indexing lag cannot masquerade as an absence. See
+        # probe_run_is_listed — this is what settles FND-676's gate.
+        self.client.probe_run_is_listed(slug, run_id)
 
         asset_counts: dict[str, int] = {}
         asset_qn_samples: dict[str, list[str]] = {}
@@ -1035,8 +1107,14 @@ class BaseE2ETest:
                     # consistent but assets appear within seconds if publish
                     # succeeded. Use a short dedicated timeout rather than the
                     # full atlas_poll_timeout_seconds used for the connection.
-                    deadline = time.monotonic() + self.atlas_asset_poll_timeout_seconds
-                    while True:
+                    for _attempt in until_deadline(
+                        self.atlas_asset_poll_timeout_seconds,
+                        self.atlas_asset_poll_interval_seconds,
+                        label=f"Atlas asset counts under {self.connection_qualified_name}",
+                        # The per-poll inventory line below already reports
+                        # progress every iteration; a heartbeat would duplicate it.
+                        heartbeat_seconds=0,
+                    ):
                         asset_counts = self.client.count_assets_under_connection(
                             self.connection_qualified_name,
                             type_names=probe_types,
@@ -1051,16 +1129,14 @@ class BaseE2ETest:
                         # same evaluator as the final assertion, so the two can
                         # never drift to different definitions of "met".
                         met = not self._evaluate_asset_expectations(asset_counts)
-                        if time.monotonic() >= deadline:
-                            break
                         # Floors/non-empty can exit as soon as they're satisfied.
                         # Exact-count parity must NOT: ES indexing is eventually
                         # consistent, so a transient match could end polling
                         # before late-arriving over-extracted assets land. Keep
-                        # polling to the deadline so over-extraction surfaces.
+                        # polling to the deadline so over-extraction surfaces —
+                        # `until_deadline` ends the loop on its own last attempt.
                         if met and not self.expected_exact_counts:
                             break
-                        time.sleep(self.atlas_asset_poll_interval_seconds)
                 # True total across ALL asset types (not just the probed ones).
                 # The non-empty backstop uses this so it also protects connectors
                 # that declare no per-type expectations — precisely the ones most
@@ -1244,27 +1320,30 @@ class BaseE2ETest:
         """
         url = os.environ.get("E2E_WORKER_HEALTH_URL", self.worker_health_url)
         logger.info("Worker-up-only tier: probing %s", url)
-        deadline = time.monotonic() + self.worker_health_timeout_seconds
         last_error = ""
-        while True:
-            # conformance: ignore[L006] short, bounded readiness poll (worker_health_timeout_seconds) with a modest interval, not a hot loop; the worker is already health-gated by the sdr-e2e action so this converges on the first attempt in CI
+        for attempt in until_deadline(
+            self.worker_health_timeout_seconds,
+            self.worker_health_poll_interval_seconds,
+            label=f"{self.connector_short_name} worker health at {url}",
+        ):
             try:
                 with urllib.request.urlopen(url, timeout=10) as resp:  # noqa: S310 — fixed health URL, not user input
                     status = resp.status
                 if 200 <= status < 300:
+                    # conformance: ignore[L006] fires at most once per call — the immediately-following return exits the loop on first success; not per-iteration log volume
                     logger.info("App worker healthy: %s -> HTTP %s", url, status)
                     return
                 last_error = f"HTTP {status}"
             except (urllib.error.URLError, OSError) as exc:
                 last_error = str(exc)
-            if time.monotonic() >= deadline:
+            if attempt.is_last:
                 raise AssertionError(
                     f"App worker for {self.connector_short_name} did not become "
                     f"healthy at {url} within {self.worker_health_timeout_seconds}s "
-                    f"(last: {last_error}). No source is provisioned, so this run "
+                    f"({attempt.number} attempts, {attempt.elapsed:.0f}s elapsed; "
+                    f"last: {last_error}). No source is provisioned, so this run "
                     "only checks that the worker deploys and serves /server/health."
                 )
-            time.sleep(self.worker_health_poll_interval_seconds)
 
     # ------------------------------------------------------------------
     # Default test method

@@ -10,7 +10,7 @@ of the SDK's dedicated ``run_in_thread()`` pool:
 
 Temporal's Python SDK uses that same default executor internally for its own
 scheduling (see the ``_BLOCKING_EXECUTOR`` comment in
-``application_sdk/execution/heartbeat.py``).  Sharing it with long-running
+``application_sdk/_runtime/offload.py``).  Sharing it with long-running
 blocking calls can exhaust the pool and deadlock the worker.  The SDK exposes a
 dedicated escape hatch, ``run_in_thread()`` (``App.run_in_thread()`` /
 ``self.task_context.run_in_thread()``), which dispatches onto its own
@@ -23,9 +23,12 @@ the executor is anything other than the ``None`` literal — a call-site-owned
 ``ThreadPoolExecutor`` (e.g. ``clients/sql.py``'s per-connection pool) is not the
 shared-pool contention this rule is about.
 
-``execution/heartbeat.py`` itself is exempt: that is where ``run_in_thread()``'s
-own dedicated-executor dispatch lives, and it never calls into the shared default
-executor (it always names ``_BLOCKING_EXECUTOR`` explicitly).
+``_runtime/offload.py`` itself is exempt: that is where ``run_in_thread()``'s own
+dedicated-executor dispatch lives, and it never calls into the shared default
+executor (it always names ``_BLOCKING_EXECUTOR`` explicitly). It was
+``execution/heartbeat.py`` until the seam moved to the dependency-neutral
+substrate (ADR-0019 / FND-316); the exemption follows the implementation rather
+than the app-facing re-export.
 """
 
 from __future__ import annotations
@@ -47,7 +50,7 @@ _EXECUTOR_ATTR = "run_in_executor"
 
 # The one file allowed to touch the shared default executor's counterpart: this is
 # where run_in_thread()'s own dedicated-executor dispatch lives.
-_EXEMPT_SUFFIX = "execution/heartbeat.py"
+_EXEMPT_SUFFIX = "_runtime/offload.py"
 
 _HINT = (
     "This offloads onto asyncio's shared default executor, which Temporal's "

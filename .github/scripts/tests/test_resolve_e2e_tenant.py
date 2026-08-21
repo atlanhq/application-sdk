@@ -295,11 +295,24 @@ _CALL_SITE_SUFFIXES = ("*.y*ml", "*.sh", "*.py")
 # test_export_extra_env.py: it names this module in its own `_NOT_A_CALLER`
 # exclusion (the twin guard has to know this one exists), which is a live
 # non-comment mention but never an invocation.
+#
+# The two FND-354 scripts name this module for the opposite reason: each states
+# in its own docstring that it handles cloud KEYS and never credentials, and
+# that this module remains the only thing that sees a tenant's entry. They are
+# the *statement* of that boundary, so an invocation appearing in either would
+# contradict the file it sits in — which is the reviewer's cue, since the
+# exclusion itself would hide it from this guard. Kept to the two files whose
+# prose carries the crux; everything else in FND-354 refers to "the per-leg
+# tenant resolver" instead, precisely so it stays inside this net.
 _NOT_A_CALLER = frozenset(
     {
         _MODULE_PATH.resolve(),
         Path(__file__).resolve(),
         (Path(__file__).parent / "test_export_extra_env.py").resolve(),
+        (
+            _REPO_ROOT / ".github/actions/discover-e2e-suites/discover_e2e_suites.py"
+        ).resolve(),
+        (_REPO_ROOT / ".github/scripts/e2e_tenant_matrix_clouds.py").resolve(),
     }
 )
 

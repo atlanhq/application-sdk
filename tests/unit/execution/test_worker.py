@@ -24,9 +24,13 @@ from application_sdk.execution._temporal._activity_errors import (
     WorkerInterceptorDuplicateError,
 )
 from application_sdk.execution._temporal.worker import (
+    _MAX_FATAL_CHAIN_DEPTH,
     AppWorker,
+    _log_worker_fatal_error,
     _resolve_gate_enforcement,
     create_worker,
+    describe_exception_chain,
+    read_core_poller_counts,
 )
 
 DRAIN_DELAY_PATCH = (
@@ -1160,3 +1164,208 @@ class TestWorkflowFailureExceptionTypes:
         declared = self._declared_types()
         assert not issubclass(asyncio.CancelledError, declared)
         assert not issubclass(ActivityError, declared)
+
+
+class TestDescribeExceptionChain:
+    """Tests for ``describe_exception_chain`` (ARUN-1127 instrumentation)."""
+
+    def test_renders_the_real_shape_of_a_temporal_poll_fatal(self) -> None:
+        """The gRPC status only exists below the wrapper, so the chain must be walked.
+
+        This is the exact shape temporalio produces: the Rust bridge raises
+        ``RuntimeError("Poll failure: ... Status { code: PermissionDenied ... }")``
+        and ``temporalio.worker`` re-wraps it as ``RuntimeError("Activity worker
+        failed") from err``. ``str(exc)`` alone therefore carries no diagnosis at
+        all — which is why classifying on it cannot work.
+        """
+        bridge_error = RuntimeError(
+            "Poll failure: Unhandled grpc error when polling: "
+            'Status { code: PermissionDenied, message: "Request unauthorized." }'
+        )
+        try:
+            try:
+                raise bridge_error
+            except RuntimeError as err:
+                raise RuntimeError("Activity worker failed") from err
+        except RuntimeError as top:
+            chain = describe_exception_chain(top)
+
+        assert chain[0] == "RuntimeError: Activity worker failed"
+        assert "PermissionDenied" in chain[1]
+        assert "PermissionDenied" not in chain[0]
+
+    def test_follows_context_when_there_is_no_explicit_cause(self) -> None:
+        try:
+            try:
+                raise ValueError("inner")
+            except ValueError:
+                raise RuntimeError("outer")  # noqa: B904 — implicit chain is the point
+        except RuntimeError as top:
+            chain = describe_exception_chain(top)
+
+        assert chain == ["RuntimeError: outer", "ValueError: inner"]
+
+    def test_cycle_does_not_hang(self) -> None:
+        first = RuntimeError("first")
+        second = RuntimeError("second")
+        first.__cause__ = second
+        second.__cause__ = first
+
+        chain = describe_exception_chain(first)
+
+        assert chain == ["RuntimeError: first", "RuntimeError: second"]
+
+    def test_depth_is_capped(self) -> None:
+        head = RuntimeError("link-0")
+        current = head
+        for index in range(1, 30):
+            nxt = RuntimeError(f"link-{index}")
+            current.__cause__ = nxt
+            current = nxt
+
+        chain = describe_exception_chain(head)
+
+        assert len(chain) == _MAX_FATAL_CHAIN_DEPTH + 1
+        assert chain[-1] == "... chain truncated"
+
+
+class TestLogWorkerFatalError:
+    """Tests for the ``on_fatal_error`` diagnostic log."""
+
+    @pytest.mark.asyncio
+    async def test_passes_the_exception_object_as_exc_info(self) -> None:
+        """``exc_info=True`` renders "NoneType: None" on this path.
+
+        ``Worker.run`` retrieves the fatal with ``task.exception()`` and invokes
+        the hook outside any ``except`` block, so ``sys.exc_info()`` is empty and
+        only passing the object itself yields a traceback. Pinning the value
+        keeps a future edit from quietly reverting to ``True`` and dropping the
+        traceback this log exists to capture.
+        """
+        exc = RuntimeError("Activity worker failed")
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.logger"
+        ) as mock_logger:
+            await _log_worker_fatal_error(exc)
+
+        assert mock_logger.error.call_args.kwargs["exc_info"] is exc
+
+
+class TestReadCorePollerCounts:
+    """Tests for ``read_core_poller_counts`` (the in-process poll-liveness read)."""
+
+    _EXPOSITION = (
+        "# HELP temporal_num_pollers Current number of pollers\n"
+        "# TYPE temporal_num_pollers gauge\n"
+        'temporal_num_pollers{poller_type="workflow_task",task_queue="q"} 2.0\n'
+        'temporal_num_pollers{poller_type="activity_task",task_queue="q"} 3.0\n'
+        "# HELP temporal_request_total Requests\n"
+        "# TYPE temporal_request_total counter\n"
+        'temporal_request_total{operation="PollActivityTaskQueue"} 41.0\n'
+    )
+
+    def _response(
+        self,
+        status_code: int = 200,
+        text: str | None = None,
+        content_length: str | None = None,
+        force_chunk_size: int | None = None,
+    ) -> mock.Mock:
+        body = (self._EXPOSITION if text is None else text).encode()
+        response = mock.Mock()
+        response.status_code = status_code
+        headers = {}
+        if content_length is not None:
+            headers["content-length"] = content_length
+        response.headers = headers
+
+        # ``aiter_bytes`` yields the body in chunks so the incremental,
+        # byte-capped accumulation path is exercised (not a single bulk read).
+        # The implementation passes ``chunk_size=cap``; ``force_chunk_size``
+        # overrides it so a test can force many small chunks regardless.
+        async def _aiter(chunk_size: int | None = None):
+            step = force_chunk_size or chunk_size or len(body) or 1
+            for offset in range(0, len(body), step):
+                yield body[offset : offset + step]
+
+        response.aiter_bytes = _aiter
+        # ``client.stream`` returns an async context manager yielding the response.
+        stream_ctx = mock.AsyncMock()
+        stream_ctx.__aenter__ = mock.AsyncMock(return_value=response)
+        stream_ctx.__aexit__ = mock.AsyncMock(return_value=False)
+        response._stream_ctx = stream_ctx
+        return response
+
+    def _patch_client(self, response: mock.Mock) -> mock.patch:
+        client = mock.AsyncMock()
+        client.stream = mock.Mock(return_value=response._stream_ctx)
+        client.__aenter__ = mock.AsyncMock(return_value=client)
+        client.__aexit__ = mock.AsyncMock(return_value=False)
+        return mock.patch("httpx.AsyncClient", return_value=client)
+
+    @pytest.mark.asyncio
+    async def test_sums_the_gauge_by_poller_type(self) -> None:
+        with self._patch_client(self._response()):
+            counts = await read_core_poller_counts()
+
+        assert counts == {"workflow_task": 2.0, "activity_task": 3.0}
+
+    @pytest.mark.asyncio
+    async def test_zero_pollers_reads_as_zero_not_unknown(self) -> None:
+        """A dead poll loop must be distinguishable from an unreadable endpoint."""
+        exposition = (
+            "# TYPE temporal_num_pollers gauge\n"
+            'temporal_num_pollers{poller_type="workflow_task"} 0.0\n'
+        )
+        with self._patch_client(self._response(text=exposition)):
+            counts = await read_core_poller_counts()
+
+        assert counts == {"workflow_task": 0.0}
+
+    @pytest.mark.asyncio
+    async def test_oversize_content_length_is_unknown_not_zero(self) -> None:
+        """A declared-oversize exposition is unknown, never a zero count."""
+        with self._patch_client(self._response(content_length=str(100 * 1024 * 1024))):
+            assert await read_core_poller_counts() is None
+
+    @pytest.mark.asyncio
+    async def test_oversize_body_is_unknown_not_zero(self) -> None:
+        """An actually-oversize body (no/!accurate Content-Length) is unknown."""
+        body = "x" * (1024 * 1024 + 1)
+        with self._patch_client(self._response(text=body)):
+            assert await read_core_poller_counts() is None
+
+    @pytest.mark.asyncio
+    async def test_oversize_chunked_stream_is_bounded(self) -> None:
+        """A chunked response with no Content-Length must bail on the running
+        byte total, not after an unbounded bulk read of the full body."""
+        # 1 MiB + 1 byte, delivered as many small chunks: the cap must trip on
+        # the accumulated total, proving the read is genuinely bounded.
+        body = "x" * (1024 * 1024 + 1)
+        with self._patch_client(self._response(text=body, force_chunk_size=4096)):
+            assert await read_core_poller_counts() is None
+
+    @pytest.mark.asyncio
+    async def test_unreachable_endpoint_is_unknown_not_zero(self) -> None:
+        client = mock.AsyncMock()
+        client.stream = mock.Mock(side_effect=OSError("connection refused"))
+        client.__aenter__ = mock.AsyncMock(return_value=client)
+        client.__aexit__ = mock.AsyncMock(return_value=False)
+
+        with mock.patch("httpx.AsyncClient", return_value=client):
+            assert await read_core_poller_counts() is None
+
+    @pytest.mark.asyncio
+    async def test_non_200_is_unknown(self) -> None:
+        with self._patch_client(self._response(status_code=503)):
+            assert await read_core_poller_counts() is None
+
+    @pytest.mark.asyncio
+    async def test_absent_gauge_family_is_unknown(self) -> None:
+        """Core registers the gauge only once polling starts; absent != zero."""
+        exposition = (
+            "# TYPE temporal_request_total counter\ntemporal_request_total 1.0\n"
+        )
+        with self._patch_client(self._response(text=exposition)):
+            assert await read_core_poller_counts() is None

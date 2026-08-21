@@ -874,3 +874,126 @@ def test_legacy_error_catchable_as_app_error(
         pass
     except Exception:
         pytest.fail(f"{cls_name} from {import_path} was not caught as AppError")
+
+
+# =============================================================================
+# application_sdk.storage.formats.format_errors — ObjectStore{Read,Download}Error
+# promoted to the public surface (CONNECT-970)
+# =============================================================================
+
+
+def test_object_store_read_error_importable_from_format_errors() -> None:
+    from application_sdk.storage.formats.format_errors import (  # noqa: F401
+        ObjectStoreReadError,
+    )
+
+
+def test_object_store_download_error_importable_from_format_errors() -> None:
+    from application_sdk.storage.formats.format_errors import (  # noqa: F401
+        ObjectStoreDownloadError,
+    )
+
+
+def test_object_store_read_error_importable_from_errors_init() -> None:
+    from application_sdk.errors import ObjectStoreReadError  # noqa: F401
+
+
+def test_object_store_download_error_importable_from_errors_init() -> None:
+    from application_sdk.errors import ObjectStoreDownloadError  # noqa: F401
+
+
+def test_object_store_read_error_is_same_object_on_both_paths() -> None:
+    """A re-export, not a second class definition.
+
+    Two distinct classes with the same name would be siblings, so an
+    ``except`` on one would silently not catch the other — the exact failure
+    mode this promotion exists to remove.
+    """
+    from application_sdk.errors import ObjectStoreReadError as public_cls
+    from application_sdk.storage.formats.format_errors import (
+        ObjectStoreReadError as private_cls,
+    )
+
+    assert public_cls is private_cls
+
+
+def test_object_store_download_error_is_same_object_on_both_paths() -> None:
+    from application_sdk.errors import ObjectStoreDownloadError as public_cls
+    from application_sdk.storage.formats.format_errors import (
+        ObjectStoreDownloadError as private_cls,
+    )
+
+    assert public_cls is private_cls
+
+
+def test_object_store_errors_in_utils_are_the_public_classes() -> None:
+    """``storage/formats/utils.py`` is the internal re-export consumer the PR
+    body names as a keep-working caller — the names it raises must be the very
+    classes the public surface exports, not surviving sibling definitions."""
+    from application_sdk.errors import ObjectStoreDownloadError, ObjectStoreReadError
+    from application_sdk.storage.formats import utils
+
+    assert utils.ObjectStoreReadError is ObjectStoreReadError
+    assert utils.ObjectStoreDownloadError is ObjectStoreDownloadError
+
+
+def test_object_store_errors_are_listed_in_errors_all() -> None:
+    import application_sdk.errors as errors_pkg
+
+    assert "ObjectStoreReadError" in errors_pkg.__all__
+    assert "ObjectStoreDownloadError" in errors_pkg.__all__
+
+
+def test_object_store_error_codes_survive_the_move() -> None:
+    """The codes are wire contracts read by the Automation Engine."""
+    from application_sdk.errors import ObjectStoreDownloadError, ObjectStoreReadError
+
+    assert ObjectStoreReadError.code == "DEPENDENCY_UNAVAILABLE_OBJECT_STORE_READ"
+    assert (
+        ObjectStoreDownloadError.code == "DEPENDENCY_UNAVAILABLE_OBJECT_STORE_DOWNLOAD"
+    )
+
+
+def test_object_store_errors_are_dependency_unavailable() -> None:
+    from application_sdk.errors import ObjectStoreDownloadError, ObjectStoreReadError
+
+    assert issubclass(ObjectStoreReadError, DependencyUnavailableError)
+    assert issubclass(ObjectStoreDownloadError, DependencyUnavailableError)
+
+
+def test_object_store_read_error_still_carries_its_evidence_fields() -> None:
+    from application_sdk.errors import ObjectStoreReadError
+
+    exc = ObjectStoreReadError(path="artifacts/example", file_extension=".json")
+
+    assert exc.path == "artifacts/example"
+    assert exc.file_extension == ".json"
+    assert exc.service == "object_store"
+    assert exc.suggested_action is not None
+    assert exc.effective_retryable is True
+    assert exc.to_failure_details().evidence["path"] == "artifacts/example"
+
+
+def test_errors_package_does_not_import_storage() -> None:
+    """``application_sdk.errors`` must stay an import leaf.
+
+    Re-exporting *from* storage instead of moving the classes would both
+    create a cycle (storage.formats -> contracts.base -> errors) and drag the
+    whole storage stack into every ``import application_sdk.errors``.
+    """
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys, application_sdk.errors;"
+            "leaked=[m for m in sys.modules if m.startswith('application_sdk.storage')];"
+            "assert not leaked, leaked",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr

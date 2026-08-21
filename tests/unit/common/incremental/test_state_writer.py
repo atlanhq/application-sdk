@@ -31,6 +31,7 @@ from application_sdk.common.incremental.state.state_writer import (
     upload_current_state,
 )
 from application_sdk.common.incremental.state.table_scope import add_table_to_scope
+from application_sdk.storage.ops import _put
 
 # ---------------------------------------------------------------------------
 # copy_non_column_entities
@@ -191,7 +192,7 @@ class TestPreparePreviousState:
 
             with patch(
                 "application_sdk.common.incremental.state.state_writer."
-                "download_s3_prefix_with_structure",
+                "download_prefix",
                 new_callable=AsyncMock,
             ):
                 result = await prepare_previous_state(
@@ -213,7 +214,7 @@ class TestPreparePreviousState:
 
             with patch(
                 "application_sdk.common.incremental.state.state_writer."
-                "download_s3_prefix_with_structure",
+                "download_prefix",
                 new_callable=AsyncMock,
                 side_effect=Exception("S3 failure"),
             ):
@@ -232,6 +233,34 @@ class TestPreparePreviousState:
             expected_temp = state_dir.parent / f"{state_dir.name}.previous"
             assert not expected_temp.exists()
 
+    async def test_previous_state_lands_unnested_in_temp_dir(
+        self, memory_store, tmp_path
+    ) -> None:
+        """Previous state must land at ``<temp>/<entity>/`` for the diff reader.
+
+        Real store, real bytes: create_incremental_diff globs
+        ``<previous_state_dir>/table/*.json``, so a prefix repeated inside the
+        temp dir silently reports "no previous tables" (FND-340).
+        """
+        prefix = "persistent-artifacts/apps/oracle/connection/123/current-state"
+        await _put(
+            f"{prefix}/table/chunk-0.json", b'{"t": 1}', memory_store, normalize=False
+        )
+
+        state_dir = tmp_path / "current-state"
+        state_dir.mkdir()
+
+        previous = await prepare_previous_state(
+            connection_qualified_name="default/oracle/123",
+            current_state_available=True,
+            current_state_dir=state_dir,
+            application_name="oracle",
+        )
+
+        assert previous is not None
+        assert (previous / "table" / "chunk-0.json").read_bytes() == b'{"t": 1}'
+        assert not (previous / "persistent-artifacts").exists()
+
     async def test_stale_temp_removal_offloaded_to_thread(self):
         """The leftover-temp rmtree must not run inline on the event loop.
 
@@ -249,7 +278,7 @@ class TestPreparePreviousState:
             with (
                 patch(
                     "application_sdk.common.incremental.state.state_writer."
-                    "download_s3_prefix_with_structure",
+                    "download_prefix",
                     new_callable=AsyncMock,
                 ),
                 patch(
@@ -307,6 +336,40 @@ class TestDownloadTransformedData:
 
             assert result == Path(temp_dir) / "transformed"
             mock_store.assert_awaited_once()
+
+    async def test_lands_files_where_transformed_readers_look(
+        self, memory_store, tmp_path, monkeypatch
+    ) -> None:
+        """Downloaded bytes must land at ``<output_path>/transformed/<entity>/``.
+
+        Run against a real store rather than a mocked download: the regression
+        this guards (FND-340) was a *layout* bug, invisible to a mock asserting
+        only that the download was awaited. The nested layout it produced —
+        ``transformed/artifacts/.../transformed/table/`` — made
+        ``get_current_table_scope`` return None and ``write_current_state``
+        raise "No tables found in transformed output".
+        """
+        from application_sdk.execution._temporal import activity_utils
+
+        staging = tmp_path / "staging"
+        monkeypatch.setattr(activity_utils, "TEMPORARY_PATH", str(staging))
+        output_path = staging / "artifacts/apps/oracle/workflows/wf-1/run-1"
+
+        prefix = "artifacts/apps/oracle/workflows/wf-1/run-1/transformed"
+        await _put(
+            f"{prefix}/table/chunk-0.json", b'{"t": 1}', memory_store, normalize=False
+        )
+        await _put(
+            f"{prefix}/column/chunk-0.json", b'{"c": 1}', memory_store, normalize=False
+        )
+
+        transformed_dir = await download_transformed_data(str(output_path))
+
+        assert transformed_dir == output_path / "transformed"
+        assert (transformed_dir / "table" / "chunk-0.json").read_bytes() == b'{"t": 1}'
+        assert (transformed_dir / "column" / "chunk-0.json").read_bytes() == b'{"c": 1}'
+        # The nested-layout signature must not reappear.
+        assert not (transformed_dir / "artifacts").exists()
 
 
 # ---------------------------------------------------------------------------

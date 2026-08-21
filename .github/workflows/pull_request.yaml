@@ -102,38 +102,21 @@ jobs:
           fi
           python3 .github/scripts/sdk_changes_non_md.py
 
-  # Required status check — the JOB has no `if:` so it always runs and always
-  # concludes. The real validation step is gated to PR (non-fork) events: the
-  # webiny action needs ORG_PAT_GITHUB, which fork PRs don't get, and merge_group
-  # entries have no PR commits to inspect. On those paths a no-op success step
-  # keeps the required context green instead of leaving it "skipped" (which would
-  # block fork PRs / the merge queue). The PR title — which becomes the squash
-  # commit subject — is independently enforced by "Validate PR title".
-  commits:
-    name: Conventional Commits
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true
-        with:
-          fetch-depth: 0
-      - name: Mint fleet App token
-        id: app-token
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true
-        continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
-        with:
-          app-id: ${{ secrets.FLEET_APP_ID }}
-          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-          owner: atlanhq
-          repositories: ${{ github.event.repository.name }}
-      - uses: webiny/action-conventional-commits@7f91b1595ca1951cdb671ddc9f07a49081ec5b69 # v1.4.2
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true
-        with:
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
-      - name: Skip on fork PR / merge_group
-        if: github.event_name == 'merge_group' || github.event.pull_request.head.repo.fork == true
-        run: echo "Commit-convention check not applicable here (fork PR or merge_group); PR title is enforced by Validate PR title."
+  # There is deliberately NO per-commit convention check here. This repo is
+  # squash-merge-only (`allow_squash_merge` is the only method enabled) with
+  # `squash_merge_commit_title: PR_TITLE` and `squash_merge_commit_message:
+  # BLANK`, so the branch's individual commit subjects are discarded at merge
+  # and never reach main. A gate on them polices text that cannot appear in the
+  # history, the changelog, or the release-version bump — all three of which
+  # read squash subjects, i.e. PR titles.
+  #
+  # The string that DOES survive is enforced, by two checks:
+  #   * "Validate PR title" (pr-title-convention.yaml) — this repo's own
+  #     path-aware rules, which are stricter than plain conventional commits
+  #     because the title drives which component's release/changelog a merge
+  #     lands in (application_sdk/ vs contract-toolkit/ vs packages/conformance/).
+  #   * the fleet's commits.yaml reusable — the path-agnostic grammar guard the
+  #     connector repos call. Not used here; this repo has the stricter one.
 
   docstr:
     name: Docstring Coverage
@@ -197,7 +180,7 @@ jobs:
 
   # NOTE: SDK unit / integration / storage-emulator tests moved to
   # sdk-tests-reusable.yaml and now run under the composing sdk-gate.yaml.
-  # The orthogonal checks below (commits, docstring coverage, Trivy scans) and
+  # The orthogonal checks below (docstring coverage, Trivy scans) and
   # the connector e2e dispatch stay here.
 
   matrix-builder:
@@ -297,7 +280,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
       - name: Compute PR base image ref
         id: ref
         env:
@@ -385,7 +368,7 @@ jobs:
           password: ${{ secrets.HARBOR_PASSWORD }}
       # Buildx for `imagetools`, which is a buildx subcommand.
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
       - name: Create the multi-arch manifest
         env:
           IMAGE: ${{ needs.build-sdk-base-image.outputs.image-base }}
@@ -486,8 +469,31 @@ jobs:
     # wait-mode != 'callback' and never runs here. A job-level permissions block
     # replaces rather than merges with the workflow defaults, so contents:read
     # is spelled out explicitly.
+    #
+    # The three grants beyond that all belong to e2e-apps' duplicate-dispatch
+    # guard (FND-646), which runs on github.token because the claim refs live in
+    # THIS repo:
+    #   contents: write     — create/delete refs/e2e-dispatch/<app>/<sha>, the
+    #                         atomic CAS that decides which of several runs on one
+    #                         SHA reaches a tenant. Same capability, same reason,
+    #                         and the same "only in a job that runs no test code"
+    #                         scoping as tests-reusable's lease-tenant job.
+    #   checks: read        — has this SHA already been dispatched? The
+    #                         'Connector E2E run / <app>' check is the evidence.
+    #   actions: read       — tell a claimant that died before dispatching from
+    #                         one that is mid-dispatch. Without it the run read
+    #                         404s, a LIVE claimant reads as dead, and its claim
+    #                         is reclaimed — a second connector run onto the same
+    #                         tenants, i.e. the bug the guard exists to prevent.
+    #                         The sibling lease-tenant job grants this for the
+    #                         same reason.
+    #   pull-requests: read — the stale-claim prune keeps a claim only while its
+    #                         SHA is still an open PR head.
     permissions:
-      contents: read
+      contents: write
+      checks: read
+      actions: read
+      pull-requests: read
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.matrix-builder.outputs.matrix) }}
@@ -650,6 +656,11 @@ jobs:
     permissions:
       contents: read
       checks: read
+      # Reading this PR's current head, so a poll for checks that will never
+      # exist stops early. Missing, the read 403s, the poll warns and waits the
+      # full budget — the old behaviour, which is why this is easy to drop and
+      # never notice.
+      pull-requests: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -688,13 +699,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MATRIX_JSON: ${{ needs.matrix-builder.outputs.matrix }}
           SHA: ${{ github.event_name == 'merge_group' && github.sha || github.event.pull_request.head.sha }}
+          # Lets this stop early instead of waiting out the full 130min for
+          # checks that will never exist: when SHA is no longer this PR's head,
+          # the dispatch guard declined to dispatch for it (FND-696). Empty on
+          # the merge_group path, which keeps the previous behaviour there.
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           NAMES_JSON=$(jq -c '[.include[] | "Connector E2E run / " + .repo_name]' <<< "$MATRIX_JSON")
           python3 .github/scripts/poll_check_runs_gate.py \
             --repo "${{ github.repository }}" \
             --sha "$SHA" \
-            --names-json "$NAMES_JSON"
+            --names-json "$NAMES_JSON" \
+            --pr-number "$PR_NUMBER"
 
   # Real-cloud storage integration tests (S3 / Azure / GCS) — exercise
   # create_store_from_binding + CloudStore against real buckets/vaults using the

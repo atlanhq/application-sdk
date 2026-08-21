@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from application_sdk.execution.heartbeat import run_best_effort, run_fault_isolated
+from application_sdk._runtime.offload import run_best_effort, run_fault_isolated
 
 
 def _echo(value: str) -> str:

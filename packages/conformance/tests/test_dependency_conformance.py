@@ -1227,6 +1227,140 @@ def test_d003_end_to_end_real_ast_and_metadata(tmp_path: Path) -> None:
     assert all("pydantic" not in f.message for f in findings)
 
 
+def _install_fake_dist(
+    root: Path, dist_name: str, import_names: list[str], *, version: str = "1.0.0"
+) -> None:
+    """Materialise a minimal installed distribution in *root*'s own ``.venv``.
+
+    Enough metadata for ``importlib.metadata.distributions(path=[...])`` to find
+    it: a ``*.dist-info`` directory with ``METADATA`` (for the Name) and
+    ``top_level.txt`` (for the provided import names).
+    """
+    site = root / ".venv" / "lib" / "python3.13" / "site-packages"
+    info = site / f"{dist_name.replace('-', '_')}-{version}.dist-info"
+    info.mkdir(parents=True)
+    info.joinpath("METADATA").write_text(
+        f"Metadata-Version: 2.1\nName: {dist_name}\nVersion: {version}\n",
+        encoding="utf-8",
+    )
+    info.joinpath("top_level.txt").write_text(
+        "\n".join(import_names) + "\n", encoding="utf-8"
+    )
+
+
+def test_d003_resolves_import_names_from_the_target_repo_venv(tmp_path: Path) -> None:
+    """A dependency absent from the *running* interpreter is still analysed when
+    the repo under test has its own environment.
+
+    ``ghostdep`` is not installed anywhere near this test process, so before the
+    repo-env lookup existed this dependency resolved to ``None`` and was skipped
+    as unanalysable — reported on stderr, but producing no finding.
+    """
+    from conformance.suite.checks.dependency_conformance import discover
+
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "my-connector"\nversion = "0.1.0"\n'
+        "dependencies = [\n"
+        '    "atlan-application-sdk>=3.17.2,<4.0.0",\n'
+        '    "ghostdep>=1,<2",\n'
+        "]\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text("import os\n", encoding="utf-8")
+    _install_fake_dist(tmp_path, "ghostdep", ["ghostdep"])
+
+    findings = [
+        f for f in scan_all(discover(tmp_path), tmp_path) if f.rule_id == "D003"
+    ]
+    assert len(findings) == 1
+    assert "ghostdep" in findings[0].message
+
+
+def test_d003_repo_venv_resolution_reports_no_coverage_gap(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Resolving from the repo's env leaves nothing unanalysed, so the
+    "skipped N dependencies" coverage warning does not fire.
+
+    This is the regression the fix targets: the same repo previously yielded a
+    different finding count per invoking interpreter (0 findings and 5 skipped
+    deps from one environment, 4 findings from the app's own), and the
+    least-covered run was the one that looked cleanest.
+    """
+    from conformance.suite.checks.dependency_conformance import discover
+
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "my-connector"\nversion = "0.1.0"\n'
+        "dependencies = [\n"
+        '    "atlan-application-sdk>=3.17.2,<4.0.0",\n'
+        '    "ghostdep>=1,<2",\n'
+        '    "useddep>=1,<2",\n'
+        "]\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text("import useddep\n", encoding="utf-8")
+    _install_fake_dist(tmp_path, "ghostdep", ["ghostdep"])
+    _install_fake_dist(tmp_path, "useddep", ["useddep"])
+
+    findings = [
+        f for f in scan_all(discover(tmp_path), tmp_path) if f.rule_id == "D003"
+    ]
+    assert [f.rule_id for f in findings] == ["D003"]
+    assert "ghostdep" in findings[0].message
+    assert "skipped" not in capsys.readouterr().err
+
+
+def test_d003_falls_back_to_running_interpreter_without_a_repo_venv(
+    tmp_path: Path,
+) -> None:
+    """No repo ``.venv`` -> resolution falls back to the invoking interpreter,
+    preserving the previous behaviour rather than silently analysing nothing."""
+    from conformance.suite.checks.dependency_conformance import discover
+
+    assert not (tmp_path / ".venv").exists()
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "my-connector"\nversion = "0.1.0"\n'
+        "dependencies = [\n"
+        '    "atlan-application-sdk>=3.17.2,<4.0.0",\n'
+        '    "jinja2>=3,<4",\n'  # a real conformance dep, never imported here
+        "]\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text("import os\n", encoding="utf-8")
+
+    findings = [
+        f for f in scan_all(discover(tmp_path), tmp_path) if f.rule_id == "D003"
+    ]
+    assert len(findings) == 1
+    assert "jinja2" in findings[0].message
+
+
+def test_d003_repo_venv_does_not_mask_a_dependency_it_lacks(tmp_path: Path) -> None:
+    """A partially-synced repo env (e.g. ``--no-dev``) must not shrink coverage:
+    a dependency missing from it still resolves via the running interpreter."""
+    from conformance.suite.checks.dependency_conformance import discover
+
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "my-connector"\nversion = "0.1.0"\n'
+        "dependencies = [\n"
+        '    "atlan-application-sdk>=3.17.2,<4.0.0",\n'
+        '    "jinja2>=3,<4",\n'  # only in the running interpreter
+        '    "ghostdep>=1,<2",\n'  # only in the repo env
+        "]\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text("import os\n", encoding="utf-8")
+    _install_fake_dist(tmp_path, "ghostdep", ["ghostdep"])
+
+    findings = [
+        f for f in scan_all(discover(tmp_path), tmp_path) if f.rule_id == "D003"
+    ]
+    messages = " ".join(f.message for f in findings)
+    assert len(findings) == 2
+    assert "ghostdep" in messages
+    assert "jinja2" in messages
+
+
 def test_d003_skips_non_utf8_source_without_crashing(tmp_path: Path) -> None:
     """A latin-1 source with a PEP 263 coding cookie is parsed (not skipped) and
     its imports counted, so a dep imported only there is not falsely flagged."""
@@ -1550,13 +1684,18 @@ def test_d010_suppressed_inline_directive(tmp_path: Path) -> None:
 
 
 def test_d010_rule_metadata() -> None:
-    """WARN is what keeps a new rule off the dogfooded gate — assert it per rule."""
+    """BLOCK since FND-311: the finding names a guaranteed runtime ImportError.
+
+    It landed as WARN under the new-rule tier policy carrying the note "treat it
+    as an error"; the tier now carries that instead of the prose. Pinned per rule
+    because the tier is what decides whether release-certify stops the app.
+    """
     from conformance.suite.rules import get_rule
     from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 
     rule = get_rule("D010")
     assert rule.name == "QueryTransformerWithoutDuckdb"
-    assert rule.tier == EnforcementTier.WARN
+    assert rule.tier == EnforcementTier.BLOCK
     assert rule.scope == RuleScope.APP
     assert rule.rationale.strip()
 
