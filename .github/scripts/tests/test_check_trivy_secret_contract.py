@@ -110,6 +110,15 @@ class TestFailureMessage:
         for value in FULLY_CONFIGURED.values():
             assert value not in message
 
+    def test_printed_text_is_the_constant_not_an_env_derived_string(self):
+        # main() must print FAILURE_TEXT, a module-level constant, so CodeQL
+        # cannot treat the print as a sink for os.environ. The constant still
+        # has to name the only secret this contract can currently fail on.
+        assert guard.REQUIRED_WITHOUT_APP_TOKEN in guard.FAILURE_TEXT
+        assert "secrets: inherit" in guard.FAILURE_TEXT
+        for value in FULLY_CONFIGURED.values():
+            assert value not in guard.FAILURE_TEXT
+
 
 # ── The reusable must stay incapable of startup_failure ──────────────────────
 # The guarantee lives in the workflow YAML, not in the script, so this is where
