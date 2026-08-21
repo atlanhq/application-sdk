@@ -5,7 +5,6 @@ level: L4
 category: platform-runtime
 globs: []
 severity: HIGH
-provenance: sdk-v3-platform-review-guidelines; Temporal replay semantics
 suppressible: false
 ---
 # Activity contracts evolve additively

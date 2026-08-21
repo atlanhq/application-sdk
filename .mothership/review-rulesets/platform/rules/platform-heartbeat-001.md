@@ -5,7 +5,6 @@ level: L4
 category: platform-runtime
 globs: []
 severity: HIGH
-provenance: sdk-v3-platform-review-guidelines; @task auto-heartbeat behavior
 suppressible: false
 ---
 # Heartbeats must survive synchronous work

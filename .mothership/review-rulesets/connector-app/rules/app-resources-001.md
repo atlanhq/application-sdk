@@ -5,7 +5,6 @@ level: L2
 category: correctness
 globs: []
 severity: MEDIUM
-provenance: sdk-v3-connector-review-guidelines
 suppressible: false
 ---
 # Client and handle lifecycle

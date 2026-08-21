@@ -5,7 +5,6 @@ level: L2
 category: test-coverage
 globs: []
 severity: HIGH
-provenance: application-sdk test conventions; connector app review practice
 suppressible: false
 ---
 # Changed behavior ships with honest tests

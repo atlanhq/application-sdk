@@ -5,7 +5,6 @@ level: L4
 category: platform-runtime
 globs: []
 severity: HIGH
-provenance: sdk-v3-platform-review-guidelines
 suppressible: false
 ---
 # Bounded memory on unbounded sources

@@ -5,7 +5,6 @@ level: L2
 category: correctness
 globs: []
 severity: HIGH
-provenance: sdk-v3-connector-review-guidelines; completeness-verification patterns
 suppressible: false
 ---
 # Publish complete results or fail loudly

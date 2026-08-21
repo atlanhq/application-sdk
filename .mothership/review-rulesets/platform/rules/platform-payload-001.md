@@ -5,7 +5,6 @@ level: L4
 category: platform-runtime
 globs: []
 severity: HIGH
-provenance: application-sdk docs/upgrade-guide-v3.md (Temporal payload limit)
 suppressible: false
 ---
 # Activity payloads carry references, not data
