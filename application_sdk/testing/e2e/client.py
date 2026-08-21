@@ -58,6 +58,7 @@ from application_sdk.testing.e2e._errors import (
     AtlanApiHttpError,
     AtlanApiResponseInvariantError,
     AtlanApiTimeoutError,
+    AutomationEngineNotDispatchingError,
     DAGProgressStalledError,
     MissingHarnessClassAttrError,
     NoWorkerOnTaskQueueError,
@@ -1677,9 +1678,11 @@ class AEWorkflowClient:
                 last_log_elapsed = elapsed
             if result.status.is_terminal:
                 return result
-            # Fail fast when nothing has started within the grace window: the
-            # run is live (parent on the AE queue) but no node has begun, which
-            # almost always means no worker is polling the extract task queue.
+            # Fail fast when nothing has started within the grace window. Which
+            # system is at fault depends on the top-level status: a run still
+            # Pending was never dispatched by AE, so the app's queue cannot be
+            # the cause; a live parent means AE dispatched and the connector's
+            # own node is the one nothing picked up.
             if (
                 # only a positive grace arms the guard; None or any value <= 0
                 # disables it (a negative would otherwise fire on the first poll)
@@ -1688,6 +1691,18 @@ class AEWorkflowClient:
                 and not any_node_started
                 and elapsed >= stall_grace_seconds
             ):
+                if result.status is DAGRunStatus.PENDING:
+                    raise AutomationEngineNotDispatchingError(
+                        message=(
+                            f"AE run {run_id} was still Pending after "
+                            f"{stall_grace_seconds}s, so it was never dispatched and "
+                            "no DAG node could start. Nothing was offered to the "
+                            "app's task queue, so the app's worker and agent name "
+                            "are not implicated — check the tenant's automation "
+                            "engine (contention on a shared e2e tenant, or an AE "
+                            "worker not processing new runs)."
+                        ),
+                    )
                 queue_hint = (
                     f" task queue '{stall_task_queue}'"
                     if stall_task_queue
@@ -1696,8 +1711,9 @@ class AEWorkflowClient:
                 raise NoWorkerOnTaskQueueError(
                     message=(
                         f"No DAG node started within {stall_grace_seconds}s for run "
-                        f"{run_id} (top-level status={result.status.value}). This "
-                        f"almost always means no worker is polling{queue_hint}. "
+                        f"{run_id} (top-level status={result.status.value}), so AE "
+                        f"dispatched but nothing picked the node up. This almost "
+                        f"always means no worker is polling{queue_hint}. "
                         "Verify the test's agent_spec().agent_name resolves to the "
                         "queue the deployed worker polls "
                         "(atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}); a "
