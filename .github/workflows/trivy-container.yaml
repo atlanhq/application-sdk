@@ -16,6 +16,13 @@
 # private-dependency BuildKit secret. Callers passing named secrets
 # explicitly instead of `inherit` keep working unchanged on their own
 # ORG_PAT_GITHUB.
+#
+# Every secret below is declared `required: false` on purpose, and validated by
+# the "Verify secret contract" step instead. `required: true` turns a caller
+# that omits the secret into a workflow-parse error: the run ends as
+# `startup_failure` with zero jobs and therefore no check run at all, which no
+# required check can gate on and nobody can see (FND-447). See
+# .github/scripts/check_trivy_secret_contract.py for the full rationale.
 
 name: Atlan Application Trivy container scan
 
@@ -23,12 +30,14 @@ on:
   workflow_call:
     secrets:
       ORG_PAT_GITHUB:
-        required: true
-        description: "Fallback PAT, used if the fleet App token can't be minted."
+        required: false
+        description: "Fallback PAT, used if the fleet App token can't be minted. Enforced by the 'Verify secret contract' step, and only when the App token did not mint -- nothing reads it otherwise."
       CHAINGUARD_USERNAME:
-        required: true
+        required: false
+        description: "Chainguard registry username. Needed unconditionally (the composite logs in to cgr.dev before it can build); enforced by the 'Verify secret contract' step, not by `required: true`."
       CHAINGUARD_PASSWORD:
-        required: true
+        required: false
+        description: "Chainguard registry password. Same handling as CHAINGUARD_USERNAME above."
       FLEET_APP_ID:
         required: false
         description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller — auto-available via 'secrets: inherit'. Declared here so the contract is self-documenting."
@@ -101,6 +110,19 @@ jobs:
             .github/scripts
           path: _sdk
           token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+
+      # Turns a missing secret into a normal red step with an actionable
+      # message. Runs after the _sdk checkout because that is where the script
+      # comes from; a missing ORG_PAT_GITHUB with no minted App token already
+      # reds that checkout loudly, which is the outcome this whole change is
+      # after -- a visible failure carrying a check run, not startup_failure.
+      - name: Verify secret contract
+        env:
+          CHAINGUARD_USERNAME: ${{ secrets.CHAINGUARD_USERNAME }}
+          CHAINGUARD_PASSWORD: ${{ secrets.CHAINGUARD_PASSWORD }}
+          ORG_PAT_GITHUB: ${{ secrets.ORG_PAT_GITHUB }}
+          APP_TOKEN_MINTED: ${{ steps.app-token.outputs.token }}
+        run: python3 _sdk/.github/scripts/check_trivy_secret_contract.py
 
       # Composite handles build, Trivy JSON+SARIF scan, SARIF upload.
       # fail-on-vulns is disabled here — the allowlist gate below takes over.
