@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from application_sdk.errors.leaves import (
     AppTimeoutError,
@@ -15,6 +15,10 @@ from application_sdk.errors.leaves import (
     PreconditionError,
     UnimplementedError,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle guard, typing only
+    # client imports this module, so the reverse import is deferred.
+    from application_sdk.testing.e2e.client import DAGRunResult
 
 # ---------------------------------------------------------------------------
 # Atlan API client errors (Family B)
@@ -205,12 +209,44 @@ class DAGProgressStalledError(PreconditionError):
     The window is set comfortably above legitimately slow single nodes (lineage
     on deep queues can sit Running for many minutes), so a healthy run never
     trips it.
+
+    ``result`` carries the last observation the poll made, stamped with
+    ``progress_stalled_after_seconds``. Raising bare left this path with only a
+    ``name=status`` list, so the caller that owns the diagnostic renderer (it
+    needs the seed DAG's routing, which the client does not have) could not
+    name the task queue or the child workflow to read. Attaching the typed
+    result lets that one renderer serve the watchdog stop and the poll ceiling
+    alike.
     """
 
     code: ClassVar[str] = "PRECONDITION_DAG_PROGRESS_STALLED"
     expected_state: str | None = (
         "at least one DAG node state transition within the progress window"
     )
+    result: DAGRunResult | None = None
+
+
+@dataclass(kw_only=True)
+class ProgressWatchdogUnreachableError(InvalidInputError):
+    """``dag_progress_stall_seconds`` is pinned at or above the poll ceiling.
+
+    The watchdog fires when ``elapsed - last_progress_elapsed`` reaches the
+    window, and ``poll_native_status`` returns as soon as ``elapsed`` reaches
+    ``ae_poll_timeout_seconds``. A window that is not strictly smaller than the
+    ceiling can therefore only ever close on a run that stalls at t=0 — for
+    every real stall the poll loop exits first, so the suite burns its whole
+    ceiling and reports the ceiling instead of the stall.
+
+    Raised at ``setup_method`` rather than warned about: the configuration
+    silently disables a fail-fast guard, and the only way to notice at runtime
+    is to read both numbers and do the subtraction. Leave
+    ``dag_progress_stall_seconds`` unset to derive a window from the ceiling, or
+    set 0 to disable the watchdog deliberately.
+    """
+
+    code: ClassVar[str] = "INVALID_INPUT_PROGRESS_WATCHDOG_UNREACHABLE"
+    field: str | None = "dag_progress_stall_seconds"
+    constraint: str | None = "must be < ae_poll_timeout_seconds"
 
 
 @dataclass(kw_only=True)

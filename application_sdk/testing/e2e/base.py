@@ -53,15 +53,18 @@ from application_sdk.common.task_queue import (
 from application_sdk.contracts.types import ConnectionRef
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.e2e._errors import (
+    DAGProgressStalledError,
     HarnessMethodNotImplementedError,
     ManifestDagMissingError,
     ManifestFileNotFoundError,
     MissingHarnessClassAttrError,
     MissingHarnessEnvError,
+    ProgressWatchdogUnreachableError,
 )
 from application_sdk.testing.e2e._poll import until_deadline
 from application_sdk.testing.e2e.client import (
     AEWorkflowClient,
+    DAGNodeResult,
     DAGNodeStatus,
     DAGRunResult,
     cold_start_submit_kwargs,
@@ -84,6 +87,67 @@ logger = get_logger(__name__)
 _HARD_FAIL_NODE_STATUSES = frozenset(
     {DAGNodeStatus.FAILED, DAGNodeStatus.ERROR, DAGNodeStatus.CANCELLED}
 )
+
+# Shape of the derived dag_progress_stall_seconds window (see
+# _derive_progress_stall_seconds). A fraction of the poll ceiling rather than an
+# absolute, so raising ae_poll_timeout_seconds widens the watchdog instead of
+# silently putting it out of reach.
+_PROGRESS_STALL_CEILING_DIVISOR = 3
+# Floor: below this, a legitimately slow single node (lineage on a deep queue
+# sits Running for minutes with nothing else in the DAG moving) would trip the
+# watchdog on a healthy run.
+_PROGRESS_STALL_MIN_SECONDS = 300
+# Cap: the old absolute default. Past this the watchdog stops being a fail-fast
+# guard — a suite with a 3h ceiling does not want to wait an hour to learn its
+# DAG is frozen.
+_PROGRESS_STALL_MAX_SECONDS = 1800
+
+
+def _derive_progress_stall_seconds(timeout_seconds: int) -> int:
+    """Progress-watchdog window to use when a suite pins no explicit value.
+
+    Args:
+        timeout_seconds: The suite's ``ae_poll_timeout_seconds``.
+
+    Returns:
+        A window strictly below ``timeout_seconds`` (0 when the ceiling itself
+        is non-positive). Strictness is the point: a window the poll loop cannot
+        reach is a disabled watchdog, which is what an absolute default did to
+        every suite whose ceiling was at or under it.
+    """
+    if timeout_seconds <= 0:
+        return 0
+    window = min(
+        _PROGRESS_STALL_MAX_SECONDS,
+        max(
+            _PROGRESS_STALL_MIN_SECONDS,
+            timeout_seconds // _PROGRESS_STALL_CEILING_DIVISOR,
+        ),
+    )
+    # The floor can exceed a very short ceiling (a 60s smoke suite): keep the
+    # window reachable there by halving the ceiling instead. A ceiling of 1s
+    # halves to 0 — no positive window is reachable, so the watchdog is off,
+    # which is the honest answer for a ceiling that tight.
+    return min(window, timeout_seconds // 2)
+
+
+@dataclass(frozen=True)
+class NodeDispatch:
+    """Where the seed DAG asked AE to dispatch one node.
+
+    Recorded per node name at bootstrap so a diagnostic can name the task queue
+    a stuck node was waiting on. The harness's seed DAG is the only place this
+    is knowable locally — ``native-status`` reports statuses, not routing.
+
+    Caveat carried into the rendered message: at submit, Heracles re-fetches the
+    manifest from the tenant-deployed pod and *that* DAG executes, so this is
+    the routing the harness asked for, not a guarantee of what ran. For the
+    system-app queues (publish / lineage / qi) the two agree in practice — they
+    are fixed tenant queue names, not per-run values.
+    """
+
+    app_name: str
+    task_queue: str
 
 
 @dataclass(frozen=True)
@@ -185,6 +249,14 @@ class BaseE2ETest:
     # default. A ClassVar annotation would make that instance assignment a
     # type error under mypy/pyright.
     source_available: bool = True
+    # Node name -> where the seed DAG routed that node. Populated in
+    # _bootstrap_workflow and read only by the stuck-node diagnostic, which
+    # degrades to "queue unknown" when it is empty (a suite reusing a
+    # pre-existing ae_workflow_slug never builds a seed DAG). Plain instance
+    # field, same reason as source_available above; always replaced wholesale,
+    # never mutated in place, so the class-level empty default is not shared
+    # state.
+    _node_dispatch: dict[str, NodeDispatch] = {}
     # Health endpoint the worker-up tier probes. The CI worker container
     # serves it on localhost:8000 (the sdr-e2e action gates on the same URL
     # before pytest). Override via E2E_WORKER_HEALTH_URL for other topologies.
@@ -301,7 +373,16 @@ class BaseE2ETest:
     # legitimately slow single node (lineage on deep queues can sit Running for
     # several minutes) while still turning a hang into a self-terminating
     # failure well before ae_poll_timeout_seconds. 0 disables it.
-    dag_progress_stall_seconds: ClassVar[int] = 1800
+    #
+    # None (the default) derives it from ae_poll_timeout_seconds — see
+    # _resolved_progress_stall_seconds. It used to be an absolute 1800s, which
+    # silently disabled the watchdog on every suite whose ceiling was 1800s or
+    # lower (the poll loop exits before the window can ever close), so those
+    # suites burned the full ceiling on a wedge instead of failing at the stall.
+    # A relative default cannot be killed by raising the ceiling. Set a positive
+    # int to pin the window; setup_method rejects a pinned value that is not
+    # strictly below ae_poll_timeout_seconds.
+    dag_progress_stall_seconds: ClassVar[int | None] = None
     atlas_poll_interval_seconds: ClassVar[int] = 30
     atlas_poll_timeout_seconds: ClassVar[int] = 1500
     # Asset counts use a much shorter poll window: Elasticsearch is eventually
@@ -386,6 +467,33 @@ class BaseE2ETest:
                     message=f"{type(self).__name__}: class attribute '{required}' must be set",
                     field=required,
                 )
+
+        self._node_dispatch = {}
+
+        # A pinned progress-stall window that is not strictly below the poll
+        # ceiling is a disabled watchdog (see ProgressWatchdogUnreachableError).
+        # Checked before the source-availability early return: it is a static
+        # configuration error, so it should surface on every tier, not only the
+        # ones that reach the poll.
+        pinned_stall = type(self).dag_progress_stall_seconds
+        if (
+            pinned_stall is not None
+            and pinned_stall > 0
+            and pinned_stall >= self.ae_poll_timeout_seconds
+        ):
+            raise ProgressWatchdogUnreachableError(
+                message=(
+                    f"{type(self).__name__}: dag_progress_stall_seconds="
+                    f"{pinned_stall}s is >= ae_poll_timeout_seconds="
+                    f"{self.ae_poll_timeout_seconds}s, so the DAG-progress "
+                    "watchdog can never fire — a wedged run will burn the full "
+                    "poll ceiling and report the ceiling instead of the stall. "
+                    "Leave dag_progress_stall_seconds unset to derive "
+                    f"{_derive_progress_stall_seconds(self.ae_poll_timeout_seconds)}s "
+                    "from the ceiling, pin a value below the ceiling, or set 0 to "
+                    "disable the watchdog deliberately."
+                ),
+            )
 
         # Source-availability tier. When no extraction source is provisioned
         # for this connector in CI, degrade to a worker-up-only check (see the
@@ -937,6 +1045,43 @@ class BaseE2ETest:
             return f"atlan-{agent.agent_name}"
         return f"atlan-{self.connector_short_name}-default"
 
+    def _resolved_progress_stall_seconds(self) -> int:
+        """Progress-watchdog window this run will actually use.
+
+        Returns ``dag_progress_stall_seconds`` when the suite pinned one
+        (including 0, which disables the watchdog), else a window derived from
+        ``ae_poll_timeout_seconds``. ``setup_method`` has already rejected a
+        pinned value the poll loop could never reach.
+        """
+        pinned = type(self).dag_progress_stall_seconds
+        if pinned is not None:
+            return pinned
+        return _derive_progress_stall_seconds(self.ae_poll_timeout_seconds)
+
+    def _capture_node_dispatch(self, seed_dag: dict[str, Any]) -> None:
+        """Record node name -> (app_name, task_queue) from the seed DAG.
+
+        Read back only by :meth:`_describe_dag_nodes`, to name the queue a
+        never-dispatched node was waiting on. Reads the *resolved*
+        ``inputs.task_queue`` in preference to the node-level
+        ``app_task_queue``: only the former has its ``{deployment_name}``
+        placeholder substituted by :meth:`_seed_dag_from_manifest`.
+        """
+        dispatch: dict[str, NodeDispatch] = {}
+        for name, node in seed_dag.items():
+            if not isinstance(node, dict):
+                continue
+            inputs = node.get("inputs")
+            queue = inputs.get("task_queue") if isinstance(inputs, dict) else None
+            if not isinstance(queue, str) or not queue:
+                queue = node.get("app_task_queue")
+            app_name = node.get("app_name")
+            dispatch[name] = NodeDispatch(
+                app_name=app_name if isinstance(app_name, str) else "",
+                task_queue=queue if isinstance(queue, str) else "",
+            )
+        self._node_dispatch = dispatch
+
     def _bootstrap_workflow(self) -> str:
         """Ensure an AE workflow exists with a published version.
 
@@ -967,6 +1112,8 @@ class BaseE2ETest:
             logger.info("manifest_path empty — falling back to _build_legacy_seed_dag")
             seed_dag = self._build_legacy_seed_dag(extract_queue)
 
+        self._capture_node_dispatch(seed_dag)
+
         version = self.client.create_version(
             slug,
             {"version": int(time.time()), "dag": seed_dag},
@@ -974,6 +1121,129 @@ class BaseE2ETest:
         logger.info("Created seed version %d under slug %s", version, slug)
         self.client.publish_version(slug, version)
         return slug
+
+    # ------------------------------------------------------------------
+    # Failure diagnostics
+    # ------------------------------------------------------------------
+
+    def _dag_outcome_headline(self, ae_result: DAGRunResult) -> str:
+        """One line saying what the DAG did, before the per-node breakdown.
+
+        A poll that stopped early is NOT a verdict on the nodes: it says the
+        harness stopped watching. Saying so explicitly is the difference between
+        "the node failed" (look for a bug in the node's code) and "the node was
+        never dispatched" (look for the worker that should have picked it up).
+        Both early exits get that treatment — the poll ceiling and the progress
+        watchdog, which is the one that fires first on any suite whose ceiling
+        is at or below 1800s.
+        """
+        if not ae_result.stopped_watching:
+            return f"AE status={ae_result.status.value}"
+        stalled = ae_result.seconds_since_last_progress
+        stall_note = (
+            f"; no DAG node changed state for the last {int(stalled)}s"
+            if stalled is not None
+            else ""
+        )
+        if ae_result.progress_stalled:
+            return (
+                f"DAG stopped making progress: the "
+                f"{int(ae_result.progress_stalled_after_seconds or 0)}s watchdog "
+                f"window closed before the poll ceiling "
+                f"(AE status={ae_result.status.value}){stall_note}"
+            )
+        return (
+            f"DAG did not complete within "
+            f"{int(ae_result.timed_out_after_seconds or 0)}s "
+            f"(AE status={ae_result.status.value}){stall_note}"
+        )
+
+    def _dispatch_note(self, node_name: str) -> str:
+        """``on task queue 'X' (app_name=Y, per the seed DAG)`` when known."""
+        dispatch = self._node_dispatch.get(node_name)
+        if dispatch is None or not dispatch.task_queue:
+            return "task queue not resolvable from the seed DAG"
+        app_note = f", app_name={dispatch.app_name}" if dispatch.app_name else ""
+        return f"task queue '{dispatch.task_queue}'{app_note}, per the seed DAG"
+
+    def _stop_point_clause(self, ae_result: DAGRunResult) -> str:
+        """`` at the Xs poll ceiling`` / `` when the Xs watchdog closed``, or ``""``.
+
+        Names which early exit produced this observation, so a node line can say
+        where the harness stopped without each branch re-deriving it — and so a
+        600s watchdog stop is never reported as the 1800s ceiling.
+        """
+        if ae_result.progress_stalled:
+            return (
+                " when the "
+                f"{int(ae_result.progress_stalled_after_seconds or 0)}s progress "
+                "watchdog closed"
+            )
+        if ae_result.timed_out:
+            return (
+                f" at the {int(ae_result.timed_out_after_seconds or 0)}s poll ceiling"
+            )
+        return ""
+
+    def _describe_dag_node(self, node: DAGNodeResult, ae_result: DAGRunResult) -> str:
+        """One breakdown line for a node, in terms of what an operator should do.
+
+        The three cases that used to render identically as
+        ``status=<X> error=None``:
+
+        * AE reports it not started (``Pending`` / ``Scheduled``) — which does
+          not say whether anything picked it up, so the line names the queue and
+          the child workflow to read, and asserts no cause (see
+          :attr:`~application_sdk.testing.e2e.client.DAGNodeStatus.is_not_started`);
+        * dispatched but never finished (``Running`` where the poll stopped) —
+          the worker took it and stopped making progress, so the queue is named
+          too;
+        * ran and failed — the error message is the whole story.
+
+        Both places the poll can stop early read the same: the ceiling and the
+        progress watchdog only differ in the clause naming which one closed.
+        """
+        stalled = ae_result.seconds_since_last_progress
+        stall_clause = (
+            f"; no DAG state change for the last {int(stalled)}s"
+            if stalled is not None
+            else ""
+        )
+        stop_point = self._stop_point_clause(ae_result)
+        if node.status.is_success:
+            duration = node.duration_seconds
+            timing = f" in {int(duration)}s" if duration is not None else ""
+            return f"  - {node.name}: succeeded{timing}"
+        if node.status.is_skipped:
+            return f"  - {node.name}: {node.status.value} (AE did not run it)"
+        if node.status.is_not_started:
+            return (
+                f"  - {node.name}: AE reports {node.status.value}{stop_point} — "
+                f"{self._dispatch_note(node.name)}{stall_clause}. AE holds a node "
+                f"at {node.status.value} whether nothing picked it up OR its child "
+                "workflow is running, so read the child workflow "
+                f"'{ae_result.run_id}-{node.name}' on the tenant's Temporal: no "
+                "such execution means nothing polled that queue (check the owning "
+                "app's workers); an execution means it is running or retrying "
+                "(check its history for heartbeat timeouts)."
+            )
+        if node.status is DAGNodeStatus.RUNNING and ae_result.stopped_watching:
+            return (
+                f"  - {node.name}: STILL RUNNING{stop_point} — "
+                f"dispatched to {self._dispatch_note(node.name)}{stall_clause}. A "
+                "worker took it and stopped making progress (or died holding it)."
+            )
+        return f"  - {node.name}: status={node.status.value} error={node.error_message}"
+
+    def _describe_dag_nodes(self, ae_result: DAGRunResult) -> str:
+        """Per-node breakdown, every node — succeeded ones included.
+
+        The successes carry the timing that shows *where* the DAG got to before
+        it stopped, which is what points at the stuck node's upstream.
+        """
+        if not ae_result.nodes:
+            return "  (no DAG nodes reported)"
+        return "\n".join(self._describe_dag_node(n, ae_result) for n in ae_result.nodes)
 
     def _core_dag_ok(self, ae_result: DAGRunResult) -> bool:
         """Skip-tolerant success gate for the DAG run.
@@ -1058,14 +1328,36 @@ class BaseE2ETest:
         )
         logger.info("AE submit returned run_id=%s", run_id)
 
-        ae_result = self.client.poll_native_status(
-            run_id,
-            interval_seconds=self.ae_poll_interval_seconds,
-            timeout_seconds=self.ae_poll_timeout_seconds,
-            stall_grace_seconds=self.ae_stall_grace_seconds,
-            stall_task_queue=self._extract_task_queue(),
-            progress_stall_seconds=self.dag_progress_stall_seconds,
-        )
+        try:
+            ae_result = self.client.poll_native_status(
+                run_id,
+                interval_seconds=self.ae_poll_interval_seconds,
+                timeout_seconds=self.ae_poll_timeout_seconds,
+                stall_grace_seconds=self.ae_stall_grace_seconds,
+                stall_task_queue=self._extract_task_queue(),
+                progress_stall_seconds=self._resolved_progress_stall_seconds(),
+            )
+        except DAGProgressStalledError as stalled:
+            # The watchdog is the exit that fires first on any suite whose
+            # ceiling is at or below 1800s — i.e. the FND-708 shape reaches the
+            # operator here, not through the ceiling return. Raising it bare
+            # skipped the per-node diagnosis entirely, so re-raise the same
+            # typed error with the breakdown the ceiling path already prints.
+            if stalled.result is None:
+                raise
+            raise DAGProgressStalledError(
+                message=(
+                    f"Full-DAG e2e stalled for connector={self.connector_short_name}\n"
+                    f"AE run_id={stalled.result.run_id} "
+                    f"slug={stalled.result.workflow_slug}\n"
+                    f"{self._dag_outcome_headline(stalled.result)}\n"
+                    f"DAG nodes:\n{self._describe_dag_nodes(stalled.result)}"
+                ),
+                result=stalled.result,
+                # Keeps the client-level raise in ``cause_repr`` on the wire
+                # envelope, not only in the traceback.
+                cause=stalled,
+            ) from stalled
 
         # Log-only, outcome-neutral. Placed after the poll so Elasticsearch
         # indexing lag cannot masquerade as an absence. See
@@ -1172,12 +1464,15 @@ class BaseE2ETest:
                         asset_qn_samples,
                     )
         else:
-            failed_names = ", ".join(n.name for n in ae_result.failed_nodes) or "(none)"
+            # Deliberately not "failed: <names>": a Pending node at the poll
+            # ceiling never ran, and calling that a failure sent the reader
+            # looking for a bug in code that was never dispatched.
             logger.warning(
-                "Skipping Atlas probe — %d/%d DAG nodes did not succeed (failed: %s)",
+                "Skipping Atlas probe — %d/%d DAG nodes did not succeed. %s\n%s",
                 len(ae_result.failed_nodes),
                 len(ae_result.nodes),
-                failed_names,
+                self._dag_outcome_headline(ae_result),
+                self._describe_dag_nodes(ae_result),
             )
             connection_in_atlas = False
 
@@ -1390,22 +1685,18 @@ class BaseE2ETest:
 
         outcome = self.run_full_dag()
         if not (self._core_dag_ok(outcome.ae_result) and outcome.connection_in_atlas):
-            failed = outcome.ae_result.failed_nodes
-            failures_msg = (
-                "\n".join(
-                    f"  - {n.name}: status={n.status.value} error={n.error_message}"
-                    for n in failed
-                )
-                if failed
+            ae_result = outcome.ae_result
+            nodes_msg = (
+                self._describe_dag_nodes(ae_result)
+                if ae_result.failed_nodes
                 else "  (all DAG nodes succeeded; Connection just didn't land in Atlas)"
             )
             raise AssertionError(
                 f"Full-DAG e2e failed for connector={self.connector_short_name}\n"
-                f"AE run_id={outcome.ae_result.run_id} "
-                f"slug={outcome.ae_result.workflow_slug}\n"
-                f"AE status={outcome.ae_result.status.value}\n"
+                f"AE run_id={ae_result.run_id} slug={ae_result.workflow_slug}\n"
+                f"{self._dag_outcome_headline(ae_result)}\n"
                 f"Connection in Atlas? {outcome.connection_in_atlas}\n"
-                f"Failed nodes:\n{failures_msg}"
+                f"DAG nodes:\n{nodes_msg}"
             )
 
         asset_failures = self._evaluate_asset_expectations(
