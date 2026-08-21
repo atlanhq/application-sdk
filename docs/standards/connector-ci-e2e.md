@@ -766,26 +766,34 @@ Two seams worth knowing about when editing either action:
   editing the build steps is covered by the remote `@main` path and the merge
   queue, not by a local-action dispatch.
 
-## When a tenant-side node never starts (FND-708)
+## When a tenant-side node stalls (FND-708)
 
-A full-DAG run dispatches most of its nodes to **tenant-side system apps** — `publish`, `lineage-publish` and `qi` run on the tenant's own queues (`atlan-publish-<deployment>`, …), not on the connector under test. Those apps are KEDA scale-to-zero on the Temporal queue, so when one of them is mid-redeploy or otherwise not polling, its node simply never gets picked up and the connector is not at fault. The tell is the other clouds' legs passing on the same commit and the same manifest.
+A full-DAG run dispatches most of its nodes to **tenant-side system apps** — `publish`, `lineage-publish` and `qi` run on the tenant's own queues (`atlan-publish-<deployment>`, …), not on the connector under test. So a node can sit for the whole poll for two quite different reasons: nothing is polling that queue (those apps are KEDA scale-to-zero on the Temporal queue, so a mid-redeploy app picks nothing up), **or** a worker took the activity promptly and then stopped making progress. Either way the connector is not at fault; the tell is the other clouds' legs passing on the same commit and the same manifest.
+
+AE's node status cannot tell you which. It holds a node at `Pending` while that node's child workflow is running: on the run this section was written from, `lineage-publish` read `Pending` from t=489s to the ceiling while its child workflow had started 331ms into that window and spent 4,810 of its 4,882 seconds retrying one activity through repeated heartbeat timeouts (~72s was real work). It then completed successfully. So the harness reports the status, names the queue, and points at the child workflow instead of asserting a cause.
 
 **Reading the failure.** A poll that ends on `ae_poll_timeout_seconds` is not a verdict on the nodes — it means the harness stopped watching. `poll_native_status` stamps that on the result it returns (`timed_out_after_seconds`, `seconds_since_last_progress`), and the assertion says so, per node:
 
 ```
-DAG did not complete within 1800s (AE status=Running); no DAG node changed state for the last 1311s.
+DAG did not complete within 1800s (AE status=Running); no DAG node changed state for the last 1311s
 DAG nodes:
   - publish: succeeded in 152s
-  - lineage-publish: NEVER SCHEDULED — Pending on task queue 'atlan-publish-production',
-    app_name=publish, per the seed DAG; no DAG state change for the last 1311s. Nothing
-    appears to be polling that queue (check the owning app's workers on the tenant).
+  - lineage-publish: AE reports Pending at the 1800s poll ceiling — task queue
+    'atlan-publish-production', app_name=publish, per the seed DAG; no DAG state change
+    for the last 1311s. AE holds a node at Pending whether nothing picked it up OR its
+    child workflow is running, so read the child workflow
+    '<ae_run_id>-lineage-publish' on the tenant's Temporal: no such execution means
+    nothing polled that queue (check the owning app's workers); an execution means it is
+    running or retrying (check its history for heartbeat timeouts).
 ```
 
-Three states used to render identically as `status=<X> error=None`, which read as a node failure and named no queue: never dispatched (`Pending` / `Scheduled`), dispatched and then frozen (`Running` at the ceiling), and ran-and-failed. Only the third is a node failure. The queue name comes from the harness's seed DAG, which is the only place it is knowable locally — `native-status` reports statuses, not routing — so the line says "per the seed DAG" rather than claiming to know what the tenant dispatched.
+The child workflow ID is `{ae_run_id}-{node_id}`, and both halves are already in the failure, so that next click needs nothing the message does not carry.
+
+Three states used to render identically as `status=<X> error=None`, which read as a node failure and named no queue: AE-reports-not-started (`Pending` / `Scheduled`), dispatched and then frozen (`Running` at the ceiling), and ran-and-failed. Only the third is a node failure. The queue name comes from the harness's seed DAG, which is the only place it is knowable locally — `native-status` reports statuses, not routing — so the line says "per the seed DAG" rather than claiming to know what the tenant dispatched.
 
 **The watchdog must stay reachable.** `dag_progress_stall_seconds` fires when `elapsed - last_progress_elapsed` reaches the window, and the poll returns as soon as `elapsed` reaches `ae_poll_timeout_seconds`. A window that is not *strictly* below the ceiling can therefore only ever close on a run that stalls at t=0 — for every real stall the poll exits first. It used to default to an absolute 1800s, which silently disabled it on every suite with a ceiling of 1800s or lower; those suites burned the full 30 minutes on a wedge and then reported the ceiling. It now defaults to `None` = derived from the ceiling (a third of it, floored at 300s and capped at 1800s), so raising the ceiling widens the watchdog instead of putting it out of reach, and `setup_method` rejects a pinned value that is not below the ceiling. Set `0` to opt out deliberately.
 
-**Why the harness cannot just shorten the node timeout.** `publish` and `lineage-publish` default to a 3-day `startToCloseTimeoutSeconds` (right for a large tenant doing real work, see [contract-toolkit reference](../../contract-toolkit/docs/reference.md)), so a tenant-side worker that dies holding one of those activities leaves the node `Pending`/`Running` far past any e2e budget — which is why the harness can only ever observe "still not finished", never "this failed, here is why". Overriding it from the harness does not work: at AE submit Heracles re-fetches the manifest from the **tenant-deployed pod** and that DAG is what executes (see [Building the image once](#building-the-image-once)); the seed DAG establishes the workflow record, not the graph. The only effective place is the connector's own committed contract — which is the manifest that also ships to production, so shortening it for CI would mean e2e no longer exercises the contract we ship. Precise reporting plus a reachable watchdog is the fix; a CI-sized node timeout is not available.
+**Why the harness cannot shorten the timeouts that actually bind.** The node-level budget is generous by design: `publish` and `lineage-publish` default to a 3-day `startToCloseTimeoutSeconds` (right for a large tenant doing real work, see [contract-toolkit reference](../../contract-toolkit/docs/reference.md)). But the timeout that produced the stall above was one layer down — a `heartbeat_timeout_seconds` of 3600 on the `publish` activity, which turns each lost heartbeat into an hour of dead time before the retry, well past any e2e budget. Neither is reachable from the harness: at AE submit Heracles re-fetches the manifest from the **tenant-deployed pod** and that DAG is what executes (see [Building the image once](#building-the-image-once)); the seed DAG establishes the workflow record, not the graph. The only effective place is the app's own committed contract — which is the manifest that also ships to production, so shortening it for CI would mean e2e no longer exercises the contract we ship. Precise reporting plus a reachable watchdog is what the harness can do; a heartbeat watchdog in the owning system app ([ADR-0018](../adr/0018-progress-aware-heartbeat.md)) is where that class of stall actually gets fixed.
 
 ## Contract regeneration before tests
 

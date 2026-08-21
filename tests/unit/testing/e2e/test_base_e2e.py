@@ -1286,19 +1286,54 @@ class TestDescribeDagNodes:
         }
         return harness
 
-    def test_pending_node_is_never_scheduled_and_names_its_queue(self) -> None:
-        """The observed shape: a tenant-side system app stopped polling, so the
-        node was never dispatched. The old line read as a node failure and named
-        no queue, which pointed the reader at the connector instead."""
+    def test_pending_node_names_its_queue_and_the_child_workflow(self) -> None:
+        """The observed shape: a node AE held at Pending for the whole poll. The
+        old line read as a node failure and named no queue, which pointed the
+        reader at the connector instead."""
         harness = self._harness()
         line = harness._describe_dag_nodes(
             _timed_out_result([_node("lineage-publish", DAGNodeStatus.PENDING)])
         )
-        assert "NEVER SCHEDULED" in line
+        assert "AE reports Pending at the 1800s poll ceiling" in line
         assert "atlan-publish-production" in line
         assert "app_name=publish" in line
         assert "1311s" in line
         assert "error=None" not in line
+
+    def test_pending_node_asserts_no_cause(self) -> None:
+        """AE's Pending does not separate "nothing picked it up" from "the child
+        workflow is running": on the run that motivated FND-708 the child had
+        started 331ms in and was retrying through heartbeat timeouts. The line
+        must not claim the queue is unpolled."""
+        harness = self._harness()
+        line = harness._describe_dag_nodes(
+            _timed_out_result([_node("lineage-publish", DAGNodeStatus.PENDING)])
+        )
+        assert "NEVER SCHEDULED" not in line
+        assert "Nothing appears to be polling" not in line
+
+    def test_pending_node_points_at_the_child_workflow_id(self) -> None:
+        """The child workflow is the only place that separates the two cases, and
+        its ID is ``{ae_run_id}-{node_id}`` — so the line must carry it."""
+        harness = self._harness()
+        line = harness._describe_dag_nodes(
+            _timed_out_result([_node("lineage-publish", DAGNodeStatus.PENDING)])
+        )
+        assert "'run-1-lineage-publish'" in line
+
+    def test_pending_node_outside_a_timeout_omits_the_ceiling(self) -> None:
+        """A terminal run can still carry a Pending node (an older service
+        downgrading Skipped), where there is no ceiling to name."""
+        harness = self._harness()
+        result = DAGRunResult(
+            run_id="run-1",
+            workflow_slug="slug",
+            status=DAGRunStatus.FAILED,
+            nodes=[_node("lineage-publish", DAGNodeStatus.PENDING)],
+        )
+        line = harness._describe_dag_nodes(result)
+        assert "AE reports Pending —" in line
+        assert "poll ceiling" not in line
 
     def test_running_at_the_ceiling_names_the_queue_too(self) -> None:
         """The other observed shape: a worker took the node and stopped. Naming
@@ -1404,7 +1439,8 @@ class TestFullDagAssertionMessage:
             harness.test_full_dag_runs_end_to_end()
         message = str(exc.value)
         assert "DAG did not complete within 1800s" in message
-        assert "NEVER SCHEDULED" in message
+        assert "AE reports Pending at the 1800s poll ceiling" in message
+        assert "'run-1-lineage-publish'" in message
         assert "atlan-publish-production" in message
         assert "publish: succeeded in 152s" in message
         # The old header called every non-successful node a failure.

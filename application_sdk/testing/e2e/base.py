@@ -1161,8 +1161,10 @@ class BaseE2ETest:
         The three cases that used to render identically as
         ``status=<X> error=None``:
 
-        * never dispatched (``Pending`` / ``Scheduled``) — nothing was polling
-          the node's task queue, so the queue is named;
+        * AE reports it not started (``Pending`` / ``Scheduled``) — which does
+          not say whether anything picked it up, so the line names the queue and
+          the child workflow to read, and asserts no cause (see
+          :attr:`~application_sdk.testing.e2e.client.DAGNodeStatus.is_not_started`);
         * dispatched but never finished (``Running`` at the ceiling) — the worker
           took it and stopped making progress, so the queue is named too;
         * ran and failed — the error message is the whole story.
@@ -1180,11 +1182,20 @@ class BaseE2ETest:
         if node.status.is_skipped:
             return f"  - {node.name}: {node.status.value} (AE did not run it)"
         if node.status.is_not_started:
+            at_ceiling = (
+                f" at the {int(ae_result.timed_out_after_seconds or 0)}s poll ceiling"
+                if ae_result.timed_out
+                else ""
+            )
             return (
-                f"  - {node.name}: NEVER SCHEDULED — {node.status.value} on "
-                f"{self._dispatch_note(node.name)}{stall_clause}. Nothing appears "
-                "to be polling that queue (check the owning app's workers on the "
-                "tenant)."
+                f"  - {node.name}: AE reports {node.status.value}{at_ceiling} — "
+                f"{self._dispatch_note(node.name)}{stall_clause}. AE holds a node "
+                f"at {node.status.value} whether nothing picked it up OR its child "
+                "workflow is running, so read the child workflow "
+                f"'{ae_result.run_id}-{node.name}' on the tenant's Temporal: no "
+                "such execution means nothing polled that queue (check the owning "
+                "app's workers); an execution means it is running or retrying "
+                "(check its history for heartbeat timeouts)."
             )
         if node.status is DAGNodeStatus.RUNNING and ae_result.timed_out:
             return (

@@ -646,13 +646,20 @@ class DAGNodeStatus(str, Enum):
 
     @property
     def is_not_started(self) -> bool:
-        """True while AE has not handed the node to a worker.
+        """True while AE has not reported the node as started.
 
-        A node in this set has *not failed* — it was never dispatched. The
-        distinction matters in every diagnostic: a ``Pending`` node at the poll
-        ceiling means nothing was polling its task queue, whereas a ``Failed``
-        one ran and errored. Reporting the first as the second sends the
-        operator looking for a bug in code that never executed.
+        A node in this set has *not failed*, which is the distinction worth
+        making in a diagnostic: a ``Failed`` node ran and errored, so reporting
+        a ``Pending`` one the same way sends the operator looking for a bug in
+        code that may never have executed.
+
+        It does **not** prove the node was never dispatched. AE holds a node at
+        ``Pending`` while its child workflow is running: on the run that
+        motivated FND-708, ``lineage-publish`` read ``Pending`` for the whole
+        poll while its child workflow had started 331ms in and was retrying an
+        activity through repeated heartbeat timeouts. Only the child workflow's
+        own history separates "nothing picked it up" from "picked up and stuck",
+        so a message built on this must point there rather than assert a cause.
         """
         return self in {DAGNodeStatus.PENDING, DAGNodeStatus.SCHEDULED}
 
@@ -742,7 +749,11 @@ class DAGRunResult:
 
     @property
     def not_started_nodes(self) -> list[DAGNodeResult]:
-        """Nodes AE never dispatched (``Pending`` / ``Scheduled``)."""
+        """Nodes AE reports as not started (``Pending`` / ``Scheduled``).
+
+        A status, not a dispatch fact — see
+        :attr:`DAGNodeStatus.is_not_started`.
+        """
         return [n for n in self.nodes if n.status.is_not_started]
 
 
