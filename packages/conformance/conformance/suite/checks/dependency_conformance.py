@@ -56,7 +56,7 @@ from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any
 
-from conformance.suite.checks._ast_common import _is_suppressed
+from conformance.suite.checks._ast_common import SuppressionsMap, _is_suppressed
 from conformance.suite.checks._ast_common import discover as _discover_sources
 from conformance.suite.checks._ast_common import (
     is_sdk_package_name,
@@ -977,7 +977,7 @@ def _make_finding(
     line: int,
     column: int,
     message: str,
-    suppressions: dict[int, tuple[frozenset[str] | None, str]],
+    suppressions: SuppressionsMap,
 ) -> Finding:
     """Construct a Finding, marking it suppressed if a directive applies."""
     suppressed, justification = _is_suppressed(suppressions, rule_id, line)
@@ -1485,7 +1485,7 @@ def _provided_import_names(dist: importlib_metadata.Distribution) -> set[str]:
 def _scan_unused_dependencies(
     dep_entries: list[_DepEntry],
     imported_modules: set[str],
-    suppressions: dict[int, tuple[frozenset[str] | None, str]],
+    suppressions: SuppressionsMap,
     file: str,
     *,
     dist_import_map: Mapping[str, set[str] | None],

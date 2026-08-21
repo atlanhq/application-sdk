@@ -152,6 +152,62 @@ def _stamp_start_correlation(input_data: Any, context: "AppContext") -> str:
     return correlation_id
 
 
+def _resolve_workflow_name(app_cls: Any, entry_point: str | None) -> tuple[str, Any]:
+    """Resolve the registered Temporal workflow type for an app + entry point.
+
+    Single resolver for both :meth:`TemporalExecutorBackend.execute` and
+    :meth:`~TemporalExecutorBackend.start`. They previously derived the name with
+    the same inline expression but validated differently — ``execute`` rejected an
+    unknown entry point while ``start`` submitted it — so a bug fixed in one did
+    not stay fixed in the other.
+
+    The naming rule mirrors ``generate_workflow_class``: an implicit ``run()``
+    entry point registers the bare ``{app}``, an explicit one registers
+    ``{app}:{entry-point}``.
+
+    Two ways the caller can name something that no worker registered, and
+    Temporal accepts a start request for an unregistered type either way — the
+    run opens, nothing claims it, and the caller awaits a listener that never
+    comes. So both fail before submitting:
+
+    * a named entry point the app does not have → ``UnknownEntryPointError``
+    * no entry point on an app that registers no bare workflow (every entry point
+      explicit) → ``EntryPointRequiredError``
+
+    Returns:
+        ``(workflow_name, entry_point_metadata_or_None)``. The metadata is
+        returned so callers needing the entry point's ``output_type`` do not look
+        it up a second time.
+    """
+    if entry_point is not None:
+        ep_meta = app_cls._app_metadata.entry_points.get(entry_point)
+        if ep_meta is None:
+            from application_sdk.execution._temporal._backend_errors import (  # noqa: PLC0415
+                UnknownEntryPointError,
+            )
+
+            raise UnknownEntryPointError(resource_identifier=entry_point)
+        return f"{app_cls._app_name}:{entry_point}", ep_meta
+
+    entry_points = getattr(app_cls._app_metadata, "entry_points", None) or {}
+    if entry_points and not any(ep.implicit for ep in entry_points.values()):
+        from application_sdk.execution._temporal._backend_errors import (  # noqa: PLC0415
+            EntryPointRequiredError,
+        )
+
+        raise EntryPointRequiredError(
+            message=(
+                f"{app_cls._app_name} declares only explicit @entrypoint methods "
+                f"({', '.join(sorted(entry_points))}), so it registers no bare "
+                f"'{app_cls._app_name}' workflow. Pass entry_point= to name the "
+                "one you mean — without it this submission would open a run that "
+                "no worker ever claims."
+            ),
+            value_summary=", ".join(sorted(entry_points)),
+        )
+    return app_cls._app_name, None
+
+
 class TemporalExecutorBackend:
     """Temporal-based executor backend for running Apps as workflows."""
 
@@ -200,18 +256,7 @@ class TemporalExecutorBackend:
             else f"{prefix}-{short_id}"
         )
 
-        workflow_name = (
-            f"{app_cls._app_name}:{entry_point}" if entry_point else app_cls._app_name
-        )
-        ep_meta = (
-            app_cls._app_metadata.entry_points.get(entry_point) if entry_point else None
-        )
-        if entry_point is not None and ep_meta is None:
-            from application_sdk.execution._temporal._backend_errors import (  # noqa: PLC0415
-                UnknownEntryPointError,
-            )
-
-            raise UnknownEntryPointError(resource_identifier=entry_point)
+        workflow_name, ep_meta = _resolve_workflow_name(app_cls, entry_point)
         output_type = (
             ep_meta.output_type
             if ep_meta is not None
@@ -264,9 +309,7 @@ class TemporalExecutorBackend:
             else f"{prefix}-{short_id}"
         )
 
-        workflow_name = (
-            f"{app_cls._app_name}:{entry_point}" if entry_point else app_cls._app_name
-        )
+        workflow_name, _ = _resolve_workflow_name(app_cls, entry_point)
         handle = await self._client.start_workflow(
             workflow_name,
             args=[input_data],

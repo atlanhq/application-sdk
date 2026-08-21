@@ -5,7 +5,7 @@
 
 # Test-Quality Rules (T-series)
 
-**24 rules** · Checker: `suite.checks.integration_marking` (T001), `suite.checks.sdr_test_checks` (T002-T003), `suite.checks.dev_entrypoint` (T004), `suite.checks.test_quality` (T005-T009), `suite.checks.test_structure` (T010-T013), `suite.checks.coverage_config` (T014-T015), `suite.checks.e2e_deployment_name` (T016), `suite.checks.e2e_agent_spec` (T017), `suite.checks.integration_deselect` (T018), `suite.checks.asyncio_loop_scope` (T019), `suite.checks.e2e_workflow_shape` (T020-T022), and `suite.checks.e2e_generated_harness` (T023-T024) (AST/TOML/YAML-based)
+**25 rules** · Checker: `suite.checks.integration_marking` (T001), `suite.checks.sdr_test_checks` (T002-T003), `suite.checks.dev_entrypoint` (T004), `suite.checks.test_quality` (T005-T009), `suite.checks.test_structure` (T010-T013), `suite.checks.coverage_config` (T014-T015), `suite.checks.e2e_deployment_name` (T016), `suite.checks.e2e_agent_spec` (T017), `suite.checks.integration_deselect` (T018), `suite.checks.asyncio_loop_scope` (T019), `suite.checks.e2e_workflow_shape` (T020-T022), `suite.checks.e2e_generated_harness` (T023-T024), and `suite.checks.entrypoint_e2e_coverage` (T025) (AST/TOML/YAML-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -39,6 +39,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [T022](#t022) | `E2ETwoStorePostureDisabled` | `warn` | `app` | `e2e-ci` | — | 0.18.0 |
 | [T023](#t023) | `E2EHarnessScaffoldHandWritten` | `warn` | `app` | `e2e-ci` | — | 0.18.0 |
 | [T024](#t024) | `E2ERunModeUnset` | `warn` | `app` | `e2e-ci` | — | 0.18.0 |
+| [T025](#t025) | `EntrypointWithoutE2ECoverage` | `warn` | `app` | `test-tier-coverage` | — | 0.22.0 |
 
 ---
 
@@ -1203,5 +1204,87 @@ inheritance is resolved across the repo's own classes.
 
 Suppress with `# conformance: ignore[T024] <reason>` on the `class` line when the mode
 is set dynamically (e.g. parametrised from an env var) rather than as a class attribute.
+
+---
+
+## T025 — `EntrypointWithoutE2ECoverage` {#t025}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `test-tier-coverage` · **Autofixable:** — · **Since:** 0.22.0
+
+> A bundle (multi-entrypoint) contract entrypoint has no e2e suite
+
+**Rationale:** T012 asks only that tests/e2e/ hold one collectable test, on the agreed reasoning that
+e2e needs one representative run rather than scenario-level coverage. On a bundle app
+that reads as 'the crawler suite is enough', and across the fleet it has meant exactly
+that: every AE-driven full-DAG e2e exercises the metadata-extraction entrypoint and the
+second one — typically a query-history miner — is never run against a tenant by
+anything. Each bundle entrypoint is its own Automation Engine submit, against its own
+DAG, its own task queue, and its own served manifest, so a green crawler leg is no
+evidence about the miner's dispatch path. 'One representative run' therefore has to mean
+one per entrypoint. The gap is also invisible: nothing in CI, conformance, or the
+scorecard distinguishes an app whose entrypoints are all covered from one where only the
+default is. Customer impact: a miner that regressed ships, because the only thing that
+would have run it in CI does not exist.
+
+The app is in **bundle mode** — `app/generated/` holds one `<name>/manifest.json` subdir
+per entrypoint — and at least one of those entrypoints is not exercised by any
+collectable test class under `tests/e2e/`.
+
+**Scope: bundle mode only.** Two shapes are both called multi-entrypoint, and only one
+has a gap:
+
+* `app/generated/<ep>/manifest.json` subdirs — each entrypoint is   submitted to
+Automation Engine independently, with its own DAG and   task queue. **This rule's
+scope.** * One marketplace card whose secondary entrypoints are invoked as DAG   nodes
+via `workflow_type: "<app>:<wire>"` (the BLDX-1342 route/card   split). The parent's own
+full-DAG run executes them, so they are   covered transitively and are never flagged —
+see `atlan-metabase-app`,   whose `extract-lineage` runs as a DAG node.
+
+Single-entrypoint apps never see this rule.
+
+**An entrypoint counts as covered** when some collectable class under `tests/e2e/`
+resolves to it by any of the three forms the harness itself accepts:
+
+1. inheriting the generated base for it (`<Ep>GeneratedE2EBase`), 2. a class-level
+`entrypoint = "<ep>"`, 3. a class-level `manifest_path` containing `/generated/<ep>/`.
+
+Resolution is syntactic and deliberately generous — the miss direction is a false
+negative, never a false positive.
+
+**Remediation:** add one suite per entrypoint, in its own file:
+
+```python
+# tests/e2e/test_myconn_miner_e2e.py
+from app.generated.miner._e2e_base import MinerGeneratedE2EBase
+
+@pytest.mark.e2e
+class TestMyConnMinerE2E(MinerGeneratedE2EBase):
+    mode = RunMode.AGENT
+```
+
+The CI matrix fans out one leg per `tests/e2e/test_*.py` file, so a second file is a
+second leg with no workflow change needed. The toolkit-generated base already carries
+this entrypoint's `manifest_path`, `entrypoint`, and pipeline-derived expectations
+(`expect_connection`, `required_dag_nodes`), so a non-publishing entrypoint is not
+graded against crawler-shaped assertions.
+
+An entrypoint that consumes state rather than creating it (a miner enriches a connection
+it does not create) seeds that state by overriding `seed_prerequisites()` — under the
+harness's own ephemeral qualified name, so `teardown_method` purges it and runs stay
+isolated.
+
+**Exemption:** an app with no e2e tier at all is already covered by T012's exemption and
+is not asked for per-entrypoint suites:
+
+```toml
+[tool.conformance]
+exempt_test_tiers = ["e2e"]
+```
+
+Suppress a single entrypoint instead with `# conformance: ignore[T025:<entrypoint>]
+<reason>` on the first line of `pyproject.toml` — e.g. `ignore[T025:miner]` exempts only
+the `miner` finding while the others stay reported. A bare `ignore[T025]` suppresses
+every entrypoint's finding at once. Each finding carries its entrypoint as a fingerprint
+discriminator, so per-entrypoint findings never share a SARIF fingerprint.
 
 ---

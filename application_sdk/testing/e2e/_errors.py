@@ -238,6 +238,39 @@ class AtlanAEWorkflowAlreadyActiveError(PreconditionError):
 
 
 @dataclass(kw_only=True)
+class UnknownConnectorTypeError(InvalidInputError):
+    """The suite's connection type is not a pyatlan ``AtlanConnectorType``.
+
+    Raised by :meth:`~application_sdk.testing.e2e.base.BaseE2ETest.seed_connection`,
+    which needs a real connector type to create the Connection. The harness's
+    own ``connection_type or connector_short_name`` fallback is fine for
+    composing a qualifiedName segment but not for this, because an app name and
+    an Atlan catalog type legitimately differ (the OpenAPI connector is
+    ``connector_short_name="openapi"`` / ``connection_type="api"``). Failing
+    here names the fix rather than surfacing a bare pyatlan ``ValueError``.
+    """
+
+    code: ClassVar[str] = "INVALID_INPUT_UNKNOWN_CONNECTOR_TYPE"
+    field: str | None = "connection_type"
+
+
+@dataclass(kw_only=True)
+class SeededConnectionNotSearchableError(PreconditionError):
+    """A seeded Connection never became searchable within the poll window.
+
+    :meth:`~application_sdk.testing.e2e.base.BaseE2ETest.seed_connection` saved
+    the Connection but Atlas never returned it. Running the DAG anyway would
+    exercise the entrypoint against a connection the platform cannot see, so
+    this fails fast instead — a wedged seed is a harness precondition failure,
+    not a connector defect, and conflating the two sends the investigation to
+    the wrong team.
+    """
+
+    code: ClassVar[str] = "PRECONDITION_SEEDED_CONNECTION_NOT_SEARCHABLE"
+    expected_state: str | None = "seeded connection searchable in Atlas"
+
+
+@dataclass(kw_only=True)
 class AgentSpecRequiredError(InvalidInputError):
     """Agent mode requires an ``AgentSpec`` but none was provided."""
 

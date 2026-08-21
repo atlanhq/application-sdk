@@ -14,7 +14,12 @@ import re
 
 from conformance.suite.schema.findings import Finding
 
-__all__ = ["_is_suppressed", "make_toml_finding", "parse_toml_suppressions"]
+__all__ = [
+    "SuppressionsMap",
+    "_is_suppressed",
+    "make_toml_finding",
+    "parse_toml_suppressions",
+]
 
 # Identical grammar to the AST-series ``_directives._SUPPRESS_RE`` — kept as a
 # separate constant because it is matched against a raw comment substring
@@ -24,9 +29,27 @@ _SUPPRESS_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A single bracket entry: ``T025`` (rule-wide) or ``T025:miner`` (one subject).
+# The ``:discriminator`` suffix lets a rule that emits several findings at one
+# location (see ``Finding.discriminator``) be suppressed per subject rather
+# than all-or-nothing.
+_RULE_ID_RE = re.compile(r"^(?P<rule>[A-Za-z0-9]+)(?::(?P<discriminator>[^,]+))?$")
 
-def parse_toml_suppressions(text: str) -> dict[int, tuple[frozenset[str] | None, str]]:
-    """Return ``{lineno: (rule_ids_or_None, justification)}`` for *text*.
+# ``{lineno: (rule_ids_or_None, discriminators, justification)}``:
+#   * rule_ids None            → directive matches any rule on that line;
+#   * discriminators None      → no ``:subject`` suffixes were used, so every
+#                                listed rule suppresses rule-wide;
+#   * discriminators {rule: {subjects}} → for those rules, only a finding whose
+#                                own discriminator is named suppresses. A rule
+#                                listed both bare and with a subject is
+#                                rule-wide (the bare form wins).
+SuppressionsMap = dict[
+    int, tuple[frozenset[str] | None, dict[str, frozenset[str]] | None, str]
+]
+
+
+def parse_toml_suppressions(text: str) -> SuppressionsMap:
+    """Return the suppression directives in *text*, keyed by line number.
 
     ``rule_ids_or_None`` is ``None`` for a rule-id-less directive (matches any
     rule on that line). A directive at line N suppresses findings on lines N
@@ -34,8 +57,13 @@ def parse_toml_suppressions(text: str) -> dict[int, tuple[frozenset[str] | None,
     AST-series convention so users only have to learn one form. Bare
     directives with no justification text are rejected — unexplained
     suppressions carry no audit value.
+
+    An entry may carry a subject: ``# conformance: ignore[T025:miner] <why>``
+    suppresses only findings whose own discriminator is ``miner`` (subject
+    matching is case-insensitive); ``# conformance: ignore[T025] <why>`` still
+    suppresses every T025 finding on the line.
     """
-    out: dict[int, tuple[frozenset[str] | None, str]] = {}
+    out: SuppressionsMap = {}
     for lineno, raw in enumerate(text.splitlines(), start=1):
         idx = raw.lstrip().find("#")
         if idx == -1:
@@ -48,25 +76,55 @@ def parse_toml_suppressions(text: str) -> dict[int, tuple[frozenset[str] | None,
         if not justification:
             continue
         ids_blob = (m.group(1) or "").strip()
-        rule_ids: frozenset[str] | None = (
-            None
-            if not ids_blob
-            else frozenset(s.strip().upper() for s in ids_blob.split(",") if s.strip())
+        rule_ids: set[str] = set()
+        discriminators: dict[str, set[str]] = {}
+        saw_discriminator = False
+        for entry in (s.strip() for s in ids_blob.split(",") if s.strip()):
+            em = _RULE_ID_RE.match(entry)
+            if em is None:
+                continue
+            rule = em.group("rule").upper()
+            subject = em.group("discriminator")
+            if subject is None:
+                rule_ids.add(rule)
+                # The bare form is rule-wide; a ``:subject`` entry for the same
+                # rule elsewhere in the list must not narrow it back.
+                discriminators.pop(rule, None)
+            elif rule not in rule_ids:
+                saw_discriminator = True
+                discriminators.setdefault(rule, set()).add(subject.strip().lower())
+        out[lineno] = (
+            None if not ids_blob else frozenset(rule_ids) | frozenset(discriminators),
+            (
+                {r: frozenset(s) for r, s in discriminators.items()}
+                if saw_discriminator
+                else None
+            ),
+            justification,
         )
-        out[lineno] = (rule_ids, justification)
     return out
 
 
 def _is_suppressed(
-    suppressions: dict[int, tuple[frozenset[str] | None, str]],
+    suppressions: SuppressionsMap,
     rule_id: str,
     line: int,
+    discriminator: str | None = None,
 ) -> tuple[bool, str | None]:
     for cand in (line, line - 1):
         if cand not in suppressions:
             continue
-        rule_ids, justification = suppressions[cand]
-        if rule_ids is None or rule_id in rule_ids:
+        rule_ids, discriminators, justification = suppressions[cand]
+        if rule_ids is None:
+            return True, justification
+        if rule_id not in rule_ids:
+            continue
+        if discriminators is None or rule_id not in discriminators:
+            # The rule was listed bare (no ``:subject``) — rule-wide.
+            return True, justification
+        if discriminator is not None and discriminator.lower() in (
+            discriminators[rule_id] or ()
+        ):
             return True, justification
     return False, None
 
@@ -78,16 +136,20 @@ def make_toml_finding(
     line: int,
     column: int,
     message: str,
-    suppressions: dict[int, tuple[frozenset[str] | None, str]],
+    suppressions: SuppressionsMap,
+    discriminator: str | None = None,
 ) -> Finding:
     """Build a :class:`Finding` anchored in TOML text, honouring suppressions."""
-    suppressed, justification = _is_suppressed(suppressions, rule_id, line)
+    suppressed, justification = _is_suppressed(
+        suppressions, rule_id, line, discriminator
+    )
     return Finding(
         rule_id=rule_id,
         file=file,
         line=line,
         column=column,
         message=message,
+        discriminator=discriminator,
         suppressed=suppressed,
         suppression_justification=justification,
     )

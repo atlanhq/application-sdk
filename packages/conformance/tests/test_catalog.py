@@ -404,6 +404,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "T022",
         "T023",
         "T024",
+        "T025",
         "O002",
         "O003",
         "O004",
@@ -649,10 +650,11 @@ def test_catalog_t_series_present() -> None:
     unset relative to a broadened fixture loop scope), T020-T022 (full-DAG e2e
     must run through the reusable Tests workflow: no bespoke sdr-e2e workflow,
     suites reachable in CI, two-store posture on SDR apps), and T023/T024 (e2e
-    harness scaffold generated from contract/app.pkl; RunMode declared)."""
+    harness scaffold generated from contract/app.pkl; RunMode declared), and T025
+    (every bundle entrypoint has an e2e suite, not just the default one)."""
     rules = load_catalog()
     t_ids = {r.id for r in rules if r.id.startswith("T")}
-    expected = {f"T{n:03d}" for n in range(1, 25)}
+    expected = {f"T{n:03d}" for n in range(1, 26)}
     missing = expected - t_ids
     assert not missing, f"Missing T-series rules: {missing}"
     extra = t_ids - expected
