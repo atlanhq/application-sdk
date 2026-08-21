@@ -58,6 +58,15 @@ packages = ["conformance"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 
+# Dev tooling. ruff is a genuine test dependency here, not only a
+# pre-commit hook: tests/test_bootstrap_scaffold_lint.py runs it over the
+# scaffolds bootstrap force-writes into consumer repos (FND-445), which
+# have to stay lint-clean under configs stricter than this repo's.
+# Pinned exactly — an unpinned linter makes that guard's verdict a
+# function of cache age rather than of the files it checks.
+[dependency-groups]
+dev = ["ruff==0.16.3"]
+
 [tool.ruff.format]
 exclude = ["conformance/bootstrap/templates/renovate.json"]
 
