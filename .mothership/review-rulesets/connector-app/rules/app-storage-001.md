@@ -5,7 +5,6 @@ level: L2
 category: correctness
 globs: []
 severity: HIGH
-provenance: sdk-v3-connector-review-guidelines
 suppressible: false
 ---
 # Cross-activity data goes through the object store

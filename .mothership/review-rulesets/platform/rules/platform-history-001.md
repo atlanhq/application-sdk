@@ -5,7 +5,6 @@ level: L4
 category: platform-runtime
 globs: []
 severity: HIGH
-provenance: Temporal history limits; SDK v3 workflow patterns
 suppressible: false
 ---
 # Respect the workflow history budget

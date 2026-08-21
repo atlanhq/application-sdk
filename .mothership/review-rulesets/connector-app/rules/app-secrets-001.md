@@ -5,7 +5,6 @@ level: L2
 category: security
 globs: []
 severity: HIGH
-provenance: sdk-v3-connector-review-guidelines
 suppressible: false
 ---
 # Credentials never reach logs or errors

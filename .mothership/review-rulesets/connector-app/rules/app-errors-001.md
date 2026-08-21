@@ -5,7 +5,6 @@ level: L2
 category: correctness
 globs: []
 severity: HIGH
-provenance: sdk-v3-connector-review-guidelines; SDK error taxonomy
 suppressible: false
 ---
 # Typed errors at boundaries; retry and failure are explicit

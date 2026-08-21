@@ -5,7 +5,6 @@ level: L4
 category: platform-runtime
 globs: []
 severity: HIGH
-provenance: connector atlan.yaml deploy contract (workerResources/KEDA/VPA/PVC)
 suppressible: false
 ---
 # atlan.yaml resources are a coupled contract with the code

@@ -5,7 +5,6 @@ level: L2
 category: observability
 globs: []
 severity: MEDIUM
-provenance: sdk-v3-connector-review-guidelines
 suppressible: true
 ---
 # Bounded observability
