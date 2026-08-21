@@ -2,6 +2,20 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.22.0] - 2026-08-21
+
+### Features
+
+- rule-level remediation scoping, docker-build gate, apply-unverifiable mode (FND-18) (#3264) ([374cb11](https://github.com/atlanhq/application-sdk/commit/374cb11))
+
+### Bug fixes
+
+- make the vendored bootstrap scaffold lint-clean in any caller (FND-445) (#3350) ([255b529](https://github.com/atlanhq/application-sdk/commit/255b529))
+- update github/codeql-action digest to db488dd (#3348) ([dc7a493](https://github.com/atlanhq/application-sdk/commit/dc7a493))
+- fail the tenant lease where the missing grant can be named (FND-702) (#3341) ([fafa0b4](https://github.com/atlanhq/application-sdk/commit/fafa0b4))
+- stop bootstrap --resync dropping per-repo CI config (FND-604) (#3283) ([e1adc0f](https://github.com/atlanhq/application-sdk/commit/e1adc0f))
+- pin the B006 ledger remedy to the checker's own version (FND-607) (#3284) ([88a2419](https://github.com/atlanhq/application-sdk/commit/88a2419))
+
 ## [0.21.0] - 2026-08-18
 
 ### Features
