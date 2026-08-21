@@ -214,6 +214,29 @@ class DAGProgressStalledError(PreconditionError):
 
 
 @dataclass(kw_only=True)
+class ProgressWatchdogUnreachableError(InvalidInputError):
+    """``dag_progress_stall_seconds`` is pinned at or above the poll ceiling.
+
+    The watchdog fires when ``elapsed - last_progress_elapsed`` reaches the
+    window, and ``poll_native_status`` returns as soon as ``elapsed`` reaches
+    ``ae_poll_timeout_seconds``. A window that is not strictly smaller than the
+    ceiling can therefore only ever close on a run that stalls at t=0 — for
+    every real stall the poll loop exits first, so the suite burns its whole
+    ceiling and reports the ceiling instead of the stall.
+
+    Raised at ``setup_method`` rather than warned about: the configuration
+    silently disables a fail-fast guard, and the only way to notice at runtime
+    is to read both numbers and do the subtraction. Leave
+    ``dag_progress_stall_seconds`` unset to derive a window from the ceiling, or
+    set 0 to disable the watchdog deliberately.
+    """
+
+    code: ClassVar[str] = "INVALID_INPUT_PROGRESS_WATCHDOG_UNREACHABLE"
+    field: str | None = "dag_progress_stall_seconds"
+    constraint: str | None = "must be < ae_poll_timeout_seconds"
+
+
+@dataclass(kw_only=True)
 class AtlanAEWorkflowAlreadyActiveError(PreconditionError):
     """A run for the AE workflow is already active, so a new submit was rejected.
 

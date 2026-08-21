@@ -766,6 +766,27 @@ Two seams worth knowing about when editing either action:
   editing the build steps is covered by the remote `@main` path and the merge
   queue, not by a local-action dispatch.
 
+## When a tenant-side node never starts (FND-708)
+
+A full-DAG run dispatches most of its nodes to **tenant-side system apps** — `publish`, `lineage-publish` and `qi` run on the tenant's own queues (`atlan-publish-<deployment>`, …), not on the connector under test. Those apps are KEDA scale-to-zero on the Temporal queue, so when one of them is mid-redeploy or otherwise not polling, its node simply never gets picked up and the connector is not at fault. The tell is the other clouds' legs passing on the same commit and the same manifest.
+
+**Reading the failure.** A poll that ends on `ae_poll_timeout_seconds` is not a verdict on the nodes — it means the harness stopped watching. `poll_native_status` stamps that on the result it returns (`timed_out_after_seconds`, `seconds_since_last_progress`), and the assertion says so, per node:
+
+```
+DAG did not complete within 1800s (AE status=Running); no DAG node changed state for the last 1311s.
+DAG nodes:
+  - publish: succeeded in 152s
+  - lineage-publish: NEVER SCHEDULED — Pending on task queue 'atlan-publish-production',
+    app_name=publish, per the seed DAG; no DAG state change for the last 1311s. Nothing
+    appears to be polling that queue (check the owning app's workers on the tenant).
+```
+
+Three states used to render identically as `status=<X> error=None`, which read as a node failure and named no queue: never dispatched (`Pending` / `Scheduled`), dispatched and then frozen (`Running` at the ceiling), and ran-and-failed. Only the third is a node failure. The queue name comes from the harness's seed DAG, which is the only place it is knowable locally — `native-status` reports statuses, not routing — so the line says "per the seed DAG" rather than claiming to know what the tenant dispatched.
+
+**The watchdog must stay reachable.** `dag_progress_stall_seconds` fires when `elapsed - last_progress_elapsed` reaches the window, and the poll returns as soon as `elapsed` reaches `ae_poll_timeout_seconds`. A window that is not *strictly* below the ceiling can therefore only ever close on a run that stalls at t=0 — for every real stall the poll exits first. It used to default to an absolute 1800s, which silently disabled it on every suite with a ceiling of 1800s or lower; those suites burned the full 30 minutes on a wedge and then reported the ceiling. It now defaults to `None` = derived from the ceiling (a third of it, floored at 300s and capped at 1800s), so raising the ceiling widens the watchdog instead of putting it out of reach, and `setup_method` rejects a pinned value that is not below the ceiling. Set `0` to opt out deliberately.
+
+**Why the harness cannot just shorten the node timeout.** `publish` and `lineage-publish` default to a 3-day `startToCloseTimeoutSeconds` (right for a large tenant doing real work, see [contract-toolkit reference](../../contract-toolkit/docs/reference.md)), so a tenant-side worker that dies holding one of those activities leaves the node `Pending`/`Running` far past any e2e budget — which is why the harness can only ever observe "still not finished", never "this failed, here is why". Overriding it from the harness does not work: at AE submit Heracles re-fetches the manifest from the **tenant-deployed pod** and that DAG is what executes (see [Building the image once](#building-the-image-once)); the seed DAG establishes the workflow record, not the graph. The only effective place is the connector's own committed contract — which is the manifest that also ships to production, so shortening it for CI would mean e2e no longer exercises the contract we ship. Precise reporting plus a reachable watchdog is the fix; a CI-sized node timeout is not available.
+
 ## Contract regeneration before tests
 
 The e2e/integration tests consume `app/generated/manifest.json` (the Automation Engine DAG): the host-side harness reads the committed file, and the connector Docker image `COPY`s `app/generated/` at build time and serves `manifest.json` at runtime. Nothing used to regenerate that file from `contract/app.pkl`, so a Contract Toolkit change — at the app level (`contract/app.pkl`) or the SDK level (`contract-toolkit/src`) — ran against a possibly-stale committed manifest and was never actually exercised (BLDX-1493).

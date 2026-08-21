@@ -38,7 +38,7 @@ import asyncio
 import math
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -644,6 +644,18 @@ class DAGNodeStatus(str, Enum):
         """True when AE intentionally did not run the node (not a failure)."""
         return self in {DAGNodeStatus.SKIPPED, DAGNodeStatus.OMITTED}
 
+    @property
+    def is_not_started(self) -> bool:
+        """True while AE has not handed the node to a worker.
+
+        A node in this set has *not failed* — it was never dispatched. The
+        distinction matters in every diagnostic: a ``Pending`` node at the poll
+        ceiling means nothing was polling its task queue, whereas a ``Failed``
+        one ran and errored. Reporting the first as the second sends the
+        operator looking for a bug in code that never executed.
+        """
+        return self in {DAGNodeStatus.PENDING, DAGNodeStatus.SCHEDULED}
+
 
 class DAGRunStatus(str, Enum):
     """Top-level status of an AE workflow run."""
@@ -698,14 +710,40 @@ class DAGRunResult:
     workflow_slug: str
     status: DAGRunStatus
     nodes: list[DAGNodeResult]
+    # Set only on the observation ``poll_native_status`` returns because it hit
+    # its own ceiling, so callers can say "the DAG did not complete in Xs"
+    # instead of reporting the last-seen node states as node failures. ``None``
+    # on every result that came back from a terminal run.
+    timed_out_after_seconds: float | None = None
+    # Elapsed poll time since the last node-state transition, at the moment the
+    # ceiling was hit. This is the DAG-wide watchdog clock (the same quantity
+    # ``dag_progress_stall_seconds`` bounds), not a per-node age: it answers
+    # "how long has this DAG been frozen in the state printed below".
+    seconds_since_last_progress: float | None = None
 
     @property
     def all_nodes_succeeded(self) -> bool:
         return bool(self.nodes) and all(n.status.is_success for n in self.nodes)
 
     @property
+    def timed_out(self) -> bool:
+        """True when this observation is the poll loop's ceiling, not a verdict."""
+        return self.timed_out_after_seconds is not None
+
+    @property
     def failed_nodes(self) -> list[DAGNodeResult]:
+        """Every node that did not succeed — failed *and* never-started alike.
+
+        Kept as the wide "not successful" set the success gates gate on. Use
+        :attr:`not_started_nodes` when the message needs to tell the operator
+        which of the two happened.
+        """
         return [n for n in self.nodes if not n.status.is_success]
+
+    @property
+    def not_started_nodes(self) -> list[DAGNodeResult]:
+        """Nodes AE never dispatched (``Pending`` / ``Scheduled``)."""
+        return [n for n in self.nodes if n.status.is_not_started]
 
 
 class AEWorkflowClient:
@@ -1577,6 +1615,14 @@ class AEWorkflowClient:
         can sit ``Running`` for many minutes) so healthy runs never trip it;
         it exists to turn an indefinite hang into a fast, self-terminating
         failure with the last-seen node states, instead of a manual cancel.
+
+        On hitting ``timeout_seconds`` the last observation is returned rather
+        than raised — but stamped with ``timed_out_after_seconds`` and
+        ``seconds_since_last_progress`` so the caller can report "the DAG did
+        not complete within Xs" and tell a never-dispatched ``Pending`` node
+        apart from one that ran and failed. Callers must therefore check
+        :attr:`DAGRunResult.timed_out` before treating the node states as a
+        verdict.
         """
         last_summary: str | None = None
         last_result: DAGRunResult | None = None
@@ -1586,6 +1632,7 @@ class AEWorkflowClient:
         # both retry loops bound honoured backoff at _RETRY_AFTER_BUDGET_SECONDS.
         honoured_seconds = 0.0
         last_log_elapsed = 0.0  # seconds since the last info log fired
+        last_elapsed = 0.0  # elapsed at the last successful observation
         any_node_started = False  # any node reached Running/terminal (stall guard)
         last_progress_elapsed = (
             0.0  # elapsed at the last node-state transition (progress watchdog)
@@ -1641,13 +1688,11 @@ class AEWorkflowClient:
                 continue
             transient_streak = 0
             last_result = result
+            last_elapsed = elapsed
             # Stall guard: a node has "started" once it leaves the not-started
             # set. Tracked as a latch so a node that starts and finishes between
             # polls still counts.
-            if any(
-                n.status not in (DAGNodeStatus.PENDING, DAGNodeStatus.SCHEDULED)
-                for n in result.nodes
-            ):
+            if any(not n.status.is_not_started for n in result.nodes):
                 any_node_started = True
             summary = " ".join(_node_glyph(n) for n in result.nodes)
             run_glyph = _RUN_GLYPHS.get(result.status.value, "•")
@@ -1730,9 +1775,18 @@ class AEWorkflowClient:
                 )
         # Timeout: return the last observation so callers can include
         # node-level state in the failure message rather than just
-        # "timed out after Xs".
+        # "timed out after Xs". Stamp the ceiling onto it: returning the
+        # observation bare made every caller read the last-seen node states as
+        # a verdict, so a node that was never dispatched surfaced as a node
+        # failure with ``error=None``.
         if last_result is not None:
-            return last_result
+            return replace(
+                last_result,
+                timed_out_after_seconds=float(timeout_seconds),
+                seconds_since_last_progress=max(
+                    0.0, last_elapsed - last_progress_elapsed
+                ),
+            )
         raise AtlanApiTimeoutError(
             message=f"native-status timed out after {timeout_seconds}s with no response",
             timeout_seconds=float(timeout_seconds),
