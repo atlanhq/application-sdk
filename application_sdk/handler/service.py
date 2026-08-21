@@ -411,8 +411,8 @@ def _resolve_output_type_for_workflow(workflow_type_name: str) -> type | None:
     worker registers from — and returns the entry point's declared
     ``output_type`` so the caller can pass it to
     ``get_workflow_handle(result_type=…)`` for typed deserialisation.  Because
-    both sides read one index, a ``workflow_type`` override resolves here as
-    readily as a convention-derived name.
+    both sides read one index, a ``legacy_workflow_types`` alias resolves here
+    as readily as a convention-derived name.
 
     Returns ``None`` when the type is not one this app registers (e.g. another
     app's workflow, or an external one); the caller falls back to untyped

@@ -19,10 +19,9 @@ _RESERVED_SDR_WORKFLOW_TYPES = frozenset(
 def get_all_app_workflows() -> list[type]:
     """Get generated workflow classes for all registered Temporal workflow types.
 
-    One class per key in each App's ``workflow_types`` index — normally one per
-    entry point, and two for an entry point carrying a ``workflow_type``
-    override (the override plus its canonical alias), so callers on either name
-    reach the same entry point.
+    One class per key in each App's ``workflow_types`` index — one per entry
+    point's canonical type, plus one per declared ``legacy_workflow_types``
+    alias, so a caller on either name reaches the same entry point.
     """
     workflows: list[type] = []
     claimed_types: dict[str, str] = {}
@@ -35,7 +34,7 @@ def get_all_app_workflows() -> list[type]:
                 raise EntryPointContractError(
                     f"App '{app_name}' registers Temporal workflow type "
                     f"'{workflow_type}', which is reserved for the SDK's SDR "
-                    "handler workflows. Choose a different workflow_type."
+                    "handler workflows. Choose a different legacy alias."
                 )
             claimed_by = claimed_types.get(workflow_type)
             if claimed_by is not None and claimed_by != app_name:

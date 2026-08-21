@@ -8,6 +8,7 @@ import re
 import shutil
 import sys
 import threading
+import types
 import warnings
 from abc import ABC
 from collections.abc import Callable, Mapping
@@ -698,7 +699,7 @@ class App(ABC):
     tags: ClassVar[dict[str, str] | None] = None
     passthrough_modules: ClassVar[set[str] | None] = None
 
-    legacy_workflow_types: ClassVar[Mapping[str, str]] = {}
+    legacy_workflow_types: ClassVar[Mapping[str, str]] = types.MappingProxyType({})
     """Inbound-only Temporal workflow type aliases: ``{alias: entry-point name}``.
 
     Declare a legacy type that external callers still dispatch (e.g. a bare
@@ -707,6 +708,11 @@ class App(ABC):
     emits the canonical ``{app-name}:{entry-point-name}`` type, so the
     ``temporal.workflow.type`` telemetry dimension counts exactly the callers
     that have not migrated. Delete an alias only when that count reaches zero.
+
+    Not inherited: registration reads each subclass's own declaration, so an
+    App subclassing an aliased App starts with no aliases — the alias names a
+    wire contract of one specific app, and silently re-registering it under a
+    second app's name would fail worker startup with a cross-app collision.
 
     This is a temporary compatibility surface for migrations, not a naming
     lever — the canonical type cannot be changed. The declaration is due to
@@ -834,6 +840,9 @@ class App(ABC):
             input_type=default_ep.input_type,
             output_type=default_ep.output_type,
             entry_points=entry_points,
+            # Own-class read on purpose: aliases name one specific app's wire
+            # contract and must not propagate to subclasses through the MRO.
+            legacy_workflow_types=cls.__dict__.get("legacy_workflow_types", {}),
         )
 
     @property
@@ -2118,9 +2127,9 @@ def generate_workflow_class(
         input_type_supports_gate,
     )
 
-    canonical_registration_name = canonical_workflow_type(app_name, ep)
-    is_canonical_registration = workflow_name == canonical_registration_name
-    if is_canonical_registration and not input_type_supports_gate(input_type):
+    canonical_type = canonical_workflow_type(app_name, ep)
+    alias_of_canonical = None if workflow_name == canonical_type else canonical_type
+    if alias_of_canonical is None and not input_type_supports_gate(input_type):
         _task_logger.warning(
             "Preflight gate will not run for entrypoint '%s' (%s): input type %s does "
             "not declare the credential-routing fields (extraction_method, "
@@ -2143,15 +2152,15 @@ def generate_workflow_class(
         # BLDX-878: inter-app calls deactivated pending review.
         # from application_sdk.app.client import WorkflowAppClient
 
-        if not is_canonical_registration:
+        if alias_of_canonical:
             _safe_log(
                 "warning",
                 f"Workflow started on legacy type '{workflow_name}'; the "
-                f"canonical type is '{canonical_registration_name}'. This alias "
-                f"is a temporary migration surface — move the caller to the "
+                f"canonical type is '{alias_of_canonical}'. This alias is a "
+                f"temporary migration surface — move the caller to the "
                 f"canonical type.",
                 legacy_workflow_type=workflow_name,
-                canonical_workflow_type=canonical_registration_name,
+                canonical_workflow_type=alias_of_canonical,
             )
 
         # Fail fast on a malformed / wrong-typed payload, before any setup runs.

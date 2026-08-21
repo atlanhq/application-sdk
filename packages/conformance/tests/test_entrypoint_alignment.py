@@ -25,6 +25,7 @@ from pathlib import Path
 from textwrap import dedent
 from typing import Literal
 
+import pytest
 from conformance.suite.checks.entrypoint_alignment import scan_all
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
@@ -636,7 +637,7 @@ def test_p016_single_mode_workflow_type_outside_dag_ignored(tmp_path: Path) -> N
 
 
 # ---------------------------------------------------------------------------
-# workflow_type overrides (CNCT-199)
+# legacy_workflow_types aliases (CNCT-199)
 # ---------------------------------------------------------------------------
 
 
@@ -741,15 +742,7 @@ def test_p016_multi_mode_aliases_do_not_move_the_wire_name(tmp_path: Path) -> No
     assert _p016_ids(findings) == []
 
 
-def test_p016_alias_routing_ignores_node_identity_fields(tmp_path: Path) -> None:
-    """F3: routing is by declaration — node app_name/task_queue play no part.
-
-    The declaration is the app's assertion that the bare type is its own; the
-    old app-name/task-queue locality heuristics (and the foreign-node hole they
-    carried) are gone. A node whose identity fields name another app still
-    routes when its type is declared, and an undeclared node never routes
-    regardless of what queue it shares.
-    """
+def _write_two_node_manifest(tmp_path: Path, aliased_node: dict) -> None:
     import json
 
     gen = tmp_path / "app" / "generated"
@@ -760,30 +753,61 @@ def test_p016_alias_routing_ignores_node_identity_fields(tmp_path: Path) -> None
                 "workflow_type": "app:extract-metadata",
                 "inputs": {"app_name": "app", "task_queue": "shared-queue"},
             },
-            "aliased": {
-                "workflow_type": "OverrideWorkflow",
-                "inputs": {"app_name": "other-app", "task_queue": "shared-queue"},
-            },
+            "aliased": aliased_node,
         }
     }
     (gen / "manifest.json").write_text(json.dumps(manifest))
-    paths = _write_py(
-        tmp_path,
-        {
-            "app/connector.py": dedent("""\
-                from application_sdk.app import App, entrypoint
-                class MyApp(App):
-                    name = "app"
-                    legacy_workflow_types = {"OverrideWorkflow": "keifu"}
-                    @entrypoint(name="extract-metadata")
-                    async def extract_metadata(self, input: Input) -> Output: ...
-                    @entrypoint(name="keifu")
-                    async def keifu(self, input: Input) -> Output: ...
-            """)
-        },
-    )
+
+
+_ALIASED_APP_SOURCE = dedent("""\
+    from application_sdk.app import App, entrypoint
+    class MyApp(App):
+        name = "app"
+        legacy_workflow_types = {"OverrideWorkflow": "keifu"}
+        @entrypoint(name="extract-metadata")
+        async def extract_metadata(self, input: Input) -> Output: ...
+        @entrypoint(name="keifu")
+        async def keifu(self, input: Input) -> Output: ...
+""")
+
+
+@pytest.mark.parametrize(
+    "aliased_node",
+    [
+        {"workflow_type": "OverrideWorkflow"},
+        {"workflow_type": "OverrideWorkflow", "inputs": {"task_queue": "shared-queue"}},
+        {"workflow_type": "OverrideWorkflow", "inputs": {"app_name": "app"}},
+    ],
+    ids=["bare", "app-nameless-with-queue", "names-this-app"],
+)
+def test_p016_declared_alias_routes_when_node_identity_does_not_contradict(
+    tmp_path: Path, aliased_node: dict
+) -> None:
+    """F3: a declared alias routes through a node that carries no app_name or
+    names this app — task_queue plays no part."""
+    _write_two_node_manifest(tmp_path, aliased_node)
+    paths = _write_py(tmp_path, {"app/connector.py": _ALIASED_APP_SOURCE})
     findings = scan_all(paths, tmp_path)
     assert _p016_ids(findings) == []
+
+
+def test_p016_declared_alias_naming_a_foreign_node_does_not_launder(
+    tmp_path: Path,
+) -> None:
+    """A node whose app_name names a different app dispatches on that app's
+    worker; declaring its type locally must not silence P016 on a genuinely
+    unrouted entry point."""
+    _write_two_node_manifest(
+        tmp_path,
+        {
+            "workflow_type": "OverrideWorkflow",
+            "inputs": {"app_name": "platform", "task_queue": "atlan-platform"},
+        },
+    )
+    paths = _write_py(tmp_path, {"app/connector.py": _ALIASED_APP_SOURCE})
+    findings = scan_all(paths, tmp_path)
+    msgs = [f.message for f in findings if f.rule_id == "P016"]
+    assert len(msgs) == 1 and "keifu" in msgs[0]
 
 
 def test_p016_undeclared_bare_node_on_shared_queue_does_not_route(

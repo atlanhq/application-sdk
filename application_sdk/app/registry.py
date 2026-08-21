@@ -12,10 +12,7 @@ if TYPE_CHECKING:
     from application_sdk.app.task import TaskMetadata
 
 
-from application_sdk.app.entrypoint import (
-    EntryPointContractError,
-    build_workflow_type_index,
-)
+from application_sdk.app.entrypoint import build_workflow_type_index
 from application_sdk.contracts.base import validate_is_contract
 from application_sdk.errors import (
     APP_ALREADY_REGISTERED,
@@ -41,6 +38,10 @@ class AppMetadata:
     tags: dict[str, str] = field(default_factory=dict)
     passthrough_modules: frozenset[str] = field(default_factory=frozenset)
     entry_points: "Mapping[str, EntryPointMetadata]" = field(default_factory=dict)
+    legacy_workflow_types: Mapping[str, str] = field(default_factory=dict)
+    """Inbound-only Temporal type aliases declared on the App class itself:
+    ``{alias: entry-point name}``. Validated wholesale by
+    :func:`~application_sdk.app.entrypoint.build_workflow_type_index`."""
     deprecated: bool = False
     deprecation_message: str | None = None
     workflow_types: "Mapping[str, EntryPointMetadata]" = field(
@@ -53,25 +54,21 @@ class AppMetadata:
     cannot drift."""
 
     def __post_init__(self) -> None:
-        # Freeze entry_points so callers cannot mutate it post-construction.
+        # Freeze the mappings so callers cannot mutate them post-construction.
         # frozen=True prevents direct assignment; object.__setattr__ bypasses that.
         object.__setattr__(
             self, "entry_points", types.MappingProxyType(self.entry_points)
         )
-        legacy = getattr(self.app_cls, "legacy_workflow_types", None) or {}
-        if not isinstance(legacy, Mapping):
-            raise EntryPointContractError(
-                f"App '{self.name}': legacy_workflow_types must be a mapping of "
-                f"alias strings to entry-point name strings, got "
-                f"{type(legacy).__name__}."
-            )
+        # Validates the declaration wholesale (container, entries, collisions).
+        index = build_workflow_type_index(
+            self.name, self.entry_points, self.legacy_workflow_types
+        )
         object.__setattr__(
             self,
-            "workflow_types",
-            types.MappingProxyType(
-                build_workflow_type_index(self.name, self.entry_points, legacy)
-            ),
+            "legacy_workflow_types",
+            types.MappingProxyType(dict(self.legacy_workflow_types or {})),
         )
+        object.__setattr__(self, "workflow_types", types.MappingProxyType(index))
 
     @property
     def qualified_name(self) -> str:
@@ -183,6 +180,7 @@ class AppRegistry:
         tags: dict[str, str] | None = None,
         passthrough_modules: set[str] | None = None,
         entry_points: "dict[str, EntryPointMetadata] | None" = None,
+        legacy_workflow_types: Mapping[str, str] | None = None,
         allow_override: bool = False,
     ) -> AppMetadata:
         """Register an App.
@@ -197,6 +195,8 @@ class AppRegistry:
             tags: Optional tags for categorization.
             passthrough_modules: Modules to pass through sandbox for this App.
             entry_points: Entry point metadata keyed by entry point name.
+            legacy_workflow_types: Inbound-only Temporal type aliases
+                (``{alias: entry-point name}``).
             allow_override: If True, allow re-registration (for testing).
 
         Returns:
@@ -227,6 +227,9 @@ class AppRegistry:
             tags=tags or {},
             passthrough_modules=frozenset(passthrough_modules or set()),
             entry_points=entry_points or {},
+            legacy_workflow_types=(
+                legacy_workflow_types if legacy_workflow_types is not None else {}
+            ),
         )
 
         self._apps[name][version] = metadata
@@ -370,6 +373,7 @@ class AppRegistry:
             description=metadata.description,
             tags=metadata.tags,
             entry_points=metadata.entry_points,
+            legacy_workflow_types=metadata.legacy_workflow_types,
             deprecated=True,
             deprecation_message=message,
         )

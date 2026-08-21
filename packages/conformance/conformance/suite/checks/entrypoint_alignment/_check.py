@@ -50,16 +50,24 @@ def _alias_routed_names(
     """Entry-point names routed through a declared legacy alias.
 
     A bare DAG node (no ``<app>:`` prefix) is a platform/other-app node —
-    unless the app's own ``legacy_workflow_types`` declares that exact string,
-    in which case the worker registers it and the node dispatches the declared
-    entry point. The declaration proves locality; no app or task-queue identity
-    heuristic is needed.
+    unless the app's own ``legacy_workflow_types`` declares that exact string.
+    The declaration is scoped per App class and must not be contradicted by
+    the node's own identity: a node whose ``app_name`` names a *different*
+    app dispatches on that app's worker, so declaring its type locally cannot
+    make it reach this entry point (that shape previously laundered a
+    genuinely unrouted entry point through a same-named platform node). A
+    node carrying no ``app_name`` routes on the declaration alone.
     """
-    return frozenset(
-        target
-        for alias, target in code.legacy_aliases.items()
-        if alias in contract.dag_workflow_types
-    )
+    routed: set[str] = set()
+    for app_class in code.app_classes:
+        for alias, target in app_class.legacy_aliases.items():
+            for dag_type, node_app in contract.dag_workflow_types:
+                if dag_type != alias:
+                    continue
+                if node_app is None or node_app == app_class.app_name:
+                    routed.add(target)
+                    break
+    return frozenset(routed)
 
 
 def _best_anchor(

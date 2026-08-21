@@ -204,7 +204,7 @@ An alias is **accepted, never produced**. Every SDK-initiated dispatch — the e
 
 What does **not** move: `?entrypoint=` still selects by entry-point name, task activity names keep their `{app-name}:{task-name}` prefix, and `App.name` is untouched — so state and storage namespaces stay put. The canonical type cannot be changed; an alias is a migration surface, not a naming lever.
 
-Registration fails loudly on a declaration mistake: an alias that restates a canonical type, targets an unknown entry point, equals an entry-point name, claims an SDK-reserved `sdr:*` handler type, duplicates a type another app on the worker registers, or collapses to another type's generated class name (`-` and `:` both become `_`).
+Registration fails loudly on a declaration mistake. At class definition: an alias that restates a canonical type, targets an unknown entry point, equals an entry-point name, or collapses to another type's generated class name (`-` and `:` both become `_`) — and, independent of aliases, an entry-point name that equals a sibling's canonical type (only reachable as an explicit entry point named exactly like the app while an implicit `run()` claims the bare app name). At worker startup: an alias that claims an SDK-reserved `sdr:*` handler type or duplicates a type another app on the same worker registers.
 
 > **The workflow-type namespace is global across workers.** An alias may be colon-qualified (for example `teradata-app:crawler`) — that is the shape a migrating app preserves, and it does not make the type canonical. Two apps on *different* workers that register the same type are not caught at startup (collision checks are per-worker); raw Temporal dispatch by type name then lands on whichever worker registered it. Treat aliases as globally unique: coordinate them across apps the same way you coordinate any shared Temporal type.
 
@@ -230,7 +230,9 @@ When `?entrypoint=` is omitted the SDK resolves the default entry point automati
 
 > **Transitional fallback:** The body field `workflow_type` is accepted for backward compatibility with legacy Heracles callers. Query param takes precedence if both are provided. The body field will be removed in a future release.
 
-Both surfaces resolve a selector the same way: as an entry-point **name** first, then against the app's registered Temporal workflow types (canonical and legacy aliases). The order can never matter — registration rejects an alias that equals an entry-point name, so one string can only ever live in one namespace.
+Both surfaces resolve a selector the same way: as an entry-point **name** first, then against the app's registered Temporal workflow types (canonical and legacy aliases). The order can never matter — registration keeps names and types disjoint (an alias may not equal an entry-point name, and an entry-point name may not equal a sibling's canonical type), so one string can only ever live in one namespace.
+
+One caveat: `GET /workflows/v1/input-contract?entrypoint=` validates the selector against the entry-point name charset before resolving, so alias shapes that fall outside it (dots, colons, a leading digit — e.g. `com.acme.MyWorkflow`) are usable selectors on `/start` only.
 
 ### Default entrypoint resolution
 

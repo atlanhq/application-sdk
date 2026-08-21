@@ -60,16 +60,20 @@ class ContractEntrypointScan:
     ``workflow_type`` convention.
     """
 
-    dag_workflow_types: frozenset[str] = field(default_factory=frozenset)
-    """Every ``workflow_type`` string the DAG dispatches, colon-qualified and
-    bare alike. The check matches an app's declared ``legacy_workflow_types``
-    aliases against this set — the declaration proves a bare node is the app's
-    own, so no app/queue identity heuristic is needed."""
+    dag_workflow_types: frozenset[tuple[str, str | None]] = field(
+        default_factory=frozenset
+    )
+    """Every ``workflow_type`` the DAG dispatches, paired with the node's
+    ``app_name`` (``None`` when the node carries none). The check routes an
+    app's declared ``legacy_workflow_types`` alias through a matching node
+    only when the node's own identity does not contradict the declaration —
+    a node naming a *different* app dispatches on that app's worker, so the
+    declaration alone cannot make it reach this one."""
 
 
 def _routes_from_manifest(
     manifest_path: Path,
-) -> tuple[frozenset[str], frozenset[str]]:
+) -> tuple[frozenset[str], frozenset[tuple[str, str | None]]]:
     """Collect DAG-declared workflow types from a manifest.
 
     Returns ``(routes, dag_workflow_types)``:
@@ -79,10 +83,10 @@ def _routes_from_manifest(
         ``"<app>:<wire-name>"`` (the part after the colon).
 
     ``dag_workflow_types``
-        Every ``workflow_type`` string in the DAG, verbatim. Bare strings
-        (e.g. ``"PublishWorkflow"``) are platform/other-app nodes unless the
-        app's code declares them in ``legacy_workflow_types`` — the check
-        resolves that against this set.
+        Every ``(workflow_type, node app_name-or-None)`` pair in the DAG.
+        Bare types (e.g. ``"PublishWorkflow"``) are platform/other-app nodes
+        unless the app's code declares them in ``legacy_workflow_types`` AND
+        the node's ``app_name`` does not name a different app.
 
     The walk is scoped to the ``dag`` subtree, so a ``workflow_type`` appearing
     elsewhere in the manifest is not collected.  It does **not** pin the
@@ -101,13 +105,19 @@ def _routes_from_manifest(
         return frozenset(), frozenset()
 
     wire_names: set[str] = set()
-    dag_types: set[str] = set()
+    dag_types: set[tuple[str, str | None]] = set()
+
+    def _node_app_name(node: dict[str, Any]) -> str | None:
+        inputs = node.get("inputs")
+        source = inputs if isinstance(inputs, dict) else node
+        app_name = source.get("app_name")
+        return app_name if isinstance(app_name, str) and app_name else None
 
     def _walk(node: Any) -> None:
         if isinstance(node, dict):
             wt = node.get("workflow_type")
             if isinstance(wt, str) and wt:
-                dag_types.add(wt)
+                dag_types.add((wt, _node_app_name(node)))
                 if ":" in wt:
                     wire_names.add(wt.split(":", 1)[1])
             for value in node.values():

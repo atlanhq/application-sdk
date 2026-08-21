@@ -51,6 +51,9 @@ class _KeifuOutput(Output):
     count: int = 0
 
 
+_UNSET = object()
+
+
 def _ep(
     name: str,
     *,
@@ -65,11 +68,6 @@ def _ep(
         method_name=name.replace("-", "_"),
         implicit=implicit,
     )
-
-
-def _cls_with(legacy: object) -> type:
-    """A stand-in app class carrying only the legacy alias declaration."""
-    return type("_Stub", (), {"legacy_workflow_types": legacy})
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +152,17 @@ class TestBuildWorkflowTypeIndex:
                 {"miner": "keifu"},
             )
 
+    def test_rejects_entry_point_name_equal_to_bare_canonical_type(self) -> None:
+        """A12: with an implicit run(), the bare app name is a canonical type,
+        so an explicit entry point named exactly like the app would make one
+        selector string mean two entry points. Rejected at registration."""
+        with pytest.raises(EntryPointContractError, match="canonical"):
+            build_workflow_type_index(
+                "postgres",
+                {"run": _ep("run", implicit=True), "postgres": _ep("postgres")},
+                None,
+            )
+
     @pytest.mark.parametrize(
         "bad",
         ["", "Keifu Workflow", "Keifu\tWorkflow", "Keifu\x00Workflow", ":::", "___"],
@@ -234,20 +243,21 @@ class TestClassSegment:
 
 
 class TestAppMetadataIndex:
-    def _meta(self, legacy: object = None) -> AppMetadata:
-        app_cls = _cls_with(legacy) if legacy is not None else object
+    def _meta(self, legacy: object = _UNSET) -> AppMetadata:
+        kwargs: dict = {} if legacy is _UNSET else {"legacy_workflow_types": legacy}
         return AppMetadata(
             name="query-intelligence",
             version="1.0.0",
-            app_cls=app_cls,
+            app_cls=object,
             input_type=_QiInput,
             output_type=_QiOutput,
             entry_points={
                 "keifu": _ep("keifu", output_type=_KeifuOutput),
             },
+            **kwargs,
         )
 
-    def test_index_reads_the_class_attribute(self) -> None:
+    def test_index_includes_declared_aliases(self) -> None:
         meta = self._meta({"KeifuWorkflow": "keifu"})
         assert set(meta.workflow_types) == {
             "KeifuWorkflow",
@@ -255,19 +265,23 @@ class TestAppMetadataIndex:
         }
         assert meta.workflow_types["KeifuWorkflow"].output_type is _KeifuOutput
 
-    def test_app_cls_without_attribute_gives_canonical_only(self) -> None:
+    def test_no_declaration_gives_canonical_only(self) -> None:
         meta = self._meta()
         assert set(meta.workflow_types) == {"query-intelligence:keifu"}
 
-    def test_index_is_frozen(self) -> None:
+    def test_index_and_declaration_are_frozen(self) -> None:
         meta = self._meta({"KeifuWorkflow": "keifu"})
         with pytest.raises(TypeError):
             meta.workflow_types["Injected"] = _ep("injected")  # type: ignore[index]
+        with pytest.raises(TypeError):
+            meta.legacy_workflow_types["Injected"] = "keifu"  # type: ignore[index]
 
-    def test_rejects_non_mapping_attribute(self) -> None:
-        """A9: a string or list is a declaration mistake, not an empty map."""
+    @pytest.mark.parametrize("bad", ["KeifuWorkflow", ["KeifuWorkflow"], 0])
+    def test_rejects_non_mapping_declaration(self, bad: object) -> None:
+        """A9: a string, list, or number is a declaration mistake, not an
+        empty map — including falsy shapes."""
         with pytest.raises(EntryPointContractError, match="legacy_workflow_types"):
-            self._meta("KeifuWorkflow")
+            self._meta(bad)
 
 
 # ---------------------------------------------------------------------------
@@ -368,6 +382,44 @@ class TestAppRegistration:
         }
         assert first == get_all_app_workflows()
 
+    def test_subclass_does_not_inherit_parent_aliases(
+        self, clean_app_registry: object, clean_task_registry: object
+    ) -> None:
+        """Aliases name one app's wire contract; the MRO must not propagate
+        them into a subclass's registration."""
+
+        class ParentAliasedApp(App):
+            name = "parent-aliased"
+            legacy_workflow_types = {"SharedLegacy": "work"}
+
+            @entrypoint
+            async def work(
+                self, input: _QiInput
+            ) -> _QiOutput:  # pragma: no cover - not executed
+                return _QiOutput()
+
+        class ChildApp(ParentAliasedApp):
+            name = "child"
+
+        child_meta = AppRegistry.get_instance().get("child")
+        assert set(child_meta.workflow_types) == {"child:work"}
+        assert dict(child_meta.legacy_workflow_types) == {}
+
+    def test_falsy_non_mapping_declaration_fails_at_class_definition(
+        self, clean_app_registry: object, clean_task_registry: object
+    ) -> None:
+        with pytest.raises(EntryPointContractError, match="legacy_workflow_types"):
+
+            class FalsyDeclarationApp(App):
+                name = "falsy-decl"
+                legacy_workflow_types = []  # type: ignore[assignment]
+
+                @entrypoint
+                async def work(
+                    self, input: _QiInput
+                ) -> _QiOutput:  # pragma: no cover - not executed
+                    return _QiOutput()
+
     def test_postgres_like_mixed_app_keeps_all_existing_workflow_types(
         self, clean_app_registry: object, clean_task_registry: object
     ) -> None:
@@ -457,6 +509,39 @@ class TestResolveOutputType:
         from application_sdk.handler.service import _resolve_output_type_for_workflow
 
         assert _resolve_output_type_for_workflow(unknown) is None
+
+
+class TestImplicitBareTypeSelector:
+    def test_bare_app_name_in_body_selector_reaches_run(
+        self, clean_app_registry: object, clean_task_registry: object
+    ) -> None:
+        """A legacy body selector carrying the bare app name must keep
+        reaching the implicit run() entry point on a mixed app."""
+        from application_sdk.handler import service as svc
+        from application_sdk.handler.service import _resolve_app_entrypoint
+
+        class MixedPostgresApp(App):
+            name = "postgres-mixed"
+
+            async def run(self, input: _QiInput) -> _QiOutput:
+                return _QiOutput()
+
+            @entrypoint
+            async def miner(
+                self, input: _KeifuInput
+            ) -> _KeifuOutput:  # pragma: no cover - not executed
+                return _KeifuOutput()
+
+        previous = svc._workflow_config
+        svc._workflow_config = svc.WorkflowClientConfig(
+            app_name="postgres-mixed",
+            app_class=MixedPostgresApp,
+        )
+        try:
+            _, ep = _resolve_app_entrypoint("postgres-mixed", "postgres-mixed")
+            assert ep.implicit is True
+        finally:
+            svc._workflow_config = previous
 
 
 class TestInboundSelector:

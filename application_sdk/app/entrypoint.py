@@ -200,6 +200,21 @@ def build_workflow_type_index(
     distinct types whose classes would overwrite each other in the module
     namespace, and one would silently run the other's entry point.
 
+    Names and types must be fully disjoint so a selector is never ambiguous:
+    an alias may not equal an entry-point name, and an entry-point name may
+    not equal another entry point's canonical type (only reachable as an
+    explicit entry point named exactly like the app while an implicit
+    ``run()`` claims the bare app name).
+
+    This function is the single validation site for the whole
+    ``legacy_workflow_types`` declaration — container shape, entry shapes,
+    and every collision axis. The cross-app guards in
+    :func:`application_sdk.execution._temporal.workflows.get_all_app_workflows`
+    are not redundant with the per-app checks here: they compare types across
+    *different* apps sharing one worker, which no per-app index can see; this
+    site wins only on timing, failing at class definition with a message that
+    names the entry points involved.
+
     Args:
         app_name: The app's registered name.
         entry_points: Entry points keyed by entry-point name.
@@ -208,11 +223,21 @@ def build_workflow_type_index(
             ``App.legacy_workflow_types``.
 
     Raises:
-        EntryPointContractError: If an alias restates a canonical type, targets
-            an unknown entry point, shadows an entry-point name, is not a
-            usable Temporal type string, or if two distinct types fold to the
-            same generated class name.
+        EntryPointContractError: If the declaration is not a mapping of
+            strings, an alias restates a canonical type, targets an unknown
+            entry point, shadows an entry-point name, is not a usable Temporal
+            type string, an entry-point name equals a sibling's canonical
+            type, or two distinct types fold to the same generated class name.
     """
+    if legacy_workflow_types is None:
+        legacy_workflow_types = {}
+    if not isinstance(legacy_workflow_types, Mapping):
+        raise EntryPointContractError(
+            f"App '{app_name}': legacy_workflow_types must be a mapping of "
+            f"alias strings to entry-point name strings, got "
+            f"{type(legacy_workflow_types).__name__}."
+        )
+
     index: dict[str, EntryPointMetadata] = {}
     by_class_segment: dict[str, str] = {}
 
@@ -234,37 +259,64 @@ def build_workflow_type_index(
         claim_class_segment(canonical)
         index[canonical] = ep
 
-    for alias, target in (legacy_workflow_types or {}).items():
-        if not isinstance(alias, str) or not isinstance(target, str):
+    for ep_name, ep in entry_points.items():
+        claimed = index.get(ep_name)
+        if claimed is not None and claimed is not ep:
             raise EntryPointContractError(
-                f"App '{app_name}': legacy_workflow_types must map alias "
-                f"strings to entry-point name strings, got "
-                f"{alias!r}: {target!r}."
+                f"App '{app_name}': entry point name '{ep_name}' equals the "
+                f"canonical Temporal workflow type of entry point "
+                f"'{claimed.name}', so a caller selecting '{ep_name}' would be "
+                f"ambiguous. Rename the '{ep_name}' entry point."
             )
-        _validate_legacy_workflow_type(alias)
-        if alias in index:
-            raise EntryPointContractError(
-                f"App '{app_name}': legacy workflow type '{alias}' restates "
-                f"the canonical type of entry point '{index[alias].name}'. "
-                f"Canonical types are always registered — declare only the "
-                f"legacy names that differ from them."
-            )
-        if alias in entry_points:
-            raise EntryPointContractError(
-                f"App '{app_name}': legacy workflow type '{alias}' equals the "
-                f"entry point name '{alias}'. Aliases and entry point names "
-                f"must stay disjoint so a selector is never ambiguous."
-            )
-        ep = entry_points.get(target)  # type: ignore[assignment]
-        if ep is None:
-            raise EntryPointContractError(
-                f"App '{app_name}': legacy workflow type '{alias}' targets "
-                f"unknown entry point '{target}'. Available entry points: "
-                f"{sorted(entry_points)}."
-            )
+
+    for alias, target in legacy_workflow_types.items():
+        target_ep = _validate_alias_entry(app_name, alias, target, index, entry_points)
         claim_class_segment(alias)
-        index[alias] = ep
+        index[alias] = target_ep
     return index
+
+
+def _validate_alias_entry(
+    app_name: str,
+    alias: object,
+    target: object,
+    index: Mapping[str, EntryPointMetadata],
+    entry_points: Mapping[str, EntryPointMetadata],
+) -> EntryPointMetadata:
+    """Reject a bad ``legacy_workflow_types`` entry; return its target.
+
+    The one place that says no to an alias declaration — every rejection an
+    entry can earn lives here, prefixed with the app so a multi-app worker's
+    failure names its owner.
+    """
+    if not isinstance(alias, str) or not isinstance(target, str):
+        raise EntryPointContractError(
+            f"App '{app_name}': legacy_workflow_types must map alias strings "
+            f"to entry-point name strings, got {alias!r}: {target!r}."
+        )
+    _validate_legacy_workflow_type(app_name, alias)
+    claimed = index.get(alias)
+    if claimed is not None:
+        raise EntryPointContractError(
+            f"App '{app_name}': legacy workflow type '{alias}' restates the "
+            f"canonical type of entry point '{claimed.name}'. Canonical types "
+            f"are always registered — declare only the legacy names that "
+            f"differ from them."
+        )
+    if alias in entry_points:
+        raise EntryPointContractError(
+            f"App '{app_name}': legacy workflow type '{alias}' equals the "
+            f"entry point name '{alias}'. Aliases and entry point names must "
+            f"stay disjoint so a selector is never ambiguous."
+        )
+    target_ep = entry_points.get(target)
+    if target_ep is None:
+        raise EntryPointContractError(
+            f"App '{app_name}': legacy workflow type '{alias}' targets "
+            f"unknown entry point '{target}'. Available entry points: "
+            f"{sorted(entry_points)}."
+        )
+    return target_ep
 
 
 def _validate_entrypoint_signature(
@@ -344,7 +396,7 @@ def _validate_entrypoint_signature(
     return input_type, output_type
 
 
-def _validate_legacy_workflow_type(alias: str) -> None:
+def _validate_legacy_workflow_type(app_name: str, alias: str) -> None:
     """Reject a legacy workflow type that cannot be registered.
 
     Deliberately looser than the entry-point name check. Temporal puts no
@@ -373,17 +425,19 @@ def _validate_legacy_workflow_type(alias: str) -> None:
     """
     if not alias:
         raise EntryPointContractError(
-            "legacy_workflow_types: an alias must be a non-empty string."
+            f"App '{app_name}': legacy_workflow_types aliases must be "
+            f"non-empty strings."
         )
     if any(char.isspace() or not char.isprintable() for char in alias):
         raise EntryPointContractError(
-            f"legacy_workflow_types: alias must not contain whitespace or "
-            f"control characters, got {alias!r}."
+            f"App '{app_name}': legacy_workflow_types alias must not contain "
+            f"whitespace or control characters, got {alias!r}."
         )
     if not any(char.isalnum() for char in alias):
         raise EntryPointContractError(
-            f"legacy_workflow_types: alias {alias!r} is not a usable Temporal "
-            f"workflow type — it carries no letters or digits."
+            f"App '{app_name}': legacy_workflow_types alias {alias!r} is not "
+            f"a usable Temporal workflow type — it carries no letters or "
+            f"digits."
         )
 
 

@@ -535,10 +535,12 @@ declares no such routes (legacy), the check falls back to permitting at most one
 * **Legacy workflow type aliases (CNCT-199):** an app may declare `legacy_workflow_types
 = {"<alias>": "<entry-point name>"}` on its `App` class — inbound-only Temporal types
 external callers still dispatch. A bare (colon-free) DAG node whose `workflow_type`
-equals a declared alias routes the alias's target entry point: the declaration itself
-proves the node is this app's own, so no app-name or task-queue identity heuristic
-applies. A bare node **not** declared as an alias is a platform/other-app node (such as
-`PublishWorkflow`) and routes nothing.
+equals a declared alias routes the alias's target entry point, provided the node's own
+identity does not contradict the declaration: a node whose `app_name` names a
+*different* app dispatches on that app's worker, so it routes nothing here even when its
+type is declared locally. A node carrying no `app_name` routes on the declaration alone
+(task queues play no part). A bare node **not** declared as an alias is a
+platform/other-app node (such as `PublishWorkflow`) and routes nothing.
 
 * **Non-literal `name=` or `legacy_workflow_types`:** a `@entrypoint(name=variable)` or
 a `legacy_workflow_types` assignment that is not a dict literal of string constants
