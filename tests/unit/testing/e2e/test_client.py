@@ -152,7 +152,7 @@ class TestPollNativeStatusStallGuard:
         never_dispatched = _result(DAGRunStatus.PENDING, DAGNodeStatus.PENDING)
 
         with patch.object(client, "get_native_status", return_value=never_dispatched):
-            with patch("time.sleep"):
+            with fake_clock():
                 with pytest.raises(AutomationEngineNotDispatchingError) as exc:
                     client.poll_native_status(
                         _RUN_ID,
