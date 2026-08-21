@@ -27,17 +27,22 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# The gate is imported only so the drift test can hold its copy of
+# check_run_age_key against the guard's; production never imports across scripts.
+import poll_check_runs_gate as gate  # noqa: E402
 from e2e_dispatch_guard import (  # noqa: E402
     _CHECKS_MAX_PAGES,
+    _PASSING_CONCLUSIONS,
     Claimant,
     GuardUnavailable,
+    check_run_age_key,
     checks_state,
     claim_is_settled,
     claim_ref,
-    dispatch_exists,
     main,
     open_pr_heads,
     prune,
+    read_dispatch_state,
     resolve,
     run_is_live,
     sha_of,
@@ -132,6 +137,34 @@ def _checks(*entries: tuple[str, str]):
     return {
         "check_runs": [{"name": name, "status": status} for name, status in entries]
     }
+
+
+def _attempt(
+    conclusion: str | None, *, at: str, check_id: int, name: str | None = None
+):
+    """One concluded (or running) attempt's check run, with an age.
+
+    Separate from ``_checks`` because the reclaim decision reads fields that
+    helper does not carry — a conclusion, and enough ordering information to say
+    which of several same-named checks is the newest.
+    """
+    entry = {
+        "name": name or CHECK,
+        "status": "completed" if conclusion else "in_progress",
+        "started_at": at,
+        "id": check_id,
+    }
+    if conclusion:
+        entry["conclusion"] = conclusion
+    return entry
+
+
+def _attempts(*entries: dict):
+    return {"total_count": len(entries), "check_runs": list(entries)}
+
+
+OLD_FAIL = _attempt("failure", at="2026-08-21T00:53:41Z", check_id=100)
+NEW_PASS = _attempt("success", at="2026-08-21T01:41:00Z", check_id=200)
 
 
 _RATE_LIMIT = (
@@ -280,29 +313,185 @@ def test_a_completed_dispatch_for_this_sha_is_still_skipped(http: FakeHTTP) -> N
     assert _resolve(run_id=1)[0] == "duplicate"
 
 
-def test_the_skip_names_the_re_run_that_can_actually_re_dispatch(
+# --- retrying a leg that dispatched and failed -----------------------------
+#
+# Re-adding the `e2e` label is what people reach for to retry a failed leg, and
+# it used to spend a whole run (both native base-image builds, Trivy, SDR K8s
+# E2E) dispatching nothing and re-reading the same red check. A new run may now
+# take the slot — but only when the failure is genuinely settled, because every
+# loosening here is paid for in tenant contention.
+
+
+def _stub_reclaim_writes(http: FakeHTTP, *, wins_the_race: bool = True) -> None:
+    http.route("DELETE", "/git/refs/", (204, None))
+    http.route("POST", "/git/blobs", (201, {"sha": BLOB}))
+    http.route(
+        "POST",
+        "/git/refs",
+        (201, {"ref": REF}) if wins_the_race else (422, {"message": "already exists"}),
+    )
+
+
+def test_a_settled_failure_is_reclaimed_by_a_new_run(http: FakeHTTP) -> None:
+    _stub_taken(http, 999)
+    http.route("GET", "/check-runs", (200, _attempts(OLD_FAIL)))
+    http.route("GET", "/actions/runs/999", (200, {"status": "completed"}))
+    _stub_reclaim_writes(http)
+
+    assert _resolve(run_id=1) == ("reclaimed", None)
+
+
+def test_a_passing_leg_is_never_reclaimed(http: FakeHTTP) -> None:
+    """Re-testing a green leg spends a tenant to re-answer an answered question,
+    and the required check is already satisfied by it."""
+    _stub_taken(http, 999)
+    http.route("GET", "/check-runs", (200, _attempts(NEW_PASS)))
+
+    assert _resolve(run_id=1)[0] == "duplicate"
+
+
+@pytest.mark.parametrize("passing", ["success", "neutral", "skipped"])
+def test_every_conclusion_the_gate_calls_a_pass_is_not_retryable(
+    http: FakeHTTP, passing
+) -> None:
+    """These three are exactly poll_check_runs_gate.PASSING_CONCLUSIONS. Treating
+    any of them as retryable would re-dispatch a leg the gate is green on."""
+    _stub_taken(http, 999)
+    http.route(
+        "GET",
+        "/check-runs",
+        (200, _attempts(_attempt(passing, at="2026-08-21T01:00:00Z", check_id=1))),
+    )
+
+    assert _resolve(run_id=1)[0] == "duplicate"
+
+
+@pytest.mark.parametrize("failing", ["failure", "cancelled", "timed_out", "stale"])
+def test_the_non_passing_conclusions_are_retryable(http: FakeHTTP, failing) -> None:
+    _stub_taken(http, 999)
+    http.route(
+        "GET",
+        "/check-runs",
+        (200, _attempts(_attempt(failing, at="2026-08-21T01:00:00Z", check_id=1))),
+    )
+    http.route("GET", "/actions/runs/999", (200, {"status": "completed"}))
+    _stub_reclaim_writes(http)
+
+    assert _resolve(run_id=1) == ("reclaimed", None)
+
+
+def test_a_leg_still_in_flight_is_never_reclaimed(http: FakeHTTP) -> None:
+    """Its connector run is at the tenant right now; a second dispatch is the
+    contention this module exists to prevent."""
+    _stub_taken(http, 999)
+    http.route(
+        "GET",
+        "/check-runs",
+        (200, _attempts(_attempt(None, at="2026-08-21T01:00:00Z", check_id=1))),
+    )
+
+    assert _resolve(run_id=1)[0] == "duplicate"
+
+
+def test_an_older_attempt_still_running_blocks_the_reclaim(http: FakeHTTP) -> None:
+    """`settled` is every attempt, not just the newest. A newer attempt can
+    conclude while an older one is still going, and that older connector run is
+    still holding the tenant."""
+    still_going = _attempt(None, at="2026-08-21T00:10:00Z", check_id=50)
+    http_stub = _attempts(still_going, OLD_FAIL)
+    _stub_taken(http, 999)
+    http.route("GET", "/check-runs", (200, http_stub))
+
+    assert _resolve(run_id=1)[0] == "duplicate"
+
+
+@pytest.mark.parametrize(
+    "newest_first", [False, True], ids=["oldest-first", "newest-first"]
+)
+def test_the_newest_conclusion_decides_not_any_failure(
+    http: FakeHTTP, newest_first
+) -> None:
+    """A SHA retried once keeps the old attempt's failed check. Folding the two
+    together — any-failure, or last-in-listing-order — would re-trigger a leg
+    that has since passed, on every subsequent event, forever."""
+    listing = [NEW_PASS, OLD_FAIL] if newest_first else [OLD_FAIL, NEW_PASS]
+    _stub_taken(http, 999)
+    http.route("GET", "/check-runs", (200, _attempts(*listing)))
+
+    assert _resolve(run_id=1)[0] == "duplicate"
+
+
+def test_a_settled_failure_is_not_reclaimed_while_the_claimant_is_live(
     http: FakeHTTP, capsys
 ) -> None:
-    """The skip used to end at "its check carries the verdict", which reads as
-    "nothing to do" — so the only retry anyone found was pushing a throwaway
-    commit. There IS one on this commit, but only for the CLAIMING run
-    (``is_my_run`` compares run ids), and nothing said so.
+    """A live claimant may be mid-re-run of its own dispatch job — ``is_my_run``
+    lets that through — and that plus a reclaim here is two dispatches at one
+    tenant. The notice hands the operator the one lever that IS safe."""
+    _stub_taken(http, 999)
+    http.route("GET", "/check-runs", (200, _attempts(OLD_FAIL)))
+    http.route("GET", "/actions/runs/999", (200, {"status": "in_progress"}))
 
-    The whole run, not ``--failed``: a leg that dispatched fine and then failed
-    downstream leaves this job green, so ``--failed`` re-runs the gate alone and
-    it re-reads the same red check.
-    """
+    assert _resolve(run_id=1)[0] == "duplicate"
+
+    printed = capsys.readouterr().out
+    assert "gh run rerun 999" in printed
+    assert "not --failed" in printed, (
+        "a leg that dispatched fine and failed downstream leaves the dispatch job "
+        "green, so --failed re-runs the gate alone and it re-reads the red check"
+    )
+
+
+def test_losing_the_race_to_reclaim_a_failure_does_not_dispatch(
+    http: FakeHTTP,
+) -> None:
+    """Two duplicate runs can both see the same settled failure. The create is
+    the compare-and-set, so exactly one may dispatch."""
+    _stub_taken(http, 999)
+    http.route("GET", "/check-runs", (200, _attempts(OLD_FAIL)))
+    http.route("GET", "/actions/runs/999", (200, {"status": "completed"}))
+    _stub_reclaim_writes(http, wins_the_race=False)
+
+    assert _resolve(run_id=1)[0] == "duplicate"
+
+
+def test_a_concluded_check_with_no_conclusion_field_is_not_reclaimed(
+    http: FakeHTTP,
+) -> None:
+    """Unreadable is not "failed". Reclaiming on a missing conclusion would make
+    every malformed check run a re-dispatch."""
     _stub_taken(http, 999)
     http.route("GET", "/check-runs", (200, _checks((CHECK, "completed"))))
 
     assert _resolve(run_id=1)[0] == "duplicate"
 
-    printed = capsys.readouterr().out
-    assert "gh run rerun 999" in printed, (
-        "the skip must name the claiming run's id — that run is the only one the "
-        "guard lets re-dispatch this SHA"
-    )
-    assert "not --failed" in printed
+
+def test_an_unreadable_listing_never_reclaims(http: FakeHTTP) -> None:
+    _stub_taken(http, 999)
+    http.route("GET", "/check-runs", (500, {"message": "server error"}))
+
+    with pytest.raises(GuardUnavailable):
+        _resolve(run_id=1)
+
+
+def test_the_guard_and_the_gate_order_check_runs_identically() -> None:
+    """The two copies of check_run_age_key must agree, or the guard would judge a
+    retry against a different attempt than the gate reports. Copies rather than a
+    shared import because nothing in .github/scripts imports a sibling script;
+    this is what stops them drifting."""
+    table = [
+        {"started_at": "2026-08-21T00:53:41Z", "id": 100},
+        {"started_at": "2026-08-21T01:41:00Z", "id": 200},
+        {"started_at": "2026-08-21T01:41:00Z", "id": 201},
+        {"id": 5},
+        {},
+        {"started_at": None, "id": None},
+    ]
+    assert [check_run_age_key(e) for e in table] == [
+        gate.check_run_age_key(e) for e in table
+    ]
+    assert _PASSING_CONCLUSIONS == set(
+        gate.PASSING_CONCLUSIONS
+    ), "the guard must not call retryable a conclusion the gate calls a pass"
 
 
 def test_this_runs_own_claim_permits_a_re_dispatch(http: FakeHTTP) -> None:
@@ -398,13 +587,14 @@ def test_every_non_completed_status_is_live(http: FakeHTTP, status: str) -> None
     assert run_is_live(REPO, 7) is True
 
 
-def test_dispatch_exists_ignores_other_checks_on_the_sha(http: FakeHTTP) -> None:
+def test_the_dispatch_state_ignores_other_checks_on_the_sha(http: FakeHTTP) -> None:
     http.route(
         "GET",
         "/check-runs",
         (200, _checks(("SDK Gate", "completed"), ("Trivy", "completed"))),
     )
-    assert dispatch_exists(REPO, SHA, CHECK) is False
+    state = read_dispatch_state(REPO, SHA, CHECK)
+    assert state is not None and state.dispatched is False
 
 
 # --- pruning ---------------------------------------------------------------

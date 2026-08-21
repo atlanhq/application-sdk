@@ -73,9 +73,21 @@ automatically final. A contender that finds the slot taken resolves it as:
 * claimed by **this run** (any attempt) — proceed. This is a job re-run, and the
   operator asking for a re-run is asking for a re-dispatch.
 * claimed by another run, and a ``Connector E2E run / <app>`` check run exists on
-  this SHA — **skip**. The dispatch happened; its verdict is that check, and the
-  connector gate on every one of the duplicate runs polls the same check and
-  reports the same answer. Nothing is lost by not dispatching again.
+  this SHA that has **not concluded**, or whose newest attempt concluded as a
+  PASS — **skip**. Either the dispatch is still being answered or it has been
+  answered; its verdict is that check, and the connector gate on every one of the
+  duplicate runs polls the same check and reports the same answer.
+* claimed by another run, every check under that name has concluded, the NEWEST
+  concluded non-passing, and the claiming run is **over** — reap the claim and
+  re-dispatch. A failed leg is the one already-dispatched state with a question
+  still worth asking, and re-adding the ``e2e`` label is how people ask it.
+  Newest rather than any, because a SHA retried once keeps the old attempt's
+  failed check and any-failure would re-trigger forever; every attempt concluded
+  rather than just the newest, because an older one still running means its
+  connector run is still at the tenant.
+* same, but the claiming run is **still live** — skip. It may be mid-re-run of
+  its own dispatch job (see the first case), and that plus a reclaim here is two
+  dispatches contending for one tenant.
 * claimed by another run with no such check, and that run is **still live** —
   skip. A peer is between its claim and its check creation, a window of one API
   call.
@@ -185,6 +197,13 @@ _OPEN_PR_MAX_PAGES = 5
 # it is reported as "unreadable" rather than "no dispatch found" — the direction
 # that fails open.
 _CHECKS_MAX_PAGES = 10
+
+# Conclusions that mean "this leg has an answer, do not re-dispatch it". Kept
+# identical to poll_check_runs_gate.PASSING_CONCLUSIONS: the gate calls these a
+# pass, so treating any of them as retryable here would re-run a leg the required
+# check is already green on. Everything else — failure, cancelled, timed_out,
+# action_required, stale — is a question still worth re-asking.
+_PASSING_CONCLUSIONS = frozenset({"success", "neutral", "skipped"})
 
 _SAFE_SLUG_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789._-")
 _SHA_RE = re.compile(r"\A[0-9a-f]{7,64}\Z")
@@ -508,15 +527,73 @@ def delete_ref(repo: str, ref: str) -> bool:
     return response.status in (200, 204)
 
 
-def dispatch_exists(repo: str, sha: str, check_run_name: str) -> bool | None:
-    """Did the claimer get as far as creating its check run on ``sha``?
+def check_run_age_key(check_run: dict) -> tuple[str, int]:
+    """Sort key that orders same-named check runs oldest-first.
 
-    True/False, or None when the answer is unreadable. The check run is created
-    immediately before the dispatch, so its presence is the evidence that a
-    dispatch either happened or is one API call away from happening.
+    Deliberately a copy of ``poll_check_runs_gate.check_run_age_key`` rather than
+    an import: nothing in .github/scripts imports a sibling script (every one is
+    a self-contained stdlib-only entry point), and the two must agree or the
+    guard would judge a retry against a different attempt than the gate reports.
+    ``test_the_guard_and_the_gate_order_check_runs_identically`` imports both and
+    holds them to the same table.
     """
-    state = checks_state(repo, sha, check_run_name)
-    return None if state is None else state != "absent"
+    started_at = check_run.get("started_at")
+    check_id = check_run.get("id")
+    return (
+        started_at if isinstance(started_at, str) else "",
+        check_id if isinstance(check_id, int) else 0,
+    )
+
+
+@dataclass(frozen=True)
+class DispatchState:
+    """What the check runs on a SHA say about one app's dispatch."""
+
+    #: Any check at all under this name, i.e. a dispatch happened (or is one API
+    #: call away from happening).
+    dispatched: bool
+    #: EVERY check under this name has concluded. Not just the newest: an older
+    #: attempt still in flight means its connector run is still at the tenant,
+    #: and re-dispatching on top of that is the contention this module prevents.
+    settled: bool
+    #: Conclusion of the newest attempt, None if it has not concluded or carries
+    #: no conclusion. Newest, not folded: a retried SHA keeps the old attempt's
+    #: check, so any-failure would re-trigger a leg that has since passed on
+    #: every subsequent event, forever.
+    newest_conclusion: str | None
+
+    @property
+    def retryable(self) -> bool:
+        """Is there a failed answer here that is worth asking again?"""
+        return (
+            self.dispatched
+            and self.settled
+            and self.newest_conclusion is not None
+            and self.newest_conclusion not in _PASSING_CONCLUSIONS
+        )
+
+
+def read_dispatch_state(
+    repo: str, sha: str, check_run_name: str
+) -> DispatchState | None:
+    """One listing, both answers. None when the listing is unreadable.
+
+    Deliberately not two calls (``dispatch_exists`` plus a conclusion read):
+    they would be two separate listings of the same endpoint that could disagree
+    across the gap, and the second would be pure cost.
+    """
+    matches = named_check_runs(repo, sha, check_run_name)
+    if matches is None:
+        return None
+    if not matches:
+        return DispatchState(dispatched=False, settled=False, newest_conclusion=None)
+    newest = max(matches, key=check_run_age_key)
+    conclusion = newest.get("conclusion")
+    return DispatchState(
+        dispatched=True,
+        settled=all(entry.get("status") == _COMPLETED for entry in matches),
+        newest_conclusion=conclusion if isinstance(conclusion, str) else None,
+    )
 
 
 def checks_state(repo: str, sha: str, check_run_name: str) -> str | None:
@@ -537,6 +614,25 @@ def checks_state(repo: str, sha: str, check_run_name: str) -> str | None:
     Anything that prevents full coverage — a failed page, a missing page, more
     pages than the cap — is "unreadable" rather than "absent", so the callers
     fall open instead of acting on a partial list.
+    """
+    matches = named_check_runs(repo, sha, check_run_name)
+    if matches is None:
+        return None
+    if not matches:
+        return "absent"
+    return "done" if all(e.get("status") == _COMPLETED for e in matches) else "running"
+
+
+def named_check_runs(repo: str, sha: str, check_run_name: str) -> list[dict] | None:
+    """Every check run on ``sha`` called ``check_run_name``; None if unreadable.
+
+    A list rather than a verdict because a retried SHA legitimately carries more
+    than one: ``create_check_run.py`` POSTs a fresh check per dispatch instead of
+    PATCHing the previous attempt's. Callers decide what to do with several —
+    ``checks_state`` folds them (any still running ⇒ running), while
+    ``newest_conclusion`` picks the latest.
+
+    See ``checks_state`` for why this paginates and why partial coverage is None.
     """
     matches: list[dict] = []
     seen = 0
@@ -581,9 +677,7 @@ def checks_state(repo: str, sha: str, check_run_name: str) -> str | None:
         )
         return None
 
-    if not matches:
-        return "absent"
-    return "done" if all(e.get("status") == _COMPLETED for e in matches) else "running"
+    return matches
 
 
 def claim_is_settled(repo: str, ref: str, sha: str, check_run_name: str) -> bool | None:
@@ -806,30 +900,65 @@ def resolve(
         )
         return "claimed", None
 
-    dispatched = dispatch_exists(repo, sha, check_run_name)
-    if dispatched is None:
+    state = read_dispatch_state(repo, sha, check_run_name)
+    if state is None:
         raise GuardUnavailable(f"could not tell whether {sha} was already dispatched")
-    if dispatched:
+    if state.dispatched:
+        # A leg that has already been dispatched is normally settled: the check
+        # run is the verdict and every duplicate run's gate reads it. The one
+        # exception is a leg that dispatched and FAILED, because then there is a
+        # question still worth asking — and re-adding the `e2e` label is what
+        # people reach for to ask it. Before this, that re-label spent a full run
+        # (both native base-image builds, Trivy, SDR K8s E2E) dispatching nothing
+        # and re-reading the same red check.
+        #
+        # Three conditions, and every one of them is load-bearing:
+        #
+        # * NEWEST conclusion, not "any failure" — a SHA retried once keeps the
+        #   old attempt's check, so any-failure would re-trigger a leg that has
+        #   since passed, on every subsequent event, forever.
+        # * A PASSING newest conclusion stays deduped. Re-testing a green leg
+        #   costs a tenant to re-answer an answered question.
+        # * The claimant run must be dead. A live claimant may be mid-re-run of
+        #   its own dispatch job (``is_my_run`` lets it through), and that plus a
+        #   reclaim here is two dispatches contending for one tenant — the exact
+        #   harm this module exists to prevent.
+        if state.retryable and not run_is_live(repo, claimant.run_id):
+            print(
+                f"Run {claimant.run_id} ({claimant.run_url(repo)}) dispatched "
+                f"{app} for {sha} and its newest '{check_run_name}' concluded "
+                f"{state.newest_conclusion!r}; that run is over, so this one "
+                "reclaims the slot and re-dispatches."
+            )
+            return _reclaim(
+                repo,
+                ref,
+                run_id=run_id,
+                attempt=attempt,
+                pr_number=pr_number,
+                claimant=claimant,
+                clock=clock,
+            )
         print(
             f"Run {claimant.run_id} ({claimant.run_url(repo)}) already dispatched "
             f"{app} for {sha}; skipping this duplicate dispatch. Its "
             f"'{check_run_name}' check on this commit carries the verdict, and "
             "this run's connector gate reads that same check."
         )
-        # Without this the message reads as "nothing to do here", and the only
-        # re-trigger people find is a fresh commit. There IS one on this commit:
-        # the claiming run may dispatch again (``is_my_run`` compares run ids
-        # only, so a re-run of it bumps the attempt and is allowed through),
-        # while any OTHER run lands here and skips. The whole run, not
-        # ``--failed``: a leg that dispatched fine and then failed downstream
-        # leaves this job green, so ``--failed`` re-runs the gate alone and it
-        # re-reads the very check that is already red.
-        print(
-            f"::notice::to re-run {app} e2e on {sha[:8]} without a new commit, "
-            f"re-run the claiming run itself: gh run rerun {claimant.run_id} "
-            "(the whole run — not --failed). Only that run is allowed to "
-            "re-dispatch this commit."
-        )
+        # Only the live-claimant case is left with something retryable in it, and
+        # there the answer is that run, not this one: re-running IT is allowed
+        # (``is_my_run`` compares run ids only, so a re-run bumps the attempt and
+        # goes through). The whole run, not ``--failed``: a leg that dispatched
+        # fine and then failed downstream leaves the dispatch job green, so
+        # ``--failed`` re-runs the gate alone and it re-reads the same red check.
+        if state.retryable:
+            print(
+                f"::notice::{app} e2e concluded {state.newest_conclusion!r} on "
+                f"{sha[:8]} but run {claimant.run_id} is still going, so this run "
+                f"cannot take the slot. To retry now: gh run rerun "
+                f"{claimant.run_id} (the whole run — not --failed). Otherwise "
+                "re-add the `e2e` label once that run finishes."
+            )
         return "duplicate", claimant
 
     if run_is_live(repo, claimant.run_id):
@@ -843,6 +972,35 @@ def resolve(
         f"::warning::run {claimant.run_id} claimed the {app} dispatch for {sha} "
         "and finished without dispatching; reclaiming the slot."
     )
+    return _reclaim(
+        repo,
+        ref,
+        run_id=run_id,
+        attempt=attempt,
+        pr_number=pr_number,
+        claimant=claimant,
+        clock=clock,
+    )
+
+
+def _reclaim(
+    repo: str,
+    ref: str,
+    *,
+    run_id: int,
+    attempt: int,
+    pr_number: int | None,
+    claimant: Claimant,
+    clock,
+) -> tuple[str, Claimant | None]:
+    """Take the slot from a finished claimant, or lose the race and stand down.
+
+    Shared by both reclaim reasons (a claimant that never dispatched, and one
+    whose dispatch failed) so there is one CAS, not two. Delete-then-create is
+    what makes it safe with several contenders: the create is the compare-and-set,
+    so exactly one wins and every other reads back "duplicate" rather than
+    dispatching a second run at the same tenant.
+    """
     delete_ref(repo, ref)
     blob = create_claim_blob(repo, run_id, attempt, clock(), pr_number)
     if try_claim(repo, ref, blob) == "claimed":
