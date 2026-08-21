@@ -1009,7 +1009,7 @@ def test_success_without_a_deployment_id_still_fails(
     ],
 )
 def test_not_found_detection(code: int, message: str, expected_not_found: bool) -> None:
-    reply = app._InstallReply.parse(_install_reply("error", code, message))
+    reply = app._MarketplaceReply.parse(_install_reply("error", code, message))
     assert reply.not_found is expected_not_found
 
 

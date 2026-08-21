@@ -503,10 +503,19 @@ def test_the_lease_wait_fits_inside_the_job_timeout(jobs: dict) -> None:  # type
 
 
 #: The jobs a lease is actually HELD across: acquired before the install, released
-#: after the last leg. The TTL is measured from the acquisition time the holder
-#: records for itself, so only this span counts — none of the pre-lease work
+#: at the end of release-tenant. The TTL is measured from the acquisition time the
+#: holder records for itself, so only this span counts — none of the pre-lease work
 #: (discovery, image build, manifest merge, runner queue time) does.
-_LEASE_HELD_ACROSS = ("prepare-tenant", "e2e")
+#:
+#: release-tenant is in the span since FND-709 and has to be. It no longer only
+#: releases: it uninstalls the app first, clearing the `releaseChannel: specific`
+#: pin the install wrote, and that has to happen UNDER the lease — hand the tenant
+#: over first and the next run's install can land between LM's HelmRelease delete
+#: and its record delete, with LM's fail-open `is_app_uninstalled` lookup shared
+#: between the two paths so neither blocks the other. Raising release-tenant's
+#: timeout therefore forces the TTL up here, rather than silently eating its
+#: margin.
+_LEASE_HELD_ACROSS = ("prepare-tenant", "e2e", "release-tenant")
 
 
 def test_the_lease_ttl_cannot_fire_on_a_healthy_holder(jobs: dict) -> None:  # type: ignore[type-arg]
@@ -1002,6 +1011,154 @@ def test_job_timeout_stays_above_the_scripts_own_waits(jobs: dict) -> None:  # t
             f"the step now passes {flag}, so the budget above is no longer the "
             "script's default — compute the timeout from the passed value instead"
         )
+
+
+# ── FND-709: the run clears its own version pin before it lets the tenant go ─
+#
+# Every assertion below protects something whose failure mode is silent residue
+# rather than a red build — a `releaseChannel: specific` pin left on a shared
+# tenant, which surfaces weeks later as an ImagePullBackOff that fails somebody
+# ELSE's install (LM's health check is namespace-scoped, DISTR-901). That is
+# exactly how the gap this closes went unnoticed for months, so the regression
+# has to be catchable here.
+
+#: The step names the guards below key on. Kept as constants because the
+#: assertions are about their ORDER and their gates, and a rename that only
+#: touched one of two literals would silently stop testing anything.
+_HOLD_STEP = "Confirm this run still holds the tenant lease"
+_UNINSTALL_STEP = "Clear this run's version pin from the tenant"
+_RELEASE_STEP = "Release the tenant lease"
+
+
+def _release_tenant_steps(jobs: dict) -> list[dict]:  # type: ignore[type-arg]
+    return list(jobs["release-tenant"]["steps"])
+
+
+def _step_index(jobs: dict, name: str) -> int:  # type: ignore[type-arg]
+    for index, step in enumerate(_release_tenant_steps(jobs)):
+        if str(step.get("name", "")) == name:
+            return index
+    raise AssertionError(
+        f"release-tenant has no step named {name!r}; the FND-709 cleanup guards "
+        "below key on it"
+    )
+
+
+def test_the_pin_is_cleared_before_the_lease_goes_back(jobs: dict) -> None:  # type: ignore[type-arg]
+    """The order IS the safety property.
+
+    Release first and the next run's install can land between LM's HelmRelease
+    delete and its record delete — and LM's reinstall suppression is explicitly
+    not a second backstop: `trigger_uninstall` and `_trigger_install` share one
+    `is_app_uninstalled` lookup that fails open, so on a bad read neither blocks
+    the other. The lease is the only thing that closes that window.
+    """
+    assert _step_index(jobs, _UNINSTALL_STEP) < _step_index(jobs, _RELEASE_STEP), (
+        "the uninstall must run while this run still holds the lease; releasing "
+        "first lets the next run's install race LM's delete"
+    )
+
+
+def test_the_uninstall_only_runs_for_a_cloud_this_run_actually_holds(
+    jobs: dict,
+) -> None:  # type: ignore[type-arg]
+    """release-tenant's `if:` is deliberately wide — it runs for clouds this run
+    never leased, so a leg that holds nothing can still hand back what it does.
+
+    The RELEASE is safe under that widening on its own (the driver re-checks
+    ownership per ref before deleting). An UNINSTALL is not: run for a cloud this
+    run never held, it deletes whatever the actual holder just installed. So it
+    has to be gated on the per-cloud lease check, and that check has to be
+    non-fatal or it reds the one job that must always be able to release.
+    """
+    steps = _release_tenant_steps(jobs)
+    hold = steps[_step_index(jobs, _HOLD_STEP)]
+    uninstall = steps[_step_index(jobs, _UNINSTALL_STEP)]
+
+    assert (
+        hold["continue-on-error"] is True
+    ), "a not-held verdict must not red the job that hands the tenant back"
+    assert "--mode verify" in hold["run"]
+    assert _step_index(jobs, _HOLD_STEP) < _step_index(jobs, _UNINSTALL_STEP)
+    assert f"steps.{hold['id']}.outcome == 'success'" in uninstall["if"], (
+        "the uninstall is not gated on this run holding THIS cloud's lease, so it "
+        "can delete another run's install"
+    )
+
+
+def test_the_uninstall_cannot_red_a_run_whose_tests_passed(jobs: dict) -> None:  # type: ignore[type-arg]
+    """A pin left behind is a slow hazard; a job that goes red over it blocks a
+    merge now. The tolerance lives here rather than in a driver flag so it is
+    visible to whoever reads the step — and so it also covers the failure paths a
+    residue flag would not (an unreachable tenant, a rotated credential)."""
+    steps = _release_tenant_steps(jobs)
+    for name in (_HOLD_STEP, "Resolve e2e tenant for this cloud", _UNINSTALL_STEP):
+        assert (
+            steps[_step_index(jobs, name)]["continue-on-error"] is True
+        ), f"{name!r} can fail, and release-tenant must never fail"
+    # And the tenant still goes back whatever the cleanup did.
+    assert steps[_step_index(jobs, _RELEASE_STEP)]["if"] == "always()"
+
+
+def test_the_uninstall_reads_app_id_from_the_apps_own_atlan_yaml(jobs: dict) -> None:  # type: ignore[type-arg]
+    """One source for the app id, shared with the install.
+
+    Threading it in would give the uninstall a second source that can disagree
+    with the install's — and a disagreement here means uninstalling the wrong app
+    from a live tenant while looking entirely successful.
+    """
+    steps = _release_tenant_steps(jobs)
+    uninstall = steps[_step_index(jobs, _UNINSTALL_STEP)]
+    assert "--app-ids" not in uninstall["run"]
+    assert "e2e_tenant_app.py uninstall" in uninstall["run"]
+    # Which needs the caller's repo checked out, or atlan.yaml is not there to read.
+    assert any(
+        "actions/checkout" in str(step.get("uses", ""))
+        and "path" not in step.get("with", {})
+        for step in steps
+    ), "the caller's repo must be checked out for its atlan.yaml"
+
+
+def test_release_tenant_timeout_stays_above_the_uninstalls_own_wait(jobs: dict) -> None:  # type: ignore[type-arg]
+    """Same rule as prepare-tenant's, and it now has a second job: this timeout
+    feeds the lease TTL guard, because release-tenant is time the lease is HELD.
+    Raising the script's budget forces both up rather than silently making a job
+    timeout — or a TTL break on a live holder — reachable."""
+    waits = app.DEFAULT_UNINSTALL_TIMEOUT_SECONDS // 60
+    required = round(waits / _MAX_WAIT_SHARE)
+    actual = jobs["release-tenant"]["timeout-minutes"]
+    assert actual >= required, (
+        f"release-tenant allows {actual} min but the uninstall can spend {waits} "
+        f"min of it waiting. Raise it to at least {required} — and re-check the "
+        "lease TTL, which is derived from this."
+    )
+
+    uninstall = _release_tenant_steps(jobs)[_step_index(jobs, _UNINSTALL_STEP)]
+    assert "--timeout-seconds" not in uninstall["run"], (
+        "the step now passes --timeout-seconds, so the budget above is no longer "
+        "the script's default — compute the timeout from the passed value instead"
+    )
+
+
+def test_the_cleanup_and_the_install_resolve_the_same_tenant(jobs: dict) -> None:  # type: ignore[type-arg]
+    """A cleanup pointed at a different tenant than the install would leave the
+    pin exactly where it was and delete an app from somewhere else. Pinned by
+    construction: both legs run the same resolver over the same matrix secret and
+    the same `matrix.cloud`."""
+    assert (
+        jobs["release-tenant"]["env"]["E2E_CLOUD"]
+        == jobs["prepare-tenant"]["env"]["E2E_CLOUD"]
+    )
+    assert (
+        jobs["release-tenant"]["env"]["E2E_TENANT_MATRIX_JSON"]
+        == jobs["prepare-tenant"]["env"]["E2E_TENANT_MATRIX_JSON"]
+    )
+    # The two-pass mask-then-write protocol for this step is NOT re-asserted here.
+    # The per-leg tenant resolver's own test module already audits every
+    # invocation in this workflow (`test_every_env_write_call_site_masks_first`),
+    # and it FINDS them by scanning .github for that script's name — so much as
+    # naming it here would register this file as one of its call sites and break
+    # the audit that matters. Deliberately worded to stay outside that net.
 
 
 def test_install_step_does_not_thread_app_id(jobs: dict) -> None:  # type: ignore[type-arg]
