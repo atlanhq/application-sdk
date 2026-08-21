@@ -7,6 +7,20 @@
 # zero findings + green CI + READY_TO_MERGE — then STOPS. It never merges; a
 # human does.
 #
+# Two bot logins are allowlisted alongside human associations, because a GitHub
+# App's comments carry author_association NONE and would otherwise never fire:
+#   * atlan-ci             — the CI identity.
+#   * mothership-ai[bot]   — the rover identity, and ONLY on PRs it authored
+#     itself. The conformance-remediation lane ends a `rule-review` outcome by
+#     opening a rule-fix PR against this repo and commenting `@sdk-resolve` on
+#     it, so the fix is driven to merge-ready instead of waiting for someone to
+#     notice a ticket. Binding the bot's trigger to its own PRs is deliberate:
+#     without it, any prompt-injected or compromised rover commenting
+#     `@sdk-resolve` on a HUMAN's PR would cause autonomous pushes to that
+#     human's branch. The resolver's own boundary still holds either way — it
+#     stops at merge-ready and a human merges, which matters more here than
+#     usual, since a conformance rule change lands fleet-wide.
+#
 # This runs in a SEPARATE sandbox from @sdk-review. The reviewer stays strictly
 # read-only (never pushes); this resolver is the only writer. All resolver logic
 # lives in .mothership/pr-resolve/ and is read at runtime by the sandbox.
@@ -60,6 +74,10 @@ jobs:
           || github.event.comment.author_association == 'MEMBER'
           || github.event.comment.author_association == 'COLLABORATOR'
           || github.event.comment.user.login == 'atlan-ci'
+          || (
+            github.event.comment.user.login == 'mothership-ai[bot]'
+            && github.event.issue.user.login == 'mothership-ai[bot]'
+          )
         )
       )
     runs-on: ubuntu-latest

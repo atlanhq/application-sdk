@@ -1,0 +1,131 @@
+# Conformance Remediation — e2e verification (FND-18 Stage 2/3)
+#
+# Dispatches ONE (repo, rule) remediation unit directly to a mothership rover,
+# bypassing the orchestrator, with the playbook and /remediate skill injected as
+# session_files FROM THIS CHECKOUT. That is what makes the lane testable before
+# any of the three FND-18 PRs merge: dispatch this workflow on the
+# vaibhavchopra/fnd-18-remediation-lane branch and the branch under test supplies
+# its own playbook.
+#
+# The rover clones the target app repo on main, runs the gated loop for exactly
+# one rule, and — if fixes survive both gates — opens PR conformance/<rule>
+# against the app repo (human-reviewed; nothing auto-merges). The step summary
+# shows RESULT, N of M cleared, the PR URL, cost, and which model served the main
+# loop vs the sub-agents (the kimi-k3 / gpt-5.6-luna proof).
+#
+# Dispatch + SSE parsing + summary mining live in the tested
+# conformance_remediation_e2e.py per docs/standards/ci.md.
+#
+# Required configuration (shared with vuln-triage-cron.yml):
+#   secrets.HARNESS_TOKEN           Bearer token for /api/sandbox/execute.
+#   secrets.GLOBALPROTECT_USERNAME  VPN auth.
+#   secrets.GLOBALPROTECT_PASSWORD  VPN auth.
+#   vars.GLOBALPROTECT_PORTAL_URL   VPN portal URL.
+#   vars.MOTHERSHIP_URL             e.g. https://mothership.atlan.dev
+
+name: Conformance Remediation E2E
+
+on:
+  # Pre-merge escape hatch: workflow_dispatch only resolves workflows on the
+  # default branch, which would defeat a pre-merge e2e. Pushing a branch named
+  #   e2e/conformance-remediation/<app-repo-name>/<RULE>
+  # (e.g. e2e/conformance-remediation/atlan-netsuite-app/L011) fires this
+  # workflow from that ref; the script derives the unit from GITHUB_REF_NAME.
+  push:
+    branches:
+      - 'e2e/conformance-remediation/**'
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: 'Target app repo (owner/name)'
+        required: true
+        default: 'atlanhq/atlan-netsuite-app'
+        type: string
+      rule:
+        description: 'Exactly one rule ID (e.g. L011, L004, E002)'
+        required: true
+        default: 'L011'
+        type: string
+      suite_version:
+        description: 'Pinned conformance suite version'
+        required: false
+        default: '0.20.1'
+        type: string
+      dry_run:
+        description: 'true = print the payload, dispatch nothing'
+        required: false
+        default: 'false'
+        type: string
+      main_model:
+        description: 'Main-loop model (A/B lever; default kimi-k3)'
+        required: false
+        default: ''
+        type: string
+      subagent_model:
+        description: 'Task sub-agent model (default gpt-5.6-luna)'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    # The rover runs up to 90m (max_timeout_seconds: 5400); the stream timeout
+    # sits just above it.
+    timeout-minutes: 100
+    concurrency:
+      # One e2e unit at a time per (repo, rule) — the rover's own idempotency
+      # guard makes a duplicate a cheap `exists:`, but there is no reason to pay
+      # for two sandboxes. On the push trigger `inputs.*` are empty, so fall
+      # back to the ref name (which encodes the unit) — otherwise every
+      # push-triggered run would share one group and unrelated units would
+      # serialise behind a 100-minute run.
+      group: conformance-remediation-e2e-${{ inputs.repo || github.ref_name }}-${{ inputs.rule }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout (this branch carries the playbook)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Connect to VPN (attempt 1/3)
+        id: vpn1
+        if: inputs.dry_run != 'true'
+        uses: ./.github/actions/globalprotect-connect
+        continue-on-error: true
+        with:
+          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+
+      - name: Connect to VPN (attempt 2/3)
+        id: vpn2
+        if: inputs.dry_run != 'true' && steps.vpn1.outcome == 'failure'
+        uses: ./.github/actions/globalprotect-connect
+        continue-on-error: true
+        with:
+          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+
+      - name: Connect to VPN (attempt 3/3)
+        if: inputs.dry_run != 'true' && steps.vpn2.outcome == 'failure'
+        uses: ./.github/actions/globalprotect-connect
+        with:
+          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+
+      - name: Dispatch one remediation unit
+        env:
+          MOTHERSHIP_URL: ${{ vars.MOTHERSHIP_URL }}
+          HARNESS_TOKEN: ${{ secrets.HARNESS_TOKEN }}
+          TARGET_REPO: ${{ inputs.repo }}
+          RULE_ID: ${{ inputs.rule }}
+          SUITE_VERSION: ${{ inputs.suite_version }}
+          MAIN_MODEL: ${{ inputs.main_model }}
+          SUBAGENT_MODEL: ${{ inputs.subagent_model }}
+          DRY_RUN: ${{ inputs.dry_run == 'true' && '1' || '0' }}
+          GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python3 .github/scripts/conformance_remediation_e2e.py
