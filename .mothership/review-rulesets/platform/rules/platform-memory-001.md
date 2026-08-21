@@ -5,7 +5,7 @@ level: L4
 category: platform-runtime
 globs: []
 severity: HIGH
-provenance: atlan-databricks-app app-review.md (MEM, SDK v3 platform rules)
+provenance: sdk-v3-platform-review-guidelines
 suppressible: false
 ---
 # Bounded memory on unbounded sources

@@ -5,7 +5,7 @@ level: L4
 category: platform-runtime
 globs: []
 severity: HIGH
-provenance: atlan-databricks-app app-review.md (contract evolution); Temporal replay semantics
+provenance: sdk-v3-platform-review-guidelines; Temporal replay semantics
 suppressible: false
 ---
 # Activity contracts evolve additively

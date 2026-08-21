@@ -5,7 +5,7 @@ level: L4
 category: platform-runtime
 globs: []
 severity: HIGH
-provenance: atlan-databricks-app app-review.md (heartbeat rules); application-sdk @task auto-heartbeat
+provenance: sdk-v3-platform-review-guidelines; @task auto-heartbeat behavior
 suppressible: false
 ---
 # Heartbeats must survive synchronous work

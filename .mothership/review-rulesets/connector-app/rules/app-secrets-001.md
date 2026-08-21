@@ -5,7 +5,7 @@ level: L2
 category: security
 globs: []
 severity: HIGH
-provenance: atlan-databricks-app app-review.md (SEC, SDK v3 platform rules)
+provenance: sdk-v3-connector-review-guidelines
 suppressible: false
 ---
 # Credentials never reach logs or errors

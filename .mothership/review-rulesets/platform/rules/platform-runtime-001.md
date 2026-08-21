@@ -5,7 +5,7 @@ level: L4
 category: platform-runtime
 globs: []
 severity: HIGH
-provenance: atlan-databricks-app app-review.md (TEMP, SDK v3 platform rules)
+provenance: sdk-v3-platform-review-guidelines
 suppressible: false
 ---
 # Workflow bodies are deterministic orchestration only
