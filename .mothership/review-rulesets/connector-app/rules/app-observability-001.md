@@ -5,7 +5,7 @@ level: L2
 category: observability
 globs: []
 severity: MEDIUM
-provenance: atlan-databricks-app app-review.md (OBS/STYLE, SDK v3 platform rules)
+provenance: sdk-v3-connector-review-guidelines
 suppressible: true
 ---
 # Bounded observability

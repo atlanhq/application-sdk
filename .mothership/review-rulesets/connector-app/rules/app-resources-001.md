@@ -5,7 +5,7 @@ level: L2
 category: correctness
 globs: []
 severity: MEDIUM
-provenance: atlan-databricks-app app-review.md (RES, SDK v3 platform rules)
+provenance: sdk-v3-connector-review-guidelines
 suppressible: false
 ---
 # Client and handle lifecycle

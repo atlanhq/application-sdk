@@ -5,7 +5,7 @@ level: L2
 category: correctness
 globs: []
 severity: HIGH
-provenance: atlan-databricks-app app-review.md (STATE/DATA, SDK v3 platform rules)
+provenance: sdk-v3-connector-review-guidelines
 suppressible: false
 ---
 # Cross-activity data goes through the object store

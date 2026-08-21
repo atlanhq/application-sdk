@@ -5,7 +5,7 @@ level: L2
 category: correctness
 globs: []
 severity: HIGH
-provenance: atlan-databricks-app app-review.md (ERR); application-sdk error taxonomy
+provenance: sdk-v3-connector-review-guidelines; SDK error taxonomy
 suppressible: false
 ---
 # Typed errors at boundaries; retry and failure are explicit
