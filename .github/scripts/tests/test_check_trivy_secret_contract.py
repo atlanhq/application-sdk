@@ -16,41 +16,78 @@ _MODULE_PATH = _REPO_ROOT / ".github" / "scripts" / "check_trivy_secret_contract
 _WORKFLOW_PATH = _REPO_ROOT / ".github" / "workflows" / "trivy-container.yaml"
 _COMPOSITE_PATH = _REPO_ROOT / ".github" / "actions" / "trivy-container" / "action.yaml"
 
-# A caller using `secrets: inherit`, with the fleet App token minted.
+# A caller using `secrets: inherit`, with the fleet App token minted. Values are
+# deliberately distinctive so a leak into any output is unmistakable.
 FULLY_CONFIGURED = {
-    "ORG_PAT_GITHUB": "pat",
-    "APP_TOKEN_MINTED": "ghs_token",
+    "ORG_PAT_GITHUB": "ghp-SENTINEL-pat-value",
+    "APP_TOKEN_MINTED": "ghs-SENTINEL-app-token",
 }
 
 
-class TestMissingSecrets:
-    def test_fully_configured_caller_has_nothing_missing(self):
-        assert guard.missing_secrets(FULLY_CONFIGURED) == []
+class TestSecretsPresent:
+    def test_reduces_values_to_booleans(self):
+        # The boundary that keeps values out of the reporting path.
+        assert guard.secrets_present(FULLY_CONFIGURED) == {
+            "ORG_PAT_GITHUB": True,
+            "APP_TOKEN_MINTED": True,
+        }
 
-    def test_org_pat_required_when_the_app_token_did_not_mint(self):
-        env = FULLY_CONFIGURED | {"APP_TOKEN_MINTED": "", "ORG_PAT_GITHUB": ""}
-        assert guard.missing_secrets(env) == ["ORG_PAT_GITHUB"]
-
-    def test_unset_variable_counts_as_missing_not_only_empty(self):
+    def test_unset_and_empty_are_both_absent(self):
         # GitHub renders an unpassed secret as "", but a caller-side typo in the
         # step's env mapping omits the variable entirely. Both must be caught.
-        assert guard.missing_secrets({}) == ["ORG_PAT_GITHUB"]
+        assert guard.secrets_present({})["ORG_PAT_GITHUB"] is False
+        assert guard.secrets_present({"ORG_PAT_GITHUB": ""})["ORG_PAT_GITHUB"] is False
+
+    def test_whitespace_only_is_absent(self):
+        assert (
+            guard.secrets_present({"ORG_PAT_GITHUB": "  "})["ORG_PAT_GITHUB"] is False
+        )
+
+    def test_returns_no_string_values_at_all(self):
+        # A regression here would re-open the clear-text-logging path CodeQL
+        # flagged: whatever this returns is what reaches failure_message.
+        assert all(
+            isinstance(v, bool)
+            for v in guard.secrets_present(FULLY_CONFIGURED).values()
+        )
+
+
+class TestMissingSecrets:
+    def _present(self, **overrides: str) -> dict[str, bool]:
+        return guard.secrets_present(FULLY_CONFIGURED | overrides)
+
+    def test_fully_configured_caller_has_nothing_missing(self):
+        assert guard.missing_secrets(self._present()) == []
+
+    def test_org_pat_required_when_the_app_token_did_not_mint(self):
+        present = self._present(APP_TOKEN_MINTED="", ORG_PAT_GITHUB="")
+        assert guard.missing_secrets(present) == ["ORG_PAT_GITHUB"]
+
+    def test_unset_variable_counts_as_missing_not_only_empty(self):
+        assert guard.missing_secrets(guard.secrets_present({})) == ["ORG_PAT_GITHUB"]
 
     def test_org_pat_not_required_when_the_app_token_minted(self):
         # Nothing reads ORG_PAT_GITHUB once the App token exists, so demanding
         # it would red a correctly configured caller.
-        assert guard.missing_secrets(FULLY_CONFIGURED | {"ORG_PAT_GITHUB": ""}) == []
+        assert guard.missing_secrets(self._present(ORG_PAT_GITHUB="")) == []
 
     def test_whitespace_only_app_token_does_not_count_as_minted(self):
-        env = FULLY_CONFIGURED | {"APP_TOKEN_MINTED": "  ", "ORG_PAT_GITHUB": ""}
-        assert guard.missing_secrets(env) == ["ORG_PAT_GITHUB"]
+        present = self._present(APP_TOKEN_MINTED="  ", ORG_PAT_GITHUB="")
+        assert guard.missing_secrets(present) == ["ORG_PAT_GITHUB"]
 
     def test_chainguard_secrets_are_no_longer_demanded(self):
         # They exist only as repo-level secrets on application-sdk, so no caller
         # could ever supply them, and no caller builds from cgr.dev anyway.
         # Demanding them is what killed all 33 callers (FND-447).
         assert guard.ALWAYS_REQUIRED == ()
-        assert guard.missing_secrets(FULLY_CONFIGURED) == []
+        assert guard.missing_secrets(self._present()) == []
+
+    def test_returns_only_declared_constant_names(self):
+        # Every returned element must be a module-level constant, never
+        # something derived from the environment.
+        known = {*guard.ALWAYS_REQUIRED, guard.REQUIRED_WITHOUT_APP_TOKEN}
+        present = self._present(APP_TOKEN_MINTED="", ORG_PAT_GITHUB="")
+        assert set(guard.missing_secrets(present)) <= known
 
 
 class TestFailureMessage:
@@ -62,6 +99,16 @@ class TestFailureMessage:
 
     def test_points_the_operator_at_the_replacement_workflow(self):
         assert "build-and-scan.yaml" in guard.failure_message(["ORG_PAT_GITHUB"])
+
+    def test_no_secret_value_reaches_the_message(self):
+        # End-to-end over the real call chain main() uses, with sentinel values
+        # in the environment. This is the assertion CodeQL's finding was about.
+        env = FULLY_CONFIGURED | {"APP_TOKEN_MINTED": "", "ORG_PAT_GITHUB": ""}
+        message = guard.failure_message(
+            guard.missing_secrets(guard.secrets_present(env))
+        )
+        for value in FULLY_CONFIGURED.values():
+            assert value not in message
 
 
 # ── The reusable must stay incapable of startup_failure ──────────────────────

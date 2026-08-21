@@ -48,22 +48,44 @@ REMEDY = (
 )
 
 
-def missing_secrets(env: Mapping[str, str]) -> list[str]:
-    """Names of secrets the scan needs that arrived empty or unset.
+def secrets_present(env: Mapping[str, str]) -> dict[str, bool]:
+    """Reduce the environment to "did this secret arrive non-empty?" per name.
 
-    `env` is the step's environment, where each secret has been mapped to a
-    same-named variable. GitHub renders an unpassed secret as the empty string
-    rather than omitting the variable, so absent and empty are one case.
+    This is the only function that touches secret *values*, and it returns
+    booleans, so no value can reach the reporting path below. Keeping that
+    boundary explicit is what makes the failure message provably name-only --
+    CodeQL flagged the previous shape, which handed the whole environment to the
+    function whose result gets printed, as clear-text logging of a secret.
+
+    GitHub renders an unpassed secret as the empty string rather than omitting
+    the variable, so absent and empty are one case. A value that is only
+    whitespace is treated as absent too: it would fail downstream anyway, and
+    reporting it here beats a cryptic auth error later.
     """
-    missing = [name for name in ALWAYS_REQUIRED if not env.get(name)]
-    app_token_minted = env.get("APP_TOKEN_MINTED", "").strip() != ""
-    if not app_token_minted and not env.get(REQUIRED_WITHOUT_APP_TOKEN):
+    names = (*ALWAYS_REQUIRED, REQUIRED_WITHOUT_APP_TOKEN, "APP_TOKEN_MINTED")
+    return {name: bool(env.get(name, "").strip()) for name in names}
+
+
+def missing_secrets(present: Mapping[str, bool]) -> list[str]:
+    """Names of secrets the scan needs that did not arrive.
+
+    Takes the presence map from `secrets_present`, never the environment: every
+    name returned is a module-level constant, so the caller can print the result
+    without any possibility of echoing a value.
+    """
+    missing = [name for name in ALWAYS_REQUIRED if not present.get(name)]
+    if not present.get("APP_TOKEN_MINTED") and not present.get(
+        REQUIRED_WITHOUT_APP_TOKEN
+    ):
         missing.append(REQUIRED_WITHOUT_APP_TOKEN)
     return missing
 
 
 def failure_message(missing: list[str]) -> str:
-    """Operator-facing explanation of which secrets are missing and what to do."""
+    """Operator-facing explanation of which secrets are missing and what to do.
+
+    `missing` holds names only, by construction -- see `missing_secrets`.
+    """
     return (
         "trivy-container.yaml did not receive these secrets: "
         f"{', '.join(missing)}.\n\n{REMEDY}"
@@ -71,7 +93,7 @@ def failure_message(missing: list[str]) -> str:
 
 
 def main() -> int:
-    missing = missing_secrets(os.environ)
+    missing = missing_secrets(secrets_present(os.environ))
     if missing:
         print(failure_message(missing), file=sys.stderr)
         return 1
