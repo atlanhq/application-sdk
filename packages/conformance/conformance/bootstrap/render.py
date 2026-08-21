@@ -82,6 +82,19 @@ RETIRED_WORKFLOWS: tuple[str, ...] = ("docstring-coverage.yaml",)
 # whose changed-files filter matches) legs fail with "Can't find action.yml"
 # the first time they actually run. Static templates (no per-repo params),
 # always-overwrite like MANAGED_WORKFLOWS.
+#
+# Because these are always-overwrite, they have to satisfy the *caller's*
+# linters, not just this repo's: a consumer whose pre-commit rejects one of
+# them cannot fix it, since the next bootstrap run reverts the fix. FND-445
+# was exactly that — the vendored Python script failed pydocstyle ``D`` and
+# got re-wrapped by ``ruff format`` at a 100-column line length, leaving a
+# connector with a permanently red pre-commit and ``checks.yml``.
+# ``tests/test_bootstrap_scaffold_lint.py`` holds that line for every
+# force-written artifact: the template-rendered ones (these two plus the
+# MANAGED_WORKFLOWS shims and the remediate SKILL.md) under a config
+# stricter than this repo's, and ``.github/ci-system-deps.txt``, whose
+# bytes come from the ``--system-deps`` flag rather than a template,
+# separately. Keep new templates inside it.
 MANAGED_ACTION_FILES: tuple[tuple[str, str], ...] = (
     (
         ".github/actions/run-conformance-detect/action.yaml",
