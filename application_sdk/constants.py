@@ -702,6 +702,22 @@ METRICS_CLEANUP_ENABLED = (
 )
 # Same signal-discriminator convention as LOG_FILE_NAME above — not a real file name.
 METRICS_FILE_NAME = os.environ.get("ATLAN_METRICS_FILE_NAME", "metrics.parquet")
+
+# --- Activity sizing telemetry (tier-sizing evidence) ------------------------
+# One record per activity execution, so the batch is larger and the flush slower
+# than metrics: this is offline evidence for fitting tier envelopes, not something
+# anyone watches live.
+SIZING_BATCH_SIZE = int(os.environ.get("ATLAN_SIZING_BATCH_SIZE", 500))
+SIZING_FLUSH_INTERVAL_SECONDS = int(
+    os.environ.get("ATLAN_SIZING_FLUSH_INTERVAL_SECONDS", 60)
+)
+# Longer than metrics' 30: tier fitting wants the tail, and the runs that matter
+# most for sizing are the rare big ones.
+SIZING_RETENTION_DAYS = int(os.environ.get("ATLAN_SIZING_RETENTION_DAYS", 90))
+SIZING_CLEANUP_ENABLED = (
+    os.getenv("ATLAN_SIZING_CLEANUP_ENABLED", "false").lower() == "true"
+)
+SIZING_FILE_NAME = os.environ.get("ATLAN_SIZING_FILE_NAME", "sizing.parquet")
 TRACES_FILE_NAME = os.environ.get("ATLAN_TRACES_FILE_NAME", "traces.parquet")
 
 # Segment Configuration

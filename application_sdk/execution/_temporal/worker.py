@@ -733,6 +733,37 @@ def create_worker(
 
         all_interceptors.append(LivenessInterceptor(on_activity))
 
+    # Before the user-supplied interceptors, so the measured window covers them —
+    # what they hold on the way in is memory this pod had to carry.
+    if interceptor_settings.enable_sizing_telemetry:
+        _sizing_activities = interceptor_settings.sizing_telemetry_activities
+        if not _sizing_activities:
+            # Fail-closed is silent, so say so rather than leave someone wondering
+            # why no rows arrived.
+            logger.warning(
+                "APPLICATION_SDK_ENABLE_SIZING_TELEMETRY is on but "
+                "APPLICATION_SDK_SIZING_TELEMETRY_ACTIVITIES is empty, so nothing "
+                "will be collected. Name the activities to measure, or set '*' to "
+                "measure all of them."
+            )
+        else:
+            from application_sdk.execution._temporal.interceptors.sizing import (  # noqa: PLC0415 — cold path: only when sizing collection is enabled
+                SizingTelemetryInterceptor,
+            )
+
+            all_interceptors.append(
+                SizingTelemetryInterceptor(
+                    poll_interval_seconds=interceptor_settings.sizing_telemetry_poll_seconds,
+                    activities=_sizing_activities,
+                )
+            )
+            logger.info(
+                "Activity sizing telemetry enabled for %s (poll interval %ss). "
+                "Measurement only — no routing decisions are made from it.",
+                sorted(_sizing_activities),
+                interceptor_settings.sizing_telemetry_poll_seconds,
+            )
+
     all_interceptors.extend(interceptors or [])
 
     if interceptor_settings.enable_output_interceptor:

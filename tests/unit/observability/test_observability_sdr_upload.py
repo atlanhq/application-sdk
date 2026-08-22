@@ -110,11 +110,13 @@ class TestObsModeDerivation:
             "logs": "sdr/logs",
             "metrics": "sdr/metrics",
             "traces": "sdr/traces",
+            "sizing": "sdr/sizing",
         }
         assert mod.OBSERVABILITY_S3_PREFIX_MAP == {
             "logs": "artifacts/apps/observability/sdr/logs",
             "metrics": "artifacts/apps/observability/sdr/metrics",
             "traces": "artifacts/apps/observability/sdr/traces",
+            "sizing": "artifacts/apps/observability/sdr/sizing",
         }
 
     def test_non_sdr_mode_when_atlan_upload_disabled(self):

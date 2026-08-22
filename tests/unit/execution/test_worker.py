@@ -380,6 +380,78 @@ class TestCreateWorker:
         with pytest.raises(WorkerInterceptorDuplicateError):
             create_worker(client, interceptors=[TraceInterceptor()])
 
+    # ── sizing telemetry wiring ───────────────────────────────────────────
+
+    def _interceptors_for(self, monkeypatch, **env) -> list:
+        """Return the interceptor list ``create_worker`` hands to Temporal."""
+
+        class _SizingApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        for key in (
+            "APPLICATION_SDK_ENABLE_SIZING_TELEMETRY",
+            "APPLICATION_SDK_SIZING_TELEMETRY_ACTIVITIES",
+        ):
+            monkeypatch.delenv(key, raising=False)
+        for key, value in env.items():
+            monkeypatch.setenv(key, value)
+
+        client = _make_mock_client()
+        captured: dict = {}
+
+        def capture_worker(*args, **kwargs):
+            captured.update(kwargs)
+            return mock.MagicMock()
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.Worker",
+            side_effect=capture_worker,
+        ):
+            create_worker(client)
+        return list(captured.get("interceptors") or [])
+
+    def _has_sizing(self, interceptors: list) -> bool:
+        return any(
+            type(i).__name__ == "SizingTelemetryInterceptor" for i in interceptors
+        )
+
+    def test_sizing_interceptor_absent_by_default(self, monkeypatch) -> None:
+        """A version bump alone must not start measuring anything."""
+        assert self._has_sizing(self._interceptors_for(monkeypatch)) is False
+
+    def test_sizing_interceptor_absent_when_enabled_with_no_allow_list(
+        self, monkeypatch
+    ) -> None:
+        """Enabled but unnamed collects nothing — and is not even attached."""
+        interceptors = self._interceptors_for(
+            monkeypatch, APPLICATION_SDK_ENABLE_SIZING_TELEMETRY="true"
+        )
+        assert self._has_sizing(interceptors) is False
+
+    def test_sizing_interceptor_attached_for_named_activities(
+        self, monkeypatch
+    ) -> None:
+        interceptors = self._interceptors_for(
+            monkeypatch,
+            APPLICATION_SDK_ENABLE_SIZING_TELEMETRY="true",
+            APPLICATION_SDK_SIZING_TELEMETRY_ACTIVITIES="merge,fetch_entities",
+        )
+        sizing = [
+            i for i in interceptors if type(i).__name__ == "SizingTelemetryInterceptor"
+        ]
+        assert len(sizing) == 1
+        assert sizing[0]._activities == frozenset({"merge", "fetch_entities"})
+
+    def test_sizing_interceptor_absent_when_list_set_but_switch_off(
+        self, monkeypatch
+    ) -> None:
+        """The master switch wins, so collection stops without editing lists."""
+        interceptors = self._interceptors_for(
+            monkeypatch, APPLICATION_SDK_SIZING_TELEMETRY_ACTIVITIES="merge"
+        )
+        assert self._has_sizing(interceptors) is False
+
     # ── max_concurrent_workflow_tasks (BLDX-1282) ─────────────────────────
 
     def test_max_concurrent_workflow_tasks_forwarded_when_set(self) -> None:
