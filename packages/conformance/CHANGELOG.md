@@ -2,6 +2,12 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.22.1] - 2026-08-22
+
+### Other changes
+
+- chore(contract-toolkit): release v0.22.1 (#3304) ([afad725](https://github.com/atlanhq/application-sdk/commit/afad725))
+
 ## [0.22.0] - 2026-08-21
 
 ### Features
