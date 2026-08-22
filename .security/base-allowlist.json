@@ -7,16 +7,5 @@
     "CRITICAL": 7,
     "HIGH": 30
   },
-  "_entry_schema": "Each non-underscore key is a CVE/advisory ID. Required: package, severity (CRITICAL|HIGH only), reason, expires, added_by, case (1-4), ticket. Optional: fix_pr. Keep entries minimal but descriptive.",
-  "CVE-2026-14456": {
-    "package": "libcrypto3, libssl3",
-    "severity": "HIGH",
-    "reason": "Case 4: base-image CVE in app-runtime-base:3 (OpenSSL 3.6.3-r4); the vulnerable OpenSSL QUIC server listener path is not exercised by the SDK, awaiting Chainguard rebuild to 3.6.3-r5.",
-    "expires": "2026-09-20",
-    "added_by": "@atlan-ci (vuln-triage rover)",
-    "case": 4,
-    "ticket": "BLDX-1635",
-    "re_evaluation_trigger": "fix_released",
-    "fix_available_date": "2026-08-13"
-  }
+  "_entry_schema": "Each non-underscore key is a CVE/advisory ID. Required: package, severity (CRITICAL|HIGH only), reason, expires, added_by, case (1-4), ticket. Optional: fix_pr. Keep entries minimal but descriptive."
 }
