@@ -386,6 +386,45 @@ def test_the_merge_job_retries_its_manifest_read() -> None:
             )
 
 
+def test_the_image_build_retries_once_on_a_transient_failure() -> None:
+    """The build's own failures are mostly not the app's (FND-656 B8).
+
+    A 504 from whatever the app's download-components task fetches, or an
+    `apk ... Permission denied` on a degraded mirror, reds the build — and with
+    it the sibling arch leg, the manifest merge, the tenant install and every e2e
+    leg, all of which skip. Two connectors lost a full run to exactly that in the
+    FND-402 sweep.
+    """
+    run = _step(_BUILD_ACTION, "Build and push PR image")["run"]
+    # Comments stripped before matching, because the rationale block above the
+    # invocation names both `with-retry.sh` and `RETRY_MAX_ATTEMPTS=2` verbatim —
+    # so substring assertions against the raw `run` stay green with the retry
+    # deleted and the comment kept, which is no guard at all.
+    code = "\n".join(
+        line for line in run.splitlines() if not line.strip().startswith("#")
+    )
+
+    # One command, not two substrings: the wrapper must be what invokes the
+    # build, so the retry covers the transient failure this exists for rather
+    # than something cheap next to it.
+    assert re.search(
+        r"RETRY_MAX_ATTEMPTS=2[^\n]*\\\n"
+        r"[ \t]*[^\n]*with-retry\.sh\"?[ \t]*\\\n"
+        r"[ \t]*docker buildx build",
+        code,
+    ), (
+        "the image build itself must be the command with-retry.sh wraps, with "
+        "two attempts (not the wrapper's default five: a build takes minutes and "
+        "can fail for a reason retrying will never fix, so more attempts would "
+        "multiply the wall-clock cost of every genuine break) — a comment "
+        "mentioning the wrapper is not the wrapper"
+    )
+    assert "--push" in code, (
+        "the retried build must still push: compose pulls the image, so a build "
+        "that only loads it locally leaves every leg pulling a missing tag"
+    )
+
+
 def test_pkl_is_downloaded_for_the_runners_architecture() -> None:
     """`build-app-image` puts `regenerate-contract` on an arm64 runner.
 

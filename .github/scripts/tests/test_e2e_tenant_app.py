@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
+import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -136,6 +137,10 @@ def _install_args(**overrides: object) -> argparse.Namespace:
         "scan_wait_seconds": 0,
         "install_retry_seconds": 0,
         "timeout_seconds": 600,
+        # Off by default so every existing test keeps exercising the
+        # fail-closed cross-check; the caller that may set it is
+        # tests-reusable.yaml (see --repo-url-is-self).
+        "repo_url_is_self": False,
     }
     values.update(overrides)
     return argparse.Namespace(**values)
@@ -862,6 +867,169 @@ def test_ghcr_image_with_an_explicit_port_still_fails_closed(
             )
         )
     assert transport.paths("POST") == []
+
+
+def test_derived_repo_url_downgrades_the_image_mismatch_to_a_warning(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """app-image-name drift must not block an app whose image name != repo name.
+
+    ``adf`` publishes ``atlan-adf-app`` out of ``atlan-azure-data-factory-app``
+    (and ``sapase``/``atlan-sap-ase-app` likewise). With --repo-url DERIVED from
+    the running repo the publish cannot repoint provenance — the only destructive
+    mistake the cross-check exists to catch — so the disagreement is a naming
+    inconsistency, not a reason to refuse (FND-656 B6).
+    """
+    transport = _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", _ok({})),
+                StubRoute("POST", "/marketplace/publish", _ok({"version_id": "v1"})),
+                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+                StubRoute(
+                    "GET", "/deployments/", _ok({"deployment_status": "SUCCEEDED"})
+                ),
+                StubRoute("GET", "/info", _ok(_lm_info(_VERSION))),
+            ],
+            sticky=[StubRoute("GET", "/releases/", Response(status=404, body={}))],
+        ),
+    )
+    app.install(
+        _install_args(
+            image="ghcr.io/atlanhq/atlan-adf-app:tag",
+            repo_url="https://github.com/atlanhq/atlan-azure-data-factory-app",
+            repo_url_is_self=True,
+        )
+    )
+    out = capsys.readouterr().out
+    assert "::warning::" in out
+    assert "app-image-name drift" in out
+    # It published: the warning is advisory, not a refusal dressed up as one.
+    assert any(
+        path.endswith("/marketplace/publish") for path in transport.paths("POST")
+    )
+
+
+def test_derived_repo_url_does_not_disarm_the_matching_case(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The flag only affects the MISMATCH branch — an agreeing pair stays silent,
+    so it cannot be read as "warns on every publish now"."""
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", _ok({})),
+                StubRoute("POST", "/marketplace/publish", _ok({"version_id": "v1"})),
+                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+                StubRoute(
+                    "GET", "/deployments/", _ok({"deployment_status": "SUCCEEDED"})
+                ),
+                StubRoute("GET", "/info", _ok(_lm_info(_VERSION))),
+            ],
+            sticky=[StubRoute("GET", "/releases/", Response(status=404, body={}))],
+        ),
+    )
+    app.install(_install_args(repo_url_is_self=True))
+
+    assert "does not match the repo implied by the image" not in capsys.readouterr().out
+
+
+def test_operator_supplied_repo_url_still_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without the flag the guard is unchanged.
+
+    e2e-tenant-install.yaml's ``repo_url`` is a free-text dispatch input, so
+    there it genuinely can name another app's repo and the publish genuinely
+    would repoint provenance. That path must keep refusing.
+    """
+    transport = _wire(
+        monkeypatch,
+        StubTransport(routes=[StubRoute("GET", "/info", _ok({}))]),
+    )
+    with pytest.raises(
+        app.TenantAppError, match="does not match the repo implied by the image"
+    ):
+        app.install(
+            _install_args(
+                image="ghcr.io/atlanhq/atlan-adf-app:tag",
+                repo_url="https://github.com/atlanhq/atlan-azure-data-factory-app",
+            )
+        )
+    assert transport.paths("POST") == []
+
+
+def test_refusal_names_the_escape_hatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A refusal that does not name the flag is a dead end for the one app the
+    convention legitimately does not hold for."""
+    _wire(monkeypatch, StubTransport(routes=[StubRoute("GET", "/info", _ok({}))]))
+    with pytest.raises(app.TenantAppError, match="--repo-url-is-self"):
+        app.install(
+            _install_args(repo_url="https://github.com/atlanhq/application-sdk")
+        )
+
+
+#: The only ``--repo-url`` shape that justifies ``--repo-url-is-self``: derived
+#: from the repo the workflow runs in, so it cannot name another app's repo.
+_DERIVED_REPO_URL = "${{ github.server_url }}/${{ github.repository }}"
+
+
+def _steps_passing_the_self_flag(workflow: Path) -> list[dict]:
+    """Every step in *workflow* that passes ``--repo-url-is-self``."""
+    parsed = yaml.safe_load(workflow.read_text(encoding="utf-8"))
+    return [
+        step
+        for job in parsed["jobs"].values()
+        for step in (job.get("steps") or [])
+        if "--repo-url-is-self" in str(step.get("run", ""))
+    ]
+
+
+def test_the_self_assertion_is_only_made_where_repo_url_is_derived() -> None:
+    """``--repo-url-is-self`` downgrades a fail-closed provenance guard on a
+    premise stated in a *different file*, and nothing in Python links the two.
+
+    Repoint ``REPO_URL`` at an input — plausible, since e2e-tenant-install.yaml
+    already has one and these two workflows converge over time — and the flag
+    keeps being passed while its premise is false. The guard then accepts an
+    operator-supplied ``--repo-url`` naming another app's repo, which is the
+    provenance rewrite it exists to refuse: it fails open, silently, with the
+    warning still claiming the URL was derived. Same coupling class the B2
+    scaffold-drift tests pin, except here the silent failure is a disarmed
+    security guard rather than a misplaced error message.
+    """
+    root = Path(__file__).resolve().parents[3]
+    steps = _steps_passing_the_self_flag(root / ".github/workflows/tests-reusable.yaml")
+
+    assert steps, (
+        "no step passes --repo-url-is-self any more. That is safe (the guard is "
+        "fail-closed again), but it makes this test vacuous — delete it along "
+        "with the flag."
+    )
+    for step in steps:
+        assert (step.get("env") or {}).get("REPO_URL") == _DERIVED_REPO_URL, (
+            f"step {step.get('name')!r} passes --repo-url-is-self, which "
+            "downgrades the image/repo cross-check to a warning on the premise "
+            "that REPO_URL is DERIVED from the running repo. REPO_URL is no "
+            "longer that expression, so the premise is false and the provenance "
+            "guard now fails open on an operator-supplied value."
+        )
+
+
+def test_the_free_text_repo_url_path_never_asserts_self() -> None:
+    """The other half of the coupling: e2e-tenant-install.yaml's ``repo_url`` is
+    a free-text dispatch input, so there the cross-check is doing real work and
+    the flag must never be passed."""
+    root = Path(__file__).resolve().parents[3]
+    install_wf = root / ".github/workflows/e2e-tenant-install.yaml"
+
+    assert not _steps_passing_the_self_flag(install_wf), (
+        "e2e-tenant-install.yaml passes --repo-url-is-self, but its repo_url is "
+        "a free-text dispatch input — an operator can name any repo, so the "
+        "provenance guard must stay fail-closed on this path"
+    )
 
 
 def test_non_ghcr_repo_image_mismatch_warns_but_proceeds(

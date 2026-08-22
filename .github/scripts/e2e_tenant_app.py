@@ -1246,14 +1246,33 @@ def install(args: argparse.Namespace) -> InstallOutcome:
             "repoint the app's source_repo to it and break its CI/CD publish "
             "gating."
         )
-        if _is_ghcr_image(args.image):
+        if args.repo_url_is_self:
+            # The caller derived --repo-url from the running repo, so it cannot
+            # be "some other app's repo" and the provenance rewrite this guard
+            # exists to prevent is not available. What the disagreement actually
+            # names is app-image-name drift, which is a naming inconsistency, not
+            # a destructive publish — so say that and continue (FND-656 B6).
+            print(
+                f"::warning::the image implies {implied} but this app's repo is "
+                f"{repo_url}. That is app-image-name drift, not a wrong repo: "
+                "--repo-url was derived from the repo running this workflow, so "
+                "the publish cannot repoint provenance. Rename the GHCR image to "
+                "match the repo (or accept that image name and repo name differ "
+                "for this app) — the publish proceeds either way."
+            )
+        elif _is_ghcr_image(args.image):
             raise TenantAppError(
                 f"refusing to publish: {explanation} The image is a ghcr.io "
-                "reference, where image name == repo name holds across the "
-                "fleet, so this disagreement is a wrong --repo-url, not a "
-                "legitimate exception. Pass the app's own repo."
+                "reference, where image name == repo name holds for most of the "
+                "fleet, so this disagreement is most likely a wrong --repo-url "
+                "rather than a legitimate exception. Pass the app's own repo. If "
+                "this app genuinely publishes under a GHCR image name that "
+                "differs from its repo name (app-image-name drift), the caller "
+                "must derive --repo-url from the running repo and pass "
+                "--repo-url-is-self, which turns this into a warning."
             )
-        print(f"::warning::{explanation} Double-check before relying on this run.")
+        else:
+            print(f"::warning::{explanation} Double-check before relying on this run.")
 
     request = PublishRequest(
         app_id=app_id,
@@ -1458,6 +1477,21 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     p_install.add_argument("--repo-url", default="")
+    p_install.add_argument(
+        "--repo-url-is-self",
+        action="store_true",
+        help=(
+            "Assert that --repo-url was DERIVED from the repo running this "
+            "workflow (github.server_url/github.repository), not typed by an "
+            "operator. Pass it only from a caller where that is structurally "
+            "true — tests-reusable.yaml does; e2e-tenant-install.yaml, whose "
+            "repo_url is a free-text dispatch input, must not. It downgrades the "
+            "image-name/repo-name cross-check from fail-closed to a warning: a "
+            "derived --repo-url cannot name another app's repo, so the provenance "
+            "rewrite the check guards against is not reachable, and the "
+            "disagreement is app-image-name drift instead (FND-656 B6)."
+        ),
+    )
     p_install.add_argument("--deploy-config", default="")
     p_install.add_argument("--self-deployed-runtime", action="store_true")
     p_install.add_argument("--sdk-version", default="")

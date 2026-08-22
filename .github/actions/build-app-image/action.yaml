@@ -290,13 +290,33 @@ runs:
         # compose file as a pull target). --load would conflict with
         # --push under the standard buildx driver, and we don't need
         # the image in the local daemon since compose handles the pull.
-        docker buildx build \
-          --tag "${IMAGE}" \
-          --push \
-          "${BUILD_ARGS[@]}" \
-          --cache-from "type=gha,scope=sdr-${{ inputs.app-name }}${{ inputs.tag-suffix }}" \
-          --cache-to "type=gha,mode=max,scope=sdr-${{ inputs.app-name }}${{ inputs.tag-suffix }}" \
-          .
+        #
+        # Wrapped in with-retry.sh because the failures that red this step are
+        # mostly not the app's: a 504 from whatever the app's own
+        # download-components task fetches, an `apk ... Permission denied` on a
+        # degraded alpine mirror, a registry hiccup on the --push. Two connectors
+        # lost a full e2e run to exactly those in the FND-402 sweep (FND-656 B8),
+        # and each one costs the whole downstream chain — the sibling arch leg,
+        # the manifest merge, the tenant install and every e2e leg all skip.
+        #
+        # RETRY_MAX_ATTEMPTS=2, not the wrapper's default 5. A build is minutes,
+        # not the seconds an asset download takes, and unlike a download it can
+        # fail for a reason retrying will never fix — a broken Dockerfile, a
+        # dependency that does not resolve. One retry covers a transient blip;
+        # more would multiply the wall-clock cost of every genuine build break by
+        # the attempt count. The retry is cheap in the transient case for the
+        # same reason it is bounded in the other: buildx replays cached layers up
+        # to the one that failed, so the second attempt re-runs the failing step,
+        # not the build.
+        RETRY_MAX_ATTEMPTS=2 RETRY_BACKOFF_BASE_SECONDS=15 \
+        "${{ github.action_path }}/../../scripts/with-retry.sh" \
+          docker buildx build \
+            --tag "${IMAGE}" \
+            --push \
+            "${BUILD_ARGS[@]}" \
+            --cache-from "type=gha,scope=sdr-${{ inputs.app-name }}${{ inputs.tag-suffix }}" \
+            --cache-to "type=gha,mode=max,scope=sdr-${{ inputs.app-name }}${{ inputs.tag-suffix }}" \
+            .
         echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
         echo "image_base=${IMAGE_BASE}" >> "$GITHUB_OUTPUT"
 

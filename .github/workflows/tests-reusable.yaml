@@ -1103,14 +1103,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "::error::the tenant-install path is on (the default since FND-128) but E2E_TENANT_MATRIX_JSON is not available to this repository, so no tenant ID can be resolved and a release cannot be scoped to any tenant. GM matches allowed_tenants EXACTLY against the tenant's vcluster instance name (e.g. 'markeznp37') — not its hostname — and the legacy single-tenant fallback (SDR_TEST_TENANT) has no matrix entry to carry that value, so there is nothing to fall back to. Either share E2E_TENANT_MATRIX_JSON with this repository, with a 'tenant_id' field on each cloud's entry (see docs/standards/connector-ci-e2e.md), or set 'install-app-to-tenant: false' in this repo's tests.yaml and use the E2E Tenant Install workflow, whose tenant_id input covers the one-off case. Failing at discovery rather than at prepare-tenant so this costs seconds instead of two image builds."
+          echo "::error::the tenant-install path is on (the default since FND-128) but E2E_TENANT_MATRIX_JSON is not available to this repository, so no tenant ID can be resolved and a release cannot be scoped to any tenant. GM matches allowed_tenants EXACTLY against the tenant's vcluster instance name (e.g. 'markeznp37') — not its hostname — and the legacy single-tenant fallback (SDR_TEST_TENANT) has no matrix entry to carry that value, so there is nothing to fall back to. The likeliest cause is the caller, not the org: E2E_TENANT_MATRIX_JSON is org-level at atlanhq, so a 'secrets: inherit' caller always receives it — but a caller that maps secrets EXPLICITLY receives only the names it lists, and this workflow declares every secret 'required: false' so an omitted one is silently empty rather than a parse error. Check this repo's tests.yaml first: if its 'tests:' job has a 'secrets:' block instead of 'secrets: inherit', map E2E_TENANT_MATRIX_JSON in that block to the same-named secret (the canonical scaffold uses 'secrets: inherit' and needs no mapping at all). Otherwise: share E2E_TENANT_MATRIX_JSON with this repository, with a 'tenant_id' field on each cloud's entry (see docs/standards/connector-ci-e2e.md), or set 'install-app-to-tenant: false' in this repo's tests.yaml and use the E2E Tenant Install workflow, whose tenant_id input covers the one-off case. Failing at discovery rather than at prepare-tenant so this costs seconds instead of two image builds."
           exit 1
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      # ── Which clouds the secret actually carries (FND-354) ─────────────────
+      # ── SDK CI scripts used by this job (FND-354, FND-656) ────────────────
       # Sparse-checked-out rather than folded into the discover action, and
       # `ref: job.workflow_sha` rather than @main, for the reason the source-
       # credential export gives at length: an action pinned @main cannot see a
@@ -1119,8 +1119,13 @@ jobs:
       # so the executed payload's provenance is pinned; application-sdk is
       # public, so the caller's default token reads it when ORG_PAT_GITHUB is
       # not shared.
-      - name: Fetch SDK CI scripts (tenant-matrix cloud keys)
-        if: env.HAS_TENANT_MATRIX != ''
+      #
+      # Deliberately NOT gated on HAS_TENANT_MATRIX any more: the scaffold
+      # precondition below needs these scripts on every e2e run, matrix secret or
+      # not. It is one sparse checkout of one directory of a public repo, so
+      # running it unconditionally costs less than a second and removes a
+      # gate that two steps would now have to agree about.
+      - name: Fetch SDK CI scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
@@ -1129,6 +1134,29 @@ jobs:
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
           persist-credentials: false
+
+      # ── The full-DAG tier's own precondition, checked before it costs anything
+      # The e2e job pins the full-DAG per-repo overrides to fixed paths under
+      # .github/e2e/ (it has to — a repo with BOTH an SDR and a full-DAG setup
+      # would otherwise auto-resolve to the SDR one and run full-DAG legs against
+      # the wrong secrets). A repo without that scaffold therefore fails, and
+      # fails in the worst place: inside the sdr-e2e action, per leg, downstream
+      # of two per-arch image builds, a manifest merge, a tenant lease and a
+      # tenant install — ~40 minutes of runner and live-tenant time for a message
+      # that reads as a bad input to this workflow rather than "this repo was
+      # never onboarded to the full-DAG tier". 11 connectors hit exactly that in
+      # the FND-402 sweep.
+      #
+      # Same argument, same position and same failing-rather-than-degrading
+      # choice as the tenant-matrix precondition above (FND-203): everything the
+      # script looks at is knowable from a checkout in milliseconds. FND-656 B2.
+      #
+      # The script checks ONLY what the e2e job pins plus the one file the action
+      # hard-requires, so it cannot red a repo whose legs pass today — see its
+      # module docstring and test_check_e2e_scaffold.py.
+      - name: Require the full-DAG e2e scaffold
+        shell: bash
+        run: python3 application-sdk-scripts/.github/scripts/check_e2e_scaffold.py
 
       # The KEY LIST, never the blob: the credentials stay with the per-leg
       # resolver, which is the only thing that needs them. Skipped without the
@@ -1198,7 +1226,7 @@ jobs:
         if: inputs.e2e-clouds != 'none' && env.HAS_TENANT_MATRIX == ''
         shell: bash
         run: |
-          echo "::warning::This run asked for the cross-CSP e2e matrix (e2e-clouds='${{ inputs.e2e-clouds }}'; empty means the SDK default list) but E2E_TENANT_MATRIX_JSON is not available to this repository, so it falls back to a single run against SDR_TEST_TENANT. Cross-CSP coverage for this run is NOT what the workflow asked for. Share the org secret with this repo to enable it."
+          echo "::warning::This run asked for the cross-CSP e2e matrix (e2e-clouds='${{ inputs.e2e-clouds }}'; empty means the SDK default list) but E2E_TENANT_MATRIX_JSON is not available to this repository, so it falls back to a single run against SDR_TEST_TENANT. Cross-CSP coverage for this run is NOT what the workflow asked for. Check this repo's tests.yaml first: a caller that maps secrets explicitly instead of using 'secrets: inherit' receives only the names it lists, and every secret here is 'required: false' so an omitted one is silently empty rather than a parse error. Otherwise share the org secret with this repo."
 
       # This job only runs when e2e was explicitly requested (label / run-e2e),
       # so zero discovered suites means "requested but nothing found" — a
@@ -1811,7 +1839,20 @@ jobs:
             --sdk-version "$SDK_VERSION" \
             --entrypoints "$ENTRYPOINTS" \
             --release-model "$RELEASE_MODEL" \
-            --created-by "$CREATED_BY"
+            --created-by "$CREATED_BY" \
+            --repo-url-is-self
+        # --repo-url-is-self asserts what REPO_URL above already is: derived from
+        # github.server_url/github.repository, i.e. the repo this workflow is
+        # running in. That makes the publish structurally unable to name another
+        # app's repo, so the script's image-name/repo-name cross-check has no
+        # provenance rewrite left to prevent and drops to a warning. Without it,
+        # an app whose GHCR image name differs from its repo name — adf publishes
+        # atlan-adf-app out of atlan-azure-data-factory-app, sapase likewise —
+        # is refused at the publish and every e2e leg dies on its version check,
+        # for a naming inconsistency that harms nothing (FND-656 B6).
+        #
+        # e2e-tenant-install.yaml deliberately does NOT pass it: its repo_url is a
+        # free-text dispatch input, so there the cross-check is doing real work.
         # --install-retry-seconds is left at its default (600). A freshly
         # published release is not immediately installable: LM resolves the
         # install against its tenant-catalog snapshot, which excludes a release
