@@ -397,6 +397,29 @@ Each entry may also carry `"deployment_name"` when that tenant's system apps
 the harness as `E2E_TENANT_DEPLOYMENT_NAME`, which
 `BaseE2ETest.resolved_tenant_deployment_name()` prefers over the class default.
 
+That same deployment name is what the **DIRECT-mode extract queue** is built
+from. Under `RunMode.DIRECT` extraction runs on the tenant's own already-deployed
+pod, so the extract node has to be dispatched to the queue that pod's worker
+polls — `atlan-{app}-{deployment}`, the shape every worker derives (see
+`application_sdk.main._derive_task_queue`). The app half is read back out of the
+connector's own `manifest.json` (each generated manifest bakes it into the
+extract node's `task_queue`), falling back to `connector_short_name` for a
+connector still on the hand-crafted legacy seed DAG. There is no `default`
+deployment: a DIRECT-mode run that dispatches to `atlan-<connector>-default`
+queues work no worker ever claims, and KEDA scales nothing because the queue it
+watches stays empty — the run just hangs to its timeout (FND-656 A2).
+
+**Widening the tenant-app cold-start budget.** `app_ready_timeout_seconds`
+(default 300s) is how long the AE submit keeps retrying a connection-refused
+dial to a still-booting tenant pod. It is a class attr, but how long a pod takes
+to serve `:8000` is a property of the run — a split-contract crawler entrypoint
+on a cold node is not the same wait as a warm single-entrypoint pod. Set
+`E2E_APP_READY_TIMEOUT_SECONDS` on the leg to override it without a PR against
+the connector repo; it is read by both full-DAG harnesses through
+`cold_start_submit_kwargs`. Blank means unset (the class attr wins), `0` disables
+the widened budget and restores `submit_workflow`'s own 4x5s default, and a
+non-integer value is a hard error rather than a silent fallback.
+
 **Per-leg resolution.** `.github/scripts/resolve_e2e_tenant.py` extracts only the
 leg's own cloud and writes `SDR_TEST_TENANT`, `SDR_CLIENT_ID`,
 `SDR_CLIENT_SECRET`, `ATLAN_API_KEY` and the derived `ATLAN_BASE_URL` to

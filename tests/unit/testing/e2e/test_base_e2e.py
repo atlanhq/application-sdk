@@ -656,9 +656,263 @@ class TestExtractTaskQueue:
 
         assert _AgentModeTest()._extract_task_queue() == "atlan-openapi-e2e-full-ci-42"
 
-    def test_direct_mode_falls_back_to_connector_default(self) -> None:
-        # _ConcreteE2ETest is RunMode.DIRECT → agent_spec() is None.
-        assert _ConcreteE2ETest()._extract_task_queue() == "atlan-openapi-default"
+    def test_direct_mode_targets_the_tenant_deployment_not_default(self) -> None:
+        """DIRECT mode dispatches to the TENANT worker's queue.
+
+        Under RunMode.DIRECT extraction runs on the tenant's own deployed pod,
+        whose worker polls atlan-{app}-{deployment}. The literal "default" this
+        used to emit is not a deployment name anywhere, so the extract node was
+        queued on a queue nobody polls and the run hung (FND-656 A2).
+        """
+        # _ConcreteE2ETest is RunMode.DIRECT → agent_spec() is None, and its
+        # inherited manifest_path does not exist in the test tree, so the queue
+        # falls back to the connector_short_name form.
+        assert _ConcreteE2ETest()._extract_task_queue() == "atlan-openapi-production"
+        assert "default" not in _ConcreteE2ETest()._extract_task_queue()
+
+    def test_direct_mode_honours_the_per_leg_deployment_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A tenant whose system apps are not under "production" is env-supplied.
+
+        Same seam resolved_tenant_deployment_name() serves everywhere else, so a
+        tenant-matrix entry carrying deployment_name reaches the extract queue
+        without a per-connector override.
+        """
+        monkeypatch.setenv("E2E_TENANT_DEPLOYMENT_NAME", "staging")
+
+        assert _ConcreteE2ETest()._extract_task_queue() == "atlan-openapi-staging"
+
+    def test_direct_mode_takes_the_app_name_from_the_manifest(
+        self, tmp_path: Path
+    ) -> None:
+        """The contract, not the class attr, names the app half of the queue.
+
+        Every generated manifest bakes the app name into the extract node's
+        task_queue, and that string is what the tenant-side DAG runs — so a
+        connector whose connector_short_name disagrees with its contract must
+        still land on the queue the tenant worker polls.
+        """
+        manifest = tmp_path / "manifest.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "dag": {
+                        "extract": {
+                            "inputs": {
+                                "task_queue": "atlan-azure-data-factory-{deployment_name}"
+                            }
+                        }
+                    }
+                }
+            )
+        )
+
+        class _T(_ConcreteE2ETest):
+            connector_short_name = "adf"
+            manifest_path = str(manifest)
+
+        assert _T()._extract_task_queue() == "atlan-azure-data-factory-production"
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            "{ not json",
+            json.dumps({"dag": {}}),
+            json.dumps({"dag": {"extract": {}}}),
+            json.dumps({"dag": {"extract": {"inputs": {"task_queue": 7}}}}),
+        ],
+        ids=["unparseable", "no-extract", "no-inputs", "non-string-queue"],
+    )
+    def test_unusable_manifest_falls_back_instead_of_raising(
+        self, tmp_path: Path, payload: str
+    ) -> None:
+        """The queue lookup is also reached from the stall-guard diagnostic.
+
+        Raising there would replace the diagnosis with a traceback about reading
+        the file used to produce it, so every unusable-manifest shape degrades to
+        the connector_short_name form.
+        """
+        manifest = tmp_path / "manifest.json"
+        manifest.write_text(payload)
+
+        class _T(_ConcreteE2ETest):
+            manifest_path = str(manifest)
+
+        assert _T()._extract_task_queue() == "atlan-openapi-production"
+
+    def test_blank_deployment_name_is_named_rather_than_rendered(self) -> None:
+        """A blank deployment must not render atlan-<app>-.
+
+        That is a queue no worker polls, i.e. the same silent hang this method
+        exists to remove, one character further along. It only became reachable
+        for the extract node when the queue stopped being a literal, so it is
+        guarded at the point that changed.
+        """
+
+        class _T(_ConcreteE2ETest):
+            tenant_deployment_name = ""
+
+        with pytest.raises(
+            MissingHarnessClassAttrError, match="tenant_deployment_name"
+        ):
+            _T()._extract_task_queue()
+
+    def test_blank_env_override_still_falls_back_to_the_class_attr(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The guard must not fire on an UNSET env var — an unset Actions env var
+        arrives as "", which resolved_tenant_deployment_name() already treats as
+        unset. Firing here would red every leg that does not set it."""
+        monkeypatch.setenv("E2E_TENANT_DEPLOYMENT_NAME", "")
+
+        assert _ConcreteE2ETest()._extract_task_queue() == "atlan-openapi-production"
+
+    def test_stall_guard_and_seed_dag_name_the_same_queue(self, tmp_path: Path) -> None:
+        """The two consumers must not disagree.
+
+        run_full_dag hands the stall-guard diagnostic _extract_task_queue() and
+        _bootstrap_workflow pins the seed DAG's extract node to it. A diagnostic
+        naming a different queue than the one the work was dispatched to is worse
+        than none — it sends the reader to an idle queue that is not the problem.
+        """
+        manifest = tmp_path / "manifest.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "dag": {
+                        "extract": {
+                            "inputs": {"task_queue": "atlan-gcs-{deployment_name}"}
+                        }
+                    }
+                }
+            )
+        )
+
+        class _T(_ConcreteE2ETest):
+            manifest_path = str(manifest)
+
+        harness = _T()
+        seeded = harness._seed_dag_from_manifest(harness._extract_task_queue())
+
+        assert (
+            seeded["extract"]["inputs"]["task_queue"]
+            == harness._extract_task_queue()
+            == "atlan-gcs-production"
+        )
+
+    def test_agent_mode_ignores_the_manifest(self, tmp_path: Path) -> None:
+        """AGENT mode must still override the manifest's queue.
+
+        The CI worker's queue is dynamic and per-leg; the manifest names the
+        tenant's. Reading the manifest in AGENT mode would send the extract node
+        to the tenant while the CI worker polls elsewhere — the FND-656 A2 bug
+        with the modes swapped.
+        """
+        manifest = tmp_path / "manifest.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "dag": {
+                        "extract": {
+                            "inputs": {"task_queue": "atlan-openapi-production"}
+                        }
+                    }
+                }
+            )
+        )
+
+        class _T(_ConcreteE2ETest):
+            mode = RunMode.AGENT
+            manifest_path = str(manifest)
+
+            def agent_spec(self) -> AgentSpec:
+                return AgentSpec(agent_name="openapi-e2e-full-ci-42")
+
+        assert _T()._extract_task_queue() == "atlan-openapi-e2e-full-ci-42"
+
+
+class TestDefaultRunMode:
+    """AGENT is the default mode, and DIRECT is opt-in tier 5 (FND-656).
+
+    The two modes fail very differently when a subclass forgets the attribute:
+    AGENT derives the CI worker's own queue from env the CI action always
+    exports, while DIRECT addresses the tenant's deployed pod — and a mismatch
+    there does not fail, it hangs to the e2e job's ceiling with no worker ever
+    claiming the work. So the default has to be the one whose failure is visible.
+    """
+
+    def test_default_is_agent(self) -> None:
+        assert BaseE2ETest.mode is RunMode.AGENT
+
+    def test_deprecated_full_dag_harness_agrees(self) -> None:
+        """Two harnesses disagreeing about what an omitted mode means is worse
+        than either choice.
+
+        Compared by ``.value``, not identity: ``application_sdk.testing.full_dag``
+        defines its OWN ``RunMode`` enum rather than re-exporting the e2e one, so
+        the two ``AGENT`` members are distinct objects and ``is`` is always False
+        across them. That duplication predates this change and is why the
+        comparison looks indirect.
+        """
+        from application_sdk.testing.full_dag.base import (  # noqa: PLC0415
+            BaseFullDAGE2ETest,
+        )
+
+        assert BaseFullDAGE2ETest.mode.value == BaseE2ETest.mode.value == "agent"
+
+    def test_build_ae_payload_requires_mode_explicitly(self) -> None:
+        """``build_ae_payload`` takes no default for ``mode`` — and must not gain
+        one.
+
+        A default there would be a second, independent answer to "what does an
+        omitted mode mean", sitting next to the class attribute above. Requiring
+        it means the only place that decision is made is the test class.
+        """
+        import inspect  # noqa: PLC0415
+
+        from application_sdk.testing.e2e.payload import (  # noqa: PLC0415
+            build_ae_payload,
+        )
+
+        param = inspect.signature(build_ae_payload).parameters["mode"]
+        assert param.default is inspect.Parameter.empty
+
+    def test_build_seed_dag_default_matches_the_class_default(self) -> None:
+        """``build_seed_dag`` DOES carry a default, and both in-tree callers pass
+        ``mode=self.mode`` explicitly — so it only governs an external caller,
+        which must not get a different answer from the class attribute."""
+        import inspect  # noqa: PLC0415
+
+        from application_sdk.testing.e2e.payload import build_seed_dag  # noqa: PLC0415
+
+        default = inspect.signature(build_seed_dag).parameters["mode"].default
+        assert default is BaseE2ETest.mode
+
+    def test_a_subclass_that_omits_mode_gets_the_agent_queue(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The regression this default exists to prevent: a suite with no `mode`
+        line lands on the CI worker's queue, not a tenant queue nothing polls."""
+        monkeypatch.setenv("ATLAN_APPLICATION_NAME", "openapi")
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "e2e-full-ci-42")
+
+        class _NoModeDeclared(BaseE2ETest):
+            connector_short_name = "openapi"
+            argo_package_name = "@atlan/openapi"
+            argo_template_name = "atlan-openapi"
+            app_service_url = "http://openapi.svc"
+
+            def _mustache_substitutions(self) -> MustacheSubstitutions:
+                return MustacheSubstitutions(connection=_make_connection_ref())
+
+        assert _NoModeDeclared()._extract_task_queue() == "atlan-openapi-e2e-full-ci-42"
+
+    def test_explicit_direct_still_wins(self) -> None:
+        """Tier 5 is opt-in, not removed. The three fleet suites that set DIRECT
+        do so with a documented rationale and must be unaffected."""
+        assert _ConcreteE2ETest.mode is RunMode.DIRECT
+        assert _ConcreteE2ETest()._extract_task_queue() == "atlan-openapi-production"
 
 
 class TestAgentSpecDerivation:
@@ -956,6 +1210,51 @@ class TestSubmitRetryKwargs:
             MissingHarnessClassAttrError, match="app_ready_poll_interval_seconds"
         ):
             harness._submit_retry_kwargs()
+
+    def test_env_override_wins_over_the_class_attr(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """How long a tenant pod takes to serve :8000 is a property of the RUN.
+
+        A split-contract crawler entrypoint on a cold node can outlast the 300s
+        class default; widening it for one investigation must not need a PR
+        against the connector repo (FND-656 A5).
+        """
+        monkeypatch.setenv("E2E_APP_READY_TIMEOUT_SECONDS", "600")
+        assert _ConcreteE2ETest()._submit_retry_kwargs() == {
+            "retries": 120,
+            "retry_sleep_seconds": 5,
+        }
+
+    def test_blank_env_override_is_treated_as_unset(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unset Actions env var arrives as "" — reading it as 0 would DISABLE
+        the budget, the opposite of what setting the variable is for."""
+        monkeypatch.setenv("E2E_APP_READY_TIMEOUT_SECONDS", "   ")
+        assert _ConcreteE2ETest()._submit_retry_kwargs() == {
+            "retries": 60,
+            "retry_sleep_seconds": 5,
+        }
+
+    def test_env_override_can_disable_the_budget(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """0 restores submit_workflow's own default budget, per the documented
+        contract of the class attr it overrides."""
+        monkeypatch.setenv("E2E_APP_READY_TIMEOUT_SECONDS", "0")
+        assert _ConcreteE2ETest()._submit_retry_kwargs() == {}
+
+    def test_non_integer_env_override_raises_rather_than_falling_back(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A typo'd budget that silently reverted to the default would be
+        diagnosed as "the override does not work", days later."""
+        monkeypatch.setenv("E2E_APP_READY_TIMEOUT_SECONDS", "10m")
+        with pytest.raises(
+            MissingHarnessEnvError, match="E2E_APP_READY_TIMEOUT_SECONDS"
+        ):
+            _ConcreteE2ETest()._submit_retry_kwargs()
 
     def test_run_full_dag_passes_the_budget_to_submit(
         self, monkeypatch: pytest.MonkeyPatch

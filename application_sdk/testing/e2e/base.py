@@ -200,8 +200,9 @@ class BaseE2ETest:
         connector_short_name: ``openapi``, ``mysql``, ``mssql``, etc.
         argo_package_name: ``@atlan/<connector>``.
         argo_template_name: Cluster-scoped WorkflowTemplate name.
-        mode: :data:`RunMode.AGENT` for tier 4, :data:`RunMode.DIRECT`
-            for tier 5.
+        mode: :data:`RunMode.AGENT` for tier 4 (the default), or
+            :data:`RunMode.DIRECT` for tier 5. DIRECT is opt-in: see the
+            attribute's own comment for why the default is AGENT.
         app_service_url: HTTP URL the AE workflow's extract activity
             falls back to.
 
@@ -231,7 +232,26 @@ class BaseE2ETest:
     connector_short_name: ClassVar[str] = ""
     argo_package_name: ClassVar[str] = ""
     argo_template_name: ClassVar[str] = ""
-    mode: ClassVar[RunMode] = RunMode.DIRECT
+    # AGENT is the default, deliberately (FND-656).
+    #
+    # This used to default to DIRECT, and the two modes fail very differently
+    # when a subclass forgets the attribute. Under DIRECT the harness dispatches
+    # the extract node to the tenant's own deployed pod; under AGENT it derives
+    # the CI worker's own queue from ATLAN_APPLICATION_NAME +
+    # ATLAN_DEPLOYMENT_NAME, which the CI action always exports. A suite that
+    # omits `mode` therefore used to silently address a tenant queue it had no
+    # reason to expect, and a mismatch there does not fail -- it HANGS, to the
+    # e2e job's 120-minute ceiling, with no worker ever claiming the work.
+    #
+    # AGENT is also what the fleet actually runs: every connector suite checked
+    # sets it explicitly, and the three that set DIRECT do so with a documented
+    # tier-5 rationale. So the default now matches the common case, and the
+    # failure mode of forgetting the attribute is a wrong-but-visible queue in
+    # CI rather than an invisible stall.
+    #
+    # DIRECT remains fully supported as tier 5 -- it is now opt-in rather than
+    # inherited. Setting it explicitly is the signal that a suite means it.
+    mode: ClassVar[RunMode] = RunMode.AGENT
     app_service_url: ClassVar[str] = ""
 
     # --- source-availability tier --------------------------------------
@@ -1039,11 +1059,107 @@ class BaseE2ETest:
         AGENT mode this must equal the queue the deployed worker polls
         (``atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}``), so the
         test's ``agent_spec().agent_name`` has to match that suffix.
+
+        In DIRECT mode there is no CI worker to name: extraction runs on the
+        tenant's own already-deployed pod, so the queue is the tenant's — see
+        :meth:`_tenant_extract_task_queue`.
         """
         agent = self.agent_spec()
         if agent is not None:
             return f"atlan-{agent.agent_name}"
-        return f"atlan-{self.connector_short_name}-default"
+        return self._tenant_extract_task_queue()
+
+    def _tenant_extract_task_queue(self) -> str:
+        """DIRECT-mode extract queue: the one the TENANT's deployed pod polls.
+
+        The tenant worker derives its queue exactly as every other worker does,
+        ``atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}`` (see
+        :func:`application_sdk.main._derive_task_queue`), and on a tenant the
+        deployment half is the tenant's own deployment name — ``production`` by
+        default, or whatever the tenant-matrix entry's ``deployment_name`` field
+        supplies via ``E2E_TENANT_DEPLOYMENT_NAME``. It is never ``default``:
+        nothing deploys under that name, so the literal
+        ``atlan-{connector}-default`` this used to return addressed a queue no
+        worker has ever polled. The extract node was accepted, queued, and then
+        sat there — observed live as a DIRECT-mode gcs run that hung for ~6h
+        with the tenant worker polling ``atlan-gcs-production`` throughout, and
+        with KEDA scaling nothing because the queue it watches stayed empty
+        (FND-656 A2).
+
+        The app half is taken from the connector's own manifest when there is
+        one. Every generated manifest bakes the app name into the extract node's
+        ``task_queue`` (``atlan-<app>-{deployment_name}``) because that string is
+        also what the tenant-side DAG runs, so reading it back keeps this queue
+        pinned to the contract rather than to a class attr that can disagree
+        with it. ``connector_short_name`` is the fallback for a connector on the
+        hand-crafted legacy seed DAG (``manifest_path`` empty), where there is no
+        contract to read and the class attr is the only name available.
+        """
+        deployment = self.resolved_tenant_deployment_name()
+        # A blank deployment name would render atlan-<app>- and dispatch the
+        # extract node to a trailing-dash queue nobody polls: the same silent
+        # hang this method exists to remove, one character further along.
+        # resolved_tenant_deployment_name() already treats a blank env var as
+        # unset and falls back to the class attr, so reaching here blank means
+        # the class attr itself was set to "" — a class-level defect worth
+        # naming rather than a run-time condition worth tolerating. (Its own
+        # docstring makes this argument about atlan-publish-; the extract node
+        # became susceptible to it when the queue stopped being a literal.)
+        if not deployment:
+            raise MissingHarnessClassAttrError(
+                message=(
+                    "tenant_deployment_name resolved to empty, so the DIRECT-mode "
+                    f"extract queue would be 'atlan-{self.connector_short_name}-' "
+                    "— a queue no worker polls, which hangs the run instead of "
+                    "failing it. Leave tenant_deployment_name at its 'production' "
+                    "default, or set E2E_TENANT_DEPLOYMENT_NAME (or the tenant "
+                    "matrix entry's deployment_name field) to the deployment the "
+                    "tenant's app is registered under."
+                ),
+                field="tenant_deployment_name",
+            )
+        template = self._manifest_extract_queue_template()
+        if not template:
+            template = f"atlan-{self.connector_short_name}-{{deployment_name}}"
+        return template.replace("{deployment_name}", deployment)
+
+    def _manifest_extract_queue_template(self) -> str:
+        """The extract node's raw ``task_queue`` from the manifest, or ``""``.
+
+        Best-effort and deliberately silent on every failure mode: the caller has
+        a correct fallback, and this is also reached from the stall-guard
+        diagnostic — an error path, where raising would replace the diagnosis
+        with a traceback about reading the file used to produce it. A missing,
+        unparseable, or extract-less manifest therefore reads the same as
+        "no manifest configured".
+        """
+        if not self.manifest_path:
+            return ""
+        try:
+            path = Path(self.manifest_path)
+            if not path.is_absolute():
+                path = Path.cwd() / path
+            if not path.is_file():
+                return ""
+            dag = orjson.loads(path.read_bytes()).get("dag")
+            if not isinstance(dag, dict):
+                return ""
+            extract = dag.get("extract")
+            if not isinstance(extract, dict):
+                return ""
+            inputs = extract.get("inputs")
+            if not isinstance(inputs, dict):
+                return ""
+            queue = inputs.get("task_queue")
+            return queue.strip() if isinstance(queue, str) else ""
+        except Exception:  # noqa: BLE001 — see the docstring: fallback, not failure
+            logger.debug(
+                "Could not read the extract task_queue out of %s; falling back to "
+                "the connector_short_name form.",
+                self.manifest_path,
+                exc_info=True,
+            )
+            return ""
 
     def _resolved_progress_stall_seconds(self) -> int:
         """Progress-watchdog window this run will actually use.
