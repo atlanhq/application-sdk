@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import gzip
 import pathlib
 from unittest.mock import MagicMock, patch
@@ -289,3 +290,88 @@ class TestRecordObservationPersists:
                 _observation(peak_memory_bytes=None, cpu_seconds=None)
             )
         mock_persist.assert_not_called()
+
+
+class TestTheFlushActuallyHappens:
+    """The bug this class exists for: a full day of collection wrote nothing.
+
+    ``add_record`` only evaluates its flush condition when a record ARRIVES. On this
+    workload — maxConcurrentActivities 1, a merge every 15-30 min, KEDA scaling pods
+    to zero between them — a pod usually sees ONE record and neither the 500-row
+    batch nor the 60s interval is ever re-checked. The buffer died with the process.
+    Every sibling adaptor starts ``_periodic_flush``; this sink did not.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_periodic_flush_task_is_started(self, tmp_path):
+        sizing_sink._reset_for_testing()
+        started = []
+        real = SizingObservabilitySink._periodic_flush
+
+        async def spy(self):
+            started.append(True)
+
+        with (
+            patch.object(SizingObservabilitySink, "_periodic_flush", spy),
+            patch.object(
+                sizing_sink, "get_observability_dir", return_value=str(tmp_path)
+            ),
+        ):
+            sizing_sink.get_sink()
+            await asyncio.sleep(0)  # let the created task run
+        assert (
+            started
+        ), "no periodic flush task was started — the buffer would never drain"
+        sizing_sink._reset_for_testing()
+        SizingObservabilitySink._periodic_flush = real
+
+    @pytest.mark.asyncio
+    async def test_one_record_then_shutdown_is_not_lost(self, sink):
+        """The exact shape that lost a day of data."""
+        flushed: list[list] = []
+
+        async def capture(records):
+            flushed.append(records)
+
+        sizing_sink._sink = sink
+        with patch.object(sink, "_flush_records", capture):
+            sink.add_record(_observation())  # a single record, no second one
+            assert not flushed, "premature flush would make this test vacuous"
+            await sizing_sink.drain()
+        sizing_sink._reset_for_testing()
+
+        assert flushed, "the single buffered row was dropped on shutdown"
+        assert flushed[0][0]["activity_type"] == "automation-engine:merge"
+
+    @pytest.mark.asyncio
+    async def test_drain_is_safe_with_no_sink(self):
+        sizing_sink._reset_for_testing()
+        await sizing_sink.drain()  # must not raise
+
+    @pytest.mark.asyncio
+    async def test_drain_never_raises(self, sink):
+        """Runs on the shutdown path; a failure must not block termination."""
+        sizing_sink._sink = sink
+        with patch.object(
+            sink, "_flush_buffer", side_effect=RuntimeError("store gone")
+        ):
+            await sizing_sink.drain()  # must not raise
+        sizing_sink._reset_for_testing()
+
+    @pytest.mark.asyncio
+    async def test_flush_logs_at_info(self, sink, tmp_path):
+        """'Is it writing?' must be answerable from logs, not by exec-ing into a pod.
+
+        The base class logs its success at DEBUG, which every deployment filters.
+        """
+
+        async def fake_upload(remote_key, local_path, **kw):
+            return None
+
+        with (
+            patch("application_sdk.storage.upload_file", new=fake_upload),
+            patch.object(sizing_sink, "logger") as mock_log,
+        ):
+            await sink._flush_records([sink.process_record(_observation())])
+        msgs = " ".join(str(c) for c in mock_log.info.call_args_list)
+        assert "flushed" in msgs
