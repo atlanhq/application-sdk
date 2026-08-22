@@ -21,10 +21,11 @@ than inferring it from which keys happen to be present.
 
 from __future__ import annotations
 
+import asyncio
 import threading
 from dataclasses import asdict
 from time import time
-from typing import Any
+from typing import Any, ClassVar
 
 from application_sdk.constants import (
     APPLICATION_NAME,
@@ -49,7 +50,47 @@ SIZING_SCHEMA_VERSION = 2
 
 
 class SizingObservabilitySink(AtlanObservability[Any]):
-    """Buffers sizing observations and uploads them as gzipped NDJSON."""
+    """Buffers sizing observations and uploads them as gzipped NDJSON.
+
+    Starts the base class's periodic flush, which is NOT optional. ``add_record``
+    only evaluates its flush condition when a record arrives, so on this workload —
+    ``maxConcurrentActivities: 1``, a merge every 15-30 minutes, KEDA scaling pods to
+    zero in between — a pod typically sees ONE record in its whole life and neither
+    trigger ever fires. The buffer then dies with the process. Every other adaptor
+    (traces, logs, metrics) starts this task; omitting it here silently wrote nothing
+    for a full day of collection.
+    """
+
+    _flush_task_started: ClassVar[bool] = False
+
+    @classmethod
+    def _reset_for_testing(cls) -> None:
+        cls._flush_task_started = False
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        if SizingObservabilitySink._flush_task_started:
+            return
+        try:
+            # Same loop-or-daemon-thread shape the traces adaptor uses: the sink is
+            # built lazily from inside an activity, so a loop is usually running,
+            # but it must also work when constructed off one.
+            try:
+                asyncio.get_running_loop().create_task(self._periodic_flush())
+            except RuntimeError:
+                threading.Thread(target=self._flush_forever, daemon=True).start()
+            SizingObservabilitySink._flush_task_started = True
+        # conformance: ignore[E004] telemetry; a sink that cannot start its flush must not stop collection
+        except Exception:
+            logger.warning("could not start the sizing flush task", exc_info=True)
+
+    def _flush_forever(self) -> None:
+        """Run the periodic flush on its own loop, for the no-running-loop case."""
+        try:
+            asyncio.run(self._periodic_flush())
+        # conformance: ignore[E004] background thread; must not take the process down
+        except Exception:
+            logger.warning("sizing flush loop stopped", exc_info=True)
 
     def process_record(self, record: Any) -> dict[str, Any]:
         """Flatten one observation into the row that gets written.
@@ -80,6 +121,18 @@ class SizingObservabilitySink(AtlanObservability[Any]):
         # and a consumer that forgets to apply it pools two different quantities.
         row["is_attributable"] = record.is_attributable
         return row
+
+    async def _flush_records(self, records: list[dict[str, Any]]) -> None:
+        """Flush, and say so at INFO.
+
+        The base logs its success at DEBUG, which is filtered in every deployment —
+        so "is the sink writing?" was unanswerable from logs and had to be settled by
+        exec'ing into a pod and forcing a flush by hand. For the one signal whose
+        whole purpose is to be collected, that is worth a line.
+        """
+        await super()._flush_records(records)
+        if records:
+            logger.info("sizing: flushed %d observation(s)", len(records))
 
     def _store_sink_enabled(self) -> bool:
         """Always on: this sink only exists when sizing collection is enabled.
@@ -151,8 +204,27 @@ def persist(observation: Any) -> None:
         logger.debug("sizing observation not persisted", exc_info=True)
 
 
+async def drain() -> None:
+    """Flush whatever is buffered. Call on worker shutdown.
+
+    The periodic task closes the gap between records; this closes the gap between
+    the last record and the process ending. KEDA scales these pods to zero, so
+    without it the final batch of every pod's life is lost — and on this workload
+    that can be most of the data.
+    """
+    sink = _sink
+    if sink is None:
+        return
+    try:
+        await sink._flush_buffer(force=True)
+    # conformance: ignore[E004] shutdown path; a failed drain must not block shutdown
+    except Exception:
+        logger.warning("sizing drain failed; buffered rows lost", exc_info=True)
+
+
 def _reset_for_testing() -> None:
     """Drop the process-wide sink so a test can build its own."""
     global _sink
     with _sink_lock:
         _sink = None
+    SizingObservabilitySink._reset_for_testing()
