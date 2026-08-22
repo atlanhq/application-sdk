@@ -1,0 +1,9 @@
+schema: 2
+rules:
+  - rules/platform-runtime-001.md
+  - rules/platform-payload-001.md
+  - rules/platform-history-001.md
+  - rules/platform-heartbeat-001.md
+  - rules/platform-memory-001.md
+  - rules/platform-contract-001.md
+  - rules/platform-resources-001.md
