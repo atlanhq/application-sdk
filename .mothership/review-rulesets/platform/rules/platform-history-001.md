@@ -9,12 +9,12 @@ suppressible: false
 ---
 # Respect the workflow history budget
 
-- Every activity schedule/retry/completion appends history events; Temporal
-  hard-terminates a workflow around 50K events / 50 MB history.
-- MUST NOT schedule one activity per item over an unbounded collection
-  (per-table, per-schema, per-asset). Batch the collection into a bounded
-  number of activities sized by the source.
-- FLAG loops in a workflow body whose iteration count scales with tenant
-  size; they need batching or continue-as-new before they ship.
-- Retry policies multiply events: an unbounded retry on a fanned-out
-  activity is a history bomb.
+- History is hard-capped (~51,200 events); every activity schedule, retry,
+  and heartbeat-timeout cycle appends events.
+- The number of activities, chunks, and batches MUST be bounded by design,
+  not by input size — an uncapped chunker works in dev and dies on a large
+  tenant, usually surfacing as a misattributed heartbeat timeout.
+- FLAG workflow-body loops whose iteration count scales with tenant size;
+  they need batching or continue-as-new before they ship.
+- Retry policies multiply events: unbounded retries on fanned-out
+  activities are a history bomb.

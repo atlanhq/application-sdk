@@ -9,10 +9,13 @@ suppressible: false
 ---
 # Activity payloads carry references, not data
 
-- Temporal caps each payload at ~2 MB and the whole history at ~50 MB.
-- MUST pass object-store paths / file references in activity inputs and
-  outputs — never row data, asset lists, or accumulated results.
+- Payloads are capped (~2 MB each) and the whole workflow history is
+  capped — activity inputs/outputs carry object-store paths or
+  FileReferences, never row data, asset lists, or accumulated results.
 - FLAG any activity output whose size scales with source size (a list of
-  tables, a dict of per-entity counts over an unbounded catalog): it works
-  in dev and explodes on a large tenant.
-- Workflow return values and signal/query payloads are under the same cap.
+  tables, a per-entity dict over an unbounded catalog) — small in dev,
+  fatal on a large tenant, and the failure surfaces as an unrelated
+  timeout, not a payload error.
+- Credentials cross activity boundaries as references, never raw values —
+  a raw credential in a payload persists in workflow history.
+- Workflow return values and signal/query payloads sit under the same cap.

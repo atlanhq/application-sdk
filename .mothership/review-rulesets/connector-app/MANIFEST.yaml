@@ -9,3 +9,7 @@ rules:
   - rules/app-secrets-001.md
   - rules/app-observability-001.md
   - rules/app-tests-001.md
+  - rules/app-sdk-drift-001.md
+  - rules/app-metadata-001.md
+  - rules/app-staleness-001.md
+  - rules/app-validation-001.md

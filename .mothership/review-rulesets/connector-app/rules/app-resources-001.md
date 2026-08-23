@@ -9,10 +9,12 @@ suppressible: false
 ---
 # Client and handle lifecycle
 
-- Create expensive clients (DB engines, HTTP sessions, drivers) once per
-  worker/handler, not per task invocation — pool exhaustion under retry is a
-  real production failure mode.
-- Every cursor, connection, file handle, and temp artifact is closed in
-  `finally` (or a context manager) so retries do not leak.
-- FLAG cleanup that can itself raise inside `finally` and mask the original
-  error — guard it.
+- Expensive clients (DB engines, HTTP sessions, drivers) are created once
+  per worker/handler, not per task invocation — pool exhaustion under retry
+  is a real production failure mode.
+- Every cursor, connection, file handle, and temp artifact closes in
+  `finally` or a context manager so retries do not leak.
+- Every variable used in a `finally` block (or after a `try`) is
+  initialized BEFORE the `try` — `UnboundLocalError` on the failure path
+  masks the original error.
+- FLAG cleanup that can itself raise inside `finally` without a guard.

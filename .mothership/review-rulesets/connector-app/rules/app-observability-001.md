@@ -9,8 +9,8 @@ suppressible: true
 ---
 # Bounded observability
 
-- MUST NOT log per-row or per-batch on hot paths — log/metric at phase
+- No per-row or per-batch logging on hot paths — log and measure at phase
   boundaries with counts.
-- Metric labels are bounded sets only: never `workflow_id`, row counts, or
-  `str(e)` as a label value (cardinality bomb).
+- Metric labels come from bounded sets only: never workflow IDs, row
+  counts, or `str(e)` as a label value (cardinality bomb).
 - FLAG always-on background diagnostic loops added "temporarily".
