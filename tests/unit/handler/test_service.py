@@ -1391,6 +1391,45 @@ class TestStartWorkflowRouting:
         finally:
             patcher.stop()
 
+    def test_entrypoint_query_param_rejects_an_alias(self) -> None:
+        """The canonical selector is names-only: an alias through ?entrypoint=
+        is a 400, keeping the alias namespace reachable only from raw Temporal
+        dispatch and the deprecated body field."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _QueryStrictApp(App):
+            name = "routing-test"
+            legacy_workflow_types = {"LegacyStrictWorkflow": "extract"}
+
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        svc = create_app_handler_service(
+            _TestHandler(),
+            app_name="routing-test",
+            app_class=_QueryStrictApp,
+            temporal_host="temporal:7233",
+        )
+        mock_client = MagicMock()
+        mock_client.start_workflow = AsyncMock()
+
+        with patch(
+            "application_sdk.handler.service._get_temporal_client",
+            new=AsyncMock(return_value=mock_client),
+        ):
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.post(
+                "/workflows/v1/start?entrypoint=LegacyStrictWorkflow",
+                json={"name": "x"},
+            )
+
+        assert response.status_code == 400
+        mock_client.start_workflow.assert_not_awaited()
+
     def test_alias_equal_to_a_sibling_name_is_impossible(self) -> None:
         """A11: the shape that made selector precedence ambiguous is rejected.
 

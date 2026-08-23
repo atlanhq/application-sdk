@@ -3,17 +3,50 @@
 from temporalio import workflow
 
 with workflow.unsafe.imports_passed_through():
+    from collections.abc import Mapping
+
     from application_sdk.app.base import generate_workflow_class
     from application_sdk.app.entrypoint import (
         EntryPointContractError,
         workflow_type_class_segment,
     )
-    from application_sdk.app.registry import AppRegistry
+    from application_sdk.app.registry import AppMetadata, AppRegistry
 
 
 _RESERVED_SDR_WORKFLOW_TYPES = frozenset(
     {"sdr:test_auth", "sdr:preflight_check", "sdr:fetch_metadata"}
 )
+
+
+def _require_declaration_matches_registration(
+    app_name: str, app_metadata: "AppMetadata"
+) -> None:
+    """Refuse to start a worker whose alias declaration diverged from registration.
+
+    The declaration is read exactly once, from the class body, at class
+    definition. A post-definition assignment
+    (``MyApp.legacy_workflow_types = {...}``) or an in-place mutation of the
+    declared dict therefore never registers — the app would boot clean and a
+    caller on the unregistered alias would get the exact CNCT-199 symptom this
+    surface exists to fix: a started run no worker ever claims. This check puts
+    every declaration shape through the same door, loudly, at worker startup.
+    """
+    declared = app_metadata.app_cls.__dict__.get("legacy_workflow_types")
+    normalized = (
+        dict(declared)
+        if isinstance(declared, Mapping)
+        else {}
+        if declared is None
+        else None
+    )
+    if normalized != dict(app_metadata.legacy_workflow_types):
+        raise EntryPointContractError(
+            f"App '{app_name}': legacy_workflow_types on the class "
+            f"({declared!r}) no longer matches what registration recorded "
+            f"({dict(app_metadata.legacy_workflow_types)!r}). The declaration "
+            f"is read once at class definition — declare aliases in the class "
+            f"body, never by post-definition assignment or mutation."
+        )
 
 
 def get_all_app_workflows() -> list[type]:
@@ -29,6 +62,7 @@ def get_all_app_workflows() -> list[type]:
     app_registry = AppRegistry.get_instance()
     for app_name in app_registry.list_apps():
         app_metadata = app_registry.get(app_name)
+        _require_declaration_matches_registration(app_name, app_metadata)
         for workflow_type, ep in app_metadata.workflow_types.items():
             if workflow_type in _RESERVED_SDR_WORKFLOW_TYPES:
                 raise EntryPointContractError(

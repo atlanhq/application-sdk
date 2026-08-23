@@ -766,6 +766,7 @@ def _resolve_app_entrypoint(
     selected_entrypoint: str | None,
     *,
     unknown_ep_status: int = 400,
+    allow_workflow_type: bool = False,
 ) -> tuple[Any, Any]:
     """Look up the app in the registry and resolve the target entry point.
 
@@ -775,15 +776,20 @@ def _resolve_app_entrypoint(
     Args:
         app_name: Registered app name (from WorkflowClientConfig).
         selected_entrypoint: An entry-point selector, or ``None`` to use the
-            default. Resolved as an entry-point name first; on a miss it is
-            tried against the app's registered Temporal workflow types
-            (canonical and ``legacy_workflow_types`` aliases), since a caller
-            reading a manifest holds a workflow type rather than an entry-point
-            name. The order is never ambiguous — registration rejects an alias
-            that equals an entry-point name.
+            default. Resolved as an entry-point name; a miss is a hard error
+            unless ``allow_workflow_type`` widens the namespace. The order is
+            never ambiguous — registration keeps names and types disjoint.
         unknown_ep_status: HTTP status to use when an explicitly named
             entrypoint does not exist.  ``400`` for /start (bad request),
             ``404`` for /input-contract (resource not found).
+        allow_workflow_type: On a name miss, also try the selector against the
+            app's registered Temporal workflow types (canonical and
+            ``legacy_workflow_types`` aliases). Only the deprecated request-body
+            ``workflow_type`` field passes ``True`` — that field exists for a
+            legacy caller who genuinely holds a workflow type. The canonical
+            ``?entrypoint=`` selector resolves entry-point names only, on every
+            route, so an alias never becomes a second permanent name on the
+            SDK's own HTTP surface.
 
     Returns:
         ``(app_meta, ep)`` — the :class:`AppMetadata` and the resolved
@@ -815,7 +821,11 @@ def _resolve_app_entrypoint(
 
     if selected_entrypoint:
         if selected_entrypoint not in entry_points:
-            by_workflow_type = app_meta.workflow_types.get(selected_entrypoint)
+            by_workflow_type = (
+                app_meta.workflow_types.get(selected_entrypoint)
+                if allow_workflow_type
+                else None
+            )
             if by_workflow_type is not None:
                 return app_meta, by_workflow_type
             # conformance: ignore[L009] logs caller-invisible context (the available entrypoints) that the generic HTTPException detail does not carry.
@@ -1153,7 +1163,11 @@ def _register_workflow_routes(
             # private callers should be updated before this SDK version is rolled
             # out to apps with multiple entry points.
             _, ep = _resolve_app_entrypoint(
-                _workflow_config.app_name, selected_entrypoint
+                _workflow_config.app_name,
+                selected_entrypoint,
+                allow_workflow_type=(
+                    entrypoint_param is None and legacy_workflow_type is not None
+                ),
             )
 
             input_type = ep.input_type

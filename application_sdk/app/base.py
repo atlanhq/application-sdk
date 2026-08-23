@@ -52,6 +52,7 @@ from application_sdk.app.context import (
     _is_atlan_logger,
 )
 from application_sdk.app.entrypoint import (
+    EntryPointContractError,
     EntryPointMetadata,
     canonical_workflow_type,
     workflow_type_class_segment,
@@ -670,6 +671,39 @@ class PersistentStateAccessor:
 # =============================================================================
 
 
+def _require_aliases_not_expired(cls: type, app_name: str) -> None:
+    """Enforce the opt-in ``legacy_workflow_types_removal_version`` expiry.
+
+    Own-class reads, like the alias map itself: the expiry names one app's
+    migration deadline and must not propagate through the MRO.
+    """
+    removal = cls.__dict__.get("legacy_workflow_types_removal_version") or ""
+    aliases = cls.__dict__.get("legacy_workflow_types") or {}
+    if not removal or not aliases:
+        return
+    from application_sdk.version import (  # noqa: PLC0415 — cheap, avoids import-time cycle
+        __version__,
+    )
+
+    def parse(version: str) -> tuple[int, ...]:
+        try:
+            return tuple(int(part) for part in version.split("."))
+        except ValueError:
+            raise EntryPointContractError(
+                f"App '{app_name}': legacy_workflow_types_removal_version must "
+                f"be a dotted numeric version, got {version!r}."
+            ) from None
+
+    if parse(__version__.split("+")[0].split("rc")[0]) >= parse(removal):
+        raise EntryPointContractError(
+            f"App '{app_name}': legacy_workflow_types declared with removal "
+            f"version {removal}, and the installed SDK is {__version__}. The "
+            f"aliases have expired — delete the drained "
+            f"legacy_workflow_types entries, or push "
+            f"legacy_workflow_types_removal_version out if callers remain."
+        )
+
+
 class App(ABC):
     """Base class for all Apps.
 
@@ -740,6 +774,16 @@ class App(ABC):
     ``legacy_workflow_types`` block; this class attribute is the interim (and,
     for apps without a contract tree, permanent) declaration site.
     """
+
+    legacy_workflow_types_removal_version: ClassVar[str] = ""
+    """Opt-in expiry for the aliases: an SDK version string (``"4.2.0"``).
+
+    Once the installed SDK reaches this version, registration fails while any
+    ``legacy_workflow_types`` remain declared — keeping the aliases becomes a
+    loud decision (push the version out, or delete the drained aliases) rather
+    than drift. Empty (the default) declares no expiry; removal then gates on
+    the ``temporal.workflow.type`` legacy-caller count reaching zero, which is
+    the right posture for aliases with a wide external caller set."""
 
     preflight_gate_mode: ClassVar[Literal["hard", "soft"]] = "soft"
     """Preflight gate posture. ``"soft"`` (default) never blocks — a
@@ -850,6 +894,7 @@ class App(ABC):
             (ep for ep in entry_points.values() if ep.default),
             next(iter(entry_points.values())),
         )
+        _require_aliases_not_expired(cls, app_name)
         _apply_app_registration(
             cls=cls,
             name=app_name,

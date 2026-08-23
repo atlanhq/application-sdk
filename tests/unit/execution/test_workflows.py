@@ -167,6 +167,39 @@ class TestGetAllAppWorkflows:
         with pytest.raises(EntryPointContractError, match="reserved"):
             get_all_app_workflows()
 
+    def test_post_definition_alias_assignment_fails_at_worker_startup(self) -> None:
+        """A declaration written after class definition never registered — the
+        worker must refuse to start rather than boot without the alias (the
+        caller would otherwise get the exact CNCT-199 open-until-timeout run)."""
+        from application_sdk.app.entrypoint import EntryPointContractError, entrypoint
+
+        class LateDeclarationApp(App):
+            @entrypoint
+            async def extract(self, input: _WfInput) -> _WfOutput:
+                return _WfOutput()
+
+        LateDeclarationApp.legacy_workflow_types = {"LateWorkflow": "extract"}
+
+        with pytest.raises(EntryPointContractError, match="class body"):
+            get_all_app_workflows()
+
+    def test_in_place_alias_mutation_fails_at_worker_startup(self) -> None:
+        """Mutating the declared dict after registration diverges from the
+        recorded snapshot; the worker refuses to start on the stale index."""
+        from application_sdk.app.entrypoint import EntryPointContractError, entrypoint
+
+        class MutatedDeclarationApp(App):
+            legacy_workflow_types = {"MutatedWorkflow": "extract"}
+
+            @entrypoint
+            async def extract(self, input: _WfInput) -> _WfOutput:
+                return _WfOutput()
+
+        MutatedDeclarationApp.legacy_workflow_types["SneakedIn"] = "extract"
+
+        with pytest.raises(EntryPointContractError, match="class body"):
+            get_all_app_workflows()
+
 
 class TestGenerateWorkflowClassBehaviour:
     """Tests for generate_workflow_class() — runtime behaviour and idempotency."""

@@ -420,6 +420,57 @@ class TestAppRegistration:
                 ) -> _QiOutput:  # pragma: no cover - not executed
                     return _QiOutput()
 
+    def test_expired_removal_version_fails_at_class_definition(
+        self, clean_app_registry: object, clean_task_registry: object
+    ) -> None:
+        """An opt-in expiry with teeth: once the SDK passes the declared
+        removal version, keeping the aliases is a loud decision, not drift."""
+        with pytest.raises(EntryPointContractError, match="removal"):
+
+            class ExpiredAliasApp(App):
+                name = "expired-alias"
+                legacy_workflow_types = {"OldWorkflow": "work"}
+                legacy_workflow_types_removal_version = "0.0.1"
+
+                @entrypoint
+                async def work(
+                    self, input: _QiInput
+                ) -> _QiOutput:  # pragma: no cover - not executed
+                    return _QiOutput()
+
+    def test_future_removal_version_registers_normally(
+        self, clean_app_registry: object, clean_task_registry: object
+    ) -> None:
+        class UnexpiredAliasApp(App):
+            name = "unexpired-alias"
+            legacy_workflow_types = {"OldWorkflow": "work"}
+            legacy_workflow_types_removal_version = "999.0.0"
+
+            @entrypoint
+            async def work(
+                self, input: _QiInput
+            ) -> _QiOutput:  # pragma: no cover - not executed
+                return _QiOutput()
+
+        meta = AppRegistry.get_instance().get("unexpired-alias")
+        assert "OldWorkflow" in meta.workflow_types
+
+    def test_removal_version_without_aliases_is_ignored(
+        self, clean_app_registry: object, clean_task_registry: object
+    ) -> None:
+        class NoAliasExpiryApp(App):
+            name = "no-alias-expiry"
+            legacy_workflow_types_removal_version = "0.0.1"
+
+            @entrypoint
+            async def work(
+                self, input: _QiInput
+            ) -> _QiOutput:  # pragma: no cover - not executed
+                return _QiOutput()
+
+        meta = AppRegistry.get_instance().get("no-alias-expiry")
+        assert set(meta.workflow_types) == {"no-alias-expiry:work"}
+
     def test_postgres_like_mixed_app_keeps_all_existing_workflow_types(
         self, clean_app_registry: object, clean_task_registry: object
     ) -> None:
@@ -538,32 +589,55 @@ class TestImplicitBareTypeSelector:
             app_class=MixedPostgresApp,
         )
         try:
-            _, ep = _resolve_app_entrypoint("postgres-mixed", "postgres-mixed")
+            _, ep = _resolve_app_entrypoint(
+                "postgres-mixed", "postgres-mixed", allow_workflow_type=True
+            )
             assert ep.implicit is True
         finally:
             svc._workflow_config = previous
 
 
 class TestInboundSelector:
-    def test_entry_point_name_wins(self, _qi_app: type) -> None:
+    def test_entry_point_name_resolves_on_every_surface(self, _qi_app: type) -> None:
         from application_sdk.handler.service import _resolve_app_entrypoint
 
         _, ep = _resolve_app_entrypoint("query-intelligence", "keifu")
         assert ep.name == "keifu"
 
-    def test_alias_selects_its_entry_point(self, _qi_app: type) -> None:
-        from application_sdk.handler.service import _resolve_app_entrypoint
+    def test_alias_resolves_only_when_workflow_types_are_allowed(
+        self, _qi_app: type
+    ) -> None:
+        """D2: the deprecated body field accepts an alias; ``?entrypoint=``
+        resolves entry-point names only, so an alias never becomes a second
+        permanent name on the SDK's own HTTP surface."""
+        from fastapi import HTTPException
 
-        _, ep = _resolve_app_entrypoint("query-intelligence", "KeifuWorkflow")
-        assert ep.name == "keifu"
-
-    def test_canonical_type_also_selects(self, _qi_app: type) -> None:
         from application_sdk.handler.service import _resolve_app_entrypoint
 
         _, ep = _resolve_app_entrypoint(
-            "query-intelligence", "query-intelligence:keifu"
+            "query-intelligence", "KeifuWorkflow", allow_workflow_type=True
         )
         assert ep.name == "keifu"
+
+        with pytest.raises(HTTPException) as excinfo:
+            _resolve_app_entrypoint("query-intelligence", "KeifuWorkflow")
+        assert excinfo.value.status_code == 400
+
+    def test_canonical_type_follows_the_same_rule(self, _qi_app: type) -> None:
+        from fastapi import HTTPException
+
+        from application_sdk.handler.service import _resolve_app_entrypoint
+
+        _, ep = _resolve_app_entrypoint(
+            "query-intelligence",
+            "query-intelligence:keifu",
+            allow_workflow_type=True,
+        )
+        assert ep.name == "keifu"
+
+        with pytest.raises(HTTPException) as excinfo:
+            _resolve_app_entrypoint("query-intelligence", "query-intelligence:keifu")
+        assert excinfo.value.status_code == 400
 
     def test_unknown_selector_still_rejected(self, _qi_app: type) -> None:
         from fastapi import HTTPException
@@ -571,5 +645,7 @@ class TestInboundSelector:
         from application_sdk.handler.service import _resolve_app_entrypoint
 
         with pytest.raises(HTTPException) as excinfo:
-            _resolve_app_entrypoint("query-intelligence", "NoSuchThing")
+            _resolve_app_entrypoint(
+                "query-intelligence", "NoSuchThing", allow_workflow_type=True
+            )
         assert excinfo.value.status_code == 400
