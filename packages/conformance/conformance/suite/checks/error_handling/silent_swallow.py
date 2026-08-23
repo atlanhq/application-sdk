@@ -266,7 +266,11 @@ class SilentSwallowMixin:
                         ):
                             gather_vars[node.targets[0].id] = node
 
+        cancelled = _cancelled_task_names(func_node)
+
         for node in bare_gathers:
+            if _is_cancel_drain(node, cancelled):
+                continue
             self._add(
                 "E010",
                 node,
@@ -347,3 +351,64 @@ class SilentSwallowMixin:
             f"except {exc_type}: [continue/break/pass] inside a loop — exception is "
             f"silently swallowed. Log at DEBUG before the loop control statement.",
         )
+
+
+def _cancelled_task_names(
+    func_node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> set[str]:
+    """Names of variables that are `.cancel()`ed anywhere in *func_node*.
+
+    Covers both `for t in tasks: t.cancel()` and bare `task.cancel()` shapes.
+    A name here means a gather over that name is very likely a cancellation
+    drain, not a result-producing call.
+    """
+    names: set[str] = set()
+    for node in _iter_shallow(func_node):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Attribute) and func.attr == "cancel"):
+            continue
+        target = func.value
+        if isinstance(target, ast.Name):
+            names.add(target.id)
+    # Resolve loop variables: `for t in tasks: ... t.cancel()` — if a
+    # cancelled name is the loop variable of a `for ... in <name>:`, treat the
+    # collection as cancelled too.
+    resolved: set[str] = set(names)
+    for node in _iter_shallow(func_node):
+        if not isinstance(node, ast.For):
+            continue
+        if not isinstance(node.iter, ast.Name):
+            continue
+        target = node.target
+        if isinstance(target, ast.Name) and target.id in names:
+            resolved.add(node.iter.id)
+    return resolved
+
+
+def _is_cancel_drain(gather_stmt: ast.AST, cancelled: set[str]) -> bool:
+    """True if *gather_stmt* is a bare ``await asyncio.gather(*tasks, ...)``
+    whose positional iterable(s) have all been cancelled in the same function
+    — the standard asyncio cancellation-drain idiom, where the results are by
+    construction CancelledError instances and there is nothing to inspect.
+    """
+    if not isinstance(gather_stmt, ast.Expr):
+        return False
+    val = gather_stmt.value
+    if isinstance(val, ast.Await):
+        val = val.value
+    if not (isinstance(val, ast.Call) and _is_gather_call(val)):
+        return False
+    positional = list(val.args)
+    if not positional:
+        return False
+    for arg in positional:
+        # `*tasks` (starred Name) or a bare `tasks` Name
+        target = arg.value if isinstance(arg, ast.Starred) else arg
+        if not isinstance(target, ast.Name):
+            # e.g. a list literal or comprehension — cannot prove drain
+            return False
+        if target.id not in cancelled:
+            return False
+    return True
