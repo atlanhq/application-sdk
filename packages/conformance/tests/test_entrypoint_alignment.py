@@ -866,6 +866,104 @@ def test_p016_declared_alias_naming_a_foreign_node_does_not_launder(
     assert len(msgs) == 1 and "keifu" in msgs[0]
 
 
+def _write_generated_shape_manifest(
+    tmp_path: Path,
+    aliased_node: dict,
+    aliases: list[tuple[str, str]] | None = None,
+) -> None:
+    """A manifest shaped the way the toolkit actually generates one.
+
+    The entry point's own node is `extract`, its `workflow_type` is **bare** (the
+    kebab-cased contract name, no `<app>:` prefix), and its identity lives in
+    `inputs.app_name`. No committed example manifest contains a colon-qualified
+    workflow_type, so this — not the route/card-split shape — is the common case.
+    """
+    import json
+
+    gen = tmp_path / "app" / "generated"
+    gen.mkdir(parents=True)
+    manifest = {
+        "dag": {
+            "extract": {
+                "app_name": "app",
+                "inputs": {
+                    "workflow_type": "ExtractMetadataWorkflow",
+                    "app_name": "app",
+                    "task_queue": "atlan-app",
+                },
+            },
+            "aliased": aliased_node,
+        },
+        **(_alias_block(aliases) if aliases else {}),
+    }
+    (gen / "manifest.json").write_text(json.dumps(manifest))
+
+
+def test_p016_alias_routes_on_a_generated_shape_manifest(tmp_path: Path) -> None:
+    """The manifest identity must come from the own node, not only from colons.
+
+    Deriving `own_app_names` purely from `<app>:` prefixes left it empty on every
+    manifest the toolkit generates, so a bare alias node carrying `inputs.app_name`
+    never routed and P016 — a BLOCK rule — failed a correctly-wired app.
+    """
+    _write_generated_shape_manifest(
+        tmp_path,
+        {"workflow_type": "OverrideWorkflow", "inputs": {"app_name": "app"}},
+        aliases=[("OverrideWorkflow", "keifu")],
+    )
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/connector.py": dedent("""\
+                from application_sdk.app import App, entrypoint
+                class MyApp(App):
+                    name = "app"
+                    legacy_workflow_types = {"OverrideWorkflow": "keifu"}
+                    @entrypoint(name="extract-metadata")
+                    async def extract_metadata(self, input: Input) -> Output: ...
+                    @entrypoint(name="keifu")
+                    async def keifu(self, input: Input) -> Output: ...
+            """)
+        },
+    )
+    findings = scan_all(paths, tmp_path)
+    msgs = [f.message for f in findings if f.rule_id == "P016"]
+    # "keifu" also appears in other messages' "declared routes" list, so match the
+    # subject of the finding rather than the bare name.
+    assert not any("Entry point 'keifu'" in m for m in msgs)
+
+
+def test_p016_generated_shape_still_refuses_a_foreign_node(tmp_path: Path) -> None:
+    """Widening identity to the own node must not widen it to every node.
+
+    Same generated shape, but the aliased node names a different app — it
+    dispatches on that app's worker, so the alias cannot reach `keifu` here.
+    """
+    _write_generated_shape_manifest(
+        tmp_path,
+        {"workflow_type": "OverrideWorkflow", "inputs": {"app_name": "platform"}},
+        aliases=[("OverrideWorkflow", "keifu")],
+    )
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/connector.py": dedent("""\
+                from application_sdk.app import App, entrypoint
+                class MyApp(App):
+                    name = "app"
+                    legacy_workflow_types = {"OverrideWorkflow": "keifu"}
+                    @entrypoint(name="extract-metadata")
+                    async def extract_metadata(self, input: Input) -> Output: ...
+                    @entrypoint(name="keifu")
+                    async def keifu(self, input: Input) -> Output: ...
+            """)
+        },
+    )
+    findings = scan_all(paths, tmp_path)
+    msgs = [f.message for f in findings if f.rule_id == "P016"]
+    assert any("Entry point 'keifu'" in m for m in msgs)
+
+
 def test_p016_a_second_app_class_does_not_launder_a_foreign_node(
     tmp_path: Path,
 ) -> None:

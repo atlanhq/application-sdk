@@ -35,6 +35,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+_OWN_NODE_ID = "extract"
+"""The DAG node id the toolkit always gives an entry point's own node."""
+
 
 @dataclass(frozen=True)
 class ContractEntrypointScan:
@@ -166,8 +169,16 @@ def _routes_from_dag(
         node's ``app_name`` does not name a different app.
 
     ``own_app_names``
-        The ``<app>`` half of those same colon-qualified types — the app
-        identities this manifest's DAG routes to itself.
+        The app identities this manifest claims as its own: the ``app_name`` its
+        entry point's own DAG node carries, plus the ``<app>`` half of any
+        colon-qualified type it routes.
+
+        Both sources are needed. The toolkit stamps the contract ``name`` onto
+        the entry point's own node (``inputs.app_name``, CNCT-93) but emits a
+        *bare* ``workflow_type`` for it, so a generated manifest usually carries
+        no colon at all — reading only colon prefixes would leave this set empty
+        on every manifest the toolkit actually produces. Colon-qualified types
+        appear on route/card-split apps and are this app's own too.
 
     The walk is scoped to the ``dag`` subtree, so a ``workflow_type`` appearing
     elsewhere in the manifest is not collected.  It does **not** pin the
@@ -206,6 +217,17 @@ def _routes_from_dag(
                 _walk(item)
 
     _walk(dag)
+
+    # The entry point's own node id is always the literal "extract" (App.pkl's
+    # generateDAG()), and the toolkit bakes the contract `name` onto it. That is the
+    # manifest's own identity even when nothing in the DAG is colon-qualified.
+    if isinstance(dag, dict):
+        own_node = dag.get(_OWN_NODE_ID)
+        if isinstance(own_node, dict):
+            own_name = _node_app_name(own_node)
+            if own_name is not None:
+                app_names.add(own_name)
+
     return frozenset(wire_names), frozenset(dag_types), frozenset(app_names)
 
 
