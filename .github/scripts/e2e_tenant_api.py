@@ -69,6 +69,21 @@ _SERVICE_PREFIX = "/api/service"
 #: :func:`path_segment` means a formatted-in value cannot either.
 PUBLISH_PATH = f"{_SERVICE_PREFIX}/marketplace/publish"
 INSTALL_PATH = f"{_SERVICE_PREFIX}/marketplace/tenant/default/apps/{{app_id}}/install"
+#: The sibling of INSTALL_PATH, and deliberately written next to it: the two are
+#: one pair, so a change to the tenant scoping of one has to be made to the other.
+#: `POST .../uninstall` in local-marketplace (`marketplace_api/v1/router.py`),
+#: proxied by Heracles as `uninstallTenantApp` in `api/marketplace.json`.
+#:
+#: Three refusals are baked into the route rather than into this constant, and the
+#: caller has to know them: a non-`default` deployment name is a 400 (customer
+#: infra / SDR uninstall is not implemented in LM yet), a system app is a 409
+#: (`is_system_app`, so this route can never clear a `publish-app`-style pin —
+#: those are reconciler-owned), and an app that is not installed is a 404. Only
+#: the `default` deployment is reachable here, which is what the e2e install path
+#: already targets.
+UNINSTALL_PATH = (
+    f"{_SERVICE_PREFIX}/marketplace/tenant/default/apps/{{app_id}}/uninstall"
+)
 APP_INFO_PATH = f"{_SERVICE_PREFIX}/marketplace/apps/{{app_id}}/info"
 DEPLOYMENT_PATH = f"{_SERVICE_PREFIX}/marketplace/apps/deployments/{{deployment_id}}"
 APP_EVENTS_PATH = f"{_SERVICE_PREFIX}/marketplace/apps/{{app_id}}/events"

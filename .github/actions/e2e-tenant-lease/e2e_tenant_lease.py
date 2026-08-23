@@ -1099,13 +1099,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--ttl-seconds",
         type=int,
-        default=14400,
+        default=18000,
         help="How long a holder may HOLD the lease (measured from the acquisition "
         "time it recorded, not from run age) before a waiter treats it as wedged "
-        "and breaks it. Must exceed the longest legitimate hold — the install plus "
-        "the leg ceiling — because breaking a live holder's lease puts a second "
-        "installer on the tenant, and because release safety depends on it too. "
-        "Default 4h against a 40min+120min hold. 0 disables the backstop.",
+        "and breaks it. Must exceed the longest legitimate hold — the install, the "
+        "leg ceiling, and the uninstall that clears the run's version pin before "
+        "the lease goes back (FND-709) — because breaking a live holder's lease "
+        "puts a second installer on the tenant, and because release safety depends "
+        "on it too. Default 5h against a 40min+120min+15min hold. 0 disables the "
+        "backstop.",
     )
     parser.add_argument(
         "--on-timeout",

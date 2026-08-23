@@ -1,0 +1,221 @@
+# Manually clear app version pins from the e2e tenants.
+#
+# FND-709. `Prepare tenant` installs the app under test through LM, which writes
+# `releaseChannel: "specific"` plus a `releaseId` into the app's HelmRelease
+# values. Nothing ever removed it, so every connector that ran e2e left a
+# permanent per-connector pin behind: 46 of 106 HelmReleases on one cloud's e2e
+# tenant were on `releaseChannel: specific`, and 30 of those carried
+# `sdr-test-<hash>` tags — the deterministic e2e test-image tag — accumulated one
+# per connector over three days.
+#
+# tests-reusable.yaml's `release-tenant` job now clears its own run's pin before
+# handing the lease back, so the accumulation stops at source. This workflow is
+# the other half: the sweep that clears what is ALREADY there, and the standing
+# escape hatch for a pin that survives the automatic cleanup (an uninstall that
+# could not reach the tenant, a run that was cancelled before `release-tenant`
+# started — GitHub cancels queued jobs rather than running them, so `always()`
+# does not save that case).
+#
+# WHY THIS MATTERS MORE THAN TIDINESS: LM's deployment health check is
+# namespace-scoped (DISTR-901), so ANY unhealthy pod in `<app>-app` fails EVERY
+# install to that tenant. Each stale `sdr-test-*` pin is a candidate
+# ImagePullBackOff the moment its image ages out of the registry cache — a future
+# install-blocker for a repo that had nothing to do with the run that created it.
+# FND-131 spent several runs diagnosing exactly that shape.
+#
+# WHY THIS IS workflow_dispatch AND NOT AUTOMATIC: removing an app from a tenant
+# is a deployment. The manual trigger IS the human authorisation and the `confirm`
+# input makes firing it at the wrong tenant a deliberate act. The automatic path
+# is scoped to the one app a run installed and is in tests-reusable.yaml; this one
+# takes an arbitrary list, so it stays manual.
+#
+# WHAT IT CANNOT DO, by design:
+#
+#   * System apps. LM answers 409 (`is_system_app`) because those are
+#     reconciler-owned and would be reinstalled if removed. The other population
+#     of `specific` pins — system apps on feature-branch builds — is FND-438's
+#     territory and is unreachable from here.
+#   * Non-`default` deployments. LM rejects those 400; customer-infra / SDR
+#     uninstall is not implemented there yet. The e2e install path only ever
+#     targets `default`, so everything this sweep needs to reach is reachable.
+#   * Deleting the namespace. It carries `helm.sh/resource-policy: keep` and
+#     removing it would need cluster-wide RBAC. Not a gap: `helm uninstall` takes
+#     the Deployments and pods with it, and a bare namespace with no unhealthy
+#     pods in it does not fail anybody's install.
+#   * `app_configs` ConfigMaps and install-hook credential Secrets survive — LM
+#     applies them out-of-band with `kubectl apply`, so `helm uninstall` leaves
+#     them. LM's own position is that they are harmless and overwritten on
+#     reinstall; sweeping them is an LM follow-up, not this workflow's job.
+#
+# NO TENANT LEASE, and it is worth being explicit about why. Lease tickets are
+# refs in the repository a run belongs to, and every contender for a connector's
+# tenant runs in the connector's repo — this workflow runs in application-sdk, so
+# it cannot see them. Keying the lease centrally would need a cross-repo PAT with
+# ref-write on every app repo. Same trade-off, and the same residual gap, as the
+# E2E Tenant Install workflow: a sweep can land underneath a live e2e run, whose
+# per-leg version check would then fail LOUDLY rather than pass on the wrong
+# version. Tracked on FND-250.
+#
+# Credentials never leave CI. `resolve_e2e_tenant.py` writes the tenant and its
+# credentials into $GITHUB_ENV behind the two-pass mask protocol, and
+# `e2e_tenant_app.py` reads them from the environment rather than argv (argv is
+# visible in process listings and in `set -x` output). Nothing prints a token.
+name: E2E Tenant Uninstall
+
+on:
+  workflow_dispatch:
+    inputs:
+      clouds:
+        description: >-
+          Which cloud's e2e tenant to sweep. "all" fans out over every cloud as a
+          matrix — the pins accumulated on all three, so that is the normal
+          choice for the FND-709 backfill.
+        required: true
+        type: choice
+        options: [all, aws, azure, gcp]
+        default: all
+      confirm:
+        description: "This REMOVES apps from a live tenant. Select yes to proceed."
+        required: true
+        type: choice
+        options: ["no", "yes"]
+        default: "no"
+      app_ids:
+        description: >-
+          GM app UUIDs to uninstall, comma- or space-separated (the `app_id` field
+          in each app repo's atlan.yaml). An app that is not installed on a given
+          tenant reports "not-installed" and costs one call, so the same list can
+          be fired at every cloud.
+        required: true
+        type: string
+      timeout_seconds:
+        description: >-
+          Budget for each app's uninstall deployment to reconcile before it is
+          reported as residue. A HelmRelease delete plus a wait for the workload
+          to go, so much shorter than an install's.
+        required: false
+        type: string
+        default: "300"
+
+permissions:
+  contents: read
+
+concurrency:
+  # One sweep at a time per cloud, and NOT cancel-in-progress: cancelling
+  # mid-uninstall leaves the tenant in whatever state LM reached, with the
+  # HelmRelease gone and the install record still there. Cloud-keyed rather than
+  # app-keyed because the list is per-run, so there is no single app to key on.
+  #
+  # Deliberately the SAME group shape as e2e-tenant-install.yaml's but a different
+  # name, so an install and a sweep can run concurrently on one cloud. Serialising
+  # them against each other would be better; it is not possible from here for the
+  # same reason the lease is not (see the header), and a sweep that removes the
+  # app an install just placed surfaces as that workflow's own read-back failing,
+  # loudly.
+  group: e2e-tenant-uninstall-${{ inputs.clouds }}
+  cancel-in-progress: false
+
+jobs:
+  uninstall:
+    name: Clear pins on ${{ matrix.cloud }}
+    # A job-level `if:` rather than a shell test, so an unconfirmed dispatch is
+    # visibly skipped instead of green-but-did-nothing.
+    if: inputs.confirm == 'yes'
+    strategy:
+      # One wedged tenant must not stop the other two being cleaned.
+      fail-fast: false
+      matrix:
+        # Expression-layer branching, so the `run:` blocks below stay
+        # straight-line (docs/standards/ci.md). `format` rather than string
+        # concatenation because GHA expressions have no `+` for strings.
+        cloud: ${{ fromJson(inputs.clouds == 'all' && '["aws","azure","gcp"]' || format('["{0}"]', inputs.clouds)) }}
+    runs-on: ubuntu-latest
+    # Comfortably above the script's own budget even for a long list: the sweep is
+    # sequential over app_ids, so the worst case is timeout_seconds per app. Sized
+    # for the FND-709 backfill (~30 apps) reaching its per-app budget only rarely
+    # — the normal case is a few seconds each. A run that does hit this reports the
+    # apps it had already cleared in its step log.
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    env:
+      E2E_TENANT_MATRIX_JSON: ${{ secrets.E2E_TENANT_MATRIX_JSON }}
+      E2E_CLOUD: ${{ matrix.cloud }}
+      FALLBACK_SDR_TEST_TENANT: ${{ secrets.SDR_TEST_TENANT }}
+      FALLBACK_SDR_CLIENT_ID: ${{ secrets.SDR_CLIENT_ID }}
+      FALLBACK_SDR_CLIENT_SECRET: ${{ secrets.SDR_CLIENT_SECRET }}
+      FALLBACK_ATLAN_API_KEY: ${{ secrets.ATLAN_API_KEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Two invocations: the mask pass must reach the log BEFORE the write pass
+      # redirects stdout into $GITHUB_ENV, because registering the matrix blob as
+      # a secret does not redact the values inside it. Same protocol as
+      # tests-reusable.yaml and e2e-tenant-install.yaml — see
+      # .github/scripts/export_extra_env.py for why the two passes are separate.
+      - name: Resolve the target tenant
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/resolve_e2e_tenant.py \
+            --matrix-json "$E2E_TENANT_MATRIX_JSON" \
+            --cloud "$E2E_CLOUD" \
+            --fallback-tenant "$FALLBACK_SDR_TEST_TENANT" \
+            --fallback-client-id "$FALLBACK_SDR_CLIENT_ID" \
+            --fallback-client-secret "$FALLBACK_SDR_CLIENT_SECRET" \
+            --fallback-api-key "$FALLBACK_ATLAN_API_KEY" \
+            --mask-only
+          python3 .github/scripts/resolve_e2e_tenant.py \
+            --matrix-json "$E2E_TENANT_MATRIX_JSON" \
+            --cloud "$E2E_CLOUD" \
+            --fallback-tenant "$FALLBACK_SDR_TEST_TENANT" \
+            --fallback-client-id "$FALLBACK_SDR_CLIENT_ID" \
+            --fallback-client-secret "$FALLBACK_SDR_CLIENT_SECRET" \
+            --fallback-api-key "$FALLBACK_ATLAN_API_KEY" \
+            >> "$GITHUB_ENV"
+
+      # Every dispatch input reaches the shell through env:, never through
+      # `${{ }}` inside run:. A workflow_dispatch input is attacker-influenced
+      # free text, and direct interpolation splices it into the script before bash
+      # sees a quote — so a crafted `app_ids` would execute rather than be parsed.
+      # Via env:, bash receives it as data, and the driver validates every id
+      # against the GM UUID shape before it reaches a request path.
+      #
+      # No env: block re-exporting the credentials: the script reads
+      # SDR_CLIENT_ID / SDR_CLIENT_SECRET straight out of the environment the
+      # resolver wrote, so the secret is not interpolated through a GitHub
+      # expression again just to be renamed.
+      #
+      # Residue exits non-zero here, unlike in the automatic cleanup: a pin that
+      # would not clear IS what this run was fired to fix, so it must be a red run
+      # and not a warning in a log nobody opens.
+      - name: Uninstall the apps
+        id: uninstall
+        env:
+          APP_IDS: ${{ inputs.app_ids }}
+          TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/e2e_tenant_app.py uninstall \
+            --base-url "$ATLAN_BASE_URL" \
+            --app-ids "$APP_IDS" \
+            --timeout-seconds "$TIMEOUT_SECONDS"
+
+      - name: Summarise
+        if: always()
+        env:
+          CLOUD: ${{ matrix.cloud }}
+          CLEARED: ${{ steps.uninstall.outputs.cleared }}
+          RESIDUAL: ${{ steps.uninstall.outputs.residual }}
+          OUTCOMES: ${{ steps.uninstall.outputs.outcomes }}
+        run: |
+          {
+            echo "### E2E tenant uninstall — ${CLOUD}"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Pin cleared | \`${CLEARED:-none}\` |"
+            echo "| Pin possibly left behind | \`${RESIDUAL:-none}\` |"
+            echo "| Per-app outcome | \`${OUTCOMES:-not attempted}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"

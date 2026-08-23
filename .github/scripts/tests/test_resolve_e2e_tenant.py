@@ -385,6 +385,10 @@ def test_call_sites_are_the_expected_files() -> None:
         # that tenant the same way a leg does. Audited: it runs the two-pass
         # --mask-only-then-write protocol, which the ordering guard below checks.
         ".github/workflows/e2e-tenant-install.yaml",
+        # FND-709: the version-pin sweep, install's mirror image. It removes an
+        # app from one e2e tenant, so it resolves that tenant the same way — and
+        # is audited the same way, by the ordering guard below.
+        ".github/workflows/e2e-tenant-uninstall.yaml",
         ".github/workflows/tests-reusable.yaml",
     }
 

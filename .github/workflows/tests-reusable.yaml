@@ -2237,7 +2237,37 @@ jobs:
           # Dockerfile that declares no such secret mount simply ignores it.
           git-token: ${{ secrets.ORG_PAT_GITHUB }}
 
-  # ── Hand the tenant to whoever is next in the queue ──────────────────────
+  # ── Give the tenant back: clear this run's pin, then release the lease ───
+  # Two things, in that order, and the order is the safety property (FND-709).
+  #
+  # `Prepare tenant` installs via LM, which writes `releaseChannel: "specific"`
+  # plus a `releaseId` into the app's HelmRelease values. Nothing ever removed it,
+  # so every connector that ran e2e left a PERMANENT per-connector version pin on
+  # every tenant it touched — 30 of them on one cloud's tenant, one per connector,
+  # accumulated over three days. That is a hazard rather than clutter: LM's
+  # deployment health check is namespace-scoped (DISTR-901), so one stale
+  # `sdr-test-*` pod whose image has aged out of the registry cache fails EVERY
+  # future install to that tenant, including for repos that had nothing to do with
+  # the run that created it. FND-131 spent several runs diagnosing exactly that
+  # shape before the cause was found.
+  #
+  # The uninstall runs BEFORE the release and while the lease is still held. The
+  # other order looks harmless and is not: handing the tenant over first lets the
+  # next run's install land between LM's HelmRelease delete and its record delete,
+  # and LM's reinstall suppression is explicitly NOT a second backstop —
+  # `trigger_uninstall` and `_trigger_install` share one `is_app_uninstalled`
+  # lookup that fails open, so on a bad read neither blocks the other. The lease
+  # is the only thing that closes that window, which is why this job is now part
+  # of the span the lease TTL has to clear (see test_e2e_tenant_lease's
+  # _LEASE_HELD_ACROSS).
+  #
+  # Deliberate consequence: `Prepare tenant` can no longer short-circuit on
+  # "tenant already runs <version> — nothing to do", so every run pays a full
+  # install, including a re-run of the same commit (the `sdr-test-<hash>` tag is
+  # deterministic, so that no-op used to fire). Accepted, and it cuts both ways —
+  # that short-circuit is precisely why FND-281 found a dirty tenant could never
+  # be detected: a run that installs nothing observes nothing.
+  #
   # Prompt release, not the mechanism that makes the lease safe. GitHub cancels
   # queued jobs rather than running them, so on a cancelled run this job never
   # starts at all and `if: always()` does not help — which is why liveness is
@@ -2245,10 +2275,12 @@ jobs:
   # ticket whose run is over. This job just means the next run waits seconds
   # rather than one poll interval.
   #
-  # It never fails the workflow: the driver returns 0 whether or not a ticket was
-  # there to delete, so a release hiccup cannot redden a run whose tests passed.
+  # It never fails the workflow: the release driver returns 0 whether or not a
+  # ticket was there to delete, every step that CAN fail carries
+  # `continue-on-error`, and no job needs this one — so neither a release hiccup
+  # nor a pin that would not clear can redden a run whose tests passed.
   release-tenant:
-    name: Release tenant lease (${{ matrix.cloud || 'default' }})
+    name: Give the tenant back (${{ matrix.cloud || 'default' }})
     needs: [discover-e2e, lease-tenant, prepare-tenant, e2e]
     # Still a per-cloud MATRIX while the acquire is one ordered job (FND-646), and
     # deliberately so: release cannot block, is ownership-checked, and is
@@ -2272,17 +2304,161 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.discover-e2e.outputs.cloud-count != '0' && needs.discover-e2e.outputs.cloud-matrix || '{"include":[{"cloud":""}]}') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Above the uninstall's own reconcile budget with room for the two checkouts,
+    # the lease check, the tenant resolve and the release — asserted against
+    # e2e_tenant_app.DEFAULT_UNINSTALL_TIMEOUT_SECONDS by a test, so raising that
+    # constant fails the guard rather than quietly making a job timeout reachable.
+    # It also feeds the lease TTL guard, because this is now time the lease is
+    # HELD: raising it forces the TTL up rather than eating the TTL's margin.
+    timeout-minutes: 15
     permissions:
       contents: write
       actions: read
+    env:
+      E2E_TENANT_MATRIX_JSON: ${{ secrets.E2E_TENANT_MATRIX_JSON }}
+      E2E_CLOUD: ${{ matrix.cloud }}
+      FALLBACK_SDR_TEST_TENANT: ${{ secrets.SDR_TEST_TENANT }}
+      FALLBACK_SDR_CLIENT_ID: ${{ secrets.SDR_CLIENT_ID }}
+      FALLBACK_SDR_CLIENT_SECRET: ${{ secrets.SDR_CLIENT_SECRET }}
+      FALLBACK_ATLAN_API_KEY: ${{ secrets.ATLAN_API_KEY }}
     steps:
+      # The caller's repo, for its atlan.yaml: the uninstall reads app_id from the
+      # same file the install did, so the two cannot disagree about which app this
+      # run put on the tenant.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Same sparse fetch and same `job.workflow_sha` pin as prepare-tenant's, for
+      # the same reason: a PR editing these drivers must exercise its own version,
+      # and `uses:` cannot take an expression so an action reference could only
+      # ever be @main.
+      - name: Fetch SDK CI scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: |
+            .github/scripts
+            .github/actions/e2e-tenant-lease
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+          persist-credentials: false
+
+      # Ownership check, and the whole reason the uninstall below is safe. This
+      # job's `if:` is deliberately wide — it runs for every cloud in the matrix,
+      # including clouds this run never leased (a partial acquire, a lease job that
+      # died) — because a leg that holds nothing must still be able to give back
+      # whatever it does hold. The RELEASE is safe under that widening on its own,
+      # since the release driver re-checks ownership per ref before deleting. An
+      # UNINSTALL is not: run for a cloud this run never held, it would delete
+      # whatever the actual holder had just installed.
+      #
+      # `continue-on-error` plus reading `.outcome` keeps the branch in the
+      # expression layer instead of a shell `if` (docs/standards/ci.md), and keeps
+      # a not-held verdict from reddening a job that must never fail.
+      - name: Confirm this run still holds the tenant lease
+        id: hold
+        continue-on-error: true
+        env:
+          APP: ${{ inputs.app-name }}
+          CLOUD: ${{ matrix.cloud }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/actions/e2e-tenant-lease/e2e_tenant_lease.py \
+            --mode verify \
+            --repo "$GITHUB_REPOSITORY" \
+            --app "$APP" \
+            --cloud "$CLOUD" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT"
+
+      # Two invocations, mask pass first — see prepare-tenant's equivalent step for
+      # why registering the matrix blob as a secret does not redact the values
+      # inside it.
+      # `continue-on-error` for the same reason the uninstall has it, and it is not
+      # redundant with the guard below: an unshared tenant-matrix secret makes the
+      # resolver EXIT non-zero, which would red this job outright — the one job
+      # that must always be able to hand the tenant back. The `ATLAN_BASE_URL`
+      # guard below then skips the uninstall rather than running it with no tenant.
+      - name: Resolve e2e tenant for this cloud
+        id: resolve
+        if: steps.hold.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/scripts/resolve_e2e_tenant.py \
+            --matrix-json "$E2E_TENANT_MATRIX_JSON" \
+            --cloud "$E2E_CLOUD" \
+            --fallback-tenant "$FALLBACK_SDR_TEST_TENANT" \
+            --fallback-client-id "$FALLBACK_SDR_CLIENT_ID" \
+            --fallback-client-secret "$FALLBACK_SDR_CLIENT_SECRET" \
+            --fallback-api-key "$FALLBACK_ATLAN_API_KEY" \
+            --mask-only
+          python3 application-sdk-scripts/.github/scripts/resolve_e2e_tenant.py \
+            --matrix-json "$E2E_TENANT_MATRIX_JSON" \
+            --cloud "$E2E_CLOUD" \
+            --fallback-tenant "$FALLBACK_SDR_TEST_TENANT" \
+            --fallback-client-id "$FALLBACK_SDR_CLIENT_ID" \
+            --fallback-client-secret "$FALLBACK_SDR_CLIENT_SECRET" \
+            --fallback-api-key "$FALLBACK_ATLAN_API_KEY" \
+            >> "$GITHUB_ENV"
+
+      # `continue-on-error` rather than a flag in the driver. This job exists to
+      # hand the tenant back and must never red a run whose tests passed, but the
+      # residue still has to be VISIBLE — so the script reports it as an
+      # ::error:: annotation and exits non-zero, the step shows as failed-but-
+      # continued, and the job stays green. The next run's cleanup retries for
+      # free; a pin that survives repeatedly is cleared with the E2E Tenant
+      # Uninstall workflow.
+      #
+      # Not gated on prepare-tenant's result, on purpose. A prepare-tenant that
+      # failed AFTER LM accepted the install (a deployment that never reconciled,
+      # say) has already written the pin, which is exactly the case worth cleaning
+      # up — and where nothing was installed the uninstall reads LM's 404 and
+      # reports "not-installed", which costs one call.
+      #
+      # `--app-ids` is deliberately omitted so the driver reads app_id from the
+      # caller's atlan.yaml, the same source the install used.
+      - name: Clear this run's version pin from the tenant
+        id: uninstall
+        if: steps.hold.outcome == 'success' && env.ATLAN_BASE_URL != ''
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/scripts/e2e_tenant_app.py uninstall \
+            --base-url "$ATLAN_BASE_URL"
+
+      # `always()`: the tenant goes back whatever the uninstall did. A pin left
+      # behind is a slow hazard; a lease left behind blocks the next run now.
       - name: Release the tenant lease
+        if: always()
         uses: atlanhq/application-sdk/.github/actions/e2e-tenant-lease@main
         with:
           mode: release
           app: ${{ inputs.app-name }}
           cloud: ${{ matrix.cloud }}
+
+      - name: Summarise
+        if: always()
+        env:
+          CLOUD: ${{ matrix.cloud || 'default' }}
+          HELD: ${{ steps.hold.outcome }}
+          CLEARED: ${{ steps.uninstall.outputs.cleared }}
+          RESIDUAL: ${{ steps.uninstall.outputs.residual }}
+          OUTCOMES: ${{ steps.uninstall.outputs.outcomes }}
+        run: |
+          {
+            echo "### Tenant given back — ${CLOUD}"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Lease held by this run | \`${HELD}\` |"
+            echo "| Version pin cleared | \`${CLEARED:-none}\` |"
+            echo "| Version pin possibly left behind | \`${RESIDUAL:-none}\` |"
+            echo "| Per-app outcome | \`${OUTCOMES:-not attempted}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # ── Callback: report the result back to the application-sdk PR/commit ────
   # that dispatched this run. application-sdk's e2e-apps composite
