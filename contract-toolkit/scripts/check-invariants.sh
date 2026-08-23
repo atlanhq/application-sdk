@@ -260,6 +260,122 @@ uiConfig = new Config.UIConfig {
 }'
 
 # --------------------------------------------------------------------------
+# 9. CONNECT-1081: legacyWorkflowTypes on a multi-entrypoint bundle root must throw.
+#    The root re-exports each entrypoint contract's already-generated files and emits
+#    no manifest.json of its own, so aliases declared there would reach no manifest at
+#    all. Left lazy, the declaration would vanish silently and resurface much later as
+#    conformance drift pointing at the wrong file. The check is forced from `output`,
+#    which the root always evaluates. Asserted here rather than in a pkl test because
+#    facts cannot express "eval fails".
+# --------------------------------------------------------------------------
+echo ":: Checking legacyWorkflowTypes bundle-root placement invariant..."
+BAD_CONTRACT="$(mktemp "$REPO_ROOT/test-root-alias-XXXXXX.pkl")"
+OUT_DIR="$(mktemp -d "$REPO_ROOT/test-root-alias-out-XXXXXX")"
+cat > "$BAD_CONTRACT" << 'PKLEOF'
+amends "src/App.pkl"
+
+name = "root-alias-bundle"
+displayName = "Root Alias Bundle"
+icon = "https://example.com/icon.svg"
+hasCredentialConfig = false
+
+entrypoints {
+  new Entrypoint {
+    name = "crawler"
+    displayName = "Crawler"
+  }
+}
+
+legacyWorkflowTypes {
+  new LegacyWorkflowTypeSpec { alias = "RootAliasWorkflow"; entrypoint = "crawler" }
+}
+PKLEOF
+ERR_MSG="$(pkl eval -m "$OUT_DIR" "$BAD_CONTRACT" 2>&1 || true)"
+rm -f "$BAD_CONTRACT"
+rm -rf "$OUT_DIR"
+if ! echo "$ERR_MSG" | grep -q "cannot be declared on a multi-entrypoint bundle root"; then
+  echo "FAIL: legacyWorkflowTypes bundle-root invariant did not fire with expected message"
+  echo "  Got: $ERR_MSG"
+  fail=1
+fi
+
+# Control: the same aliases on a single-entrypoint contract must generate cleanly.
+# Without this, a contract that errors for an unrelated reason would pass the assertion
+# above and prove nothing about the placement rule.
+echo ":: Checking legacyWorkflowTypes on a single-entrypoint contract still generates (control)..."
+CTRL_CONTRACT="$(mktemp "$REPO_ROOT/test-alias-ctrl-XXXXXX.pkl")"
+CTRL_OUT="$(mktemp -d "$REPO_ROOT/test-alias-ctrl-out-XXXXXX")"
+cat > "$CTRL_CONTRACT" << 'PKLEOF'
+amends "src/App.pkl"
+
+name = "alias-ctrl-app"
+displayName = "Alias Control App"
+icon = "https://example.com/icon.svg"
+hasCredentialConfig = false
+pipeline { publish = null }
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs { ["target"] = new TextInput { title = "Target"; placeholderText = "x" } }
+    }
+  }
+}
+
+legacyWorkflowTypes {
+  new LegacyWorkflowTypeSpec { alias = "AliasCtrlWorkflow"; entrypoint = "alias-ctrl-app" }
+}
+PKLEOF
+CTRL_ERR="$(pkl eval -m "$CTRL_OUT" "$CTRL_CONTRACT" 2>&1 || true)"
+rm -f "$CTRL_CONTRACT"
+rm -rf "$CTRL_OUT"
+if echo "$CTRL_ERR" | grep -q "Pkl Error"; then
+  echo "FAIL: control contract declaring legacyWorkflowTypes failed to generate"
+  echo "  Got: $CTRL_ERR"
+  fail=1
+fi
+
+# --------------------------------------------------------------------------
+# 10. CONNECT-1081: a duplicate alias must throw. `alias` is the identity key both in
+#     the manifest and in the SDK's `{alias: entrypoint}` mapping, where a repeat would
+#     silently collapse to one entry (last wins) and route callers to the wrong entry
+#     point. The Listing carries an isDistinct constraint that must fire at eval time.
+# --------------------------------------------------------------------------
+echo ":: Checking legacyWorkflowTypes duplicate-alias invariant..."
+BAD_CONTRACT="$(mktemp "$REPO_ROOT/test-dup-alias-XXXXXX.pkl")"
+OUT_DIR="$(mktemp -d "$REPO_ROOT/test-dup-alias-out-XXXXXX")"
+cat > "$BAD_CONTRACT" << 'PKLEOF'
+amends "src/App.pkl"
+
+name = "dup-alias-app"
+displayName = "Dup Alias App"
+icon = "https://example.com/icon.svg"
+hasCredentialConfig = false
+pipeline { publish = null }
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs { ["target"] = new TextInput { title = "Target"; placeholderText = "x" } }
+    }
+  }
+}
+
+legacyWorkflowTypes {
+  new LegacyWorkflowTypeSpec { alias = "dup"; entrypoint = "dup-alias-app" }
+  new LegacyWorkflowTypeSpec { alias = "dup"; entrypoint = "dup-alias-app" }
+}
+PKLEOF
+ERR_MSG="$(pkl eval -m "$OUT_DIR" "$BAD_CONTRACT" 2>&1 || true)"
+rm -f "$BAD_CONTRACT"
+rm -rf "$OUT_DIR"
+if ! echo "$ERR_MSG" | grep -q "isDistinct"; then
+  echo "FAIL: duplicate-alias invariant did not fire (expected an isDistinct constraint violation)"
+  echo "  Got: $ERR_MSG"
+  fail=1
+fi
+
+# --------------------------------------------------------------------------
 # Done
 # --------------------------------------------------------------------------
 if [ "$fail" -ne 0 ]; then

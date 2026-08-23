@@ -361,6 +361,35 @@ schedules: Listing<ScheduleSpec>(this.toList().map((s) -> s.name).isDistinct) = 
 /// constraint fails a contract with duplicate names at eval time.
 events: Listing<EventTriggerSpec>(this.toList().map((e) -> e.name).isDistinct) = new Listing {}
 
+/// Inbound-only legacy Temporal workflow type aliases (CONNECT-1081). When non-empty,
+/// the toolkit renders a `legacy_workflow_types` block into `manifest.json`, and the
+/// SDK's `App.legacy_workflow_types` class attribute must declare exactly the same
+/// pairs — conformance K015 fails the app on any disagreement.
+///
+/// An alias is accepted, never produced: the worker keeps answering a pre-migration
+/// type that unmigrated callers still dispatch, while every SDK-initiated dispatch
+/// still emits the canonical `{app-name}:{entrypoint-name}` type. That asymmetry is
+/// what lets the `temporal.workflow.type` telemetry dimension count exactly the callers
+/// that have not migrated, so an alias can be dropped once the count reaches zero.
+///
+/// Default is empty (no `legacy_workflow_types` key emitted), so existing manifests are
+/// byte-identical. This is a single-entrypoint manifest-shaping property, exactly like
+/// `schedules`: a multi-entrypoint bundle root renders no `manifest.json` of its own,
+/// so declaring aliases there is refused at eval time — declare them on each
+/// entrypoint's `contract` instead.
+///
+/// `alias` is the reconcile identity key; duplicates would collapse to one entry, so
+/// the constraint fails such a contract at eval time.
+legacyWorkflowTypes: Listing<LegacyWorkflowTypeSpec>(this.toList().map((a) -> a.alias).isDistinct) = new Listing {}
+
+/// Opt-in expiry for `legacyWorkflowTypes`, as an SDK version string (`"4.2.0"`).
+/// Mirrors the SDK's app-level `legacy_workflow_types_removal_version`: once the
+/// installed SDK reaches this version, registration fails while any alias remains, so
+/// keeping the aliases becomes a loud decision rather than drift. Empty (the default)
+/// declares no expiry and emits no `removal_version` key. The expiry is app-level, not
+/// per-alias, because the SDK gates the whole declaration on one version.
+legacyWorkflowTypesRemovalVersion: String = ""
+
 /// Top-level on/off for app notifications.
 ///
 /// When `true`, appends a run-level notification node (`NotificationNode`, key
@@ -2313,6 +2342,19 @@ class EventTriggerSpec {
   status: "ACTIVE"|"PAUSED" = "ACTIVE"
 }
 
+/// One inbound-only legacy Temporal workflow type alias. `alias` is the wire type an
+/// unmigrated caller still dispatches; `entrypoint` is the entry-point name it routes
+/// to. The pair mirrors one `{alias: entrypoint-name}` entry of the SDK's
+/// `App.legacy_workflow_types` mapping.
+///
+/// Both fields carry the shape rules the SDK enforces at registration: no whitespace,
+/// and at least one alphanumeric character. A `:` is deliberately allowed — a legacy
+/// type may itself be a qualified `{app-name}:{wire-name}` string.
+class LegacyWorkflowTypeSpec {
+  alias: String(matches(Regex("\\S+")), matches(Regex(".*[A-Za-z0-9].*")))
+  entrypoint: String(matches(Regex("\\S+")), matches(Regex(".*[A-Za-z0-9].*")))
+}
+
 local function renderFilterRule(rule: FilterRuleSpec): Mapping<String, Any> =
   // Hidden properties are lazy — reference the validator so its `throw` fires at eval
   // time rather than silently rendering an invalid rule.
@@ -2371,6 +2413,26 @@ local manifestData: Mapping<String, Any> = new Mapping {
             }
           }
         }
+      }
+    }
+  }
+  // CONNECT-1081: the manifest is the contracted declaration site for inbound-only
+  // workflow type aliases. Conformance K015 reads this block and fails the app when it
+  // disagrees with the SDK's `App.legacy_workflow_types`. Guarded so a contract that
+  // declares no alias renders a byte-identical manifest.
+  when (legacyWorkflowTypes.length > 0) {
+    ["legacy_workflow_types"] = new Mapping {
+      ["aliases"] = new Listing {
+        for (a in legacyWorkflowTypes) {
+          new Mapping {
+            ["alias"] = a.alias
+            ["entrypoint"] = a.entrypoint
+          }
+        }
+      }
+      // Omit rather than render "" so "no expiry declared" is one shape, not two.
+      when (legacyWorkflowTypesRemovalVersion != "") {
+        ["removal_version"] = legacyWorkflowTypesRemovalVersion
       }
     }
   }
@@ -3673,6 +3735,17 @@ local credentialConflictNames: List<String> =
     !files.every((file) -> file.output.text == files.first.output.text)
   )
 
+// CONNECT-1081: a bundle root re-exports each entrypoint contract's already-generated
+// files verbatim and emits no `manifest.json` of its own, so aliases declared here
+// would reach no manifest at all. Refuse at eval time rather than let the declaration
+// vanish and surface later as conformance drift pointing at the wrong file.
+hidden _legacyWorkflowTypesPlacementCheck: Any =
+  if (!entrypoints.isEmpty && legacyWorkflowTypes.length > 0)
+    throw("legacyWorkflowTypes cannot be declared on a multi-entrypoint bundle root: "
+      + "the root emits no manifest.json, so the aliases would never be generated. "
+      + "Declare them on the contract of each entrypoint the aliases route to.")
+  else null
+
 hidden _credentialConflictCheck: Any =
   if (!credentialConflictNames.isEmpty)
     throw("App.pkl found credential config filename(s) generated with different content: \(credentialConflictNames.join(", ")). "
@@ -3687,6 +3760,9 @@ output =
   let (_jdbcCheck = jdbcInvariant)
   let (_connectorCheck = connectorInvariant)
   let (_credCheck = _credentialConflictCheck)
+  // Forced here because a bundle root never evaluates manifestData, which is the only
+  // other reader of legacyWorkflowTypes — the misplacement would otherwise stay lazy.
+  let (_legacyAliasPlacementCheck = _legacyWorkflowTypesPlacementCheck)
   // Forced here rather than inside generateExtractNode: `pipeline { extract = null }`
   // is a supported opt-out, and a lazily-evaluated check inside that node would
   // let a reserved-name collision through for exactly those contracts.

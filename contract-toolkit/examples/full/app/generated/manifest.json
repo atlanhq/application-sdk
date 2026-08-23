@@ -159,5 +159,18 @@
         "start_to_close_timeout_seconds": 86400
       }
     }
+  },
+  "legacy_workflow_types": {
+    "aliases": [
+      {
+        "alias": "FullFeaturedWorkflow",
+        "entrypoint": "full-featured"
+      },
+      {
+        "alias": "legacy-app:full-featured",
+        "entrypoint": "full-featured"
+      }
+    ],
+    "removal_version": "4.2.0"
   }
 }

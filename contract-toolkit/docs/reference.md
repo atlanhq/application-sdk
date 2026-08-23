@@ -164,6 +164,78 @@ entrypoint renders its own manifest.
 See [`examples/scheduled/`](../examples/scheduled/) for a full worked example.
 (Same field/behaviour exists on the legacy `NativeApp.pkl`.)
 
+### Legacy Workflow Type Aliases
+
+A migration renames an app's Temporal workflow type, but external callers keep
+dispatching the old one. `legacyWorkflowTypes` declares those old types as **inbound-only
+aliases**: the worker keeps accepting them, while every SDK-initiated dispatch still
+emits the canonical `{app-name}:{entrypoint-name}` type. Because an alias is accepted but
+never produced, the `temporal.workflow.type` telemetry dimension counts exactly the
+callers that have not migrated — delete the alias once that count reaches zero.
+
+The generated manifest is the **contracted declaration site**. The SDK's
+`App.legacy_workflow_types` class attribute must declare the same pairs; conformance
+`K015` compares the two and fails the app on any disagreement. Apps with no contract tree
+keep the class attribute as their only declaration site.
+
+Default is empty, and no `legacy_workflow_types` key is emitted, so existing manifests are
+unaffected.
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `legacyWorkflowTypes` | `Listing<LegacyWorkflowTypeSpec>` | `new Listing {}` | Inbound-only aliases for this entrypoint. Rendered into `manifest.json` `legacy_workflow_types.aliases` when non-empty. `alias`es must be **unique** (enforced at eval time — a duplicate would collapse to one entry and route callers to the wrong entry point). |
+| `legacyWorkflowTypesRemovalVersion` | String | `""` | Opt-in expiry, as an SDK version string. Mirrors the SDK's app-level `legacy_workflow_types_removal_version`: once the installed SDK reaches this version, registration fails while any alias remains. Empty emits no `removal_version` key. The expiry is app-level, not per-alias, because the SDK gates the whole declaration on one version. |
+
+**`LegacyWorkflowTypeSpec`:**
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `alias` | String | — | The wire type an unmigrated caller still dispatches. No whitespace, at least one alphanumeric character — the same shape the SDK enforces at registration. A `:` is allowed: a legacy type may itself be a qualified `{app-name}:{wire-name}` string. |
+| `entrypoint` | String | — | Entry-point name the alias routes to. Must match an `@entrypoint` name in the app's code. |
+
+```pkl
+legacyWorkflowTypes {
+  new LegacyWorkflowTypeSpec {
+    alias = "FullFeaturedWorkflow"
+    entrypoint = "full-featured"
+  }
+  new LegacyWorkflowTypeSpec {
+    alias = "legacy-app:full-featured"
+    entrypoint = "full-featured"
+  }
+}
+legacyWorkflowTypesRemovalVersion = "4.2.0"
+```
+→ generated `manifest.json`:
+```jsonc
+"legacy_workflow_types": {
+  "aliases": [
+    { "alias": "FullFeaturedWorkflow",       "entrypoint": "full-featured" },
+    { "alias": "legacy-app:full-featured",   "entrypoint": "full-featured" }
+  ],
+  "removal_version": "4.2.0"
+}
+```
+
+The matching SDK declaration:
+
+```python
+class FullFeaturedApp(App):
+    legacy_workflow_types = {
+        "FullFeaturedWorkflow": "full-featured",
+        "legacy-app:full-featured": "full-featured",
+    }
+    legacy_workflow_types_removal_version = "4.2.0"
+```
+
+**Placement:** like `schedules`, this is a single-entrypoint manifest-shaping property.
+A [multi-entrypoint bundle root](#multi-entrypoint-bundle) renders no `manifest.json` of
+its own, so declaring aliases there is **refused at eval time** — declare them on the
+`contract` of each entrypoint the aliases route to. See
+[`examples/full/`](../examples/full/) for the single-entrypoint form and
+[`examples/bundle/crawler.pkl`](../examples/bundle/crawler.pkl) for the per-entrypoint
+form. (Not available on the legacy `NativeApp.pkl`.)
+
 ### E2E Test Harness
 
 These fields are emitted into `app/generated/_e2e_base.py` and are required by `BaseE2ETest` / `SQLAppE2ETest`. The defaults are derived from `name`; 95% of connectors never need to override them.

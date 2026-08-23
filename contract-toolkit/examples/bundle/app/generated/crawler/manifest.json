@@ -56,5 +56,13 @@
         "start_to_close_timeout_seconds": 259200
       }
     }
+  },
+  "legacy_workflow_types": {
+    "aliases": [
+      {
+        "alias": "SnowflakeCrawlerWorkflow",
+        "entrypoint": "crawler"
+      }
+    ]
   }
 }

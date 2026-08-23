@@ -1,0 +1,145 @@
+// Tests for inbound-only legacy Temporal workflow type aliases (CONNECT-1081).
+//
+// When an app declares `legacyWorkflowTypes`, the toolkit renders a
+// `legacy_workflow_types` block into `manifest.json`. That block is the contracted
+// declaration site: conformance K015 compares it against the SDK's
+// `App.legacy_workflow_types` class attribute and fails the app on any disagreement.
+//
+// The block is absent when nothing is declared, so manifests for apps with no aliases
+// stay byte-identical. `removal_version` is omitted rather than rendered empty, so
+// "no expiry declared" has exactly one shape on the wire.
+//
+// A multi-entrypoint bundle root cannot declare aliases at all — it renders no
+// manifest.json of its own. That refusal is an eval-time throw, which `facts` cannot
+// express, so it is asserted in scripts/check-invariants.sh instead.
+
+amends "pkl:test"
+
+import "pkl:json"
+import "../src/App.pkl" as App
+
+local parser = new json.Parser { useMapping = true }
+
+local sharedUiConfig = new App.UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["target"] = new App.TextInput {
+          title = "Target"
+          placeholderText = "my-target"
+        }
+      }
+    }
+  }
+}
+
+local appWithAliases = (App) {
+  name = "app-with-aliases"
+  displayName = "App With Aliases"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  uiConfig = sharedUiConfig
+  pipeline {
+    publish = null
+  }
+
+  legacyWorkflowTypes {
+    new App.LegacyWorkflowTypeSpec {
+      alias = "AppWithAliasesWorkflow"
+      entrypoint = "app-with-aliases"
+    }
+    // A legacy type may itself be a qualified `{app}:{wire}` string — the colon is
+    // deliberately allowed, matching the SDK's own alias validation.
+    new App.LegacyWorkflowTypeSpec {
+      alias = "predecessor-app:crawler"
+      entrypoint = "app-with-aliases"
+    }
+  }
+  legacyWorkflowTypesRemovalVersion = "4.2.0"
+}
+
+// Aliases without an expiry — the posture for a wide external caller set, where removal
+// gates on the telemetry count reaching zero rather than on an SDK version.
+local appNoRemovalVersion = (App) {
+  name = "app-no-removal-version"
+  displayName = "App No Removal Version"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  uiConfig = sharedUiConfig
+  pipeline {
+    publish = null
+  }
+
+  legacyWorkflowTypes {
+    new App.LegacyWorkflowTypeSpec {
+      alias = "AppNoRemovalVersionWorkflow"
+      entrypoint = "app-no-removal-version"
+    }
+  }
+}
+
+local appNoAliases = (App) {
+  name = "app-no-aliases"
+  displayName = "App No Aliases"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  uiConfig = sharedUiConfig
+  pipeline {
+    publish = null
+  }
+}
+
+local aliasesManifest = parser.parse(
+  appWithAliases.output.files["app/generated/manifest.json"].text
+)
+local noRemovalVersionManifest = parser.parse(
+  appNoRemovalVersion.output.files["app/generated/manifest.json"].text
+)
+local noAliasesManifest = parser.parse(
+  appNoAliases.output.files["app/generated/manifest.json"].text
+)
+
+// The bundle example proves the per-entrypoint declaration site end to end: the root
+// declares nothing, the crawler contract declares its own alias, and the alias lands in
+// the crawler's manifest rather than the miner's.
+local bundle = import("../examples/bundle/app.pkl")
+
+local bundleCrawlerManifest = parser.parse(
+  bundle.output.files["app/generated/crawler/manifest.json"].text
+)
+local bundleMinerManifest = parser.parse(
+  bundle.output.files["app/generated/miner/manifest.json"].text
+)
+
+facts {
+  ["renders legacy_workflow_types.aliases from the declaration, in order"] {
+    aliasesManifest["legacy_workflow_types"]["aliases"].length == 2
+    aliasesManifest["legacy_workflow_types"]["aliases"][0]["alias"] == "AppWithAliasesWorkflow"
+    aliasesManifest["legacy_workflow_types"]["aliases"][0]["entrypoint"] == "app-with-aliases"
+    aliasesManifest["legacy_workflow_types"]["aliases"][1]["alias"] == "predecessor-app:crawler"
+    aliasesManifest["legacy_workflow_types"]["aliases"][1]["entrypoint"] == "app-with-aliases"
+  }
+
+  ["renders removal_version when an expiry is declared"] {
+    aliasesManifest["legacy_workflow_types"]["removal_version"] == "4.2.0"
+  }
+
+  ["omits removal_version entirely when no expiry is declared"] {
+    noRemovalVersionManifest["legacy_workflow_types"]["aliases"].length == 1
+    !noRemovalVersionManifest["legacy_workflow_types"].containsKey("removal_version")
+  }
+
+  ["omits legacy_workflow_types when no alias is declared"] {
+    !noAliasesManifest.containsKey("legacy_workflow_types")
+  }
+
+  ["an alias declared on an entrypoint contract lands in that entrypoint's manifest"] {
+    bundleCrawlerManifest["legacy_workflow_types"]["aliases"].length == 1
+    bundleCrawlerManifest["legacy_workflow_types"]["aliases"][0]["alias"] == "SnowflakeCrawlerWorkflow"
+    bundleCrawlerManifest["legacy_workflow_types"]["aliases"][0]["entrypoint"] == "crawler"
+  }
+
+  ["a sibling entrypoint that declares no alias gets no block"] {
+    !bundleMinerManifest.containsKey("legacy_workflow_types")
+  }
+}
