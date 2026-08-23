@@ -183,7 +183,7 @@ unaffected.
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `legacyWorkflowTypes` | `Listing<LegacyWorkflowTypeSpec>` | `new Listing {}` | Inbound-only aliases for this entrypoint. Rendered into `manifest.json` `legacy_workflow_types.aliases` when non-empty. `alias`es must be **unique** (enforced at eval time — a duplicate would collapse to one entry and route callers to the wrong entry point). |
+| `legacyWorkflowTypes` | `Listing<LegacyWorkflowTypeSpec>` | `new Listing {}` | The app's inbound-only aliases. Rendered into `manifest.json` `legacy_workflow_types.aliases` when non-empty. `alias`es must be **unique** (enforced at eval time — a duplicate would collapse to one entry and route callers to the wrong entry point). |
 | `legacyWorkflowTypesRemovalVersion` | String | `""` | Opt-in expiry, as an SDK version string. Mirrors the SDK's app-level `legacy_workflow_types_removal_version`: once the installed SDK reaches this version, registration fails while any alias remains. Empty emits no `removal_version` key. The expiry is app-level, not per-alias, because the SDK gates the whole declaration on one version. |
 
 **`LegacyWorkflowTypeSpec`:**
@@ -228,13 +228,22 @@ class FullFeaturedApp(App):
     legacy_workflow_types_removal_version = "4.2.0"
 ```
 
-**Placement:** like `schedules`, this is a single-entrypoint manifest-shaping property.
-A [multi-entrypoint bundle root](#multi-entrypoint-bundle) renders no `manifest.json` of
-its own, so declaring aliases there is **refused at eval time** — declare them on the
-`contract` of each entrypoint the aliases route to. See
-[`examples/full/`](../examples/full/) for the single-entrypoint form and
-[`examples/bundle/crawler.pkl`](../examples/bundle/crawler.pkl) for the per-entrypoint
-form. (Not available on the legacy `NativeApp.pkl`.)
+**Placement — app-level, unlike `schedules`.** The SDK's `App.legacy_workflow_types` is
+one map across the whole app, and its values name entry points other than the declaring
+one, so the block cannot be split per entrypoint. A
+[multi-entrypoint bundle root](#multi-entrypoint-bundle) renders no `manifest.json` of
+its own and cannot reach into an entrypoint's already-generated output, so declaring
+aliases there is **refused at eval time**. Declare the **same block on every entrypoint
+contract** instead: each generated manifest then carries an identical copy, and
+conformance `K015` fails the app if a copy is missing or diverges.
+
+A contract that generates no manifest at all — a single-entrypoint contract with no
+`uiConfig` — is refused for the same reason.
+
+See [`examples/full/`](../examples/full/) for the single-entrypoint form, and
+[`examples/bundle/crawler.pkl`](../examples/bundle/crawler.pkl) plus
+[`examples/bundle/miner.pkl`](../examples/bundle/miner.pkl) for the duplicated
+app-level form. (Not available on the legacy `NativeApp.pkl`.)
 
 ### E2E Test Harness
 

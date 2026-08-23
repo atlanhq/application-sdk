@@ -336,6 +336,111 @@ if echo "$CTRL_ERR" | grep -q "Pkl Error"; then
 fi
 
 # --------------------------------------------------------------------------
+# 9b. CONNECT-1081: the other no-manifest path. manifest.json is emitted only
+#     `when (uiConfig != null)`, so a single-entrypoint contract without a UI also
+#     generates nothing for the aliases to land in. The guard must refuse that too,
+#     or the declaration vanishes exactly as it would on a bundle root.
+# --------------------------------------------------------------------------
+echo ":: Checking legacyWorkflowTypes requires a manifest-emitting contract..."
+BAD_CONTRACT="$(mktemp "$REPO_ROOT/test-alias-noui-XXXXXX.pkl")"
+OUT_DIR="$(mktemp -d "$REPO_ROOT/test-alias-noui-out-XXXXXX")"
+cat > "$BAD_CONTRACT" << 'PKLEOF'
+amends "src/App.pkl"
+
+name = "alias-noui-app"
+displayName = "Alias No UI App"
+icon = "https://example.com/icon.svg"
+hasCredentialConfig = false
+pipeline { publish = null }
+
+legacyWorkflowTypes {
+  new LegacyWorkflowTypeSpec { alias = "AliasNoUiWorkflow"; entrypoint = "alias-noui-app" }
+}
+PKLEOF
+ERR_MSG="$(pkl eval -m "$OUT_DIR" "$BAD_CONTRACT" 2>&1 || true)"
+rm -f "$BAD_CONTRACT"
+rm -rf "$OUT_DIR"
+if ! echo "$ERR_MSG" | grep -q "requires a contract that generates a manifest.json"; then
+  echo "FAIL: legacyWorkflowTypes no-uiConfig invariant did not fire with expected message"
+  echo "  Got: $ERR_MSG"
+  fail=1
+fi
+
+# --------------------------------------------------------------------------
+# 9c. CONNECT-1081: the placement guard must be `local`, not `hidden` — a `hidden`
+#     property lands in the amending module's namespace, so a contract could assign
+#     it away and generate the very shape the guard exists to refuse.
+# --------------------------------------------------------------------------
+echo ":: Checking the legacyWorkflowTypes placement guard cannot be amended away..."
+BAD_CONTRACT="$(mktemp "$REPO_ROOT/test-alias-override-XXXXXX.pkl")"
+OUT_DIR="$(mktemp -d "$REPO_ROOT/test-alias-override-out-XXXXXX")"
+cat > "$BAD_CONTRACT" << 'PKLEOF'
+amends "src/App.pkl"
+
+name = "alias-override-bundle"
+displayName = "Alias Override Bundle"
+icon = "https://example.com/icon.svg"
+hasCredentialConfig = false
+
+entrypoints {
+  new Entrypoint { name = "crawler"; displayName = "Crawler" }
+}
+
+legacyWorkflowTypes {
+  new LegacyWorkflowTypeSpec { alias = "OverrideAliasWorkflow"; entrypoint = "crawler" }
+}
+
+_legacyWorkflowTypesPlacementCheck = null
+PKLEOF
+ERR_MSG="$(pkl eval -m "$OUT_DIR" "$BAD_CONTRACT" 2>&1 || true)"
+rm -f "$BAD_CONTRACT"
+rm -rf "$OUT_DIR"
+if ! echo "$ERR_MSG" | grep -qE "cannot be declared on a multi-entrypoint bundle root|Cannot find property"; then
+  echo "FAIL: the placement guard was amended away and generation succeeded"
+  echo "  Got: $ERR_MSG"
+  fail=1
+fi
+
+# --------------------------------------------------------------------------
+# 9d. CONNECT-1081: a control character in an alias must throw. The SDK rejects it at
+#     registration (`not char.isprintable()`), so accepting it here would generate a
+#     clean contract that fails at worker boot — and a control character mangles logs
+#     and the Temporal UI in the meantime.
+# --------------------------------------------------------------------------
+echo ":: Checking legacyWorkflowTypes control-character invariant..."
+BAD_CONTRACT="$(mktemp "$REPO_ROOT/test-alias-ctrlchar-XXXXXX.pkl")"
+OUT_DIR="$(mktemp -d "$REPO_ROOT/test-alias-ctrlchar-out-XXXXXX")"
+cat > "$BAD_CONTRACT" << 'PKLEOF'
+amends "src/App.pkl"
+
+name = "alias-ctrlchar-app"
+displayName = "Alias Ctrl Char App"
+icon = "https://example.com/icon.svg"
+hasCredentialConfig = false
+pipeline { publish = null }
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs { ["target"] = new TextInput { title = "Target"; placeholderText = "x" } }
+    }
+  }
+}
+
+legacyWorkflowTypes {
+  new LegacyWorkflowTypeSpec { alias = "Legacy\u{7}Workflow"; entrypoint = "alias-ctrlchar-app" }
+}
+PKLEOF
+ERR_MSG="$(pkl eval -m "$OUT_DIR" "$BAD_CONTRACT" 2>&1 || true)"
+rm -f "$BAD_CONTRACT"
+rm -rf "$OUT_DIR"
+if ! echo "$ERR_MSG" | grep -q "Type constraint"; then
+  echo "FAIL: control-character alias should raise a type constraint violation"
+  echo "  Got: $ERR_MSG"
+  fail=1
+fi
+
+# --------------------------------------------------------------------------
 # 10. CONNECT-1081: a duplicate alias must throw. `alias` is the identity key both in
 #     the manifest and in the SDK's `{alias: entrypoint}` mapping, where a repeat would
 #     silently collapse to one entry (last wins) and route callers to the wrong entry

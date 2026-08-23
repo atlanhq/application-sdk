@@ -866,6 +866,39 @@ def test_p016_declared_alias_naming_a_foreign_node_does_not_launder(
     assert len(msgs) == 1 and "keifu" in msgs[0]
 
 
+def test_p016_a_second_app_class_does_not_launder_a_foreign_node(
+    tmp_path: Path,
+) -> None:
+    """Node identity is checked against the manifest, not against code-side names.
+
+    A repo defining a second App whose name matches the foreign node's `app_name`
+    must not thereby route the alias: the node still dispatches on that other
+    app's worker. Unioning the code-side App names made exactly that mistake.
+    """
+    _write_two_node_manifest(
+        tmp_path,
+        {
+            "workflow_type": "OverrideWorkflow",
+            "inputs": {"app_name": "platform", "task_queue": "atlan-platform"},
+        },
+        aliases=[("OverrideWorkflow", "keifu")],
+    )
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/connector.py": _ALIASED_APP_SOURCE,
+            "app/platform.py": dedent("""\
+                from application_sdk.app import App
+                class PlatformApp(App):
+                    name = "platform"
+            """),
+        },
+    )
+    findings = scan_all(paths, tmp_path)
+    msgs = [f.message for f in findings if f.rule_id == "P016"]
+    assert len(msgs) == 1 and "keifu" in msgs[0]
+
+
 def test_p016_undeclared_bare_node_on_shared_queue_does_not_route(
     tmp_path: Path,
 ) -> None:

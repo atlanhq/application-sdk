@@ -701,17 +701,28 @@ is why drift is invisible: each site is individually well-formed.
 
 **Fix -- declare the same thing twice, on purpose.** In the contract:
 
-    legacyWorkflowTypes {       new LegacyWorkflowTypeSpec {         alias =
-"LegacyCrawlerWorkflow"         entrypoint = "crawler"       }     }
+```pkl
+legacyWorkflowTypes {
+  new LegacyWorkflowTypeSpec {
+    alias = "LegacyCrawlerWorkflow"
+    entrypoint = "crawler"
+  }
+}
 legacyWorkflowTypesRemovalVersion = "4.2.0"
+```
 
 then regenerate, and in the app:
 
-    class MyApp(App):         legacy_workflow_types = {
-"LegacyCrawlerWorkflow": "crawler",         }
-legacy_workflow_types_removal_version = "4.2.0"
+```python
+class MyApp(App):
+    legacy_workflow_types = {
+        "LegacyCrawlerWorkflow": "crawler",
+    }
+    legacy_workflow_types_removal_version = "4.2.0"
+```
 
-For a multi-entrypoint bundle the block goes on each entry point's own contract -- the
+The block is app-level, so for a multi-entrypoint bundle the **same** block goes on
+every entry point's contract and every generated manifest carries an identical copy. The
 bundle root renders no manifest and refuses the declaration at eval time.
 
 An app with no `app/generated/` tree is out of scope: the class attribute is then the

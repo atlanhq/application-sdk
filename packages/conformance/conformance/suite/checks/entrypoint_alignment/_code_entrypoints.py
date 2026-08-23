@@ -27,6 +27,9 @@ from __future__ import annotations
 
 import ast
 from dataclasses import dataclass, field
+from pathlib import Path
+
+from conformance.suite.checks._ast_common import _IgnoreDirective, _parse_directives
 
 _SDK_PREFIX = "application_sdk"
 
@@ -109,9 +112,10 @@ def _extract_ep_name(
 def _class_attribute_value(class_node: ast.ClassDef, attr: str) -> ast.expr | None:
     """The assigned expression of a class-body attribute, or ``None`` if unset.
 
-    Covers both ``attr = ...`` and the annotated ``attr: T = ...`` form. An
-    annotation with no value reads as unset, matching Python: the class carries
-    no attribute of its own and inherits the SDK default.
+    Covers both ``attr = ...`` and the annotated ``attr: T = ...`` form. A bare
+    annotation binds no value, so the scan keeps walking: ``attr: ClassVar[str]``
+    followed by ``attr = "..."`` is one attribute with a value, and stopping at
+    the annotation would read a real declaration as absent.
     """
     for stmt in class_node.body:
         if isinstance(stmt, ast.Assign) and any(
@@ -123,6 +127,7 @@ def _class_attribute_value(class_node: ast.ClassDef, attr: str) -> ast.expr | No
             isinstance(stmt, ast.AnnAssign)
             and isinstance(stmt.target, ast.Name)
             and stmt.target.id == attr
+            and stmt.value is not None
         ):
             return stmt.value
     return None
@@ -336,3 +341,37 @@ def scan_file_for_entrypoints(
                     )
                 )
             break  # Only the first @entrypoint decorator on a method counts.
+
+
+def scan_paths_for_entrypoints(
+    paths: list[Path], root: Path
+) -> tuple[CodeEntrypointScan, dict[str, dict[int, _IgnoreDirective]]]:
+    """Scan every path for ``@entrypoint`` data and inline suppression directives.
+
+    Shared by P016 and K015 so the two read the same App-class facts from the
+    same files; a second copy of this loop would be free to drift from P016's.
+    Unreadable and unparseable files are skipped — a check reports drift it can
+    prove, and a file it cannot parse proves nothing.
+    """
+    code = CodeEntrypointScan()
+    directives_by_file: dict[str, dict[int, _IgnoreDirective]] = {}
+
+    for path in paths:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        try:
+            tree = ast.parse(text, filename=str(path))
+        except SyntaxError:
+            continue
+        if not isinstance(tree, ast.Module):
+            continue
+        try:
+            rel = str(path.relative_to(root))
+        except ValueError:
+            rel = str(path)
+        directives_by_file[rel] = _parse_directives(text)
+        scan_file_for_entrypoints(tree, rel, code)
+
+    return code, directives_by_file

@@ -17,8 +17,8 @@ credentialConnectorType = "jdbc"
 connectorConfigName = "atlan-connectors-bundle"
 
 // Declared here, not on the bundle root: the root renders no manifest.json, so it
-// refuses `legacyWorkflowTypes` at eval time. Each entrypoint carries the aliases that
-// route to it, and every generated manifest must agree with the SDK declaration.
+// refuses `legacyWorkflowTypes` at eval time. The block is app-level, so `miner.pkl`
+// carries an identical copy and conformance K015 holds both against the SDK declaration.
 legacyWorkflowTypes {
   new LegacyWorkflowTypeSpec {
     alias = "SnowflakeCrawlerWorkflow"

@@ -44,9 +44,7 @@ def _synthetic_node() -> ast.AST:
     return node
 
 
-def _alias_routed_names(
-    code: CodeEntrypointScan, contract: ContractEntrypointScan
-) -> frozenset[str]:
+def _alias_routed_names(contract: ContractEntrypointScan) -> frozenset[str]:
     """Entry-point names routed through a manifest-declared legacy alias.
 
     A bare DAG node (no ``<app>:`` prefix) is a platform/other-app node —
@@ -56,21 +54,22 @@ def _alias_routed_names(
     reading it here retires the code scan as P016's alias source.
 
     The declaration must not be contradicted by the node's own identity: a node
-    whose ``app_name`` names an app this repo does not define dispatches on that
-    app's worker, so declaring its type here cannot make it reach this entry
-    point (that shape previously laundered a genuinely unrouted entry point
-    through a same-named platform node).  A node carrying no ``app_name`` routes
-    on the declaration alone.
+    whose ``app_name`` falls outside the app identities this manifest routes to
+    itself dispatches on another app's worker, so declaring its type here cannot
+    make it reach this entry point (that shape previously laundered a genuinely
+    unrouted entry point through a same-named platform node).  A node carrying no
+    ``app_name`` routes on the declaration alone.
+
+    Identity comes from the manifest, not from the App classes found in code: in
+    a repo defining two Apps, a node naming the *other* one must not launder an
+    alias belonging to this manifest.
     """
-    own_app_names = {
-        app_class.app_name for app_class in code.app_classes if app_class.app_name
-    }
     routed: set[str] = set()
     for alias, target in contract.legacy_aliases:
         for dag_type, node_app in contract.dag_workflow_types:
             if dag_type != alias:
                 continue
-            if node_app is None or node_app in own_app_names:
+            if node_app is None or node_app in contract.own_app_names:
                 routed.add(target)
                 break
     return frozenset(routed)
@@ -174,7 +173,7 @@ def check_p016(
 
     # ── Single-entry-point mode ──────────────────────────────────────────────
     if contract.mode == "single":
-        routes = contract.routes | _alias_routed_names(code, contract)
+        routes = contract.routes | _alias_routed_names(contract)
         if routes:
             # Route/card split (BLDX-1342): a secondary @entrypoint is valid when
             # the DAG declares it as a route (workflow_type "<app>:<wire>"), even

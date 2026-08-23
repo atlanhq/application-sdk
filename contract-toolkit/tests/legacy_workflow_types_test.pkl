@@ -78,6 +78,27 @@ local appNoRemovalVersion = (App) {
   }
 }
 
+// The SDK tests "carries a letter or digit" with str.isalnum(), which is Unicode-aware.
+// An ASCII-only constraint here would refuse a legacy type the worker registers happily,
+// and the author would have no way to declare it in the contract at all.
+local appUnicodeAlias = (App) {
+  name = "app-unicode-alias"
+  displayName = "App Unicode Alias"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  uiConfig = sharedUiConfig
+  pipeline {
+    publish = null
+  }
+
+  legacyWorkflowTypes {
+    new App.LegacyWorkflowTypeSpec {
+      alias = "クローラ"
+      entrypoint = "app-unicode-alias"
+    }
+  }
+}
+
 local appNoAliases = (App) {
   name = "app-no-aliases"
   displayName = "App No Aliases"
@@ -98,10 +119,13 @@ local noRemovalVersionManifest = parser.parse(
 local noAliasesManifest = parser.parse(
   appNoAliases.output.files["app/generated/manifest.json"].text
 )
+local unicodeAliasManifest = parser.parse(
+  appUnicodeAlias.output.files["app/generated/manifest.json"].text
+)
 
-// The bundle example proves the per-entrypoint declaration site end to end: the root
-// declares nothing, the crawler contract declares its own alias, and the alias lands in
-// the crawler's manifest rather than the miner's.
+// The bundle example proves the declaration site end to end: the root declares nothing,
+// each entrypoint contract declares the same app-level block, and both generated
+// manifests carry an identical copy.
 local bundle = import("../examples/bundle/app.pkl")
 
 local bundleCrawlerManifest = parser.parse(
@@ -133,13 +157,21 @@ facts {
     !noAliasesManifest.containsKey("legacy_workflow_types")
   }
 
+  ["accepts a non-Latin alias, matching the SDK's Unicode isalnum() rule"] {
+    unicodeAliasManifest["legacy_workflow_types"]["aliases"][0]["alias"] == "クローラ"
+  }
+
   ["an alias declared on an entrypoint contract lands in that entrypoint's manifest"] {
     bundleCrawlerManifest["legacy_workflow_types"]["aliases"].length == 1
     bundleCrawlerManifest["legacy_workflow_types"]["aliases"][0]["alias"] == "SnowflakeCrawlerWorkflow"
     bundleCrawlerManifest["legacy_workflow_types"]["aliases"][0]["entrypoint"] == "crawler"
   }
 
-  ["a sibling entrypoint that declares no alias gets no block"] {
-    !bundleMinerManifest.containsKey("legacy_workflow_types")
+  // The block is app-level, so the sibling carries the same copy even though the alias
+  // targets the crawler. K015 fails a bundle whose manifests disagree, so a per-entrypoint
+  // subset here would be drift, not a smaller declaration.
+  ["every entrypoint manifest carries an identical copy of the app-level block"] {
+    bundleMinerManifest["legacy_workflow_types"] == bundleCrawlerManifest["legacy_workflow_types"]
+    bundleMinerManifest["legacy_workflow_types"]["aliases"][0]["entrypoint"] == "crawler"
   }
 }

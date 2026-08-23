@@ -9,6 +9,17 @@ displayName = "Query Miner"
 icon = "https://assets.atlan.com/assets/snowflake.svg"
 hasCredentialConfig = false
 
+// The same app-level block the crawler declares. Aliases are app-level in the SDK
+// (`App.legacy_workflow_types` is one map across entry points), so every entry point's
+// manifest carries an identical copy — including this one, whose alias targets the
+// crawler. Conformance K015 fails the app if a copy is missing or diverges.
+legacyWorkflowTypes {
+  new LegacyWorkflowTypeSpec {
+    alias = "SnowflakeCrawlerWorkflow"
+    entrypoint = "crawler"
+  }
+}
+
 pipeline {
   // Miner mines query history; it does not publish assets.
   publish = null

@@ -70,6 +70,19 @@ class ContractEntrypointScan:
     a node naming a *different* app dispatches on that app's worker, so the
     declaration alone cannot make it reach this one."""
 
+    own_app_names: frozenset[str] = field(default_factory=frozenset)
+    """App names this manifest's own DAG claims — the ``<app>`` half of every
+    colon-qualified ``workflow_type`` it routes.
+
+    This is the manifest's own identity, taken from the same artifact that
+    declares the aliases. A bare node whose ``app_name`` falls outside this set
+    dispatches on another app's worker, so a local alias declaration cannot make
+    it reach an entry point here. Deriving it from the manifest rather than from
+    the App classes found in code matters in a repo that defines more than one
+    App: a node naming the *other* app must not launder an alias belonging to
+    this one. Empty in ``multi``/``absent`` modes.
+    """
+
     legacy_aliases: frozenset[tuple[str, str]] = field(default_factory=frozenset)
     """Inbound-only workflow type aliases the manifest declares, as
     ``(alias, target entry-point name)`` pairs (CONNECT-1081).
@@ -137,10 +150,10 @@ def parse_legacy_aliases(data: dict[str, Any]) -> LegacyAliasDeclaration:
 
 def _routes_from_dag(
     dag: Any,
-) -> tuple[frozenset[str], frozenset[tuple[str, str | None]]]:
+) -> tuple[frozenset[str], frozenset[tuple[str, str | None]], frozenset[str]]:
     """Collect DAG-declared workflow types from a manifest's ``dag`` subtree.
 
-    Returns ``(routes, dag_workflow_types)``:
+    Returns ``(routes, dag_workflow_types, own_app_names)``:
 
     ``routes``
         Wire names taken from every ``workflow_type`` of the form
@@ -152,6 +165,10 @@ def _routes_from_dag(
         unless the manifest declares them in ``legacy_workflow_types`` AND the
         node's ``app_name`` does not name a different app.
 
+    ``own_app_names``
+        The ``<app>`` half of those same colon-qualified types — the app
+        identities this manifest's DAG routes to itself.
+
     The walk is scoped to the ``dag`` subtree, so a ``workflow_type`` appearing
     elsewhere in the manifest is not collected.  It does **not** pin the
     ``<app>`` prefix to this app's own name — the (rare) cross-app
@@ -160,10 +177,11 @@ def _routes_from_dag(
     own, so in practice this returns this app's DAG-routed entry points.
     """
     if dag is None:
-        return frozenset(), frozenset()
+        return frozenset(), frozenset(), frozenset()
 
     wire_names: set[str] = set()
     dag_types: set[tuple[str, str | None]] = set()
+    app_names: set[str] = set()
 
     def _node_app_name(node: dict[str, Any]) -> str | None:
         inputs = node.get("inputs")
@@ -177,7 +195,10 @@ def _routes_from_dag(
             if isinstance(wt, str) and wt:
                 dag_types.add((wt, _node_app_name(node)))
                 if ":" in wt:
-                    wire_names.add(wt.split(":", 1)[1])
+                    prefix, wire = wt.split(":", 1)
+                    wire_names.add(wire)
+                    if prefix:
+                        app_names.add(prefix)
             for value in node.values():
                 _walk(value)
         elif isinstance(node, list):
@@ -185,7 +206,7 @@ def _routes_from_dag(
                 _walk(item)
 
     _walk(dag)
-    return frozenset(wire_names), frozenset(dag_types)
+    return frozenset(wire_names), frozenset(dag_types), frozenset(app_names)
 
 
 def scan_contract(root: Path) -> ContractEntrypointScan:
@@ -223,12 +244,13 @@ def scan_contract(root: Path) -> ContractEntrypointScan:
         data = load_manifest_document(single_manifest)
         if data is None:
             return ContractEntrypointScan(names=frozenset(), mode="single")
-        routes, dag_workflow_types = _routes_from_dag(data.get("dag"))
+        routes, dag_workflow_types, own_app_names = _routes_from_dag(data.get("dag"))
         return ContractEntrypointScan(
             names=frozenset(),
             mode="single",
             routes=routes,
             dag_workflow_types=dag_workflow_types,
+            own_app_names=own_app_names,
             legacy_aliases=parse_legacy_aliases(data).aliases,
         )
 

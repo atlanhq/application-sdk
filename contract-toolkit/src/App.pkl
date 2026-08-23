@@ -373,10 +373,15 @@ events: Listing<EventTriggerSpec>(this.toList().map((e) -> e.name).isDistinct) =
 /// that have not migrated, so an alias can be dropped once the count reaches zero.
 ///
 /// Default is empty (no `legacy_workflow_types` key emitted), so existing manifests are
-/// byte-identical. This is a single-entrypoint manifest-shaping property, exactly like
-/// `schedules`: a multi-entrypoint bundle root renders no `manifest.json` of its own,
-/// so declaring aliases there is refused at eval time — declare them on each
-/// entrypoint's `contract` instead.
+/// byte-identical.
+///
+/// The block is **app-level**, unlike `schedules`: the SDK's
+/// `App.legacy_workflow_types` is one map across every entry point, and its values name
+/// entry points other than the declaring one. A multi-entrypoint bundle root renders no
+/// `manifest.json` of its own and cannot reach into an entry point's already-generated
+/// output, so declaring aliases there is refused at eval time. Declare the **same block
+/// on every entrypoint contract** instead — each one then carries an identical copy, and
+/// K015 fails the app if a copy is missing or diverges.
 ///
 /// `alias` is the reconcile identity key; duplicates would collapse to one entry, so
 /// the constraint fails such a contract at eval time.
@@ -2347,12 +2352,27 @@ class EventTriggerSpec {
 /// to. The pair mirrors one `{alias: entrypoint-name}` entry of the SDK's
 /// `App.legacy_workflow_types` mapping.
 ///
-/// Both fields carry the shape rules the SDK enforces at registration: no whitespace,
-/// and at least one alphanumeric character. A `:` is deliberately allowed — a legacy
-/// type may itself be a qualified `{app-name}:{wire-name}` string.
+/// Both fields carry the shape rules the SDK enforces at registration
+/// (`_validate_legacy_workflow_type`): no whitespace, no control or other non-printable
+/// characters, and at least one alphanumeric. The alphanumeric class is Unicode, not
+/// ASCII, because the SDK tests it with `str.isalnum()` — a non-Latin legacy type the
+/// worker would register must not be refused here. A `:` is deliberately allowed: a
+/// legacy type may itself be a qualified `{app-name}:{wire-name}` string.
+///
+/// Keeping these aligned matters because the two checks fire at different times. A shape
+/// pkl accepts and the SDK rejects generates a clean contract and then fails at worker
+/// boot, which is the slowest possible place to learn it.
 class LegacyWorkflowTypeSpec {
-  alias: String(matches(Regex("\\S+")), matches(Regex(".*[A-Za-z0-9].*")))
-  entrypoint: String(matches(Regex("\\S+")), matches(Regex(".*[A-Za-z0-9].*")))
+  alias: String(
+    matches(Regex("\\S+")),
+    !matches(Regex(".*\\p{C}.*")),
+    matches(Regex(".*[\\p{IsAlphabetic}\\p{IsDigit}].*"))
+  )
+  entrypoint: String(
+    matches(Regex("\\S+")),
+    !matches(Regex(".*\\p{C}.*")),
+    matches(Regex(".*[\\p{IsAlphabetic}\\p{IsDigit}].*"))
+  )
 }
 
 local function renderFilterRule(rule: FilterRuleSpec): Mapping<String, Any> =
@@ -3739,11 +3759,24 @@ local credentialConflictNames: List<String> =
 // files verbatim and emits no `manifest.json` of its own, so aliases declared here
 // would reach no manifest at all. Refuse at eval time rather than let the declaration
 // vanish and surface later as conformance drift pointing at the wrong file.
-hidden _legacyWorkflowTypesPlacementCheck: Any =
-  if (!entrypoints.isEmpty && legacyWorkflowTypes.length > 0)
+// Refuse a declaration that would reach no manifest. Two contracts generate none: a
+// multi-entrypoint bundle root (which re-exports each entry point's already-generated
+// files) and a single-entrypoint contract with no uiConfig (manifest.json is emitted
+// only `when (uiConfig != null)`). `local`, not `hidden`, so an amending contract cannot
+// assign the guard away and generate silently.
+local _legacyWorkflowTypesPlacementCheck: Any =
+  if (legacyWorkflowTypes.isEmpty)
+    null
+  else if (!entrypoints.isEmpty)
     throw("legacyWorkflowTypes cannot be declared on a multi-entrypoint bundle root: "
       + "the root emits no manifest.json, so the aliases would never be generated. "
-      + "Declare them on the contract of each entrypoint the aliases route to.")
+      + "The block is app-level — declare the same block on the contract of every "
+      + "entrypoint, so each generated manifest carries an identical copy.")
+  else if (uiConfig == null)
+    throw("legacyWorkflowTypes requires a contract that generates a manifest.json, "
+      + "but this one declares no uiConfig, so no manifest is emitted and the aliases "
+      + "would never be generated. Declare a uiConfig, or drop legacyWorkflowTypes and "
+      + "keep App.legacy_workflow_types as the app's only declaration site.")
   else null
 
 hidden _credentialConflictCheck: Any =

@@ -220,7 +220,7 @@ Registration fails loudly on a declaration mistake. At class definition: an alia
 > legacyWorkflowTypesRemovalVersion = "4.2.0"
 > ```
 >
-> For a multi-entrypoint bundle the block goes on each entry point's own contract — the bundle root renders no manifest and refuses the declaration at eval time.
+> The block is app-level, matching the class attribute: for a multi-entrypoint bundle the **same** block goes on every entry point's contract, so each generated manifest carries an identical copy. The bundle root renders no manifest and refuses the declaration at eval time.
 
 > **Expiry.** `legacy_workflow_types_removal_version = "4.2.0"` is an opt-in deadline: once the installed SDK reaches it, registration fails while aliases remain declared — keeping them becomes a loud decision rather than drift. Leave it unset for aliases with a wide external caller set; removal then gates on the `temporal.workflow.type` legacy-caller count reaching zero. The expiry is app-level, not per-alias, and a contract-carrying app declares the same value in `legacyWorkflowTypesRemovalVersion`.
 

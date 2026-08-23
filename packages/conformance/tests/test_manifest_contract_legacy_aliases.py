@@ -63,23 +63,28 @@ def _k015(findings: list) -> list[str]:
 def _app_source(
     aliases: str = '{"LegacyCrawlerWorkflow": "crawler"}',
     removal_version: str | None = None,
-    extra: str = "",
+    preamble: str = "",
 ) -> str:
-    version_line = (
-        f'    legacy_workflow_types_removal_version = "{removal_version}"\n'
-        if removal_version is not None
-        else ""
-    )
-    return dedent("""\
-        from application_sdk.app import App, entrypoint
-        class MyApp(App):
-            name = "myapp"
-        """) + f"{extra}    legacy_workflow_types = {aliases}\n{version_line}" + dedent(
-        """\
-            @entrypoint(name="crawler")
-            async def crawler(self, input: Input) -> Output: ...
-        """
-    )
+    """An App subclass declaring *aliases*, with a real ``@entrypoint`` in its body.
+
+    Built by joining whole lines rather than concatenating ``dedent`` blocks: a
+    trailing block would be dedented against its own indentation and drop the
+    class body out from under the class.
+    """
+    lines = [
+        "from application_sdk.app import App, entrypoint",
+        *([preamble] if preamble else []),
+        "class MyApp(App):",
+        '    name = "myapp"',
+        f"    legacy_workflow_types = {aliases}",
+    ]
+    if removal_version is not None:
+        lines.append(f'    legacy_workflow_types_removal_version = "{removal_version}"')
+    lines += [
+        '    @entrypoint(name="crawler")',
+        "    async def crawler(self, input: Input) -> Output: ...",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 # ---------------------------------------------------------------------------
@@ -236,11 +241,45 @@ def test_k015_fires_on_a_non_literal_declaration(tmp_path: Path) -> None:
     )
     paths = _write_py(
         tmp_path,
-        {"app/connector.py": _app_source(aliases="ALIASES", extra="")},
+        {
+            "app/connector.py": _app_source(
+                aliases="ALIASES",
+                preamble='ALIASES = {"LegacyCrawlerWorkflow": "crawler"}',
+            )
+        },
     )
     msgs = _k015(scan_all(paths, tmp_path))
     assert len(msgs) == 1
     assert "not a literal declaration" in msgs[0]
+
+
+def test_k015_reads_a_declaration_that_carries_a_separate_annotation(
+    tmp_path: Path,
+) -> None:
+    """``attr: ClassVar[...]`` then ``attr = ...`` is one attribute with a value.
+
+    Stopping the class-body scan at the bare annotation read a real declaration
+    as absent, which surfaced as a false "the SDK App does not declare this".
+    """
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        aliases=[("LegacyCrawlerWorkflow", "crawler")],
+    )
+    source = dedent("""\
+        from typing import ClassVar
+        from application_sdk.app import App, entrypoint
+        class MyApp(App):
+            name: ClassVar[str]
+            name = "myapp"
+            legacy_workflow_types: ClassVar[dict]
+            legacy_workflow_types = {"LegacyCrawlerWorkflow": "crawler"}
+            @entrypoint(name="crawler")
+            async def crawler(self, input: Input) -> Output: ...
+    """)
+    assert (
+        _k015(scan_all(_write_py(tmp_path, {"app/connector.py": source}), tmp_path))
+        == []
+    )
 
 
 def test_k015_fires_on_a_non_literal_removal_version(tmp_path: Path) -> None:
@@ -269,7 +308,12 @@ def test_k015_fires_on_a_non_literal_removal_version(tmp_path: Path) -> None:
 
 
 def test_k015_reads_every_entrypoint_manifest_in_multi_mode(tmp_path: Path) -> None:
-    """The block is app-level, so each per-entrypoint manifest carries a copy."""
+    """The block is app-level, so each per-entrypoint manifest carries a copy.
+
+    This is the shape `contract-toolkit/examples/bundle` generates: both the
+    crawler's and the miner's manifest carry the identical block, including the
+    miner's, whose alias targets the crawler.
+    """
     generated = tmp_path / "app" / "generated"
     for name in ("crawler", "miner"):
         _write_manifest(
@@ -292,6 +336,36 @@ def test_k015_fires_when_per_entrypoint_manifests_disagree(tmp_path: Path) -> No
     msgs = _k015(scan_all(paths, tmp_path))
     assert len(msgs) == 1
     assert "disagree on legacy_workflow_types" in msgs[0]
+
+
+def test_k015_accepts_the_committed_bundle_example_shape(tmp_path: Path) -> None:
+    """Guard against the rule contradicting the toolkit's own generated output.
+
+    The generator, the docs and this rule all have to agree on one declaration
+    model. They disagreed once: the example declared the block on the crawler
+    only, and K015 reported the correct output as unfixable drift.
+    """
+    repo_root = Path(__file__).resolve().parents[3]
+    bundle = (
+        repo_root / "contract-toolkit" / "examples" / "bundle" / "app" / "generated"
+    )
+    generated = tmp_path / "app" / "generated"
+    for name in ("crawler", "miner"):
+        target = generated / name / "manifest.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            (bundle / name / "manifest.json").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/connector.py": _app_source(
+                aliases='{"SnowflakeCrawlerWorkflow": "crawler"}'
+            )
+        },
+    )
+    assert _k015(scan_all(paths, tmp_path)) == []
 
 
 # ---------------------------------------------------------------------------

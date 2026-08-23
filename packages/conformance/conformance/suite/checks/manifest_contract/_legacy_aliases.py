@@ -19,18 +19,12 @@ attribute is the only declaration site and there is nothing to compare.
 
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 
-from conformance.suite.checks._ast_common import (
-    _IgnoreDirective,
-    _parse_directives,
-    make_finding,
-)
+from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.checks.entrypoint_alignment._code_entrypoints import (
     AppClassLocation,
-    CodeEntrypointScan,
-    scan_file_for_entrypoints,
+    scan_paths_for_entrypoints,
 )
 from conformance.suite.checks.entrypoint_alignment._contract_entrypoints import (
     LegacyAliasDeclaration,
@@ -42,48 +36,13 @@ from conformance.suite.checks.entrypoint_alignment._contract_entrypoints import 
 )
 from conformance.suite.schema.findings import Finding
 
+from ._manifest_refs import manifest_paths_for_contract
+
 _RULE_ID = "K015"
-
-
-def _manifest_paths(root: Path, contract) -> list[Path]:  # noqa: ANN001
-    """The ``manifest.json`` paths implied by the contract-scan mode."""
-    generated = root / "app" / "generated"
-    if contract.mode == "single":
-        return [generated / "manifest.json"]
-    if contract.mode == "multi":
-        return [generated / name / "manifest.json" for name in sorted(contract.names)]
-    return []
 
 
 def _format_pairs(pairs: frozenset[tuple[str, str]]) -> str:
     return ", ".join(f"{alias} -> {target}" for alias, target in sorted(pairs))
-
-
-def _scan_code(paths: list[Path], root: Path) -> tuple[
-    CodeEntrypointScan, dict[str, dict[int, _IgnoreDirective]]
-]:
-    code = CodeEntrypointScan()
-    directives_by_file: dict[str, dict[int, _IgnoreDirective]] = {}
-
-    for path in paths:
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-        try:
-            tree = ast.parse(text, filename=str(path))
-        except SyntaxError:
-            continue
-        if not isinstance(tree, ast.Module):
-            continue
-        try:
-            rel = str(path.relative_to(root))
-        except ValueError:
-            rel = str(path)
-        directives_by_file[rel] = _parse_directives(text)
-        scan_file_for_entrypoints(tree, rel, code)
-
-    return code, directives_by_file
 
 
 def _finding(
@@ -118,14 +77,15 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     documents = [
         (path, document)
         for path, document in (
-            (path, load_manifest_document(path)) for path in _manifest_paths(root, contract)
+            (path, load_manifest_document(path))
+            for path in manifest_paths_for_contract(root, contract)
         )
         if document is not None
     ]
     if not documents:
         return []
 
-    code, directives_by_file = _scan_code(paths, root)
+    code, directives_by_file = scan_paths_for_entrypoints(paths, root)
     if not code.app_classes:
         return []
 
@@ -209,17 +169,22 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
             )
         )
 
-    code_versions = {
+    # Every alias-bearing class must name the manifest's version, not just one of
+    # them: with two Apps declaring "4.2.0" and no expiry, a membership test would
+    # accept the manifest against either and let the other diverge unreported.
+    disagreeing = {
         app_class.legacy_removal_version
         for app_class in code.app_classes
         if app_class.legacy_aliases
+        and app_class.legacy_removal_version != manifest_declaration.removal_version
     }
-    if code_versions and manifest_declaration.removal_version not in code_versions:
+    if disagreeing:
         findings.append(
             _finding(
                 anchor,
                 "legacy_workflow_types_removal_version disagrees with the contract: "
-                f"code declares {sorted(code_versions)!r}, the manifest declares "
+                f"code declares {sorted(v or 'no expiry' for v in disagreeing)!r}, "
+                "the manifest declares "
                 f"{manifest_declaration.removal_version or 'no expiry'!r}. The expiry "
                 "is what turns a drained alias into a loud decision rather than drift, "
                 "so the two sites must name the same version.",
