@@ -1045,7 +1045,7 @@ RULES: tuple[RuleDefinition, ...] = (
         id="K015",
         scope=RuleScope.APP,
         name="LegacyWorkflowTypeContractDrift",
-        tier=EnforcementTier.WARN,
+        tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         autofixable=False,
@@ -1066,7 +1066,21 @@ RULES: tuple[RuleDefinition, ...] = (
             "one P016 no longer credits, so a genuinely routed entry point reads "
             "as drift and the app is blocked on a false finding. Nothing else "
             "notices either shape -- the app builds, the contract generates, and "
-            "the mismatch only surfaces as a dispatch failure in production."
+            "the mismatch only surfaces as a dispatch failure in production.\n"
+            "\n"
+            "Customer impact: an alias exists because unmigrated callers are "
+            "still dispatching a pre-migration workflow type. When the manifest "
+            "advertises an alias the worker never registered, every one of those "
+            "callers keeps failing at dispatch -- the crawl simply never starts, "
+            "and the contract says it should. That is the precise outage the "
+            "alias was added to prevent, reintroduced silently.\n"
+            "\n"
+            "This blocks rather than warns because P016 -- itself a blocking "
+            "rule -- now routes off the manifest block. A drifted block does not "
+            "merely go unnoticed; it changes what another blocking rule "
+            "concludes, so the two must be held together at the same strength. "
+            "The surface is new and no app declares aliases yet, so nothing in "
+            "the fleet is blocked by adopting it at this tier."
         ),
         short_description=(
             "the manifest's legacy_workflow_types block and the SDK App's "

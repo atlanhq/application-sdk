@@ -95,7 +95,9 @@ def _app_source(
 def test_k015_rule_metadata() -> None:
     rule = get_rule("K015")
     assert rule.name == "LegacyWorkflowTypeContractDrift"
-    assert rule.tier is EnforcementTier.WARN
+    # BLOCK, not WARN: P016 is blocking and now routes off the manifest block, so a
+    # drifted block changes what another blocking rule concludes.
+    assert rule.tier is EnforcementTier.BLOCK
     assert rule.scope is RuleScope.APP
     assert rule.category == "contract-toolkit"
 

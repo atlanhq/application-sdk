@@ -29,7 +29,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [K012](#k012) | `GeneratePoeTaskMissing` | `block` | `app` | `contract-toolkit` | — | 0.14.0 |
 | [K013](#k013) | `ManifestNodeAppNameMisattributed` | `warn` | `app` | `contract-toolkit` | — | 0.18.0 |
 | [K014](#k014) | `ReleaseModelUndeclared` | `warn` | `app` | `contract-toolkit` | — | 0.18.0 |
-| [K015](#k015) | `LegacyWorkflowTypeContractDrift` | `warn` | `app` | `contract-toolkit` | — | 0.23.0 |
+| [K015](#k015) | `LegacyWorkflowTypeContractDrift` | `block` | `app` | `contract-toolkit` | — | 0.23.0 |
 
 ---
 
@@ -663,7 +663,7 @@ declaring the value is one line and is the entire point of the rule.
 
 ## K015 — `LegacyWorkflowTypeContractDrift` {#k015}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.23.0
+**Tier:** `block` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.23.0
 
 > the manifest's legacy_workflow_types block and the SDK App's legacy_workflow_types declaration do not agree
 
@@ -678,7 +678,16 @@ rejects: the unmigrated caller keeps dispatching and keeps failing, which is the
 outage the alias existed to prevent. An alias only in code is one P016 no longer
 credits, so a genuinely routed entry point reads as drift and the app is blocked on a
 false finding. Nothing else notices either shape -- the app builds, the contract
-generates, and the mismatch only surfaces as a dispatch failure in production.
+generates, and the mismatch only surfaces as a dispatch failure in production.  Customer
+impact: an alias exists because unmigrated callers are still dispatching a pre-migration
+workflow type. When the manifest advertises an alias the worker never registered, every
+one of those callers keeps failing at dispatch -- the crawl simply never starts, and the
+contract says it should. That is the precise outage the alias was added to prevent,
+reintroduced silently.  This blocks rather than warns because P016 -- itself a blocking
+rule -- now routes off the manifest block. A drifted block does not merely go unnoticed;
+it changes what another blocking rule concludes, so the two must be held together at the
+same strength. The surface is new and no app declares aliases yet, so nothing in the
+fleet is blocked by adopting it at this tier.
 
 The generated `app/generated/**/manifest.json` `legacy_workflow_types` block and the SDK
 `App` subclass's `legacy_workflow_types` class attribute must declare the same `alias ->
