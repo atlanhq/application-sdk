@@ -152,7 +152,7 @@ class TestPollNativeStatusStallGuard:
         never_dispatched = _result(DAGRunStatus.PENDING, DAGNodeStatus.PENDING)
 
         with patch.object(client, "get_native_status", return_value=never_dispatched):
-            with patch("time.sleep"):
+            with fake_clock():
                 with pytest.raises(AutomationEngineNotDispatchingError) as exc:
                     client.poll_native_status(
                         _RUN_ID,
@@ -275,8 +275,22 @@ class TestPollNativeStatusProgressWatchdog:
                         stall_grace_seconds=None,  # isolate the progress watchdog
                         progress_stall_seconds=30,
                     )
-        # Message surfaces the wedged node's state for the operator.
-        assert "extract=" in str(exc.value)
+        # The wedged node's state reaches the operator as the attached typed
+        # result, not as a name=status list in the message: naming the task
+        # queue and the child workflow needs the harness's seed DAG, so the
+        # harness renders and the client only carries the observation.
+        assert "No DAG node changed state for 30s" in str(exc.value)
+        attached = exc.value.result
+        assert attached is not None
+        assert [n.name for n in attached.nodes] == ["extract"]
+        assert attached.progress_stalled is True
+        assert attached.progress_stalled_after_seconds == 30.0
+        assert attached.stopped_watching is True
+        # The watchdog is not the ceiling; conflating them would make the
+        # renderer print "at the 600s poll ceiling" for a 30s stall.
+        assert attached.timed_out is False
+        assert attached.seconds_since_last_progress is not None
+        assert attached.seconds_since_last_progress >= 30.0
 
     def test_disabled_when_progress_stall_none(self):
         """progress_stall_seconds=None disables the watchdog: a wedged-Running
@@ -1731,3 +1745,123 @@ class TestSubmitReconciliation:
         ):
             assert client.submit_workflow({"any": "p"}, slug="slug-x") == "r-3"
         mock_find.assert_not_called()
+
+
+class TestPollNativeStatusCeilingStamp:
+    """A poll that ends on its own ceiling must say so on the result it returns.
+
+    Returning the last observation bare made every caller read the last-seen
+    node states as a verdict, so a node that was never dispatched surfaced as a
+    node failure with ``error=None`` (FND-708).
+    """
+
+    def test_ceiling_stamps_the_timeout_and_the_stall_window(self):
+        """Nothing ever moves → the returned observation carries the ceiling and
+        the full no-progress window."""
+        client = _make_client()
+        stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
+
+        with patch.object(client, "get_native_status", return_value=stuck):
+            with fake_clock():
+                result = client.poll_native_status(
+                    _RUN_ID,
+                    interval_seconds=10,
+                    timeout_seconds=30,
+                    stall_grace_seconds=None,
+                    progress_stall_seconds=None,
+                )
+        assert result.timed_out is True
+        assert result.timed_out_after_seconds == 30.0
+        assert result.seconds_since_last_progress is not None
+        assert 0.0 <= result.seconds_since_last_progress <= 30.0
+
+    def test_stall_window_is_measured_from_the_last_transition(self):
+        """A DAG that progresses and *then* freezes reports the frozen window,
+        not the whole poll — that is the number that names the wedge."""
+        client = _make_client()
+        pending = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
+        running = _result(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
+
+        with patch.object(
+            client, "get_native_status", side_effect=[pending] + [running] * 20
+        ):
+            with fake_clock():
+                result = client.poll_native_status(
+                    _RUN_ID,
+                    interval_seconds=10,
+                    timeout_seconds=60,
+                    stall_grace_seconds=None,
+                    progress_stall_seconds=None,
+                )
+        assert result.timed_out_after_seconds == 60.0
+        # The transition happened on the second poll, so the frozen window is
+        # strictly shorter than the poll itself.
+        assert result.seconds_since_last_progress is not None
+        assert 0.0 < result.seconds_since_last_progress < 60.0
+
+    def test_terminal_result_is_not_stamped(self):
+        """A run that finished is a verdict, not a ceiling — no stamp."""
+        client = _make_client()
+
+        with patch.object(
+            client, "get_native_status", return_value=_succeeded_result()
+        ):
+            with fake_clock():
+                result = client.poll_native_status(
+                    _RUN_ID, interval_seconds=10, timeout_seconds=600
+                )
+        assert result.timed_out is False
+        assert result.timed_out_after_seconds is None
+        assert result.seconds_since_last_progress is None
+
+
+class TestNotStartedNodes:
+    """Pending/Scheduled is a status, not a dispatch fact — and not a failure.
+
+    AE holds a node at Pending whether nothing picked it up or its child
+    workflow is running, so the set says the node has not *failed*; it does not
+    say the node never started.
+    """
+
+    @pytest.mark.parametrize("status", [DAGNodeStatus.PENDING, DAGNodeStatus.SCHEDULED])
+    def test_not_started_statuses(self, status: DAGNodeStatus):
+        assert status.is_not_started is True
+
+    @pytest.mark.parametrize(
+        "status",
+        [
+            DAGNodeStatus.RUNNING,
+            DAGNodeStatus.SUCCEEDED,
+            DAGNodeStatus.FAILED,
+            DAGNodeStatus.SKIPPED,
+        ],
+    )
+    def test_started_or_finished_statuses(self, status: DAGNodeStatus):
+        assert status.is_not_started is False
+
+    def test_not_started_nodes_excludes_a_real_failure(self):
+        """``failed_nodes`` stays the wide not-successful set; the new accessor
+        isolates the never-dispatched ones so a message can tell them apart."""
+        result = DAGRunResult(
+            run_id=_RUN_ID,
+            workflow_slug="slug",
+            status=DAGRunStatus.RUNNING,
+            nodes=[
+                DAGNodeResult(
+                    name="publish",
+                    status=DAGNodeStatus.FAILED,
+                    started_at_ms=None,
+                    completed_at_ms=None,
+                    error_message="boom",
+                ),
+                DAGNodeResult(
+                    name="lineage-publish",
+                    status=DAGNodeStatus.PENDING,
+                    started_at_ms=None,
+                    completed_at_ms=None,
+                    error_message=None,
+                ),
+            ],
+        )
+        assert [n.name for n in result.failed_nodes] == ["publish", "lineage-publish"]
+        assert [n.name for n in result.not_started_nodes] == ["lineage-publish"]

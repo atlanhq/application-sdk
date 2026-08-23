@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.28.2
-source-sha:    e45dabeff8e517fd114209cad47241591d1bca65
-source-date:   2026-08-21T11:23:15+05:30
+sdk-version:   3.28.3
+source-sha:    46b9e35628e6e8a6413aa502bd19aae7a99d495b
+source-date:   2026-08-21T11:51:31+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -3135,7 +3135,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `DAGRunResult`
 
 - **Import:** `from application_sdk.testing.full_dag.client import DAGRunResult`
-- **Signature:** `class DAGRunResult(run_id: str, workflow_slug: str, status: DAGRunStatus, nodes: list[DAGNodeResult])`
+- **Signature:** `class DAGRunResult(run_id: str, ...)`
 - **Summary:** Full result returned by :meth:`AEWorkflowClient.poll_native_status`.
 - **Defined in:** `application_sdk/testing/e2e/client.py`
 

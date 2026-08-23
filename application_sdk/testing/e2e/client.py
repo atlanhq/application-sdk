@@ -38,7 +38,7 @@ import asyncio
 import math
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -645,6 +645,25 @@ class DAGNodeStatus(str, Enum):
         """True when AE intentionally did not run the node (not a failure)."""
         return self in {DAGNodeStatus.SKIPPED, DAGNodeStatus.OMITTED}
 
+    @property
+    def is_not_started(self) -> bool:
+        """True while AE has not reported the node as started.
+
+        A node in this set has *not failed*, which is the distinction worth
+        making in a diagnostic: a ``Failed`` node ran and errored, so reporting
+        a ``Pending`` one the same way sends the operator looking for a bug in
+        code that may never have executed.
+
+        It does **not** prove the node was never dispatched. AE holds a node at
+        ``Pending`` while its child workflow is running: on the run that
+        motivated FND-708, ``lineage-publish`` read ``Pending`` for the whole
+        poll while its child workflow had started 331ms in and was retrying an
+        activity through repeated heartbeat timeouts. Only the child workflow's
+        own history separates "nothing picked it up" from "picked up and stuck",
+        so a message built on this must point there rather than assert a cause.
+        """
+        return self in {DAGNodeStatus.PENDING, DAGNodeStatus.SCHEDULED}
+
 
 class DAGRunStatus(str, Enum):
     """Top-level status of an AE workflow run."""
@@ -699,14 +718,68 @@ class DAGRunResult:
     workflow_slug: str
     status: DAGRunStatus
     nodes: list[DAGNodeResult]
+    # Set only on the observation ``poll_native_status`` returns because it hit
+    # its own ceiling, so callers can say "the DAG did not complete in Xs"
+    # instead of reporting the last-seen node states as node failures. ``None``
+    # on every result that came back from a terminal run.
+    timed_out_after_seconds: float | None = None
+    # Set only on the observation attached to a ``DAGProgressStalledError``: the
+    # progress watchdog stopped the poll early, so like
+    # ``timed_out_after_seconds`` this is where the harness stopped watching
+    # rather than a verdict. Carries the window that was breached.
+    progress_stalled_after_seconds: float | None = None
+    # Elapsed poll time since the last node-state transition, at the moment the
+    # poll stopped watching — the ceiling or the progress watchdog. This is the
+    # DAG-wide watchdog clock (the same quantity ``dag_progress_stall_seconds``
+    # bounds), not a per-node age: it answers "how long has this DAG been frozen
+    # in the state printed below".
+    seconds_since_last_progress: float | None = None
 
     @property
     def all_nodes_succeeded(self) -> bool:
         return bool(self.nodes) and all(n.status.is_success for n in self.nodes)
 
     @property
+    def timed_out(self) -> bool:
+        """True when this observation is the poll loop's ceiling, not a verdict."""
+        return self.timed_out_after_seconds is not None
+
+    @property
+    def progress_stalled(self) -> bool:
+        """True when the progress watchdog ended the poll, not a verdict."""
+        return self.progress_stalled_after_seconds is not None
+
+    @property
+    def stopped_watching(self) -> bool:
+        """True when the poll stopped before the DAG reached a terminal state.
+
+        The union of the two early exits — the poll ceiling
+        (:attr:`timed_out`) and the progress watchdog
+        (:attr:`progress_stalled`). Either way the node states are the last
+        observation and not a verdict, which is the distinction a diagnostic
+        has to make; the watchdog is now the one that fires first on any suite
+        whose ceiling is at or below 1800s.
+        """
+        return self.timed_out or self.progress_stalled
+
+    @property
     def failed_nodes(self) -> list[DAGNodeResult]:
+        """Every node that did not succeed — failed *and* never-started alike.
+
+        Kept as the wide "not successful" set the success gates gate on. Use
+        :attr:`not_started_nodes` when the message needs to tell the operator
+        which of the two happened.
+        """
         return [n for n in self.nodes if not n.status.is_success]
+
+    @property
+    def not_started_nodes(self) -> list[DAGNodeResult]:
+        """Nodes AE reports as not started (``Pending`` / ``Scheduled``).
+
+        A status, not a dispatch fact — see
+        :attr:`DAGNodeStatus.is_not_started`.
+        """
+        return [n for n in self.nodes if n.status.is_not_started]
 
 
 class AEWorkflowClient:
@@ -1578,6 +1651,14 @@ class AEWorkflowClient:
         can sit ``Running`` for many minutes) so healthy runs never trip it;
         it exists to turn an indefinite hang into a fast, self-terminating
         failure with the last-seen node states, instead of a manual cancel.
+
+        On hitting ``timeout_seconds`` the last observation is returned rather
+        than raised — but stamped with ``timed_out_after_seconds`` and
+        ``seconds_since_last_progress`` so the caller can report "the DAG did
+        not complete within Xs" and tell a never-dispatched ``Pending`` node
+        apart from one that ran and failed. Callers must therefore check
+        :attr:`DAGRunResult.timed_out` before treating the node states as a
+        verdict.
         """
         last_summary: str | None = None
         last_result: DAGRunResult | None = None
@@ -1587,6 +1668,7 @@ class AEWorkflowClient:
         # both retry loops bound honoured backoff at _RETRY_AFTER_BUDGET_SECONDS.
         honoured_seconds = 0.0
         last_log_elapsed = 0.0  # seconds since the last info log fired
+        last_elapsed = 0.0  # elapsed at the last successful observation
         any_node_started = False  # any node reached Running/terminal (stall guard)
         last_progress_elapsed = (
             0.0  # elapsed at the last node-state transition (progress watchdog)
@@ -1642,13 +1724,11 @@ class AEWorkflowClient:
                 continue
             transient_streak = 0
             last_result = result
+            last_elapsed = elapsed
             # Stall guard: a node has "started" once it leaves the not-started
             # set. Tracked as a latch so a node that starts and finishes between
             # polls still counts.
-            if any(
-                n.status not in (DAGNodeStatus.PENDING, DAGNodeStatus.SCHEDULED)
-                for n in result.nodes
-            ):
+            if any(not n.status.is_not_started for n in result.nodes):
                 any_node_started = True
             summary = " ".join(_node_glyph(n) for n in result.nodes)
             run_glyph = _RUN_GLYPHS.get(result.status.value, "•")
@@ -1730,25 +1810,42 @@ class AEWorkflowClient:
                 and any_node_started
                 and (elapsed - last_progress_elapsed) >= progress_stall_seconds
             ):
-                node_states = (
-                    ", ".join(f"{n.name}={n.status.value}" for n in result.nodes)
-                    or "(no nodes)"
-                )
+                # Stamp the stall onto the observation and attach it, rather
+                # than rendering a ``name=status`` list here: naming the task
+                # queue and the child workflow needs the seed DAG's routing,
+                # which only the harness holds. One renderer, two entry points.
                 raise DAGProgressStalledError(
                     message=(
                         f"No DAG node changed state for {progress_stall_seconds}s for "
-                        f"run {run_id} (top-level status={result.status.value}; nodes: "
-                        f"{node_states}). A node started but is not progressing — most "
-                        "often wedged on a slow/failing step (e.g. extract stuck on an "
-                        f"object-store upload). Failing fast instead of polling the full "
-                        f"{timeout_seconds}s."
+                        f"run {run_id} (top-level status={result.status.value}). A node "
+                        "started but is not progressing — most often wedged on a "
+                        "slow/failing step (e.g. extract stuck on an object-store "
+                        "upload). Failing fast instead of polling the full "
+                        f"{timeout_seconds}s. Last-seen node states are attached as "
+                        "``result``."
+                    ),
+                    result=replace(
+                        result,
+                        progress_stalled_after_seconds=float(progress_stall_seconds),
+                        seconds_since_last_progress=max(
+                            0.0, elapsed - last_progress_elapsed
+                        ),
                     ),
                 )
         # Timeout: return the last observation so callers can include
         # node-level state in the failure message rather than just
-        # "timed out after Xs".
+        # "timed out after Xs". Stamp the ceiling onto it: returning the
+        # observation bare made every caller read the last-seen node states as
+        # a verdict, so a node that was never dispatched surfaced as a node
+        # failure with ``error=None``.
         if last_result is not None:
-            return last_result
+            return replace(
+                last_result,
+                timed_out_after_seconds=float(timeout_seconds),
+                seconds_since_last_progress=max(
+                    0.0, last_elapsed - last_progress_elapsed
+                ),
+            )
         raise AtlanApiTimeoutError(
             message=f"native-status timed out after {timeout_seconds}s with no response",
             timeout_seconds=float(timeout_seconds),
