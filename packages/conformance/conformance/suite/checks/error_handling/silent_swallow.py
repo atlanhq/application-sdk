@@ -288,7 +288,22 @@ class SilentSwallowMixin:
                                 break
                 # for r in var: ... — iteration counts as inspection
                 if isinstance(node, ast.For):
+                    # `for r in var:` — iterating the result list directly.
                     if isinstance(node.iter, ast.Name) and node.iter.id == var_name:
+                        inspected = True
+                        break
+                    # `for i, r in enumerate(var):` / `for ... in zip(var, ...):` —
+                    # iterating the result list through a standard combinator.
+                    if isinstance(node.iter, ast.Call) and any(
+                        isinstance(arg, ast.Name) and arg.id == var_name
+                        for arg in node.iter.args
+                    ):
+                        inspected = True
+                        break
+                # `x = var[i]` / `x = var[0]` — subscripting the result list to
+                # inspect elements one by one.
+                if isinstance(node, ast.Subscript):
+                    if isinstance(node.value, ast.Name) and node.value.id == var_name:
                         inspected = True
                         break
             if not inspected:

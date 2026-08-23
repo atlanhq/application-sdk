@@ -789,6 +789,52 @@ async def run():
     )
 
 
+def test_p010_no_finding_enumerate_iteration() -> None:
+    # Shape from atlan-anaplan-app app/extracts/dimensions.py:243 (and pages.py,
+    # lineitems.py, lists.py, models.py, modules.py, views.py): results are
+    # iterated via enumerate() and each element checked with isinstance.
+    _none(
+        """\
+import asyncio
+async def run():
+    chunk_results = await asyncio.gather(*tasks, return_exceptions=True)
+    for i, result in enumerate(chunk_results):
+        if isinstance(result, Exception):
+            logger.error("task failed: %s", result)
+"""
+    )
+
+
+def test_p010_no_finding_subscript_access() -> None:
+    # Shape from atlan-anaplan-app app/extracts/lineitems.py:129 (and
+    # lists.py, modules.py, views.py): results are indexed out of the list and
+    # each element checked with isinstance.
+    _none(
+        """\
+import asyncio
+async def run():
+    chunk_results = await asyncio.gather(*tasks, return_exceptions=True)
+    for i, task in enumerate(tasks):
+        result = chunk_results[i]
+        if isinstance(result, Exception):
+            logger.error("task failed: %s", result)
+"""
+    )
+
+
+def test_p010_no_finding_zip_iteration() -> None:
+    _none(
+        """\
+import asyncio
+async def run():
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for item, result in zip(items, results):
+        if isinstance(result, Exception):
+            logger.error("task failed: %s", result)
+"""
+    )
+
+
 # ── P011 — LoggingFilterUnsafeBody ───────────────────────────────────────────
 
 
