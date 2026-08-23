@@ -1041,4 +1041,95 @@ RULES: tuple[RuleDefinition, ...] = (
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k014"
         ),
     ),
+    RuleDefinition(
+        id="K015",
+        scope=RuleScope.APP,
+        name="LegacyWorkflowTypeContractDrift",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="contract-toolkit",
+        autofixable=False,
+        since="0.23.0",
+        orthogonal_gate="tests",
+        rationale=(
+            "An inbound-only workflow type alias keeps a worker answering a "
+            "pre-migration Temporal type that external callers have not stopped "
+            "dispatching. Once an app carries a contract tree the alias is "
+            "declared twice: in the generated manifest's legacy_workflow_types "
+            "block, which is the contracted declaration site, and in the SDK's "
+            "App.legacy_workflow_types class attribute, which is what actually "
+            "registers with the worker. Neither site validates the other, and a "
+            "disagreement is silent in both directions. An alias only in the "
+            "manifest is one the contract advertises and the worker rejects: the "
+            "unmigrated caller keeps dispatching and keeps failing, which is the "
+            "exact outage the alias existed to prevent. An alias only in code is "
+            "one P016 no longer credits, so a genuinely routed entry point reads "
+            "as drift and the app is blocked on a false finding. Nothing else "
+            "notices either shape -- the app builds, the contract generates, and "
+            "the mismatch only surfaces as a dispatch failure in production."
+        ),
+        short_description=(
+            "the manifest's legacy_workflow_types block and the SDK App's "
+            "legacy_workflow_types declaration do not agree"
+        ),
+        full_description=(
+            "The generated ``app/generated/**/manifest.json`` "
+            "``legacy_workflow_types`` block and the SDK ``App`` subclass's "
+            "``legacy_workflow_types`` class attribute must declare the same "
+            "``alias -> entry-point`` pairs and the same expiry.\n"
+            "\n"
+            "The rule fires on four shapes:\n"
+            "\n"
+            "* an alias declared in code that the manifest does not carry;\n"
+            "* an alias declared in the manifest that the ``App`` does not;\n"
+            "* a ``removal_version`` that differs between the two sites;\n"
+            "* per-entry-point manifests that disagree with each other (the "
+            "block is app-level, so every copy must be identical).\n"
+            "\n"
+            "A ``legacy_workflow_types`` assignment the scan cannot read "
+            "statically -- a variable, a comprehension -- is reported too: the "
+            "comparison cannot be made at all, so neither agreement nor drift "
+            "can be established.\n"
+            "\n"
+            "Only the class attribute registers the alias with the worker. Only "
+            "the manifest block is read by P016 when it decides whether a bare "
+            "DAG node routes an entry point. That split is why drift is "
+            "invisible: each site is individually well-formed.\n"
+            "\n"
+            "**Fix -- declare the same thing twice, on purpose.** In the "
+            "contract:\n"
+            "\n"
+            "    legacyWorkflowTypes {\n"
+            "      new LegacyWorkflowTypeSpec {\n"
+            '        alias = "LegacyCrawlerWorkflow"\n'
+            '        entrypoint = "crawler"\n'
+            "      }\n"
+            "    }\n"
+            '    legacyWorkflowTypesRemovalVersion = "4.2.0"\n'
+            "\n"
+            "then regenerate, and in the app:\n"
+            "\n"
+            "    class MyApp(App):\n"
+            "        legacy_workflow_types = {\n"
+            '            "LegacyCrawlerWorkflow": "crawler",\n'
+            "        }\n"
+            '        legacy_workflow_types_removal_version = "4.2.0"\n'
+            "\n"
+            "For a multi-entrypoint bundle the block goes on each entry point's "
+            "own contract -- the bundle root renders no manifest and refuses the "
+            "declaration at eval time.\n"
+            "\n"
+            "An app with no ``app/generated/`` tree is out of scope: the class "
+            "attribute is then the only declaration site and there is nothing to "
+            "compare.\n"
+            "\n"
+            "**Suppress** with ``# conformance: ignore[K015] <reason>`` above the "
+            "``App`` subclass. Suppressing leaves the two sites free to diverge, "
+            "and P016 keeps routing off the manifest either way.\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k015"
+        ),
+    ),
 )

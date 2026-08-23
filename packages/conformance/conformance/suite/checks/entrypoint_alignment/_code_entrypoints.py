@@ -106,6 +106,28 @@ def _extract_ep_name(
     return None, False
 
 
+def _class_attribute_value(class_node: ast.ClassDef, attr: str) -> ast.expr | None:
+    """The assigned expression of a class-body attribute, or ``None`` if unset.
+
+    Covers both ``attr = ...`` and the annotated ``attr: T = ...`` form. An
+    annotation with no value reads as unset, matching Python: the class carries
+    no attribute of its own and inherits the SDK default.
+    """
+    for stmt in class_node.body:
+        if isinstance(stmt, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == attr
+            for target in stmt.targets
+        ):
+            return stmt.value
+        if (
+            isinstance(stmt, ast.AnnAssign)
+            and isinstance(stmt.target, ast.Name)
+            and stmt.target.id == attr
+        ):
+            return stmt.value
+    return None
+
+
 def _extract_app_name(class_node: ast.ClassDef) -> str | None:
     """The app name this class registers under, when statically knowable.
 
@@ -113,25 +135,12 @@ def _extract_app_name(class_node: ast.ClassDef) -> str | None:
     attribute falls back to the kebab-cased class name. A non-literal
     assignment returns ``None`` — no identity claim can be made.
     """
-    for stmt in class_node.body:
-        value: ast.expr | None = None
-        if isinstance(stmt, ast.Assign) and any(
-            isinstance(target, ast.Name) and target.id == "name"
-            for target in stmt.targets
-        ):
-            value = stmt.value
-        elif (
-            isinstance(stmt, ast.AnnAssign)
-            and isinstance(stmt.target, ast.Name)
-            and stmt.target.id == "name"
-        ):
-            value = stmt.value
-        if value is None:
-            continue
-        if isinstance(value, ast.Constant) and isinstance(value.value, str):
-            return value.value or _method_name_to_kebab(class_node.name)
-        return None
-    return _method_name_to_kebab(class_node.name)
+    value = _class_attribute_value(class_node, "name")
+    if value is None:
+        return _method_name_to_kebab(class_node.name)
+    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+        return value.value or _method_name_to_kebab(class_node.name)
+    return None
 
 
 def _extract_legacy_aliases(
@@ -144,36 +153,39 @@ def _extract_legacy_aliases(
     ``is_unresolved=True`` when the attribute is assigned something the scan
     cannot statically read (a variable, a comprehension, …).
     """
-    for stmt in class_node.body:
-        value: ast.expr | None = None
-        if isinstance(stmt, ast.Assign) and any(
-            isinstance(target, ast.Name) and target.id == "legacy_workflow_types"
-            for target in stmt.targets
+    value = _class_attribute_value(class_node, "legacy_workflow_types")
+    if value is None:
+        return {}, False
+    if not isinstance(value, ast.Dict):
+        return {}, True
+    aliases: dict[str, str] = {}
+    for key, val in zip(value.keys, value.values):
+        if (
+            isinstance(key, ast.Constant)
+            and isinstance(key.value, str)
+            and isinstance(val, ast.Constant)
+            and isinstance(val.value, str)
         ):
-            value = stmt.value
-        elif (
-            isinstance(stmt, ast.AnnAssign)
-            and isinstance(stmt.target, ast.Name)
-            and stmt.target.id == "legacy_workflow_types"
-        ):
-            value = stmt.value
-        if value is None:
-            continue
-        if not isinstance(value, ast.Dict):
+            aliases[key.value] = val.value
+        else:
             return {}, True
-        aliases: dict[str, str] = {}
-        for key, val in zip(value.keys, value.values):
-            if (
-                isinstance(key, ast.Constant)
-                and isinstance(key.value, str)
-                and isinstance(val, ast.Constant)
-                and isinstance(val.value, str)
-            ):
-                aliases[key.value] = val.value
-            else:
-                return {}, True
-        return aliases, False
-    return {}, False
+    return aliases, False
+
+
+def _extract_removal_version(class_node: ast.ClassDef) -> tuple[str, bool]:
+    """Parse a class body for a literal ``legacy_workflow_types_removal_version``.
+
+    Returns ``(version, is_unresolved)``. An absent attribute reads as ``""``,
+    the SDK default meaning "no expiry declared"; a non-literal assignment sets
+    ``is_unresolved`` so K015 reports that it cannot compare rather than
+    reporting a mismatch it cannot prove.
+    """
+    value = _class_attribute_value(class_node, "legacy_workflow_types_removal_version")
+    if value is None:
+        return "", False
+    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+        return value.value, False
+    return "", True
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +225,11 @@ class AppClassLocation:
     across App classes would let one app's declaration route another's
     entry point."""
 
+    legacy_removal_version: str = ""
+    """This class's literal ``legacy_workflow_types_removal_version``, or ``""``
+    when the attribute is absent (the SDK default: no expiry). K015 compares it
+    against the manifest block's ``removal_version``."""
+
 
 @dataclass
 class UnresolvedLocation:
@@ -231,8 +248,10 @@ class CodeEntrypointScan:
     app_classes: list[AppClassLocation] = field(default_factory=list)
     unresolved: list[UnresolvedLocation] = field(default_factory=list)
     unresolved_aliases: list[AppClassLocation] = field(default_factory=list)
-    """App subclasses whose ``legacy_workflow_types`` assignment the scan
-    cannot statically read (a variable, a comprehension, …)."""
+    """App subclasses whose ``legacy_workflow_types`` or
+    ``legacy_workflow_types_removal_version`` assignment the scan cannot
+    statically read (a variable, a comprehension, …), so K015 cannot compare the
+    declaration against the manifest block."""
 
     def name_set(self) -> frozenset[str]:
         """Return the set of all wire names found in code."""
@@ -273,14 +292,16 @@ def scan_file_for_entrypoints(
                     base_name = None
                 if base_name in app_aliases:
                     aliases, is_unresolved = _extract_legacy_aliases(node)
+                    removal_version, version_unresolved = _extract_removal_version(node)
                     location = AppClassLocation(
                         filename=filename,
                         node=node,
                         app_name=_extract_app_name(node),
                         legacy_aliases={} if is_unresolved else aliases,
+                        legacy_removal_version=removal_version,
                     )
                     result.app_classes.append(location)
-                    if is_unresolved:
+                    if is_unresolved or version_unresolved:
                         result.unresolved_aliases.append(location)
                     break
 

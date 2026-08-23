@@ -208,9 +208,21 @@ Registration fails loudly on a declaration mistake. At class definition: an alia
 
 > **The workflow-type namespace is global across workers.** An alias may be colon-qualified (for example `teradata-app:crawler`) — that is the shape a migrating app preserves, and it does not make the type canonical. Two apps on *different* workers that register the same type are not caught at startup (collision checks are per-worker); raw Temporal dispatch by type name then lands on whichever worker registered it. Treat aliases as globally unique: coordinate them across apps the same way you coordinate any shared Temporal type.
 
-> **Declaration site.** The class attribute is the interim declaration site — the class **body** specifically: the declaration is read once at class definition, and worker startup refuses to boot if a post-definition assignment or mutation diverged from what registration recorded. Contract-carrying apps will declare aliases in the app contract manifest once the contract toolkit ships the schema (tracked in CONNECT-1081); apps without a contract tree keep using the class attribute.
+> **Declaration site.** The class attribute is what registers the alias — the class **body** specifically: the declaration is read once at class definition, and worker startup refuses to boot if a post-definition assignment or mutation diverged from what registration recorded. A contract-carrying app declares the same aliases a second time in the app contract manifest, via the toolkit's `legacyWorkflowTypes` block, which is the contracted declaration site; conformance `K015` fails the app when the two disagree, and `P016` routes off the manifest copy. An app with no contract tree declares them in the class attribute alone.
+>
+> ```pkl
+> legacyWorkflowTypes {
+>   new LegacyWorkflowTypeSpec {
+>     alias = "KeifuWorkflow"
+>     entrypoint = "keifu"
+>   }
+> }
+> legacyWorkflowTypesRemovalVersion = "4.2.0"
+> ```
+>
+> For a multi-entrypoint bundle the block goes on each entry point's own contract — the bundle root renders no manifest and refuses the declaration at eval time.
 
-> **Expiry.** `legacy_workflow_types_removal_version = "4.2.0"` is an opt-in deadline: once the installed SDK reaches it, registration fails while aliases remain declared — keeping them becomes a loud decision rather than drift. Leave it unset for aliases with a wide external caller set; removal then gates on the `temporal.workflow.type` legacy-caller count reaching zero.
+> **Expiry.** `legacy_workflow_types_removal_version = "4.2.0"` is an opt-in deadline: once the installed SDK reaches it, registration fails while aliases remain declared — keeping them becomes a loud decision rather than drift. Leave it unset for aliases with a wide external caller set; removal then gates on the `temporal.workflow.type` legacy-caller count reaching zero. The expiry is app-level, not per-alias, and a contract-carrying app declares the same value in `legacyWorkflowTypesRemovalVersion`.
 
 ### HTTP dispatch
 

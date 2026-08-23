@@ -1,0 +1,230 @@
+"""K015 LegacyWorkflowTypeContractDrift — check implementation (CONNECT-1081).
+
+An inbound-only Temporal workflow type alias is declared in two places once an
+app carries a contract tree: the generated
+``app/generated/**/manifest.json`` ``legacy_workflow_types`` block, which is the
+contracted declaration site, and the SDK's ``App.legacy_workflow_types`` class
+attribute, which is what the worker actually registers.
+
+Only the class attribute changes runtime behaviour. Only the manifest block is
+read by P016 when it decides whether a bare DAG node routes an entry point. So a
+disagreement between them is silent in both directions: an alias present only in
+code is one P016 no longer credits, and an alias present only in the manifest is
+one the worker rejects at dispatch while the contract advertises it. This check
+holds the two in agreement.
+
+Apps with no ``app/generated/`` tree are out of scope — for them the class
+attribute is the only declaration site and there is nothing to compare.
+"""
+
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+from conformance.suite.checks._ast_common import (
+    _IgnoreDirective,
+    _parse_directives,
+    make_finding,
+)
+from conformance.suite.checks.entrypoint_alignment._code_entrypoints import (
+    AppClassLocation,
+    CodeEntrypointScan,
+    scan_file_for_entrypoints,
+)
+from conformance.suite.checks.entrypoint_alignment._contract_entrypoints import (
+    LegacyAliasDeclaration,
+    load_manifest_document,
+    parse_legacy_aliases,
+)
+from conformance.suite.checks.entrypoint_alignment._contract_entrypoints import (
+    scan_contract as scan_contract_entrypoints,
+)
+from conformance.suite.schema.findings import Finding
+
+_RULE_ID = "K015"
+
+
+def _manifest_paths(root: Path, contract) -> list[Path]:  # noqa: ANN001
+    """The ``manifest.json`` paths implied by the contract-scan mode."""
+    generated = root / "app" / "generated"
+    if contract.mode == "single":
+        return [generated / "manifest.json"]
+    if contract.mode == "multi":
+        return [generated / name / "manifest.json" for name in sorted(contract.names)]
+    return []
+
+
+def _format_pairs(pairs: frozenset[tuple[str, str]]) -> str:
+    return ", ".join(f"{alias} -> {target}" for alias, target in sorted(pairs))
+
+
+def _scan_code(paths: list[Path], root: Path) -> tuple[
+    CodeEntrypointScan, dict[str, dict[int, _IgnoreDirective]]
+]:
+    code = CodeEntrypointScan()
+    directives_by_file: dict[str, dict[int, _IgnoreDirective]] = {}
+
+    for path in paths:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        try:
+            tree = ast.parse(text, filename=str(path))
+        except SyntaxError:
+            continue
+        if not isinstance(tree, ast.Module):
+            continue
+        try:
+            rel = str(path.relative_to(root))
+        except ValueError:
+            rel = str(path)
+        directives_by_file[rel] = _parse_directives(text)
+        scan_file_for_entrypoints(tree, rel, code)
+
+    return code, directives_by_file
+
+
+def _finding(
+    anchor: AppClassLocation,
+    message: str,
+    directives_by_file: dict[str, dict[int, _IgnoreDirective]],
+) -> Finding:
+    return make_finding(
+        filename=anchor.filename,
+        rule_id=_RULE_ID,
+        node=anchor.node,
+        message=message,
+        directives=directives_by_file.get(anchor.filename, {}),
+    )
+
+
+def scan_all(paths: list[Path], root: Path) -> list[Finding]:
+    """Compare the manifest ``legacy_workflow_types`` block against the SDK declaration.
+
+    No-ops when ``app/generated/`` is absent or unparseable, and when no ``App``
+    subclass is found in code — there is then no pair of declarations to hold in
+    agreement, and reporting drift against a repo shape this check does not
+    understand would be a false positive.
+    """
+    if not (root / "app" / "generated").is_dir():
+        return []
+
+    contract = scan_contract_entrypoints(root)
+    if contract.mode == "absent":
+        return []
+
+    documents = [
+        (path, document)
+        for path, document in (
+            (path, load_manifest_document(path)) for path in _manifest_paths(root, contract)
+        )
+        if document is not None
+    ]
+    if not documents:
+        return []
+
+    code, directives_by_file = _scan_code(paths, root)
+    if not code.app_classes:
+        return []
+
+    findings: list[Finding] = []
+
+    # A declaration the scan cannot read statically blocks the comparison
+    # outright — report that rather than a mismatch the check cannot prove.
+    for unreadable in code.unresolved_aliases:
+        findings.append(
+            _finding(
+                unreadable,
+                "legacy_workflow_types (or legacy_workflow_types_removal_version) is "
+                "not a literal declaration, so it cannot be compared against the "
+                "manifest's legacy_workflow_types block. Declare it inline, e.g. "
+                'legacy_workflow_types = {"LegacyType": "entry-point-name"}. '
+                "Suppress with '# conformance: ignore[K015] <reason>' if unavoidable.",
+                directives_by_file,
+            )
+        )
+    if code.unresolved_aliases:
+        return findings
+
+    declared: list[LegacyAliasDeclaration] = [
+        parse_legacy_aliases(document) for _, document in documents
+    ]
+
+    anchor = code.app_classes[0]
+
+    # Every generated manifest carries the same app-level block, so a divergence
+    # between copies means one entry point was regenerated and another was not.
+    distinct = {(d.aliases, d.removal_version) for d in declared}
+    if len(distinct) > 1:
+        findings.append(
+            _finding(
+                anchor,
+                "the generated manifests disagree on legacy_workflow_types: "
+                + "; ".join(
+                    f"{path.relative_to(root)} declares "
+                    f"[{_format_pairs(d.aliases) or 'none'}]"
+                    for (path, _), d in zip(documents, declared)
+                )
+                + ". The block is app-level, so every entry point's manifest must "
+                "carry the same copy — re-run the contract generation.",
+                directives_by_file,
+            )
+        )
+        return findings
+
+    manifest_declaration = declared[0]
+    code_aliases = frozenset(
+        (alias, target)
+        for app_class in code.app_classes
+        for alias, target in app_class.legacy_aliases.items()
+    )
+
+    missing_from_manifest = code_aliases - manifest_declaration.aliases
+    if missing_from_manifest:
+        findings.append(
+            _finding(
+                anchor,
+                "legacy_workflow_types declares aliases the app contract does not: "
+                f"[{_format_pairs(missing_from_manifest)}]. The generated manifest is "
+                "the contracted declaration site, and P016 routes off it — an alias "
+                "missing there reads as unrouted. Declare it in the contract's "
+                "legacyWorkflowTypes and re-run the contract generation.",
+                directives_by_file,
+            )
+        )
+
+    missing_from_code = manifest_declaration.aliases - code_aliases
+    if missing_from_code:
+        findings.append(
+            _finding(
+                anchor,
+                "the app contract declares legacy_workflow_types the SDK App does not: "
+                f"[{_format_pairs(missing_from_code)}]. Only the class attribute "
+                "registers the alias with the worker, so a caller dispatching one of "
+                "these is rejected while the contract advertises it. Add it to "
+                "legacy_workflow_types, or drop it from the contract.",
+                directives_by_file,
+            )
+        )
+
+    code_versions = {
+        app_class.legacy_removal_version
+        for app_class in code.app_classes
+        if app_class.legacy_aliases
+    }
+    if code_versions and manifest_declaration.removal_version not in code_versions:
+        findings.append(
+            _finding(
+                anchor,
+                "legacy_workflow_types_removal_version disagrees with the contract: "
+                f"code declares {sorted(code_versions)!r}, the manifest declares "
+                f"{manifest_declaration.removal_version or 'no expiry'!r}. The expiry "
+                "is what turns a drained alias into a loud decision rather than drift, "
+                "so the two sites must name the same version.",
+                directives_by_file,
+            )
+        )
+
+    return findings
