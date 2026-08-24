@@ -464,7 +464,7 @@ requires-dist = [
 provides-extras = ["test"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "ruff", specifier = "==0.16.4" }]
+dev = [{ name = "ruff", specifier = "==0.16.3" }]
 
 [[package]]
 name = "attrs"
