@@ -640,7 +640,7 @@ def test_an_http_status_on_the_post_is_not_a_stream_error():
     assert st.err_code == "http_504"
     assert st.errored is True
     assert st.stream_error == ""
-    plan = sd._retry_class(st, 1)
+    plan = sd._retry_class(st, 1, sd.MAIN_MODEL)
     assert plan.retry is True
 
 
@@ -669,7 +669,7 @@ def test_a_genuine_transport_drop_is_still_never_retried():
     )
     assert st.stream_error
     assert st.errored is False
-    plan = sd._retry_class(st, 1)
+    plan = sd._retry_class(st, 1, sd.MAIN_MODEL)
     assert plan.retry is False
 
 
@@ -1047,7 +1047,7 @@ def test_a_known_code_is_never_overridden_by_the_message_patterns():
 
 
 def test_retry_fires_on_a_dead_sandbox_with_a_retryable_code():
-    plan = sd.retry_decision(_errored("429"), 1, 6000)
+    plan = sd.retry_decision(_errored("429"), 1, 6000, sd.MAIN_MODEL)
     assert plan.retry is True
     assert plan.model == sd.RETRY_MAIN_MODEL
     assert sd.RETRY_MAIN_MODEL in plan.reason and "attempt 2 of 2" in plan.reason
@@ -1060,11 +1060,11 @@ def test_retry_fires_when_complete_carries_status_error():
         )
     )
     assert sd.sandbox_terminated_abnormally(st) is True
-    assert sd.retry_decision(st, 1, 6000).retry is True
+    assert sd.retry_decision(st, 1, 6000, sd.MAIN_MODEL).retry is True
 
 
 def test_only_one_retry_is_ever_spent():
-    plan = sd.retry_decision(_errored("429"), 2, 6000)
+    plan = sd.retry_decision(_errored("429"), 2, 6000, sd.MAIN_MODEL)
     assert plan.retry is False and "all 2 attempts" in plan.reason
     assert sd.MAX_DISPATCH_ATTEMPTS == 2
 
@@ -1073,26 +1073,28 @@ def test_a_cut_stream_never_retries_because_the_reviewer_may_still_be_working():
     """A second reviewer would post a second summary on the same PR."""
     st = _stream(*_event("started", {"session_id": "s"}))
     st.stream_error = "read timed out"
-    plan = sd.retry_decision(st, 1, 6000)
+    plan = sd.retry_decision(st, 1, 6000, sd.MAIN_MODEL)
     assert plan.retry is False and "post a second summary" in plan.reason
 
 
 def test_a_clean_eof_without_complete_never_retries():
     st = _stream(*_event("started", {"session_id": "s"}))
-    plan = sd.retry_decision(st, 1, 6000)
+    plan = sd.retry_decision(st, 1, 6000, sd.MAIN_MODEL)
     assert plan.retry is False and "may still be running" in plan.reason
 
 
 def test_an_unrecognised_cause_stays_fail_fast():
-    plan = sd.retry_decision(_errored("401", "auth"), 1, 6000)
+    plan = sd.retry_decision(_errored("401", "auth"), 1, 6000, sd.MAIN_MODEL)
     assert plan.retry is False and "not a known model/provider fault" in plan.reason
 
 
 def test_a_retry_is_refused_below_the_wall_clock_floor():
     """Below the floor a second sandbox would be killed mid-review."""
-    plan = sd.retry_decision(_errored("429"), 1, 600)
+    plan = sd.retry_decision(_errored("429"), 1, 600, sd.MAIN_MODEL)
     assert plan.retry is False and "600s of the job budget remain" in plan.reason
-    assert sd.retry_decision(_errored("429"), 1, sd.RETRY_MIN_REMAINING_SECONDS).retry
+    assert sd.retry_decision(
+        _errored("429"), 1, sd.RETRY_MIN_REMAINING_SECONDS, sd.MAIN_MODEL
+    ).retry
 
 
 def test_every_refusal_says_why():
@@ -1105,7 +1107,7 @@ def test_every_refusal_says_why():
         (_completed("0.83"), 2, 6000),
         (_completed("0.83"), 1, 10),
     ):
-        plan = sd.retry_decision(st, attempt, left)
+        plan = sd.retry_decision(st, attempt, left, sd.attempt_model(attempt))
         assert plan.retry is False and plan.reason.strip()
 
 
@@ -1125,7 +1127,7 @@ def test_a_clean_completed_sandbox_that_said_nothing_retries_on_the_same_model()
     assert sd.sandbox_completed_cleanly(st) is True
     assert sd.sandbox_terminated_abnormally(st) is False  # why it never retried
 
-    plan = sd.retry_decision(st, 1, 6000)
+    plan = sd.retry_decision(st, 1, 6000, sd.MAIN_MODEL)
     assert plan.retry is True
     assert plan.model == sd.MAIN_MODEL != sd.RETRY_MAIN_MODEL
     assert "posted no verdict" in plan.reason and "same model" in plan.reason
@@ -1134,9 +1136,20 @@ def test_a_clean_completed_sandbox_that_said_nothing_retries_on_the_same_model()
 def test_the_same_model_retry_still_honours_the_shared_retry_bounds():
     """Constraint: an extra entry condition only — the knobs do not move."""
     st = _completed("1.0")
-    assert sd.retry_decision(st, sd.MAX_DISPATCH_ATTEMPTS, 6000).retry is False
-    assert sd.retry_decision(st, 1, sd.RETRY_MIN_REMAINING_SECONDS - 1).retry is False
-    assert sd.retry_decision(st, 1, sd.RETRY_MIN_REMAINING_SECONDS).retry is True
+    assert (
+        sd.retry_decision(st, sd.MAX_DISPATCH_ATTEMPTS, 6000, sd.MAIN_MODEL).retry
+        is False
+    )
+    assert (
+        sd.retry_decision(
+            st, 1, sd.RETRY_MIN_REMAINING_SECONDS - 1, sd.MAIN_MODEL
+        ).retry
+        is False
+    )
+    assert (
+        sd.retry_decision(st, 1, sd.RETRY_MIN_REMAINING_SECONDS, sd.MAIN_MODEL).retry
+        is True
+    )
 
 
 def test_a_complete_carrying_a_non_completed_status_is_not_the_clean_class():
@@ -1147,7 +1160,7 @@ def test_a_complete_carrying_a_non_completed_status_is_not_the_clean_class():
         )
     )
     assert sd.sandbox_completed_cleanly(st) is False
-    assert sd.retry_decision(st, 1, 6000).model == sd.RETRY_MAIN_MODEL
+    assert sd.retry_decision(st, 1, 6000, sd.MAIN_MODEL).model == sd.RETRY_MAIN_MODEL
 
 
 def test_a_terminal_complete_outranks_a_socket_death_on_the_way_out():
@@ -1155,7 +1168,7 @@ def test_a_terminal_complete_outranks_a_socket_death_on_the_way_out():
     make it live again, so this is still the silent-review class."""
     st = _completed("0.83")
     st.stream_error = "connection reset by peer"
-    plan = sd.retry_decision(st, 1, 6000)
+    plan = sd.retry_decision(st, 1, 6000, sd.MAIN_MODEL)
     assert plan.retry is True and plan.model == sd.MAIN_MODEL
 
 
@@ -1495,7 +1508,7 @@ def test_a_dropped_rpc_is_not_a_model_fault_and_used_to_fall_through():
 
 
 def test_a_dropped_rpc_retries_on_the_same_model():
-    plan = sd.retry_decision(_rpc_dropped(), 1, 6000)
+    plan = sd.retry_decision(_rpc_dropped(), 1, 6000, sd.MAIN_MODEL)
     assert plan.retry is True
     assert plan.model == sd.MAIN_MODEL != sd.RETRY_MAIN_MODEL
     assert "dropped RPC" in plan.reason and "same model" in plan.reason
@@ -1505,23 +1518,34 @@ def test_a_dropped_rpc_without_a_terminal_complete_is_the_same_class():
     """The other shape it arrives in: the error event and nothing after it."""
     st = _stream(*_event("error", {"code": "unknown", "message": _RPC_DROP}))
     assert st.completed is False and st.stream_error == ""
-    plan = sd.retry_decision(st, 1, 6000)
+    plan = sd.retry_decision(st, 1, 6000, sd.MAIN_MODEL)
     assert plan.retry is True and plan.model == sd.MAIN_MODEL
 
 
 def test_the_transport_retry_still_honours_the_shared_retry_bounds():
     """Constraint: an extra entry condition only — the knobs do not move."""
     st = _rpc_dropped()
-    assert sd.retry_decision(st, sd.MAX_DISPATCH_ATTEMPTS, 6000).retry is False
-    assert sd.retry_decision(st, 1, sd.RETRY_MIN_REMAINING_SECONDS - 1).retry is False
-    assert sd.retry_decision(st, 1, sd.RETRY_MIN_REMAINING_SECONDS).retry is True
+    assert (
+        sd.retry_decision(st, sd.MAX_DISPATCH_ATTEMPTS, 6000, sd.MAIN_MODEL).retry
+        is False
+    )
+    assert (
+        sd.retry_decision(
+            st, 1, sd.RETRY_MIN_REMAINING_SECONDS - 1, sd.MAIN_MODEL
+        ).retry
+        is False
+    )
+    assert (
+        sd.retry_decision(st, 1, sd.RETRY_MIN_REMAINING_SECONDS, sd.MAIN_MODEL).retry
+        is True
+    )
 
 
 def test_a_known_code_is_never_overridden_by_the_transport_patterns():
     """A code that carries information decides on its own, as everywhere else."""
     st = _stream(*_event("error", {"code": "401", "message": _RPC_DROP}))
     assert sd.is_transport_fault(st) is False
-    assert sd.retry_decision(st, 1, 6000).retry is False
+    assert sd.retry_decision(st, 1, 6000, sd.MAIN_MODEL).retry is False
 
 
 def test_a_dispatch_level_http_status_is_never_the_transport_class():
@@ -1531,12 +1555,15 @@ def test_a_dispatch_level_http_status_is_never_the_transport_class():
     st.err_code, st.err_msg = "http_504", f"HTTP 504 on dispatch POST: {_RPC_DROP}"
     assert sd.is_transport_fault(st) is False
     # And it keeps the model swap the http_ codespace already earned it.
-    assert sd.retry_decision(st, 1, 6000).model == sd.RETRY_MAIN_MODEL
+    assert sd.retry_decision(st, 1, 6000, sd.MAIN_MODEL).model == sd.RETRY_MAIN_MODEL
 
 
 def test_a_model_fault_still_swaps_the_model():
     """No regression on FND-641/FND-643: the two classes stay on their own axes."""
-    assert sd.retry_decision(_errored("429"), 1, 6000).model == sd.RETRY_MAIN_MODEL
+    assert (
+        sd.retry_decision(_errored("429"), 1, 6000, sd.MAIN_MODEL).model
+        == sd.RETRY_MAIN_MODEL
+    )
 
 
 def test_main_re_dispatches_a_dropped_rpc_on_the_same_model(
@@ -1594,7 +1621,7 @@ def test_a_sandbox_api_fault_is_not_a_model_fault_and_would_fall_through():
 
 
 def test_a_sandbox_api_fault_retries_on_the_same_model():
-    plan = sd.retry_decision(_sandbox_api_dead(), 1, 6000)
+    plan = sd.retry_decision(_sandbox_api_dead(), 1, 6000, sd.MAIN_MODEL)
     assert plan.retry is True
     assert plan.model == sd.MAIN_MODEL != sd.RETRY_MAIN_MODEL
     assert "sandbox-api" in plan.reason and "same model" in plan.reason
@@ -1604,13 +1631,74 @@ def test_an_internal_code_without_the_prefix_still_refuses_to_retry():
     """Keeps the class an allowlist: `internal` alone buys nothing."""
     st = _sandbox_api_dead("upstream model rejected the request")
     assert sd.is_sandbox_api_fault(st) is False
-    plan = sd.retry_decision(st, 1, 6000)
+    plan = sd.retry_decision(st, 1, 6000, sd.MAIN_MODEL)
     assert plan.retry is False and plan.model == ""
 
 
 def test_the_sandbox_api_retry_still_honours_the_shared_retry_bounds():
     """Constraint: an extra entry condition only — the knobs do not move."""
     st = _sandbox_api_dead()
-    assert sd.retry_decision(st, sd.MAX_DISPATCH_ATTEMPTS, 6000).retry is False
-    assert sd.retry_decision(st, 1, sd.RETRY_MIN_REMAINING_SECONDS - 1).retry is False
-    assert sd.retry_decision(st, 1, sd.RETRY_MIN_REMAINING_SECONDS).retry is True
+    assert (
+        sd.retry_decision(st, sd.MAX_DISPATCH_ATTEMPTS, 6000, sd.MAIN_MODEL).retry
+        is False
+    )
+    assert (
+        sd.retry_decision(
+            st, 1, sd.RETRY_MIN_REMAINING_SECONDS - 1, sd.MAIN_MODEL
+        ).retry
+        is False
+    )
+    assert (
+        sd.retry_decision(st, 1, sd.RETRY_MIN_REMAINING_SECONDS, sd.MAIN_MODEL).retry
+        is True
+    )
+
+
+def test_a_sandbox_api_fault_is_matched_anywhere_in_the_message():
+    """mothership does not deliver the message bare consistently.
+
+    The transport class on this lane exists because the provider text arrived
+    wrapped in a nested JSON blob, so anchoring this class to a prefix would
+    silently miss the same fault in the same envelope.
+    """
+    wrapped = (
+        '{"type":"error","message":"[sandbox-api/_execute_sync] generator '
+        "didn't stop after throw()\"}"
+    )
+    st = _sandbox_api_dead(wrapped)
+    assert sd.is_sandbox_api_fault(st) is True
+    assert sd.retry_decision(st, 1, 6000, sd.MAIN_MODEL).retry is True
+
+
+def test_this_lane_retries_a_sandbox_api_fault_that_billed():
+    """The deliberate divergence from the resolve lane's copy.
+
+    A second reviewer costs a duplicate comment that FND-636's dedupe collapses,
+    so this lane does not have to prove nothing ran before re-dispatching. The
+    resolve lane does, because a second resolver pushes commits.
+    """
+    st = _stream(
+        *_event("complete", {"status": "error", "cost_usd": "12.34"}),
+        *_event("error", {"code": "internal", "message": _SANDBOX_API_MASKED}),
+    )
+    assert sd.is_sandbox_api_fault(st) is True
+    assert sd.retry_decision(st, 1, 6000, sd.MAIN_MODEL).retry is True
+
+
+def test_the_same_model_is_the_one_that_RAN_not_the_one_attempt_n_implies():
+    """The invariant `RetryPlan` exists to hold, pinned on every same-model class.
+
+    `attempt_model(attempt)` answers "what attempt N would have run by default",
+    which stops being the same answer the moment a same-model retry has
+    happened. A model that is neither MAIN_MODEL nor RETRY_MAIN_MODEL proves the
+    plan reports what actually ran rather than re-deriving it.
+    """
+    ran = "some/other-model"
+    for st in (
+        _sandbox_api_dead(),
+        _rpc_dropped(),
+        _completed("0.83"),
+    ):
+        plan = sd.retry_decision(st, 1, 6000, ran)
+        assert plan.retry is True
+        assert plan.model == ran, plan.reason
