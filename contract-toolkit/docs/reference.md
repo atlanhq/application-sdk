@@ -164,6 +164,273 @@ entrypoint renders its own manifest.
 See [`examples/scheduled/`](../examples/scheduled/) for a full worked example.
 (Same field/behaviour exists on the legacy `NativeApp.pkl`.)
 
+### Artifact Schemas (data hand-off declarations)
+
+Data crosses app boundaries as files: a connector writes NDJSON entities the publish
+app reads, a miner writes partitioned parquet a parser reads. At each hand-off the
+producer's idea of the artifact's shape and the consumer's idea of it are independent
+beliefs, and nothing checks that they agree. A production RCA traced a 73-day frozen
+lineage marker to one column that had become a string where the consumer expected a
+timestamp — every workflow in the chain reported success throughout.
+
+`artifactSchemas` is where an app declares those shapes. The toolkit renders them to
+`app/generated/artifact_schemas.json`; the SDK checks the real artifact against the
+declaration at the hand-off (see ADR-0020 in the SDK repo).
+
+**The toolkit is transport, not owner.** Every field is authored by the app, the SDK
+ships no field list, and the artifact is per-app. What the toolkit owns is the *type
+vocabulary* and the file shape — nothing in `src/` names a column.
+
+Default is empty, and an app that declares nothing generates **byte-identical** output
+to before this block existed, so adoption is per-app and per-entrypoint.
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `artifactSchemas` | `Mapping<ContractFieldName, ArtifactSchema>` | `new Mapping {}` | Declared shapes for this entrypoint's artifacts, keyed by contract field name. Rendered to `app/generated/artifact_schemas.json` when non-empty; no file at all when empty. |
+
+**Keys are contract field names, never paths.** A key is the name of a `FileReference`
+field on this entrypoint's input or output contract model — a Python identifier,
+validated at eval time. The runtime resolves a declaration from the contract field it
+is materialising, so nothing is inferred from the shape of a storage path. (Path-shape
+inference is what let an earlier upload-time hook match nothing and silently validate
+zero records; a key like `"artifacts/raw/*.parquet"` fails generation.)
+
+**Inputs are declarable too.** For a cross-app hand-off the **consumer** declares what
+it requires of its input, and the producer references the consumer's published
+declaration by pinned version rather than re-authoring the field list. Ownership stays
+with the consumer.
+
+**`ArtifactSchema`:**
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `format` | `ArtifactFormat` | — | `"ndjson"` or `"parquet"`. No default: each format has its own validator with its own cost and dependency floor, and the answer is not derivable from the contract field. This is the *content* format — SDK NDJSON artifacts conventionally carry a `.json` suffix and are still `"ndjson"`. |
+| `fields` | `Listing<ArtifactField>` | — | Declared fields. Must be **non-empty** and names must be **distinct**, both enforced at eval time. A zero-field schema reports as declared while asserting nothing; a duplicate name would silently collapse to one assertion. |
+| `description` | String? | null | What this artifact is. Free-form, never asserted; omitted from the output when unset. |
+
+**`ArtifactField`:**
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `name` | `ArtifactFieldPath` | — | Path to the field within a record, built from two step kinds: `.name` descends into a container's named member (`"a.b"`), `[]` descends into an array's element (`"tags[]"`, `"columns[].name"`). Empty segments (`".a"`, `"a."`, `"a..b"`) and malformed brackets (`"[]"`, `"a["`, `"a[0]"`) fail generation. |
+| `type` | `ArtifactFieldTypeExtended` | `"any"` | Logical type asserted for this field. |
+| `required` | Boolean | `true` | Whether the field must be present in every record / in the parquet schema. Always rendered. |
+| `description` | String (non-empty) | — | **Required.** What the field carries and what the consumer expects of it. Never asserted at runtime — it is documentation, enforced at authoring time, and always present in the output. |
+
+#### The logical-type vocabulary
+
+Two typealiases, the second layering additively on the first, so the base stays a
+guaranteed floor while extension members can be declared before every validator
+supports them:
+
+```pkl
+/// Types every validator must map, for every format. The stable floor.
+typealias ArtifactFieldType =
+  "string"|"int"|"float"|"bool"|"timestamp"|"date"|"json"|"any"
+
+/// Additive extension. A member here may resolve to "unsupported for this
+/// format" without widening the floor above.
+typealias ArtifactFieldTypeExtended =
+  ArtifactFieldType|"decimal"|"binary"|"time"|"array"|"struct"|"map"
+```
+
+Field declarations use `ArtifactFieldTypeExtended`. The vocabulary is *logical*, not
+physical — one member covers several physical encodings.
+
+| Logical | parquet / arrow | NDJSON / JSON |
+|---|---|---|
+| `string` | `string`, `large_string` | JSON string |
+| `int` | any `int*` / `uint*` | JSON number, integral |
+| `float` | `float*`, `double` | JSON number |
+| `decimal` | `decimal128`, `decimal256` | JSON number **or** string (both lossless carriers) |
+| `bool` | `bool` | JSON `true`/`false` |
+| `timestamp` | `timestamp[*]` — **any unit, tz-aware or not** | ISO-8601 string or epoch number |
+| `date` | `date32`, `date64` | ISO-8601 date string |
+| `time` | `time32`, `time64` | ISO-8601 time string |
+| `binary` | `binary`, `large_binary`, `fixed_size_binary` | base64 string |
+| `json` | `string` whose content parses as JSON | nested object/array, or a JSON-in-string |
+| `array` | `list`, `large_list`, `fixed_size_list` | JSON array |
+| `struct` | `struct` | JSON object |
+| `map` | `map` | JSON object |
+| `any` | any type | any type |
+
+#### Why `description` is required on every field
+
+A declaration is read by whoever is debugging the hand-off that just failed. A bare
+`name` + `type` pair states the assertion but not why it holds — and there are two
+cases where the pair states almost nothing on its own: a `type = "any"` field, whose
+description is the only place it can say what it carries, and a `required = false`
+field, whose description is the only place it can say *when* it appears. A field with
+no description also cannot be reviewed: a reviewer sees `"YEAR": "int"` and has no way
+to tell a considered assertion from a guess.
+
+Generation refuses a missing or empty description, naming the field. `description` is
+therefore always present in the generated artifact, so a consumer never branches on it.
+The schema-level `description` stays optional.
+
+The load-bearing row is `timestamp`: arrow `timestamp[*]` satisfies it at any unit,
+tz-aware or not, and arrow `string` does **not**. That single asymmetry is the check
+the RCA above needed. `json` exists so a parquet column that is physically a string
+but semantically a JSON blob keeps its own check. `any` means "must be present, type
+not asserted" — declare it rather than inventing a wrong type to satisfy the enum.
+
+#### Nesting
+
+Nested payloads are declared as **paths plus a container type**, not a recursive type
+grammar. There are two step kinds:
+
+| Step | Means | Example |
+|---|---|---|
+| `.name` | descend into a container's named member | `attributes` (`struct`) → `attributes.name` (`string`) |
+| `[]` | descend into an array's **element** | `columns` (`array`) → `columns[]` (`struct`) → `columns[].name` (`string`) |
+
+An array of scalars carries a leaf type on the element step instead of a struct:
+`tags` as `array`, `tags[]` as `string`.
+
+`[]` is the explicit "descend into the list" step precisely because the physical
+encoding is not. Parquet spells the same leaf `columns.list.element.name` under the
+3-level list encoding and `columns.bag.array.name` under the legacy 2-level one, so a
+declaration written in physical terms would be pinned to an encoding the producer can
+change without telling anyone. `[]` says what is *meant*; each validator resolves it
+for its own format.
+
+On an element path, **`required` reads per element**: `columns[].name` required means
+every element must carry `name`, and an empty array satisfies it vacuously. Declaring
+the array itself `required = false` is the separate statement that the array may be
+absent entirely.
+
+**Every path prefix must itself be declared, with a container type that can hold what
+the path descends into.** Declaring `attributes.name` while leaving `attributes`
+undeclared fails generation — it would drop exactly the check that catches a producer
+which flattened the struct away, since the leaf assertion can still pass against a
+flattened record. Declaring `attributes` as `string` alongside `attributes.name` fails
+too: that is a contradiction the validator would otherwise have to resolve by guessing.
+A `.name` step needs its container declared `struct`/`map`/`json`/`any`; an `[]` step
+needs `array`/`any`.
+
+Index selection (`columns[0]`) is rejected by the grammar: a schema describes every
+element, not one of them.
+
+Deeply-nested cases with thousands of properties are not declared here at all — the
+SDK's model-backed schema source delegates to the executable model instead.
+
+```pkl
+artifactSchemas {
+  ["raw_queries"] = new ArtifactSchema {
+    format = "parquet"
+    description = "Query-history rows written for the downstream parser."
+    fields {
+      new ArtifactField {
+        name = "QUERY_ID"
+        type = "string"
+        description = "Warehouse-assigned query id. The parser's join key."
+      }
+      new ArtifactField {
+        name = "START_TIME"
+        type = "timestamp"
+        description = "When the query began executing."
+      }
+      new ArtifactField {
+        name = "CREDITS_USED"
+        type = "float"
+        required = false
+        description = "Compute credits billed. Absent on warehouses that do not meter per query."
+      }
+    }
+  }
+  ["transformed_entities"] = new ArtifactSchema {
+    format = "ndjson"
+    fields {
+      new ArtifactField {
+        name = "typeName"
+        type = "string"
+        description = "Atlan type this record instantiates. Publish routes on it."
+      }
+      new ArtifactField {
+        name = "attributes"
+        type = "struct"
+        description = "Container for the entity's attributes."
+      }
+      new ArtifactField {
+        name = "attributes.qualifiedName"
+        type = "string"
+        description = "Stable identity of the entity. Publish upserts on it."
+      }
+      new ArtifactField {
+        name = "attributes.columns"
+        type = "array"
+        required = false
+        description = "Child columns carried inline. Absent for types that have none."
+      }
+      new ArtifactField {
+        name = "attributes.columns[]"
+        type = "struct"
+        description = "One column."
+      }
+      new ArtifactField {
+        name = "attributes.columns[].name"
+        type = "string"
+        description = "Column name as it appears in the source."
+      }
+    }
+  }
+}
+```
+→ generated `app/generated/artifact_schemas.json`:
+```jsonc
+{
+  "version": 1,
+  "schemas": {
+    "raw_queries": {
+      "format": "parquet",
+      "description": "Query-history rows written for the downstream parser.",
+      "fields": [
+        { "name": "QUERY_ID",     "type": "string",    "required": true,  "description": "Warehouse-assigned query id. The parser's join key." },
+        { "name": "START_TIME",   "type": "timestamp", "required": true,  "description": "When the query began executing." },
+        { "name": "CREDITS_USED", "type": "float",     "required": false, "description": "Compute credits billed. Absent on warehouses that do not meter per query." }
+      ]
+    },
+    "transformed_entities": {
+      "format": "ndjson",
+      "fields": [
+        { "name": "typeName",                 "type": "string", "required": true,  "description": "Atlan type this record instantiates. Publish routes on it." },
+        { "name": "attributes",               "type": "struct", "required": true,  "description": "Container for the entity's attributes." },
+        { "name": "attributes.qualifiedName", "type": "string", "required": true,  "description": "Stable identity of the entity. Publish upserts on it." },
+        { "name": "attributes.columns",       "type": "array",  "required": false, "description": "Child columns carried inline. Absent for types that have none." },
+        { "name": "attributes.columns[]",     "type": "struct", "required": true,  "description": "One column." },
+        { "name": "attributes.columns[].name","type": "string", "required": true,  "description": "Column name as it appears in the source." }
+      ]
+    }
+  }
+}
+```
+
+`version` is the envelope version of the file shape, read by the SDK loader. It is
+bumped only on a breaking change to the file's structure — not when an app edits its
+own declarations.
+
+**Placement:** `artifactSchemas` is a per-entrypoint property, exactly like `pipeline` /
+`uiConfig` / `schedules`. A single-entrypoint app declares it at the top level and the
+file lands at `app/generated/artifact_schemas.json`. A **multi-entrypoint** app declares
+it on each [entrypoint's `contract`](#multi-entrypoint-apps), and each entrypoint's file
+is re-exported to `app/generated/{entrypoint}/artifact_schemas.json` by the standard
+re-export path — no bundle-specific wiring. The entrypoint dimension is therefore the
+file's *location*, and the keys inside the file stay contract field names, so nothing
+has to be re-keyed on relocation.
+
+Declaring `artifactSchemas` on a **bundle root** is a generation error. The root has no
+contract model of its own, so a key there could not name a real `FileReference` field,
+and the shared file it would emit could be picked up as a fallback for an entrypoint
+that declares nothing — checking the wrong declarations silently. Two entrypoints that
+genuinely share an artifact assign one shared `ArtifactSchema` value into both contracts.
+
+Unlike the workflow config and manifest, this file does **not** depend on `uiConfig`: a
+declaration describes data hand-offs, which an app has whether or not it renders a setup
+form.
+
+See [`examples/artifact-schemas/`](../examples/artifact-schemas/) for a full worked
+example. Not available on the legacy `NativeApp.pkl`.
+
 ### E2E Test Harness
 
 These fields are emitted into `app/generated/_e2e_base.py` and are required by `BaseE2ETest` / `SQLAppE2ETest`. The defaults are derived from `name`; 95% of connectors never need to override them.
@@ -2900,6 +3167,43 @@ class AppInputContract(ExtractionInput):
   `{"catalog": {"db": {}}}` to the existing filter map shape
   `{"catalog": ["db"]}` before validation.
 - Publish fields simplified: `publish_dry_run` replaces the loader-specific fields
+
+---
+
+### Artifact Schemas (`app/generated/artifact_schemas.json`)
+
+Emitted **only** when the contract declares a non-empty `artifactSchemas` block — an
+app that declares nothing produces no such file. Independent of `uiConfig`. In a
+multi-entrypoint app each entrypoint's copy lands at
+`app/generated/{entrypoint}/artifact_schemas.json`.
+
+```json
+{
+  "version": 1,
+  "schemas": {
+    "raw_queries": {
+      "format": "parquet",
+      "description": "Query-history rows written for the downstream parser.",
+      "fields": [
+        { "name": "QUERY_ID", "type": "string", "required": true, "description": "Warehouse-assigned query id. The parser's join key." },
+        { "name": "START_TIME", "type": "timestamp", "required": true, "description": "When the query began executing." },
+        { "name": "CREDITS_USED", "type": "float", "required": false, "description": "Compute credits billed. Absent on warehouses that do not meter per query." }
+      ]
+    }
+  }
+}
+```
+
+- `version` — envelope version of the file shape, read by the SDK loader. Bumped only
+  on a breaking structural change, never when an app edits its own declarations.
+- `schemas` keys — contract field names (a `FileReference` field on the entrypoint's
+  input/output model), never storage paths.
+- `description` — required and non-empty on every field, so always present. The
+  schema-level `description` is optional and omitted when unset.
+- `required` — always emitted, defaulting to `true`.
+
+See [Artifact Schemas (data hand-off declarations)](#artifact-schemas-data-hand-off-declarations)
+for the type vocabulary and the per-format mapping.
 
 ---
 

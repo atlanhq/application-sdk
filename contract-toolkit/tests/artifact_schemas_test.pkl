@@ -1,0 +1,407 @@
+// Tests for artifact schema declarations (ADR-0020, FND-685).
+//
+// `artifactSchemas` is the declaration home for the shape of the files an app
+// hands off. The toolkit is transport, not owner: it fixes the type vocabulary
+// and the file shape, and every field is authored by the app.
+//
+// The load-bearing behaviours asserted here:
+//   - an app that declares nothing emits NO `artifact_schemas.json`, so adopting
+//     the block is opt-in and existing consumer repos see no spurious diff.
+//   - declarations are keyed by contract field name, never by path shape.
+//   - nesting stays flat: a container declaration plus leaf paths, with `[]` as the
+//     "descend into the list" step, so arrays of structs are expressible without a
+//     recursive type grammar. (The refusals for an undeclared or wrongly-typed
+//     container live in scripts/check-invariants.sh.)
+//   - a bundle relocates each entrypoint's declarations under
+//     `app/generated/{entrypoint}/` with no bundle-specific wiring.
+
+amends "pkl:test"
+
+import "pkl:json"
+import "../examples/artifact-schemas/app.pkl" as artifactSchemasApp
+import "../examples/minimal/app.pkl" as minimalApp
+import "../src/App.pkl" as App
+
+local parser = new json.Parser { useMapping = true }
+
+local exampleFiles = artifactSchemasApp.output.files
+local exampleSchemas = parser.parse(
+  exampleFiles["app/generated/artifact_schemas.json"].text
+)
+
+// ── Defaults: a field declared with nothing but a name ────────────────────────
+
+local defaultsApp = (App) {
+  name = "defaults-app"
+  displayName = "Defaults App"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  pipeline { publish = null }
+
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Configuration"] {
+        inputs {
+          ["target"] = new App.TextInput { title = "Target"; placeholderText = "x" }
+        }
+      }
+    }
+  }
+
+  artifactSchemas {
+    ["bare"] = new App.ArtifactSchema {
+      format = "ndjson"
+      fields {
+        // `description` is the only property with no default — everything else
+        // here is exercising the defaults.
+        new App.ArtifactField {
+          name = "only_field"
+          description = "The one field, declared with nothing but a name."
+        }
+      }
+    }
+  }
+}
+
+local defaultsSchemas = parser.parse(
+  defaultsApp.output.files["app/generated/artifact_schemas.json"].text
+)
+
+// ── An app with no declarations (the byte-identical guarantee) ─────────────────
+
+local noSchemasApp = (App) {
+  name = "no-schemas-app"
+  displayName = "No Schemas App"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  pipeline { publish = null }
+
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Configuration"] {
+        inputs {
+          ["target"] = new App.TextInput { title = "Target"; placeholderText = "x" }
+        }
+      }
+    }
+  }
+}
+
+// ── Bundle mode: per-entrypoint relocation, plus a bundle-level declaration ────
+
+local bundleUiConfig = new App.UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["target"] = new App.TextInput { title = "Target"; placeholderText = "x" }
+      }
+    }
+  }
+}
+
+local bundleCrawlerContract = (App) {
+  name = "crawler"
+  displayName = "Crawler"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  uiConfig = bundleUiConfig
+  pipeline { publish = null }
+
+  artifactSchemas {
+    ["transformed_entities"] = new App.ArtifactSchema {
+      format = "ndjson"
+      fields {
+        new App.ArtifactField { name = "typeName"; type = "string"; description = "Atlan type this record instantiates." }
+      }
+    }
+  }
+}
+
+local bundleMinerContract = (App) {
+  name = "miner"
+  displayName = "Query Miner"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  uiConfig = bundleUiConfig
+  pipeline { publish = null }
+
+  artifactSchemas {
+    ["raw_queries"] = new App.ArtifactSchema {
+      format = "parquet"
+      fields {
+        new App.ArtifactField { name = "START_TIME"; type = "timestamp"; description = "When the query began executing." }
+      }
+    }
+  }
+}
+
+local bundleApp = (App) {
+  name = "schema-bundle"
+  displayName = "Schema Bundle"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  entrypoints {
+    new App.Entrypoint {
+      name = "crawler"
+      displayName = "Crawler"
+      contract = bundleCrawlerContract
+    }
+    new App.Entrypoint {
+      name = "miner"
+      displayName = "Query Miner"
+      contract = bundleMinerContract
+    }
+  }
+}
+
+local bundleFiles = bundleApp.output.files
+
+local bundleMinerSchemas = parser.parse(
+  bundleFiles["app/generated/miner/artifact_schemas.json"].text
+)
+
+// A bundle whose entrypoints declare nothing must not gain the artifact either.
+local bareBundleApp = (App) {
+  name = "bare-bundle"
+  displayName = "Bare Bundle"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  entrypoints {
+    new App.Entrypoint {
+      name = "crawler"
+      displayName = "Crawler"
+      contract = (bundleCrawlerContract) { artifactSchemas = new Mapping {} }
+    }
+  }
+}
+
+// ── Extension types: declarable before every validator supports them ──────────
+
+local extendedApp = (App) {
+  name = "extended-app"
+  displayName = "Extended App"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  uiConfig = bundleUiConfig
+
+  artifactSchemas {
+    ["wide"] = new App.ArtifactSchema {
+      format = "parquet"
+      fields {
+        new App.ArtifactField { name = "amount"; type = "decimal"; description = "An extension-typed decimal field." }
+        new App.ArtifactField { name = "payload"; type = "binary"; description = "An extension-typed binary field." }
+        new App.ArtifactField { name = "run_at"; type = "time"; description = "An extension-typed time field." }
+        new App.ArtifactField { name = "tags"; type = "array"; description = "An extension-typed array field." }
+        new App.ArtifactField { name = "attributes"; type = "struct"; description = "An extension-typed struct field." }
+        new App.ArtifactField { name = "labels"; type = "map"; description = "An extension-typed map field." }
+      }
+    }
+  }
+}
+
+local extendedSchemas = parser.parse(
+  extendedApp.output.files["app/generated/artifact_schemas.json"].text
+)
+
+// ── Element paths: arrays of structs, and scalar arrays ───────────────────────
+
+local arraysApp = (App) {
+  name = "arrays-app"
+  displayName = "Arrays App"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  uiConfig = bundleUiConfig
+
+  artifactSchemas {
+    ["entities"] = new App.ArtifactSchema {
+      format = "ndjson"
+      fields {
+        new App.ArtifactField {
+          name = "columns"
+          type = "array"
+          description = "Child columns carried inline."
+        }
+        new App.ArtifactField {
+          name = "columns[]"
+          type = "struct"
+          description = "One column."
+        }
+        new App.ArtifactField {
+          name = "columns[].name"
+          type = "string"
+          description = "Column name."
+        }
+        new App.ArtifactField {
+          name = "columns[].order"
+          type = "int"
+          required = false
+          description = "Ordinal position, when the source exposes one."
+        }
+        new App.ArtifactField {
+          name = "tags"
+          type = "array"
+          description = "Source-side tags."
+        }
+        new App.ArtifactField {
+          name = "tags[]"
+          type = "string"
+          description = "One tag. Elements are plain strings."
+        }
+      }
+    }
+  }
+}
+
+local arraysSchemas = parser.parse(
+  arraysApp.output.files["app/generated/artifact_schemas.json"].text
+)
+
+local arraysFields = arraysSchemas["schemas"]["entities"]["fields"]
+
+facts {
+  // ── Opt-in: no declaration, no artifact ────────────────────────────────────
+  ["an app that declares nothing emits no artifact_schemas.json"] {
+    !noSchemasApp.output.files.containsKey("app/generated/artifact_schemas.json")
+  }
+
+  // The committed `minimal` example is the regression guard for the fleet-wide
+  // byte-identical requirement: every existing example predates this block.
+  ["the minimal example is unchanged by the block existing"] {
+    !minimalApp.output.files.containsKey("app/generated/artifact_schemas.json")
+  }
+
+  ["a bundle whose entrypoints declare nothing emits no artifact_schemas.json"] {
+    !bareBundleApp.output.files.containsKey("app/generated/artifact_schemas.json")
+    !bareBundleApp.output.files.containsKey("app/generated/crawler/artifact_schemas.json")
+  }
+
+  // ── Envelope ───────────────────────────────────────────────────────────────
+  ["the artifact carries a version envelope and a schemas map"] {
+    exampleSchemas["version"] == 1
+    exampleSchemas.containsKey("schemas")
+  }
+
+  // ── Keying: contract field names, never path shapes ────────────────────────
+  ["declarations are keyed by output-contract field name"] {
+    exampleSchemas["schemas"].keys == Set("raw_queries", "transformed_entities", "upstream_lineage")
+  }
+
+  // ── Field rendering ────────────────────────────────────────────────────────
+  ["a parquet declaration renders format, description and ordered fields"] {
+    exampleSchemas["schemas"]["raw_queries"]["format"] == "parquet"
+    exampleSchemas["schemas"]["raw_queries"]["description"] ==
+      "Query-history rows written for the downstream parser."
+    exampleSchemas["schemas"]["raw_queries"]["fields"].length == 6
+    exampleSchemas["schemas"]["raw_queries"]["fields"][0]["name"] == "QUERY_ID"
+    exampleSchemas["schemas"]["raw_queries"]["fields"][0]["type"] == "string"
+  }
+
+  // The one asymmetry the capability exists to assert: a timestamp column must
+  // survive the declaration as `timestamp`, never collapse to `string`.
+  ["a timestamp field is declared as timestamp, not string"] {
+    exampleSchemas["schemas"]["raw_queries"]["fields"][1]["name"] == "START_TIME"
+    exampleSchemas["schemas"]["raw_queries"]["fields"][1]["type"] == "timestamp"
+  }
+
+  ["required defaults to true and is always rendered"] {
+    exampleSchemas["schemas"]["raw_queries"]["fields"][0]["required"] == true
+    exampleSchemas["schemas"]["raw_queries"]["fields"][2]["required"] == false
+    defaultsSchemas["schemas"]["bare"]["fields"][0]["required"] == true
+  }
+
+  ["type defaults to any — presence asserted, type not"] {
+    defaultsSchemas["schemas"]["bare"]["fields"][0]["type"] == "any"
+  }
+
+  // Schema-level description stays optional and is omitted when unset. Field-level
+  // description is REQUIRED and non-empty, so it is always present — a consumer
+  // reading the artifact never has to branch on it, and a field can never state an
+  // assertion without stating why it holds. (The refusals for a missing or empty
+  // field description live in scripts/check-invariants.sh, since facts cannot
+  // express "eval fails".)
+  ["schema description is omitted when unset; field description is always present"] {
+    !defaultsSchemas["schemas"]["bare"].containsKey("description")
+    defaultsSchemas["schemas"]["bare"]["fields"][0]["description"] ==
+      "The one field, declared with nothing but a name."
+    exampleSchemas["schemas"]["raw_queries"]["fields"].toList().every((f) ->
+      !(f["description"] as String).isEmpty
+    )
+  }
+
+  // ── Nesting: dotted paths plus a container type, no recursive grammar ──────
+  ["nested payloads render as dotted paths alongside a container type"] {
+    exampleSchemas["schemas"]["transformed_entities"]["fields"][1]["name"] == "attributes"
+    exampleSchemas["schemas"]["transformed_entities"]["fields"][1]["type"] == "struct"
+    exampleSchemas["schemas"]["transformed_entities"]["fields"][2]["name"] == "attributes.qualifiedName"
+    exampleSchemas["schemas"]["transformed_entities"]["fields"][2]["type"] == "string"
+  }
+
+  // ── The consumer owns the declaration, so inputs are declarable too ────────
+  ["an input artifact is declared the same way as an output"] {
+    exampleSchemas["schemas"]["upstream_lineage"]["format"] == "ndjson"
+    exampleSchemas["schemas"]["upstream_lineage"]["fields"].length == 3
+  }
+
+  // ── Extension vocabulary ───────────────────────────────────────────────────
+  ["extension types are declarable without widening the floor"] {
+    extendedSchemas["schemas"]["wide"]["fields"].toList().map((f) -> f["type"]) ==
+      List("decimal", "binary", "time", "array", "struct", "map")
+  }
+
+  // ── Element paths ──────────────────────────────────────────────────────────
+  // An array of structs is three declarations, not a recursive grammar: the array,
+  // its element, and each leaf under the element.
+  ["an array of structs is declared as array + element + leaves"] {
+    arraysFields.toList().map((f) -> f["name"]) == List(
+      "columns", "columns[]", "columns[].name", "columns[].order", "tags", "tags[]"
+    )
+    arraysFields[0]["type"] == "array"
+    arraysFields[1]["type"] == "struct"
+    arraysFields[2]["type"] == "string"
+  }
+
+  // A scalar array carries a leaf type on the element step rather than a struct —
+  // the case an `elementType` property would have handled, expressed with the same
+  // mechanism as everything else.
+  ["a scalar array carries its element type on the [] step"] {
+    arraysFields[4]["name"] == "tags"
+    arraysFields[4]["type"] == "array"
+    arraysFields[5]["name"] == "tags[]"
+    arraysFields[5]["type"] == "string"
+  }
+
+  // `required` is per element on an element path, so it renders exactly as declared
+  // and the validator (not the toolkit) owns the vacuous-on-empty-array reading.
+  ["required renders per element on an element path"] {
+    arraysFields[2]["required"] == true
+    arraysFields[3]["required"] == false
+  }
+
+  // The committed example carries the same shape, so step 3's fixture exercises it.
+  ["the example fixture declares an array of structs"] {
+    exampleSchemas["schemas"]["transformed_entities"]["fields"].toList()
+      .map((f) -> f["name"]).contains("attributes.columns[].name")
+  }
+
+  // ── Bundle relocation ──────────────────────────────────────────────────────
+  ["a bundle relocates each entrypoint's declarations under its own subfolder"] {
+    bundleFiles.containsKey("app/generated/crawler/artifact_schemas.json")
+    bundleFiles.containsKey("app/generated/miner/artifact_schemas.json")
+  }
+
+  // The entrypoint dimension is the file's location; the key inside the file
+  // stays the contract field name, so nothing has to re-key on relocation.
+  ["relocated declarations keep contract-field keys, not entrypoint keys"] {
+    bundleMinerSchemas["schemas"].keys == Set("raw_queries")
+    bundleMinerSchemas["schemas"]["raw_queries"]["fields"][0]["type"] == "timestamp"
+  }
+
+  // A bundle root emits no shared file that could shadow the per-entrypoint ones.
+  // (Declaring `artifactSchemas` on a bundle root is a generation error — asserted
+  // in scripts/check-invariants.sh, since facts cannot express "eval fails".)
+  ["a bundle root emits no shared artifact_schemas.json"] {
+    !bundleFiles.containsKey("app/generated/artifact_schemas.json")
+  }
+}

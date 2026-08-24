@@ -260,6 +260,246 @@ uiConfig = new Config.UIConfig {
 }'
 
 # --------------------------------------------------------------------------
+# 9. artifactSchemas (ADR-0020): the three declarations that must fail to
+#    generate rather than render a declaration that checks nothing.
+#
+#    - A path/prefix/glob key. Declarations are keyed by the contract field the
+#      runtime is materialising; path-shape inference is what let the earlier
+#      upload-time hook match nothing and validate zero records.
+#    - An empty `fields` listing. Reports as declared, asserts nothing — the
+#      "looks adopted, validates nothing" state the capability exists to remove.
+#    - Duplicate field names within a schema, which would silently collapse to
+#      one assertion.
+#
+#    Asserted here rather than in pkl test because facts cannot express
+#    "eval fails".
+# --------------------------------------------------------------------------
+echo ":: Checking artifactSchemas invariants..."
+
+# $1 = artifactSchemas block body
+artifact_schemas_body() {
+  cat <<PKLEOF
+amends "src/App.pkl"
+
+name = "artifact-schemas-invariant-app"
+displayName = "Artifact Schemas Invariant App"
+icon = "https://example.com/icon.svg"
+hasCredentialConfig = false
+pipeline { publish = null }
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs { ["target"] = new TextInput { title = "Target"; placeholderText = "x" } }
+    }
+  }
+}
+
+artifactSchemas {
+$1
+}
+PKLEOF
+}
+
+check_artifact_schemas() {
+  local label="$1" expected="$2" body="$3"
+  local contract out_dir err
+  contract="$(mktemp "$REPO_ROOT/test-artifact-schemas-XXXXXX.pkl")"
+  out_dir="$(mktemp -d "$REPO_ROOT/test-artifact-schemas-out-XXXXXX")"
+  printf '%s\n' "$body" > "$contract"
+  err="$(pkl eval -m "$out_dir" "$contract" 2>&1 || true)"
+  rm -f "$contract"
+  rm -rf "$out_dir"
+  if ! echo "$err" | grep -q "$expected"; then
+    echo "FAIL: artifactSchemas invariant did not fire for $label"
+    echo "  Got: $err"
+    fail=1
+  fi
+}
+
+check_artifact_schemas "path-shaped key" 'A-Za-z_' "$(artifact_schemas_body '  ["artifacts/raw/*.parquet"] = new ArtifactSchema {
+    format = "parquet"
+    fields { new ArtifactField { name = "QUERY_ID"; type = "string"; description = "d" } }
+  }')"
+
+check_artifact_schemas "empty fields" 'isEmpty' "$(artifact_schemas_body '  ["raw_queries"] = new ArtifactSchema {
+    format = "parquet"
+    fields {}
+  }')"
+
+check_artifact_schemas "duplicate field names" 'isDistinct' "$(artifact_schemas_body '  ["raw_queries"] = new ArtifactSchema {
+    format = "parquet"
+    fields {
+      new ArtifactField { name = "QUERY_ID"; type = "string"; description = "d" }
+      new ArtifactField { name = "QUERY_ID"; type = "int"; description = "d" }
+    }
+  }')"
+
+# Control: the same contract with a valid declaration must generate cleanly, and
+# must actually emit the artifact. Without this, a check that always errors (for
+# any reason) would pass the three assertions above and prove nothing.
+echo ":: Checking a valid artifactSchemas declaration still generates (control)..."
+AS_CTRL_CONTRACT="$(mktemp "$REPO_ROOT/test-artifact-schemas-ctrl-XXXXXX.pkl")"
+AS_CTRL_OUT="$(mktemp -d "$REPO_ROOT/test-artifact-schemas-ctrl-out-XXXXXX")"
+artifact_schemas_body '  ["raw_queries"] = new ArtifactSchema {
+    format = "parquet"
+    fields { new ArtifactField { name = "START_TIME"; type = "timestamp"; description = "d" } }
+  }' > "$AS_CTRL_CONTRACT"
+AS_CTRL_ERR="$(pkl eval -m "$AS_CTRL_OUT" "$AS_CTRL_CONTRACT" 2>&1 || true)"
+if echo "$AS_CTRL_ERR" | grep -q "Pkl Error"; then
+  echo "FAIL: control contract with a valid artifactSchemas declaration failed to generate"
+  echo "  Got: $AS_CTRL_ERR"
+  fail=1
+elif [ ! -f "$AS_CTRL_OUT/app/generated/artifact_schemas.json" ]; then
+  echo "FAIL: control contract generated no app/generated/artifact_schemas.json"
+  fail=1
+fi
+rm -f "$AS_CTRL_CONTRACT"
+rm -rf "$AS_CTRL_OUT"
+
+check_artifact_schemas "missing field description" '`description` is required' "$(artifact_schemas_body '  ["raw_queries"] = new ArtifactSchema {
+    format = "parquet"
+    fields { new ArtifactField { name = "START_TIME"; type = "timestamp" } }
+  }')"
+
+check_artifact_schemas "empty field description" 'isEmpty' "$(artifact_schemas_body '  ["raw_queries"] = new ArtifactSchema {
+    format = "parquet"
+    fields { new ArtifactField { name = "START_TIME"; type = "timestamp"; description = "" } }
+  }')"
+
+# A nested path whose container is undeclared drops exactly the check that catches a
+# producer which flattened the container away — the leaf assertion can still pass
+# against a flattened record. And a container declared with a scalar type is a
+# contradiction the validator would have to resolve by guessing.
+check_artifact_schemas "nested path with undeclared container" 'without their container' "$(artifact_schemas_body '  ["raw_queries"] = new ArtifactSchema {
+    format = "ndjson"
+    fields { new ArtifactField { name = "attributes.name"; type = "string"; description = "d" } }
+  }')"
+
+check_artifact_schemas "element path with undeclared element" 'without their container' "$(artifact_schemas_body '  ["raw_queries"] = new ArtifactSchema {
+    format = "ndjson"
+    fields {
+      new ArtifactField { name = "columns"; type = "array"; description = "d" }
+      new ArtifactField { name = "columns[].name"; type = "string"; description = "d" }
+    }
+  }')"
+
+check_artifact_schemas "named-member step into a scalar container" 'descends into' "$(artifact_schemas_body '  ["raw_queries"] = new ArtifactSchema {
+    format = "ndjson"
+    fields {
+      new ArtifactField { name = "attributes"; type = "string"; description = "d" }
+      new ArtifactField { name = "attributes.name"; type = "string"; description = "d" }
+    }
+  }')"
+
+check_artifact_schemas "[] step into a non-array container" 'descends into' "$(artifact_schemas_body '  ["raw_queries"] = new ArtifactSchema {
+    format = "ndjson"
+    fields {
+      new ArtifactField { name = "columns"; type = "struct"; description = "d" }
+      new ArtifactField { name = "columns[]"; type = "struct"; description = "d" }
+    }
+  }')"
+
+# Index selection is not a declaration — a schema describes every element, not one of
+# them — so `columns[0]` must fail the path grammar rather than be read as `columns[]`.
+check_artifact_schemas "index selection in a path" 'Type constraint' "$(artifact_schemas_body '  ["raw_queries"] = new ArtifactSchema {
+    format = "ndjson"
+    fields { new ArtifactField { name = "columns[0]"; type = "struct"; description = "d" } }
+  }')"
+
+# Control: a fully-declared array of structs must generate cleanly. Without this, the
+# four refusals above would pass even if every element path were rejected outright.
+echo ":: Checking a fully-declared array of structs still generates (control)..."
+AS_ARR_CONTRACT="$(mktemp "$REPO_ROOT/test-artifact-schemas-arr-XXXXXX.pkl")"
+AS_ARR_OUT="$(mktemp -d "$REPO_ROOT/test-artifact-schemas-arr-out-XXXXXX")"
+artifact_schemas_body '  ["transformed_entities"] = new ArtifactSchema {
+    format = "ndjson"
+    fields {
+      new ArtifactField { name = "columns"; type = "array"; description = "d" }
+      new ArtifactField { name = "columns[]"; type = "struct"; description = "d" }
+      new ArtifactField { name = "columns[].name"; type = "string"; description = "d" }
+    }
+  }' > "$AS_ARR_CONTRACT"
+AS_ARR_ERR="$(pkl eval -m "$AS_ARR_OUT" "$AS_ARR_CONTRACT" 2>&1 || true)"
+if echo "$AS_ARR_ERR" | grep -q "Pkl Error"; then
+  echo "FAIL: control contract with a fully-declared array of structs failed to generate"
+  echo "  Got: $AS_ARR_ERR"
+  fail=1
+elif ! grep -q '"columns\[\].name"' "$AS_ARR_OUT/app/generated/artifact_schemas.json"; then
+  echo "FAIL: control contract did not render the element path columns[].name"
+  fail=1
+fi
+rm -f "$AS_ARR_CONTRACT"
+rm -rf "$AS_ARR_OUT"
+
+# A bundle root has no contract model, so a key there could not name a real
+# FileReference field, and the file it would emit could be picked up as a fallback
+# for an entrypoint that declares nothing. Generation must refuse.
+echo ":: Checking artifactSchemas on a bundle root is refused..."
+AS_BUNDLE_CONTRACT="$(mktemp "$REPO_ROOT/test-artifact-schemas-bundle-XXXXXX.pkl")"
+AS_BUNDLE_OUT="$(mktemp -d "$REPO_ROOT/test-artifact-schemas-bundle-out-XXXXXX")"
+cat > "$AS_BUNDLE_CONTRACT" << 'PKLEOF'
+amends "src/App.pkl"
+
+import "examples/artifact-schemas/app.pkl" as Sub
+
+name = "artifact-schemas-bundle"
+displayName = "Artifact Schemas Bundle"
+icon = "https://example.com/icon.svg"
+hasCredentialConfig = false
+
+entrypoints {
+  new Entrypoint { name = "sub"; displayName = "Sub"; contract = Sub }
+}
+
+artifactSchemas {
+  ["raw_queries"] = new ArtifactSchema {
+    format = "parquet"
+    fields { new ArtifactField { name = "START_TIME"; type = "timestamp"; description = "d" } }
+  }
+}
+PKLEOF
+AS_BUNDLE_ERR="$(pkl eval -m "$AS_BUNDLE_OUT" "$AS_BUNDLE_CONTRACT" 2>&1 || true)"
+rm -f "$AS_BUNDLE_CONTRACT"
+rm -rf "$AS_BUNDLE_OUT"
+if ! echo "$AS_BUNDLE_ERR" | grep -q "multi-entrypoint bundle root"; then
+  echo "FAIL: artifactSchemas on a bundle root was not refused"
+  echo "  Got: $AS_BUNDLE_ERR"
+  fail=1
+fi
+
+# Control: a contract declaring NO artifactSchemas must not emit the artifact.
+# This is the fleet-wide byte-identical requirement — every existing consumer
+# repo regenerates against this toolkit and must see no new file.
+echo ":: Checking an app with no artifactSchemas emits no artifact (control)..."
+AS_NONE_CONTRACT="$(mktemp "$REPO_ROOT/test-artifact-schemas-none-XXXXXX.pkl")"
+AS_NONE_OUT="$(mktemp -d "$REPO_ROOT/test-artifact-schemas-none-out-XXXXXX")"
+cat > "$AS_NONE_CONTRACT" << 'PKLEOF'
+amends "src/App.pkl"
+
+name = "artifact-schemas-absent-app"
+displayName = "Artifact Schemas Absent App"
+icon = "https://example.com/icon.svg"
+hasCredentialConfig = false
+pipeline { publish = null }
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs { ["target"] = new TextInput { title = "Target"; placeholderText = "x" } }
+    }
+  }
+}
+PKLEOF
+pkl eval -m "$AS_NONE_OUT" "$AS_NONE_CONTRACT" > /dev/null 2>&1 || true
+if [ -f "$AS_NONE_OUT/app/generated/artifact_schemas.json" ]; then
+  echo "FAIL: an app declaring no artifactSchemas still emitted artifact_schemas.json"
+  fail=1
+fi
+rm -f "$AS_NONE_CONTRACT"
+rm -rf "$AS_NONE_OUT"
+
+# --------------------------------------------------------------------------
 # Done
 # --------------------------------------------------------------------------
 if [ "$fail" -ne 0 ]; then
