@@ -1624,17 +1624,23 @@ def _scan_conformance_dependency(
     """D011: the app's declaration of the conformance suite itself.
 
     Repo-level, not per-file: this is a property of the root ``pyproject.toml``,
-    so a monorepo must not collect one finding per sub-package.  Three branches,
+    so a monorepo must not collect one finding per sub-package.  Four branches,
     checked in order and reported at most once:
 
     1. **Undeclared** — the package appears in no dependency array, so
        ``uv run atlan-application-sdk-conformance`` (the form the remediation
        loop and the bootstrapped ``remediate`` skill use) fails to spawn.
-    2. **Pinned or one-sided** — declared, but with a specifier that cannot
+    2. **Declared in** ``[project.dependencies]`` — a *placement* violation,
+       not a spawn one: ``uv run`` does find the script, so no other branch
+       fires, but a production sync installs ``[project.dependencies]`` and
+       skips dependency groups, so the declaration ships a dev-only tool in
+       the runtime image.  Reported even when a correct dev-group entry also
+       exists, because the runtime line still has to go.
+    3. **Pinned or one-sided** — declared, but with a specifier that cannot
        float (``==0.13.0``, ``~=0.17``, or a bare ``>=0.17.0`` with no upper
        bound).  The D-series CI leg resolves the suite out of the app's
        ``uv.lock``, so a frozen specifier freezes the ruleset grading the repo.
-    3. **Missing from the lock** — declared and floating, but absent from a
+    4. **Missing from the lock** — declared and floating, but absent from a
        readable ``uv.lock``.  CI syncs from the lock, so a pyproject-only edit
        leaves the console script unavailable in the very environment that needs
        it.  Skipped entirely when the lock is absent or unparseable, so a
@@ -1684,7 +1690,37 @@ def _scan_conformance_dependency(
             )
         ]
 
-    # ── Branch 2: declared, but the specifier cannot float ──────────────────
+    # ── Branch 2: declared in the runtime array ─────────────────────────────
+    # A floating entry in [project.dependencies] satisfies every other branch
+    # — the console script really does spawn — so placement has to be graded
+    # on its own or the one array the package must never appear in is the one
+    # array this rule never reports.
+    runtime_entries = [e for e in entries if e.array_path == "project.dependencies"]
+    if runtime_entries:
+        entry = runtime_entries[0]
+        return [
+            _make_finding(
+                rule_id=RULE_D011,
+                file=rel_pyproject,
+                line=entry.line,
+                column=entry.column,
+                message=(
+                    f"'{CONFORMANCE_PACKAGE}' is declared in "
+                    f"[project.dependencies]. That ships a dev-only tool in "
+                    f"the runtime image: a production sync installs "
+                    f"[project.dependencies] and skips dependency groups. "
+                    f"Move it into [dependency-groups].dev as '{canonical}' "
+                    f"(any dev dependency group or "
+                    f"[project.optional-dependencies.*] array is accepted) "
+                    f"and delete the [project.dependencies] entry — even if a "
+                    f"correct dev-group entry already exists, the runtime one "
+                    f"still has to go."
+                ),
+                suppressions=suppressions,
+            )
+        ]
+
+    # ── Branch 3: declared, but the specifier cannot float ──────────────────
     for entry in entries:
         parsed = _parse_requirement(entry.raw)
         spec = parsed[1] if parsed else ""
@@ -1711,7 +1747,7 @@ def _scan_conformance_dependency(
                 )
             ]
 
-    # ── Branch 3: declared and floating, but not in a readable lock ─────────
+    # ── Branch 4: declared and floating, but not in a readable lock ─────────
     if (
         _lock_is_readable(root)
         and _locked_package_version(root, CONFORMANCE_PACKAGE) is None

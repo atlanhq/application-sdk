@@ -314,7 +314,7 @@ with no app-side edit.  Bump the SDK; do not reach for a suppression.
 
 **Tier:** `block` · **Scope:** `app` · **Category:** `dependency-tooling` · **Autofixable:** yes · **Since:** 0.23.0
 
-> atlan-application-sdk-conformance is undeclared, pinned to a non-floating specifier, or missing from uv.lock
+> atlan-application-sdk-conformance is undeclared, declared in [project.dependencies], pinned to a non-floating specifier, or missing from uv.lock
 
 **Rationale:** The published remediation programs and the bootstrapped per-app 'remediate' skill invoke
 the suite as 'uv run atlan-application-sdk-conformance'. In a repo that does not declare
@@ -341,21 +341,26 @@ loop cannot run in the repo at all, so nothing can be fixed there even once it i
 
 Every app should declare `atlan-application-sdk-conformance` in a dev/test dependency
 array, with a specifier that can float, and have it resolved in `uv.lock`.  At most one
-finding is reported per repo; three things are checked, in order:
+finding is reported per repo; four things are checked, in order:
 
 1. **Declared at all** — satisfied by an entry in **any**    `[dependency-groups.*]`
 group or any    `[project.optional-dependencies.*]` array, because apps    legitimately
-differ on which group they use. 2. **Specifier can float** — a floor *and* an upper
-bound, and    not a pin.  `==0.13.0`, `===0.13.0`, `~=0.17.0`, a bare    `>=0.17.0` and
-a bare `<1.0.0` are all rejected. 3. **Present in** `uv.lock` — checked only when a lock
-exists    and parses, so a missing or malformed lock never manufactures    a finding.
+differ on which group they use. 2. **Not in** `[project.dependencies]` — graded
+separately,    because a floating runtime entry satisfies every other check    (the
+console script really does spawn) while shipping a    dev-only tool in the runtime
+image.  Reported even when a    correct dev-group entry also exists: the runtime line
+still    has to be deleted.  The fix is to move the entry, not to    add a second one.
+3. **Specifier can float** — a floor *and* an upper bound, and    not a pin.
+`==0.13.0`, `===0.13.0`, `~=0.17.0`, a bare    `>=0.17.0` and a bare `<1.0.0` are all
+rejected. 4. **Present in** `uv.lock` — checked only when a lock exists    and parses,
+so a missing or malformed lock never manufactures    a finding.
 
 The canonical form is `[dependency-groups].dev`, matching `atlan-app-template`:
 `"atlan-application-sdk-conformance>=0.17.0,<1.0.0"`.
 
 The package is not needed at runtime and must never be added to `[project.dependencies]`
 — dev groups are excluded from a production sync, so the declaration cannot reach the
-shipped image.
+shipped image. Branch 2 above is what enforces that placement.
 
 **Known trade-off, tracked in FND-419.**  Declaring the package also pins the ruleset
 used by one CI leg.  The D-series leg is the only one that runs `uv run --with

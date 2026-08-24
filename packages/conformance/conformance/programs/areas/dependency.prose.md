@@ -63,9 +63,10 @@ while admitting ancient releases.  The prescription below (keep the app's floor
 when it is higher; never lower one) is the only safeguard for that, and human
 review of residue is the backstop.
 
-Branch 3 is also the one D-series finding whose fix is **not** a
-`pyproject.toml` edit — it needs `uv lock`.  The re-detection gate reads the
-lock for that branch, so an edit that does not run `uv lock` will not clear it.
+The lock branch (branch 4) is also the one D-series finding whose fix is
+**not** a `pyproject.toml` edit — it needs `uv lock`.  The re-detection gate
+reads the lock for that branch, so an edit that does not run `uv lock` will not
+clear it.
 
 ### Requires
 
@@ -136,10 +137,10 @@ fix.  The re-detection gate is authoritative for this area — see
   one entry.
 
 - **D011 ConformanceDependencyContract** (`classification = "mechanical"` for
-  branches 1 and 2) — BLOCK-tier, no suppress path in default mode, same as
-  D001.  One rule, three branches; read the message to tell them apart, because
+  branches 1, 2 and 3) — BLOCK-tier, no suppress path in default mode, same as
+  D001.  One rule, four branches; read the message to tell them apart, because
   the fix differs.  The canonical target in
-  all three cases is
+  all four cases is
   `"atlan-application-sdk-conformance>=0.17.0,<1.0.0"` in
   `[dependency-groups].dev`, matching `atlan-app-template`.
 
@@ -150,22 +151,31 @@ fix.  The re-detection gate is authoritative for this area — see
      file has none.  `finding.line` anchors at the `[dependency-groups]`
      header, or line 1 when there is no such table.  **Never** add it to
      `[project.dependencies]` — that ships a dev-only tool in the runtime
-     image.
-  2. *"cannot float"* — declared, but the specifier is a pin (`==0.13.0`,
+     image, and branch 2 below will then fire on your own edit.
+  2. *"is declared in `[project.dependencies]`"* — a placement violation, not
+     a spawn one: the script does run, so nothing else fires.  **Move** the
+     entry — delete the `[project.dependencies]` line and add the canonical
+     entry to `[dependency-groups].dev` (or to the dev group the repo already
+     uses) — do not leave the runtime line in place beside a new dev-group
+     entry, which is the failure mode this branch exists to catch.  If a
+     correct dev-group entry already exists, deleting the runtime line is the
+     whole fix.  `finding.line` anchors at the offending
+     `[project.dependencies]` entry.
+  3. *"cannot float"* — declared, but the specifier is a pin (`==0.13.0`,
      `===0.13.0`, `~=0.17.0`) or one-sided (`>=0.17.0` with no upper bound, or
      a bare `<1.0.0` with no floor).  Rewrite **that entry only** to the
      canonical two-sided form, preserving its position in the array.  Keep the
      app's existing floor if it is higher than `0.17.0`; never lower a floor.
      `finding.line` anchors at the declaring line.
-  3. *"no entry in uv.lock"* — declared and floating, but unresolved in the
+  4. *"no entry in uv.lock"* — declared and floating, but unresolved in the
      lock.  This one is **not** a `pyproject.toml` edit: run `uv lock` and
      commit the result.  Classify it `judgment` and route to residue if the
      loop cannot run `uv lock` in its environment — a hand-edited `uv.lock` is
      never an acceptable fix.
 
-  For branches 1 and 2, note in the edit description that `uv lock` must be
+  For branches 1, 2 and 3, note in the edit description that `uv lock` must be
   re-run so the change reaches the lockfile: the re-detection gate reads
-  `pyproject.toml` for those branches and will pass without it, and branch 3
+  `pyproject.toml` for those branches and will pass without it, and branch 4
   then becomes the next finding.
 
 - **D006 IncompatibleRequiresPython** — the app's `[project].requires-python`

@@ -1922,7 +1922,95 @@ def test_d011_pin_branch_anchors_at_the_declaring_line(tmp_path: Path) -> None:
     assert findings[0].line == 11
 
 
-# ── D011 branch 3: declared and floating, but absent from uv.lock ────────────
+# ── D011: declared in the runtime array ─────────────────────────────────────
+
+
+def _d011_runtime(spec: str) -> str:
+    """A root pyproject whose [project.dependencies] declares *spec*."""
+    return (
+        '[project]\nname = "demo-app"\nversion = "0.1.0"\n'
+        "dependencies = [\n"
+        '    "atlan-application-sdk>=3.17.2,<4.0.0",\n'
+        f'    "{spec}",\n]\n'
+    )
+
+
+def test_d011_fires_on_a_floating_runtime_declaration(tmp_path: Path) -> None:
+    """The one array the package must never appear in.
+
+    A floating ``[project.dependencies]`` entry satisfies every other branch —
+    ``uv run`` does spawn the script — so without a dedicated placement branch
+    the rule would report nothing on the placement the catalog, the generated
+    docs and ``dependency.prose.md`` all forbid.
+    """
+    findings = _d011_scan(
+        tmp_path, _d011_runtime("atlan-application-sdk-conformance>=0.17.0,<1.0.0")
+    )
+    assert len(findings) == 1
+    f = findings[0]
+    assert "[project.dependencies]" in f.message
+    assert "runtime image" in f.message
+    # tells the remediator where it belongs, in canonical form
+    assert "[dependency-groups].dev" in f.message
+    assert "atlan-application-sdk-conformance>=0.17.0,<1.0.0" in f.message
+    # anchored at the offending runtime line (the second array entry), not the
+    # dev group
+    assert f.line == 6
+
+
+def test_d011_runtime_declaration_fires_even_beside_a_correct_dev_group(
+    tmp_path: Path,
+) -> None:
+    """A correct dev-group entry does not license the runtime one to stay."""
+    findings = _d011_scan(
+        tmp_path,
+        _d011_runtime("atlan-application-sdk-conformance>=0.17.0,<1.0.0")
+        + _D011_OK_GROUP,
+    )
+    assert len(findings) == 1
+    assert "[project.dependencies]" in findings[0].message
+    assert findings[0].line == 6
+
+
+def test_d011_runtime_placement_takes_precedence_over_the_shape_branch(
+    tmp_path: Path,
+) -> None:
+    """Placement is the more fundamental problem: moving it is the fix, not capping it."""
+    findings = _d011_scan(
+        tmp_path, _d011_runtime("atlan-application-sdk-conformance==0.13.0")
+    )
+    assert len(findings) == 1
+    assert "[project.dependencies]" in findings[0].message
+    assert "cannot float" not in findings[0].message
+
+
+def test_d011_runtime_placement_takes_precedence_over_the_lock_branch(
+    tmp_path: Path,
+) -> None:
+    _write_lock(tmp_path, include_conformance=False)
+    findings = _d011_scan(
+        tmp_path, _d011_runtime("atlan-application-sdk-conformance>=0.17.0,<1.0.0")
+    )
+    assert len(findings) == 1
+    assert "[project.dependencies]" in findings[0].message
+    assert "uv.lock" not in findings[0].message
+
+
+def test_d011_optional_dependencies_placement_is_not_a_runtime_finding(
+    tmp_path: Path,
+) -> None:
+    """Only [project.dependencies] is the runtime array; extras are opt-in."""
+    assert (
+        _d011_scan(
+            tmp_path,
+            _D011_HEAD + "\n[project.optional-dependencies]\ndev = [\n"
+            '    "atlan-application-sdk-conformance>=0.17.0,<1.0.0",\n]\n',
+        )
+        == []
+    )
+
+
+# ── D011 branch 4: declared and floating, but absent from uv.lock ────────────
 
 
 def _write_lock(tmp_path: Path, *, include_conformance: bool) -> None:
