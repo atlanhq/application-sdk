@@ -1,13 +1,24 @@
-"""Offline, reusable data validation for Atlan asset writes.
+"""Offline, reusable data validation for Atlan artifacts and asset writes.
 
-This package is the SDK's *principle-based* validation scaffold (BLDX-1555). It
-builds on the per-asset ``.validate()`` backbone that ``pyatlan_v9`` exposes on
-every asset class — a purely local, dry-run check (required fields, qualified-name
-format, and create-time hierarchy fields) that needs **no network call**. Pushing
-validation this deep in the stack means the same check applies whether an asset is
-produced via the app SDK, low-level ``pyatlan``, or MCP.
+Two layers live here.
 
-Two things live here:
+**Artifact validation** (ADR-0020) is the generic one: a thin, format-agnostic
+wrapper that takes an app-owned declaration, dispatches on format, and owns only
+the shared outcome — one report shape, one outcome event, one bounded drill-down
+payload. Byte integrity (``storage/integrity.py``) attests that the bytes read are
+the bytes written and is explicit that this proves nothing about the artifact being
+semantically complete; this is that missing third leg. Its two orthogonal plug-in
+seams — *where the declaration comes from* and *how a format is checked* — are
+:mod:`application_sdk.validation.protocols`; the shared outcome surface is
+:mod:`application_sdk.validation.artifacts`.
+
+**Asset validation** (BLDX-1555) is the concrete NDJSON x typed-model check that
+predates the wrapper, built on the per-asset ``.validate()`` backbone that
+``pyatlan_v9`` exposes on every asset class — a purely local, dry-run check
+(required fields, qualified-name format, and create-time hierarchy fields) that
+needs **no network call**. Pushing validation this deep in the stack means the same
+check applies whether an asset is produced via the app SDK, low-level ``pyatlan``,
+or MCP. It offers:
 
 * :func:`validate_asset` — run pyatlan_v9's ``.validate()`` on a single asset and
   return the error messages (never raises).
@@ -20,8 +31,30 @@ Two things live here:
 
 The referential-integrity pass is intentionally an SDK concern, not a pyatlan one:
 it is a cross-record check that a single asset's ``.validate()`` cannot make.
+
+ADR-0020 folds asset validation into the wrapper as its NDJSON x ``ModelSource``
+cell, preserving its event name and attribute keys verbatim — a refactor behind a
+stable event surface, not a rename.
+
+**Standing dependency floor for this whole package**: no ``pyarrow``, ``pandas`` or
+``pandera`` import anywhere in it. A JSON-only caller must never pay for a parquet
+reader, and pandera stays test-only.
 """
 
+from application_sdk.validation.artifacts import (
+    ArtifactDeclaration,
+    ArtifactFailureKind,
+    ArtifactFieldType,
+    ArtifactFieldTypeExtended,
+    ArtifactValidationFailure,
+    ArtifactValidationOutcome,
+    ArtifactValidationReport,
+    DeclaredField,
+    FieldMapDeclaration,
+    ModelDeclaration,
+    artifact_validation_event_fields,
+    artifact_validation_matrix_json,
+)
 from application_sdk.validation.assets import (
     AssetValidationFailure,
     AssetValidationReport,
@@ -29,8 +62,25 @@ from application_sdk.validation.assets import (
     validate_asset,
     validate_transformed_dir,
 )
+from application_sdk.validation.protocols import FormatValidator, SchemaSource
 
 __all__ = [
+    # Artifact validation (ADR-0020)
+    "ArtifactDeclaration",
+    "ArtifactFailureKind",
+    "ArtifactFieldType",
+    "ArtifactFieldTypeExtended",
+    "ArtifactValidationFailure",
+    "ArtifactValidationOutcome",
+    "ArtifactValidationReport",
+    "DeclaredField",
+    "FieldMapDeclaration",
+    "FormatValidator",
+    "ModelDeclaration",
+    "SchemaSource",
+    "artifact_validation_event_fields",
+    "artifact_validation_matrix_json",
+    # Asset validation (BLDX-1555)
     "AssetValidationFailure",
     "AssetValidationReport",
     "ReferentialFailure",

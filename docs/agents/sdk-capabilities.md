@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.28.2
-source-sha:    7f8e7fcfd8c4d0e3bdca99297c515e42606f3d72
-source-date:   2026-08-21T13:45:40+01:00
+sdk-version:   3.28.3
+source-sha:    fc4b272b8ccd28c598abc514cb57c30b4959a4c6
+source-date:   2026-08-24T20:25:58Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -29,13 +29,13 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
-| `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 22 |
+| `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 27 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 97 |
-| `application_sdk.validation` | Offline asset validation — pyatlan_v9 .validate() wrappers, no network call | 5 |
+| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 30 |
 
 ## Subpackage Details
 
@@ -2586,12 +2586,47 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 
 ### Constants and Enums
 
+#### `ARTIFACT_VALIDATION_EVENT`
+
+- **Import:** `from application_sdk.observability.events import ARTIFACT_VALIDATION_EVENT`
+- **Signature:** `ARTIFACT_VALIDATION_EVENT: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/events.py`
+
+#### `ASSET_VALIDATION_EVENT`
+
+- **Import:** `from application_sdk.observability.events import ASSET_VALIDATION_EVENT`
+- **Signature:** `ASSET_VALIDATION_EVENT: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/events.py`
+
 #### `correlation_context`
 
 - **Import:** `from application_sdk.observability import correlation_context`
 - **Signature:** `correlation_context: ContextVar[dict[str, Any] | None]`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/observability/context.py`
+
+#### `OUTCOME_EVENT_NAMES`
+
+- **Import:** `from application_sdk.observability.events import OUTCOME_EVENT_NAMES`
+- **Signature:** `OUTCOME_EVENT_NAMES: Final[frozenset[str]]`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/events.py`
+
+#### `PREFLIGHT_OUTCOME_EVENT`
+
+- **Import:** `from application_sdk.observability.events import PREFLIGHT_OUTCOME_EVENT`
+- **Signature:** `PREFLIGHT_OUTCOME_EVENT: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/events.py`
+
+#### `PREFLIGHT_POSTURE_EVENT`
+
+- **Import:** `from application_sdk.observability.events import PREFLIGHT_POSTURE_EVENT`
+- **Signature:** `PREFLIGHT_POSTURE_EVENT: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/events.py`
 
 #### `request_context`
 
@@ -3719,9 +3754,25 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 ## `application_sdk.validation`
 
-Offline asset validation — pyatlan_v9 .validate() wrappers, no network call
+Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call
 
 ### Classes
+
+#### `ArtifactValidationFailure`
+
+- **Import:** `from application_sdk.validation import ArtifactValidationFailure`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `class ArtifactValidationFailure(kind: ArtifactFailureKind, ...)`
+- **Summary:** One failing unit — a record that broke, or a column that disagreed.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `ArtifactValidationReport`
+
+- **Import:** `from application_sdk.validation import ArtifactValidationReport`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `class ArtifactValidationReport(artifact_format: str = '', ...)`
+- **Summary:** Aggregate outcome of validating one artifact against one declaration.
+- **Defined in:** `application_sdk/validation/artifacts.py`
 
 #### `AssetValidationFailure`
 
@@ -3737,6 +3788,38 @@ Offline asset validation — pyatlan_v9 .validate() wrappers, no network call
 - **Summary:** Aggregate outcome of validating a batch of transformed assets.
 - **Defined in:** `application_sdk/validation/assets.py`
 
+#### `DeclaredField`
+
+- **Import:** `from application_sdk.validation import DeclaredField`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `class DeclaredField(path: str, type: ArtifactFieldTypeExtended = 'any', required: bool = True)`
+- **Summary:** One field an app declares it requires of an artifact.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `FieldMapDeclaration`
+
+- **Import:** `from application_sdk.validation import FieldMapDeclaration`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `class FieldMapDeclaration(fields: tuple[DeclaredField, ...] = ())`
+- **Summary:** A declaration resolved to an explicit field map — the ``ContractSource`` shape.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `FormatValidator`
+
+- **Import:** `from application_sdk.validation import FormatValidator`
+- **Also importable from:** `application_sdk.validation.protocols`
+- **Signature:** `class FormatValidator`
+- **Summary:** How one artifact format is checked against a resolved declaration.
+- **Defined in:** `application_sdk/validation/protocols.py`
+
+#### `ModelDeclaration`
+
+- **Import:** `from application_sdk.validation import ModelDeclaration`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `class ModelDeclaration(model: type)`
+- **Summary:** A declaration resolved to an executable typed model — the ``ModelSource`` shape.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
 #### `ReferentialFailure`
 
 - **Import:** `from application_sdk.validation import ReferentialFailure`
@@ -3744,7 +3827,31 @@ Offline asset validation — pyatlan_v9 .validate() wrappers, no network call
 - **Summary:** A relationship reference whose target asset is absent from the batch.
 - **Defined in:** `application_sdk/validation/assets.py`
 
+#### `SchemaSource`
+
+- **Import:** `from application_sdk.validation import SchemaSource`
+- **Also importable from:** `application_sdk.validation.protocols`
+- **Signature:** `class SchemaSource`
+- **Summary:** Where an artifact's declaration comes from.
+- **Defined in:** `application_sdk/validation/protocols.py`
+
 ### Functions
+
+#### `artifact_validation_event_fields`
+
+- **Import:** `from application_sdk.validation import artifact_validation_event_fields`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `artifact_validation_event_fields(report: ArtifactValidationReport, *, ...)`
+- **Summary:** Build the outcome event's attribute map from a report.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `artifact_validation_matrix_json`
+
+- **Import:** `from application_sdk.validation import artifact_validation_matrix_json`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `artifact_validation_matrix_json(report: ArtifactValidationReport, *, ...)`
+- **Summary:** Compact per-failure drill-down for the outcome event, as one JSON string.
+- **Defined in:** `application_sdk/validation/artifacts.py`
 
 #### `validate_asset`
 
@@ -3759,6 +3866,125 @@ Offline asset validation — pyatlan_v9 .validate() wrappers, no network call
 - **Signature:** `validate_transformed_dir(path: str | Path, *, for_creation: bool = True, check_referential_integrity: bool = True)`
 - **Summary:** Validate every transformed-output asset under ``path``.
 - **Defined in:** `application_sdk/validation/assets.py`
+
+### Constants and Enums
+
+#### `ARTIFACT_FIELD_TYPES`
+
+- **Import:** `from application_sdk.validation.artifacts import ARTIFACT_FIELD_TYPES`
+- **Signature:** `ARTIFACT_FIELD_TYPES: Final[frozenset[str]]`
+- **Summary:** Runtime membership test for :data:`ArtifactFieldType`.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `ARTIFACT_FIELD_TYPES_EXTENDED`
+
+- **Import:** `from application_sdk.validation.artifacts import ARTIFACT_FIELD_TYPES_EXTENDED`
+- **Signature:** `ARTIFACT_FIELD_TYPES_EXTENDED: Final[frozenset[str]]`
+- **Summary:** Runtime membership test for :data:`ArtifactFieldTypeExtended`.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `ARTIFACT_VALIDATION_EVENT`
+
+- **Import:** `from application_sdk.validation.artifacts import ARTIFACT_VALIDATION_EVENT`
+- **Signature:** `ARTIFACT_VALIDATION_EVENT: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/events.py`
+
+#### `ARTIFACT_VALIDATION_OUTCOMES`
+
+- **Import:** `from application_sdk.validation.artifacts import ARTIFACT_VALIDATION_OUTCOMES`
+- **Signature:** `ARTIFACT_VALIDATION_OUTCOMES: Final[frozenset[str]]`
+- **Summary:** Runtime membership test for :data:`ArtifactValidationOutcome`.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `ArtifactDeclaration`
+
+- **Import:** `from application_sdk.validation import ArtifactDeclaration`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `ArtifactDeclaration`
+- **Summary:** Tagged union of what a :class:`~application_sdk.validation.protocols.SchemaSource`
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `ArtifactFailureKind`
+
+- **Import:** `from application_sdk.validation import ArtifactFailureKind`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `ArtifactFailureKind`
+- **Summary:** Why one unit failed. ``missing``/``type_mismatch`` come from a field-map diff,
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `ArtifactFieldType`
+
+- **Import:** `from application_sdk.validation import ArtifactFieldType`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `ArtifactFieldType`
+- **Summary:** The stable floor: types every validator must map, for every format.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `ArtifactFieldTypeExtended`
+
+- **Import:** `from application_sdk.validation import ArtifactFieldTypeExtended`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `ArtifactFieldTypeExtended`
+- **Summary:** Additive extension. Declarations use this, so a member can be declared before
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `ArtifactValidationOutcome`
+
+- **Import:** `from application_sdk.validation import ArtifactValidationOutcome`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `ArtifactValidationOutcome`
+- **Summary:** Every artifact hand-off emits exactly one of these — the negatives included.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `OUTCOME_ABSENT`
+
+- **Import:** `from application_sdk.validation.artifacts import OUTCOME_ABSENT`
+- **Signature:** `OUTCOME_ABSENT: Final`
+- **Summary:** The artifact itself was not readable: missing, empty, or a malformed declaration
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `OUTCOME_CLEAN`
+
+- **Import:** `from application_sdk.validation.artifacts import OUTCOME_CLEAN`
+- **Signature:** `OUTCOME_CLEAN: Final`
+- **Summary:** Checked against a declaration; nothing failed.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `OUTCOME_FLAGGED`
+
+- **Import:** `from application_sdk.validation.artifacts import OUTCOME_FLAGGED`
+- **Signature:** `OUTCOME_FLAGGED: Final`
+- **Summary:** Checked against a declaration; at least one unit failed.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `OUTCOME_NOT_DECLARED`
+
+- **Import:** `from application_sdk.validation.artifacts import OUTCOME_NOT_DECLARED`
+- **Signature:** `OUTCOME_NOT_DECLARED: Final`
+- **Summary:** No declaration exists for this artifact. Carries ``boundary``: a finding on an
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `OUTCOME_UNSUPPORTED`
+
+- **Import:** `from application_sdk.validation.artifacts import OUTCOME_UNSUPPORTED`
+- **Signature:** `OUTCOME_UNSUPPORTED: Final`
+- **Summary:** A declaration exists but this (format x source) cell cannot check it — e.g.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `UNIT_COLUMN`
+
+- **Import:** `from application_sdk.validation.artifacts import UNIT_COLUMN`
+- **Signature:** `UNIT_COLUMN: Final`
+- **Summary:** Unit for the metadata-only formats, where the footer schema is diffed and no row
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `UNIT_RECORD`
+
+- **Import:** `from application_sdk.validation.artifacts import UNIT_RECORD`
+- **Signature:** `UNIT_RECORD: Final`
+- **Summary:** Unit for the streaming per-record formats (NDJSON).
+- **Defined in:** `application_sdk/validation/artifacts.py`
 
 ## Contracts
 

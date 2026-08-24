@@ -19,5 +19,5 @@ server: FastAPI server, MCP integration, middleware, health endpoint
 storage: Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 templates: SQL metadata extractor templates and their contracts
 testing: Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers
-validation: Offline asset validation — pyatlan_v9 .validate() wrappers, no network call
+validation: Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call
 transformers: "Legacy daft+YAML transformer stack (back-compat only — migrate to pyatlan record mappers; see upgrade-guide-v3.md). No __all__; deep-import only."
