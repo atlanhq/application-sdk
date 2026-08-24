@@ -54,6 +54,7 @@ from application_sdk.contracts.types import ConnectionRef
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.e2e._errors import (
     DAGProgressStalledError,
+    DeployedManifestMismatchError,
     HarnessMethodNotImplementedError,
     ManifestDagMissingError,
     ManifestFileNotFoundError,
@@ -61,12 +62,18 @@ from application_sdk.testing.e2e._errors import (
     MissingHarnessEnvError,
     ProgressWatchdogUnreachableError,
 )
+from application_sdk.testing.e2e._manifest_identity import (
+    DagNodeIdentity,
+    compare_node_identities,
+    node_identities,
+)
 from application_sdk.testing.e2e._poll import until_deadline
 from application_sdk.testing.e2e.client import (
     AEWorkflowClient,
     DAGNodeResult,
     DAGNodeStatus,
     DAGRunResult,
+    PublishedVersion,
     cold_start_submit_kwargs,
 )
 from application_sdk.testing.e2e.credential import CredentialBody
@@ -138,6 +145,31 @@ def _derive_progress_stall_seconds(timeout_seconds: int) -> int:
     # halves to 0 — no positive window is reachable, so the watchdog is off,
     # which is the honest answer for a ceiling that tight.
     return min(window, timeout_seconds // 2)
+
+
+def _supersedes(published: int | None, seed: int | None) -> bool:
+    """Whether *published* provably replaced the harness's *seed* version.
+
+    Provably is the whole point. AE's version number is optional on the wire
+    (``_safe_int`` yields ``None`` for a missing or non-numeric one), and
+    ``None != seed`` is true — so an inequality test alone reads an unknown
+    version as a supersede and goes on to compare a DAG it cannot attribute to
+    the tenant. An absent number cannot prove anything, so it answers False.
+
+    ``seed is None`` is the one case where no proof is needed: the harness
+    published no seed version, so there is nothing for AE to have superseded
+    and whatever it serves is not the harness's own DAG echoed back.
+
+    Args:
+        published: Version number AE reports for the published version.
+        seed: Version number the harness published, if it published one.
+
+    Returns:
+        True only when the comparison that follows is meaningful.
+    """
+    if seed is None:
+        return True
+    return published is not None and published != seed
 
 
 @dataclass(frozen=True)
@@ -266,6 +298,20 @@ class BaseE2ETest:
     # never mutated in place, so the class-level empty default is not shared
     # state.
     _node_dispatch: dict[str, NodeDispatch] = {}
+    # Node name -> the identity the app under test declares for that node,
+    # captured from the manifest-derived seed DAG in _bootstrap_workflow and
+    # read only by _assert_deployed_manifest_matches. Empty means there is
+    # nothing to compare against (a hand-crafted legacy seed DAG, or a suite
+    # reusing a pre-existing ae_workflow_slug), and the check self-skips. Plain
+    # instance field, same reason as source_available above.
+    _expected_node_identities: dict[str, DagNodeIdentity] = {}
+    # AE's version number for the seed version this harness published, or None
+    # when the harness published none. _assert_deployed_manifest_matches waits
+    # for the published version to differ from this before comparing: while AE
+    # still serves the seed, the only DAG on offer is the harness's own, and
+    # comparing it to itself would report a match no matter what the tenant
+    # runs. Plain instance field, same reason as source_available above.
+    _seed_version: int | None = None
     # Health endpoint the worker-up tier probes. The CI worker container
     # serves it on localhost:8000 (the sdr-e2e action gates on the same URL
     # before pytest). Override via E2E_WORKER_HEALTH_URL for other topologies.
@@ -316,6 +362,32 @@ class BaseE2ETest:
     # the 5 min headline.
     app_ready_timeout_seconds: ClassVar[int] = 300
     app_ready_poll_interval_seconds: ClassVar[int] = 5
+
+    # --- deployed-manifest identity check (FND-129) --------------------
+    # Whether to assert, right after submit, that the DAG AE published is the
+    # DAG this repo's manifest declares. Verifying the installed *version*
+    # (which CI does, via the sdr-e2e action's `expected-app-version`) says the
+    # right image is on the tenant; this says the graph that ran is the graph we
+    # built — a different claim, because at submit Heracles re-fetches the
+    # manifest from the tenant-deployed pod and supersedes the harness's seed
+    # version with it.
+    #
+    # On by default, but it only ever *fails* a leg on a positive finding: an
+    # unreadable response, a published version that never superseded the seed,
+    # or a connector with no manifest to compare all log and continue. So an
+    # unonboarded caller is untouched without opting out, the same way the CI
+    # version check self-skips on an empty `expected-app-version`. Set False on
+    # a connector whose deployed DAG legitimately diverges from its committed
+    # manifest — and say why in the override, because the default position is
+    # that such a divergence is the bug this check exists to find.
+    assert_deployed_manifest: ClassVar[bool] = True
+    # Budget for the published version to supersede the harness's seed. This is
+    # AE's own create+publish, server-side and already done by the time submit
+    # answers, so the wait is for read-after-write visibility rather than for
+    # work: seconds, not minutes. Exhausting it is not a failure — the check
+    # reports the supersede as unobserved and the run continues to the poll.
+    deployed_manifest_timeout_seconds: ClassVar[int] = 60
+    deployed_manifest_poll_interval_seconds: ClassVar[int] = 5
 
     # --- optional class attrs ------------------------------------------
     connection_type: ClassVar[str] = ""
@@ -478,6 +550,8 @@ class BaseE2ETest:
                 )
 
         self._node_dispatch = {}
+        self._expected_node_identities = {}
+        self._seed_version = None
 
         # A pinned progress-stall window that is not strictly below the poll
         # ceiling is a disabled watchdog (see ProgressWatchdogUnreachableError).
@@ -1189,6 +1263,30 @@ class BaseE2ETest:
             )
         self._node_dispatch = dispatch
 
+    def _capture_expected_node_identities(self, seed_dag: dict[str, Any]) -> None:
+        """Record the node identities the app under test declares.
+
+        Read back only by :meth:`_assert_deployed_manifest_matches`.
+
+        Captured from the seed DAG rather than by re-reading the file: the seed
+        DAG *is* the manifest's ``dag``, already carrying this harness's
+        ``{app_name}`` substitution, so the two sides of the later comparison
+        are normalised the same way. A connector with no ``manifest_path`` built
+        its seed DAG by hand (``_build_legacy_seed_dag``) — that is an
+        approximation of the app's graph, not a copy of it, so there is nothing
+        to compare and the identities stay empty.
+        """
+        if not self.manifest_path:
+            logger.info(
+                "manifest_path empty — the deployed-manifest identity check has "
+                "no committed DAG to compare against and will self-skip"
+            )
+            self._expected_node_identities = {}
+            return
+        self._expected_node_identities = node_identities(
+            seed_dag, app_name=self.connector_short_name
+        )
+
     def _bootstrap_workflow(self) -> str:
         """Ensure an AE workflow exists with a published version.
 
@@ -1220,6 +1318,7 @@ class BaseE2ETest:
             seed_dag = self._build_legacy_seed_dag(extract_queue)
 
         self._capture_node_dispatch(seed_dag)
+        self._capture_expected_node_identities(seed_dag)
 
         version = self.client.create_version(
             slug,
@@ -1227,6 +1326,7 @@ class BaseE2ETest:
         )
         logger.info("Created seed version %d under slug %s", version, slug)
         self.client.publish_version(slug, version)
+        self._seed_version = version
         return slug
 
     # ------------------------------------------------------------------
@@ -1406,6 +1506,135 @@ class BaseE2ETest:
             self.app_ready_poll_interval_seconds,
         )
 
+    # ------------------------------------------------------------------
+    # Deployed-manifest identity check
+    # ------------------------------------------------------------------
+
+    def _read_superseding_published_version(self, slug: str) -> PublishedVersion | None:
+        """Wait briefly for AE to serve a published version past the seed.
+
+        Args:
+            slug: The AE workflow slug the harness submitted against.
+
+        Returns:
+            The published version once it carries a DAG and provably superseded
+            the harness's seed, else ``None`` — the honest answer for both an
+            unreadable response and a supersede that never showed up inside the
+            budget. ``None`` is never a mismatch.
+        """
+        seed = self._seed_version
+        # The last read that came back at all, not the last read: a transient
+        # blip after a good read must not make the diagnostic claim AE was never
+        # readable, which is a different (and wronger) thing to tell an operator.
+        published: PublishedVersion | None = None
+        for attempt in until_deadline(
+            self.deployed_manifest_timeout_seconds,
+            self.deployed_manifest_poll_interval_seconds,
+            label=f"the DAG AE published for slug {slug}",
+            heartbeat_seconds=0,
+        ):
+            read = self.client.get_published_version(slug)
+            if read is not None:
+                published = read
+                if read.dag and _supersedes(read.version, seed):
+                    return read
+            if attempt.is_last:
+                break
+        if published is None:
+            # get_published_version already logged why each read failed.
+            logger.warning(
+                "Deployed-manifest identity check skipped for slug %s: AE's "
+                "published version was never readable within %ds, so whether "
+                "the executed DAG is this repo's DAG stays unverified",
+                slug,
+                self.deployed_manifest_timeout_seconds,
+            )
+            return None
+        logger.warning(
+            "Deployed-manifest identity check skipped for slug %s: after %ds AE "
+            "serves version %r (the harness's own seed version is %r) with %d "
+            "node(s), which does not prove Heracles' re-fetch of the tenant "
+            "pod's manifest superseded the seed — an absent version number "
+            "cannot, and an equal one says it did not. Comparing the seed DAG "
+            "against itself would report a match regardless of what the tenant "
+            "runs, so nothing is asserted",
+            slug,
+            self.deployed_manifest_timeout_seconds,
+            published.version,
+            seed,
+            len(published.dag),
+        )
+        return None
+
+    def _assert_deployed_manifest_matches(self, slug: str) -> None:
+        """Assert the DAG AE published is the DAG this repo's manifest declares.
+
+        Runs immediately after submit and before the poll loop. Post-submit is
+        the one thing lost versus the preflight this replaces (which AE does not
+        offer — see
+        :meth:`~application_sdk.testing.e2e.client.AEWorkflowClient.get_published_version`),
+        but it still fails within seconds of submit and long before any
+        assertion, with a node-level diff instead of a confusing downstream
+        failure.
+
+        Compares node identity, not the DAG blob: template variables are
+        substituted at submit, so a byte comparison would fail on every run.
+
+        Raises:
+            DeployedManifestMismatchError: The read got through, AE's published
+                version provably superseded the harness's seed, and the node
+                identities still disagree.
+        """
+        if not self.assert_deployed_manifest:
+            logger.info(
+                "assert_deployed_manifest is off for %s — not checking whether "
+                "the executed DAG is this repo's DAG",
+                type(self).__name__,
+            )
+            return
+        expected = self._expected_node_identities
+        if not expected:
+            logger.info(
+                "Deployed-manifest identity check skipped for slug %s: this "
+                "suite has no manifest-derived seed DAG to compare against",
+                slug,
+            )
+            return
+        published = self._read_superseding_published_version(slug)
+        if published is None:
+            return
+        actual = node_identities(published.dag, app_name=self.connector_short_name)
+        diff = compare_node_identities(expected, actual)
+        if diff.matches:
+            logger.info(
+                "Deployed-manifest identity check passed: AE published version "
+                "%r for slug %s runs the %d node(s) this repo's manifest "
+                "declares (%s), so the executed DAG is the app under test's",
+                published.version,
+                slug,
+                len(expected),
+                ", ".join(sorted(expected)),
+            )
+            return
+        raise DeployedManifestMismatchError(
+            message=(
+                f"The DAG AE published at submit is not the DAG "
+                f"{type(self).__name__} built from {self.manifest_path}.\n"
+                f"At submit, Heracles re-fetches the manifest from the "
+                f"tenant-deployed pod and publishes it over the harness's seed "
+                f"version, so this is the graph that will actually run — and it "
+                f"is not this repo's. The tenant is very likely running a "
+                f"different build of the app than the one under test.\n"
+                f"slug={slug} published_version={published.version!r} "
+                f"seed_version={self._seed_version!r}\n"
+                f"local nodes:     {', '.join(sorted(expected)) or '(none)'}\n"
+                f"published nodes: {', '.join(sorted(actual)) or '(none)'}\n"
+                f"differences:\n{diff.render()}"
+            ),
+            observed=diff.render(),
+            location=f"AE workflow slug {slug}",
+        )
+
     def run_full_dag(self) -> FullDAGOutcome:
         """Submit, poll AE, poll Atlas, return the combined outcome."""
         slug = self._bootstrap_workflow()
@@ -1434,6 +1663,12 @@ class BaseE2ETest:
             payload, slug=slug, **self._submit_retry_kwargs()
         )
         logger.info("AE submit returned run_id=%s", run_id)
+
+        # Before the poll: submit is what makes Heracles fetch the tenant pod's
+        # manifest and publish it over our seed, so this is the earliest point
+        # the executed graph is knowable — and still seconds in, long before any
+        # assertion could pass against the wrong app.
+        self._assert_deployed_manifest_matches(slug)
 
         try:
             ae_result = self.client.poll_native_status(
