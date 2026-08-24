@@ -63,9 +63,10 @@ the reason each was routed here:
 - `scope` — repository root path.
 - `mode` — `"default"` (FAILING only) or `"strict"` (FAILING + WARNING).
 - `rule_ids` — optional list of exact rule IDs to restrict this run to, e.g.
-  `["L004"]`.  Forwarded to every area and through to `detect-violations` (the
-  runner has no `--rule` flag; scoping is a post-filter — see
-  `functions/detect-violations.prose.md`).  Omitted ⇒ every rule in the enabled
+  `["L004"]`.  Forwarded to every area and through to `detect-violations`,
+  which pushes them down to the runner natively as `--rule` when the pinned
+  runner accepts the flag (a runner that rejects it falls back to series +
+  post-filter — see `functions/detect-violations.prose.md`).  Omitted ⇒ every rule in the enabled
   series.  This is what lets a caller remediate exactly one rule per run, which
   is also the only way to express "blocking tier first": tier is a **per-rule**
   property, so it cannot be selected through `series`.

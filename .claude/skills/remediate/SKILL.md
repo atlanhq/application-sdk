@@ -22,11 +22,14 @@ inputs:
     description: >
       Comma-separated list of exact rule IDs to restrict the run to, e.g.
       "L004" or "L001,L011".  Threaded through as the program's `rule_ids`
-      input and applied by `detect-violations` as a **post-filter** on
-      `result.rule_id` — the runner has no `--rule` flag, and its `--series`
-      matches a single series *letter*, so `--series L004` silently activates
-      zero checks and yields an empty report.  Pass the narrowest `--area`
-      whose series covers the requested IDs so the runner does less work.
+      input and pushed down to the runner NATIVELY as `--rule <IDS>` whenever
+      the pinned runner accepts the flag: the runner derives the series,
+      executes only those modules, and scopes findings, the exit state and the
+      emitted SARIF catalog to exactly these rules.  Support is probed, never
+      inferred from a version string — on a runner that rejects `--rule`,
+      `detect-violations` falls back to the narrowest `--series` plus a
+      rule-id post-filter — never `--series L004`, which matches a series
+      *letter* and silently activates zero checks.
 
       This is what makes one-rule-per-run possible, and it is also the only way
       to express "blocking tier first": tier is a **per-rule** property (D001
@@ -170,11 +173,12 @@ Runs an iterative, gated remediation loop over the conformance suite's findings:
 /remediate --apply-unverifiable         # P/I/S apply instead of only proposing
 ```
 
-**Rule argument**: restricts the run to exact rule IDs.  Applied as a post-filter
-on `result.rule_id` — the runner's `--series` matches a series *letter*, so
-`--series L004` activates zero checks.  Combine with the narrowest `--area` so the
-runner scans less.  Because tier is per-rule and not per-series, `--rule` is also
-the only way to express "the blocking rules first".
+**Rule argument**: restricts the run to exact rule IDs.  Pushed down to the
+runner natively as `--rule <IDS>` whenever the pinned runner accepts the flag —
+the SARIF comes back scoped to exactly these rules, one descriptor per requested
+rule.  A runner that rejects the flag falls back to the narrowest `--series` plus
+a rule-id post-filter inside `detect-violations`.  Because tier is per-rule and not per-series, `--rule` is
+also the only way to express "the blocking rules first".
 
 **Path argument**: a repo-root-relative path prefix that filters *which findings
 are remediated*.  It does **not** change what the runner scans — the runner

@@ -21,20 +21,28 @@ description: >
   rule-series letters to run, e.g. `"E"` for error-handling only or `"E,L"` for
   error-handling and logging.
 - `rule_ids` (list of string, optional) — restrict results to these exact rule
-  IDs, e.g. `["L004"]` or `["L001", "L011"]`.  Applied as a **post-filter** on
-  `result.rule_id`, for the same reason `path_prefix` is: the runner's `--series`
-  flag matches a single series *letter*, so `--series L004` silently activates
-  **zero** checks and produces an empty report rather than an L004-only one.
-  Rule-level scoping therefore cannot be pushed down to the runner and must be
-  done on the parsed output.  When omitted, all rules in the requested series are
-  returned.
+  IDs, e.g. `["L004"]` or `["L001", "L011"]`.  **Pushed down to the runner
+  natively**: pass them as `--rule <ID>[,<ID>...]` (comma-joined, in place of
+  `--series`) — the runner derives the series from the ids, executes only those
+  series' modules, and scopes the findings, the exit state, and the emitted
+  SARIF rule catalog to exactly the requested rules.  Do NOT pass `--series`
+  alongside `--rule`; the two are mutually exclusive and the runner errors on
+  the combination.
 
-  Callers should still pass the narrowest `series` that covers `rule_ids` (the
-  first letter of each ID) so the runner does less work; the filter then removes
-  the rest of that series.  Tier is a **per-rule** property, not a per-series
-  one (D001 and D009 are BLOCK inside a series that is otherwise WARN), so a
-  caller that needs "only this rule" — or "only the blocking rules" — has no way
-  to express it through `series` alone.  This parameter is that way.
+  **Compatibility fallback**: probe for the flag, never key off a version
+  string.  If the pinned runner rejects `--rule` (exit with an
+  unknown-argument error), rerun with
+  the narrowest `--series` covering the ids (the first letter of each ID) and
+  apply the rule-id post-filter on the parsed output as described below — the
+  behaviour is identical, only the efficiency differs.  Never use
+  `--series L004`: a series flag matches a single *letter*, so a full rule id
+  silently activates **zero** checks and produces an empty report.
+
+  Tier is a **per-rule** property, not a per-series one (D001 and D009 are
+  BLOCK inside a series that is otherwise WARN), so a caller that needs "only
+  this rule" — or "only the blocking rules" — has no way to express it through
+  `series` alone.  This parameter is that way.  When omitted, all rules in the
+  requested series are returned.
 - `target` (string, default `"failing"`) — which dispositions to return.
   `"failing"` returns only FAILING results (BLOCK-tier, gate-blocking).
   `"failing+warning"` (used by strict mode) also includes WARNING results
@@ -69,11 +77,21 @@ description: >
 
 ### Implementation
 
-Run the conformance suite runner for the requested series, write the SARIF to
-`remediation/runs/detect.sarif`, then parse it:
+Run the conformance suite runner, write the SARIF to
+`remediation/runs/detect.sarif`, then parse it.  With `rule_ids`, scope the
+runner natively:
 
 ```sh
 mkdir -p remediation/runs
+uv run atlan-application-sdk-conformance detect \
+  --repo <scope> \
+  --rule <rule_ids comma-joined> \
+  --output remediation/runs/detect.sarif
+```
+
+Without `rule_ids` (whole-series runs), use `--series` as before:
+
+```sh
 uv run atlan-application-sdk-conformance detect \
   --repo <scope> \
   --series <series> \
@@ -112,17 +130,18 @@ is `"failing+warning"`).
 with the prefix string (normalise both sides with `str.lstrip("./")` before
 comparing so that `"./application_sdk/foo.py"` matches `"application_sdk"`).
 
-**Rule ID filtering**: if `rule_ids` is set and non-empty, discard any result
-whose `result.rule_id` is not in it.  Compare exactly — rule IDs are already
-canonical (`^[A-Z]\d{3}$`), so no normalisation is needed; upper-case any
-caller-supplied value once before comparing so a `--rule l004` argument still
-matches.
+**Rule ID filtering**: when the runner ran with `--rule`, the SARIF is already
+rule-scoped and no further filtering is needed.  On the version-fallback path
+(older pinned runner, `--series` + post-filter), discard any result whose
+`result.rule_id` is not in `rule_ids`.  Compare exactly — rule IDs are already
+canonical (`^[A-Z]\d{3}$`); upper-case any caller-supplied value once before
+comparing so a `--rule l004` argument still matches.
 
-Apply this filter **after** the disposition filter and independently of
-`path_prefix` — the two compose, so a caller can ask for "L004, only under
-`app/`".  An empty or absent `rule_ids` means "no rule filter", never "match
-nothing"; an ID that matches no result returns an empty `findings` list, which
-is the correct answer (that rule is clean) and must not be reported as an error.
+Either way the filter composes with `path_prefix` — a caller can ask for
+"L004, only under `app/`".  An empty or absent `rule_ids` means "no rule
+filter", never "match nothing"; an ID that matches no result returns an empty
+`findings` list, which is the correct answer (that rule is clean) and must not
+be reported as an error.
 
 Tag each result's area by reading the first letter of `result.rule_id`:
 `E` → `error-handling`, `L` → `logging`, `C` → `ci`, `P` → `prescriptions`,

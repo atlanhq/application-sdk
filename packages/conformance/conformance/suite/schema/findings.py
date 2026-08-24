@@ -48,11 +48,22 @@ def findings_to_report(
     commit_sha: str | None = None,
     branch: str | None = None,
     excluded_paths: list[str] | None = None,
+    rule_ids: set[str] | None = None,
 ) -> SarifReport:
-    """Convert a list of Findings to a SARIF SarifReport via ReportBuilder."""
+    """Convert a list of Findings to a SARIF SarifReport via ReportBuilder.
+
+    ``rule_ids`` narrows the emitted ``driver.rules`` catalog to exactly the
+    requested rules (a ``--rule``-scoped run should not ship 150+ descriptors
+    for one rule's findings — consumers feed this SARIF to models, and the
+    unused descriptors are pure context waste). ``None`` keeps the full
+    catalog, which series-scoped runs rely on for fleet dashboards.
+    """
     from conformance.suite.rules import load_catalog
 
     catalog = load_catalog()
+    if rule_ids is not None:
+        wanted = set(rule_ids) | {f.rule_id for f in findings}
+        catalog = [r for r in catalog if r.id in wanted]
     builder = ReportBuilder.from_catalog(
         catalog,
         tool_name="atlan-conformance",
