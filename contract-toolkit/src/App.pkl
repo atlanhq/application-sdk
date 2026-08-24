@@ -393,7 +393,11 @@ legacyWorkflowTypes: Listing<LegacyWorkflowTypeSpec>(this.toList().map((a) -> a.
 /// keeping the aliases becomes a loud decision rather than drift. Empty (the default)
 /// declares no expiry and emits no `removal_version` key. The expiry is app-level, not
 /// per-alias, because the SDK gates the whole declaration on one version.
-legacyWorkflowTypesRemovalVersion: String = ""
+/// Constrained to a dotted numeric version or empty: the SDK parses this with
+/// `int()` per dot-separated part and refuses registration on anything else, so a
+/// free-form String here would generate a clean contract whose worker then dies at
+/// boot — the same failure mode the alias charset constraint closes.
+legacyWorkflowTypesRemovalVersion: String(isEmpty || matches(Regex("\\d+(\\.\\d+)*"))) = ""
 
 /// Top-level on/off for app notifications.
 ///

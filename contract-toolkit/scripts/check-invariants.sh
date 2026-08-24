@@ -441,6 +441,46 @@ if ! echo "$ERR_MSG" | grep -q "Type constraint"; then
 fi
 
 # --------------------------------------------------------------------------
+# 9e. CONNECT-1081: a non-numeric removal version must throw. The SDK parses this
+#     with int() per dot-separated part (application_sdk/app/base.py) and refuses
+#     registration on anything else, so accepting "4.x.0" here would generate a
+#     clean contract whose worker dies at boot.
+# --------------------------------------------------------------------------
+echo ":: Checking legacyWorkflowTypesRemovalVersion numeric-version invariant..."
+BAD_CONTRACT="$(mktemp "$REPO_ROOT/test-alias-badver-XXXXXX.pkl")"
+OUT_DIR="$(mktemp -d "$REPO_ROOT/test-alias-badver-out-XXXXXX")"
+cat > "$BAD_CONTRACT" << 'PKLEOF'
+amends "src/App.pkl"
+
+name = "alias-badver-app"
+displayName = "Alias Bad Version App"
+icon = "https://example.com/icon.svg"
+hasCredentialConfig = false
+pipeline { publish = null }
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs { ["target"] = new TextInput { title = "Target"; placeholderText = "x" } }
+    }
+  }
+}
+
+legacyWorkflowTypes {
+  new LegacyWorkflowTypeSpec { alias = "AliasBadVerWorkflow"; entrypoint = "alias-badver-app" }
+}
+legacyWorkflowTypesRemovalVersion = "4.x.0"
+PKLEOF
+ERR_MSG="$(pkl eval -m "$OUT_DIR" "$BAD_CONTRACT" 2>&1 || true)"
+rm -f "$BAD_CONTRACT"
+rm -rf "$OUT_DIR"
+if ! echo "$ERR_MSG" | grep -q "Type constraint"; then
+  echo "FAIL: a non-numeric legacyWorkflowTypesRemovalVersion should raise a type constraint violation"
+  echo "  Got: $ERR_MSG"
+  fail=1
+fi
+
+# --------------------------------------------------------------------------
 # 10. CONNECT-1081: a duplicate alias must throw. `alias` is the identity key both in
 #     the manifest and in the SDK's `{alias: entrypoint}` mapping, where a repeat would
 #     silently collapse to one entry (last wins) and route callers to the wrong entry
