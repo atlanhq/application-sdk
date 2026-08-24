@@ -487,7 +487,7 @@ RULES: tuple[RuleDefinition, ...] = (
         id="D011",
         scope=RuleScope.APP,
         name="ConformanceDependencyContract",
-        tier=EnforcementTier.WARN,
+        tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="dependency-tooling",
         autofixable=True,
@@ -512,7 +512,18 @@ RULES: tuple[RuleDefinition, ...] = (
             "pyproject-only edit that never reaches uv.lock leaves the console "
             "script absent in CI, which installs from the lock. A floor plus "
             "the 1.0.0 major boundary, locked, is the one shape that keeps the "
-            "repo on a current ruleset without admitting an unreviewed major."
+            "repo on a current ruleset without admitting an unreviewed major. "
+            "Customer impact: a repo whose ruleset is frozen silently stops "
+            "being graded by every rule added since that version — including "
+            "the ones that describe guaranteed runtime failures, such as a "
+            "transform path that raises ImportError on every record (D010) or "
+            "a Dapr component fetch that rate-limits under CI concurrency "
+            "(D009). The app then ships a defect that a current ruleset would "
+            "have blocked, and because the gate reported success the first "
+            "thing that reveals it is the customer's own failed crawl. Where a "
+            "declaration is missing outright, the remediation loop cannot run "
+            "in the repo at all, so nothing can be fixed there even once it is "
+            "found."
         ),
         short_description=(
             "atlan-application-sdk-conformance is undeclared, pinned to a "

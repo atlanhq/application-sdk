@@ -17,9 +17,9 @@ findings in the working tree, as reported by `suite.runner --series D`.
 #### violations-dependency
 
 The fingerprint-set of all unsuppressed FAILING D-series results.  Extends to
-include WARNING results in strict mode — D002/D003/D004/D006/D007/D008/D011
-are WARN-tier, so they are processed in strict mode; D001, D005, D009 and D010
-are BLOCK-tier and processed in both modes.
+include WARNING results in strict mode — D002/D003/D004/D006/D007/D008 are
+WARN-tier, so they are processed in strict mode; D001, D005, D009, D010 and
+D011 are BLOCK-tier and processed in both modes.
 
 This facet's fingerprint moves when any D-series finding is resolved (fixed or
 suppressed with justification) or when new ones appear.  An unchanged
@@ -135,8 +135,10 @@ fix.  The re-detection gate is authoritative for this area — see
   instead (note that as a follow-up in the edit description).  Remove only that
   one entry.
 
-- **D011 ConformanceDependencyContract** — one rule, three branches; read the
-  message to tell them apart, because the fix differs.  The canonical target in
+- **D011 ConformanceDependencyContract** (`classification = "mechanical"` for
+  branches 1 and 2) — BLOCK-tier, no suppress path in default mode, same as
+  D001.  One rule, three branches; read the message to tell them apart, because
+  the fix differs.  The canonical target in
   all three cases is
   `"atlan-application-sdk-conformance>=0.17.0,<1.0.0"` in
   `[dependency-groups].dev`, matching `atlan-app-template`.
@@ -270,7 +272,7 @@ When `mode == "strict"` and `finding.disposition == "warning"`, the model may
 propose an inline suppression instead of a fix if the deviation is a deliberate,
 justified exception for this app.  Applicable rules and notes:
 
-- **D002 / D004 / D005 / D006 / D007 / D008 / D010 / D011** — standard inline
+- **D002 / D004 / D005 / D006 / D007 / D008 / D010** — standard inline
   suppression.
   TOML uses `#` for comments, so the directive trails the entry or sits on the
   line above it:
@@ -287,5 +289,5 @@ justified exception for this app.  Applicable rules and notes:
 
 The justification must describe *why* the deviation is acceptable here, not
 merely that the rule is being suppressed.  Route every suppression to residue
-for human audit.  D001 and D009 are BLOCK-tier and have no suppress path in
+for human audit.  D001, D009 and D011 are BLOCK-tier and have no suppress path in
 default mode.

@@ -25,7 +25,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [D008](#d008) | `WeakenedTypeChecking` | `warn` | `app` | `tooling-baseline` | yes | 0.5.0 |
 | [D009](#d009) | `RemoteDaprComponentFetch` | `block` | `app` | `dapr-components` | yes | 0.12.0 |
 | [D010](#d010) | `QueryTransformerWithoutDuckdb` | `block` | `app` | `runtime-dependencies` | — | 0.18.0 |
-| [D011](#d011) | `ConformanceDependencyContract` | `warn` | `app` | `dependency-tooling` | yes | 0.23.0 |
+| [D011](#d011) | `ConformanceDependencyContract` | `block` | `app` | `dependency-tooling` | yes | 0.23.0 |
 
 ---
 
@@ -312,7 +312,7 @@ with no app-side edit.  Bump the SDK; do not reach for a suppression.
 
 ## D011 — `ConformanceDependencyContract` {#d011}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `dependency-tooling` · **Autofixable:** yes · **Since:** 0.23.0
+**Tier:** `block` · **Scope:** `app` · **Category:** `dependency-tooling` · **Autofixable:** yes · **Since:** 0.23.0
 
 > atlan-application-sdk-conformance is undeclared, pinned to a non-floating specifier, or missing from uv.lock
 
@@ -330,7 +330,14 @@ a '~=' compatible-release pin, or a one-sided '>=0.17.0' either freezes the rule
 grading the repo or leaves it unbounded, and a pyproject-only edit that never reaches
 uv.lock leaves the console script absent in CI, which installs from the lock. A floor
 plus the 1.0.0 major boundary, locked, is the one shape that keeps the repo on a current
-ruleset without admitting an unreviewed major.
+ruleset without admitting an unreviewed major. Customer impact: a repo whose ruleset is
+frozen silently stops being graded by every rule added since that version — including
+the ones that describe guaranteed runtime failures, such as a transform path that raises
+ImportError on every record (D010) or a Dapr component fetch that rate-limits under CI
+concurrency (D009). The app then ships a defect that a current ruleset would have
+blocked, and because the gate reported success the first thing that reveals it is the
+customer's own failed crawl. Where a declaration is missing outright, the remediation
+loop cannot run in the repo at all, so nothing can be fixed there even once it is found.
 
 Every app should declare `atlan-application-sdk-conformance` in a dev/test dependency
 array, with a specifier that can float, and have it resolved in `uv.lock`.  At most one
