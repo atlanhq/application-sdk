@@ -81,6 +81,36 @@ GATE_ATTEMPTS_KEY = "gate_attempt"
 # attributes.
 ASSET_VALIDATION_MATRIX_KEY = "asset_validation_matrix"
 
+# Generic artifact-validation outcome-event keys (ADR-0020), shared with the
+# emitter (``application_sdk.validation.artifacts``) so a rename is a single edit
+# that keeps the emit call-site and the allowlist below in sync. One row is
+# emitted per artifact hand-off, whatever the format and whichever schema source
+# declared it — including the negative outcomes, because a check that reports
+# nothing is indistinguishable from a check that passed.
+#
+# ``artifact_unit`` names what ``artifact_total``/``passed``/``failed`` count, so
+# the same four scalars carry both a streaming NDJSON record scan and a parquet
+# footer column diff without a consumer having to infer the unit from the format.
+# The bounded per-failure drill-down rides in ``artifact_validation_matrix`` as
+# one JSON string (JSONExtract-able), exactly as the asset matrix does, and is
+# always present — even as ``"[]"`` — so consumers never branch on its presence.
+ARTIFACT_VALIDATION_MATRIX_KEY = "artifact_validation_matrix"
+ARTIFACT_FORMAT_KEY = "artifact_format"
+ARTIFACT_SCHEMA_SOURCE_KEY = "artifact_schema_source"
+ARTIFACT_FIELD_KEY = "artifact_field"
+ARTIFACT_UNIT_KEY = "artifact_unit"
+ARTIFACT_TOTAL_KEY = "artifact_total"
+ARTIFACT_PASSED_KEY = "artifact_passed"
+ARTIFACT_FAILED_KEY = "artifact_failed"
+ARTIFACT_UNDECODABLE_KEY = "artifact_undecodable"
+ARTIFACT_FIELDS_DECLARED_KEY = "artifact_fields_declared"
+
+# Whether the undeclared artifact sat on an entrypoint's public boundary
+# (a finding) or on an app-internal ``@task`` contract (informational). Both emit;
+# neither is silent. Deliberately unprefixed, matching the equally generic
+# ``outcome``/``reason``/``checks`` keys this allowlist already carries.
+ARTIFACT_BOUNDARY_KEY = "boundary"
+
 # SDK-side allowlist that gates which kwargs reach OTLP.  When a logger is called
 # with structured kwargs (e.g. ``_log().info("Downloaded", storage_path=key)``),
 # loguru places the kwargs on ``record["extra"]`` rather than in the message
@@ -145,6 +175,18 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "assets_invalid",
         "assets_orphaned",
         "assets_undeserializable",
+        # ── Generic artifact validation outcome event (ADR-0020) ─────────
+        ARTIFACT_VALIDATION_MATRIX_KEY,
+        ARTIFACT_FORMAT_KEY,
+        ARTIFACT_SCHEMA_SOURCE_KEY,
+        ARTIFACT_FIELD_KEY,
+        ARTIFACT_UNIT_KEY,
+        ARTIFACT_TOTAL_KEY,
+        ARTIFACT_PASSED_KEY,
+        ARTIFACT_FAILED_KEY,
+        ARTIFACT_UNDECODABLE_KEY,
+        ARTIFACT_FIELDS_DECLARED_KEY,
+        ARTIFACT_BOUNDARY_KEY,
         # ── Misc SDK ─────────────────────────────────────────────────────
         "log_type",
         "app_name",

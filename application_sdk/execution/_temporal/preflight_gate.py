@@ -61,6 +61,20 @@ with workflow.unsafe.imports_passed_through():
         PreflightStatus,
     )
     from application_sdk.infrastructure.context import get_infrastructure
+
+    # Stable log bodies for the gate's two events — the contract connector-pulse
+    # queries on. They live in the shared event-name registry and their values are
+    # **unchanged** by the move there, so every dashboard string keeps working.
+    # The outcome event is the gate's per-run verdict row; the posture event fires
+    # once per gate-registered app at worker build and is the *denominator* the
+    # outcome events cannot supply — an app that never reaches a verdict emits no
+    # outcome row carrying ``gate_mode``, so "which apps believe they are gated" is
+    # unanswerable from outcomes alone, and that is exactly the app whose broken
+    # guarantee we most need to find.
+    from application_sdk.observability.events import (
+        PREFLIGHT_OUTCOME_EVENT,
+        PREFLIGHT_POSTURE_EVENT,
+    )
     from application_sdk.observability.logger_adaptor import (
         CHECK_MATRIX_KEY,
         GATE_ATTEMPTS_KEY,
@@ -74,18 +88,6 @@ with workflow.unsafe.imports_passed_through():
 logger = get_logger(__name__)
 
 PREFLIGHT_FAILED_ERROR_TYPE = "PreflightFailed"
-
-# Stable log body for the gate outcome event — the contract connector-pulse queries
-# on. Pinned here so the string can't drift across the emission sites.
-PREFLIGHT_OUTCOME_EVENT = "Preflight gate outcome"
-
-# Stable log body for the boot-time posture event, emitted once per gate-registered
-# app at worker build. This is the *denominator* the outcome events cannot supply:
-# an app that never reaches a verdict emits no outcome row carrying ``gate_mode``,
-# so "which apps believe they are gated" is unanswerable from outcomes alone —
-# which is exactly the app whose broken guarantee we most need to find. Pinned
-# alongside the outcome event for the same reason.
-PREFLIGHT_POSTURE_EVENT = "Preflight gate posture"
 
 # Contract sentinel stamped as the primary FailureDetails.code on a fallback block
 # (a handler that returned NOT_READY without a typed check error). It replaces the
