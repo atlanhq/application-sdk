@@ -39,6 +39,19 @@ class BlockingReason(str, Enum):
     )
     CHECKS_FAILING = "checks_failing"  # required CI checks red
     CHECKS_PENDING = "checks_pending"  # required CI checks still running
+    BOUNDED_LOCK_REFUSAL_EXPIRED = (
+        # A sub-case of CHECKS_FAILING, not an ordinary broken build. The
+        # release-age driver refused this lock refresh and left a deliberately
+        # un-installable uv.lock behind so a required check would hold the branch
+        # (see withhold() in .github/scripts/renovate_uv_lock_bounded.py) — but the
+        # window it named has since elapsed, so the thing that blocked it no longer
+        # would. Nothing re-evaluates it on its own: the branch is not behind base,
+        # so Renovate reuses it without re-running postUpgradeTasks, and the marker
+        # committed into uv.lock carries no clock. Recovery is to delete the branch
+        # and let the next Renovate pass rebuild it (recreateClosed: true in the
+        # shared preset makes that safe). FND-782; mechanism in FND-695.
+        "bounded_lock_refusal_expired"
+    )
     MERGE_CONFLICT = "merge_conflict"  # mergeable=CONFLICTING
     NON_DEP_FILES = "non_dep_files"  # changed files outside auto-approve allowlist
     AUTOMERGE_NOT_ARMED = (
@@ -107,6 +120,16 @@ class RenovatePR:
     # Defaulted so pre-existing RenovatePR constructions stay valid; scan._parse_pr
     # populates it from the fetched field.
     auto_merge_enabled: bool = False
+    # Raw: committedDate of the branch head. The clock the bounded-lock refusal
+    # signal expires against — created_at is wrong for it, because Renovate
+    # rewrites a lock branch in place across many pushes without reopening the PR.
+    # None when the input predates the field (a hand-rolled `gh pr list` dump, or a
+    # stored scan from before FND-782); the refusal signal then simply does not fire.
+    head_committed_at: Optional[datetime] = None
+    # Raw: the release-age window named by the tripwire `[options]` table in this
+    # branch's uv.lock ("P3D"), or "" when the lock has no tripwire. Parsed out by
+    # scan._parse_pr so the multi-hundred-KB lock text itself is never retained.
+    lock_refusal_window: str = ""
     # populated by classify()
     category: Category = Category.UNKNOWN
     update_type: UpdateType = UpdateType.UNKNOWN
