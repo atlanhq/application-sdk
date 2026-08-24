@@ -102,6 +102,15 @@ _PROGRESS_STALL_MIN_SECONDS = 300
 # DAG is frozen.
 _PROGRESS_STALL_MAX_SECONDS = 1800
 
+# Teardown purges assets in batches of this size. pyatlan's purge_by_guid puts
+# one ``guid=`` query param per asset into a single DELETE, and httpx refuses to
+# build a URL whose query exceeds MAX_URL_LENGTH (65536) — at ~42 bytes per GUID
+# that is a hard ceiling near 1,550 assets, raised client-side so *nothing* is
+# deleted. A crawl routinely produces more than that, so the list has to be
+# chunked. Kept well under the ceiling: purge is expensive server-side, and a
+# smaller batch means a single failing chunk orphans less.
+_PURGE_BATCH_SIZE = 50
+
 
 def _derive_progress_stall_seconds(timeout_seconds: int) -> int:
     """Progress-watchdog window to use when a suite pins no explicit value.
@@ -661,10 +670,58 @@ class BaseE2ETest:
         if not conn_qn:
             return
 
+        client = self._teardown_client()
+        if client is None:
+            return
+
+        # Two independently-guarded phases. Sharing one guard is what let a
+        # single child-purge failure orphan the connection as well: the raise
+        # jumped past the connection purge entirely, and the teardown warning
+        # is post-verdict, so the leg still went green while leaking everything.
+        self._purge_child_assets(client, conn_qn)
+        self._purge_connection(client, conn_qn)
+
+    @staticmethod
+    def _teardown_client() -> Any | None:
+        """Sync pyatlan client for teardown, or ``None`` when unavailable.
+
+        Returns:
+            An ``AtlanClient``, or ``None`` if the harness env isn't configured
+            (nothing to clean up) or the client couldn't be built.
+        """
+        tenant_url = os.environ.get("ATLAN_BASE_URL", "")
+        api_token = os.environ.get("ATLAN_API_KEY", "")
+        if not tenant_url or not api_token:
+            return None
         try:
             from pyatlan.client.atlan import (  # noqa: PLC0415; type: ignore[import]
                 AtlanClient,
             )
+
+            # conformance: ignore[P024] e2e harness asset lookup runs outside the async execution path; sync pyatlan is intentional
+            return AtlanClient(base_url=tenant_url, api_key=api_token)
+        except Exception:
+            logger.warning(
+                "e2e cleanup: could not build a tenant client — manual purge "
+                "may be needed",
+                exc_info=True,
+            )
+            return None
+
+    @staticmethod
+    def _purge_child_assets(client: Any, conn_qn: str) -> None:
+        """Purge every descendant of ``conn_qn`` in bounded batches.
+
+        Every GUID is collected *before* the first delete on purpose. pyatlan's
+        default search pagination is offset-based (``from``/``size``), so
+        purging between pages shifts the result window and silently skips
+        assets; a list of 36-char strings is cheap even at six figures.
+
+        Args:
+            client: Sync pyatlan client.
+            conn_qn: Qualified name of the connection being torn down.
+        """
+        try:
             from pyatlan.model.assets import (  # noqa: PLC0415; type: ignore[import]
                 Asset,
             )
@@ -672,35 +729,86 @@ class BaseE2ETest:
                 FluentSearch,
             )
 
-            tenant_url = os.environ.get("ATLAN_BASE_URL", "")
-            api_token = os.environ.get("ATLAN_API_KEY", "")
-            if not tenant_url or not api_token:
-                return
-
-            # conformance: ignore[P024] e2e harness asset lookup runs outside the async execution path; sync pyatlan is intentional
-            client = AtlanClient(base_url=tenant_url, api_key=api_token)
-
-            # Collect GUIDs for all descendant assets.
-            child_guids: list[str] = []
             child_request = (
                 FluentSearch()
                 .where(Asset.QUALIFIED_NAME.startswith(conn_qn + "/"))
                 .include_on_results(Asset.GUID)
             ).to_request()
             child_request.dsl.size = 200
-            for asset in client.asset.search(child_request):
-                if asset.guid:
-                    child_guids.append(asset.guid)
+            child_guids: list[str] = [
+                asset.guid for asset in client.asset.search(child_request) if asset.guid
+            ]
+        except Exception:
+            logger.warning(
+                "e2e cleanup: could not list child assets under %s — manual "
+                "purge may be needed",
+                conn_qn,
+                exc_info=True,
+            )
+            return
 
-            if child_guids:
-                client.asset.purge_by_guid(child_guids)
-                logger.info(
-                    "e2e cleanup: purged %d child assets under %s",
-                    len(child_guids),
-                    conn_qn,
+        if not child_guids:
+            return
+
+        # Batch failures are counted and reported once after the loop rather
+        # than logged per batch: a large crawl is hundreds of batches, and a
+        # tenant-wide outage would otherwise emit one warning per batch.
+        purged = 0
+        failed_batches = 0
+        last_error: Exception | None = None
+        for offset in range(0, len(child_guids), _PURGE_BATCH_SIZE):
+            batch = child_guids[offset : offset + _PURGE_BATCH_SIZE]
+            try:
+                client.asset.purge_by_guid(batch)
+            # conformance: ignore[E004] teardown boundary — a batch failure must never propagate and mask the test verdict; the aggregate is logged at WARNING with exc_info below
+            except Exception as exc:
+                # DEBUG per batch, WARNING for the summary below: a tenant-wide
+                # outage is hundreds of failing batches, and one line each would
+                # bury the count that actually says how much leaked.
+                logger.debug(
+                    "e2e cleanup: purge batch at offset %d failed",
+                    offset,
+                    exc_info=True,
                 )
+                failed_batches += 1
+                last_error = exc
+            else:
+                purged += len(batch)
 
-            # Purge the connection itself.
+        if last_error is not None:
+            logger.warning(
+                "e2e cleanup: purged %d of %d child assets under %s; %d batch(es) "
+                "of %d failed — manual purge may be needed",
+                purged,
+                len(child_guids),
+                conn_qn,
+                failed_batches,
+                _PURGE_BATCH_SIZE,
+                exc_info=last_error,
+            )
+        else:
+            logger.info(
+                "e2e cleanup: purged %d child assets under %s",
+                purged,
+                conn_qn,
+            )
+
+    @staticmethod
+    def _purge_connection(client: Any, conn_qn: str) -> None:
+        """Purge the connection asset itself.
+
+        Args:
+            client: Sync pyatlan client.
+            conn_qn: Qualified name of the connection being torn down.
+        """
+        try:
+            from pyatlan.model.assets import (  # noqa: PLC0415; type: ignore[import]
+                Asset,
+            )
+            from pyatlan.model.fluent_search import (  # noqa: PLC0415; type: ignore[import]
+                FluentSearch,
+            )
+
             conn_request = (
                 FluentSearch()
                 .where(Asset.QUALIFIED_NAME.eq(conn_qn))
@@ -713,7 +821,6 @@ class BaseE2ETest:
                     client.asset.purge_by_guid(asset.guid)
                     # conformance: ignore[L006] loop bounded to a single result via dsl.size=1; one purge event per connection
                     logger.info("e2e cleanup: purged connection %s", conn_qn)
-
         except Exception:
             logger.warning(
                 "e2e cleanup failed for connection %s — manual purge may be needed",
