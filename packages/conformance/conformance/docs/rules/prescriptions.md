@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**45 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P041), `suite.checks.transform_templates` (P040, scans template YAML) (all AST-based / cross-artifact)
+**44 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042), `suite.checks.transform_templates` (P040, scans template YAML) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -63,7 +63,6 @@ reassigned.
 | [P038](#p038) | `SdrArtifactMisrooted` | `block` | `app` | `sdr-readiness` | — | 0.16.0 |
 | [P039](#p039) | `SdrAgentJsonDroppedByInputContract` | `block` | `app` | `sdr-readiness` | — | 0.16.0 |
 | [P040](#p040) | `TransformTemplateReservedKeyword` | `warn` | `app` | `transform-templates` | — | 0.18.0 |
-| [P041](#p041) | `SdrHardPreflightGate` | `warn` | `app` | `sdr-readiness` | — | 0.18.0 |
 | [P042](#p042) | `SdrHandRolledUploadBridge` | `warn` | `app` | `sdr-readiness` | — | 0.18.0 |
 | [P043](#p043) | `NonPublicErrorControlFlow` | `warn` | `app` | `error-seam` | — | 0.21.0 |
 | [P044](#p044) | `DirectStoragePrefixTransfer` | `warn` | `app` | `storage-seam` | — | 0.21.0 |
@@ -1566,85 +1565,6 @@ value was the interim advice and it is worse than it looks on an unfixed SDK: be
 found nothing, and dropped the attribute from published output — a silent missing
 attribute in place of a loud `ParserException`. From 3.28.0 both spellings resolve and
 render identically, so the upgrade is the fix and the template edit is unnecessary.
-
----
-
-## P041 — `SdrHardPreflightGate` {#p041}
-
-**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.18.0
-
-> SDR app hard-codes preflight_gate_mode = 'hard' — non-secret-config preflight failures abort agent-mode workflows
-
-**Rationale:** In SDR (agent) mode the app resolves its configuration through the customer's secret
-store, and customers rightly mirror only *secrets* into it — non-sensitive values
-(database names, schema filters) are often absent. Preflight checks that depend on such
-non-secret config then report NOT_READY even though the run would succeed. Most
-connectors run the preflight gate non-fatally, but an app that hard-codes
-preflight_gate_mode = 'hard' aborts the entire workflow on that spurious verdict
-(observed for a query-engine connector in fleet testing). Until the SDK differentiates
-gate enforcement by run mode, the interim app-side posture is to soften the gate for
-self-deployed runs — e.g. preflight_gate_mode = 'soft' if ENABLE_ATLAN_UPLOAD else
-'hard' — keeping it env-overridable via ATLAN_PREFLIGHT_GATE_MODE.
-
-For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, an unconditional
-`preflight_gate_mode = "hard"` assignment is flagged.
-
-The SDK's preflight gate (`App.preflight_gate_mode`) defaults to `"soft"` — a NOT_READY
-verdict is logged (`would_block`) but the run proceeds.  An app opts into `"hard"` when
-its checks are trusted to gate real runs.  That trust assumption breaks in SDR (agent)
-mode: configuration is resolved through the *customer's* secret store, and customers
-rightly mirror only secrets into it — non-sensitive values (a database name for a
-schema-existence check, for example) are commonly absent.  The preflight check then
-fails for a reason unrelated to the run's actual viability, and a hard gate aborts the
-whole workflow (observed for a query-engine connector in fleet testing; connectors with
-soft gates ran the same checks non-fatally and succeeded).
-
-This is suggest-only (WARN): a hard gate is a legitimate posture for cloud-hosted runs,
-and the right long-term fix is SDK-side — gate enforcement differentiated by run mode,
-so the same app can be hard in cloud mode and soft in agent mode.  Until then:
-
-**Remediation (interim app-side posture):** derive the gate mode from the run mode
-instead of hard-coding it, e.g.:
-
-```python
-preflight_gate_mode = "soft" if ENABLE_ATLAN_UPLOAD else "hard"
-```
-
-and keep it env-overridable (the SDK's `ATLAN_PREFLIGHT_GATE_MODE` env var takes
-precedence over the class attribute, so operators can restore the hard gate per
-deployment).
-
-**What is and is not flagged.**  The exemption is semantic, not structural: `"hard"` is
-safe only on the *else* path.
-
-Silent on:
-
-* `preflight_gate_mode = "soft" if ENABLE_ATLAN_UPLOAD else "hard"`   and its
-`if`/`else` statement spelling (an ordinary style   choice once the branches grow past
-one line); * `os.environ.get("ATLAN_PREFLIGHT_GATE_MODE", <that ternary>)` —   the same
-posture spelled through the override.
-
-Still flagged:
-
-* a plain `preflight_gate_mode = "hard"`; * the inverted ternary `"hard" if
-ENABLE_ATLAN_UPLOAD else "soft"`   — hard exactly when upload is on, the reverse of the
-intent; * a both-arms-hard ternary (unconditional in a conditional's   clothing); *
-`os.environ.get("ATLAN_PREFLIGHT_GATE_MODE", "hard")` and
-`os.environ.get("ATLAN_PREFLIGHT_GATE_MODE") or "hard"` — hard on   every deployment
-that leaves the variable unset.  Only the known   env-lookup callees (`os.environ.get` /
-`os.getenv` /   `os.environ.setdefault`) have their default read this way; an
-arbitrary helper call (`resolve_gate(env, default='hard')`) is   opaque to a static
-check — its constant default says nothing about   the value it returns, so it is *not*
-flagged; * one hop of constant indirection (`MODE = "hard"` /   `preflight_gate_mode =
-MODE`), at module level **or** in the   same class body — `preflight_gate_mode` is
-conventionally a   class attribute, so the class-body form is at least as common.   The
-name resolves when every straight-line assignment to it in   that body is a string
-literal; the last one wins (so   `MODE = "soft"` followed by `MODE = "hard"` still
-fires). A   name ever assigned a computed value is not resolved at all.
-
-Known limit: a condition written with inverted polarity (`"hard" if not
-ENABLE_ATLAN_UPLOAD else "soft"`) reads as the true-arm shape and is flagged — suppress
-it inline with the reason.
 
 ---
 

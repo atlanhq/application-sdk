@@ -1,7 +1,7 @@
-"""SDR-readiness rule definitions (P029, P030, P037, P038, P039, P041, P042).
+"""SDR-readiness rule definitions (P029, P030, P037, P038, P039, P042).
 
 Apps that declare ``self_deployed_runtime: true`` in ``atlan.yaml`` must satisfy
-seven structural invariants before they can be considered SDR-ready:
+six structural invariants before they can be considered SDR-ready:
 
 * ``P029`` — every ``manifest.json`` under ``app/generated/`` must include an
   ``agent_json`` key inside ``dag.extract.inputs.args``.  Missing this field
@@ -45,12 +45,6 @@ seven structural invariants before they can be considered SDR-ready:
   / 0 assets; observed for a BI connector in fleet testing).  Contracts that
   subclass the SDK ``*ExtractionInput`` family or allow extra fields are exempt.
 
-* ``P041`` — an SDR app that hard-codes ``preflight_gate_mode = "hard"``.  In
-  SDR (agent) mode, preflight checks that depend on *non-secret* config (e.g. a
-  database/schema existence check) can fail because customers rightly do not
-  mirror non-sensitive values into the secret store; a hard gate then aborts
-  the whole workflow (observed for a query-engine connector in fleet testing).
-  Suggest-only: prefer a run-mode-differentiated posture.
 
 * ``P042`` — an app whose custom ``upload_to_atlan`` bridge *does* transfer, with
   no ``self.upload()`` anywhere.  Split out of P030 because the failure is
@@ -520,110 +514,6 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/prescriptions.md#p039"
-        ),
-    ),
-    RuleDefinition(
-        id="P041",
-        scope=RuleScope.APP,
-        name="SdrHardPreflightGate",
-        tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
-        category="sdr-readiness",
-        autofixable=False,
-        orthogonal_gate="tests",
-        since="0.18.0",
-        rationale=(
-            "In SDR (agent) mode the app resolves its configuration through the "
-            "customer's secret store, and customers rightly mirror only *secrets* "
-            "into it — non-sensitive values (database names, schema filters) are "
-            "often absent. Preflight checks that depend on such non-secret config "
-            "then report NOT_READY even though the run would succeed. Most "
-            "connectors run the preflight gate non-fatally, but an app that "
-            "hard-codes preflight_gate_mode = 'hard' aborts the entire workflow on "
-            "that spurious verdict (observed for a query-engine connector in fleet "
-            "testing). Until the SDK differentiates gate enforcement by run mode, "
-            "the interim app-side posture is to soften the gate for self-deployed "
-            "runs — e.g. preflight_gate_mode = 'soft' if ENABLE_ATLAN_UPLOAD else "
-            "'hard' — keeping it env-overridable via ATLAN_PREFLIGHT_GATE_MODE."
-        ),
-        short_description=(
-            "SDR app hard-codes preflight_gate_mode = 'hard' — non-secret-config "
-            "preflight failures abort agent-mode workflows"
-        ),
-        full_description=(
-            "For apps declaring ``self_deployed_runtime: true`` in ``atlan.yaml``,\n"
-            'an unconditional ``preflight_gate_mode = "hard"`` assignment is\n'
-            "flagged.\n"
-            "\n"
-            "The SDK's preflight gate (``App.preflight_gate_mode``) defaults to\n"
-            '``"soft"`` — a NOT_READY verdict is logged (``would_block``) but the\n'
-            'run proceeds.  An app opts into ``"hard"`` when its checks are\n'
-            "trusted to gate real runs.  That trust assumption breaks in SDR\n"
-            "(agent) mode: configuration is resolved through the *customer's*\n"
-            "secret store, and customers rightly mirror only secrets into it —\n"
-            "non-sensitive values (a database name for a schema-existence check,\n"
-            "for example) are commonly absent.  The preflight check then fails for\n"
-            "a reason unrelated to the run's actual viability, and a hard gate\n"
-            "aborts the whole workflow (observed for a query-engine connector in\n"
-            "fleet testing; connectors with soft gates ran the same checks\n"
-            "non-fatally and succeeded).\n"
-            "\n"
-            "This is suggest-only (WARN): a hard gate is a legitimate posture for\n"
-            "cloud-hosted runs, and the right long-term fix is SDK-side — gate\n"
-            "enforcement differentiated by run mode, so the same app can be hard\n"
-            "in cloud mode and soft in agent mode.  Until then:\n"
-            "\n"
-            "**Remediation (interim app-side posture):** derive the gate mode from\n"
-            "the run mode instead of hard-coding it, e.g.::\n"
-            "\n"
-            '    preflight_gate_mode = "soft" if ENABLE_ATLAN_UPLOAD else "hard"\n'
-            "\n"
-            "and keep it env-overridable (the SDK's ``ATLAN_PREFLIGHT_GATE_MODE``\n"
-            "env var takes precedence over the class attribute, so operators can\n"
-            "restore the hard gate per deployment).\n"
-            "\n"
-            "**What is and is not flagged.**  The exemption is semantic, not\n"
-            'structural: ``"hard"`` is safe only on the *else* path.\n'
-            "\n"
-            "Silent on:\n"
-            "\n"
-            '* ``preflight_gate_mode = "soft" if ENABLE_ATLAN_UPLOAD else "hard"``\n'
-            "  and its ``if``/``else`` statement spelling (an ordinary style\n"
-            "  choice once the branches grow past one line);\n"
-            '* ``os.environ.get("ATLAN_PREFLIGHT_GATE_MODE", <that ternary>)`` —\n'
-            "  the same posture spelled through the override.\n"
-            "\n"
-            "Still flagged:\n"
-            "\n"
-            '* a plain ``preflight_gate_mode = "hard"``;\n'
-            '* the inverted ternary ``"hard" if ENABLE_ATLAN_UPLOAD else "soft"``\n'
-            "  — hard exactly when upload is on, the reverse of the intent;\n"
-            "* a both-arms-hard ternary (unconditional in a conditional's\n"
-            "  clothing);\n"
-            '* ``os.environ.get("ATLAN_PREFLIGHT_GATE_MODE", "hard")`` and\n'
-            '  ``os.environ.get("ATLAN_PREFLIGHT_GATE_MODE") or "hard"`` — hard on\n'
-            "  every deployment that leaves the variable unset.  Only the known\n"
-            "  env-lookup callees (``os.environ.get`` / ``os.getenv`` /\n"
-            "  ``os.environ.setdefault``) have their default read this way; an\n"
-            "  arbitrary helper call (``resolve_gate(env, default='hard')``) is\n"
-            "  opaque to a static check — its constant default says nothing about\n"
-            "  the value it returns, so it is *not* flagged;\n"
-            '* one hop of constant indirection (``MODE = "hard"`` /\n'
-            "  ``preflight_gate_mode = MODE``), at module level **or** in the\n"
-            "  same class body — ``preflight_gate_mode`` is conventionally a\n"
-            "  class attribute, so the class-body form is at least as common.\n"
-            "  The name resolves when every straight-line assignment to it in\n"
-            "  that body is a string literal; the last one wins (so\n"
-            '  ``MODE = "soft"`` followed by ``MODE = "hard"`` still fires). A\n'
-            "  name ever assigned a computed value is not resolved at all.\n"
-            "\n"
-            "Known limit: a condition written with inverted polarity\n"
-            '(``"hard" if not ENABLE_ATLAN_UPLOAD else "soft"``) reads as the\n'
-            "true-arm shape and is flagged — suppress it inline with the reason.\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/prescriptions.md#p041"
         ),
     ),
     RuleDefinition(
