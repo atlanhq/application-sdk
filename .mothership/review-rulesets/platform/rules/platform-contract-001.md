@@ -7,14 +7,17 @@ globs: []
 severity: HIGH
 suppressible: false
 ---
-# Activity contracts evolve additively
+# Contract evolution needs a replay story
 
-- MUST NOT remove or rename a field on an activity `Input`/`Output` model —
-  in-flight workflows replay old payloads against new code and break.
-- New fields are additive with defaults; a new field on an existing
-  `Output` states its replay story for payloads that predate it.
-- An `Input` that is a manifest/DAG entry point MUST tolerate extra fields,
-  or orchestrator-supplied args are silently dropped.
+The conformance suite BLOCKS non-additive contract changes and contract
+drift mechanically. This rule owns what "additive" cannot capture:
+
+- A new field on an existing activity `Output` states its replay story:
+  what happens when an in-flight workflow replays a payload that predates
+  the field? A default alone is only correct if downstream logic tolerates
+  it mid-run.
+- An `Input` that is a manifest/DAG entry point MUST tolerate extra
+  fields, or orchestrator-supplied args are silently dropped.
 - MUST NOT expose internal implementation knobs as new task inputs —
   default to less control surface; sibling entrypoints share contracts
   (same field, same alias, same default).

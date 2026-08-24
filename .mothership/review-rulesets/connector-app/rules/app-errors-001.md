@@ -7,18 +7,23 @@ globs: []
 severity: HIGH
 suppressible: false
 ---
-# Typed errors at boundaries; retry and failure are explicit
+# Retry and failure semantics are explicit
 
-- MUST raise typed application errors at module boundaries — never bare
-  `ValueError`/`RuntimeError` for operational failures.
-- MUST preserve the cause chain (`raise NewError(...) from exc`) AND keep it
-  acyclic: never re-raise where the new error already appears in the cause
-  chain — a cycle wedges the platform's failure serialization and replaces
-  the real error with a recursion error.
-- MUST NOT write `except Exception: return Output(FAILED, str(exc))` at a
-  handler or endpoint — it erases the failure class the platform routes on.
-- Retryable errors re-raise so the platform retries; non-retryable errors
-  return a failure shape. A new catch decides which, explicitly.
-- Unclassified source errors default to retryable, and fail-fast branches
-  key on stable error codes, never message prose — a wrong non-retryable
+The conformance suite owns exception hygiene mechanically (bare excepts,
+untyped raises, missing chaining, swallowed errors). This rule owns the
+semantics no AST check can judge:
+
+- Cause chains stay acyclic: never re-raise where the new error already
+  appears in its own cause chain — a cycle wedges the platform's failure
+  serialization and replaces the real error with a recursion error.
+- Retryability (does the platform retry) and degradability (may an
+  exhausted failure be absorbed as a gap and still report success) are
+  SEPARATE decisions. A new classifier branch answers both, explicitly;
+  never reuse one boolean for both.
+- Unclassified source errors default to retryable — a wrong non-retryable
   verdict kills a multi-hour run on attempt 1.
+- Fail-fast classification keys on stable error codes/enums, never on
+  message prose — sources keep rewording their errors.
+- A catch that converts a failure into a success-shaped return erases the
+  failure class the platform routes on; verify the caller can still
+  distinguish outcomes.

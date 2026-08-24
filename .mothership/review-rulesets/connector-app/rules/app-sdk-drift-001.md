@@ -9,12 +9,16 @@ suppressible: true
 ---
 # Use the SDK helper, not a hand-rolled copy
 
-- FLAG new code that reimplements functionality the SDK already provides —
-  logging setup, state/storage access, HTTP or source clients, retry
-  wrappers, config resolution, heartbeating, temp-file management.
-- Bespoke infrastructure fragments behavior across the fleet and blocks
-  centralized fixes: a bug fixed in the SDK stays alive in every copy.
+The conformance suite flags the KNOWN hand-rolled shapes (own storage
+clients, manual Temporal workers, manual HTTP servers, bespoke process
+isolation, hand-rolled upload bridges). This rule owns the unnamed ones:
+
+- FLAG new code that reimplements SDK-provided behavior the suite has no
+  check for yet — bespoke retry wrappers, config resolution, logging
+  setup, temp-file management, heartbeat plumbing.
+- Check the SDK's public helpers before accepting an "the SDK cannot do
+  this" claim in the diff or PR description.
 - Safe path: a documented SDK gap — the PR names the missing capability
   and links the SDK issue; the local shim is marked for removal.
-- Check the SDK's public helpers before accepting "the SDK cannot do this"
-  claims in the diff or PR description.
+- Bespoke infrastructure fragments the fleet: a bug fixed in the SDK
+  stays alive in every private copy.

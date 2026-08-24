@@ -7,10 +7,17 @@ globs: []
 severity: HIGH
 suppressible: false
 ---
-# Credentials never reach logs, errors, or outputs
+# Indirect credential leaks
 
-- MUST NOT log connection URLs, `engine.url`, `connect_args`, headers, or
-  `repr()` of any client/engine object — they embed credentials.
-- MUST NOT put credential material or raw connection config into exception
-  messages, activity outputs, or metric labels.
-- Reference secrets by store path or env var name, never by value.
+The conformance suite flags direct credential-in-log values, hardcoded
+credentials, and raw env access mechanically. This rule owns the
+indirect leaks static analysis cannot recognize:
+
+- Objects whose string form embeds credentials: connection URLs,
+  `engine.url`, `connect_args`, headers dicts, `repr()` of any
+  client/engine object — in logs, exception messages, or error evidence.
+- Credential material in metric label values or activity outputs (it
+  persists in workflow history and dashboards).
+- A new code path that moves a secret from a reference (store path, env
+  name) to a value — even between internal functions; values spread,
+  references don't.
