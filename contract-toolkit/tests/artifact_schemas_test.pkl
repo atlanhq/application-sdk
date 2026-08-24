@@ -48,7 +48,12 @@ local defaultsApp = (App) {
     ["bare"] = new App.ArtifactSchema {
       format = "ndjson"
       fields {
-        new App.ArtifactField { name = "only_field" }
+        // `description` is the only property with no default — everything else
+        // here is exercising the defaults.
+        new App.ArtifactField {
+          name = "only_field"
+          description = "The one field, declared with nothing but a name."
+        }
       }
     }
   }
@@ -102,7 +107,7 @@ local bundleCrawlerContract = (App) {
     ["transformed_entities"] = new App.ArtifactSchema {
       format = "ndjson"
       fields {
-        new App.ArtifactField { name = "typeName"; type = "string" }
+        new App.ArtifactField { name = "typeName"; type = "string"; description = "Atlan type this record instantiates." }
       }
     }
   }
@@ -120,7 +125,7 @@ local bundleMinerContract = (App) {
     ["raw_queries"] = new App.ArtifactSchema {
       format = "parquet"
       fields {
-        new App.ArtifactField { name = "START_TIME"; type = "timestamp" }
+        new App.ArtifactField { name = "START_TIME"; type = "timestamp"; description = "When the query began executing." }
       }
     }
   }
@@ -180,12 +185,12 @@ local extendedApp = (App) {
     ["wide"] = new App.ArtifactSchema {
       format = "parquet"
       fields {
-        new App.ArtifactField { name = "amount"; type = "decimal" }
-        new App.ArtifactField { name = "payload"; type = "binary" }
-        new App.ArtifactField { name = "run_at"; type = "time" }
-        new App.ArtifactField { name = "tags"; type = "array" }
-        new App.ArtifactField { name = "attributes"; type = "struct" }
-        new App.ArtifactField { name = "labels"; type = "map" }
+        new App.ArtifactField { name = "amount"; type = "decimal"; description = "An extension-typed decimal field." }
+        new App.ArtifactField { name = "payload"; type = "binary"; description = "An extension-typed binary field." }
+        new App.ArtifactField { name = "run_at"; type = "time"; description = "An extension-typed time field." }
+        new App.ArtifactField { name = "tags"; type = "array"; description = "An extension-typed array field." }
+        new App.ArtifactField { name = "attributes"; type = "struct"; description = "An extension-typed struct field." }
+        new App.ArtifactField { name = "labels"; type = "map"; description = "An extension-typed map field." }
       }
     }
   }
@@ -250,10 +255,19 @@ facts {
     defaultsSchemas["schemas"]["bare"]["fields"][0]["type"] == "any"
   }
 
-  ["description is omitted when unset, on both the schema and the field"] {
+  // Schema-level description stays optional and is omitted when unset. Field-level
+  // description is REQUIRED and non-empty, so it is always present — a consumer
+  // reading the artifact never has to branch on it, and a field can never state an
+  // assertion without stating why it holds. (The refusals for a missing or empty
+  // field description live in scripts/check-invariants.sh, since facts cannot
+  // express "eval fails".)
+  ["schema description is omitted when unset; field description is always present"] {
     !defaultsSchemas["schemas"]["bare"].containsKey("description")
-    !defaultsSchemas["schemas"]["bare"]["fields"][0].containsKey("description")
-    exampleSchemas["schemas"]["raw_queries"]["fields"][1].containsKey("description")
+    defaultsSchemas["schemas"]["bare"]["fields"][0]["description"] ==
+      "The one field, declared with nothing but a name."
+    exampleSchemas["schemas"]["raw_queries"]["fields"].toList().every((f) ->
+      !(f["description"] as String).isEmpty
+    )
   }
 
   // ── Nesting: dotted paths plus a container type, no recursive grammar ──────

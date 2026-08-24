@@ -7,6 +7,10 @@
 /// `app/generated/artifact_schemas.json` and the SDK checks the real artifact
 /// against the declaration at the hand-off.
 ///
+/// Every field carries a `description`. It is required: a declaration is read by
+/// whoever is debugging the hand-off that just failed, and `name` + `type` alone
+/// state the assertion without stating why it holds.
+///
 /// The three cases worth seeing here:
 ///   - a **parquet** hand-off whose `START_TIME` is declared `timestamp`. Arrow
 ///     `timestamp[*]` satisfies that at any unit; arrow `string` does not. That
@@ -59,16 +63,18 @@ artifactSchemas {
       new ArtifactField {
         name = "QUERY_ID"
         type = "string"
+        description = "Warehouse-assigned query id, unique within the account. The parser's join key."
       }
       new ArtifactField {
         name = "START_TIME"
         type = "timestamp"
-        description = "Must be a real timestamp column. A stringified timestamp here is the defect this declaration exists to catch."
+        description = "When the query began executing. Must be a real timestamp column — a stringified timestamp here is the defect this declaration exists to catch."
       }
       new ArtifactField {
         name = "CREDITS_USED"
         type = "float"
         required = false
+        description = "Compute credits billed for the query. Absent on warehouses that do not meter per query."
       }
       new ArtifactField {
         // Snowflake NUMBER lands as parquet decimal128; asserting float would
@@ -76,17 +82,18 @@ artifactSchemas {
         name = "ROWS_PRODUCED"
         type = "decimal"
         required = false
+        description = "Row count the query returned. Declared decimal because a Snowflake NUMBER lands as parquet decimal128; asserting float would mis-flag it or lose precision."
       }
       new ArtifactField {
         name = "YEAR"
         type = "int"
-        description = "Partition column."
+        description = "Partition column derived from START_TIME. The parser prunes on it, so a string here silently disables partition pruning."
       }
       new ArtifactField {
         name = "SESSION_PARAMS"
         type = "json"
         required = false
-        description = "Physically a string column; semantically a JSON blob. Collapsing the two would defeat this hop's check."
+        description = "Session settings in force for the query. Physically a string column, semantically a JSON blob — collapsing the two would defeat this hop's check."
       }
     }
   }
@@ -99,23 +106,28 @@ artifactSchemas {
       new ArtifactField {
         name = "typeName"
         type = "string"
+        description = "Atlan type this record instantiates, e.g. Table. Publish routes on it."
       }
       new ArtifactField {
         name = "attributes"
         type = "struct"
+        description = "Container for the entity's attributes. Declared so a record that flattened them to top level is caught before publish reads it."
       }
       new ArtifactField {
         name = "attributes.qualifiedName"
         type = "string"
+        description = "Stable identity of the entity. Publish upserts on it, so a missing or non-string value creates duplicates rather than failing."
       }
       new ArtifactField {
         name = "attributes.name"
         type = "string"
+        description = "Display name shown in the UI."
       }
       new ArtifactField {
         name = "attributes.lastSyncRunAt"
         type = "timestamp"
         required = false
+        description = "When this entity was last written by a run. Absent on the first sync, set on every later one."
       }
       new ArtifactField {
         // Present-but-unasserted: a thin contract states presence without anyone
@@ -123,6 +135,7 @@ artifactSchemas {
         name = "customAttributes"
         type = "any"
         required = false
+        description = "Source-specific extras passed through untouched. Type deliberately unasserted — the shape is the source's, not ours."
       }
     }
   }
@@ -137,14 +150,17 @@ artifactSchemas {
       new ArtifactField {
         name = "source_qualified_name"
         type = "string"
+        description = "Qualified name of the upstream asset the edge starts at."
       }
       new ArtifactField {
         name = "target_qualified_name"
         type = "string"
+        description = "Qualified name of the downstream asset the edge ends at."
       }
       new ArtifactField {
         name = "process_id"
         type = "string"
+        description = "Id of the process that produced the edge. Groups edges into one lineage process on read."
       }
     }
   }

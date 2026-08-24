@@ -206,7 +206,7 @@ with the consumer.
 |---|---|---|---|
 | `format` | `ArtifactFormat` | — | `"ndjson"` or `"parquet"`. No default: each format has its own validator with its own cost and dependency floor, and the answer is not derivable from the contract field. This is the *content* format — SDK NDJSON artifacts conventionally carry a `.json` suffix and are still `"ndjson"`. |
 | `fields` | `Listing<ArtifactField>` | — | Declared fields. Must be **non-empty** and names must be **distinct**, both enforced at eval time. A zero-field schema reports as declared while asserting nothing; a duplicate name would silently collapse to one assertion. |
-| `description` | String? | null | Free-form note for humans reading the generated artifact. Never asserted; omitted from the output when unset. |
+| `description` | String? | null | What this artifact is. Free-form, never asserted; omitted from the output when unset. |
 
 **`ArtifactField`:**
 
@@ -215,7 +215,7 @@ with the consumer.
 | `name` | `ArtifactFieldPath` | — | Dotted path to the field within a record: `"a"`, `"a.b"`, `"a.b.c"`. Empty segments (`".a"`, `"a."`, `"a..b"`) fail generation. |
 | `type` | `ArtifactFieldTypeExtended` | `"any"` | Logical type asserted for this field. |
 | `required` | Boolean | `true` | Whether the field must be present in every record / in the parquet schema. Always rendered. |
-| `description` | String? | null | Free-form note. Never asserted; omitted when unset. |
+| `description` | String (non-empty) | — | **Required.** What the field carries and what the consumer expects of it. Never asserted at runtime — it is documentation, enforced at authoring time, and always present in the output. |
 
 #### The logical-type vocabulary
 
@@ -254,6 +254,20 @@ physical — one member covers several physical encodings.
 | `map` | `map` | JSON object |
 | `any` | any type | any type |
 
+#### Why `description` is required on every field
+
+A declaration is read by whoever is debugging the hand-off that just failed. A bare
+`name` + `type` pair states the assertion but not why it holds — and there are two
+cases where the pair states almost nothing on its own: a `type = "any"` field, whose
+description is the only place it can say what it carries, and a `required = false`
+field, whose description is the only place it can say *when* it appears. A field with
+no description also cannot be reviewed: a reviewer sees `"YEAR": "int"` and has no way
+to tell a considered assertion from a guess.
+
+Generation refuses a missing or empty description, naming the field. `description` is
+therefore always present in the generated artifact, so a consumer never branches on it.
+The schema-level `description` stays optional.
+
 The load-bearing row is `timestamp`: arrow `timestamp[*]` satisfies it at any unit,
 tz-aware or not, and arrow `string` does **not**. That single asymmetry is the check
 the RCA above needed. `json` exists so a parquet column that is physically a string
@@ -273,17 +287,42 @@ artifactSchemas {
     format = "parquet"
     description = "Query-history rows written for the downstream parser."
     fields {
-      new ArtifactField { name = "QUERY_ID"; type = "string" }
-      new ArtifactField { name = "START_TIME"; type = "timestamp" }
-      new ArtifactField { name = "CREDITS_USED"; type = "float"; required = false }
+      new ArtifactField {
+        name = "QUERY_ID"
+        type = "string"
+        description = "Warehouse-assigned query id. The parser's join key."
+      }
+      new ArtifactField {
+        name = "START_TIME"
+        type = "timestamp"
+        description = "When the query began executing."
+      }
+      new ArtifactField {
+        name = "CREDITS_USED"
+        type = "float"
+        required = false
+        description = "Compute credits billed. Absent on warehouses that do not meter per query."
+      }
     }
   }
   ["transformed_entities"] = new ArtifactSchema {
     format = "ndjson"
     fields {
-      new ArtifactField { name = "typeName"; type = "string" }
-      new ArtifactField { name = "attributes"; type = "struct" }
-      new ArtifactField { name = "attributes.qualifiedName"; type = "string" }
+      new ArtifactField {
+        name = "typeName"
+        type = "string"
+        description = "Atlan type this record instantiates. Publish routes on it."
+      }
+      new ArtifactField {
+        name = "attributes"
+        type = "struct"
+        description = "Container for the entity's attributes."
+      }
+      new ArtifactField {
+        name = "attributes.qualifiedName"
+        type = "string"
+        description = "Stable identity of the entity. Publish upserts on it."
+      }
     }
   }
 }
@@ -297,17 +336,17 @@ artifactSchemas {
       "format": "parquet",
       "description": "Query-history rows written for the downstream parser.",
       "fields": [
-        { "name": "QUERY_ID",     "type": "string",    "required": true  },
-        { "name": "START_TIME",   "type": "timestamp", "required": true  },
-        { "name": "CREDITS_USED", "type": "float",     "required": false }
+        { "name": "QUERY_ID",     "type": "string",    "required": true,  "description": "Warehouse-assigned query id. The parser's join key." },
+        { "name": "START_TIME",   "type": "timestamp", "required": true,  "description": "When the query began executing." },
+        { "name": "CREDITS_USED", "type": "float",     "required": false, "description": "Compute credits billed. Absent on warehouses that do not meter per query." }
       ]
     },
     "transformed_entities": {
       "format": "ndjson",
       "fields": [
-        { "name": "typeName",                 "type": "string", "required": true },
-        { "name": "attributes",               "type": "struct", "required": true },
-        { "name": "attributes.qualifiedName", "type": "string", "required": true }
+        { "name": "typeName",                 "type": "string", "required": true, "description": "Atlan type this record instantiates. Publish routes on it." },
+        { "name": "attributes",               "type": "struct", "required": true, "description": "Container for the entity's attributes." },
+        { "name": "attributes.qualifiedName", "type": "string", "required": true, "description": "Stable identity of the entity. Publish upserts on it." }
       ]
     }
   }
@@ -3094,9 +3133,9 @@ multi-entrypoint app each entrypoint's copy lands at
       "format": "parquet",
       "description": "Query-history rows written for the downstream parser.",
       "fields": [
-        { "name": "QUERY_ID", "type": "string", "required": true },
-        { "name": "START_TIME", "type": "timestamp", "required": true },
-        { "name": "CREDITS_USED", "type": "float", "required": false }
+        { "name": "QUERY_ID", "type": "string", "required": true, "description": "Warehouse-assigned query id. The parser's join key." },
+        { "name": "START_TIME", "type": "timestamp", "required": true, "description": "When the query began executing." },
+        { "name": "CREDITS_USED", "type": "float", "required": false, "description": "Compute credits billed. Absent on warehouses that do not meter per query." }
       ]
     }
   }
@@ -3107,7 +3146,8 @@ multi-entrypoint app each entrypoint's copy lands at
   on a breaking structural change, never when an app edits its own declarations.
 - `schemas` keys — contract field names (a `FileReference` field on the entrypoint's
   input/output model), never storage paths.
-- `description` — omitted entirely when unset, on both the schema and the field.
+- `description` — required and non-empty on every field, so always present. The
+  schema-level `description` is optional and omitted when unset.
 - `required` — always emitted, defaulting to `true`.
 
 See [Artifact Schemas (data hand-off declarations)](#artifact-schemas-data-hand-off-declarations)

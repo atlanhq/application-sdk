@@ -442,9 +442,16 @@ pipeline: Pipeline = new Pipeline {}
 ///     format = "parquet"
 ///     description = "Query-history rows the parser reads."
 ///     fields {
-///       new ArtifactField { name = "QUERY_ID"; type = "string" }
-///       new ArtifactField { name = "START_TIME"; type = "timestamp" }
-///       new ArtifactField { name = "CREDITS_USED"; type = "float"; required = false }
+///       new ArtifactField {
+///         name = "QUERY_ID"
+///         type = "string"
+///         description = "Warehouse-assigned id, unique within the account."
+///       }
+///       new ArtifactField {
+///         name = "START_TIME"
+///         type = "timestamp"
+///         description = "When the query began. A stringified timestamp here is the defect this catches."
+///       }
 ///     }
 ///   }
 /// }
@@ -3881,8 +3888,20 @@ class ArtifactField {
   /// field that is genuinely optional but must carry `type` when it does appear.
   required: Boolean = true
 
-  /// Free-form note for humans reading the generated artifact. Never asserted.
-  description: String?
+  /// What this field carries and what the consumer expects of it. **Required and
+  /// non-empty** — a declaration is read by whoever is debugging the hand-off that
+  /// just failed, and a bare `name`/`type` pair tells them the assertion but not
+  /// why it holds. It is also the only place a `type = "any"` field can say what it
+  /// is, and the only place a `required = false` field can say when it appears.
+  /// Never asserted at runtime; it is documentation, enforced at authoring time.
+  ///
+  /// The default `throw` is how a required property gets an actionable error: Pkl's
+  /// own "value is undefined" message names neither the field nor the reason.
+  description: String(!isEmpty) =
+    throw("ArtifactField '\(name)': `description` is required — say what the field "
+      + "carries and what the consumer expects of it. A name and a type state the "
+      + "assertion but not why it holds, and a declaration is read by whoever is "
+      + "debugging the hand-off that just failed.")
 }
 
 /// The declared shape of one artifact handed off through a contract `FileReference`.
@@ -3907,7 +3926,9 @@ local function renderArtifactField(f: ArtifactField): Mapping<String, Any> = new
   ["name"] = f.name
   ["type"] = f.type
   ["required"] = f.required
-  when (f.description != null) { ["description"] = f.description }
+  // Always present — `description` is required on `ArtifactField`, so a consumer
+  // never has to branch on it.
+  ["description"] = f.description
 }
 
 local function renderArtifactSchema(s: ArtifactSchema): Mapping<String, Any> = new Mapping {

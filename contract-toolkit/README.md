@@ -193,6 +193,10 @@ The toolkit is transport, not owner: it fixes the logical type vocabulary
 authored by the app. Nested payloads are dotted paths plus a container type, not a
 recursive grammar.
 
+Every field must carry a non-empty `description`. A declaration is read by whoever is
+debugging the hand-off that just failed, and a bare `name` + `type` pair states the
+assertion without stating why it holds.
+
 **Opt-in and emitted only when declared.** An app with no `artifactSchemas` block
 generates byte-identical output to before the block existed — no new file. Unlike the
 workflow config and manifest, this file does not depend on `uiConfig`. Multi-entrypoint

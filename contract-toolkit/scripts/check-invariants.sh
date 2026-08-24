@@ -319,7 +319,7 @@ check_artifact_schemas() {
 
 check_artifact_schemas "path-shaped key" 'A-Za-z_' "$(artifact_schemas_body '  ["artifacts/raw/*.parquet"] = new ArtifactSchema {
     format = "parquet"
-    fields { new ArtifactField { name = "QUERY_ID"; type = "string" } }
+    fields { new ArtifactField { name = "QUERY_ID"; type = "string"; description = "d" } }
   }')"
 
 check_artifact_schemas "empty fields" 'isEmpty' "$(artifact_schemas_body '  ["raw_queries"] = new ArtifactSchema {
@@ -330,8 +330,8 @@ check_artifact_schemas "empty fields" 'isEmpty' "$(artifact_schemas_body '  ["ra
 check_artifact_schemas "duplicate field names" 'isDistinct' "$(artifact_schemas_body '  ["raw_queries"] = new ArtifactSchema {
     format = "parquet"
     fields {
-      new ArtifactField { name = "QUERY_ID"; type = "string" }
-      new ArtifactField { name = "QUERY_ID"; type = "int" }
+      new ArtifactField { name = "QUERY_ID"; type = "string"; description = "d" }
+      new ArtifactField { name = "QUERY_ID"; type = "int"; description = "d" }
     }
   }')"
 
@@ -343,7 +343,7 @@ AS_CTRL_CONTRACT="$(mktemp "$REPO_ROOT/test-artifact-schemas-ctrl-XXXXXX.pkl")"
 AS_CTRL_OUT="$(mktemp -d "$REPO_ROOT/test-artifact-schemas-ctrl-out-XXXXXX")"
 artifact_schemas_body '  ["raw_queries"] = new ArtifactSchema {
     format = "parquet"
-    fields { new ArtifactField { name = "START_TIME"; type = "timestamp" } }
+    fields { new ArtifactField { name = "START_TIME"; type = "timestamp"; description = "d" } }
   }' > "$AS_CTRL_CONTRACT"
 AS_CTRL_ERR="$(pkl eval -m "$AS_CTRL_OUT" "$AS_CTRL_CONTRACT" 2>&1 || true)"
 if echo "$AS_CTRL_ERR" | grep -q "Pkl Error"; then
@@ -356,6 +356,16 @@ elif [ ! -f "$AS_CTRL_OUT/app/generated/artifact_schemas.json" ]; then
 fi
 rm -f "$AS_CTRL_CONTRACT"
 rm -rf "$AS_CTRL_OUT"
+
+check_artifact_schemas "missing field description" '`description` is required' "$(artifact_schemas_body '  ["raw_queries"] = new ArtifactSchema {
+    format = "parquet"
+    fields { new ArtifactField { name = "START_TIME"; type = "timestamp" } }
+  }')"
+
+check_artifact_schemas "empty field description" 'isEmpty' "$(artifact_schemas_body '  ["raw_queries"] = new ArtifactSchema {
+    format = "parquet"
+    fields { new ArtifactField { name = "START_TIME"; type = "timestamp"; description = "" } }
+  }')"
 
 # A bundle root has no contract model, so a key there could not name a real
 # FileReference field, and the file it would emit could be picked up as a fallback
@@ -380,7 +390,7 @@ entrypoints {
 artifactSchemas {
   ["raw_queries"] = new ArtifactSchema {
     format = "parquet"
-    fields { new ArtifactField { name = "START_TIME"; type = "timestamp" } }
+    fields { new ArtifactField { name = "START_TIME"; type = "timestamp"; description = "d" } }
   }
 }
 PKLEOF
