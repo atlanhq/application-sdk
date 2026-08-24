@@ -209,6 +209,10 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     legitimately calls ``create_worker`` and ``uvicorn.run`` — that is its job;
     consumer apps must delegate those calls to the SDK launcher (BLDX-1411).
 
+    D011 (conformance suite undeclared) is app-scoped: the SDK *publishes* the
+    package, so it has no reason to declare it as a consumer, and the rule would
+    be pure noise there.
+
     B001 (deprecated-symbol usage) is app-scoped: the SDK deliberately retains
     and internally uses its own deprecated shims.  B002–B004 (deprecation
     authoring hygiene) are SDK-only — they grade how the SDK *declares* its
@@ -344,6 +348,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "D007",
         "D008",
         "D009",
+        "D011",
         "E020",
         "K001",
         "K002",

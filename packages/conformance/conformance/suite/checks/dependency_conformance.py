@@ -77,8 +77,13 @@ RULE_D007 = "D007"
 RULE_D008 = "D008"
 RULE_D009 = "D009"
 RULE_D010 = "D010"
+RULE_D011 = "D011"
 
 SDK_PACKAGE = "atlan-application-sdk"
+# The conformance suite itself (D011).  Apps declare it in a dev group so
+# the remediation loop's ``uv run atlan-application-sdk-conformance``
+# invocation resolves; it is never a runtime dependency.
+CONFORMANCE_PACKAGE = "atlan-application-sdk-conformance"
 
 # The canonical build backend for Atlan apps (D007).
 HATCHLING_BACKEND = "hatchling.build"
@@ -190,6 +195,43 @@ def _sdk_extras_in(raw: str) -> list[str]:
         return []
     blob = m.group("extras") or ""
     return [e.strip() for e in blob.split(",") if e.strip()]
+
+
+def _is_floating_range(spec: str) -> bool:
+    """Return True iff *spec* is a two-sided range that can still float (D011).
+
+    Deliberately stricter than :func:`_is_bounded_specifier`, which accepts
+    ``==X`` and ``~=X.Y`` as "bounded".  For the conformance suite an exact or
+    compatible-release pin is the defect, not a satisfying answer: the D-series
+    CI leg resolves the suite from the app's ``uv.lock``, so a frozen specifier
+    freezes the ruleset that grades the repo.  The canonical form is
+    ``>=<floor>,<1.0.0`` — a floor plus the 1.0.0 major boundary — which lets a
+    lockfile refresh pick up each new release.
+
+    Rejected: bare names, exact (``==`` / ``===``), compatible-release (``~=``),
+    and one-sided ranges (``>=0.17.0`` with no upper bound).
+    """
+    spec = spec.strip()
+    if not spec:
+        return False
+    clauses = [c.strip() for c in spec.split(",") if c.strip()]
+    if not clauses:
+        return False
+
+    has_lower = False
+    has_upper = False
+    for clause in clauses:
+        if clause.startswith(("===", "==", "~=")):
+            # A pin of any flavour freezes the ruleset — never floating.
+            return False
+        if clause.startswith(">=") or (
+            clause.startswith(">") and not clause.startswith(">=")
+        ):
+            has_lower = True
+        elif clause.startswith("<"):
+            # covers both ``<`` and ``<=``
+            has_upper = True
+    return has_lower and has_upper
 
 
 def _is_bounded_specifier(spec: str) -> bool:
@@ -1122,6 +1164,43 @@ def _marker_can_hold(marker: object) -> bool:
         return True
 
 
+def _locked_package_version(root: Path, name: str) -> str | None:
+    """Return the version *name* resolves to in ``root/uv.lock``, else None.
+
+    ``None`` means "not in the lock" — either the lock does not exist, cannot be
+    parsed, or carries no such package.  Callers must not treat an unparseable
+    lock as a violation; D011 only reports a *missing entry* when the lock is
+    readable, so a malformed lock never manufactures a finding.
+    """
+    lock = root / "uv.lock"
+    if not lock.is_file():
+        return None
+    try:
+        doc = tomllib.loads(lock.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return None
+    target = _normalise_name(name)
+    for pkg in doc.get("package", []):
+        if not isinstance(pkg, dict):
+            continue
+        if _normalise_name(str(pkg.get("name", ""))) == target:
+            version = pkg.get("version")
+            return str(version) if version is not None else None
+    return None
+
+
+def _lock_is_readable(root: Path) -> bool:
+    """True iff ``root/uv.lock`` exists and parses — the D011 lock branch's gate."""
+    lock = root / "uv.lock"
+    if not lock.is_file():
+        return False
+    try:
+        tomllib.loads(lock.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return False
+    return True
+
+
 def _lock_dependency_edges(
     pkg: dict[str, object], extras: frozenset[str]
 ) -> list[tuple[str, frozenset[str]]]:
@@ -1539,6 +1618,161 @@ def _scan_unused_dependencies(
     return findings, unresolved
 
 
+def _scan_conformance_dependency(
+    text: str, rel_pyproject: str, root: Path
+) -> list[Finding]:
+    """D011: the app's declaration of the conformance suite itself.
+
+    Repo-level, not per-file: this is a property of the root ``pyproject.toml``,
+    so a monorepo must not collect one finding per sub-package.  Four branches,
+    checked in order and reported at most once:
+
+    1. **Undeclared** — the package appears in no dependency array, so
+       ``uv run atlan-application-sdk-conformance`` (the form the remediation
+       loop and the bootstrapped ``remediate`` skill use) fails to spawn.
+    2. **Declared in** ``[project.dependencies]`` — a *placement* violation,
+       not a spawn one: ``uv run`` does find the script, so no other branch
+       fires, but a production sync installs ``[project.dependencies]`` and
+       skips dependency groups, so the declaration ships a dev-only tool in
+       the runtime image.  Reported even when a correct dev-group entry also
+       exists, because the runtime line still has to go.
+    3. **Pinned or one-sided** — declared, but with a specifier that cannot
+       float (``==0.13.0``, ``~=0.17``, or a bare ``>=0.17.0`` with no upper
+       bound).  The D-series CI leg resolves the suite out of the app's
+       ``uv.lock``, so a frozen specifier freezes the ruleset grading the repo.
+    4. **Missing from the lock** — declared and floating, but absent from a
+       readable ``uv.lock``.  CI syncs from the lock, so a pyproject-only edit
+       leaves the console script unavailable in the very environment that needs
+       it.  Skipped entirely when the lock is absent or unparseable, so a
+       malformed lock never manufactures a finding.
+    """
+    # App-scoped: the SDK *publishes* this package, so it has no reason to
+    # declare it as a consumer.
+    if _is_self_check(_project_name(text)):
+        return []
+
+    suppressions = parse_toml_suppressions(text)
+    conformance_norm = _normalise_name(CONFORMANCE_PACKAGE)
+    canonical = f"{CONFORMANCE_PACKAGE}>=0.17.0,<1.0.0"
+
+    entries = [
+        e
+        for e in (*_iter_dep_entries(text), *_iter_dependency_group_entries(text))
+        if e.name == conformance_norm
+    ]
+
+    # ── Branch 1: undeclared ────────────────────────────────────────────────
+    if not entries:
+        # Anchor at the [dependency-groups] header so the reviewer sees where
+        # the declaration belongs; line 1 when there is no such table.
+        anchor_line = 1
+        for ln, line in enumerate(text.splitlines(), start=1):
+            if line.strip() == "[dependency-groups]":
+                anchor_line = ln
+                break
+        return [
+            _make_finding(
+                rule_id=RULE_D011,
+                file=rel_pyproject,
+                line=anchor_line,
+                column=1,
+                message=(
+                    f"App pyproject.toml does not declare "
+                    f"'{CONFORMANCE_PACKAGE}' in any dependency group. The "
+                    f"remediation loop invokes the suite as 'uv run "
+                    f"{CONFORMANCE_PACKAGE}', which fails to spawn when the "
+                    f"package is undeclared, so findings can be reported by CI "
+                    f"but never remediated in the repo. Add '{canonical}' to "
+                    f"[dependency-groups].dev — not to [project.dependencies], "
+                    f"which would ship it in the runtime image."
+                ),
+                suppressions=suppressions,
+            )
+        ]
+
+    # ── Branch 2: declared in the runtime array ─────────────────────────────
+    # A floating entry in [project.dependencies] satisfies every other branch
+    # — the console script really does spawn — so placement has to be graded
+    # on its own or the one array the package must never appear in is the one
+    # array this rule never reports.
+    runtime_entries = [e for e in entries if e.array_path == "project.dependencies"]
+    if runtime_entries:
+        entry = runtime_entries[0]
+        return [
+            _make_finding(
+                rule_id=RULE_D011,
+                file=rel_pyproject,
+                line=entry.line,
+                column=entry.column,
+                message=(
+                    f"'{CONFORMANCE_PACKAGE}' is declared in "
+                    f"[project.dependencies]. That ships a dev-only tool in "
+                    f"the runtime image: a production sync installs "
+                    f"[project.dependencies] and skips dependency groups. "
+                    f"Move it into [dependency-groups].dev as '{canonical}' "
+                    f"(any dev dependency group or "
+                    f"[project.optional-dependencies.*] array is accepted) "
+                    f"and delete the [project.dependencies] entry — even if a "
+                    f"correct dev-group entry already exists, the runtime one "
+                    f"still has to go."
+                ),
+                suppressions=suppressions,
+            )
+        ]
+
+    # ── Branch 3: declared, but the specifier cannot float ──────────────────
+    for entry in entries:
+        parsed = _parse_requirement(entry.raw)
+        spec = parsed[1] if parsed else ""
+        if not _is_floating_range(spec):
+            shown = spec or "no version specifier"
+            return [
+                _make_finding(
+                    rule_id=RULE_D011,
+                    file=rel_pyproject,
+                    line=entry.line,
+                    column=entry.column,
+                    message=(
+                        f"'{CONFORMANCE_PACKAGE}' is declared in "
+                        f"[{entry.array_path}] with a specifier that cannot "
+                        f"float ({shown}). The D-series CI leg resolves the "
+                        f"suite from this repo's uv.lock, so an exact pin, a "
+                        f"'~=' compatible-release pin, or a one-sided '>=' "
+                        f"freezes or unbounds the ruleset that grades the "
+                        f"repo. Use a floor plus the 1.0.0 major boundary so a "
+                        f"lockfile refresh picks up each release: "
+                        f"'{canonical}'."
+                    ),
+                    suppressions=suppressions,
+                )
+            ]
+
+    # ── Branch 4: declared and floating, but not in a readable lock ─────────
+    if (
+        _lock_is_readable(root)
+        and _locked_package_version(root, CONFORMANCE_PACKAGE) is None
+    ):
+        return [
+            _make_finding(
+                rule_id=RULE_D011,
+                file=rel_pyproject,
+                line=entries[0].line,
+                column=entries[0].column,
+                message=(
+                    f"'{CONFORMANCE_PACKAGE}' is declared in "
+                    f"[{entries[0].array_path}] but has no entry in uv.lock. "
+                    f"CI installs from the lock, so the console script the "
+                    f"remediation loop calls is still absent there. Run "
+                    f"'uv lock' and commit the result alongside the "
+                    f"pyproject.toml change."
+                ),
+                suppressions=suppressions,
+            )
+        ]
+
+    return []
+
+
 def scan_all(
     paths: list[Path],
     root: Path,
@@ -1588,6 +1822,9 @@ def scan_all(
         findings.extend(
             _scan_query_transformer_duckdb(py_files, root, text, rel_pyproject)
         )
+
+    # ── D011 (repo-level: a property of the root pyproject, not of each) ────
+    findings.extend(_scan_conformance_dependency(text, rel_pyproject, root))
 
     # ── D003 ────────────────────────────────────────────────────────────────
     dep_entries = [

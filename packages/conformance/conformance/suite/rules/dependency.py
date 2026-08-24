@@ -483,4 +483,102 @@ RULES: tuple[RuleDefinition, ...] = (
             "packages/conformance/conformance/docs/rules/dependency.md#d010"
         ),
     ),
+    RuleDefinition(
+        id="D011",
+        scope=RuleScope.APP,
+        name="ConformanceDependencyContract",
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.STATIC,
+        category="dependency-tooling",
+        autofixable=True,
+        since="0.23.0",
+        rationale=(
+            "The published remediation programs and the bootstrapped per-app "
+            "'remediate' skill invoke the suite as "
+            "'uv run atlan-application-sdk-conformance'. In a repo that does not "
+            "declare the package that is a hard failure — 'error: Failed to spawn', "
+            "exit 2 — because no transitive dependency exposes the console script, "
+            "not even a full SDK sync (211 packages, 31 scripts, none of them this "
+            "one). So the whole remediation loop is unavailable in a non-declaring "
+            "repo: CI can report findings that nobody can then remediate locally or "
+            "in-PR. A dev-group declaration restores the loop and never reaches the "
+            "runtime image, because dev groups are not installed by a production "
+            "sync (FND-419). "
+            "The declaration alone is not enough, which is why this rule also "
+            "grades its shape: the D-series leg resolves the suite out of the "
+            "app's uv.lock, so an exact pin ('==0.13.0'), a '~=' "
+            "compatible-release pin, or a one-sided '>=0.17.0' either freezes "
+            "the ruleset grading the repo or leaves it unbounded, and a "
+            "pyproject-only edit that never reaches uv.lock leaves the console "
+            "script absent in CI, which installs from the lock. A floor plus "
+            "the 1.0.0 major boundary, locked, is the one shape that keeps the "
+            "repo on a current ruleset without admitting an unreviewed major. "
+            "Customer impact: a repo whose ruleset is frozen silently stops "
+            "being graded by every rule added since that version — including "
+            "the ones that describe guaranteed runtime failures, such as a "
+            "transform path that raises ImportError on every record (D010) or "
+            "a Dapr component fetch that rate-limits under CI concurrency "
+            "(D009). The app then ships a defect that a current ruleset would "
+            "have blocked, and because the gate reported success the first "
+            "thing that reveals it is the customer's own failed crawl. Where a "
+            "declaration is missing outright, the remediation loop cannot run "
+            "in the repo at all, so nothing can be fixed there even once it is "
+            "found."
+        ),
+        short_description=(
+            "atlan-application-sdk-conformance is undeclared, declared in "
+            "[project.dependencies], pinned to a non-floating specifier, or "
+            "missing from uv.lock"
+        ),
+        full_description=(
+            "Every app should declare ``atlan-application-sdk-conformance`` in a\n"
+            "dev/test dependency array, with a specifier that can float, and\n"
+            "have it resolved in ``uv.lock``.  At most one finding is reported\n"
+            "per repo; four things are checked, in order:\n"
+            "\n"
+            "1. **Declared at all** — satisfied by an entry in **any**\n"
+            "   ``[dependency-groups.*]`` group or any\n"
+            "   ``[project.optional-dependencies.*]`` array, because apps\n"
+            "   legitimately differ on which group they use.\n"
+            "2. **Not in** ``[project.dependencies]`` — graded separately,\n"
+            "   because a floating runtime entry satisfies every other check\n"
+            "   (the console script really does spawn) while shipping a\n"
+            "   dev-only tool in the runtime image.  Reported even when a\n"
+            "   correct dev-group entry also exists: the runtime line still\n"
+            "   has to be deleted.  The fix is to move the entry, not to\n"
+            "   add a second one.\n"
+            "3. **Specifier can float** — a floor *and* an upper bound, and\n"
+            "   not a pin.  ``==0.13.0``, ``===0.13.0``, ``~=0.17.0``, a bare\n"
+            "   ``>=0.17.0`` and a bare ``<1.0.0`` are all rejected.\n"
+            "4. **Present in** ``uv.lock`` — checked only when a lock exists\n"
+            "   and parses, so a missing or malformed lock never manufactures\n"
+            "   a finding.\n"
+            "\n"
+            "The canonical form is ``[dependency-groups].dev``, matching\n"
+            "``atlan-app-template``:\n"
+            '``"atlan-application-sdk-conformance>=0.17.0,<1.0.0"``.\n'
+            "\n"
+            "The package is not needed at runtime and must never be added to\n"
+            "``[project.dependencies]`` — dev groups are excluded from a\n"
+            "production sync, so the declaration cannot reach the shipped image.\n"
+            "Branch 2 above is what enforces that placement.\n"
+            "\n"
+            "**Known trade-off, tracked in FND-419.**  Declaring the package also\n"
+            "pins the ruleset used by one CI leg.  The D-series leg is the only\n"
+            "one that runs ``uv run --with atlan-application-sdk-conformance``\n"
+            "against the app's synced environment; because that ``--with``\n"
+            "requirement is unconstrained, uv satisfies it from the app's\n"
+            "``uv.lock`` rather than resolving fresh, while the other series legs\n"
+            "run ``uvx`` (latest from PyPI).  A declaring repo therefore grades\n"
+            "its dependency rules with whatever version its lockfile holds, and\n"
+            "the aggregate report can show two driver versions.  Keeping the\n"
+            "lockfile current is what limits that; the structural fix is to stop\n"
+            "the D leg reading the lockfile at all, which is FND-419's Step 1 +\n"
+            "Step 2 and does not require any app-repo change.\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/dependency.md#d011"
+        ),
+    ),
 )
