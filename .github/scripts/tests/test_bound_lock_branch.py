@@ -45,12 +45,17 @@ def git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
-    """A repo shaped like application-sdk: two uv projects and a requirements.txt."""
+    """A repo shaped like application-sdk: two uv projects, one npm project, and a
+    requirements.txt. All four files the refresh lane rewrites."""
     (tmp_path / "uv.lock").write_text("root lock\n")
     (tmp_path / "requirements.txt").write_text("stale==1.0.0\n")
     sub = tmp_path / "packages" / "conformance"
     sub.mkdir(parents=True)
     (sub / "uv.lock").write_text("sub lock\n")
+    npm_project = tmp_path / orchestrator.NPM_PROJECT
+    npm_project.mkdir(parents=True, exist_ok=True)
+    (npm_project / "package.json").write_text('{"name": "remediation"}\n')
+    (npm_project / "package-lock.json").write_text('{"lockfileVersion": 3}\n')
     git(tmp_path, "init", "-q")
     git(tmp_path, "add", "-A")
     git(tmp_path, "commit", "-qm", "base")
@@ -198,12 +203,44 @@ class TestBoundProject:
             assert exempt == list(project.exempt)
 
 
+class TestBoundNpm:
+    """The fourth file the lane rewrites, bounded by a different mechanism."""
+
+    def test_the_npm_project_is_the_one_under_packages_conformance(self):
+        # Two levels of `conformance`, which is easy to get wrong by one: the uv
+        # project is packages/conformance, the npm project is one deeper.
+        assert orchestrator.NPM_PROJECT == "packages/conformance/conformance"
+
+    def test_the_npm_driver_gets_the_same_window_and_baseline_as_the_uv_bound(
+        self, monkeypatch, tmp_path
+    ):
+        """A second window in one workflow would need its own justification, and a
+        baseline other than the base branch is what makes "never roll back what
+        main ships" structural rather than a claim."""
+        calls: list[list[str]] = []
+        monkeypatch.setattr(
+            orchestrator.npm_bounded, "main", lambda argv: calls.append(argv) or 0
+        )
+        orchestrator.bound_npm("P3D", "origin/main", tmp_path)
+
+        (argv,) = calls
+        assert argv[argv.index("--window") + 1] == "P3D"
+        assert argv[argv.index("--baseline-ref") + 1] == "origin/main"
+        assert argv[argv.index("--project-dir") + 1] == str(
+            tmp_path / orchestrator.NPM_PROJECT
+        )
+        # The npm bound has no exempt set: exemptions exist to let a first-party
+        # package move ahead of the window, and none of these three dev-only
+        # devDependencies is Atlan-published.
+        assert "--exempt" not in argv
+
+
 class TestMain:
     """End to end with the bound stubbed. The invariant under test throughout is
     that nothing reaches a commit unless every project was bounded successfully."""
 
-    def _stub_bound(self, monkeypatch, *, rewrite: bool = True):
-        """Stand in for the driver. `rewrite=False` models an already-bound branch."""
+    def _stub_bound(self, monkeypatch, *, rewrite: bool = True, npm_code: int = 0):
+        """Stand in for both drivers. `rewrite=False` models an already-bound branch."""
 
         def fake_main(argv: list[str]) -> int:
             directory = Path(argv[argv.index("--project-dir") + 1])
@@ -211,12 +248,19 @@ class TestMain:
                 (directory / "uv.lock").write_text("bounded\n")
             return 0
 
-        monkeypatch.setattr(orchestrator.bounded, "main", fake_main)
+        def fake_npm_main(argv: list[str]) -> int:
+            directory = Path(argv[argv.index("--project-dir") + 1])
+            if rewrite and npm_code == 0:
+                (directory / "package-lock.json").write_text('{"bounded": true}\n')
+            return npm_code
 
-    def test_one_commit_carries_both_locks_and_the_requirements_export(
+        monkeypatch.setattr(orchestrator.bounded, "main", fake_main)
+        monkeypatch.setattr(orchestrator.npm_bounded, "main", fake_npm_main)
+
+    def test_one_commit_carries_every_lock_and_the_requirements_export(
         self, monkeypatch, in_repo
     ):
-        """One commit, not three: each push re-fires the PR's whole check suite."""
+        """One commit, not four: each push re-fires the PR's whole check suite."""
         self._stub_bound(monkeypatch)
         monkeypatch.setattr(
             orchestrator,
@@ -228,9 +272,29 @@ class TestMain:
         assert head_files(in_repo) == {
             "uv.lock",
             "packages/conformance/uv.lock",
+            f"{orchestrator.NPM_PROJECT}/package-lock.json",
             "requirements.txt",
         }
         assert head_subject(in_repo) == orchestrator.COMMIT_MESSAGE
+
+    def test_a_failed_npm_bound_commits_nothing_at_all(self, monkeypatch, in_repo):
+        """Same fail-closed-not-fail-partial rule the uv projects get.
+
+        A half-bounded branch still auto-merges and still looks like the control
+        worked. The npm driver reserves a non-zero exit for the cases where it
+        could not establish a safe outcome at all — a declined bound is exit 0,
+        precisely so an ordinary decline does not throw away the uv bounds that
+        did apply.
+        """
+        self._stub_bound(monkeypatch, npm_code=1)
+        exported: list[Path] = []
+        monkeypatch.setattr(
+            orchestrator, "export_requirements", lambda root: exported.append(root)
+        )
+
+        assert orchestrator.main(["--window", "P7D", "--baseline-ref", "HEAD"]) == 1
+        assert head_subject(in_repo) == "base"
+        assert exported == [], "the export must not run against a half-bound tree"
 
     def test_a_failed_bound_commits_nothing_at_all(self, monkeypatch, in_repo):
         """Fail-closed, and specifically not fail-partial.
