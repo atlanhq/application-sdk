@@ -244,6 +244,17 @@ RETRYABLE_TRANSPORT_PATTERNS = ("disconnected prematurely",)
 # Fails identically on any model, so never spend a second sandbox on it: the
 # sandbox wants interactive input, which GHA can never give.
 NEVER_RETRY_ERR_CODES = frozenset({"elicitation"})
+# FND-764. mothership's own sandbox-api codespace — a fault in its execution
+# wrapper rather than in the model. Precautionary on THIS lane: all 9 observed
+# occurrences were on the resolve lane and none here, but the two lanes POST the
+# same `mode: "direct"` endpoint and reach the same five unguarded
+# `langfuse_lifecycle_span` blocks in mothership's `_execute_direct`, so the
+# review lane is exposed to it identically. Matched on the code AND the message
+# prefix so a future non-plumbing `internal` cannot inherit a retry that was
+# never argued for. Kept as its own per-lane copy, like RETRYABLE_TRANSPORT_
+# PATTERNS above, because the entry conditions are per-lane.
+SANDBOX_API_ERR_CODE = "internal"
+SANDBOX_API_ERR_PREFIX = "[sandbox-api/"
 # Dispatch-level HTTP statuses live in their own `http_` codespace, kept apart
 # from the stream's provider codes on purpose: a provider 400 carried inside the
 # stream is worth a different model, while a 400 on the POST itself is a
@@ -793,6 +804,19 @@ def is_retryable_fault(st: SSEState) -> bool:
     return any(p in st.err_msg.lower() for p in RETRYABLE_ERR_PATTERNS)
 
 
+def is_sandbox_api_fault(st: SSEState) -> bool:
+    """True when mothership's sandbox-api reported a fault in its own plumbing.
+
+    Self-deciding on the code, like `is_retryable_fault`: `internal` is
+    informative, so this never consults the message-pattern ladder. The prefix
+    is part of the discriminator rather than a fallback — see
+    SANDBOX_API_ERR_CODE.
+    """
+    if st.err_code != SANDBOX_API_ERR_CODE:
+        return False
+    return st.err_msg.lstrip().startswith(SANDBOX_API_ERR_PREFIX)
+
+
 def is_transport_fault(st: SSEState) -> bool:
     """True when the reported fault is the RPC to the sandbox, not the model.
 
@@ -868,6 +892,22 @@ def _retry_class(st: SSEState, attempt: int) -> RetryPlan:
             True,
             f"code={st.err_code or 'none'} reports a dropped RPC to the sandbox "
             f"({_squash(st.err_msg)[:80]}) — the model never failed, so "
+            f"re-dispatching on the same model ({same}) (attempt {attempt + 1} "
+            f"of {MAX_DISPATCH_ATTEMPTS})",
+            same,
+        )
+    if is_sandbox_api_fault(st):
+        # FND-764. mothership reported a fault in its OWN wrapper around the run
+        # (`sandbox-api/...`), not in the model — so, like the transport class
+        # above, the swap axis is the wrong one and attempt 2 re-runs the same
+        # model on a fresh session id. Ranked above `is_retryable_fault` because
+        # `internal` is an informative code and would otherwise fall out of it
+        # as "not a known model/provider fault" — true, and beside the point.
+        same = attempt_model(attempt)
+        return RetryPlan(
+            True,
+            f"code={st.err_code} is a fault in mothership's own sandbox-api "
+            f"wrapper ({_squash(st.err_msg)[:80]}), not in the model — "
             f"re-dispatching on the same model ({same}) (attempt {attempt + 1} "
             f"of {MAX_DISPATCH_ATTEMPTS})",
             same,

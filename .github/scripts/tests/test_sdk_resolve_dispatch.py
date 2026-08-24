@@ -203,7 +203,8 @@ def test_noop_run_is_retryable_and_names_itself_in_the_reason():
     st = _stream("event: complete", 'data: {"status": "completed"}')
     assert st.err_code == ""
     assert sr.is_retryable_fault(st) is True
-    ok, reason = sr.retry_decision(st, 1, sr.DISPATCH_BUDGET_SECONDS)
+    _plan = sr.retry_decision(st, 1, sr.DISPATCH_BUDGET_SECONDS)
+    ok, reason = _plan.retry, _plan.reason
     assert ok is True
     assert "no-op run" in reason
     assert sr.RETRY_MAIN_MODEL in reason
@@ -710,7 +711,8 @@ def test_retry_decision_fires_on_a_dead_sandbox_with_a_provider_fault():
     st = sr.SSEState()
     st.got_event = st.completed = st.errored = True
     st.status, st.err_code = "error", "429"
-    ok, reason = sr.retry_decision(st, 1, sr.DISPATCH_BUDGET_SECONDS)
+    _plan = sr.retry_decision(st, 1, sr.DISPATCH_BUDGET_SECONDS)
+    ok, reason = _plan.retry, _plan.reason
     assert ok is True
     assert sr.RETRY_MAIN_MODEL in reason
 
@@ -719,7 +721,8 @@ def test_retry_decision_refuses_a_second_retry():
     st = sr.SSEState()
     st.got_event = st.completed = st.errored = True
     st.status, st.err_code = "error", "429"
-    ok, reason = sr.retry_decision(st, sr.MAX_DISPATCH_ATTEMPTS, 6000)
+    _plan = sr.retry_decision(st, sr.MAX_DISPATCH_ATTEMPTS, 6000)
+    ok, reason = _plan.retry, _plan.reason
     assert ok is False and "attempts" in reason
 
 
@@ -727,7 +730,8 @@ def test_retry_decision_refuses_a_transport_drop():
     # The sandbox may still be working — a re-dispatch would double-run it.
     st = _stream("event: started", 'data: {"session_id": "s1"}')
     assert sr.sandbox_terminated_abnormally(st) is False
-    ok, reason = sr.retry_decision(st, 1, 6000)
+    _plan = sr.retry_decision(st, 1, 6000)
+    ok, reason = _plan.retry, _plan.reason
     assert ok is False and "double-run" in reason
 
 
@@ -735,7 +739,8 @@ def test_retry_decision_refuses_when_the_job_budget_is_nearly_gone():
     st = sr.SSEState()
     st.got_event = st.completed = st.errored = True
     st.status, st.err_code = "error", "429"
-    ok, reason = sr.retry_decision(st, 1, sr.RETRY_MIN_REMAINING_SECONDS - 1)
+    _plan = sr.retry_decision(st, 1, sr.RETRY_MIN_REMAINING_SECONDS - 1)
+    ok, reason = _plan.retry, _plan.reason
     assert ok is False and "job budget" in reason
 
 
@@ -767,7 +772,8 @@ def test_an_http_status_on_the_post_is_not_a_stream_error():
     st = sr.dispatch_once("http://m", "tok", {}, opener=_raising_opener(exc))
     assert st.err_code == "http_504"
     assert st.errored is True
-    ok, reason = sr.retry_decision(st, 1, sr.DISPATCH_BUDGET_SECONDS)
+    _plan = sr.retry_decision(st, 1, sr.DISPATCH_BUDGET_SECONDS)
+    ok, reason = _plan.retry, _plan.reason
     assert ok is True
     assert sr.RETRY_MAIN_MODEL in reason
 
@@ -1136,7 +1142,8 @@ def test_a_dropped_rpc_gets_the_long_out_of_band_poll():
 
 def test_a_dropped_rpc_is_never_re_dispatched_on_this_lane():
     """A resolver pushes commits; two on one branch cannot be undone."""
-    ok, reason = sr.retry_decision(_rpc_dropped(), 1, sr.DISPATCH_BUDGET_SECONDS)
+    _plan = sr.retry_decision(_rpc_dropped(), 1, sr.DISPATCH_BUDGET_SECONDS)
+    ok, reason = _plan.retry, _plan.reason
     assert ok is False
     assert "dropped RPC" in reason and "cannot be undone" in reason
 
@@ -1165,7 +1172,8 @@ def test_a_model_fault_still_swaps_the_model():
     st.status, st.err_code = "error", "429"
     st.err_msg = "temporarily rate-limited upstream"
     assert sr.is_transport_fault(st) is False
-    ok, reason = sr.retry_decision(st, 1, sr.DISPATCH_BUDGET_SECONDS)
+    _plan = sr.retry_decision(st, 1, sr.DISPATCH_BUDGET_SECONDS)
+    ok, reason = _plan.retry, _plan.reason
     assert ok is True and sr.RETRY_MAIN_MODEL in reason
 
 
@@ -1195,3 +1203,113 @@ def test_main_fails_a_dropped_rpc_whose_handoff_never_lands(monkeypatch, capsys)
     assert sr.main() == 1
     assert len(payloads) == 1
     assert "Not re-dispatching" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# a fault in mothership's own sandbox-api wrapper: same-model retry (FND-764)
+# ---------------------------------------------------------------------------
+
+# Verbatim from the 9 consecutive resolve failures on 2026-08-24 (runs
+# 32712863922 .. 32739465231). mothership's `langfuse_lifecycle_span` swallowed
+# the real exception and yielded a second time, so `contextlib` raised this in
+# its place and the actual cause never reached us (FND-765).
+_SANDBOX_API_MASKED = "[sandbox-api/_execute_sync] generator didn't stop after throw()"
+# The other observed shape, from run 32494993256 — legible, and plainly
+# transient. A different cause from the one above; the same retryability.
+_SANDBOX_API_CLONE = (
+    "[sandbox-api/_execute_sync] Failed to clone repository: "
+    '{"error":"CommandError: ... Command timeout after 60000ms"}'
+)
+
+
+def _sandbox_api_dead(message: str = _SANDBOX_API_MASKED):
+    """How those runs ended: `complete` with status=error, no cost, then the code.
+
+    `cost_usd` is empty on purpose — it is empty on every observed occurrence,
+    which is the evidence that no model produced a token.
+    """
+    return _stream(
+        "event: complete",
+        'data: {"status": "error", "cost_usd": ""}',
+        "",
+        *_error_event("internal", message),
+    )
+
+
+def test_a_sandbox_api_fault_is_recognised_by_code_and_prefix():
+    for msg in (_SANDBOX_API_MASKED, _SANDBOX_API_CLONE):
+        assert sr.is_sandbox_api_fault(_sandbox_api_dead(msg)) is True
+
+
+def test_a_sandbox_api_fault_retries_on_the_SAME_model():
+    """The whole point of the class: the model never failed, so don't swap it.
+
+    Before FND-764 this fell out of `is_retryable_fault` as "not a known
+    model/provider fault" — true, and beside the point.
+    """
+    st = _sandbox_api_dead()
+    assert sr.is_transport_fault(st) is False
+    plan = sr.retry_decision(st, 1, sr.DISPATCH_BUDGET_SECONDS)
+    assert plan.retry is True
+    assert plan.model == sr.MAIN_MODEL != sr.RETRY_MAIN_MODEL
+    assert "sandbox-api" in plan.reason
+
+
+def test_an_internal_code_without_the_prefix_still_refuses_to_retry():
+    """The guard that keeps this an allowlist rather than a denylist.
+
+    `internal` is a generic label. A future non-plumbing use of it must not
+    inherit a retry that was only ever argued for the sandbox-api codespace.
+    """
+    st = _sandbox_api_dead("upstream model rejected the request")
+    assert sr.is_sandbox_api_fault(st) is False
+    plan = sr.retry_decision(st, 1, sr.DISPATCH_BUDGET_SECONDS)
+    assert plan.retry is False
+    assert plan.model == ""
+    assert "not a known model/provider fault" in plan.reason
+
+
+def test_the_budget_floor_still_bounds_the_sandbox_api_class():
+    plan = sr.retry_decision(_sandbox_api_dead(), 1, sr.RETRY_MIN_REMAINING_SECONDS - 1)
+    assert plan.retry is False
+    assert "job budget" in plan.reason
+
+
+def test_the_attempt_cap_still_bounds_the_sandbox_api_class():
+    plan = sr.retry_decision(
+        _sandbox_api_dead(), sr.MAX_DISPATCH_ATTEMPTS, sr.DISPATCH_BUDGET_SECONDS
+    )
+    assert plan.retry is False
+
+
+def test_main_redispatches_a_sandbox_api_fault_on_the_same_model(monkeypatch, capsys):
+    """End-to-end: two dispatches, both on MAIN_MODEL, and the run recovers."""
+    _main_env(monkeypatch)
+    payloads = _record_dispatches(
+        monkeypatch, [_sandbox_api_dead(), _completed_stream("2.10")]
+    )
+
+    assert sr.main() == 0
+    assert [p["model"] for p in payloads] == [sr.MAIN_MODEL, sr.MAIN_MODEL]
+    # A retry MUST NOT collide with attempt 1's source_id on the mothership side.
+    assert payloads[0]["source_id"] != payloads[1]["source_id"]
+    assert "Re-dispatching" in capsys.readouterr().out
+
+
+def test_main_names_both_models_when_a_same_model_retry_also_fails(monkeypatch, capsys):
+    """The failure suffix must report what actually ran, not attempt_model().
+
+    With the model no longer a function of the attempt number, deriving the
+    suffix from `attempt_model(...)` would claim a swap to RETRY_MAIN_MODEL that
+    never happened.
+    """
+    _main_env(monkeypatch)
+    payloads = _record_dispatches(
+        monkeypatch, [_sandbox_api_dead(), _sandbox_api_dead()]
+    )
+
+    assert sr.main() == 1
+    assert len(payloads) == 2
+    out = capsys.readouterr().out
+    assert f"retried on {sr.MAIN_MODEL} after {sr.MAIN_MODEL} failed" in out
+    assert sr.RETRY_MAIN_MODEL not in out

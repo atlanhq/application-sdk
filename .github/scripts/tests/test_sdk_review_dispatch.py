@@ -1561,3 +1561,56 @@ def test_main_does_not_re_dispatch_a_dropped_rpc_that_delivered(
 
     assert sd.main() == 0
     assert len(seen) == 1
+
+
+# ---------------------------------------------------------------------------
+# a fault in mothership's own sandbox-api wrapper: same-model retry (FND-764)
+# ---------------------------------------------------------------------------
+
+# Verbatim from the resolve lane's 9 consecutive failures on 2026-08-24. This
+# lane saw none of them, but both POST the same `mode: "direct"` endpoint and
+# reach the same unguarded lifecycle-span blocks on mothership's side, so the
+# exposure is identical — the class is precautionary here, not observed.
+_SANDBOX_API_MASKED = "[sandbox-api/_execute_sync] generator didn't stop after throw()"
+
+
+def _sandbox_api_dead(message: str = _SANDBOX_API_MASKED) -> sd.SSEState:
+    return _stream(
+        *_event("complete", {"status": "error", "cost_usd": ""}),
+        *_event("error", {"code": "internal", "message": message}),
+    )
+
+
+def test_a_sandbox_api_fault_is_not_a_model_fault_and_would_fall_through():
+    """The regression anchor: the model-swap allowlist declines `internal`.
+
+    Correctly — nothing about the model failed. Before this class that refusal
+    was the end of the run.
+    """
+    st = _sandbox_api_dead()
+    assert sd.is_retryable_fault(st) is False
+    assert sd.is_transport_fault(st) is False  # informative code, not a pipe drop
+    assert sd.is_sandbox_api_fault(st) is True
+
+
+def test_a_sandbox_api_fault_retries_on_the_same_model():
+    plan = sd.retry_decision(_sandbox_api_dead(), 1, 6000)
+    assert plan.retry is True
+    assert plan.model == sd.MAIN_MODEL != sd.RETRY_MAIN_MODEL
+    assert "sandbox-api" in plan.reason and "same model" in plan.reason
+
+
+def test_an_internal_code_without_the_prefix_still_refuses_to_retry():
+    """Keeps the class an allowlist: `internal` alone buys nothing."""
+    st = _sandbox_api_dead("upstream model rejected the request")
+    assert sd.is_sandbox_api_fault(st) is False
+    plan = sd.retry_decision(st, 1, 6000)
+    assert plan.retry is False and plan.model == ""
+
+
+def test_the_sandbox_api_retry_still_honours_the_shared_retry_bounds():
+    """Constraint: an extra entry condition only — the knobs do not move."""
+    st = _sandbox_api_dead()
+    assert sd.retry_decision(st, sd.MAX_DISPATCH_ATTEMPTS, 6000).retry is False
+    assert sd.retry_decision(st, 1, sd.RETRY_MIN_REMAINING_SECONDS - 1).retry is False
+    assert sd.retry_decision(st, 1, sd.RETRY_MIN_REMAINING_SECONDS).retry is True
