@@ -23,6 +23,12 @@ name: Bound the Renovate lock refresh
 # that is first-party and explicitly chosen — the cooldown has no business
 # delaying a deliberate pick, only the unattended upgrade-everything refresh.
 #
+# The lane rewrites four lock files, and the npm one is bounded by a different
+# mechanism from the three Python ones (FND-380): npm can express none of the
+# per-package retention ceilings the uv bound relies on, so that file is gated
+# whole — take the bounded resolve, or restore the base branch's lock verbatim.
+# See renovate_npm_lock_bounded's docstring for the measurements behind that.
+#
 # All logic lives in the tested driver .github/scripts/bound_lock_branch.py; this
 # workflow provides the toolchain, the baseline ref, and the push.
 
@@ -33,6 +39,10 @@ on:
     paths:
       - "uv.lock"
       - "packages/conformance/uv.lock"
+      # The npm lock moves on its own: measured on #3355, whose entire net diff
+      # after the uv bound was this one file. Without it here that push runs no
+      # job at all and the file merges unbounded.
+      - "packages/conformance/conformance/package-lock.json"
 
 permissions:
   contents: read
@@ -46,7 +56,7 @@ concurrency:
 
 jobs:
   bound:
-    name: Re-resolve uv.lock under the release-age window
+    name: Re-resolve the refreshed locks under the release-age window
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # Two guards, for two unrelated reasons.
@@ -130,6 +140,17 @@ jobs:
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.12.5"
+
+      # For the npm half of the bound. Pinned to the same major as renovate.yaml
+      # rather than taking whatever the runner image ships: npm's major decides
+      # the lockfileVersion it writes, and a runner rolling forward to a major
+      # that writes a different one would turn every bounded resolve into a
+      # whole-file rewrite. Verified on npm 11.x: an unbounded
+      # `npm install --package-lock-only` reproduces the committed lock
+      # byte for byte, so the lane's diffs stay reviewable.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
 
       # P3D matches the fleet. A shorter window here would put application-sdk's
       # CI on a different dependency set from the connectors again, which is half
