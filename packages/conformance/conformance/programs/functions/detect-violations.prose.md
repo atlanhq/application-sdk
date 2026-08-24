@@ -29,8 +29,9 @@ description: >
   alongside `--rule`; the two are mutually exclusive and the runner errors on
   the combination.
 
-  **Version fallback**: `--rule` exists from suite 0.21.  If the pinned
-  runner rejects the flag (exit with an unknown-argument error), rerun with
+  **Compatibility fallback**: probe for the flag, never key off a version
+  string.  If the pinned runner rejects `--rule` (exit with an
+  unknown-argument error), rerun with
   the narrowest `--series` covering the ids (the first letter of each ID) and
   apply the rule-id post-filter on the parsed output as described below — the
   behaviour is identical, only the efficiency differs.  Never use

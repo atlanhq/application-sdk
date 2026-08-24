@@ -22,10 +22,11 @@ inputs:
     description: >
       Comma-separated list of exact rule IDs to restrict the run to, e.g.
       "L004" or "L001,L011".  Threaded through as the program's `rule_ids`
-      input and pushed down to the runner NATIVELY as `--rule <IDS>` (suite
-      0.21+): the runner derives the series, executes only those modules, and
-      scopes findings, the exit state and the emitted SARIF catalog to
-      exactly these rules.  On an older pinned runner (no `--rule` flag),
+      input and pushed down to the runner NATIVELY as `--rule <IDS>` whenever
+      the pinned runner accepts the flag: the runner derives the series,
+      executes only those modules, and scopes findings, the exit state and the
+      emitted SARIF catalog to exactly these rules.  Support is probed, never
+      inferred from a version string — on a runner that rejects `--rule`,
       `detect-violations` falls back to the narrowest `--series` plus a
       rule-id post-filter — never `--series L004`, which matches a series
       *letter* and silently activates zero checks.
@@ -173,10 +174,10 @@ Runs an iterative, gated remediation loop over the conformance suite's findings:
 ```
 
 **Rule argument**: restricts the run to exact rule IDs.  Pushed down to the
-runner natively as `--rule <IDS>` (suite 0.21+ — the SARIF comes back scoped to
-exactly these rules, one descriptor per requested rule); older pinned runners
-fall back to the narrowest `--series` plus a rule-id post-filter inside
-`detect-violations`.  Because tier is per-rule and not per-series, `--rule` is
+runner natively as `--rule <IDS>` whenever the pinned runner accepts the flag —
+the SARIF comes back scoped to exactly these rules, one descriptor per requested
+rule.  A runner that rejects the flag falls back to the narrowest `--series` plus
+a rule-id post-filter inside `detect-violations`.  Because tier is per-rule and not per-series, `--rule` is
 also the only way to express "the blocking rules first".
 
 **Path argument**: a repo-root-relative path prefix that filters *which findings

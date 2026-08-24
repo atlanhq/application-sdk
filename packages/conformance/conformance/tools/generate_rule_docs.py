@@ -422,6 +422,31 @@ def _render_rule_block(rule: RuleDefinition) -> list[str]:
     return lines
 
 
+# The rule id inside a suppression directive, e.g. the "E012" in
+# "# conformance: ignore[E012] intentional: stdlib interop".
+_SUPPRESSION_ID_RE = re.compile(r"^(.*?ignore\s*\[)[^\]]*\]")
+
+
+def _rule_suppression_example(meta: SeriesMeta, rule: RuleDefinition) -> str:
+    """The series' suppression directive, re-pointed at exactly ``rule``.
+
+    A by-id file is the *only* thing a one-rule consumer reads, so the directive
+    it prints has to name that rule — printing the series example (a different
+    id) leaves the actual finding live when copied.  The comment syntax is taken
+    from the series example rather than hardcoded, because it is not uniform
+    across series (K-series directives are ``//``, not ``#``).  The rationale is
+    a placeholder: justification text is mandatory for a directive to take
+    effect, and the series example's reason does not apply to this rule.
+    """
+    m = _SUPPRESSION_ID_RE.match(meta.suppression_example)
+    if m is None:  # pragma: no cover — every series example carries an id
+        raise ValueError(
+            f"series {meta.prefix} suppression_example has no ignore[...] id: "
+            f"{meta.suppression_example!r}"
+        )
+    return f"{m.group(1)}{rule.id}] intentional: <why this is deliberate here>"
+
+
 def _render_rule_file(meta: SeriesMeta, rule: RuleDefinition) -> str:
     """A standalone single-rule document (``by-id/<RULE>.md``).
 
@@ -443,7 +468,7 @@ def _render_rule_file(meta: SeriesMeta, rule: RuleDefinition) -> str:
         "Suppress a finding on the violating line or the line directly above it:"
     )
     lines.append("")
-    lines.append(f"```python\n{meta.suppression_example}\n```")
+    lines.append(f"```python\n{_rule_suppression_example(meta, rule)}\n```")
     lines.append("")
     lines.extend(_render_rule_block(rule))
     while lines and lines[-1] == "":
@@ -557,7 +582,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help=(
             "Verify committed files match generated output. "
-            "Exits 1 if any file is stale or missing."
+            "Exits 1 if any file is stale, missing, or an orphaned by-id file "
+            "left behind by a rule id that has left the catalog."
         ),
     )
     return parser.parse_args(argv)
@@ -579,6 +605,8 @@ def main(argv: list[str] | None = None) -> None:
     assert_registry_consistent(meta_series=frozenset(m.prefix for m in _SERIES_META))
 
     stale: list[str] = []
+    by_id = outdir / "by-id"
+    expected_by_id: set[str] = set()
 
     for meta in _SERIES_META:
         rules = grouped.get(meta.prefix, [])
@@ -604,10 +632,10 @@ def main(argv: list[str] | None = None) -> None:
         # Per-rule files: by-id/<RULE>.md — the context-squeezed single-rule
         # view, generated from the same blocks so it can never drift from the
         # series doc.
-        by_id = outdir / "by-id"
         if not check_mode:
             by_id.mkdir(parents=True, exist_ok=True)
         for rule in rules:
+            expected_by_id.add(rule.id)
             rule_content = _render_rule_file(meta, rule)
             rule_target = by_id / f"{rule.id}.md"
             if check_mode:
@@ -620,10 +648,24 @@ def main(argv: list[str] | None = None) -> None:
             else:
                 rule_target.write_text(rule_content, encoding="utf-8")
 
+    # Orphan sweep.  The expected-file loop above can only ever see ids that are
+    # still in the catalog, so a by-id file left behind by a deleted id would
+    # stay committed and keep being served to one-rule consumers forever.
+    if by_id.is_dir():
+        for orphan in sorted(
+            p for p in by_id.glob("*.md") if p.stem not in expected_by_id
+        ):
+            if check_mode:
+                print(f"ORPHAN: {orphan}", file=sys.stderr)
+                stale.append(str(orphan))
+            else:
+                orphan.unlink()
+                print(f"Removed {orphan}")
+
     if check_mode:
         if stale:
             print(
-                f"\n{len(stale)} file(s) are stale or missing. "
+                f"\n{len(stale)} file(s) are stale, missing or orphaned. "
                 "Run `uv run poe generate-rule-docs` to update.",
                 file=sys.stderr,
             )
