@@ -26,6 +26,7 @@ from third-party decorators that happen to be named ``entrypoint``.
 from __future__ import annotations
 
 import ast
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -133,6 +134,20 @@ def _class_attribute_value(class_node: ast.ClassDef, attr: str) -> ast.expr | No
     return None
 
 
+def _pascal_to_kebab(name: str) -> str:
+    """``'MyApp'`` → ``'my-app'``, mirroring ``application_sdk.app.base``.
+
+    Kept character-for-character equivalent to the SDK's own helper: this value
+    is compared against the app name the toolkit baked into the generated
+    manifest, so a looser transform (plain underscore replacement, say) reads a
+    nameless ``App`` subclass as a *different* app and silently drops it from
+    every identity-scoped comparison.
+    """
+    spaced = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1-\2", name)
+    spaced = re.sub(r"([a-z\d])([A-Z])", r"\1-\2", spaced)
+    return spaced.lower()
+
+
 def _extract_app_name(class_node: ast.ClassDef) -> str | None:
     """The app name this class registers under, when statically knowable.
 
@@ -142,9 +157,9 @@ def _extract_app_name(class_node: ast.ClassDef) -> str | None:
     """
     value = _class_attribute_value(class_node, "name")
     if value is None:
-        return _method_name_to_kebab(class_node.name)
+        return _pascal_to_kebab(class_node.name)
     if isinstance(value, ast.Constant) and isinstance(value.value, str):
-        return value.value or _method_name_to_kebab(class_node.name)
+        return value.value or _pascal_to_kebab(class_node.name)
     return None
 
 

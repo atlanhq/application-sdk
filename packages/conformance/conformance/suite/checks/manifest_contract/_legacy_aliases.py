@@ -62,8 +62,9 @@ def _finding(
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     """Compare the manifest ``legacy_workflow_types`` block against the SDK declaration.
 
-    No-ops when ``app/generated/`` is absent or unparseable, and when no ``App``
-    subclass is found in code — there is then no pair of declarations to hold in
+    No-ops when ``app/generated/`` is absent or unparseable, when no ``App``
+    subclass is found in code, and when none of the ``App`` subclasses found is the
+    one this manifest belongs to — there is then no pair of declarations to hold in
     agreement, and reporting drift against a repo shape this check does not
     understand would be a false positive.
     """
@@ -89,11 +90,29 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     if not code.app_classes:
         return []
 
+    # Scope to the App this manifest belongs to. A repo may define several App
+    # subclasses; pooling their declarations against one manifest both invents drift
+    # (a sibling App's aliases read as missing from a manifest that was never meant
+    # to carry them) and hides it (a sibling can satisfy a manifest alias the owning
+    # App never registered). Identity comes from the manifest, the same source P016
+    # uses. When the manifest yields no identity there is nothing to scope by, so
+    # fall back to every class rather than silently checking nothing.
+    owning = [
+        app_class
+        for app_class in code.app_classes
+        if app_class.app_name in contract.own_app_names
+    ]
+    if contract.own_app_names and not owning:
+        return []
+    app_classes = owning or code.app_classes
+
     findings: list[Finding] = []
 
     # A declaration the scan cannot read statically blocks the comparison
     # outright — report that rather than a mismatch the check cannot prove.
-    for unreadable in code.unresolved_aliases:
+    owned = {id(app_class) for app_class in app_classes}
+    unresolved = [c for c in code.unresolved_aliases if id(c) in owned]
+    for unreadable in unresolved:
         findings.append(
             _finding(
                 unreadable,
@@ -105,14 +124,14 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
                 directives_by_file,
             )
         )
-    if code.unresolved_aliases:
+    if unresolved:
         return findings
 
     declared: list[LegacyAliasDeclaration] = [
         parse_legacy_aliases(document) for _, document in documents
     ]
 
-    anchor = code.app_classes[0]
+    anchor = app_classes[0]
 
     # Every generated manifest carries the same app-level block, so a divergence
     # between copies means one entry point was regenerated and another was not.
@@ -137,7 +156,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     manifest_declaration = declared[0]
     code_aliases = frozenset(
         (alias, target)
-        for app_class in code.app_classes
+        for app_class in app_classes
         for alias, target in app_class.legacy_aliases.items()
     )
 
@@ -174,7 +193,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     # accept the manifest against either and let the other diverge unreported.
     disagreeing = {
         app_class.legacy_removal_version
-        for app_class in code.app_classes
+        for app_class in app_classes
         if app_class.legacy_aliases
         and app_class.legacy_removal_version != manifest_declaration.removal_version
     }

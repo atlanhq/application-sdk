@@ -305,6 +305,107 @@ def test_k015_fires_on_a_non_literal_removal_version(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Identity scoping (two App subclasses in one repo)
+# ---------------------------------------------------------------------------
+
+_SIBLING_APP = dedent("""\
+    from application_sdk.app import App, entrypoint
+    class SiblingApp(App):
+        name = "sibling"
+        legacy_workflow_types = {"SiblingLegacyWorkflow": "sibling-crawler"}
+        legacy_workflow_types_removal_version = "9.9.9"
+        @entrypoint(name="sibling-crawler")
+        async def sibling_crawler(self, input: Input) -> Output: ...
+""")
+
+
+def test_k015_ignores_a_sibling_apps_declaration(tmp_path: Path) -> None:
+    """A second App's aliases are not this manifest's business.
+
+    Pooling every App subclass invented drift: the sibling's alias read as
+    missing from a manifest that was never meant to carry it, and its
+    `removal_version` disagreed with this app's.
+    """
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        aliases=[("LegacyCrawlerWorkflow", "crawler")],
+    )
+    paths = _write_py(
+        tmp_path,
+        {"app/connector.py": _app_source(), "app/sibling.py": _SIBLING_APP},
+    )
+    assert _k015(scan_all(paths, tmp_path)) == []
+
+
+def test_k015_does_not_let_a_sibling_app_satisfy_a_manifest_alias(
+    tmp_path: Path,
+) -> None:
+    """The other direction: a sibling must not launder a missing declaration.
+
+    The manifest declares an alias only the sibling App declares in code. The
+    owning App never registers it, so a caller dispatching it is still rejected
+    and the drift must be reported.
+    """
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        aliases=[("SiblingLegacyWorkflow", "sibling-crawler")],
+    )
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/connector.py": _app_source(
+                aliases='{"LegacyCrawlerWorkflow": "crawler"}'
+            ),
+            "app/sibling.py": _SIBLING_APP,
+        },
+    )
+    msgs = _k015(scan_all(paths, tmp_path))
+    assert any("the SDK App does not" in m for m in msgs)
+    assert any("SiblingLegacyWorkflow -> sibling-crawler" in m for m in msgs)
+
+
+def test_k015_no_ops_when_no_app_class_owns_the_manifest(tmp_path: Path) -> None:
+    """Only a foreign App is defined — nothing here can be attributed."""
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        aliases=[("LegacyCrawlerWorkflow", "crawler")],
+    )
+    paths = _write_py(tmp_path, {"app/sibling.py": _SIBLING_APP})
+    assert _k015(scan_all(paths, tmp_path)) == []
+
+
+def test_k015_matches_an_app_class_with_no_explicit_name(tmp_path: Path) -> None:
+    """The class-name fallback must derive the same name the SDK registers.
+
+    `class MyappApp(App)` with no `name` registers as `myapp-app` in the SDK
+    (`_pascal_to_kebab`). A looser transform read it as a different app and
+    dropped the class from the comparison, silently checking nothing.
+    """
+    generated = tmp_path / "app" / "generated" / "manifest.json"
+    generated.parent.mkdir(parents=True, exist_ok=True)
+    generated.write_text(
+        json.dumps(
+            {
+                "dag": {"extract": {"inputs": {"app_name": "myapp-app"}}},
+                "legacy_workflow_types": {
+                    "aliases": [{"alias": "Other", "entrypoint": "crawler"}]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    source = dedent("""\
+        from application_sdk.app import App, entrypoint
+        class MyappApp(App):
+            legacy_workflow_types = {"LegacyCrawlerWorkflow": "crawler"}
+            @entrypoint(name="crawler")
+            async def crawler(self, input: Input) -> Output: ...
+    """)
+    msgs = _k015(scan_all(_write_py(tmp_path, {"app/connector.py": source}), tmp_path))
+    assert any("LegacyCrawlerWorkflow -> crawler" in m for m in msgs)
+
+
+# ---------------------------------------------------------------------------
 # Multi-entrypoint mode
 # ---------------------------------------------------------------------------
 
