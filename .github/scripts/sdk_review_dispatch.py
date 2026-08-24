@@ -255,6 +255,10 @@ NEVER_RETRY_ERR_CODES = frozenset({"elicitation"})
 # PATTERNS above, because the entry conditions are per-lane.
 SANDBOX_API_ERR_CODE = "internal"
 SANDBOX_API_ERR_PREFIX = "[sandbox-api/"
+# Wider than the 80 the other classes use: the clone-timeout variant of this
+# class is ~150 chars and buries its actual cause at the very end, behind a JSON
+# envelope, so the usual cap would discard the only readable part.
+SANDBOX_API_ERR_PREVIEW_CHARS = 200
 # Dispatch-level HTTP statuses live in their own `http_` codespace, kept apart
 # from the stream's provider codes on purpose: a provider 400 carried inside the
 # stream is worth a different model, while a 400 on the POST itself is a
@@ -907,7 +911,8 @@ def _retry_class(st: SSEState, attempt: int) -> RetryPlan:
         return RetryPlan(
             True,
             f"code={st.err_code} is a fault in mothership's own sandbox-api "
-            f"wrapper ({_squash(st.err_msg)[:80]}), not in the model — "
+            f"wrapper ({_squash(st.err_msg)[:SANDBOX_API_ERR_PREVIEW_CHARS]}), "
+            f"not in the model — "
             f"re-dispatching on the same model ({same}) (attempt {attempt + 1} "
             f"of {MAX_DISPATCH_ATTEMPTS})",
             same,

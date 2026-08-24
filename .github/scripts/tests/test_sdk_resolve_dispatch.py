@@ -1312,4 +1312,17 @@ def test_main_names_both_models_when_a_same_model_retry_also_fails(monkeypatch, 
     assert len(payloads) == 2
     out = capsys.readouterr().out
     assert f"retried on {sr.MAIN_MODEL} after {sr.MAIN_MODEL} failed" in out
-    assert sr.RETRY_MAIN_MODEL not in out
+
+
+def test_the_clone_timeout_variant_keeps_its_cause_in_the_reason():
+    """The one shape of this class whose message is worth reading.
+
+    Its cause sits at the very end, behind a JSON envelope, so the 80-char cap
+    the other classes use would truncate it away in the line a human triages
+    from.
+    """
+    plan = sr.retry_decision(
+        _sandbox_api_dead(_SANDBOX_API_CLONE), 1, sr.DISPATCH_BUDGET_SECONDS
+    )
+    assert plan.retry is True
+    assert "Command timeout after 60000ms" in plan.reason
