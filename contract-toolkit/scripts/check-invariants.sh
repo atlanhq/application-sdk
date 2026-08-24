@@ -260,6 +260,267 @@ uiConfig = new Config.UIConfig {
 }'
 
 # --------------------------------------------------------------------------
+# 9. CONNECT-1081: legacyWorkflowTypes on a multi-entrypoint bundle root must throw.
+#    The root re-exports each entrypoint contract's already-generated files and emits
+#    no manifest.json of its own, so aliases declared there would reach no manifest at
+#    all. Left lazy, the declaration would vanish silently and resurface much later as
+#    conformance drift pointing at the wrong file. The check is forced from `output`,
+#    which the root always evaluates. Asserted here rather than in a pkl test because
+#    facts cannot express "eval fails".
+# --------------------------------------------------------------------------
+echo ":: Checking legacyWorkflowTypes bundle-root placement invariant..."
+BAD_CONTRACT="$(mktemp "$REPO_ROOT/test-root-alias-XXXXXX.pkl")"
+OUT_DIR="$(mktemp -d "$REPO_ROOT/test-root-alias-out-XXXXXX")"
+cat > "$BAD_CONTRACT" << 'PKLEOF'
+amends "src/App.pkl"
+
+name = "root-alias-bundle"
+displayName = "Root Alias Bundle"
+icon = "https://example.com/icon.svg"
+hasCredentialConfig = false
+
+entrypoints {
+  new Entrypoint {
+    name = "crawler"
+    displayName = "Crawler"
+  }
+}
+
+legacyWorkflowTypes {
+  new LegacyWorkflowTypeSpec { alias = "RootAliasWorkflow"; entrypoint = "crawler" }
+}
+PKLEOF
+ERR_MSG="$(pkl eval -m "$OUT_DIR" "$BAD_CONTRACT" 2>&1 || true)"
+rm -f "$BAD_CONTRACT"
+rm -rf "$OUT_DIR"
+if ! echo "$ERR_MSG" | grep -q "cannot be declared on a multi-entrypoint bundle root"; then
+  echo "FAIL: legacyWorkflowTypes bundle-root invariant did not fire with expected message"
+  echo "  Got: $ERR_MSG"
+  fail=1
+fi
+
+# Control: the same aliases on a single-entrypoint contract must generate cleanly.
+# Without this, a contract that errors for an unrelated reason would pass the assertion
+# above and prove nothing about the placement rule.
+echo ":: Checking legacyWorkflowTypes on a single-entrypoint contract still generates (control)..."
+CTRL_CONTRACT="$(mktemp "$REPO_ROOT/test-alias-ctrl-XXXXXX.pkl")"
+CTRL_OUT="$(mktemp -d "$REPO_ROOT/test-alias-ctrl-out-XXXXXX")"
+cat > "$CTRL_CONTRACT" << 'PKLEOF'
+amends "src/App.pkl"
+
+name = "alias-ctrl-app"
+displayName = "Alias Control App"
+icon = "https://example.com/icon.svg"
+hasCredentialConfig = false
+pipeline { publish = null }
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs { ["target"] = new TextInput { title = "Target"; placeholderText = "x" } }
+    }
+  }
+}
+
+legacyWorkflowTypes {
+  new LegacyWorkflowTypeSpec { alias = "AliasCtrlWorkflow"; entrypoint = "alias-ctrl-app" }
+}
+PKLEOF
+CTRL_ERR="$(pkl eval -m "$CTRL_OUT" "$CTRL_CONTRACT" 2>&1 || true)"
+rm -f "$CTRL_CONTRACT"
+rm -rf "$CTRL_OUT"
+if echo "$CTRL_ERR" | grep -q "Pkl Error"; then
+  echo "FAIL: control contract declaring legacyWorkflowTypes failed to generate"
+  echo "  Got: $CTRL_ERR"
+  fail=1
+fi
+
+# --------------------------------------------------------------------------
+# 9b. CONNECT-1081: the other no-manifest path. manifest.json is emitted only
+#     `when (uiConfig != null)`, so a single-entrypoint contract without a UI also
+#     generates nothing for the aliases to land in. The guard must refuse that too,
+#     or the declaration vanishes exactly as it would on a bundle root.
+# --------------------------------------------------------------------------
+echo ":: Checking legacyWorkflowTypes requires a manifest-emitting contract..."
+BAD_CONTRACT="$(mktemp "$REPO_ROOT/test-alias-noui-XXXXXX.pkl")"
+OUT_DIR="$(mktemp -d "$REPO_ROOT/test-alias-noui-out-XXXXXX")"
+cat > "$BAD_CONTRACT" << 'PKLEOF'
+amends "src/App.pkl"
+
+name = "alias-noui-app"
+displayName = "Alias No UI App"
+icon = "https://example.com/icon.svg"
+hasCredentialConfig = false
+pipeline { publish = null }
+
+legacyWorkflowTypes {
+  new LegacyWorkflowTypeSpec { alias = "AliasNoUiWorkflow"; entrypoint = "alias-noui-app" }
+}
+PKLEOF
+ERR_MSG="$(pkl eval -m "$OUT_DIR" "$BAD_CONTRACT" 2>&1 || true)"
+rm -f "$BAD_CONTRACT"
+rm -rf "$OUT_DIR"
+if ! echo "$ERR_MSG" | grep -q "requires a contract that generates a manifest.json"; then
+  echo "FAIL: legacyWorkflowTypes no-uiConfig invariant did not fire with expected message"
+  echo "  Got: $ERR_MSG"
+  fail=1
+fi
+
+# --------------------------------------------------------------------------
+# 9c. CONNECT-1081: the placement guard must be `local`, not `hidden` — a `hidden`
+#     property lands in the amending module's namespace, so a contract could assign
+#     it away and generate the very shape the guard exists to refuse.
+# --------------------------------------------------------------------------
+echo ":: Checking the legacyWorkflowTypes placement guard cannot be amended away..."
+BAD_CONTRACT="$(mktemp "$REPO_ROOT/test-alias-override-XXXXXX.pkl")"
+OUT_DIR="$(mktemp -d "$REPO_ROOT/test-alias-override-out-XXXXXX")"
+cat > "$BAD_CONTRACT" << 'PKLEOF'
+amends "src/App.pkl"
+
+name = "alias-override-bundle"
+displayName = "Alias Override Bundle"
+icon = "https://example.com/icon.svg"
+hasCredentialConfig = false
+
+entrypoints {
+  new Entrypoint { name = "crawler"; displayName = "Crawler" }
+}
+
+legacyWorkflowTypes {
+  new LegacyWorkflowTypeSpec { alias = "OverrideAliasWorkflow"; entrypoint = "crawler" }
+}
+
+_legacyWorkflowTypesPlacementCheck = null
+PKLEOF
+ERR_MSG="$(pkl eval -m "$OUT_DIR" "$BAD_CONTRACT" 2>&1 || true)"
+rm -f "$BAD_CONTRACT"
+rm -rf "$OUT_DIR"
+if ! echo "$ERR_MSG" | grep -qE "cannot be declared on a multi-entrypoint bundle root|Cannot find property"; then
+  echo "FAIL: the placement guard was amended away and generation succeeded"
+  echo "  Got: $ERR_MSG"
+  fail=1
+fi
+
+# --------------------------------------------------------------------------
+# 9d. CONNECT-1081: a control character in an alias must throw. The SDK rejects it at
+#     registration (`not char.isprintable()`), so accepting it here would generate a
+#     clean contract that fails at worker boot — and a control character mangles logs
+#     and the Temporal UI in the meantime.
+# --------------------------------------------------------------------------
+echo ":: Checking legacyWorkflowTypes control-character invariant..."
+BAD_CONTRACT="$(mktemp "$REPO_ROOT/test-alias-ctrlchar-XXXXXX.pkl")"
+OUT_DIR="$(mktemp -d "$REPO_ROOT/test-alias-ctrlchar-out-XXXXXX")"
+cat > "$BAD_CONTRACT" << 'PKLEOF'
+amends "src/App.pkl"
+
+name = "alias-ctrlchar-app"
+displayName = "Alias Ctrl Char App"
+icon = "https://example.com/icon.svg"
+hasCredentialConfig = false
+pipeline { publish = null }
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs { ["target"] = new TextInput { title = "Target"; placeholderText = "x" } }
+    }
+  }
+}
+
+legacyWorkflowTypes {
+  new LegacyWorkflowTypeSpec { alias = "Legacy\u{7}Workflow"; entrypoint = "alias-ctrlchar-app" }
+}
+PKLEOF
+ERR_MSG="$(pkl eval -m "$OUT_DIR" "$BAD_CONTRACT" 2>&1 || true)"
+rm -f "$BAD_CONTRACT"
+rm -rf "$OUT_DIR"
+if ! echo "$ERR_MSG" | grep -q "Type constraint"; then
+  echo "FAIL: control-character alias should raise a type constraint violation"
+  echo "  Got: $ERR_MSG"
+  fail=1
+fi
+
+# --------------------------------------------------------------------------
+# 9e. CONNECT-1081: a non-numeric removal version must throw. The SDK parses this
+#     with int() per dot-separated part (application_sdk/app/base.py) and refuses
+#     registration on anything else, so accepting "4.x.0" here would generate a
+#     clean contract whose worker dies at boot.
+# --------------------------------------------------------------------------
+echo ":: Checking legacyWorkflowTypesRemovalVersion numeric-version invariant..."
+BAD_CONTRACT="$(mktemp "$REPO_ROOT/test-alias-badver-XXXXXX.pkl")"
+OUT_DIR="$(mktemp -d "$REPO_ROOT/test-alias-badver-out-XXXXXX")"
+cat > "$BAD_CONTRACT" << 'PKLEOF'
+amends "src/App.pkl"
+
+name = "alias-badver-app"
+displayName = "Alias Bad Version App"
+icon = "https://example.com/icon.svg"
+hasCredentialConfig = false
+pipeline { publish = null }
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs { ["target"] = new TextInput { title = "Target"; placeholderText = "x" } }
+    }
+  }
+}
+
+legacyWorkflowTypes {
+  new LegacyWorkflowTypeSpec { alias = "AliasBadVerWorkflow"; entrypoint = "alias-badver-app" }
+}
+legacyWorkflowTypesRemovalVersion = "4.x.0"
+PKLEOF
+ERR_MSG="$(pkl eval -m "$OUT_DIR" "$BAD_CONTRACT" 2>&1 || true)"
+rm -f "$BAD_CONTRACT"
+rm -rf "$OUT_DIR"
+if ! echo "$ERR_MSG" | grep -q "Type constraint"; then
+  echo "FAIL: a non-numeric legacyWorkflowTypesRemovalVersion should raise a type constraint violation"
+  echo "  Got: $ERR_MSG"
+  fail=1
+fi
+
+# --------------------------------------------------------------------------
+# 10. CONNECT-1081: a duplicate alias must throw. `alias` is the identity key both in
+#     the manifest and in the SDK's `{alias: entrypoint}` mapping, where a repeat would
+#     silently collapse to one entry (last wins) and route callers to the wrong entry
+#     point. The Listing carries an isDistinct constraint that must fire at eval time.
+# --------------------------------------------------------------------------
+echo ":: Checking legacyWorkflowTypes duplicate-alias invariant..."
+BAD_CONTRACT="$(mktemp "$REPO_ROOT/test-dup-alias-XXXXXX.pkl")"
+OUT_DIR="$(mktemp -d "$REPO_ROOT/test-dup-alias-out-XXXXXX")"
+cat > "$BAD_CONTRACT" << 'PKLEOF'
+amends "src/App.pkl"
+
+name = "dup-alias-app"
+displayName = "Dup Alias App"
+icon = "https://example.com/icon.svg"
+hasCredentialConfig = false
+pipeline { publish = null }
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs { ["target"] = new TextInput { title = "Target"; placeholderText = "x" } }
+    }
+  }
+}
+
+legacyWorkflowTypes {
+  new LegacyWorkflowTypeSpec { alias = "dup"; entrypoint = "dup-alias-app" }
+  new LegacyWorkflowTypeSpec { alias = "dup"; entrypoint = "dup-alias-app" }
+}
+PKLEOF
+ERR_MSG="$(pkl eval -m "$OUT_DIR" "$BAD_CONTRACT" 2>&1 || true)"
+rm -f "$BAD_CONTRACT"
+rm -rf "$OUT_DIR"
+if ! echo "$ERR_MSG" | grep -q "isDistinct"; then
+  echo "FAIL: duplicate-alias invariant did not fire (expected an isDistinct constraint violation)"
+  echo "  Got: $ERR_MSG"
+  fail=1
+fi
+
+# --------------------------------------------------------------------------
 # Done
 # --------------------------------------------------------------------------
 if [ "$fail" -ne 0 ]; then

@@ -242,8 +242,9 @@ _SERIES_META: list[SeriesMeta] = [
             "`suite.checks.generated_freshness` (K003–K005, scans "
             "``contract/PklProject``, ``contract/PklProject.deps.json``, "
             "``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), "
-            "`suite.checks.manifest_contract` (K006, cross-references "
-            "``app/generated/**/manifest.json`` against Python ``Output`` contracts)"
+            "`suite.checks.manifest_contract` (K006/K015, cross-references "
+            "``app/generated/**/manifest.json`` against Python ``Output`` contracts "
+            "and the SDK ``App``'s ``legacy_workflow_types`` declaration)"
         ),
         suppression_example=(
             "// conformance: ignore[K001] intentional: phased migration tracked in BLDX-XXXX"

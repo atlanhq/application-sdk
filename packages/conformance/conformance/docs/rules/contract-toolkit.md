@@ -5,7 +5,7 @@
 
 # Contract-Toolkit Conformance Rules (K-series)
 
-**14 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts)
+**15 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006/K015, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts and the SDK ``App``'s ``legacy_workflow_types`` declaration)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -29,6 +29,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [K012](#k012) | `GeneratePoeTaskMissing` | `block` | `app` | `contract-toolkit` | — | 0.14.0 |
 | [K013](#k013) | `ManifestNodeAppNameMisattributed` | `warn` | `app` | `contract-toolkit` | — | 0.18.0 |
 | [K014](#k014) | `ReleaseModelUndeclared` | `warn` | `app` | `contract-toolkit` | — | 0.18.0 |
+| [K015](#k015) | `LegacyWorkflowTypeContractDrift` | `block` | `app` | `contract-toolkit` | — | 0.23.0 |
 
 ---
 
@@ -657,5 +658,87 @@ it directly.
 **Suppress** with `# conformance: ignore[K014] <reason>` on the first line of
 `atlan.yaml` (or the line above the key). A suppression is rarely the right answer:
 declaring the value is one line and is the entire point of the rule.
+
+---
+
+## K015 — `LegacyWorkflowTypeContractDrift` {#k015}
+
+**Tier:** `block` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.23.0
+
+> the manifest's legacy_workflow_types block and the SDK App's legacy_workflow_types declaration do not agree
+
+**Rationale:** An inbound-only workflow type alias keeps a worker answering a pre-migration Temporal
+type that external callers have not stopped dispatching. Once an app carries a contract
+tree the alias is declared twice: in the generated manifest's legacy_workflow_types
+block, which is the contracted declaration site, and in the SDK's
+App.legacy_workflow_types class attribute, which is what actually registers with the
+worker. Neither site validates the other, and a disagreement is silent in both
+directions. An alias only in the manifest is one the contract advertises and the worker
+rejects: the unmigrated caller keeps dispatching and keeps failing, which is the exact
+outage the alias existed to prevent. An alias only in code is one P016 no longer
+credits, so a genuinely routed entry point reads as drift and the app is blocked on a
+false finding. Nothing else notices either shape -- the app builds, the contract
+generates, and the mismatch only surfaces as a dispatch failure in production.  Customer
+impact: an alias exists because unmigrated callers are still dispatching a pre-migration
+workflow type. When the manifest advertises an alias the worker never registered, every
+one of those callers keeps failing at dispatch -- the crawl simply never starts, and the
+contract says it should. That is the precise outage the alias was added to prevent,
+reintroduced silently.  This blocks rather than warns because P016 -- itself a blocking
+rule -- now routes off the manifest block. A drifted block does not merely go unnoticed;
+it changes what another blocking rule concludes, so the two must be held together at the
+same strength. The surface is new and no app declares aliases yet, so nothing in the
+fleet is blocked by adopting it at this tier.
+
+The generated `app/generated/**/manifest.json` `legacy_workflow_types` block and the SDK
+`App` subclass's `legacy_workflow_types` class attribute must declare the same `alias ->
+entry-point` pairs and the same expiry.
+
+The rule fires on four shapes:
+
+* an alias declared in code that the manifest does not carry; * an alias declared in the
+manifest that the `App` does not; * a `removal_version` that differs between the two
+sites; * per-entry-point manifests that disagree with each other (the block is
+app-level, so every copy must be identical).
+
+A `legacy_workflow_types` assignment the scan cannot read statically -- a variable, a
+comprehension -- is reported too: the comparison cannot be made at all, so neither
+agreement nor drift can be established.
+
+Only the class attribute registers the alias with the worker. Only the manifest block is
+read by P016 when it decides whether a bare DAG node routes an entry point. That split
+is why drift is invisible: each site is individually well-formed.
+
+**Fix -- declare the same thing twice, on purpose.** In the contract:
+
+```pkl
+legacyWorkflowTypes {
+  new LegacyWorkflowTypeSpec {
+    alias = "LegacyCrawlerWorkflow"
+    entrypoint = "crawler"
+  }
+}
+legacyWorkflowTypesRemovalVersion = "4.2.0"
+```
+
+then regenerate, and in the app:
+
+```python
+class MyApp(App):
+    legacy_workflow_types = {
+        "LegacyCrawlerWorkflow": "crawler",
+    }
+    legacy_workflow_types_removal_version = "4.2.0"
+```
+
+The block is app-level, so for a multi-entrypoint bundle the **same** block goes on
+every entry point's contract and every generated manifest carries an identical copy. The
+bundle root renders no manifest and refuses the declaration at eval time.
+
+An app with no `app/generated/` tree is out of scope: the class attribute is then the
+only declaration site and there is nothing to compare.
+
+**Suppress** with `# conformance: ignore[K015] <reason>` above the `App` subclass.
+Suppressing leaves the two sites free to diverge, and P016 keeps routing off the
+manifest either way.
 
 ---

@@ -769,10 +769,15 @@ class App(ABC):
     second app's name would fail worker startup with a cross-app collision.
 
     This is a temporary compatibility surface for migrations, not a naming
-    lever — the canonical type cannot be changed. The declaration is due to
-    move to the app contract manifest once the contract toolkit carries a
-    ``legacy_workflow_types`` block; this class attribute is the interim (and,
-    for apps without a contract tree, permanent) declaration site.
+    lever — the canonical type cannot be changed.
+
+    Declare it twice, on purpose. For an app with a contract tree the contracted
+    declaration site is the generated manifest's ``legacy_workflow_types`` block
+    (the toolkit's ``legacyWorkflowTypes``), which conformance K015 holds in
+    agreement with this attribute. Only this attribute registers the alias with
+    the worker; only the manifest block is read by P016 when it decides whether
+    a bare DAG node routes an entry point. An app with no contract tree declares
+    it here alone.
     """
 
     legacy_workflow_types_removal_version: ClassVar[str] = ""
@@ -783,7 +788,10 @@ class App(ABC):
     loud decision (push the version out, or delete the drained aliases) rather
     than drift. Empty (the default) declares no expiry; removal then gates on
     the ``temporal.workflow.type`` legacy-caller count reaching zero, which is
-    the right posture for aliases with a wide external caller set."""
+    the right posture for aliases with a wide external caller set.
+
+    The expiry is app-level, not per-alias. A contract-carrying app declares the
+    same value as the manifest block's ``removal_version``; K015 compares them."""
 
     preflight_gate_mode: ClassVar[Literal["hard", "soft"]] = "soft"
     """Preflight gate posture. ``"soft"`` (default) never blocks — a

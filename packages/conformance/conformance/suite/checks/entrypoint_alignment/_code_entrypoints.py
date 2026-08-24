@@ -26,7 +26,11 @@ from third-party decorators that happen to be named ``entrypoint``.
 from __future__ import annotations
 
 import ast
+import re
 from dataclasses import dataclass, field
+from pathlib import Path
+
+from conformance.suite.checks._ast_common import _IgnoreDirective, _parse_directives
 
 _SDK_PREFIX = "application_sdk"
 
@@ -106,6 +110,44 @@ def _extract_ep_name(
     return None, False
 
 
+def _class_attribute_value(class_node: ast.ClassDef, attr: str) -> ast.expr | None:
+    """The assigned expression of a class-body attribute, or ``None`` if unset.
+
+    Covers both ``attr = ...`` and the annotated ``attr: T = ...`` form. A bare
+    annotation binds no value, so the scan keeps walking: ``attr: ClassVar[str]``
+    followed by ``attr = "..."`` is one attribute with a value, and stopping at
+    the annotation would read a real declaration as absent.
+    """
+    for stmt in class_node.body:
+        if isinstance(stmt, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == attr
+            for target in stmt.targets
+        ):
+            return stmt.value
+        if (
+            isinstance(stmt, ast.AnnAssign)
+            and isinstance(stmt.target, ast.Name)
+            and stmt.target.id == attr
+            and stmt.value is not None
+        ):
+            return stmt.value
+    return None
+
+
+def _pascal_to_kebab(name: str) -> str:
+    """``'MyApp'`` → ``'my-app'``, mirroring ``application_sdk.app.base``.
+
+    Kept character-for-character equivalent to the SDK's own helper: this value
+    is compared against the app name the toolkit baked into the generated
+    manifest, so a looser transform (plain underscore replacement, say) reads a
+    nameless ``App`` subclass as a *different* app and silently drops it from
+    every identity-scoped comparison.
+    """
+    spaced = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1-\2", name)
+    spaced = re.sub(r"([a-z\d])([A-Z])", r"\1-\2", spaced)
+    return spaced.lower()
+
+
 def _extract_app_name(class_node: ast.ClassDef) -> str | None:
     """The app name this class registers under, when statically knowable.
 
@@ -113,25 +155,12 @@ def _extract_app_name(class_node: ast.ClassDef) -> str | None:
     attribute falls back to the kebab-cased class name. A non-literal
     assignment returns ``None`` — no identity claim can be made.
     """
-    for stmt in class_node.body:
-        value: ast.expr | None = None
-        if isinstance(stmt, ast.Assign) and any(
-            isinstance(target, ast.Name) and target.id == "name"
-            for target in stmt.targets
-        ):
-            value = stmt.value
-        elif (
-            isinstance(stmt, ast.AnnAssign)
-            and isinstance(stmt.target, ast.Name)
-            and stmt.target.id == "name"
-        ):
-            value = stmt.value
-        if value is None:
-            continue
-        if isinstance(value, ast.Constant) and isinstance(value.value, str):
-            return value.value or _method_name_to_kebab(class_node.name)
-        return None
-    return _method_name_to_kebab(class_node.name)
+    value = _class_attribute_value(class_node, "name")
+    if value is None:
+        return _pascal_to_kebab(class_node.name)
+    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+        return value.value or _pascal_to_kebab(class_node.name)
+    return None
 
 
 def _extract_legacy_aliases(
@@ -144,36 +173,39 @@ def _extract_legacy_aliases(
     ``is_unresolved=True`` when the attribute is assigned something the scan
     cannot statically read (a variable, a comprehension, …).
     """
-    for stmt in class_node.body:
-        value: ast.expr | None = None
-        if isinstance(stmt, ast.Assign) and any(
-            isinstance(target, ast.Name) and target.id == "legacy_workflow_types"
-            for target in stmt.targets
+    value = _class_attribute_value(class_node, "legacy_workflow_types")
+    if value is None:
+        return {}, False
+    if not isinstance(value, ast.Dict):
+        return {}, True
+    aliases: dict[str, str] = {}
+    for key, val in zip(value.keys, value.values):
+        if (
+            isinstance(key, ast.Constant)
+            and isinstance(key.value, str)
+            and isinstance(val, ast.Constant)
+            and isinstance(val.value, str)
         ):
-            value = stmt.value
-        elif (
-            isinstance(stmt, ast.AnnAssign)
-            and isinstance(stmt.target, ast.Name)
-            and stmt.target.id == "legacy_workflow_types"
-        ):
-            value = stmt.value
-        if value is None:
-            continue
-        if not isinstance(value, ast.Dict):
+            aliases[key.value] = val.value
+        else:
             return {}, True
-        aliases: dict[str, str] = {}
-        for key, val in zip(value.keys, value.values):
-            if (
-                isinstance(key, ast.Constant)
-                and isinstance(key.value, str)
-                and isinstance(val, ast.Constant)
-                and isinstance(val.value, str)
-            ):
-                aliases[key.value] = val.value
-            else:
-                return {}, True
-        return aliases, False
-    return {}, False
+    return aliases, False
+
+
+def _extract_removal_version(class_node: ast.ClassDef) -> tuple[str, bool]:
+    """Parse a class body for a literal ``legacy_workflow_types_removal_version``.
+
+    Returns ``(version, is_unresolved)``. An absent attribute reads as ``""``,
+    the SDK default meaning "no expiry declared"; a non-literal assignment sets
+    ``is_unresolved`` so K015 reports that it cannot compare rather than
+    reporting a mismatch it cannot prove.
+    """
+    value = _class_attribute_value(class_node, "legacy_workflow_types_removal_version")
+    if value is None:
+        return "", False
+    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+        return value.value, False
+    return "", True
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +245,11 @@ class AppClassLocation:
     across App classes would let one app's declaration route another's
     entry point."""
 
+    legacy_removal_version: str = ""
+    """This class's literal ``legacy_workflow_types_removal_version``, or ``""``
+    when the attribute is absent (the SDK default: no expiry). K015 compares it
+    against the manifest block's ``removal_version``."""
+
 
 @dataclass
 class UnresolvedLocation:
@@ -231,8 +268,10 @@ class CodeEntrypointScan:
     app_classes: list[AppClassLocation] = field(default_factory=list)
     unresolved: list[UnresolvedLocation] = field(default_factory=list)
     unresolved_aliases: list[AppClassLocation] = field(default_factory=list)
-    """App subclasses whose ``legacy_workflow_types`` assignment the scan
-    cannot statically read (a variable, a comprehension, …)."""
+    """App subclasses whose ``legacy_workflow_types`` or
+    ``legacy_workflow_types_removal_version`` assignment the scan cannot
+    statically read (a variable, a comprehension, …), so K015 cannot compare the
+    declaration against the manifest block."""
 
     def name_set(self) -> frozenset[str]:
         """Return the set of all wire names found in code."""
@@ -273,14 +312,16 @@ def scan_file_for_entrypoints(
                     base_name = None
                 if base_name in app_aliases:
                     aliases, is_unresolved = _extract_legacy_aliases(node)
+                    removal_version, version_unresolved = _extract_removal_version(node)
                     location = AppClassLocation(
                         filename=filename,
                         node=node,
                         app_name=_extract_app_name(node),
                         legacy_aliases={} if is_unresolved else aliases,
+                        legacy_removal_version=removal_version,
                     )
                     result.app_classes.append(location)
-                    if is_unresolved:
+                    if is_unresolved or version_unresolved:
                         result.unresolved_aliases.append(location)
                     break
 
@@ -315,3 +356,37 @@ def scan_file_for_entrypoints(
                     )
                 )
             break  # Only the first @entrypoint decorator on a method counts.
+
+
+def scan_paths_for_entrypoints(
+    paths: list[Path], root: Path
+) -> tuple[CodeEntrypointScan, dict[str, dict[int, _IgnoreDirective]]]:
+    """Scan every path for ``@entrypoint`` data and inline suppression directives.
+
+    Shared by P016 and K015 so the two read the same App-class facts from the
+    same files; a second copy of this loop would be free to drift from P016's.
+    Unreadable and unparseable files are skipped — a check reports drift it can
+    prove, and a file it cannot parse proves nothing.
+    """
+    code = CodeEntrypointScan()
+    directives_by_file: dict[str, dict[int, _IgnoreDirective]] = {}
+
+    for path in paths:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        try:
+            tree = ast.parse(text, filename=str(path))
+        except SyntaxError:
+            continue
+        if not isinstance(tree, ast.Module):
+            continue
+        try:
+            rel = str(path.relative_to(root))
+        except ValueError:
+            rel = str(path)
+        directives_by_file[rel] = _parse_directives(text)
+        scan_file_for_entrypoints(tree, rel, code)
+
+    return code, directives_by_file

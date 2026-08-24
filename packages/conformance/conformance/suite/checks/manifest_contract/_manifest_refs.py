@@ -28,6 +28,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+
+def manifest_paths_for_contract(root: Path, contract) -> list[Path]:  # noqa: ANN001
+    """Return the ``manifest.json`` paths implied by the P016 contract-scan mode."""
+    generated = root / "app" / "generated"
+    if contract.mode == "single":
+        return [generated / "manifest.json"]
+    if contract.mode == "multi":
+        return [generated / name / "manifest.json" for name in sorted(contract.names)]
+    return []
+
+
 _REF_RE = re.compile(r"^\$\.(?P<node>[\w-]+)\.outputs\.(?P<field>\w+)$")
 
 _EXTRACT_NODE_ID = "extract"

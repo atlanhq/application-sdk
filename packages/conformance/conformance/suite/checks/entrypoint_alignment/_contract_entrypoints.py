@@ -35,6 +35,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+_OWN_NODE_ID = "extract"
+"""The DAG node id the toolkit always gives an entry point's own node."""
+
 
 @dataclass(frozen=True)
 class ContractEntrypointScan:
@@ -64,19 +67,96 @@ class ContractEntrypointScan:
         default_factory=frozenset
     )
     """Every ``workflow_type`` the DAG dispatches, paired with the node's
-    ``app_name`` (``None`` when the node carries none). The check routes an
-    app's declared ``legacy_workflow_types`` alias through a matching node
+    ``app_name`` (``None`` when the node carries none). The check routes a
+    manifest-declared ``legacy_workflow_types`` alias through a matching node
     only when the node's own identity does not contradict the declaration —
     a node naming a *different* app dispatches on that app's worker, so the
     declaration alone cannot make it reach this one."""
 
+    own_app_names: frozenset[str] = field(default_factory=frozenset)
+    """App names this manifest's own DAG claims — the ``<app>`` half of every
+    colon-qualified ``workflow_type`` it routes.
 
-def _routes_from_manifest(
-    manifest_path: Path,
-) -> tuple[frozenset[str], frozenset[tuple[str, str | None]]]:
-    """Collect DAG-declared workflow types from a manifest.
+    This is the manifest's own identity, taken from the same artifact that
+    declares the aliases. A bare node whose ``app_name`` falls outside this set
+    dispatches on another app's worker, so a local alias declaration cannot make
+    it reach an entry point here. Deriving it from the manifest rather than from
+    the App classes found in code matters in a repo that defines more than one
+    App: a node naming the *other* app must not launder an alias belonging to
+    this one. Empty in ``multi``/``absent`` modes.
+    """
 
-    Returns ``(routes, dag_workflow_types)``:
+    legacy_aliases: frozenset[tuple[str, str]] = field(default_factory=frozenset)
+    """Inbound-only workflow type aliases the manifest declares, as
+    ``(alias, target entry-point name)`` pairs (CONNECT-1081).
+
+    The manifest is the contracted declaration site for these; K015 holds it in
+    agreement with the SDK's ``App.legacy_workflow_types`` class attribute, and
+    P016 routes off this rather than off the code declaration.  Empty in
+    ``multi``/``absent`` modes, matching :attr:`routes` — P016 never consults
+    routes outside single mode.  K015 reads the per-entry-point manifests of a
+    multi-mode tree itself.
+    """
+
+
+@dataclass(frozen=True)
+class LegacyAliasDeclaration:
+    """The ``legacy_workflow_types`` block of one manifest."""
+
+    aliases: frozenset[tuple[str, str]] = field(default_factory=frozenset)
+    """``(alias, target entry-point name)`` pairs."""
+
+    removal_version: str = ""
+    """Declared expiry, or ``""`` when the block omits ``removal_version``."""
+
+
+def load_manifest_document(manifest_path: Path) -> dict[str, Any] | None:
+    """Load a manifest as a JSON object, or ``None`` when it cannot be read.
+
+    Unreadable, malformed, and non-object manifests all collapse to ``None``: a
+    conformance check reports drift it can prove, and a manifest it cannot parse
+    proves nothing.
+    """
+    try:
+        data: Any = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def parse_legacy_aliases(data: dict[str, Any]) -> LegacyAliasDeclaration:
+    """Read the ``legacy_workflow_types`` block out of a parsed manifest.
+
+    A block whose entries are not ``{"alias": str, "entrypoint": str}`` is
+    skipped entry by entry rather than failing the whole parse — a hand-edited
+    manifest should surface as the drift it is, not as a silent empty read.
+    """
+    block = data.get("legacy_workflow_types")
+    if not isinstance(block, dict):
+        return LegacyAliasDeclaration()
+
+    aliases: set[tuple[str, str]] = set()
+    for entry in block.get("aliases") or []:
+        if not isinstance(entry, dict):
+            continue
+        alias = entry.get("alias")
+        target = entry.get("entrypoint")
+        if isinstance(alias, str) and alias and isinstance(target, str) and target:
+            aliases.add((alias, target))
+
+    removal_version = block.get("removal_version")
+    return LegacyAliasDeclaration(
+        aliases=frozenset(aliases),
+        removal_version=removal_version if isinstance(removal_version, str) else "",
+    )
+
+
+def _routes_from_dag(
+    dag: Any,
+) -> tuple[frozenset[str], frozenset[tuple[str, str | None]], frozenset[str]]:
+    """Collect DAG-declared workflow types from a manifest's ``dag`` subtree.
+
+    Returns ``(routes, dag_workflow_types, own_app_names)``:
 
     ``routes``
         Wire names taken from every ``workflow_type`` of the form
@@ -85,8 +165,20 @@ def _routes_from_manifest(
     ``dag_workflow_types``
         Every ``(workflow_type, node app_name-or-None)`` pair in the DAG.
         Bare types (e.g. ``"PublishWorkflow"``) are platform/other-app nodes
-        unless the app's code declares them in ``legacy_workflow_types`` AND
-        the node's ``app_name`` does not name a different app.
+        unless the manifest declares them in ``legacy_workflow_types`` AND the
+        node's ``app_name`` does not name a different app.
+
+    ``own_app_names``
+        The app identities this manifest claims as its own: the ``app_name`` its
+        entry point's own DAG node carries, plus the ``<app>`` half of any
+        colon-qualified type it routes.
+
+        Both sources are needed. The toolkit stamps the contract ``name`` onto
+        the entry point's own node (``inputs.app_name``, CNCT-93) but emits a
+        *bare* ``workflow_type`` for it, so a generated manifest usually carries
+        no colon at all — reading only colon prefixes would leave this set empty
+        on every manifest the toolkit actually produces. Colon-qualified types
+        appear on route/card-split apps and are this app's own too.
 
     The walk is scoped to the ``dag`` subtree, so a ``workflow_type`` appearing
     elsewhere in the manifest is not collected.  It does **not** pin the
@@ -95,17 +187,12 @@ def _routes_from_manifest(
     name.  In a generated single-mode manifest every routed node is this app's
     own, so in practice this returns this app's DAG-routed entry points.
     """
-    try:
-        data: Any = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        return frozenset(), frozenset()
-
-    dag = data.get("dag") if isinstance(data, dict) else None
     if dag is None:
-        return frozenset(), frozenset()
+        return frozenset(), frozenset(), frozenset()
 
     wire_names: set[str] = set()
     dag_types: set[tuple[str, str | None]] = set()
+    app_names: set[str] = set()
 
     def _node_app_name(node: dict[str, Any]) -> str | None:
         inputs = node.get("inputs")
@@ -119,7 +206,10 @@ def _routes_from_manifest(
             if isinstance(wt, str) and wt:
                 dag_types.add((wt, _node_app_name(node)))
                 if ":" in wt:
-                    wire_names.add(wt.split(":", 1)[1])
+                    prefix, wire = wt.split(":", 1)
+                    wire_names.add(wire)
+                    if prefix:
+                        app_names.add(prefix)
             for value in node.values():
                 _walk(value)
         elif isinstance(node, list):
@@ -127,7 +217,18 @@ def _routes_from_manifest(
                 _walk(item)
 
     _walk(dag)
-    return frozenset(wire_names), frozenset(dag_types)
+
+    # The entry point's own node id is always the literal "extract" (App.pkl's
+    # generateDAG()), and the toolkit bakes the contract `name` onto it. That is the
+    # manifest's own identity even when nothing in the DAG is colon-qualified.
+    if isinstance(dag, dict):
+        own_node = dag.get(_OWN_NODE_ID)
+        if isinstance(own_node, dict):
+            own_name = _node_app_name(own_node)
+            if own_name is not None:
+                app_names.add(own_name)
+
+    return frozenset(wire_names), frozenset(dag_types), frozenset(app_names)
 
 
 def scan_contract(root: Path) -> ContractEntrypointScan:
@@ -162,12 +263,17 @@ def scan_contract(root: Path) -> ContractEntrypointScan:
     # Single-EP: a manifest.json at the root of app/generated/
     single_manifest = generated / "manifest.json"
     if single_manifest.is_file():
-        routes, dag_workflow_types = _routes_from_manifest(single_manifest)
+        data = load_manifest_document(single_manifest)
+        if data is None:
+            return ContractEntrypointScan(names=frozenset(), mode="single")
+        routes, dag_workflow_types, own_app_names = _routes_from_dag(data.get("dag"))
         return ContractEntrypointScan(
             names=frozenset(),
             mode="single",
             routes=routes,
             dag_workflow_types=dag_workflow_types,
+            own_app_names=own_app_names,
+            legacy_aliases=parse_legacy_aliases(data).aliases,
         )
 
     # app/generated/ exists but contains no manifest.json anywhere — treat as absent
