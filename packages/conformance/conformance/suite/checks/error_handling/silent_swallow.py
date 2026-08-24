@@ -280,6 +280,10 @@ class SilentSwallowMixin:
             )
 
         for var_name, assign_node in gather_vars.items():
+            # The results may be inspected under another name: callers routinely
+            # copy them into an accumulator (`dest.extend(chunk_results)`) and
+            # iterate that instead. Inspection of any such alias counts.
+            names = _inspection_aliases(func_node, var_name)
             inspected = False
             for node in _iter_shallow(func_node):
                 # isinstance(var, ...) direct check
@@ -287,19 +291,19 @@ class SilentSwallowMixin:
                     func = node.func
                     if isinstance(func, ast.Name) and func.id == "isinstance":
                         if node.args and isinstance(node.args[0], ast.Name):
-                            if node.args[0].id == var_name:
+                            if node.args[0].id in names:
                                 inspected = True
                                 break
                 # for r in var: ... — iteration counts as inspection
                 if isinstance(node, ast.For):
                     # `for r in var:` — iterating the result list directly.
-                    if isinstance(node.iter, ast.Name) and node.iter.id == var_name:
+                    if isinstance(node.iter, ast.Name) and node.iter.id in names:
                         inspected = True
                         break
                     # `for i, r in enumerate(var):` / `for ... in zip(var, ...):` —
                     # iterating the result list through a standard combinator.
                     if isinstance(node.iter, ast.Call) and any(
-                        isinstance(arg, ast.Name) and arg.id == var_name
+                        isinstance(arg, ast.Name) and arg.id in names
                         for arg in node.iter.args
                     ):
                         inspected = True
@@ -307,7 +311,7 @@ class SilentSwallowMixin:
                 # `x = var[i]` / `x = var[0]` — subscripting the result list to
                 # inspect elements one by one.
                 if isinstance(node, ast.Subscript):
-                    if isinstance(node.value, ast.Name) and node.value.id == var_name:
+                    if isinstance(node.value, ast.Name) and node.value.id in names:
                         inspected = True
                         break
             if not inspected:
@@ -353,16 +357,75 @@ class SilentSwallowMixin:
         )
 
 
+def _inspection_aliases(
+    func_node: ast.FunctionDef | ast.AsyncFunctionDef, var_name: str
+) -> set[str]:
+    """Names that the gather results of *var_name* also flow into.
+
+    A caller frequently copies the gather results into an accumulator and
+    inspects *that* list::
+
+        chunk_results = await asyncio.gather(*coros, return_exceptions=True)
+        dest.extend(chunk_results)
+        for i, result in enumerate(dest):
+            if isinstance(result, Exception):
+                ...
+
+    Only whole-list copies are tracked -- ``dest.extend(var)``,
+    ``dest.append(var)`` and ``dest += var`` -- and transitively, so a chain of
+    copies resolves too. Element-wise copies are deliberately excluded: those
+    require the caller to have touched each element already.
+    """
+    names = {var_name}
+    changed = True
+    while changed:
+        changed = False
+        for node in _iter_shallow(func_node):
+            src: str | None = None
+            dest: str | None = None
+            # `dest.extend(var)` / `dest.append(var)`
+            if isinstance(node, ast.Call):
+                func = node.func
+                if (
+                    isinstance(func, ast.Attribute)
+                    and func.attr in ("extend", "append")
+                    and isinstance(func.value, ast.Name)
+                    and len(node.args) == 1
+                    and isinstance(node.args[0], ast.Name)
+                ):
+                    dest = func.value.id
+                    src = node.args[0].id
+            # `dest += var`
+            elif (
+                isinstance(node, ast.AugAssign)
+                and isinstance(node.op, ast.Add)
+                and isinstance(node.target, ast.Name)
+                and isinstance(node.value, ast.Name)
+            ):
+                dest = node.target.id
+                src = node.value.id
+            if src in names and dest is not None and dest not in names:
+                names.add(dest)
+                changed = True
+    return names
+
+
 def _cancelled_task_names(
     func_node: ast.FunctionDef | ast.AsyncFunctionDef,
-) -> set[str]:
-    """Names of variables that are `.cancel()`ed anywhere in *func_node*.
+) -> dict[str, int]:
+    """Variables `.cancel()`ed in *func_node*, mapped to their earliest line.
 
     Covers both `for t in tasks: t.cancel()` and bare `task.cancel()` shapes.
-    A name here means a gather over that name is very likely a cancellation
-    drain, not a result-producing call.
+    The line number is what makes the cancel-drain idiom distinguishable from
+    a discarded gather: the documented idiom cancels *first* and then drains,
+    so only a cancel that precedes the gather excuses it.
     """
-    names: set[str] = set()
+    names: dict[str, int] = {}
+
+    def _record(mapping: dict[str, int], name: str, lineno: int) -> None:
+        if lineno < mapping.get(name, lineno + 1):
+            mapping[name] = lineno
+
     for node in _iter_shallow(func_node):
         if not isinstance(node, ast.Call):
             continue
@@ -371,11 +434,11 @@ def _cancelled_task_names(
             continue
         target = func.value
         if isinstance(target, ast.Name):
-            names.add(target.id)
+            _record(names, target.id, node.lineno)
     # Resolve loop variables: `for t in tasks: ... t.cancel()` — if a
     # cancelled name is the loop variable of a `for ... in <name>:`, treat the
-    # collection as cancelled too.
-    resolved: set[str] = set(names)
+    # collection as cancelled too, from the line the loop starts on.
+    resolved: dict[str, int] = dict(names)
     for node in _iter_shallow(func_node):
         if not isinstance(node, ast.For):
             continue
@@ -383,15 +446,17 @@ def _cancelled_task_names(
             continue
         target = node.target
         if isinstance(target, ast.Name) and target.id in names:
-            resolved.add(node.iter.id)
+            _record(resolved, node.iter.id, node.lineno)
     return resolved
 
 
-def _is_cancel_drain(gather_stmt: ast.AST, cancelled: set[str]) -> bool:
+def _is_cancel_drain(gather_stmt: ast.AST, cancelled: dict[str, int]) -> bool:
     """True if *gather_stmt* is a bare ``await asyncio.gather(*tasks, ...)``
-    whose positional iterable(s) have all been cancelled in the same function
-    — the standard asyncio cancellation-drain idiom, where the results are by
-    construction CancelledError instances and there is nothing to inspect.
+    whose positional iterable(s) were all cancelled *earlier* in the same
+    function — the standard asyncio cancellation-drain idiom, where the
+    results are by construction CancelledError instances and there is nothing
+    to inspect. A cancel that comes after the gather is not a drain: it does
+    not make the results the gather already discarded any less real.
     """
     if not isinstance(gather_stmt, ast.Expr):
         return False
@@ -409,6 +474,7 @@ def _is_cancel_drain(gather_stmt: ast.AST, cancelled: set[str]) -> bool:
         if not isinstance(target, ast.Name):
             # e.g. a list literal or comprehension — cannot prove drain
             return False
-        if target.id not in cancelled:
+        cancel_line = cancelled.get(target.id)
+        if cancel_line is None or cancel_line >= gather_stmt.lineno:
             return False
     return True

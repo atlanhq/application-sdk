@@ -835,6 +835,56 @@ async def run():
     )
 
 
+def test_p010_no_finding_extend_alias_inspection() -> None:
+    # Shape from atlan-anaplan-app app/extracts/models.py:119: the gather
+    # results are copied into an accumulator with .extend() and the
+    # accumulator is what gets enumerated and isinstance-checked.
+    _none(
+        """\
+import asyncio
+async def run():
+    dest = []
+    chunk_results = await asyncio.gather(*tasks, return_exceptions=True)
+    dest.extend(chunk_results)
+    for i, result in enumerate(dest):
+        if isinstance(result, Exception):
+            logger.error("task failed: %s", result)
+"""
+    )
+
+
+def test_p010_no_finding_augassign_alias_inspection() -> None:
+    # Same copy, written as `dest += chunk_results`.
+    _none(
+        """\
+import asyncio
+async def run():
+    dest = []
+    chunk_results = await asyncio.gather(*tasks, return_exceptions=True)
+    dest += chunk_results
+    for result in dest:
+        if isinstance(result, Exception):
+            logger.error("task failed: %s", result)
+"""
+    )
+
+
+def test_p010_extend_alias_still_fires_when_uninspected() -> None:
+    # The alias is tracked, not trusted: copying into an accumulator that is
+    # never inspected is still a silent swallow.
+    _single(
+        """\
+import asyncio
+async def run():
+    dest = []
+    chunk_results = await asyncio.gather(*tasks, return_exceptions=True)
+    dest.extend(chunk_results)
+    return dest
+""",
+        "E010",
+    )
+
+
 def test_p010_no_finding_cancel_drain() -> None:
     # Shape from atlan-dataplex-app
     # app/services/comprehensive_discovery_service.py:2804 and :2820 — after a
@@ -882,6 +932,22 @@ async def run():
                 task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 """
+    )
+
+
+def test_p010_bare_gather_still_fires_when_cancelled_later() -> None:
+    # The documented idiom is cancel-then-drain. A cancel that comes *after*
+    # the gather does not drain results the gather already discarded, so the
+    # bare gather must still fire.
+    _single(
+        """\
+import asyncio
+async def run():
+    await asyncio.gather(*tasks, return_exceptions=True)
+    for task in tasks:
+        task.cancel()
+""",
+        "E010",
     )
 
 
