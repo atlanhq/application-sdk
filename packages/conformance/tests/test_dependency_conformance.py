@@ -7,7 +7,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
-from conformance.suite.checks._ast_common import parse_toml_suppressions
+from conformance.suite.checks._ast_common import _is_suppressed, parse_toml_suppressions
 from conformance.suite.checks.dependency_conformance import (
     _REMOTE_COMPONENT_FETCH_RE,
     SDK_PYTHON_FLOOR,
@@ -298,9 +298,60 @@ def test_parse_suppressions_inline_directive() -> None:
     )
     suppressions = parse_toml_suppressions(text)
     assert 4 in suppressions
-    ids, just = suppressions[4]
+    ids, discriminators, just = suppressions[4]
     assert ids == frozenset({"D002"})
+    assert discriminators is None
     assert "hotfix" in just
+
+
+def test_parse_suppressions_discriminator_form() -> None:
+    """``ignore[T025:miner]`` parses the subject alongside the rule id."""
+    text = (
+        "# conformance: ignore[T025:miner] miner has no CI-reachable source\n"
+        '[project]\nname = "demo"\n'
+    )
+    suppressions = parse_toml_suppressions(text)
+    ids, discriminators, just = suppressions[1]
+    assert ids == frozenset({"T025"})
+    assert discriminators == {"T025": frozenset({"miner"})}
+    assert "CI-reachable" in just
+
+
+def test_is_suppressed_discriminator_matching() -> None:
+    """A ``:subject`` directive suppresses only findings carrying that subject."""
+    text = (
+        "# conformance: ignore[T025:miner] miner has no CI-reachable source\n"
+        '[project]\nname = "demo"\n'
+    )
+    suppressions = parse_toml_suppressions(text)
+    # The named subject suppresses.
+    assert _is_suppressed(suppressions, "T025", 2, discriminator="miner")[0]
+    # …case-insensitively.
+    assert _is_suppressed(suppressions, "T025", 2, discriminator="Miner")[0]
+    # A different subject on the same rule+line does NOT suppress.
+    assert not _is_suppressed(suppressions, "T025", 2, discriminator="crawler")[0]
+    # A finding with no discriminator is not suppressed by a subject directive.
+    assert not _is_suppressed(suppressions, "T025", 2)[0]
+    # A different rule is untouched.
+    assert not _is_suppressed(suppressions, "D002", 2, discriminator="miner")[0]
+
+
+def test_is_suppressed_bare_rule_still_suppresses_discriminated_findings() -> None:
+    """A bare ``ignore[T025]`` stays rule-wide, discriminator or not."""
+    text = "# conformance: ignore[T025] nothing is CI-reachable here\n[project]\n"
+    suppressions = parse_toml_suppressions(text)
+    assert _is_suppressed(suppressions, "T025", 2, discriminator="miner")[0]
+    assert _is_suppressed(suppressions, "T025", 2)[0]
+
+
+def test_bare_entry_wins_over_a_subject_entry_for_the_same_rule() -> None:
+    """``ignore[T025:miner, T025]`` must not be narrowed back by the subject."""
+    for text in (
+        "# conformance: ignore[T025:miner, T025] why\n[project]\n",
+        "# conformance: ignore[T025, T025:miner] why\n[project]\n",
+    ):
+        suppressions = parse_toml_suppressions(text)
+        assert _is_suppressed(suppressions, "T025", 2, discriminator="crawler")[0]
 
 
 def test_d002_suppressed_inline_directive_is_counted_but_not_active() -> None:

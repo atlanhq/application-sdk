@@ -3204,6 +3204,154 @@ local function generateE2EBasePy(): FileOutput = new FileOutput {
     (if (emitConnCat) "    connection_category = \"\(escapePyStr(connector!!.category))\"\n" else "")
 }
 
+// ── Bundle (multi-entrypoint) e2e base ────────────────────────────────────────
+//
+// A bundle's per-entrypoint contract is rendered as a standalone App and its
+// files are then re-rooted under `app/generated/<ep>/`. That relocation is
+// invisible to the sub-contract, so its own `generateE2EBasePy()` output is
+// wrong in four ways for a bundle: `connector_short_name` / `app_service_url` /
+// `argo_*` come from the ENTRYPOINT's name rather than the bundle's, and neither
+// `manifest_path` nor `entrypoint` is emitted at all — so `manifest_path` falls
+// back to `app/generated/manifest.json`, which does not exist in a bundle, and
+// Automation Engine gets no entrypoint selector and 404s "No manifest available"
+// at submit.
+//
+// These functions run in the BUNDLE's scope, where both the bundle and the
+// `Entrypoint` are in hand, and their output replaces the relocated file. They
+// are reachable only from the multi-entrypoint output block, so a
+// single-entrypoint app's generated base is byte-for-byte unaffected.
+
+// SQL-family selection for a bundle entrypoint. The bundle root usually declares
+// no `connector`, so the category comes from the entrypoint's own `sourceCategory`
+// (the same vocabulary `e2eBaseClass()` matches on).
+local function e2eBaseClassForCategory(cat: String?): String =
+  if (cat == "warehouse" || cat == "database" || cat == "lake" || cat == "queryengine")
+    "SQLAppE2ETest"
+  else "BaseE2ETest"
+
+// True when this entrypoint's pipeline publishes to Atlas — i.e. it lands a
+// Connection and assets beneath it. Mirrors `generateDAG()`'s own condition for
+// emitting the `publish` node, so the harness expectations cannot disagree with
+// the DAG that was generated.
+local function epPublishes(c: Typed): Boolean =
+  c.pipeline.publish != null || c.extraNodes.toMap().containsKey("publish")
+
+// True when this entrypoint's pipeline produces lineage. Mirrors every form
+// `generateDAG()` emits a lineage node for: the typed `pipeline.lineage` step
+// (→ `lineage-app`), the `pipeline.publish.lineagePublish` sub-step
+// (→ `lineage-publish`), and an app that carries its lineage stage in an
+// `extraNodes` override (`lineage-app` / `lineage-publish`) — a documented DAG
+// shape. Reading only `pipeline.lineage` would generate a suite that never
+// asserts the lineage landed for exactly the apps that wired it by hand.
+local function epProducesLineage(c: Typed): Boolean =
+  c.pipeline.lineage != null
+    || (c.pipeline.publish != null && c.pipeline.publish!!.lineagePublish != null)
+    || c.extraNodes.toMap().containsKey("lineage-app")
+    || c.extraNodes.toMap().containsKey("lineage-publish")
+
+// Nodes that must genuinely succeed for the run to count as a pass. Only
+// `extract` and `publish`: `qi`, `popularity`, `lineage-*` and `notifications`
+// are legitimately Skipped by AE, and the harness's skip-tolerant gate is built
+// for exactly that. This reproduces the SDK's own ("extract", "publish") default
+// on a full crawler pipeline, and narrows it to ("extract",) on a miner.
+local function epRequiredDagNodes(c: Typed): String =
+  let (parts = (new Listing {
+    when (c.pipeline.extract != null) { "\"extract\"" }
+    when (epPublishes(c)) { "\"publish\"" }
+  }).toList())
+  // A 1-tuple needs its trailing comma or Python reads it as a parenthesised string.
+  if (parts.length == 1) "(\(parts.first),)" else "(\(parts.join(", ")))"
+
+local function pyBool(b: Boolean): String = if (b) "True" else "False"
+
+// Last path segment of a marketplace package id: "@atlan/teradata-miner" -> "teradata-miner".
+local function pkgLeaf(pkg: String): String = pkg.split("/").last
+
+// The `argoPackageNames` entry that belongs to this entrypoint, or null.
+//
+// A bundle ships one package per marketplace card, and a miner leg must submit
+// against the MINER's package/template — submitting against the crawler's runs
+// the wrong workflow and passes. `packageId` states the mapping outright; when it
+// is absent, match on the package leaf, which covers both shapes in the fleet:
+//
+//   argoPackageNames { "@atlan/crawler"; "@atlan/miner" }            leaf == ep.name
+//   argoPackageNames { "@atlan/teradata"; "@atlan/teradata-miner" }  leaf ends with the name
+//
+// Returns null when nothing matches — e.g. teradata's `crawler` entrypoint, whose
+// package is the bare "@atlan/teradata". The caller then falls back to the
+// bundle's own resolved package and template, which is right for exactly that
+// case: the card that carries no suffix IS the bundle's primary one.
+local function epMatchedPackage(ep: Entrypoint): String? =
+  if (ep.packageId != null) ep.packageId
+  else
+    let (suffix = "-" + ep.name)
+    let (hits = (new Listing {
+      for (pkg in argoPackageNames) {
+        when (pkgLeaf(pkg) == ep.name || pkgLeaf(pkg).endsWith(suffix)) { pkg }
+      }
+    }).toList())
+    if (hits.isEmpty) null else hits.first
+
+local function epPackageName(ep: Entrypoint): String =
+  epMatchedPackage(ep) ?? resolvedArgoPackageName
+
+// Cluster WorkflowTemplate name. Derived from the matched package's leaf, because
+// the deployed template is named after the package ("atlan-teradata-miner"), not
+// after the bundle. Falls back to the bundle's `argoTemplateName` when no package
+// matched, keeping the unmatched primary entrypoint on the bundle's own template.
+local function epTemplateName(ep: Entrypoint): String =
+  let (matched = epMatchedPackage(ep))
+  if (matched == null) argoTemplateName else "atlan-" + pkgLeaf(matched)
+
+local function generateBundleE2EBasePy(ep: Entrypoint): FileOutput = new FileOutput {
+  local c = ep.contract!!
+  local baseClass = e2eBaseClassForCategory(ep.sourceCategory ?? c.connector?.category)
+  local cname = pascalCase(ep.name)
+  // Identity is the BUNDLE's, not the entrypoint's: every entrypoint of a bundle
+  // is served by one deployed app service, and `connector_short_name` drives the
+  // DAG's `app_name`, the QI `vendor_name`, and the default
+  // `connector_config_name` (`atlan-connectors-<short-name>`) — which must
+  // resolve to the bundle's shared credential configmap, not a per-entrypoint one
+  // that was never generated.
+  local shortName = name
+  // Per-entrypoint marketplace package and template — see `epMatchedPackage`.
+  local pkgName = epPackageName(ep)
+  local tmplName = epTemplateName(ep)
+  local publishes = epPublishes(c)
+  local expectsLineage = epProducesLineage(c)
+  // `connection_type` is always emitted (never gated on `value != name`): the SDK
+  // falls back to `connector_short_name`, which is now the BUNDLE name and so is
+  // wrong for every bundle whose source differs from it.
+  local connType = ep.source ?? c.connector?.value
+  local connCat = ep.sourceCategory ?? c.connector?.category
+  text =
+    "# Generated from contract/app.pkl via contract-toolkit. DO NOT EDIT.\n" +
+    "# Regenerate with: pkl eval -m . contract/app.pkl\n" +
+    "from application_sdk.testing.e2e import \(baseClass)\n\n\n" +
+    "class \(cname)GeneratedE2EBase(\(baseClass)):\n" +
+    "    connector_short_name = \"\(escapePyStr(shortName))\"\n" +
+    "    argo_package_name = \"\(escapePyStr(pkgName))\"\n" +
+    "    argo_template_name = \"\(escapePyStr(tmplName))\"\n" +
+    "    app_service_url = \"\(escapePyStr(appServiceUrl))\"\n" +
+    (if (connType != null) "    connection_type = \"\(escapePyStr(connType))\"\n" else "") +
+    (if (connCat != null && connCat != "warehouse") "    connection_category = \"\(escapePyStr(connCat))\"\n" else "") +
+    "    connector_config_name = \"\(escapePyStr(connectorConfigName))\"\n" +
+    "    # This entrypoint's own manifest. Without it the harness reads the\n" +
+    "    # single-entrypoint default (app/generated/manifest.json), which a bundle\n" +
+    "    # does not have, and fails with ManifestFileNotFoundError.\n" +
+    "    manifest_path = \"app/generated/\(escapePyStr(ep.name))/manifest.json\"\n" +
+    "    # Sent as metadata.entrypoint on the AE submit so Automation Engine\n" +
+    "    # fetches THIS entrypoint's manifest from the deployed pod. A bare fetch\n" +
+    "    # 404s \"No manifest available\" on a multi-entrypoint app.\n" +
+    "    entrypoint = \"\(escapePyStr(ep.name))\"\n" +
+    "    # Derived from this entrypoint's pipeline, so the assertions match the\n" +
+    "    # DAG that was generated rather than the crawler-shaped SDK defaults.\n" +
+    "    required_dag_nodes = \(epRequiredDagNodes(c))\n" +
+    "    expect_connection = \(pyBool(publishes))\n" +
+    "    require_nonempty_assets = \(pyBool(publishes))\n" +
+    "    expect_lineage = \(pyBool(expectsLineage))\n"
+}
+
 local function generateE2ESubstitutionsPy(): FileOutput? =
   let (props = uiConfig?.properties ?? Map())
   let (skip = e2eSubsSkip())
@@ -3737,10 +3885,18 @@ output =
           for (entrypoint in entrypoints) {
             when (entrypoint.contract != null) {
               for (fileName, fileOutput in entrypoint.contract!!.output.files) {
-                when (normalizeContractFileName(fileName) != "" && !isCredentialFile(entrypoint, fileName)) {
+                // `_e2e_base.py` is deliberately NOT relocated: the sub-contract
+                // rendered it believing it was a standalone app, so its identity
+                // fields name the entrypoint instead of the bundle and it carries
+                // neither `manifest_path` nor `entrypoint`. The bundle-scoped
+                // generator below replaces it. Every other file relocates as before.
+                when (normalizeContractFileName(fileName) != ""
+                      && normalizeContractFileName(fileName) != "_e2e_base.py"
+                      && !isCredentialFile(entrypoint, fileName)) {
                   ["app/generated/\(entrypoint.name)/\(normalizeContractFileName(fileName))"] = fileOutput
                 }
               }
+              ["app/generated/\(entrypoint.name)/_e2e_base.py"] = generateBundleE2EBasePy(entrypoint)
             }
           }
         }

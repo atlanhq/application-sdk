@@ -140,8 +140,64 @@ Or manually add to `app/generated/manifest.json`:
 
 **Note on `task_queue`:** The value `atlan-{app-name}-{deployment-name}` is only used when both `ATLAN_APPLICATION_NAME` and `ATLAN_DEPLOYMENT_NAME` env vars are set. In local dev (where neither is set), the SDK falls back to `{ClassName}-queue`. Update `task_queue` to match how your local Temporal worker is configured (check the output of `uv run python run_dev.py` for the actual queue name).
 
+### Scaffold the test surfaces
+
+A new entrypoint is a new workflow that nothing tests. Both tiers need it named
+explicitly, because in both cases the silent fallback is a **pass against the
+wrong workflow** — the app resolves its default entrypoint rather than erroring.
+Do not skip this step: it is the one that makes the new entrypoint's regressions
+visible.
+
+**Integration** — add a scenario naming the entrypoint:
+
+```python
+Scenario(
+    name="{entrypoint_snake_name}_workflow",
+    api="workflow",
+    entrypoint="{entrypoint-kebab-name}",   # → POST /start?entrypoint=<name>
+    args={...},
+    assert_that={"success": equals(True)},
+)
+```
+
+For an in-process test, pass `entry_point="{entrypoint-kebab-name}"` to the
+executor — a multi-entrypoint app registers only `{app}:{entrypoint}`, never the
+bare `{app}`, so omitting it raises `EntryPointRequiredError`.
+
+**e2e (bundle-mode apps only)** — add **one file per entrypoint**; the CI matrix
+fans out one leg per `tests/e2e/test_*.py`, so a second file is a second leg with
+no workflow change:
+
+```python
+# tests/e2e/test_{app_name}_{entrypoint_snake_name}_e2e.py
+from app.generated.{entrypoint_snake_name}._e2e_base import (
+    {EntrypointPascalName}GeneratedE2EBase,
+)
+from application_sdk.testing.e2e import RunMode
+
+
+@pytest.mark.e2e
+class Test{AppPascalName}{EntrypointPascalName}E2E(
+    {EntrypointPascalName}GeneratedE2EBase
+):
+    mode = RunMode.AGENT
+```
+
+The generated base already carries this entrypoint's `manifest_path`,
+`entrypoint`, and pipeline-derived expectations (`expect_connection`,
+`required_dag_nodes`, …), so a non-publishing entrypoint is not graded against
+crawler-shaped assertions. If the entrypoint *consumes* state rather than
+creating it (a miner enriches a connection it does not create), override
+`seed_prerequisites()` and call `self.seed_connection(...)` — under the harness's
+own ephemeral QN, so teardown purges it and runs stay isolated.
+
+Conformance rule `T025 EntrypointWithoutE2ECoverage` reports a bundle entrypoint
+with no e2e suite, so skipping this will surface in the repo's own scan.
+
 ## Verification
 
 1. `uv run python run_dev.py` — smoke test the new entrypoint.
 2. In Temporal UI, verify `{app-name}:{entrypoint-kebab-name}` appears as the workflow type (e.g. `my-app:mine-queries` if the method is `mine_queries`).
 3. Check the response from `GET /workflows/v1/manifest` includes the new node.
+4. `uv run pytest tests/integration -k {entrypoint_snake_name}` — the new scenario passes.
+5. `uv run atlan-conformance` — `T025` is silent for the new entrypoint (bundle apps).

@@ -33,6 +33,7 @@ import os
 import time
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import quote
 
 import orjson
 import pytest
@@ -245,6 +246,12 @@ class BaseIntegrationTest:
     server_host: str = ""
     server_version: str = "v1"
     workflow_endpoint: str = "/start"
+    # Suite-wide default entrypoint for workflow scenarios on a multi-entrypoint
+    # app. A per-scenario ``Scenario.entrypoint`` overrides it; see
+    # :meth:`_resolve_workflow_endpoint` for the full precedence. Empty means
+    # "send no selector", which is correct for a single-entrypoint app and is
+    # byte-identical to the pre-existing behaviour.
+    entrypoint: str = ""
     timeout: int = 30
 
     # Default values merged with auto-discovered credentials
@@ -525,6 +532,41 @@ class BaseIntegrationTest:
 
         return args
 
+    def _resolve_workflow_endpoint(self, scenario: Scenario) -> str:
+        """Resolve the path a workflow scenario POSTs to, including any selector.
+
+        Precedence, most specific first:
+
+        ==========================  ====================================================
+        ``scenario.endpoint``       full override, wins outright (may carry its own
+                                    query string) — unchanged behaviour
+        ``scenario.entrypoint``     appended to ``workflow_endpoint``
+        ``cls.entrypoint``          suite-wide default, appended the same way
+        neither                     bare ``workflow_endpoint``, exactly as before
+        ==========================  ====================================================
+
+        ``scenario.endpoint`` deliberately short-circuits rather than merging: it
+        is documented as a full path override, and a suite already writing
+        ``endpoint="/start?entrypoint=miner"`` by hand must keep working
+        identically rather than acquire a second, possibly conflicting selector.
+
+        The value is URL-encoded, and joined with ``&`` when ``workflow_endpoint``
+        already carries a query string, so a suite that customised its endpoint
+        does not end up with two ``?``.
+        """
+        if scenario.endpoint:
+            return scenario.endpoint
+
+        entrypoint = scenario.entrypoint or self.entrypoint
+        if not entrypoint:
+            return self.workflow_endpoint
+
+        separator = "&" if "?" in self.workflow_endpoint else "?"
+        return (
+            f"{self.workflow_endpoint}{separator}"
+            f"entrypoint={quote(entrypoint, safe='')}"
+        )
+
     def _execute_scenario(self, scenario: Scenario) -> ScenarioResult:
         """Execute a single scenario and return the result.
 
@@ -556,11 +598,20 @@ class BaseIntegrationTest:
             logger.debug("Built args for %s", scenario.name)
 
             # Step 2: Call the API
-            endpoint = scenario.endpoint or self.workflow_endpoint
+            endpoint = self._resolve_workflow_endpoint(scenario)
             response = self.client.call_api(
                 api=scenario.api,
                 args=args,
-                endpoint_override=endpoint if scenario.api == "workflow" else None,
+                # .lower() to match every other api dispatch in this class
+                # (_build_scenario_args) and in client.call_api, which both
+                # normalise. Case-sensitive here meant api="Workflow" built
+                # workflow args and then silently dropped the endpoint override —
+                # so the entrypoint selector would have gone missing too. No
+                # capitalised spelling exists in the fleet today; this keeps the
+                # selector from depending on that staying true.
+                endpoint_override=(
+                    endpoint if scenario.api.lower() == "workflow" else None
+                ),
             )
             result.response = response
             logger.debug("API response for %s: %s", scenario.name, response)

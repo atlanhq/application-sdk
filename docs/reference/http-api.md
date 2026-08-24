@@ -89,7 +89,9 @@ Delegates to `Handler.fetch_metadata(MetadataInput)`.
 
 Start a workflow run.
 
-**Query param:** `?entrypoint=<name>` (optional). When omitted, the default `run()` entry point is used for single-entrypoint apps; apps with multiple `@entrypoint` methods return HTTP 400 if this parameter is absent. When set, it selects a specific `@entrypoint`-decorated method.
+**Query param:** `?entrypoint=<name>` (optional). When set, it selects a specific `@entrypoint`-decorated method. When omitted, the app's **default** entry point is resolved: the single `run()`/`@entrypoint` when there is only one, otherwise the one marked `default=True`, otherwise the alphabetically first. Only an app with entry points and no resolvable default returns HTTP 400 (`"entrypoint is required for this app."`).
+
+> **Pass it explicitly on a multi-entrypoint app.** Omitting it does not fail — it silently starts whichever entry point resolves as default, so a caller (or a test) meaning to start the miner can start the crawler instead and see a success response. See [Entry points](../concepts/entry-points.md#default-entrypoint-resolution) for the full resolution table.
 
 **Request body:**
 ```json
@@ -107,7 +109,7 @@ Example with entrypoint:
 POST /workflows/v1/start?entrypoint=extract-metadata
 ```
 
-> **Note:** `workflow_type` body field is supported as a deprecated fallback (planned removal in v3.1.0). Always use `?entrypoint=` for new code.
+> **Note:** the `workflow_type` body field is supported as a deprecated fallback (removal in v4.0 — see the `DeprecationWarning` raised by the route). Always use `?entrypoint=` for new code.
 
 **Response:**
 ```json

@@ -192,8 +192,9 @@ _SERIES_META: list[SeriesMeta] = [
             "`suite.checks.e2e_agent_spec` (T017), "
             "`suite.checks.integration_deselect` (T018), "
             "`suite.checks.asyncio_loop_scope` (T019), "
-            "`suite.checks.e2e_workflow_shape` (T020-T022), and "
-            "`suite.checks.e2e_generated_harness` (T023-T024) (AST/TOML/YAML-based)"
+            "`suite.checks.e2e_workflow_shape` (T020-T022), "
+            "`suite.checks.e2e_generated_harness` (T023-T024), and "
+            "`suite.checks.entrypoint_e2e_coverage` (T025) (AST/TOML/YAML-based)"
         ),
         suppression_example=(
             "# conformance: ignore[T001] intentional: marked dynamically via add_marker"

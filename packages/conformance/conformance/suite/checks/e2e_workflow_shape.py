@@ -88,6 +88,7 @@ import sys
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
+    SuppressionsMap,
     is_collectable_test_file,
     make_cli_main,
     make_toml_finding,
@@ -516,9 +517,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     """Grade the repo's e2e CI wiring (T020, T021, T022)."""
     findings: list[Finding] = []
     # (relative path, text, suppressions, line index of the `uses:` reusable call)
-    callers: list[
-        tuple[str, str, dict[int, tuple[frozenset[str] | None, str]], int]
-    ] = []
+    callers: list[tuple[str, str, SuppressionsMap, int]] = []
     names_e2e_path = False
 
     for path in paths:
@@ -637,8 +636,8 @@ def _read_lines(root: Path, rel: str) -> list[str]:
 
 def _t021_anchor(
     root: Path,
-    callers: list[tuple[str, str, dict[int, tuple[frozenset[str] | None, str]], int]],
-) -> tuple[str, int, dict[int, tuple[frozenset[str] | None, str]]]:
+    callers: list[tuple[str, str, SuppressionsMap, int]],
+) -> tuple[str, int, SuppressionsMap]:
     """Where to anchor a T021 finding.
 
     Prefer the caller that exists but is misconfigured (its ``uses:`` line), so
