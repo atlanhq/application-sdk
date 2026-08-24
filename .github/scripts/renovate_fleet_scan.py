@@ -9,6 +9,10 @@ size. Output is written in the exact per-repo JSON file layout that
 packages/conformance/conformance/renovate/scan.py `_parse_pr` / `_auto_merge_stats` for
 the consuming schema this script must match.
 
+One follow-up query per PR is issued after the search, and only for PRs that are red
+with a uv.lock-only diff: it reads that lock so the classifier can distinguish a stale
+bounded-lock refusal from an ordinary broken build (FND-782). See fetch_lock_texts.
+
 Environment:
     GH_TOKEN   bearer token (GitHub App installation token or PAT) for api.github.com
 
@@ -39,6 +43,12 @@ PAGE_SIZE = 100
 # far beyond any realistic fleet. Trips only if a query is unexpectedly unbounded.
 MAX_PAGES = 50
 
+# Ceiling on the follow-up uv.lock blob fetches (see fetch_lock_texts). Each one
+# pulls a few hundred KB, so this is a cost guard, not a correctness bound — the
+# pre-filter it backs up should leave a handful of candidates fleet-wide, and
+# anything over the cap is reported rather than silently dropped.
+MAX_LOCK_FETCHES = 25
+
 _OPEN_PR_FIELDS = """
 number
 url
@@ -57,6 +67,7 @@ files(first: 100) { nodes { path } }
 commits(last: 1) {
   nodes {
     commit {
+      committedDate
       statusCheckRollup {
         contexts(first: 100) {
           nodes {
@@ -208,6 +219,108 @@ def _status_rollup_to_list(pr: dict) -> list[dict]:
     return out
 
 
+# Conclusions/states that make a check red. Mirrors
+# conformance.renovate.scan._CHECKS_FAILING — duplicated rather than imported
+# because .github/scripts/ runs on a bare interpreter with no conformance package
+# installed. Only used as a fetch pre-filter here; the authoritative reduction
+# still happens in the classifier.
+_FAILING_CHECK_STATES = frozenset(
+    {"FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED"}
+)
+
+_LOCK_BLOB_QUERY = """
+query($owner: String!, $name: String!, $expression: String!) {
+  repository(owner: $owner, name: $name) {
+    object(expression: $expression) {
+      ... on Blob { text }
+    }
+  }
+}
+"""
+
+
+def _head_committed_at(pr: dict) -> str:
+    commits = (pr.get("commits") or {}).get("nodes") or []
+    if not commits:
+        return ""
+    return ((commits[0] or {}).get("commit") or {}).get("committedDate") or ""
+
+
+def _has_failing_check(pr: dict) -> bool:
+    return any(
+        (c.get("state") or c.get("conclusion") or c.get("status") or "").upper()
+        in _FAILING_CHECK_STATES
+        for c in _status_rollup_to_list(pr)
+    )
+
+
+def lock_refusal_candidate(pr: dict) -> Optional[str]:
+    """Path of the uv.lock worth fetching for this PR, or None.
+
+    The bounded-lock refusal signal (FND-782) needs the branch's lock *contents*,
+    which no PR search field carries. Fetching one blob per open Renovate PR would
+    move hundreds of MB across the fleet for a condition that should be rare, so
+    narrow it first to the only shape that can possibly be a refusal: a red PR
+    whose entire diff is a single uv.lock. Both facts are already in hand from the
+    search response, and both are conditions the classifier independently requires
+    anyway — this is a pre-filter, not a second copy of the classification.
+    """
+    if not _has_failing_check(pr):
+        return None
+    paths = [f["path"] for f in (pr.get("files") or {}).get("nodes") or []]
+    if len(paths) != 1 or paths[0].rsplit("/", 1)[-1] != "uv.lock":
+        return None
+    return paths[0]
+
+
+def fetch_lock_texts(token: str, prs: list[dict], post: PostFn = _post_graphql) -> int:
+    """Attach ``uvLockText`` to every PR that could be carrying a lock refusal.
+
+    Mutates the nodes in place and returns how many were fetched. A blob that
+    cannot be read (deleted branch, permissions, an unexpected object type) is
+    warned about and skipped: the PR then classifies exactly as it did before this
+    signal existed, which is the safe direction to fail.
+    """
+    candidates = [(pr, path) for pr in prs if (path := lock_refusal_candidate(pr))]
+    if len(candidates) > MAX_LOCK_FETCHES:
+        skipped = [pr["url"] for pr, _ in candidates[MAX_LOCK_FETCHES:]]
+        print(
+            f"Warning: {len(candidates)} lock-refusal candidates exceeds the "
+            f"{MAX_LOCK_FETCHES}-fetch cap; not inspecting the lock for: "
+            f"{', '.join(skipped)}",
+            file=sys.stderr,
+        )
+        candidates = candidates[:MAX_LOCK_FETCHES]
+
+    fetched = 0
+    for pr, path in candidates:
+        owner, _, name = pr["repository"]["nameWithOwner"].partition("/")
+        payload = {
+            "query": _LOCK_BLOB_QUERY,
+            "variables": {
+                "owner": owner,
+                "name": name,
+                "expression": f"{pr.get('headRefName') or ''}:{path}",
+            },
+        }
+        try:
+            data = post(token, payload)
+            if "errors" in data:
+                raise RuntimeError(str(data["errors"]))
+            obj = ((data["data"] or {}).get("repository") or {}).get("object") or {}
+            text = obj.get("text")
+        except (RuntimeError, KeyError, TypeError) as exc:
+            print(
+                f"Warning: could not read {path} on {pr['url']}: {exc}",
+                file=sys.stderr,
+            )
+            continue
+        if text:
+            pr["uvLockText"] = text
+            fetched += 1
+    return fetched
+
+
 def normalize_open_pr(pr: dict) -> dict:
     """Map a GraphQL PullRequest node to the `gh pr list --json ...` shape renovate-scan expects."""
     return {
@@ -230,6 +343,12 @@ def normalize_open_pr(pr: dict) -> dict:
         "updatedAt": pr["updatedAt"],
         "isDraft": bool(pr.get("isDraft") or False),
         "body": pr.get("body") or "",
+        # Beyond the `gh pr list --json` schema, both read by
+        # conformance.renovate.scan._parse_pr and both optional there: the branch
+        # head's commit date (the clock a bounded-lock refusal expires against) and
+        # the head uv.lock, present only for the few PRs fetch_lock_texts picked.
+        "headCommittedAt": _head_committed_at(pr),
+        "uvLockText": pr.get("uvLockText") or "",
     }
 
 
@@ -292,6 +411,15 @@ def run(
         _MERGED_PR_FIELDS,
         post,
     )
+
+    # Second pass, deliberately narrow: only the red uv.lock-only PRs, and only
+    # then, get their lock contents pulled so the classifier can tell a stale
+    # bounded-lock refusal from an ordinary broken build (FND-782).
+    fetched = fetch_lock_texts(token, open_nodes, post)
+    if fetched:
+        print(
+            f"Fetched uv.lock for {fetched} lock-refusal candidate(s)", file=sys.stderr
+        )
 
     open_grouped = group_by_repo(open_nodes, normalize_open_pr)
     merged_grouped = group_by_repo(merged_nodes, normalize_merged_pr)

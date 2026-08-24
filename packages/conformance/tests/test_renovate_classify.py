@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from conformance.renovate.classify import STALE_AFTER_DAYS, classify
+from conformance.renovate.classify import lock_refusal_window as extract_refusal_window
+from conformance.renovate.classify import parse_window
 from conformance.renovate.models import (
     BlockingReason,
     Category,
@@ -38,6 +40,8 @@ def make_pr(
     is_draft: bool = False,
     body: str = "",
     auto_merge_enabled: bool = False,
+    head_committed_at: datetime | None = None,
+    lock_refusal_window: str = "",
 ) -> RenovatePR:
     """Construct an unclassified RenovatePR with sane defaults for one scenario."""
     return RenovatePR(
@@ -55,6 +59,8 @@ def make_pr(
         is_draft=is_draft,
         body=body,
         auto_merge_enabled=auto_merge_enabled,
+        head_committed_at=head_committed_at,
+        lock_refusal_window=lock_refusal_window,
     )
 
 
@@ -640,3 +646,181 @@ def test_extract_deps_title_fallback_action_form() -> None:
     assert [(d.name, d.from_version, d.to_version) for d in pr.deps] == [
         ("anthropics/claude-code-action", "", "1.0.190")
     ]
+
+
+# ── Bounded-lock refusal: expired vs. ordinary broken build (FND-782) ────────
+
+# The tripwire withhold() writes: baseline versions plus a bare [options] table.
+# The absence of an `exclude-newer` key is what separates it from an [options]
+# table uv wrote itself.
+_TRIPWIRE_LOCK = """\
+version = 1
+revision = 3
+requires-python = ">=3.11"
+
+[options]
+exclude-newer-span = "P3D"
+
+[[package]]
+name = "boto3"
+version = "1.43.67"
+"""
+
+# What uv itself records when a repo declares its own [tool.uv] exclude-newer —
+# same span key, but always alongside the absolute timestamp and (when per-package
+# ceilings apply) the subtable. Four fleet repos carry this permanently, on base
+# as well as on every branch, and must never read as a refusal.
+_UV_OWN_OPTIONS_LOCK = """\
+version = 1
+revision = 3
+
+[options]
+exclude-newer = "0001-01-01T00:00:00Z" # no effect; back-compat for relative values
+exclude-newer-span = "P7D"
+
+[options.exclude-newer-package]
+pyatlan = { timestamp = "0001-01-01T00:00:00Z", span = "PT0S" }
+
+[[package]]
+name = "boto3"
+version = "1.43.67"
+"""
+
+_PLAIN_LOCK = """\
+version = 1
+revision = 3
+
+[[package]]
+name = "boto3"
+version = "1.43.67"
+"""
+
+
+def _refusal_pr(
+    *,
+    window: str = "P3D",
+    head_age: timedelta = timedelta(days=4),
+    files: list[str] | None = None,
+    labels: list[str] | None = None,
+    checks_state: ChecksState = ChecksState.FAILING,
+) -> RenovatePR:
+    """A red, uv.lock-only lock-maintenance PR carrying an expired tripwire."""
+    return make_pr(
+        labels=labels if labels is not None else ["update:lock-maintenance"],
+        title="Lock file maintenance",
+        branch="renovate/lock-file-maintenance",
+        checks_state=checks_state,
+        files=files if files is not None else ["uv.lock"],
+        created_at=_OLD,
+        head_committed_at=_NOW - head_age,
+        lock_refusal_window=window,
+    )
+
+
+def test_window_parses_days_and_hours() -> None:
+    assert parse_window("P3D") == timedelta(days=3)
+    assert parse_window("PT12H") == timedelta(hours=12)
+    assert parse_window(" P1DT6H ") == timedelta(days=1, hours=6)
+
+
+def test_window_rejects_calendar_units_and_junk() -> None:
+    # Mirrors the driver: months/years are refused rather than approximated.
+    assert parse_window("P1M") is None
+    assert parse_window("P") is None
+    assert parse_window("") is None
+    assert parse_window("3 days") is None
+
+
+def test_refusal_window_read_from_tripwire() -> None:
+    assert extract_refusal_window(_TRIPWIRE_LOCK) == "P3D"
+
+
+def test_refusal_window_empty_for_uv_written_options() -> None:
+    # The discriminator that keeps the four self-bounding repos out of the signal.
+    assert extract_refusal_window(_UV_OWN_OPTIONS_LOCK) == ""
+
+
+def test_refusal_window_empty_for_ordinary_lock() -> None:
+    assert extract_refusal_window(_PLAIN_LOCK) == ""
+
+
+def test_refusal_window_ignores_a_span_outside_the_options_table() -> None:
+    # A later table quoting the same key must not be read as the tripwire.
+    lock = _PLAIN_LOCK + '\n[tool.something]\nexclude-newer-span = "P7D"\n'
+    assert extract_refusal_window(lock) == ""
+
+
+def test_blocking_bounded_lock_refusal_expired() -> None:
+    # Red, lock-only, tripwire present, head older than the window it names.
+    pr = classify(_refusal_pr())
+    assert pr.blocking_reason is BlockingReason.BOUNDED_LOCK_REFUSAL_EXPIRED
+
+
+def test_blocking_bounded_lock_refusal_expired_at_the_window_boundary() -> None:
+    # Everything blocking a refusal written at T is >= W old at T + W, so the
+    # boundary itself counts as expired.
+    pr = classify(_refusal_pr(head_age=timedelta(days=3, seconds=1)))
+    assert pr.blocking_reason is BlockingReason.BOUNDED_LOCK_REFUSAL_EXPIRED
+
+
+def test_blocking_checks_failing_while_the_refusal_is_still_live() -> None:
+    # Held today, for a reason that still holds. Nothing to surface yet.
+    pr = classify(_refusal_pr(head_age=timedelta(hours=6)))
+    assert pr.blocking_reason is BlockingReason.CHECKS_FAILING
+
+
+def test_blocking_checks_failing_when_the_lock_has_no_tripwire() -> None:
+    # An ordinary broken lock-maintenance build — a human owns it.
+    pr = classify(_refusal_pr(window=""))
+    assert pr.blocking_reason is BlockingReason.CHECKS_FAILING
+
+
+def test_blocking_checks_failing_when_the_diff_is_more_than_the_lock() -> None:
+    pr = classify(_refusal_pr(files=["uv.lock", "pyproject.toml"]))
+    assert pr.blocking_reason is BlockingReason.CHECKS_FAILING
+
+
+def test_blocking_checks_failing_when_head_date_is_unknown() -> None:
+    # Input predating headCommittedAt: no clock, so no claim. created_at is not a
+    # substitute — Renovate rewrites a lock branch in place.
+    pr = classify(
+        make_pr(
+            labels=["update:lock-maintenance"],
+            checks_state=ChecksState.FAILING,
+            files=["uv.lock"],
+            created_at=_OLD,
+            head_committed_at=None,
+            lock_refusal_window="P3D",
+        )
+    )
+    assert pr.blocking_reason is BlockingReason.CHECKS_FAILING
+
+
+def test_blocking_refusal_signal_only_applies_to_lock_maintenance() -> None:
+    # Only the lock lane runs the bounded driver, so only it can be carrying a
+    # refusal. Assert the category guard rather than relying on the other three
+    # conditions to happen to exclude everything else.
+    pr = classify(_refusal_pr(labels=["conformance-package-update", "update:patch"]))
+    assert pr.blocking_reason is BlockingReason.CHECKS_FAILING
+
+
+def test_blocking_merge_conflict_still_wins_over_the_refusal_signal() -> None:
+    pr = classify(
+        make_pr(
+            labels=["update:lock-maintenance"],
+            checks_state=ChecksState.FAILING,
+            files=["uv.lock"],
+            mergeable="CONFLICTING",
+            head_committed_at=_NOW - timedelta(days=4),
+            lock_refusal_window="P3D",
+        )
+    )
+    assert pr.blocking_reason is BlockingReason.MERGE_CONFLICT
+
+
+def test_expired_refusal_counts_as_auto_merge_eligible_but_stuck() -> None:
+    # The dashboard's "stuck" count is derived from blocking_reason, so a new
+    # reason must not silently drop out of it.
+    pr = classify(_refusal_pr())
+    assert pr.auto_merge_expected is True
+    assert pr.blocking_reason is not BlockingReason.AWAITING_HUMAN_REVIEW

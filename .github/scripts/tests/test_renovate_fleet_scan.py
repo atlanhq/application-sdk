@@ -218,7 +218,16 @@ def test_normalize_open_pr_full_shape():
         "updatedAt": "2026-06-02T00:00:00Z",
         "isDraft": False,
         "body": "bumps foo",
-        "commits": {"nodes": [{"commit": {"statusCheckRollup": None}}]},
+        "commits": {
+            "nodes": [
+                {
+                    "commit": {
+                        "committedDate": "2026-06-02T00:00:00Z",
+                        "statusCheckRollup": None,
+                    }
+                }
+            ]
+        },
     }
     out = rfs.normalize_open_pr(pr)
     assert out == {
@@ -236,6 +245,8 @@ def test_normalize_open_pr_full_shape():
         "updatedAt": "2026-06-02T00:00:00Z",
         "isDraft": False,
         "body": "bumps foo",
+        "headCommittedAt": "2026-06-02T00:00:00Z",
+        "uvLockText": "",
     }
 
 
@@ -268,6 +279,8 @@ def test_normalize_open_pr_defaults_for_missing_optional_fields():
         "body",
         "statusCheckRollup",
         "autoMergeEnabled",
+        "headCommittedAt",
+        "uvLockText",
     ):
         assert out[key] is not None
 
@@ -393,3 +406,140 @@ def test_run_writes_open_and_merged_files(tmp_path):
     assert json.loads((open_dir / "atlanhq_b.json").read_text()) == []
     assert json.loads((merged_dir / "atlanhq_a.json").read_text()) == [{"reviews": []}]
     assert json.loads((merged_dir / "atlanhq_b.json").read_text()) == []
+
+
+# ---------------------------------------------------------------------------
+# Lock-refusal candidate pre-filter + blob fetch (FND-782)
+# ---------------------------------------------------------------------------
+
+
+def _candidate(
+    *,
+    conclusion="FAILURE",
+    paths=("uv.lock",),
+    url="https://github.com/atlanhq/atlan-mysql-app/pull/7",
+    branch="renovate/lock-file-maintenance",
+):
+    return {
+        "url": url,
+        "headRefName": branch,
+        "repository": {"nameWithOwner": "atlanhq/atlan-mysql-app"},
+        "files": {"nodes": [{"path": p} for p in paths]},
+        "commits": {
+            "nodes": [
+                {
+                    "commit": {
+                        "committedDate": "2026-08-20T00:00:00Z",
+                        "statusCheckRollup": {
+                            "contexts": {
+                                "nodes": [
+                                    {
+                                        "__typename": "CheckRun",
+                                        "conclusion": conclusion,
+                                        "status": "COMPLETED",
+                                    }
+                                ]
+                            }
+                        },
+                    }
+                }
+            ]
+        },
+    }
+
+
+def test_head_committed_at_read_from_last_commit():
+    assert rfs._head_committed_at(_candidate()) == "2026-08-20T00:00:00Z"
+
+
+def test_head_committed_at_empty_when_no_commits():
+    assert rfs._head_committed_at({"commits": {"nodes": []}}) == ""
+
+
+def test_lock_refusal_candidate_matches_red_lock_only_pr():
+    assert rfs.lock_refusal_candidate(_candidate()) == "uv.lock"
+
+
+def test_lock_refusal_candidate_matches_a_nested_lock():
+    assert rfs.lock_refusal_candidate(_candidate(paths=("apps/api/uv.lock",))) == (
+        "apps/api/uv.lock"
+    )
+
+
+def test_lock_refusal_candidate_skips_green_prs():
+    # The overwhelming majority of lock PRs. Fetching their locks would be the
+    # whole cost of this feature for none of the signal.
+    assert rfs.lock_refusal_candidate(_candidate(conclusion="SUCCESS")) is None
+
+
+def test_lock_refusal_candidate_skips_multi_file_diffs():
+    assert (
+        rfs.lock_refusal_candidate(_candidate(paths=("uv.lock", "pyproject.toml")))
+        is None
+    )
+
+
+def test_lock_refusal_candidate_skips_non_lock_diffs():
+    assert rfs.lock_refusal_candidate(_candidate(paths=("package-lock.json",))) is None
+
+
+def test_fetch_lock_texts_attaches_only_to_candidates():
+    prs = [_candidate(), _candidate(conclusion="SUCCESS", url="https://x/2")]
+    calls = []
+
+    def fake_post(token, payload):
+        calls.append(payload["variables"])
+        return {"data": {"repository": {"object": {"text": "[options]\n"}}}}
+
+    assert rfs.fetch_lock_texts("tok", prs, fake_post) == 1
+    assert calls == [
+        {
+            "owner": "atlanhq",
+            "name": "atlan-mysql-app",
+            "expression": "renovate/lock-file-maintenance:uv.lock",
+        }
+    ]
+    assert prs[0]["uvLockText"] == "[options]\n"
+    assert "uvLockText" not in prs[1]
+
+
+def test_fetch_lock_texts_survives_an_unreadable_blob(capsys):
+    # Deleted branch / permissions / an unexpected object type. The PR then
+    # classifies exactly as it did before this signal existed.
+    prs = [_candidate()]
+
+    def fake_post(token, payload):
+        return {"errors": [{"message": "Could not resolve to a Repository"}]}
+
+    assert rfs.fetch_lock_texts("tok", prs, fake_post) == 0
+    assert "uvLockText" not in prs[0]
+    assert "could not read uv.lock" in capsys.readouterr().err
+
+
+def test_fetch_lock_texts_skips_a_null_object():
+    prs = [_candidate()]
+
+    def fake_post(token, payload):
+        return {"data": {"repository": {"object": None}}}
+
+    assert rfs.fetch_lock_texts("tok", prs, fake_post) == 0
+    assert "uvLockText" not in prs[0]
+
+
+def test_fetch_lock_texts_caps_fetches_and_reports_what_it_skipped(monkeypatch, capsys):
+    monkeypatch.setattr(rfs, "MAX_LOCK_FETCHES", 2)
+    prs = [_candidate(url=f"https://x/{i}") for i in range(4)]
+
+    def fake_post(token, payload):
+        return {"data": {"repository": {"object": {"text": "x"}}}}
+
+    assert rfs.fetch_lock_texts("tok", prs, fake_post) == 2
+    err = capsys.readouterr().err
+    # No silent truncation: the ones that were dropped are named.
+    assert "https://x/2" in err and "https://x/3" in err
+
+
+def test_open_pr_fields_request_the_head_commit_date():
+    # The clock the refusal signal expires against rides on a selection the query
+    # already makes; a rename upstream would silently disable the signal.
+    assert "committedDate" in rfs._OPEN_PR_FIELDS

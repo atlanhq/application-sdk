@@ -23,6 +23,8 @@ Blocking-reason mirrors renovate-auto-approve-reusable.yml conditions:
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from conformance.renovate.models import (
     BlockingReason,
@@ -72,8 +74,127 @@ _DEP_FILE_RE = re.compile(
 STALE_AFTER_DAYS = 1
 
 
+# ISO 8601 duration subset accepted for the tripwire window, mirroring
+# renovate_uv_lock_bounded.parse_window — that is the only writer, so anything it
+# cannot emit is not a window we should be interpreting. Calendar units are
+# rejected rather than approximated.
+_WINDOW_RE = re.compile(r"^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?$")
+
+
 def _non_dep_files(files: list[str]) -> list[str]:
     return [f for f in files if not _DEP_FILE_RE.match(f)]
+
+
+def parse_window(window: str) -> Optional[timedelta]:
+    """``P3D`` / ``PT12H`` -> timedelta; ``None`` for anything unrecognised."""
+    match = _WINDOW_RE.match(window.strip())
+    if not match or not any(match.groups()):
+        return None
+    days, hours, minutes = (int(g) if g else 0 for g in match.groups())
+    return timedelta(days=days, hours=hours, minutes=minutes)
+
+
+def lock_refusal_window(lock_text: str) -> str:
+    """The release-age window named by a bounded-lock *refusal* tripwire, or "".
+
+    ``withhold()`` in ``.github/scripts/renovate_uv_lock_bounded.py`` refuses a
+    lock refresh by writing the baseline versions plus a bare ``[options]`` table::
+
+        [options]
+        exclude-newer-span = "P3D"
+
+    That table is the refusal's only durable trace — nothing else on the PR
+    records it — and it is precisely what ``uv sync --locked`` rejects, which is
+    how a required check ends up red by design.
+
+    Distinguishing it from an ``[options]`` table uv wrote itself matters, because
+    four repos declare their own ``[tool.uv] exclude-newer`` and legitimately carry
+    one on every branch *and* on base. uv always records the absolute
+    ``exclude-newer`` key alongside the span (and an
+    ``[options.exclude-newer-package]`` subtable when per-package ceilings apply);
+    the tripwire writes the span alone. So a lone span is the driver's signature,
+    and reading only the head lock is enough — no second fetch of base to prove the
+    table was *added*.
+
+    Line-based rather than a ``tomllib`` round-trip for the same reason
+    ``strip_options`` is: the caller holds several hundred KB of lockfile per PR
+    and needs six lines of it.
+    """
+    span = ""
+    in_options = False
+    for raw in lock_text.splitlines():
+        line = raw.strip()
+        if line.startswith("[options."):
+            # uv's own per-package ceiling subtable. Never written by withhold().
+            return ""
+        if line.startswith("[options]"):
+            in_options = True
+            continue
+        if not in_options:
+            continue
+        if line.startswith("["):
+            in_options = False
+            continue
+        if not line or line.startswith("#"):
+            continue
+        key, _, value = line.partition("=")
+        if key.strip() == "exclude-newer":
+            # uv wrote this table, not the driver.
+            return ""
+        if key.strip() == "exclude-newer-span":
+            span = value.split("#")[0].strip().strip("\"'")
+    return span
+
+
+def _is_uv_lock_only(files: list[str]) -> bool:
+    """Exactly one changed file, and it is a ``uv.lock`` (at any depth)."""
+    return len(files) == 1 and files[0].rsplit("/", 1)[-1] == "uv.lock"
+
+
+def bounded_lock_refusal_expired(
+    pr: RenovatePR, category: Category, now: datetime
+) -> bool:
+    """Is this red PR a bounded-lock refusal whose window has already elapsed?
+
+    Four conditions, all machine-checkable and none heuristic:
+
+    1. it is a lock-maintenance PR,
+    2. the diff is a ``uv.lock`` and nothing else,
+    3. that lock carries the driver's refusal tripwire (see
+       :func:`lock_refusal_window`), and
+    4. the branch head is at least as old as the window the tripwire names.
+
+    (4) is what makes the refusal *expired* rather than merely present. A refusal
+    written at ``T`` was caused by content published inside ``(T - W, T]``; by
+    ``T + W`` every one of those releases is at least ``W`` old, so the same
+    resolve would now be admitted. ``head_committed_at`` is the right clock and
+    ``created_at`` is not: Renovate rewrites a lock branch in place, so a PR opened
+    a week ago may carry a refusal written an hour ago.
+
+    What this deliberately does not claim is *which* refusal path wrote the
+    tripwire — ``withhold()`` is also called for an unsatisfiable floor and for the
+    rollback gate, and those do not expire with the clock. The signal is honest
+    about that: it says the tripwire is on and the window it names has elapsed,
+    which is already strictly more than ``checks_failing`` conveys, and the first
+    triage step (look at the branch; delete it to force a fresh resolve) is the
+    same either way.
+    """
+    if category is not Category.LOCK_MAINTENANCE:
+        return False
+    if not _is_uv_lock_only(pr.files):
+        return False
+    window = parse_window(pr.lock_refusal_window)
+    if window is None:
+        return False
+    head = pr.head_committed_at
+    if head is None:
+        # No clock for the branch head — the input predates the field. Report the
+        # ordinary red-build reason rather than guessing from created_at, which
+        # Renovate's in-place branch rewrites make unrelated to the refusal.
+        return False
+    if head.tzinfo is None:
+        head = head.replace(tzinfo=timezone.utc)
+    return now - head >= window
 
 
 def categorize(pr: RenovatePR) -> Category:
@@ -257,17 +378,20 @@ def blocking_reason(
     category: Category,
     update_type: UpdateType,
     age_days: int = 0,
+    now: Optional[datetime] = None,
 ) -> BlockingReason:
     """
     Why has this open PR not merged?
 
     Mirrors the conditions in renovate-auto-approve-reusable.yml, then adds two
     signals for the silent-stuck case a green/approved/mergeable PR can fall into
-    when GitHub-native auto-merge is never armed (see PR #2828 postmortem).
+    when GitHub-native auto-merge is never armed (see PR #2828 postmortem), plus
+    one sub-case of a red build that no human owns (FND-782).
 
-    ``age_days`` is threaded in explicitly rather than read off ``pr`` because
-    classify() computes it after the model is first constructed.
+    ``age_days`` and ``now`` are threaded in explicitly rather than read off ``pr``
+    because classify() computes them after the model is first constructed.
     """
+    now = now or datetime.now(timezone.utc)
     if not auto_merge_expected(category, update_type):
         return BlockingReason.AWAITING_HUMAN_REVIEW
 
@@ -279,6 +403,12 @@ def blocking_reason(
         return BlockingReason.NON_DEP_FILES
 
     if pr.checks_state == ChecksState.FAILING:
+        # Red is ordinarily a human's problem and age adds nothing to it. One
+        # shape is different: a bounded-lock refusal is red by design and nothing
+        # will ever re-evaluate it, so once its window has elapsed it is frozen
+        # rather than broken. Separate it out so the dashboard can say which.
+        if bounded_lock_refusal_expired(pr, category, now):
+            return BlockingReason.BOUNDED_LOCK_REFUSAL_EXPIRED
         return BlockingReason.CHECKS_FAILING
     if pr.checks_state == ChecksState.PENDING:
         return BlockingReason.CHECKS_PENDING
@@ -316,8 +446,6 @@ def classify(pr: RenovatePR) -> RenovatePR:
     Return a new RenovatePR with category, update_type, auto_merge_expected,
     blocking_reason, and age_days populated.
     """
-    from datetime import datetime, timezone
-
     cat = categorize(pr)
     ut = derive_update_type(pr)
     ame = auto_merge_expected(cat, ut)
@@ -326,13 +454,11 @@ def classify(pr: RenovatePR) -> RenovatePR:
     # pr.created_at may be tz-aware or naive; normalise.
     created = pr.created_at
     if created.tzinfo is None:
-        from datetime import timezone as _tz
-
-        created = created.replace(tzinfo=_tz.utc)
+        created = created.replace(tzinfo=timezone.utc)
     age = max(0, (now - created).days)
 
     # age feeds the staleness backstop, so it must be computed before classifying.
-    br = blocking_reason(pr, cat, ut, age)
+    br = blocking_reason(pr, cat, ut, age, now)
 
     # dataclass is frozen=True; use replace pattern.
     import dataclasses
