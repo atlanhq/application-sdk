@@ -18,6 +18,8 @@ indirect leaks static analysis cannot recognize:
   client/engine object — in logs, exception messages, or error evidence.
 - Credential material in metric label values or activity outputs (it
   persists in workflow history and dashboards).
-- A new code path that moves a secret from a reference (store path, env
-  name) to a value — even between internal functions; values spread,
-  references don't.
+- Credential VALUES crossing a durable or observable boundary:
+  persistence, logs, activity payloads/outputs, or any cross-activity /
+  cross-process handoff — pass references there (store path, env name).
+  In-process resolution of a reference to a value for client
+  construction is normal and NOT a finding.

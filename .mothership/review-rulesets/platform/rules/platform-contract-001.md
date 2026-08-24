@@ -16,8 +16,11 @@ drift mechanically. This rule owns what "additive" cannot capture:
   what happens when an in-flight workflow replays a payload that predates
   the field? A default alone is only correct if downstream logic tolerates
   it mid-run.
-- An `Input` that is a manifest/DAG entry point MUST tolerate extra
-  fields, or orchestrator-supplied args are silently dropped.
+- Entry-point `Input`s DECLARE every manifest-supplied field the app
+  consumes. The SDK warns and DROPS undeclared extras — an orchestrator
+  arg the app expects but never declared is silently lost, not tolerated.
+  FLAG code that reads platform args from raw dicts to dodge declaration,
+  and any `extra="allow"` added just to smuggle undeclared fields through.
 - MUST NOT expose internal implementation knobs as new task inputs —
   default to less control surface; sibling entrypoints share contracts
   (same field, same alias, same default).
