@@ -1,0 +1,151 @@
+/// Artifact-schemas example — demonstrates declaring the shape of the files an
+/// app hands off (ADR-0020).
+///
+/// `artifactSchemas` is keyed by the name of a `FileReference` field on this
+/// entrypoint's input/output contract model, never by a storage path. Each entry
+/// declares a format and a non-empty list of fields; the toolkit renders them to
+/// `app/generated/artifact_schemas.json` and the SDK checks the real artifact
+/// against the declaration at the hand-off.
+///
+/// The three cases worth seeing here:
+///   - a **parquet** hand-off whose `START_TIME` is declared `timestamp`. Arrow
+///     `timestamp[*]` satisfies that at any unit; arrow `string` does not. That
+///     one asymmetry is the check a 73-day frozen-lineage RCA needed.
+///   - an **NDJSON** hand-off with nested fields declared as dotted paths plus a
+///     container type (`attributes` is `struct`, `attributes.name` is `string`)
+///     — no recursive type grammar.
+///   - an artifact declared on the app's **input**: the consumer owns the
+///     declaration, so a consuming app states what it requires of what it reads.
+///
+/// Generated layout:
+///   atlan.yaml
+///   app.yaml
+///   app/generated/artifact-schemas-example.json  ← workflow setup config
+///   app/generated/artifact_schemas.json          ← the declarations
+///   app/generated/manifest.json
+///   app/generated/_input.py
+amends "../../src/App.pkl"
+
+name = "artifact-schemas-example"
+displayName = "Artifact Schemas Example"
+icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
+hasCredentialConfig = false
+
+pipeline {
+  publish = null
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["lookback-days"] = new NumericInput {
+          title = "Query lookback (days)"
+          helpText = "How much query history to read."
+          default = 30
+          width = 4
+        }
+      }
+    }
+  }
+}
+
+artifactSchemas {
+  // Output hand-off: partitioned parquet this app writes for a downstream parser.
+  ["raw_queries"] = new ArtifactSchema {
+    format = "parquet"
+    description = "Query-history rows written for the downstream parser."
+    fields {
+      new ArtifactField {
+        name = "QUERY_ID"
+        type = "string"
+      }
+      new ArtifactField {
+        name = "START_TIME"
+        type = "timestamp"
+        description = "Must be a real timestamp column. A stringified timestamp here is the defect this declaration exists to catch."
+      }
+      new ArtifactField {
+        name = "CREDITS_USED"
+        type = "float"
+        required = false
+      }
+      new ArtifactField {
+        // Snowflake NUMBER lands as parquet decimal128; asserting float would
+        // either mis-flag the column or lose precision.
+        name = "ROWS_PRODUCED"
+        type = "decimal"
+        required = false
+      }
+      new ArtifactField {
+        name = "YEAR"
+        type = "int"
+        description = "Partition column."
+      }
+      new ArtifactField {
+        name = "SESSION_PARAMS"
+        type = "json"
+        required = false
+        description = "Physically a string column; semantically a JSON blob. Collapsing the two would defeat this hop's check."
+      }
+    }
+  }
+
+  // Output hand-off: NDJSON entities, nested fields as dotted paths.
+  ["transformed_entities"] = new ArtifactSchema {
+    format = "ndjson"
+    description = "Transformed entities streamed to the publish step."
+    fields {
+      new ArtifactField {
+        name = "typeName"
+        type = "string"
+      }
+      new ArtifactField {
+        name = "attributes"
+        type = "struct"
+      }
+      new ArtifactField {
+        name = "attributes.qualifiedName"
+        type = "string"
+      }
+      new ArtifactField {
+        name = "attributes.name"
+        type = "string"
+      }
+      new ArtifactField {
+        name = "attributes.lastSyncRunAt"
+        type = "timestamp"
+        required = false
+      }
+      new ArtifactField {
+        // Present-but-unasserted: a thin contract states presence without anyone
+        // inventing a wrong type to satisfy the enum.
+        name = "customAttributes"
+        type = "any"
+        required = false
+      }
+    }
+  }
+
+  // Input hand-off: what this app requires of an artifact another app produced.
+  // The consumer owns the declaration; the producer references it rather than
+  // re-authoring the field list.
+  ["upstream_lineage"] = new ArtifactSchema {
+    format = "ndjson"
+    description = "Lineage edges this app reads from an upstream producer."
+    fields {
+      new ArtifactField {
+        name = "source_qualified_name"
+        type = "string"
+      }
+      new ArtifactField {
+        name = "target_qualified_name"
+        type = "string"
+      }
+      new ArtifactField {
+        name = "process_id"
+        type = "string"
+      }
+    }
+  }
+}

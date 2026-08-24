@@ -1,0 +1,26 @@
+{
+  "execution_mode": "automation-engine",
+  "dag": {
+    "extract": {
+      "activity_name": "execute_workflow",
+      "activity_display_name": "Extract Artifact Schemas Example Metadata",
+      "app_name": "artifact-schemas-example",
+      "inputs": {
+        "workflow_type": "artifact-schemas-example",
+        "app_name": "artifact-schemas-example",
+        "app_id": "",
+        "argo_workflow_slug": "",
+        "task_queue": "atlan-artifact-schemas-example-{deployment_name}",
+        "args": {
+          "app_name": "artifact-schemas-example",
+          "credential": "{{credential}}",
+          "agent_json": "{{agent-json}}",
+          "lookback_days": "{{lookback-days}}"
+        }
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 86400
+      }
+    }
+  }
+}

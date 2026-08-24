@@ -1,0 +1,31 @@
+{
+  "id": "artifact-schemas-example",
+  "name": "Artifact Schemas Example",
+  "logo": "https://assets.atlan.com/assets/fullscreen-exit.svg",
+  "config": {
+    "properties": {
+      "lookback-days": {
+        "type": "number",
+        "required": false,
+        "ui": {
+          "widget": "inputNumber",
+          "label": "Query lookback (days)",
+          "hidden": false,
+          "help": "How much query history to read.",
+          "grid": 4
+        },
+        "default": 30
+      }
+    },
+    "steps": [
+      {
+        "title": "Configuration",
+        "description": "",
+        "id": "configuration",
+        "properties": [
+          "lookback-days"
+        ]
+      }
+    ]
+  }
+}

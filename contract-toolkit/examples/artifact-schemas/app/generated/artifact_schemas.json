@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "schemas": {
+    "raw_queries": {
+      "format": "parquet",
+      "description": "Query-history rows written for the downstream parser.",
+      "fields": [
+        {
+          "name": "QUERY_ID",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "START_TIME",
+          "type": "timestamp",
+          "required": true,
+          "description": "Must be a real timestamp column. A stringified timestamp here is the defect this declaration exists to catch."
+        },
+        {
+          "name": "CREDITS_USED",
+          "type": "float",
+          "required": false
+        },
+        {
+          "name": "ROWS_PRODUCED",
+          "type": "decimal",
+          "required": false
+        },
+        {
+          "name": "YEAR",
+          "type": "int",
+          "required": true,
+          "description": "Partition column."
+        },
+        {
+          "name": "SESSION_PARAMS",
+          "type": "json",
+          "required": false,
+          "description": "Physically a string column; semantically a JSON blob. Collapsing the two would defeat this hop's check."
+        }
+      ]
+    },
+    "transformed_entities": {
+      "format": "ndjson",
+      "description": "Transformed entities streamed to the publish step.",
+      "fields": [
+        {
+          "name": "typeName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "attributes",
+          "type": "struct",
+          "required": true
+        },
+        {
+          "name": "attributes.qualifiedName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "attributes.name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "attributes.lastSyncRunAt",
+          "type": "timestamp",
+          "required": false
+        },
+        {
+          "name": "customAttributes",
+          "type": "any",
+          "required": false
+        }
+      ]
+    },
+    "upstream_lineage": {
+      "format": "ndjson",
+      "description": "Lineage edges this app reads from an upstream producer.",
+      "fields": [
+        {
+          "name": "source_qualified_name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "target_qualified_name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "process_id",
+          "type": "string",
+          "required": true
+        }
+      ]
+    }
+  }
+}

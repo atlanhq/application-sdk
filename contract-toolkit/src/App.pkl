@@ -411,6 +411,46 @@ manifestTopLevelArgs: Mapping<String, String> = new Mapping {
 /// ```
 pipeline: Pipeline = new Pipeline {}
 
+// ── ARTIFACT SCHEMAS ─────────────────────────────────────────────────────────
+
+/// Per-artifact field declarations, rendered to `app/generated/artifact_schemas.json`.
+///
+/// Default: empty — an app that declares nothing generates **byte-identical**
+/// output to before this block existed, so adopting it is opt-in per app.
+///
+/// Each key is the name of a `FileReference` field on this entrypoint's input or
+/// output contract model (`ContractFieldName`) — never a path, prefix, or glob.
+/// Keying by contract field is the whole point: the runtime knows which field it
+/// is materialising, so nothing is inferred from the shape of a storage path.
+///
+/// The toolkit is transport, not owner. Every field below is authored by the app
+/// that *consumes* the artifact; the SDK ships no field list. For a cross-app
+/// hand-off the consumer declares what it requires of its input, and the producer
+/// references the consumer's published declaration rather than re-authoring it.
+///
+/// Multi-entrypoint apps declare `artifactSchemas` on each entrypoint contract;
+/// the bundle re-exports them to `app/generated/{entrypoint}/artifact_schemas.json`
+/// like every other per-entrypoint artifact, so the entrypoint dimension is the
+/// file's location and the key inside the file stays the contract field name.
+/// Declaring it on a bundle **root** is a generation error: the root has no contract
+/// model, so a key there could not name a real field, and the file it would emit
+/// could be picked up as a fallback for an entrypoint that declares nothing.
+///
+/// ```pkl
+/// artifactSchemas {
+///   ["raw_queries"] = new ArtifactSchema {
+///     format = "parquet"
+///     description = "Query-history rows the parser reads."
+///     fields {
+///       new ArtifactField { name = "QUERY_ID"; type = "string" }
+///       new ArtifactField { name = "START_TIME"; type = "timestamp" }
+///       new ArtifactField { name = "CREDITS_USED"; type = "float"; required = false }
+///     }
+///   }
+/// }
+/// ```
+artifactSchemas: Mapping<ContractFieldName, ArtifactSchema> = new Mapping {}
+
 // ── DEPLOY CONFIG ─────────────────────────────────────────────────────────────
 
 /// Deployment configuration. Leave unset (null, the default) to let Heracles
@@ -3773,6 +3813,147 @@ local appYamlOutput: FileOutput = new FileOutput {
   text = generatedYamlHeader + renderer.renderDocument(value)
 }
 
+// ── Artifact schema declarations (ADR-0020) ──────────────────────────────────
+//
+// Apps declare the shape of the files they hand off, and the SDK checks the real
+// artifact against that declaration at the hand-off. The toolkit's whole job here
+// is transport: it owns the *type vocabulary* and the file format; every field is
+// the app's. Nothing in `src/` names a column.
+
+/// Logical field types every validator must map, for every format. The stable floor.
+///
+/// This is a *logical* vocabulary, not a physical one — one member can cover several
+/// physical encodings (`int` matches any arrow width and signedness; `timestamp`
+/// matches `timestamp[*]` at any unit, tz-aware or not). The load-bearing member is
+/// `timestamp`: an arrow `string` does **not** satisfy it, which is the single
+/// asymmetry the capability exists to assert.
+///
+/// `any` means "must be present, type not asserted" — declare it rather than
+/// inventing a wrong type to satisfy the enum.
+typealias ArtifactFieldType =
+  "string"|"int"|"float"|"bool"|"timestamp"|"date"|"json"|"any"
+
+/// Additive extension of `ArtifactFieldType`. A member here may resolve to
+/// "unsupported for this format" in a given validator without widening the floor
+/// above, so a contract can declare it before every validator supports it.
+///
+/// `decimal` exists because a Snowflake `NUMBER` lands as parquet `decimal128` and
+/// asserting `float` would either mis-flag it or lose precision. `binary`, `time`,
+/// `array`, `struct` and `map` are real in warehouse sources but on no current hop.
+typealias ArtifactFieldTypeExtended =
+  ArtifactFieldType|"decimal"|"binary"|"time"|"array"|"struct"|"map"
+
+/// Physical container format of a declared artifact. Each format has its own
+/// validator with its own dependency floor — NDJSON streams line by line on the
+/// stdlib, parquet reads only the file footer and needs pyarrow.
+///
+/// Content format, not file extension: SDK NDJSON artifacts are conventionally
+/// written with a `.json` suffix and are still `"ndjson"` here.
+typealias ArtifactFormat = "ndjson"|"parquet"
+
+/// Name of a `FileReference` field on an entrypoint's input/output contract model:
+/// a Python identifier.
+///
+/// Deliberately **not** a path, prefix, or glob. The runtime resolves a declaration
+/// from the contract field it is materialising, never from the shape of a storage
+/// path — path-shape inference is what let the earlier upload-time hook match
+/// nothing and silently validate zero records.
+typealias ContractFieldName = String(matches(Regex("[A-Za-z_][A-Za-z0-9_]*")))
+
+/// Dotted path to a field inside an artifact record: `"a"`, `"a.b"`, `"a.b.c"`.
+///
+/// Nested payloads are declared as dotted paths plus a container type — declare
+/// `attributes` as `struct` and `attributes.name` as `string` — rather than a
+/// recursive type grammar. Empty segments (`""`, `".a"`, `"a."`, `"a..b"`) are
+/// rejected at eval time.
+typealias ArtifactFieldPath = String(matches(Regex("[^.]+(\\.[^.]+)*")))
+
+/// One declared field within an artifact.
+class ArtifactField {
+  /// Dotted path to the field within a record. See `ArtifactFieldPath`.
+  name: ArtifactFieldPath
+
+  /// Logical type asserted for this field. Use `"any"` to assert presence only.
+  type: ArtifactFieldTypeExtended = "any"
+
+  /// Whether the field must be present in every record / in the parquet schema.
+  /// Default `true` — a declared field is expected to be there. Set `false` for a
+  /// field that is genuinely optional but must carry `type` when it does appear.
+  required: Boolean = true
+
+  /// Free-form note for humans reading the generated artifact. Never asserted.
+  description: String?
+}
+
+/// The declared shape of one artifact handed off through a contract `FileReference`.
+///
+/// `fields` must be non-empty: a schema declaring zero fields checks nothing while
+/// reporting as declared, which is exactly the "looks adopted, validates nothing"
+/// state this capability exists to remove. Field names must be distinct — a
+/// duplicate would silently collapse to one assertion.
+class ArtifactSchema {
+  /// Physical format of the artifact. No default: the app must say which validator
+  /// applies, because the answer is not derivable from the contract field.
+  format: ArtifactFormat
+
+  /// Declared fields. Non-empty, names distinct.
+  fields: Listing<ArtifactField>(!isEmpty, this.toList().map((f) -> f.name).isDistinct)
+
+  /// Free-form note for humans reading the generated artifact. Never asserted.
+  description: String?
+}
+
+local function renderArtifactField(f: ArtifactField): Mapping<String, Any> = new Mapping {
+  ["name"] = f.name
+  ["type"] = f.type
+  ["required"] = f.required
+  when (f.description != null) { ["description"] = f.description }
+}
+
+local function renderArtifactSchema(s: ArtifactSchema): Mapping<String, Any> = new Mapping {
+  ["format"] = s.format
+  when (s.description != null) { ["description"] = s.description }
+  ["fields"] = new Listing {
+    for (f in s.fields) {
+      renderArtifactField(f)
+    }
+  }
+}
+
+/// Envelope version of `artifact_schemas.json`. Bump only on a breaking change to
+/// the file's shape; the SDK loader reads it to decide how to parse.
+local artifactSchemasVersion: Int = 1
+
+local artifactSchemasData: Mapping<String, Any> = new Mapping {
+  ["version"] = artifactSchemasVersion
+  ["schemas"] = new Mapping {
+    for (fieldName, schema in artifactSchemas) {
+      [fieldName] = renderArtifactSchema(schema)
+    }
+  }
+}
+
+local artifactSchemasOutput: FileOutput = new FileOutput {
+  value = artifactSchemasData
+  renderer = new JsonRenderer {}
+}
+
+// A bundle root has no contract model of its own, so a key here could never name a
+// real `FileReference` field. Emitting it anyway would put a shared
+// `app/generated/artifact_schemas.json` next to the per-entrypoint ones, where a
+// loader looking up an entrypoint that declares nothing could fall back onto it and
+// check the wrong declarations — the silent-wrong-answer failure mode this whole
+// capability exists to remove. Refuse instead. Two entrypoints that genuinely share
+// an artifact assign one shared `ArtifactSchema` value into both contracts.
+hidden _bundleArtifactSchemaCheck: Any =
+  if (!entrypoints.isEmpty && !artifactSchemas.isEmpty)
+    throw("App.pkl: `artifactSchemas` is declared on a multi-entrypoint bundle root, "
+      + "which has no contract model of its own. Declarations are keyed by a FileReference "
+      + "field on an entrypoint's input/output contract, so move them onto each "
+      + "entrypoint's `contract`. Entrypoints that share an artifact can assign one "
+      + "shared ArtifactSchema value into both.")
+  else null
+
 // ── Multi-entrypoint credential dedup (from NativeAppBundle.pkl) ──────────────
 
 class ContractFile {
@@ -3839,6 +4020,10 @@ output =
   // is a supported opt-out, and a lazily-evaluated check inside that node would
   // let a reserved-name collision through for exactly those contracts.
   let (_reservedUiCheck = reservedUiFieldInvariant)
+  // Forced for the same reason: the single-entrypoint emission below is the only
+  // reader of `artifactSchemas`, so a bundle root's declaration would otherwise
+  // never be evaluated and would vanish without a word.
+  let (_bundleSchemaCheck = _bundleArtifactSchemaCheck)
   let (_e2eCredOutput = generateE2ECredentialPy())
   let (_e2eSubsOutput = generateE2ESubstitutionsPy())
   new ModuleOutput {
@@ -3871,6 +4056,15 @@ output =
         }
         when (_e2eSubsOutput != null) {
           ["app/generated/_e2e_substitutions.py"] = _e2eSubsOutput!!
+        }
+        // artifact schema declarations (ADR-0020) — also independent of uiConfig:
+        // a declaration describes data hand-offs, which an app has whether or not
+        // it renders a setup form. Gated on non-empty so an app that declares
+        // nothing generates byte-identical output to before this block existed.
+        // Multi-entrypoint apps declare these on each entrypoint's contract; the
+        // re-export loop below relocates each one to `app/generated/{entrypoint}/`.
+        when (!artifactSchemas.isEmpty) {
+          ["app/generated/artifact_schemas.json"] = artifactSchemasOutput
         }
       }
 

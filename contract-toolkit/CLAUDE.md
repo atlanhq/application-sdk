@@ -19,6 +19,7 @@ Contracts generate — from one `pkl eval -m . contract/app.pkl` at repo root:
 - `app/generated/atlan-connectors-{name}.json` — credential config
 - `app/generated/manifest.json` — Automation Engine DAG
 - `app/generated/_input.py` — typed SDK input model
+- `app/generated/artifact_schemas.json` — data hand-off declarations (only when `artifactSchemas` is non-empty)
 
 ## Main Files
 
@@ -62,6 +63,7 @@ demonstrates distinct feature surface, verified by `tests/*.pkl`.
 - `connection-ref`: `ConnectionRefInput` widget, `pipeline.publish = null`.
 - `publish-controls`: publish toggles, `includeInputFields`, `errorHandling`.
 - `fanin`: multi-parent fan-in via `dependsOn`, explicit `DependencyCondition`.
+- `artifact-schemas`: `artifactSchemas` data hand-off declarations — parquet + NDJSON, dotted nested paths, an input artifact.
 
 ## Editing Rules
 
