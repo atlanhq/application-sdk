@@ -1624,12 +1624,17 @@ jobs:
       # tenant resolver take its single-tenant path.
       matrix: ${{ fromJson(needs.discover-e2e.outputs.cloud-count != '0' && needs.discover-e2e.outputs.cloud-matrix || '{"include":[{"cloud":""}]}') }}
     runs-on: ubuntu-latest
-    # Twice the script's own waits, not a shade over them: the install retries for
-    # up to ~600s while LM's catalog snapshot catches up, then polls the deployment
-    # for up to ~600s. At 30 the runner's timeout can fire first on a slow sync,
-    # and a bare "job cancelled after 30m" replaces the actionable error the script
-    # was about to print — the diagnosis-hostile failure this job exists to avoid.
-    timeout-minutes: 40
+    # Twice the script's own waits, not a shade over them: the publish retries for
+    # up to ~240s while the marketplace service is not answering, the install
+    # retries for up to ~600s while LM's catalog snapshot catches up, then the
+    # deployment is polled for up to ~600s. Set too tight, the runner's timeout
+    # fires first on a slow sync and a bare "job cancelled after Nm" replaces the
+    # actionable error the script was about to print — the diagnosis-hostile
+    # failure this job exists to avoid. This is a ceiling, not a spend: the job
+    # finishes in a handful of minutes whenever the tenants are healthy.
+    # test_job_timeout_stays_above_the_scripts_own_waits derives the floor from
+    # the script's constants, so this cannot drift below them unnoticed.
+    timeout-minutes: 48
     concurrency:
       # Run-unique, i.e. deliberately NOT a serialising group. Tenant exclusion
       # is the lease's job now (lease-tenant above), and the lease is strictly

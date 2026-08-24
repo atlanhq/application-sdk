@@ -134,6 +134,12 @@ def _install_args(**overrides: object) -> argparse.Namespace:
         "release_model": "",
         "created_by": "",
         "scan_wait_seconds": 0,
+        # Both retry budgets default to 0 here, and every test that wants a retry
+        # opts in. `time.sleep` is stubbed but `time.monotonic` is not, so a
+        # nonzero budget against a transport that never succeeds is a hot loop
+        # for that many real seconds — a test must either script a success or
+        # keep the budget at 0.
+        "publish_retry_seconds": 0,
         "install_retry_seconds": 0,
         "timeout_seconds": 600,
     }
@@ -348,6 +354,184 @@ def test_publish_without_a_version_id_fails_rather_than_installing_nothing(
     )
     with pytest.raises(app.TenantAppError, match="version_id"):
         app.install(_install_args())
+
+
+# ── The marketplace service is a shared dependency (FND-760) ─────────────────
+# Heracles reports "the marketplace service did not answer me" as HTTP 400
+# `code 1000` "Please check your request parameters" — a validation shape for
+# something that is not a validation failure. On 2026-08-24 that took four
+# connector PRs down in eight minutes across all three clouds. The publish is
+# retried through it; a real rejection still fails on the first response.
+
+
+def _upstream_down(status: int = 400) -> Response:
+    """Heracles' body when its own call to the marketplace service did not return.
+
+    Verbatim from the atlan-db2-app / atlan-databricks-app / cloudsql legs, minus
+    the requestId — the point of the fixture is that the retryable signal lives in
+    `message` and nowhere else.
+    """
+    return Response(
+        status=status,
+        body={
+            "code": 1000,
+            "error": "Please check your request parameters",
+            "info": None,
+            "message": "error getting response from marketplace service",
+        },
+    )
+
+
+def _publish_after(*failures: Response) -> StubTransport:
+    """Transport whose publish fails with each of ``failures``, then succeeds."""
+    return StubTransport(
+        routes=[
+            StubRoute("GET", "/info", _ok({})),
+            *[StubRoute("POST", "/marketplace/publish", f) for f in failures],
+            StubRoute("POST", "/marketplace/publish", _ok({"version_id": "v1"})),
+            StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+            StubRoute("GET", "/deployments/", _ok({"deployment_status": "SUCCEEDED"})),
+            StubRoute("GET", "/info", _ok(_lm_info(_VERSION))),
+        ],
+        sticky=[StubRoute("GET", "/releases/", Response(status=404, body={}))],
+    )
+
+
+def test_publish_retries_through_the_marketplace_being_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _wire(
+        monkeypatch,
+        _publish_after(_upstream_down(), _upstream_down(), _upstream_down()),
+    )
+    outcome = app.install(_install_args(publish_retry_seconds=240))
+    assert outcome.deployment_id == "d1"
+    assert len([p for p in transport.paths("POST") if "/publish" in p]) == 4
+
+
+@pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
+def test_publish_retries_the_transient_statuses(
+    monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    """A body-less 5xx/429 is retried on the status alone — no marker needed."""
+    transport = _wire(monkeypatch, _publish_after(Response(status=status, body={})))
+    app.install(_install_args(publish_retry_seconds=240))
+    assert len([p for p in transport.paths("POST") if "/publish" in p]) == 2
+
+
+def test_a_real_rejection_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The bug this guards: retrying every publish 400.
+
+    Heracles' upstream-failure body IS a 400, so the temptation is to retry the
+    status. That would make a genuinely malformed request — and the CI/CD-managed
+    provenance guard, which arrives as a 400 too — spend the whole budget before
+    reporting the error a human has to read. Only the message discriminates.
+    """
+    transport = _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", Response(status=404, body={})),
+                StubRoute(
+                    "POST",
+                    "/marketplace/publish",
+                    Response(
+                        status=400, body={"message": "version is managed by ci/cd"}
+                    ),
+                ),
+            ]
+        ),
+    )
+    with pytest.raises(app.TenantAppError, match="source_repo"):
+        app.install(_install_args(publish_retry_seconds=240))
+    assert len([p for p in transport.paths("POST") if "/publish" in p]) == 1
+
+
+def test_a_credential_rejection_is_never_retried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Even carrying the retryable marker. Credentials do not come good on a retry.
+
+    The marker is upstream text, so a reworded or proxied 401 could carry it;
+    the status is checked first precisely so that cannot drag an auth failure
+    into a four-minute loop and bury the which-credential hint behind it.
+    """
+    transport = _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", Response(status=404, body={})),
+                StubRoute("POST", "/marketplace/publish", _upstream_down(status=401)),
+            ]
+        ),
+    )
+    with pytest.raises(app.TenantAppError, match="E2E_OAUTH_CLIENT_ID"):
+        app.install(_install_args(publish_retry_seconds=240))
+    assert len([p for p in transport.paths("POST") if "/publish" in p]) == 1
+
+
+@dataclass
+class _PublishTimesOutThen:
+    """Raises a transport-level error on the first ``failures`` publishes.
+
+    A StubRoute can only carry a Response, and this fault has none: TenantClient
+    RAISES on DNS / connect / read-timeout rather than returning a status. So this
+    is the only way to reach `_publish`'s `except TenantApiError` arm — the arm
+    that covers the anaplan leg, where the marketplace service hung for the full
+    60s client timeout instead of answering.
+    """
+
+    inner: StubTransport
+    failures: int
+    seen: int = 0
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: dict[str, object] | None = None,
+        timeout: int = 60,
+    ) -> Response:
+        if method == "POST" and "/marketplace/publish" in path:
+            self.seen += 1
+            if self.seen <= self.failures:
+                raise TenantApiError(
+                    f"POST {path} could not reach {_TENANT}: "
+                    "The read operation timed out"
+                )
+        return self.inner.request(method, path, body=body, timeout=timeout)
+
+
+def test_publish_retries_a_transport_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = _PublishTimesOutThen(inner=_publish_after(), failures=2)
+    monkeypatch.setattr(TenantClient, "request", transport.request)
+    outcome = app.install(_install_args(publish_retry_seconds=240))
+    assert outcome.deployment_id == "d1"
+    assert transport.seen == 3
+
+
+def test_publish_budget_exhaustion_says_outage_not_bad_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reaching here means the service stayed down, so the body is misleading.
+
+    Taking "check your request parameters" at face value sends the next person to
+    read the publish body for a fault that is not in it — which is exactly the
+    hour this failure mode has already cost.
+    """
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[StubRoute("GET", "/info", Response(status=404, body={}))],
+            sticky=[StubRoute("POST", "/marketplace/publish", _upstream_down())],
+        ),
+    )
+    with pytest.raises(app.TenantAppError) as excinfo:
+        app.install(_install_args(publish_retry_seconds=0))
+    message = str(excinfo.value)
+    assert "the payload is not the problem" in message
+    assert "outage to raise rather than a run to re-trigger" in message
 
 
 # ── Reconciliation ───────────────────────────────────────────────────────────
