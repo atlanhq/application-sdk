@@ -570,14 +570,22 @@ VALIDATE_ASSETS_ON_UPLOAD: bool = (
 VALIDATE_ASSETS_TIMEOUT_SECONDS: float = float(
     os.getenv("ATLAN_VALIDATE_ASSETS_TIMEOUT_SECONDS", "600")
 )
-#: The single "rows per axis" cap for transformed-asset validation output —
-#: shared by both surfaces so they can never drift: the human-readable
-#: ``AssetValidationReport.format_report(max_items=...)`` listing and the
-#: structured ``asset_validation_matrix`` telemetry the upload activity emits.
-#: The event's scalar counts always reflect the full batch; only these
-#: drill-down samples are bounded (so a pathological batch cannot produce an
-#: unbounded WARNING body or ``LogAttributes`` value).
-ASSET_VALIDATION_MAX_ITEMS_PER_AXIS: int = 25
+#: The single "rows per axis" cap for every validation drill-down surface —
+#: one number, so the human-readable ``format_report(max_items=...)`` listing and
+#: the structured matrix telemetry can never drift apart.
+#:
+#: Bounding is two-tier and deliberately asymmetric: the **scan** is unbounded
+#: (every record is examined, so the event's scalar counts always reflect the full
+#: batch) and only the two *output* surfaces are capped, so a pathological batch
+#: cannot produce an unbounded WARNING body or ``LogAttributes`` value.
+ARTIFACT_VALIDATION_MAX_ITEMS_PER_AXIS: int = 25
+
+#: The transformed-asset validator's cap. An alias rather than its own literal:
+#: asset validation is one format x source cell of the artifact wrapper
+#: (ADR-0020), and two independently-editable 25s is exactly the drift the single
+#: shared cap exists to prevent. The name survives because it is the pinned
+#: identifier the shipped asset surface imports.
+ASSET_VALIDATION_MAX_ITEMS_PER_AXIS: int = ARTIFACT_VALIDATION_MAX_ITEMS_PER_AXIS
 
 # Dapr Client Configuration
 #: Maximum gRPC message length in bytes for Dapr client.

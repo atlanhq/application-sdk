@@ -251,6 +251,28 @@ Dockerfiles. That is what reddened `scan / Build Image` fleet-wide in #3212. The
 bounded driver strips the block; if you add another lock-writing command, check
 what it records.
 
+### A refused lock refresh is red on purpose, and nothing re-evaluates it
+
+`withhold()` in `renovate_uv_lock_bounded.py` refuses by writing the baseline
+versions plus a bare `[options]` table — the one lever the driver holds over a
+*required* check, since `uv sync --locked` then rejects the lock and
+`scan / Build Image` holds the branch. Two consequences follow, and both bite:
+
+**Nothing expires it.** The branch is not behind its base, so Renovate reuses it
+without re-running `postUpgradeTasks`, and the marker committed into `uv.lock`
+carries no clock. Observed 2026-08-24: five fleet lock PRs sat frozen for two to
+four days after the window that blocked them had opened. Recovery is to delete
+the branch and let the next pass rebuild it — `recreateClosed: true` in the shared
+preset is what makes that safe.
+
+**The fleet dashboard names it.** `conformance.renovate.classify` splits that
+shape out of `checks_failing` as `bounded_lock_refusal_expired` (FND-782) once
+four things hold: the PR is lock-maintenance, its diff is a `uv.lock` and nothing
+else, that lock carries a lone `exclude-newer-span` (uv's own `[options]` always
+records the absolute `exclude-newer` beside it, so a lone span is the driver's
+signature), and the branch head is at least as old as the window it names. It
+reports; it does not self-heal. A recurrence is meant to be visible, not absorbed.
+
 ## The release-age bound on application-sdk's own lock refresh
 
 `postUpgradeTasks` reaches every repo in the fleet except the one that publishes

@@ -80,6 +80,17 @@ from application_sdk.errors import (
 from application_sdk.errors.base import AppError as _NewAppError
 from application_sdk.errors.leaves import InternalError as _InternalError
 from application_sdk.errors.leaves import InvalidInputError as _InvalidInputError
+
+# Fixed event name for the structured, queryable transformed-asset validation
+# outcome. Emitted on every upload from inside the upload activity, so the
+# Temporal activity context (workflow_id/run_id/app_name) is auto-stamped and the
+# row joins to the workflow outcome in ClickHouse — mirrors the preflight gate's
+# outcome event. Scalar counts land as top-level LogAttributes; the per-failure
+# drill-down rides in the ``asset_validation_matrix`` JSON attribute. The name now
+# lives in the shared event-name registry alongside the preflight gate's two and
+# the generic artifact-validation one; its value is **unchanged** by that move,
+# because shipped dashboards and alert rules key off the exact string.
+from application_sdk.observability.events import ASSET_VALIDATION_EVENT
 from application_sdk.observability.logger_adaptor import (
     ASSET_VALIDATION_MATRIX_KEY,
     get_logger,
@@ -96,17 +107,6 @@ try:
     _FRAMEWORK_VERSION = importlib.metadata.version("application-sdk")
 except importlib.metadata.PackageNotFoundError:  # conformance: ignore[E009] package not installed (e.g. editable dev install); "unknown" sentinel is benign
     _FRAMEWORK_VERSION = "unknown"
-
-# Fixed event name for the structured, queryable transformed-asset validation
-# outcome. Emitted on every upload from inside the upload activity, so the
-# Temporal activity context (workflow_id/run_id/app_name) is auto-stamped and the
-# row joins to the workflow outcome in ClickHouse — mirrors the preflight gate's
-# outcome event. Scalar counts land as top-level LogAttributes; the per-failure
-# drill-down rides in the ``asset_validation_matrix`` JSON attribute.
-# Peer of ``PREFLIGHT_OUTCOME_EVENT`` (execution/_temporal/preflight_gate.py):
-# same outcome-event pattern. No shared registry for these names yet — worth
-# adding only once a third such event exists.
-ASSET_VALIDATION_EVENT = "Transformed-asset validation outcome"
 
 # Cap on how many failure/orphan rows the matrix carries, aliased from the single
 # source of truth in ``constants`` so the structured matrix and the human-readable

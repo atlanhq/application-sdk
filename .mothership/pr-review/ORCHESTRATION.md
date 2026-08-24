@@ -1426,6 +1426,15 @@ comment and each finding as an inline review comment.
 # Redaction gate for toolkit reviews. Public review bodies must not include
 # private consumer repo names, scratch paths, or fetched SHAs. If this fires,
 # rewrite the public body using capability aliases before posting.
+#
+# The gate exempts the hex-valued control markers (REVIEWED_HEAD,
+# TOOLKIT_ARTIFACT_HASH, …) because they are data the approval chain reads
+# back, not prose about a consumer: they carry this repo's own head SHA, which
+# is public by construction. Before that exemption existed the 40-hex rule
+# rewrote `<!-- REVIEWED_HEAD: <sha> -->` to `[private sha]`,
+# sdk_review_approve.py read that as "no marker", and it skipped every label
+# and the atlan-ci approval while still exiting 0 — a green run on an
+# unapproved PR. Keep the markers machine-readable through this step.
 if [ "$review_scope" = "contract-toolkit" ] || [ "$review_scope" = "mixed-sdk-toolkit" ]; then
   .mothership/pr-review/scripts/redact-toolkit-public-review.sh /tmp/review-summary.md
   for body in /tmp/inline-comments/*.md; do
@@ -1470,6 +1479,12 @@ gh api "repos/$REPO/statuses/$HEAD_SHA" \
 # changed (the stale-SHA guard in step 5 would have exited if it had).
 # The sed is idempotent: if the LLM already wrote the real SHA the
 # pattern finds no match and the file is unchanged.
+#
+# Note what this net does NOT cover: it repairs the literal `<HEAD_SHA>`
+# placeholder only. The redaction gate above already ran, so a marker
+# damaged there is past saving here — the pattern no longer matches and
+# the file stays broken. That is why the gate exempts the marker rather
+# than relying on a repair downstream of it.
 HEAD_SHA_STAMPED=$(jq -r '.headRefOid' /tmp/PR.json)
 sed -i "s|<!-- REVIEWED_HEAD: <HEAD_SHA> -->|<!-- REVIEWED_HEAD: ${HEAD_SHA_STAMPED} -->|" /tmp/review-summary.md
 
