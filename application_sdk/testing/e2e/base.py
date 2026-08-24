@@ -138,6 +138,31 @@ def _derive_progress_stall_seconds(timeout_seconds: int) -> int:
     return min(window, timeout_seconds // 2)
 
 
+def _supersedes(published: int | None, seed: int | None) -> bool:
+    """Whether *published* provably replaced the harness's *seed* version.
+
+    Provably is the whole point. AE's version number is optional on the wire
+    (``_safe_int`` yields ``None`` for a missing or non-numeric one), and
+    ``None != seed`` is true — so an inequality test alone reads an unknown
+    version as a supersede and goes on to compare a DAG it cannot attribute to
+    the tenant. An absent number cannot prove anything, so it answers False.
+
+    ``seed is None`` is the one case where no proof is needed: the harness
+    published no seed version, so there is nothing for AE to have superseded
+    and whatever it serves is not the harness's own DAG echoed back.
+
+    Args:
+        published: Version number AE reports for the published version.
+        seed: Version number the harness published, if it published one.
+
+    Returns:
+        True only when the comparison that follows is meaningful.
+    """
+    if seed is None:
+        return True
+    return published is not None and published != seed
+
+
 @dataclass(frozen=True)
 class NodeDispatch:
     """Where the seed DAG asked AE to dispatch one node.
@@ -1404,7 +1429,7 @@ class BaseE2ETest:
             read = self.client.get_published_version(slug)
             if read is not None:
                 published = read
-                if read.dag and (seed is None or read.version != seed):
+                if read.dag and _supersedes(read.version, seed):
                     return read
             if attempt.is_last:
                 break
@@ -1420,10 +1445,12 @@ class BaseE2ETest:
             return None
         logger.warning(
             "Deployed-manifest identity check skipped for slug %s: after %ds AE "
-            "still serves version %r (the harness's own seed version is %r) with "
-            "%d node(s), so Heracles' re-fetch of the tenant pod's manifest was "
-            "not observed. Comparing the seed DAG against itself would report a "
-            "match regardless of what the tenant runs, so nothing is asserted",
+            "serves version %r (the harness's own seed version is %r) with %d "
+            "node(s), which does not prove Heracles' re-fetch of the tenant "
+            "pod's manifest superseded the seed — an absent version number "
+            "cannot, and an equal one says it did not. Comparing the seed DAG "
+            "against itself would report a match regardless of what the tenant "
+            "runs, so nothing is asserted",
             slug,
             self.deployed_manifest_timeout_seconds,
             published.version,

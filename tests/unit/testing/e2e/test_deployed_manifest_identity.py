@@ -28,6 +28,7 @@ from application_sdk.testing.e2e._manifest_identity import (
     compare_node_identities,
     node_identities,
 )
+from application_sdk.testing.e2e.base import _supersedes
 from application_sdk.testing.e2e.client import (
     AEWorkflowClient,
     PublishedVersion,
@@ -278,7 +279,7 @@ class TestGetPublishedVersion:
 # ---------------------------------------------------------------------------
 
 
-def _published(dag: dict[str, Any], version: int = 2000) -> PublishedVersion:
+def _published(dag: dict[str, Any], version: int | None = 2000) -> PublishedVersion:
     return PublishedVersion(version=version, dag=dag)
 
 
@@ -387,6 +388,42 @@ class TestAssertDeployedManifestMatches:
         ):
             harness._assert_deployed_manifest_matches("mysql-abc")
 
+    def test_a_published_version_with_no_version_number_asserts_nothing(self) -> None:
+        """AE's version number is optional on the wire, so ``_safe_int`` can
+        yield None — and ``None != seed`` is true. Comparing on inequality alone
+        would treat an unattributable record as superseding the seed and diff a
+        DAG it cannot prove came from the tenant."""
+        harness = _harness(
+            deployed_manifest_timeout_seconds=1,
+            deployed_manifest_poll_interval_seconds=1,
+        )
+        unnumbered = _published({"extract": _node("mysql", "Divergent")}, version=None)
+        with (
+            patch.object(
+                harness.client, "get_published_version", return_value=unnumbered
+            ),
+            patch("time.sleep"),
+        ):
+            harness._assert_deployed_manifest_matches("mysql-abc")
+
+    def test_an_unnumbered_read_does_not_end_the_wait(self) -> None:
+        """It is unprovable, not terminal: a numbered supersede later in the
+        budget must still be found and compared."""
+        harness = _harness(
+            deployed_manifest_timeout_seconds=30,
+            deployed_manifest_poll_interval_seconds=1,
+        )
+        reads = [
+            _published({"extract": _node("mysql", "Divergent")}, version=None),
+            _published({"extract": _node("mysql", "Divergent")}, version=2000),
+        ]
+        with (
+            patch.object(harness.client, "get_published_version", side_effect=reads),
+            patch("time.sleep"),
+            pytest.raises(DeployedManifestMismatchError),
+        ):
+            harness._assert_deployed_manifest_matches("mysql-abc")
+
     def test_a_readable_read_survives_a_later_blip(self) -> None:
         """A blip after a good read must not make the diagnostic claim AE was
         never readable — that is a different, and wronger, thing to report."""
@@ -434,6 +471,25 @@ class TestAssertDeployedManifestMatches:
             pytest.raises(DeployedManifestMismatchError),
         ):
             harness._assert_deployed_manifest_matches("mysql-abc")
+
+
+class TestSupersedes:
+    """The predicate that decides whether the comparison is meaningful at all."""
+
+    @pytest.mark.parametrize(
+        ("published", "seed", "expected"),
+        [
+            pytest.param(2000, 1000, True, id="a-different-number-supersedes"),
+            pytest.param(1000, 1000, False, id="the-same-number-does-not"),
+            pytest.param(None, 1000, False, id="an-absent-number-proves-nothing"),
+            pytest.param(2000, None, True, id="no-seed-needs-no-proof"),
+            pytest.param(None, None, True, id="no-seed-even-without-a-number"),
+        ],
+    )
+    def test_only_a_provable_replacement_counts(
+        self, published: int | None, seed: int | None, expected: bool
+    ) -> None:
+        assert _supersedes(published, seed) is expected
 
 
 class TestCaptureExpectedNodeIdentities:
