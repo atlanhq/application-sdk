@@ -1735,8 +1735,16 @@ class TestTeardownPurgeBatching:
         assert asset_client.purge_batches == [["conn-guid"]]
 
     def test_unconfigured_env_is_a_no_op(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """No tenant client means nothing to clean up — and nothing to raise."""
+        """No tenant creds means nothing to clean up — and nothing to raise.
+
+        The real ``_teardown_client`` runs here: stubbing it out would skip the
+        very env branch this covers, and building an AtlanClient against an
+        empty base URL is what would raise.
+        """
+        monkeypatch.delenv("ATLAN_BASE_URL", raising=False)
+        monkeypatch.delenv("ATLAN_API_KEY", raising=False)
+        assert BaseE2ETest._teardown_client() is None
+
         harness = _ConcreteE2ETest()
         harness.connection_qualified_name = "default/openapi/1787587123106596"
-        monkeypatch.setattr(BaseE2ETest, "_teardown_client", staticmethod(lambda: None))
         harness.teardown_method(method=None)  # should not raise
