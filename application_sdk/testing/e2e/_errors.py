@@ -138,6 +138,36 @@ class ManifestDagMissingError(DataIntegrityError):
 
 
 @dataclass(kw_only=True)
+class DeployedManifestMismatchError(DataIntegrityError):
+    """The DAG AE published at submit is not the DAG the app under test declares.
+
+    The version check upstream of this one asserts the right *image* is
+    installed. This asserts the right *graph* ran, which is a different claim:
+    at submit, Heracles re-fetches the manifest from the tenant-deployed pod and
+    calls ``CreateVersion`` + ``PublishVersion`` on the harness's own slug,
+    superseding the seed version. So the graph that executes is the pod's, and
+    until this check nothing named the difference — a leg whose assertions all
+    pass could have been exercising a graph the repo never built.
+
+    Raised only on a positive finding: the read got through, AE's published
+    version provably superseded the harness's seed, and the node identities
+    still disagree. Every unanswerable outcome (an unreadable response, a
+    version that never superseded, a connector with no manifest to compare)
+    logs and continues — see
+    :meth:`~application_sdk.testing.e2e.base.BaseE2ETest._assert_deployed_manifest_matches`.
+
+    ``observed`` carries the rendered node-set / per-node diff
+    (:meth:`~application_sdk.testing.e2e._manifest_identity.ManifestIdentityDiff.render`)
+    so the failure names which nodes diverged rather than only that some did.
+    """
+
+    code: ClassVar[str] = "DATA_INTEGRITY_DEPLOYED_MANIFEST_MISMATCH"
+    expectation: str | None = (
+        "the published DAG's node identities match the local manifest's"
+    )
+
+
+@dataclass(kw_only=True)
 class AdminRoleNotResolvedError(PreconditionError):
     """The pyatlan role cache could not resolve the ``$admin`` role GUID."""
 

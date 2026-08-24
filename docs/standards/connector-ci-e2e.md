@@ -615,6 +615,52 @@ side benefit.
 > tenant. With `install-app-to-tenant: false`, that is whatever was last
 > hand-deployed there.
 
+### Asserting the executed DAG, not just the installed version (FND-129)
+
+The install path verifies the **version** on the tenant (`expected-app-version`,
+self-skipping when empty). That is a proxy. What actually executes is the DAG
+Heracles fetches from the tenant-deployed pod at submit — `CreateVersion(slug,
+dag)` + `PublishVersion` on the same slug the harness seeded, superseding the
+seed version. So the version check says *the right image is installed*; the
+harness also asserts *the graph that ran is the graph we built*.
+
+Right after submit and before the poll loop, `BaseE2ETest` reads back the
+published version:
+
+```
+GET /automation/api/v1/workflows/{slug}/versions?is_published=true&page=0&page_size=1
+```
+
+and compares its DAG's **node identity** — node set, plus each node's `app_name`
+and `inputs.workflow_type` — against the identities of the manifest-derived seed
+DAG. A divergence raises `DeployedManifestMismatchError` with the node-level
+diff. Post-submit is the one thing lost versus a preflight: the originally
+planned `?submit=false` does not exist (`processCreateWorkflow` routes native
+execution to `processAutomationEngineWorkflow` without forwarding query params,
+and that function ends in an unconditional submit), and there is no
+`GET /package-workflows/{name}`. It still fails within seconds of submit and
+long before any assertion, with a precise diff instead of a confusing
+downstream failure.
+
+**Identity, not the DAG blob.** Template variables are substituted at submit
+(`substituteTemplateVars`), so a byte comparison would fail on every run. Node
+name, owning app and workflow type survive substitution; the `{app_name}`
+placeholder is resolved on both sides before comparing.
+
+**It only ever reds a leg on a positive finding.** Three outcomes are
+*unanswerable*, and each logs and continues rather than failing:
+
+| Outcome | Why nothing is asserted |
+|---|---|
+| The read did not get through (transport error, non-2xx, unparseable envelope) | No answer is not a mismatch |
+| AE still serves the harness's own seed version after `deployed_manifest_timeout_seconds` (60s) | Comparing the seed DAG to itself would pass whatever the tenant runs |
+| The suite has no `manifest_path` (a hand-crafted legacy seed DAG) | The seed is an approximation of the app's graph, not a copy of it |
+
+So an unonboarded caller is untouched without opting out — the same self-skip
+posture as the CI version check. `assert_deployed_manifest = False` on the test
+class turns it off outright, but the default position is that a divergence is
+the bug this check exists to find.
+
 ### Adoption: on by default (FND-128)
 
 `install-app-to-tenant` defaults to **true**. No app repo has to opt in, and none

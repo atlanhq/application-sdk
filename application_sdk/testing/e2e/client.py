@@ -782,6 +782,59 @@ class DAGRunResult:
         return [n for n in self.nodes if n.status.is_not_started]
 
 
+@dataclass(frozen=True)
+class PublishedVersion:
+    """The workflow version AE currently serves as published, and its DAG.
+
+    Read back after submit to see what Heracles published over the harness's
+    seed version — the graph that actually executes. ``version`` is opaque
+    beyond ``!=``: it exists so a caller can tell "AE superseded my seed" from
+    "AE is still serving my seed", which is the difference between a real
+    comparison and comparing the harness's own DAG to itself.
+
+    Attributes:
+        version: AE's version number, or ``None`` when the response omitted it
+            (which makes the supersede question unanswerable, not answered no).
+        dag: The version's ``dag`` object, ``{}`` when absent.
+    """
+
+    version: int | None
+    dag: dict[str, Any]
+
+
+def _first_version_row(body: Any) -> dict[str, Any] | None:
+    """First version record in a ``/versions`` listing response, if any.
+
+    The listing's envelope is not contractual — observed and plausible shapes
+    put the rows under ``data`` directly, under a nested ``records`` /
+    ``versions`` / ``items`` key, or return a bare single object for a
+    ``page_size=1`` read. Accepting all of them keeps a shape change from
+    reading as "the DAG does not match"; an envelope this function cannot parse
+    returns ``None``, which callers treat as unanswerable rather than as a
+    finding.
+    """
+    if isinstance(body, list):
+        rows: Any = body
+    elif isinstance(body, dict):
+        rows = body.get("data", body)
+        if isinstance(rows, dict):
+            for key in ("records", "versions", "items"):
+                nested = rows.get(key)
+                if isinstance(nested, list):
+                    rows = nested
+                    break
+    else:
+        return None
+    if isinstance(rows, dict):
+        # A page_size=1 read that answered with the record itself.
+        return rows if ("dag" in rows or "version" in rows) else None
+    if isinstance(rows, list):
+        for row in rows:
+            if isinstance(row, dict):
+                return row
+    return None
+
+
 class AEWorkflowClient:
     """Thin wrapper over the three Atlan endpoints used by full-DAG tests.
 
@@ -1223,6 +1276,69 @@ class AEWorkflowClient:
             message=f"publish_version failed after {retries} attempts: {body!r}",
             target="POST /automation/api/v1/workflows/.../versions/.../publish",
             retry_after_seconds=_requested_retry_after(body),
+        )
+
+    def get_published_version(self, slug: str) -> PublishedVersion | None:
+        """GET the published version of *slug* — the DAG that actually runs.
+
+        ``GET /automation/api/v1/workflows/<slug>/versions?is_published=true
+        &page=0&page_size=1`` — the same read Heracles itself uses
+        (``GetLatestPublishedVersion``). Read-only, and on a route family the
+        harness already authenticates against for create / publish.
+
+        There is deliberately no preflight equivalent of this: the originally
+        planned ``?submit=false`` does not exist (``processCreateWorkflow``
+        routes native execution to ``processAutomationEngineWorkflow`` without
+        forwarding query params, and that function ends in an unconditional
+        submit), and there is no ``GET /package-workflows/{name}``. So callers
+        read this *after* submit.
+
+        Never raises. Returns ``None`` when the read did not get through — a
+        transport failure, a non-2xx, or an envelope
+        :func:`_first_version_row` could not parse. ``None`` means "no answer",
+        which is not the same as "no match", and callers must not treat it as
+        one.
+
+        Returns:
+            The published version and its DAG, or ``None`` if unreadable.
+        """
+        path = (
+            f"/automation/api/v1/workflows/{quote(slug, safe='')}/versions"
+            "?is_published=true&page=0&page_size=1"
+        )
+        try:
+            status, body = self._request("GET", path)
+        except AppError:
+            logger.warning(
+                "published-version read for slug %s did not get through; which "
+                "DAG AE published stays unknown",
+                slug,
+                exc_info=True,
+            )
+            return None
+        if status >= 300:
+            logger.warning(
+                "published-version read for slug %s returned HTTP %d; which DAG "
+                "AE published stays unknown\nresponse=%r",
+                slug,
+                status,
+                body,
+            )
+            return None
+        row = _first_version_row(body)
+        if row is None:
+            logger.warning(
+                "published-version read for slug %s returned no parseable "
+                "version record; which DAG AE published stays unknown\n"
+                "response=%r",
+                slug,
+                body,
+            )
+            return None
+        dag = row.get("dag")
+        return PublishedVersion(
+            version=_safe_int(row.get("version")),
+            dag=dag if isinstance(dag, dict) else {},
         )
 
     def find_run_created_since(
