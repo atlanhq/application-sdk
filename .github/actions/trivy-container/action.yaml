@@ -7,11 +7,18 @@ description: |
 
 inputs:
   chainguard-username:
-    description: Chainguard registry username
-    required: true
+    description: >-
+      Chainguard registry username. Optional: the login step is skipped when
+      empty. Only builds whose Dockerfile pulls a cgr.dev base image need it --
+      that is application-sdk's own Dockerfile
+      (FROM cgr.dev/atlan.com/app-framework-golden), not the connector apps,
+      which build from registry.atlan.com, docker.io or registry.access.redhat.com.
+      The credentials live as repo-level secrets on application-sdk and so are
+      unavailable to any other repo by construction (FND-447).
+    required: false
   chainguard-password:
-    description: Chainguard registry password
-    required: true
+    description: Chainguard registry password. Same handling as chainguard-username.
+    required: false
   github-token:
     description: GitHub token for Docker build secrets
     required: true
@@ -34,7 +41,12 @@ runs:
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
 
+    # Skipped when no credentials are supplied. docker/login-action errors on an
+    # empty username, so an unconditional login turned "this build does not need
+    # cgr.dev" into a hard failure -- which is how every connector app's scan
+    # died even once its secrets reached the reusable (FND-447).
     - name: Log in to Chainguard Container Registry
+      if: inputs.chainguard-username != ''
       uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
       with:
         registry: cgr.dev
@@ -85,7 +97,7 @@ runs:
         TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
 
     - name: Upload scan results to GitHub Security tab
-      uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
+      uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4
       if: always()
       continue-on-error: true
       with:

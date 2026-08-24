@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from application_sdk.testing.e2e._poll import fake_clock
 from application_sdk.testing.full_dag._errors import (
     AtlanApiHttpError,
     AtlanApiResponseInvariantError,
@@ -127,8 +128,6 @@ def test_unknown_status_strings_treated_as_pending(
 def test_poll_native_status_returns_on_terminal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Avoid the real time.sleep — poll interval doesn't matter for the test.
-    monkeypatch.setattr("time.sleep", lambda _: None)
     client, queue = _make_client(
         monkeypatch,
         [
@@ -143,7 +142,10 @@ def test_poll_native_status_returns_on_terminal(
             ),
         ],
     )
-    result = client.poll_native_status("r", interval_seconds=1, timeout_seconds=60)
+    # fake_clock fast-forwards the poll loop's own clock and sleeps; the real
+    # time.monotonic (and so the asyncio loop's timers) stay untouched.
+    with fake_clock():
+        result = client.poll_native_status("r", interval_seconds=1, timeout_seconds=60)
     assert result.status is DAGRunStatus.SUCCEEDED
     assert queue == []  # all three responses consumed
 
@@ -151,7 +153,6 @@ def test_poll_native_status_returns_on_terminal(
 def test_poll_native_status_returns_last_observation_on_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("time.sleep", lambda _: None)
     client, _ = _make_client(
         monkeypatch,
         # interval=1, timeout=3 → we'll fire 3 polls (elapsed=0,1,2) all Running
@@ -161,7 +162,8 @@ def test_poll_native_status_returns_last_observation_on_timeout(
             (200, {"status": "Running", "dag_nodes": {}}),
         ],
     )
-    result = client.poll_native_status("r", interval_seconds=1, timeout_seconds=3)
+    with fake_clock():
+        result = client.poll_native_status("r", interval_seconds=1, timeout_seconds=3)
     # Still Running but we got back the last observed state instead of
     # raising — caller can include node-level diagnostics in their error.
     assert result.status is DAGRunStatus.RUNNING
@@ -173,7 +175,6 @@ def test_poll_atlas_for_connection_succeeds_when_search_finds_it(
     """``poll_atlas_for_connection`` returns True as soon as the
     search-based existence check returns True (indexer may have lagged
     earlier polls)."""
-    monkeypatch.setattr("time.sleep", lambda _: None)
     client, _ = _make_client(monkeypatch, [])
 
     # Stub the search-based existence check directly — first two polls
@@ -185,12 +186,13 @@ def test_poll_atlas_for_connection_succeeds_when_search_finds_it(
         return calls["n"] >= 3
 
     monkeypatch.setattr(client, "connection_exists_in_atlas_via_search", fake_search)
-    assert (
-        client.poll_atlas_for_connection(
-            "default/mysql/test", interval_seconds=1, timeout_seconds=10
+    with fake_clock():
+        assert (
+            client.poll_atlas_for_connection(
+                "default/mysql/test", interval_seconds=1, timeout_seconds=10
+            )
+            is True
         )
-        is True
-    )
     assert calls["n"] == 3
 
 
@@ -198,17 +200,17 @@ def test_poll_atlas_for_connection_bails_after_not_found_streak(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``max_not_found_attempts`` consecutive empty searches → False fast."""
-    monkeypatch.setattr("time.sleep", lambda _: None)
     client, _ = _make_client(monkeypatch, [])
     monkeypatch.setattr(
         client, "connection_exists_in_atlas_via_search", lambda _: False
     )
-    assert (
-        client.poll_atlas_for_connection(
-            "default/mysql/test",
-            interval_seconds=1,
-            timeout_seconds=1000,
-            max_not_found_attempts_override=3,
+    with fake_clock():
+        assert (
+            client.poll_atlas_for_connection(
+                "default/mysql/test",
+                interval_seconds=1,
+                timeout_seconds=1000,
+                max_not_found_attempts_override=3,
+            )
+            is False
         )
-        is False
-    )

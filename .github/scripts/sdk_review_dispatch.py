@@ -30,19 +30,27 @@ have, because the review lane needs them:
     its summary to the PR, the review WAS delivered, so a later stream
     breakage is a mothership-side finalize glitch and must not red the check.
 
-One re-dispatch is allowed, in either of two classes — see
+One re-dispatch is allowed, in any of three classes — see
 MAX_DISPATCH_ATTEMPTS and retry_decision():
 
-  * the sandbox died on a hard error a DIFFERENT model could survive; and
+  * the sandbox died on a hard error a DIFFERENT model could survive;
   * the sandbox reached `status=completed` and posted no verdict, which is the
     turn ending early rather than the model failing, so attempt 2 runs the SAME
-    model.
+    model; and
+  * mothership reported a dropped RPC to the sandbox, which is a fault in the
+    pipe rather than in the model — so attempt 2 also runs the SAME model.
 
-Both fire only after the verdict check has come back empty — confirmed empty,
-sharing `sdk_review_verdict_gate`'s recheck, because the comments API is not
-read-after-write consistent. That is the single point where the sandbox is
-provably finished AND nothing was delivered; every other stream ending stays
-fail-fast, because a second reviewer would post a second summary on the same PR.
+All three fire only after the verdict check has come back empty — confirmed
+empty, sharing `sdk_review_verdict_gate`'s recheck, because the comments API is
+not read-after-write consistent. That is the single point where nothing was
+delivered; every other stream ending stays fail-fast, because a second reviewer
+would post a second summary on the same PR.
+
+The first two classes also have the sandbox provably finished. The third does
+not — a dropped pipe says nothing about the sandbox behind it — and is admitted
+anyway because this lane is self-repairing: both attempts carry the same
+`GHA_RUN_URL`, so FND-636's dedupe collapses a double post. The resolve lane
+gets no such class, for exactly that reason (FND-647).
 
 Environment (all supplied by the `Dispatch to mothership Rover Direct API`
 step in `.github/workflows/sdk-review.yml`):
@@ -64,6 +72,7 @@ step in `.github/workflows/sdk-review.yml`):
 
 from __future__ import annotations
 
+import hashlib
 import http.client
 import json
 import os
@@ -114,23 +123,38 @@ IDLE_WARN_SECONDS = 300
 # request, replacing kimi-k3 (which was itself chosen on cost per TASK, not per
 # token: index 57.2, ~$0.85/task vs claude-opus-5 at 60.5, ~$2.40). Two things
 # have to hold on the proxy side or every dispatch dies on turn one, and the
-# codes tell you which: 404 means `x-ai/grok-4.6` is not in the
-# llmproxy.atlan.dev catalog, 403 means the `sdk_review` gateway key does not
+# codes tell you which: 400 means the pinned name is not one the
+# llmproxy.atlan.dev catalog recognises (its own message is "Invalid model
+# name passed in model=..."), 403 means the `sdk_review` gateway key does not
 # allowlist it.
+#
+# Mothership itself does not validate the name at all: `_validate_model_ids`
+# in `harness/api/models/sandbox.py` only rejects blank/whitespace/control-char
+# values, by design ("No allow-list of names: new models must work without a
+# code change"). So a typo in this constant is never caught at dispatch - it
+# boots a real sandbox, bills for it, and only dies mid-run when the container
+# itself calls the proxy. That is exactly what happened for FND-660: this
+# constant carried the OpenRouter-style `x-ai/` prefix instead of this proxy's
+# `xai/`, so any dispatch that reached the sandbox would have paid for one
+# and failed on its first proxy call.
 #
 # KNOWN RISK, carried deliberately: xAI does NOT prompt-cache on the
 # Anthropic `/v1/messages` route Claude Code uses (verified in the LiteLLM
-# ledger when mothership pinned its PR reviewer to x-ai/grok-4.5 in Jul 2026 —
+# ledger when mothership pinned its PR reviewer to xai/grok-4.5 in Jul 2026 -
 # Cache Hit False even with Claude Code sending cache_control), so a multi-turn
 # agentic reviewer re-bills its full context every turn. That is why mothership
 # reverted its own grok pin. This lane has the same shape, so watch the
-# per-review cost before treating the switch as settled.
+# per-review cost before treating the switch as settled. That risk was
+# measured on grok-4.5, not 4.6: a manual `/v1/messages` probe of
+# `xai/grok-4.6` on 2026-08-20 returned a non-zero `cache_read_input_tokens`,
+# so the no-caching claim is unverified for 4.6 and the per-run cost should be
+# re-measured before it is treated as settled.
 #
 # The fast lane stays on gpt-5.6-luna. `small_fast_model` must be pinned
 # explicitly: mothership's model_routing_env does `fast = small_fast_model or
 # model`, so pinning `model` alone would drag the background lane onto the main
 # model too.
-MAIN_MODEL = "x-ai/grok-4.6"
+MAIN_MODEL = "xai/grok-4.6"
 FAST_MODEL = "gpt-5.6-luna"
 IDLE_TIMEOUT_SECONDS = 1800
 
@@ -144,6 +168,20 @@ IDLE_TIMEOUT_SECONDS = 1800
 # be empty" — same model, same bug). Swapping the model is the whole point of
 # the retry.
 MAX_DISPATCH_ATTEMPTS = 2
+# Mothership names the sandbox after the `session_id` it is handed, and that
+# name is a DNS label: `worker /sandbox/create` answers HTTP 500
+# {"error":"Sandbox ID must be 1-63 characters long."} for anything longer.
+# That killed the retry on #3326 and, by arithmetic, every retry this lane had
+# ever authorised (FND-677): the base id the workflow builds was 62 chars, so
+# attempt 1 booted and attempt 2 — base + `-retry1` — was 69 and could not
+# create a sandbox at all. Both retry classes derive their id here, so both
+# were dead on arrival. The base id is now short enough that the ladder fits
+# untouched; this cap is the invariant that keeps it that way.
+SANDBOX_ID_MAX_CHARS = 63
+# Chars of sha256 spent identifying an id that had to be squeezed. 10 hex chars
+# is ~40 bits — collision-proof enough for one repo's review ids, and short
+# enough to leave the human-readable head intact.
+SANDBOX_ID_DIGEST_CHARS = 10
 # Attempt 2's main model: mothership's own DEFAULT_CLAUDE_MODEL, named
 # explicitly rather than by omitting `model` from the payload, so a test can
 # assert the two attempts actually differ and the retry does not silently
@@ -187,9 +225,33 @@ RETRYABLE_ERR_PATTERNS = (
     "upstream",
 )
 UNINFORMATIVE_ERR_CODES = frozenset({"", "none", "unknown"})
+# FND-647. A fault in mothership's own RPC to the sandbox, not in the model.
+# Kept in its OWN tuple rather than added to RETRYABLE_ERR_PATTERNS above
+# because it moves a different axis: a model swap cannot fix something the model
+# never touched, so this class re-dispatches on the SAME model (with the fresh
+# session id every attempt already gets). Read only when the code carries no
+# information, exactly like the model-fault patterns.
+#
+# Deliberately narrow — one message shape, observed on resolver run
+# 32309963717, which threw away a healthy $0.69 run over it. Every entry admits
+# a re-dispatch against a sandbox of UNKNOWN liveness, affordable here only
+# because FND-636's dedupe collapses a double post: both attempts carry the same
+# GHA_RUN_URL, the key it attributes on. Do not add a pattern that has not been
+# seen in a real run. The resolve lane keeps its own copy of this tuple and uses
+# it to REFUSE — a second resolver pushes commits — so the two are deliberately
+# not shared: same signature, opposite policy.
+RETRYABLE_TRANSPORT_PATTERNS = ("disconnected prematurely",)
 # Fails identically on any model, so never spend a second sandbox on it: the
 # sandbox wants interactive input, which GHA can never give.
 NEVER_RETRY_ERR_CODES = frozenset({"elicitation"})
+# Dispatch-level HTTP statuses live in their own `http_` codespace, kept apart
+# from the stream's provider codes on purpose: a provider 400 carried inside the
+# stream is worth a different model, while a 400 on the POST itself is a
+# malformed payload that fails identically on any model. Only 429 and 5xx mean
+# "the far side was transiently unable to accept the request".
+RETRYABLE_DISPATCH_HTTP_CODES = frozenset(
+    {"http_429", "http_500", "http_502", "http_503", "http_504"}
+)
 # The job caps at 130 min (`timeout-minutes: 130`) and the VPN steps eat a few
 # of those before dispatch starts, so budget this step at 110 min from its own
 # start. A retry is only worth booting with enough of that left to finish a
@@ -270,6 +332,28 @@ def attempt_suffix(attempt: int) -> str:
     return "" if attempt <= 1 else f"-retry{attempt - 1}"
 
 
+def fit_sandbox_id(session_id: str) -> str:
+    """Squeeze `session_id` into mothership's sandbox-name budget.
+
+    Truncation alone would be a correctness bug, not a cosmetic one: every
+    part of the id that carries uniqueness (run id, run attempt, retry suffix)
+    sits at the END, and consecutive GitHub run ids share a long prefix — so a
+    head-truncated id could equal the previous run's, which is precisely the
+    resume-a-dead-conversation collision the attempt ladder exists to avoid.
+    Keep the legible head, and spend the last chars on a digest of the WHOLE
+    pre-truncation id so distinct inputs keep distinct outputs.
+
+    This is a backstop, not the fix: the workflow's base id leaves ~18 chars of
+    headroom under the cap, so a squeezed id means the format drifted (a test
+    asserts the real one still fits untouched).
+    """
+    if len(session_id) <= SANDBOX_ID_MAX_CHARS:
+        return session_id
+    digest = hashlib.sha256(session_id.encode()).hexdigest()[:SANDBOX_ID_DIGEST_CHARS]
+    head = session_id[: SANDBOX_ID_MAX_CHARS - SANDBOX_ID_DIGEST_CHARS - 1].rstrip("-")
+    return f"{head}-{digest}" if head else digest
+
+
 def attempt_session_id(session_id: str, attempt: int) -> str:
     """A retry MUST NOT reuse the session id.
 
@@ -279,8 +363,12 @@ def attempt_session_id(session_id: str, attempt: int) -> str:
     conversation found with session" failure on #2987 and the zero-SSE death on
     #2989. `mothership_terminate_session.py` derives the same ids so a cancel
     still stops whichever attempt is live.
+
+    Every id the lane can send goes through here, so the sandbox-name budget is
+    enforced in one place — the dispatcher and the terminator cannot disagree
+    about what was actually booted.
     """
-    return f"{session_id}{attempt_suffix(attempt)}"
+    return fit_sandbox_id(f"{session_id}{attempt_suffix(attempt)}")
 
 
 def build_payload(
@@ -692,6 +780,10 @@ def is_retryable_fault(st: SSEState) -> bool:
     known code would classify "401 upstream auth failed" as retryable and buy a
     second sandbox that fails identically.
     """
+    if st.err_code.startswith("http_"):
+        # Self-deciding codespace: a dispatch-level HTTP status never falls
+        # through to the message-pattern ladder below.
+        return st.err_code in RETRYABLE_DISPATCH_HTTP_CODES
     if st.err_code in NEVER_RETRY_ERR_CODES:
         return False
     if st.err_code in RETRYABLE_ERR_CODES:
@@ -699,6 +791,20 @@ def is_retryable_fault(st: SSEState) -> bool:
     if st.err_code not in UNINFORMATIVE_ERR_CODES:
         return False
     return any(p in st.err_msg.lower() for p in RETRYABLE_ERR_PATTERNS)
+
+
+def is_transport_fault(st: SSEState) -> bool:
+    """True when the reported fault is the RPC to the sandbox, not the model.
+
+    Same code discipline as `is_retryable_fault`: an informative code decides on
+    its own and never falls through to the patterns, which exist for the
+    flattened `none`/`unknown`/empty case. `http_` codes are excluded outright —
+    a status on the POST itself means no sandbox was ever started, so there is no
+    RPC to a sandbox that could have dropped.
+    """
+    if st.err_code.startswith("http_") or st.err_code not in UNINFORMATIVE_ERR_CODES:
+        return False
+    return any(p in st.err_msg.lower() for p in RETRYABLE_TRANSPORT_PATTERNS)
 
 
 def sandbox_completed_cleanly(st: SSEState) -> bool:
@@ -744,6 +850,27 @@ def _retry_class(st: SSEState, attempt: int) -> RetryPlan:
             False,
             "the stream ended without a hard error — the sandbox may still be "
             "running, and a re-dispatch would double-review the PR",
+        )
+    if is_transport_fault(st):
+        # FND-647. mothership's RPC to the sandbox dropped. Nothing about the
+        # model failed, so the swap axis is the wrong one — attempt 2 re-runs
+        # the same model on a fresh session id.
+        #
+        # Ranked BELOW the two guards above rather than above them: reaching
+        # here means mothership itself reported a terminal fault, so this is not
+        # the "our socket died and the reviewer is probably still working" case,
+        # where a retry is usually two sandboxes for one review. It is still a
+        # sandbox of unknown liveness — the drop is in the pipe, not the sandbox
+        # — and that is affordable only because both attempts carry the same
+        # GHA_RUN_URL and FND-636's dedupe collapses a double post.
+        same = attempt_model(attempt)
+        return RetryPlan(
+            True,
+            f"code={st.err_code or 'none'} reports a dropped RPC to the sandbox "
+            f"({_squash(st.err_msg)[:80]}) — the model never failed, so "
+            f"re-dispatching on the same model ({same}) (attempt {attempt + 1} "
+            f"of {MAX_DISPATCH_ATTEMPTS})",
+            same,
         )
     if not is_retryable_fault(st):
         return RetryPlan(
@@ -1138,6 +1265,32 @@ def dispatch_once(
                 st,
                 deadline,
             )
+    except urllib.error.HTTPError as e:
+        # Ordering matters: HTTPError is itself a URLError subclass, and
+        # URLError is one of STREAM_TRANSPORT_ERRORS below - this clause MUST
+        # come first or a dispatch-level HTTP status lands on `stream_error`
+        # and `_retry_class` bails with "our stream died rather than the
+        # sandbox", which is the bug this closes (run 32347771368 got a 504 on
+        # the POST and never retried, never polled, delivered nothing).
+        #
+        # `st.errored = True` with `st.stream_error` left EMPTY is deliberate:
+        # an HTTP status means the far side answered and no sandbox was ever
+        # started, so `_retry_class` should reach the abnormal-termination /
+        # `is_retryable_fault` branches, not the stream-death one.
+        try:
+            # Narrow on purpose: a body read can fail on a half-open socket
+            # (OSError), a premature close (http.client.HTTPException), or a
+            # response whose `fp` was already consumed/absent (AttributeError,
+            # ValueError). None of those may be allowed to mask the HTTP status
+            # we came here to record.
+            body = e.read().decode("utf-8", "replace")
+        except (OSError, http.client.HTTPException, AttributeError, ValueError):
+            body = str(e.reason)
+        body = body[:500]
+        print(f"::error::Sandbox dispatch rejected with HTTP {e.code}: {body}")
+        st.errored = True
+        st.err_code = f"http_{e.code}"
+        st.err_msg = f"HTTP {e.code} on dispatch POST: {body}"
     except STREAM_TRANSPORT_ERRORS as e:
         # NOT `errored`: this is OUR connection dying, not the sandbox. The
         # shell saw the same class of failure as curl diagnostics on stdout and

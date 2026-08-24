@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar
+from enum import Enum
+from typing import TYPE_CHECKING, ClassVar
 
 from application_sdk.errors.leaves import (
     AppTimeoutError,
@@ -14,6 +15,10 @@ from application_sdk.errors.leaves import (
     PreconditionError,
     UnimplementedError,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle guard, typing only
+    # client imports this module, so the reverse import is deferred.
+    from application_sdk.testing.e2e.client import DAGRunResult
 
 # ---------------------------------------------------------------------------
 # Atlan API client errors (Family B)
@@ -45,12 +50,55 @@ class AtlanApiResponseInvariantError(DataIntegrityError):
     location: str | None = "atlan_api_client"
 
 
+class RequestDelivery(str, Enum):
+    """Whether a failed HTTP request can have taken effect at the origin.
+
+    The distinction only matters for a **non-idempotent** write (the AE
+    submit): re-issuing one the origin already processed spawns a duplicate
+    run, so the client must know whether that is possible before retrying.
+
+    Two independent signals narrow the ambiguous case:
+
+    * the transport error's own shape. ``urllib`` could not tell a connect
+      timeout from a read timeout — both surfaced as a bare
+      :class:`TimeoutError` — which forced the submit path to treat every
+      network failure as ambiguous and give up after one attempt. ``httpx``
+      separates the connect phase from everything after it, giving
+      :attr:`NOT_DELIVERED`.
+    * a follow-up read of the origin's own state. A write whose effect is
+      externally observable can simply be looked up afterwards, giving
+      :attr:`NOT_APPLIED` when it is provably absent.
+    """
+
+    NOT_DELIVERED = "not_delivered"
+    """The connection was never established, so the request bytes never left
+    the client. The origin cannot have seen it — re-issuing is safe even for a
+    non-idempotent write."""
+
+    NOT_APPLIED = "not_applied"
+    """The request may well have reached the origin, but a follow-up read of
+    the origin's own state found no trace of its effect. Re-issuing is safe on
+    the strength of that read, not of the transport error."""
+
+    AMBIGUOUS = "ambiguous"
+    """The connection was established, the failure came later (read timeout,
+    reset mid-flight), and nothing has ruled out the origin having processed
+    it. Only an idempotent caller may re-issue."""
+
+
 @dataclass(kw_only=True)
 class AtlanApiTimeoutError(AppTimeoutError):
-    """No response received from the AE API before the timeout elapsed."""
+    """No response received from the AE API before the timeout elapsed.
+
+    ``delivery`` records whether the request can have reached the origin. It
+    defaults to :attr:`RequestDelivery.AMBIGUOUS` — the conservative value —
+    so any raise site that does not classify the failure keeps the old
+    never-repost behaviour for non-idempotent writes.
+    """
 
     code: ClassVar[str] = "TIMEOUT_ATLAN_API"
     operation: str | None = "native_status_poll"
+    delivery: RequestDelivery = RequestDelivery.AMBIGUOUS
 
 
 # ---------------------------------------------------------------------------
@@ -131,20 +179,40 @@ class AppNotReadyError(PreconditionError):
 
 @dataclass(kw_only=True)
 class NoWorkerOnTaskQueueError(PreconditionError):
-    """No worker started any DAG node within the stall-grace window.
+    """No worker started any DAG node while the AE run was live.
 
-    The AE run's parent workflow runs on the always-on automation-engine
-    queue, so the top-level run flips to ``Running`` even when the connector's
-    own ``extract`` node is stuck ``Pending`` because no worker is polling its
-    task queue. Rather than let the harness hang for the full
-    ``ae_poll_timeout_seconds`` (often 30 min), we fail fast here. The usual
-    cause is an agent-name / task-queue mismatch: the test's
+    Raised only when the top-level run has left ``Pending`` — the parent
+    workflow runs on the always-on automation-engine queue, so a live parent
+    means AE dispatched and the connector's own node is the one stuck. That
+    points at the app: an agent-name / task-queue mismatch, where the test's
     ``agent_spec().agent_name`` must resolve to the same queue the deployed
     worker polls (``atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}``).
+    Rather than hang for the full ``ae_poll_timeout_seconds`` (often 30 min),
+    the harness fails fast here.
+
+    A top-level run still sitting ``Pending`` is :class:`AutomationEngineNotDispatchingError`
+    instead — nothing reached the app, so the app's queue is not implicated.
     """
 
     code: ClassVar[str] = "PRECONDITION_NO_WORKER_ON_TASK_QUEUE"
     expected_state: str | None = "a worker polling the extract task queue"
+
+
+@dataclass(kw_only=True)
+class AutomationEngineNotDispatchingError(PreconditionError):
+    """The AE run never left ``Pending`` within the stall-grace window.
+
+    The top-level status is the Automation Engine's own state. While it is
+    ``Pending`` the run has not been dispatched at all, so no DAG node could
+    have started and nothing has yet been offered to the connector's task
+    queue. The app, its worker and its agent name are therefore not implicated
+    — attributing this to a missing worker sends triage to the wrong system.
+    The usual causes are tenant-side: AE contention on a shared e2e tenant, or
+    an AE worker that is not processing new runs.
+    """
+
+    code: ClassVar[str] = "PRECONDITION_AE_NOT_DISPATCHING"
+    expected_state: str | None = "the AE run leaving Pending"
 
 
 @dataclass(kw_only=True)
@@ -161,12 +229,44 @@ class DAGProgressStalledError(PreconditionError):
     The window is set comfortably above legitimately slow single nodes (lineage
     on deep queues can sit Running for many minutes), so a healthy run never
     trips it.
+
+    ``result`` carries the last observation the poll made, stamped with
+    ``progress_stalled_after_seconds``. Raising bare left this path with only a
+    ``name=status`` list, so the caller that owns the diagnostic renderer (it
+    needs the seed DAG's routing, which the client does not have) could not
+    name the task queue or the child workflow to read. Attaching the typed
+    result lets that one renderer serve the watchdog stop and the poll ceiling
+    alike.
     """
 
     code: ClassVar[str] = "PRECONDITION_DAG_PROGRESS_STALLED"
     expected_state: str | None = (
         "at least one DAG node state transition within the progress window"
     )
+    result: DAGRunResult | None = None
+
+
+@dataclass(kw_only=True)
+class ProgressWatchdogUnreachableError(InvalidInputError):
+    """``dag_progress_stall_seconds`` is pinned at or above the poll ceiling.
+
+    The watchdog fires when ``elapsed - last_progress_elapsed`` reaches the
+    window, and ``poll_native_status`` returns as soon as ``elapsed`` reaches
+    ``ae_poll_timeout_seconds``. A window that is not strictly smaller than the
+    ceiling can therefore only ever close on a run that stalls at t=0 — for
+    every real stall the poll loop exits first, so the suite burns its whole
+    ceiling and reports the ceiling instead of the stall.
+
+    Raised at ``setup_method`` rather than warned about: the configuration
+    silently disables a fail-fast guard, and the only way to notice at runtime
+    is to read both numbers and do the subtraction. Leave
+    ``dag_progress_stall_seconds`` unset to derive a window from the ceiling, or
+    set 0 to disable the watchdog deliberately.
+    """
+
+    code: ClassVar[str] = "INVALID_INPUT_PROGRESS_WATCHDOG_UNREACHABLE"
+    field: str | None = "dag_progress_stall_seconds"
+    constraint: str | None = "must be < ae_poll_timeout_seconds"
 
 
 @dataclass(kw_only=True)

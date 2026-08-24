@@ -18,6 +18,17 @@ The retry fires only after the out-of-band poll has come back empty, which is
 the single point where the sandbox is provably dead and nothing further will
 land; every other stream ending stays fail-fast.
 
+That is a strictly narrower rule than the review lane's, on purpose (FND-647).
+The reviewer also retries a fault it cannot prove killed the sandbox, because
+two reviewers only ever cost a duplicate comment that FND-636's dedupe
+collapses. A resolver PUSHES COMMITS: two live on one branch is what
+`sdk_resolve_push_guard.py` exists to prevent and nothing can undo afterwards.
+So on this lane an unproven death is never re-dispatched — a dropped RPC buys
+the LONG out-of-band poll instead (see `oob_poll_budget`), which is a recovery
+that cannot double-run anything. `retry_decision` has to say that explicitly:
+the fault otherwise reads as a no-op run to `resolved_nothing` and would be
+re-dispatched on the strength of it.
+
 Environment:
     MOTHERSHIP_URL      base URL (e.g. https://mothership.atlan.dev)
     HARNESS_TOKEN       bearer for /api/sandbox/execute
@@ -35,6 +46,7 @@ Environment:
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import re
@@ -63,19 +75,34 @@ DEFAULT_MAX_ROUNDS = 8
 # to Grok 4.6 by operator request, replacing kimi-k3 (chosen on cost per TASK,
 # not per token: index 57.2, ~$0.85/task vs claude-opus-5 at 60.5, ~$2.40).
 # Both proxy sides have to allow it or every dispatch dies on turn one, and the
-# code says which: 404 means `x-ai/grok-4.6` is not in the llmproxy.atlan.dev
-# catalog, 403 means the gateway key does not allowlist it. This lane declares
-# no `ai_gateway_key_name`, so that key is mothership's LITELLM_KEY_DEFAULT —
-# not the review lane's scoped `sdk_review` key.
+# code says which: 400 means the pinned name is not one the
+# llmproxy.atlan.dev catalog recognises (its own message is "Invalid model
+# name passed in model=..."), 403 means the gateway key does not allowlist it.
+# This lane declares no `ai_gateway_key_name`, so that key is mothership's
+# LITELLM_KEY_DEFAULT - not the review lane's scoped `sdk_review` key.
+#
+# Mothership itself does not validate the name at all: `_validate_model_ids`
+# in `harness/api/models/sandbox.py` only rejects blank/whitespace/control-char
+# values, by design ("No allow-list of names: new models must work without a
+# code change"). So a typo in this constant is never caught at dispatch - it
+# boots a real sandbox, bills for it, and only dies mid-run when the container
+# itself calls the proxy. That is exactly what happened for FND-660: this
+# constant carried the OpenRouter-style `x-ai/` prefix instead of this proxy's
+# `xai/`, so any dispatch that reached the sandbox would have paid for one
+# and failed on its first proxy call.
 #
 # KNOWN RISK, carried deliberately: xAI does NOT prompt-cache on the Anthropic
 # `/v1/messages` route Claude Code uses (verified in the LiteLLM ledger when
-# mothership pinned its PR reviewer to x-ai/grok-4.5 in Jul 2026, and the reason
+# mothership pinned its PR reviewer to xai/grok-4.5 in Jul 2026, and the reason
 # it reverted), so a multi-turn agentic lane re-bills its full context every
-# turn — and resolve runs up to DEFAULT_MAX_ROUNDS rounds per PR.
+# turn — and resolve runs up to DEFAULT_MAX_ROUNDS rounds per PR. That risk was
+# measured on grok-4.5, not 4.6: a manual `/v1/messages` probe of
+# `xai/grok-4.6` on 2026-08-20 returned a non-zero `cache_read_input_tokens`,
+# so the no-caching claim is unverified for 4.6 and the per-run cost should be
+# re-measured before it is treated as settled.
 #
 # The fast lane stays on gpt-5.6-luna. Reverting is a one-liner.
-MAIN_MODEL = "x-ai/grok-4.6"
+MAIN_MODEL = "xai/grok-4.6"
 FAST_MODEL = "gpt-5.6-luna"
 
 # --- Re-dispatch when the sandbox dies on a hard error ----------------------
@@ -131,6 +158,19 @@ RETRYABLE_ERR_PATTERNS = (
     "upstream",
 )
 UNINFORMATIVE_ERR_CODES = frozenset({"", "none", "unknown"})
+# FND-647. A fault in mothership's own RPC to the sandbox, not in the model —
+# observed as `code=unknown` + "ReadableStream received over RPC disconnected
+# prematurely." on run 32309963717 (PR #3276), which threw away a healthy $0.69
+# run. Read only when the code carries no information, exactly like the
+# model-fault patterns above.
+#
+# On THIS lane the class never authorises a re-dispatch: the drop is in the pipe,
+# so it is no evidence the resolver died, and a second resolver pushing to one
+# branch is unrecoverable. What it selects is the long out-of-band poll (the
+# resolver may be many minutes from its Phase 4 hand-off) plus a refusal that
+# says so. The review lane keeps its own copy of this tuple and DOES retry on
+# it; the tuples are deliberately per-lane, because the entry conditions are.
+RETRYABLE_TRANSPORT_PATTERNS = ("disconnected prematurely",)
 # Causes that fail identically on any model — never spend a second sandbox:
 #   elicitation   the sandbox wants interactive input, which GHA can never give.
 #   stream_error  OUR urlopen died, not the sandbox. The resolver is probably
@@ -139,6 +179,14 @@ UNINFORMATIVE_ERR_CODES = frozenset({"", "none", "unknown"})
 # Auth/permission and prompt faults are excluded by the allowlist above rather
 # than named here: they will fail the same way on any model, forever.
 NEVER_RETRY_ERR_CODES = frozenset({"elicitation", "stream_error"})
+# Dispatch-level HTTP statuses live in their own `http_` codespace, kept apart
+# from the stream's provider codes on purpose: a provider 400 carried inside the
+# stream is worth a different model, while a 400 on the POST itself is a
+# malformed payload that fails identically on any model. Only 429 and 5xx mean
+# "the far side was transiently unable to accept the request".
+RETRYABLE_DISPATCH_HTTP_CODES = frozenset(
+    {"http_429", "http_500", "http_502", "http_503", "http_504"}
+)
 # The job caps at 130 min (`timeout-minutes: 130` in sdk-resolve.yml) and the VPN
 # steps eat a few of those before dispatch starts, so budget this step at 110 min
 # from its own start. A retry is only worth booting with enough of that left to
@@ -164,7 +212,9 @@ OOB_POLL_INTERVAL_SECONDS = 30
 OOB_POLL_SECONDS_STREAM_DROP = 2700
 # Abnormal sandbox termination (status=error / error event): the sandbox is dead
 # and will post nothing more — a couple of quick checks only catch a summary that
-# landed just before it died.
+# landed just before it died. NOT used for a transport fault, which reports a
+# terminal error without the sandbox being dead (FND-647): those take the
+# stream-drop budget above.
 OOB_POLL_SECONDS_HARD_ERROR = 120
 # Clock-skew margin subtracted from this run's start when matching a summary's
 # created_at, so a hand-off posted right at the boundary isn't missed. Small
@@ -784,14 +834,40 @@ def sandbox_terminated_abnormally(st: SSEState) -> bool:
     return st.status != "completed" or resolved_nothing(st)
 
 
+def is_transport_fault(st: SSEState) -> bool:
+    """True when the reported fault is the RPC to the sandbox, not the model.
+
+    Same code discipline as `is_retryable_fault`: an informative code decides on
+    its own and never falls through to the patterns, which exist for the
+    flattened `none`/`unknown`/empty case. `http_` codes are excluded outright —
+    a status on the POST itself means no sandbox was ever started, so there is no
+    RPC to a sandbox that could have dropped, and that codespace already decides
+    for itself.
+    """
+    if st.err_code.startswith("http_") or st.err_code not in UNINFORMATIVE_ERR_CODES:
+        return False
+    return any(p in st.err_msg.lower() for p in RETRYABLE_TRANSPORT_PATTERNS)
+
+
 def oob_poll_budget(st: SSEState) -> int:
     """Seconds to look for an out-of-band summary, given how the stream ended."""
     if not st.got_event:
         return 0  # never saw an event → sandbox likely never started; nothing to await
+    if is_transport_fault(st):
+        # FND-647. mothership reported a dropped RPC, which `errored` then makes
+        # look like a dead sandbox to the check below — so this ranks above it.
+        # The pipe dropping is no evidence the resolver stopped, and it can be
+        # many minutes from its Phase 4 hand-off, so give it the full window.
+        # Waiting is the ONLY recovery available here: a re-dispatch is off the
+        # table (see `retry_decision`), so the 120s this used to get is exactly
+        # how a healthy run gets thrown away (run 32309963717, $0.69).
+        return OOB_POLL_SECONDS_STREAM_DROP
     if sandbox_terminated_abnormally(st):
         # Sandbox terminated abnormally; only catch a summary posted just before.
         return OOB_POLL_SECONDS_HARD_ERROR
-    return OOB_POLL_SECONDS_STREAM_DROP  # transport drop; sandbox likely still working
+    # Our own stream was cut with no terminal event; the sandbox is likely
+    # still working.
+    return OOB_POLL_SECONDS_STREAM_DROP
 
 
 def is_retryable_fault(st: SSEState) -> bool:
@@ -804,6 +880,10 @@ def is_retryable_fault(st: SSEState) -> bool:
     would classify "401 upstream auth failed" as retryable and buy a second
     sandbox that fails identically.
     """
+    if st.err_code.startswith("http_"):
+        # Self-deciding codespace: a dispatch-level HTTP status never falls
+        # through to the message-pattern ladder below.
+        return st.err_code in RETRYABLE_DISPATCH_HTTP_CODES
     if st.err_code in NEVER_RETRY_ERR_CODES:
         return False
     if resolved_nothing(st):
@@ -821,10 +901,12 @@ def is_retryable_fault(st: SSEState) -> bool:
 def retry_decision(st: SSEState, attempt: int, seconds_left: float) -> tuple[bool, str]:
     """Whether to re-dispatch after this attempt, and the reason either way.
 
-    Called only once the out-of-band poll has come back empty, so "the sandbox
-    is dead and posted nothing" is already established for the abnormal-
-    termination branch. The reason is logged verbatim so a run that did NOT
-    retry says why, which is the part that is invisible today.
+    Called only once the out-of-band poll has come back empty, so "posted
+    nothing" is established for every branch, and "the sandbox is dead" for the
+    abnormal-termination branch — with one exception, which is why the transport
+    branch below exists: a dropped RPC reports a terminal fault without proving
+    the resolver stopped, and on this lane an unproven death is never retried.
+    The reason is logged verbatim so a run that did NOT retry says why.
     """
     if attempt >= MAX_DISPATCH_ATTEMPTS:
         return False, f"already used all {MAX_DISPATCH_ATTEMPTS} attempts"
@@ -832,6 +914,28 @@ def retry_decision(st: SSEState, attempt: int, seconds_left: float) -> tuple[boo
         return False, (
             "the stream ended without a hard error — the sandbox may still be "
             "running, and a re-dispatch would double-run the resolver"
+        )
+    if is_transport_fault(st):
+        # FND-647, and it must be ranked ABOVE `is_retryable_fault` rather than
+        # left to fall through it. An error event leaves `run_completed` False,
+        # so a clean `complete` plus a dropped RPC is indistinguishable from a
+        # no-op run — and FND-644's `resolved_nothing` branch answers True on
+        # that basis, buying a second resolver against a first of UNKNOWN
+        # liveness. That is the double-push `sdk_resolve_push_guard.py` exists to
+        # prevent, and no dedupe can undo it after the fact. (Before FND-644 the
+        # same fault fell out the other side, refused with "a different model
+        # would fail the same way" — true, and beside the point: the model never
+        # failed. Run 32309963717 was lost that way.)
+        #
+        # This lane therefore has NO transport retry class at all, by decision
+        # rather than by default: what the fault buys instead is the long
+        # out-of-band poll above, which recovers the run without ever risking a
+        # second resolver. If that poll came back empty, the run is spent.
+        return False, (
+            f"code={st.err_code or 'none'} reports a dropped RPC to the sandbox, "
+            "not a dead one — the resolver may still be pushing, and two "
+            "resolvers on one branch cannot be undone, so this lane waits for "
+            "the out-of-band hand-off instead of re-dispatching"
         )
     if not is_retryable_fault(st):
         return False, (
@@ -934,6 +1038,35 @@ def dispatch_once(
         # of blocking the full 2h. TimeoutError/OSError surface here too.
         with opener(req, timeout=READ_IDLE_TIMEOUT_SECONDS) as resp:
             return process_stream(raw.decode("utf-8", "replace") for raw in resp)
+    except urllib.error.HTTPError as e:
+        # Ordering matters: HTTPError is itself a URLError subclass, so this
+        # clause MUST come before the URLError/TimeoutError/OSError one below
+        # or every dispatch-level HTTP status would be swallowed into
+        # `stream_error` and treated as "our connection died mid-stream" - the
+        # exact class this codebase refuses to retry (run 32347771368 got a
+        # 504 on the POST and logged "code=stream_error is not a known
+        # model/provider fault": no retry, no out-of-band poll, zero work done).
+        #
+        # An HTTP status on the POST means the far side actually answered and
+        # no sandbox was ever started, unlike a mid-stream drop - so there is
+        # nothing to double-run, which is why this is retryable-eligible where
+        # `stream_error` is not.
+        try:
+            # Narrow on purpose: a body read can fail on a half-open socket
+            # (OSError), a premature close (http.client.HTTPException), or a
+            # response whose `fp` was already consumed/absent (AttributeError,
+            # ValueError). None of those may be allowed to mask the HTTP status
+            # we came here to record.
+            body = e.read().decode("utf-8", "replace")
+        except (OSError, http.client.HTTPException, AttributeError, ValueError):
+            body = str(e.reason)
+        body = body[:500]
+        print(f"::error::Sandbox dispatch rejected with HTTP {e.code}: {body}")
+        st = SSEState()
+        st.errored = True
+        st.err_code = f"http_{e.code}"
+        st.err_msg = f"HTTP {e.code} on dispatch POST: {body}"
+        return st
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         print(f"::error::Sandbox dispatch stream error/stall: {e}")
         st = SSEState()

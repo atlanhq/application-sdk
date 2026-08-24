@@ -1036,6 +1036,16 @@ jobs:
       # e2e-full-reusable.yaml's plan-clouds has always guarded on the count for
       # exactly this reason.
       cloud-count: ${{ steps.discover-clouds.outputs.count }}
+      # The same cloud dimension as a flat list, for lease-tenant — which is ONE
+      # job that takes every cloud's lease in order rather than a matrix leg per
+      # cloud (FND-646), so it needs the list and not a matrix.
+      #
+      # Emitted from the SAME action call as `cloud-matrix` above, not from the
+      # suite fan-out's `clouds` below. The two calls resolve identically today
+      # and a test pins that, but a lease set that missed a cloud the install
+      # then ran against would be an unserialised install rather than a visible
+      # failure — so this takes the distinction out of play entirely.
+      cloud-list: ${{ steps.discover-clouds.outputs.clouds }}
       # The resolved cloud list as a flat string, for the scorecard's descriptive
       # `observed` field (FND-34). Taken from the SAME action call that emitted
       # the matrix, so "what we recorded as covered" and "what actually ran"
@@ -1416,37 +1426,133 @@ jobs:
   # the order runs reach this job, and a total order gives fairness rather than
   # exclusion. Exclusion needs an atomic primitive — see the module docstring.
   #
-  # Same gate and same cloud matrix as prepare-tenant: no install, no contention
-  # worth serialising — the legs of a non-installing run cannot lose a version
-  # race because nothing changes the version under them.
-  lease-tenant:
-    name: Tenant lease (${{ matrix.cloud || 'default' }})
-    needs: [discover-e2e, merge-e2e-image]
+  # ONE job for every cloud, not a matrix leg per cloud — and that is the fix for
+  # a deadlock, not a tidy-up (FND-646). The matrix acquired each cloud's lease in
+  # PARALLEL and held it for the whole run while blocking on the rest, which is
+  # hold-and-wait. It deadlocked the first time two runs queued behind one holder:
+  # the holder released all three leases at once, the two waiters raced for the
+  # freed set and SPLIT it (one took aws + azure, the other gcp), and each then
+  # blocked on what the other held for the full 90-minute budget. Any time two or
+  # more runs are queued behind a holder, a parallel matrix makes that split the
+  # EXPECTED outcome.
+  #
+  # So this job takes them one at a time, in an order that is a pure function of
+  # the cloud names, and gives back everything it took if it cannot get the whole
+  # set (see acquire_ordered). Resource ordering makes a cycle impossible, so the
+  # worst case degrades from mutual blocking to plain serialisation. Nothing is
+  # ever cancelled: a queued run waits and then proceeds. That matters because
+  # cancelling is not a safe alternative here — prepare-tenant carries
+  # `if: always()`, so a cancelled run finishes installing onto the tenants it
+  # had already leased on its way out.
+  #
+  # Same gate as prepare-tenant: no install, no contention worth serialising —
+  # the legs of a non-installing run cannot lose a version race because nothing
+  # changes the version under them.
+  # ── Is the SDK commit under test still the one under review? ─────────────
+  # The SDK-side dispatch guard drops a fan-out whose SHA has already been
+  # superseded (e2e_dispatch_guard.py, FND-696), but it can only see the window
+  # UP TO the dispatch. A push landing after it leaves this run already in
+  # flight for a commit nobody will merge, and the tenant lease below then does
+  # exactly what it promises — it QUEUES, so the live commit waits out this
+  # run's entire install-plus-legs cycle. On application-sdk PR #3322 that was
+  # 3m38s, 10m12s and 12m of pure lease wait across three connectors.
+  #
+  # This job is the second half of that fix (FND-701), and it is worth being
+  # precise about which half. A dispatched run that has ALREADY leased cannot be
+  # helped: cancelling it is unsafe, because prepare-tenant carries
+  # `if: always()` and finishes installing onto the tenants it holds on its way
+  # out — so for that run the queue is the right answer. A run that has
+  # dispatched but NOT yet leased is a different thing entirely. It is still
+  # building the image and running unit and integration tests — 2m30s on the
+  # openapi leg of #3322, dispatched 21:07:38 and leased 21:10:10 — and it holds
+  # nothing at all, so it can stand down for free.
+  #
+  # Placed here rather than earlier on purpose: the answer is only worth as much
+  # as its freshness, so it is asked as close to the lease as the DAG allows.
+  #
+  # It cannot fail this run. The script exits 0 on every path and answers
+  # "false" to every doubt, and the gates below read the OUTPUT rather than the
+  # job result, so even an outright job failure leaves the lease happening —
+  # which is the pre-existing behaviour.
+  sdk-head-recheck:
+    name: Recheck the dispatched SDK ref
+    needs: [merge-e2e-image]
     if: inputs.install-app-to-tenant && needs.merge-e2e-image.result == 'success'
-    strategy:
-      # One cloud's queue being stuck must not cancel the others.
-      fail-fast: false
-      matrix: ${{ fromJson(needs.discover-e2e.outputs.cloud-count != '0' && needs.discover-e2e.outputs.cloud-matrix || '{"include":[{"cloud":""}]}') }}
     runs-on: ubuntu-latest
-    # Above the action's own 90-minute wait budget, so a run that queues for the
-    # full budget still reaches the script's own error — which names the holding
-    # run — instead of being replaced by a bare "job cancelled after Nm".
+    timeout-minutes: 5
+    permissions:
+      # Nothing beyond the default. Every read is of public data in
+      # application-sdk — a ref, the blob it points at, and a pull request — and
+      # a connector's own github.token can already do that.
+      contents: read
+    outputs:
+      superseded: ${{ steps.recheck.outputs.superseded }}
+    steps:
+      - name: Recheck the dispatched SDK ref
+        id: recheck
+        uses: atlanhq/application-sdk/.github/actions/e2e-dispatch-recheck@main
+        with:
+          sdk-ref: ${{ inputs.application-sdk-ref }}
+          # The claim ref the SDK wrote is keyed on the connector REPOSITORY
+          # name, which is what its dispatch matrix iterates over — not the
+          # short app-name. Derived from github.repository so the two cannot
+          # disagree, and so a connector whose app-name and repo differ (every
+          # one of them: "openapi" vs "atlan-openapi-app") still finds its claim.
+          app: ${{ github.event.repository.name }}
+
+  lease-tenant:
+    name: Tenant lease
+    needs: [discover-e2e, merge-e2e-image, sdk-head-recheck]
+    # `always()` here is load-bearing and is what makes the recheck fail-open. A
+    # job's `needs` gate is evaluated separately from its `if:`, and without a
+    # status-check function GitHub applies an implicit success() over every need
+    # — so a recheck job that died on infrastructure would SKIP the lease, and a
+    # skipped lease skips the install and greens the run vacuously. Lifting the
+    # implicit check and reading the OUTPUT instead means an absent answer (job
+    # failed, job skipped, output never written) leases exactly as before.
+    #
+    # Because always() lifts that implicit check, discover-e2e and
+    # merge-e2e-image have to be named explicitly; they were previously carried
+    # by it. Same shape and same reason as prepare-tenant and the e2e legs below.
+    if: |
+      always() &&
+      inputs.install-app-to-tenant &&
+      needs.discover-e2e.result == 'success' &&
+      needs.merge-e2e-image.result == 'success' &&
+      needs.sdk-head-recheck.outputs.superseded != 'true'
+    runs-on: ubuntu-latest
+    # Above the action's own 90-minute wait budget, which is now a budget for the
+    # WHOLE ordered set rather than per cloud — so this still bounds the job, and
+    # a run that queues for the full budget still reaches the script's own error
+    # (which names the holding run) instead of a bare "job cancelled after Nm".
     timeout-minutes: 100
     permissions:
       # Ref writes create and delete the lease ticket. Scoped to THIS job on
       # purpose: the long-running e2e legs below keep read-only contents, so the
       # write capability lives only in a job that runs no test code.
+      #
+      # A called workflow's permissions can only EQUAL or NARROW the caller's, so
+      # this declaration is a ceiling and not a grant: if the calling repo's
+      # `tests:` job has no `contents: write` — because it declares a narrower
+      # `permissions:` block, or because the repo default is read-only — the
+      # acquire below fails, by design and with an error naming the grant
+      # (FND-702). The canonical scaffolded tests.yaml declares the whole set for
+      # exactly this reason.
       contents: write
       # Tell a live holder from a dead one, which is what makes a cancelled run's
       # abandoned ticket self-healing.
       actions: read
     steps:
-      - name: Acquire the tenant lease
+      - name: Acquire the tenant leases
         uses: atlanhq/application-sdk/.github/actions/e2e-tenant-lease@main
         with:
           mode: acquire
           app: ${{ inputs.app-name }}
-          cloud: ${{ matrix.cloud }}
+          # The clouds prepare-tenant will install onto, from the same discovery
+          # call that built its matrix. Empty is the single-tenant fallback path
+          # and the action leases "default" for it, which is what prepare-tenant's
+          # own fallback leg (`cloud: ""`) verifies.
+          clouds: ${{ needs.discover-e2e.outputs.cloud-list }}
 
   # ── Install the app under test onto each cloud's tenant ──────────────────
   # One leg per CLOUD, not per suite × cloud: the installation is tenant-scoped
@@ -1462,18 +1568,32 @@ jobs:
     # Gated on lease-tenant having RUN, not on it having succeeded, and then each
     # leg confirms its OWN cloud's lease in its first step.
     #
-    # `needs.lease-tenant.result` is the matrix AGGREGATE, so `== 'success'` means
-    # "some cloud's lease succeeded", never "this leg's did". Observed live: one
-    # cloud's acquire failed on a transient TLS error and the aggregate then
-    # skipped the install for the two clouds whose leases HAD been taken — a run
-    # holding two tenants that installed onto neither.
+    # Since lease-tenant became a single ordered job (FND-646) its `.result` is
+    # exact rather than a matrix aggregate — but `!= 'skipped'` still has to
+    # stay, and now for a sharper reason than the one it was written for.
+    # Acquisition is all-or-nothing, so a FAILED lease means this run holds
+    # nothing; tightening this to `== 'success'` would SKIP the install, and the
+    # e2e legs deliberately tolerate a skipped prepare-tenant (see
+    # test_e2e_tolerates_skipped_but_not_failed_prepare). They would then run
+    # against whatever version the tenant happens to serve — the exact FND-31
+    # failure. Letting the install run and FAIL on its own lease check is what
+    # stops the legs.
+    #
+    # It was originally widened because `.result` was the matrix aggregate:
+    # `== 'success'` meant "some cloud's lease succeeded", never "this leg's
+    # did". Observed live — one cloud's acquire failed on a transient TLS error
+    # and the aggregate then skipped the install for the two clouds whose leases
+    # HAD been taken, a run holding two tenants that installed onto neither.
+    # Ordered acquisition removes that failure mode at source; the per-cloud
+    # verify step below stays anyway, because it is the only thing that makes the
+    # install's precondition true per TENANT rather than per job.
     #
     # `always()` is what makes the widening actually do anything, and it is easy
     # to omit: without a status-check function GitHub applies an implicit
     # success() over every `needs` entry and skips the job BEFORE this `if:` is
-    # consulted, so a failed lease leg would still skip the install everywhere
-    # and the per-cloud verify step below would never run. Same shape and same
-    # reason as the e2e legs' gate — see test_e2e_tolerates_skipped_but_not_failed_prepare.
+    # consulted, so a failed lease would still skip the install and the per-cloud
+    # verify step below would never run. Same shape and same reason as the e2e
+    # legs' gate.
     #
     # Because always() lifts that implicit success(), discover-e2e and
     # merge-e2e-image have to be named explicitly here; they were previously
@@ -1761,9 +1881,24 @@ jobs:
     # so the version check self-skips. A silently passing wrong-version run, from
     # the job added to make wrong-version runs impossible.
     needs:
-      [discover-e2e, build-e2e-image, merge-e2e-image, lease-tenant, prepare-tenant]
+      [
+        discover-e2e,
+        build-e2e-image,
+        merge-e2e-image,
+        sdk-head-recheck,
+        lease-tenant,
+        prepare-tenant,
+      ]
+    # The superseded clause is gated on the OUTPUT, never on the job result, and
+    # it has to be: a skipped lease-tenant is the benign value in the clauses
+    # below (it is the install-app-to-tenant:false path), so without this the
+    # legs would run against a tenant nobody installed onto with
+    # expected-app-version empty — a silently passing wrong-version run, the
+    # exact FND-31 failure. Reading the output also keeps a failed recheck
+    # fail-open: no answer means carry on (FND-701).
     if: |
       always() &&
+      needs.sdk-head-recheck.outputs.superseded != 'true' &&
       needs.discover-e2e.result == 'success' &&
       needs.discover-e2e.outputs.count != '0' &&
       (needs.lease-tenant.result == 'success' || needs.lease-tenant.result == 'skipped') &&
@@ -2115,17 +2250,23 @@ jobs:
   release-tenant:
     name: Release tenant lease (${{ matrix.cloud || 'default' }})
     needs: [discover-e2e, lease-tenant, prepare-tenant, e2e]
-    # Gated on lease-tenant having RUN, not on it having succeeded. `.result` on a
-    # matrix job is the aggregate, so `== 'success'` meant one cloud's acquire
-    # timing out skipped the release for EVERY cloud — including the legs that did
-    # acquire, whose leases would then wait for the next contender's reaper
-    # instead of being handed back. That directly contradicts this job's own
-    # reason for existing.
+    # Still a per-cloud MATRIX while the acquire is one ordered job (FND-646), and
+    # deliberately so: release cannot block, is ownership-checked, and is
+    # idempotent, so there is no hold-and-wait to remove here — and one leg per
+    # cloud keeps a single wedged DELETE from holding the others' tenants.
+    #
+    # Gated on lease-tenant having RUN, not on it having succeeded. When acquire
+    # was a matrix, `== 'success'` meant one cloud's acquire timing out skipped
+    # the release for EVERY cloud, including those that had acquired — their
+    # leases then waited for the next contender's reaper instead of being handed
+    # back. The ordered acquire hands its own leases back on the way out of a
+    # failure, so this is now a backstop rather than the primary path, but it must
+    # stay one: a lease job that dies outright releases nothing.
     #
     # Safe to widen because the release driver checks ownership before deleting:
-    # a leg that never acquired reads a lease that is not its own (or none at all)
-    # and no-ops. Not gated on the legs' outcome either — a failed leg must still
-    # give the tenant back.
+    # a leg for a cloud this run never held reads a lease that is not its own (or
+    # none at all) and no-ops. Not gated on the legs' outcome either — a failed
+    # leg must still give the tenant back.
     if: always() && needs.lease-tenant.result != 'skipped'
     strategy:
       fail-fast: false
@@ -2168,6 +2309,7 @@ jobs:
         discover-e2e,
         build-e2e-image,
         merge-e2e-image,
+        sdk-head-recheck,
         lease-tenant,
         prepare-tenant,
         e2e,
@@ -2296,6 +2438,13 @@ jobs:
           lease-tenant-result: ${{ needs.lease-tenant.result }}
           prepare-tenant-result: ${{ needs.prepare-tenant.result }}
           e2e-result: ${{ needs.e2e.result }}
+          # Explains a skipped matrix as a deliberate stand-down rather than the
+          # misconfiguration the matrix-skipped anomaly exists to catch. Empty
+          # (the recheck job skipped, or it failed and wrote no answer) reads as
+          # "not explained", which is the correct default: the anomaly is what
+          # stops a future re-wiring of the e2e `if` from greening the gate by
+          # skipping it (FND-701).
+          superseded: ${{ needs.sdk-head-recheck.outputs.superseded }}
 
       # Body only — this step emits no verdict; the completion step below takes
       # the gate's. Its CLI stays frozen: this script is checked out from the
@@ -2596,6 +2745,7 @@ jobs:
         discover-e2e,
         build-e2e-image,
         merge-e2e-image,
+        sdk-head-recheck,
         lease-tenant,
         prepare-tenant,
         e2e,
@@ -2639,6 +2789,13 @@ jobs:
           lease-tenant-result: ${{ needs.lease-tenant.result }}
           prepare-tenant-result: ${{ needs.prepare-tenant.result }}
           e2e-result: ${{ needs.e2e.result }}
+          # Explains a skipped matrix as a deliberate stand-down rather than the
+          # misconfiguration the matrix-skipped anomaly exists to catch. Empty
+          # (the recheck job skipped, or it failed and wrote no answer) reads as
+          # "not explained", which is the correct default: the anomaly is what
+          # stops a future re-wiring of the e2e `if` from greening the gate by
+          # skipping it (FND-701).
+          superseded: ${{ needs.sdk-head-recheck.outputs.superseded }}
 
       - name: Post unified test-summary comment on PR
         if: always() && github.event_name == 'pull_request'

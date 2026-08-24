@@ -17,6 +17,23 @@ does so cheaply:
 
 Exits 0 once every name in --name is 'completed' with a passing conclusion,
 1 if any concludes non-passing, 1 on timeout.
+
+Stopping early when the SHA stops mattering
+-------------------------------------------
+A check run that never appears is waited out in full — 130 minutes, by design,
+because a connector can legitimately take two hours to report. There is one case
+where that wait is knowably pointless: this run's SHA is no longer the head of
+its PR, and the dispatch guard therefore declined to dispatch for it at all
+(``e2e_dispatch_guard.py``, FND-696). Nothing will ever create the checks, so
+with ``--pr-number`` this stops as soon as it can see that, and exits 0.
+
+Zero, not one, and the reason is worth stating because "green without a verdict"
+is normally the bug: this is a green on a commit that is no longer under review,
+where no verdict is required from anyone. A red there would be a false alarm on
+an abandoned run — recurring, since a second push in quick succession is routine,
+and read by automation that treats a red gate as a real failure. The head
+commit's own run is entirely unaffected, and it is the only one whose gate can
+satisfy a required check.
 """
 
 from __future__ import annotations
@@ -30,6 +47,63 @@ import sys
 import time
 
 PASSING_CONCLUSIONS = {"success", "neutral", "skipped"}
+
+# This poll runs for up to 130 minutes and its only sign of life is the
+# per-attempt "waiting on checks" line. Python block-buffers stdout when it is a
+# pipe, which an Actions log always is, so without this the step shows nothing at
+# all until it finishes and then prints the whole history at once — a live gate
+# and a wedged one look identical (FND-696).
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
+
+
+class Superseded(Exception):
+    """The SHA being polled is no longer the head of its PR.
+
+    Raised rather than returned so it cannot be confused with a verdict: there is
+    no pass or fail for a commit nobody is going to merge, and the caller has to
+    handle it deliberately.
+    """
+
+    def __init__(self, head: str) -> None:
+        super().__init__(head)
+        self.head = head
+
+
+def pr_head_sha(repo: str, number: int) -> str | None:
+    """The head SHA the PR currently points at, or None if it could not be read.
+
+    None is "unknown", never "no head": an unreadable answer must leave the poll
+    exactly as it was, because the cost of being wrong here is abandoning the
+    wait for checks that were genuinely on their way.
+
+    Hence the SystemExit catch, which is the whole reason this is not a two-line
+    function. ``gh_api_conditional`` raises on any >=400 — correct for the poll
+    it was written for, where an unreadable check listing is a real failure, and
+    exactly wrong here: this read is an optimisation, so a missing
+    ``pull-requests: read`` grant would otherwise turn "stop waiting sooner" into
+    "kill the gate the first time it looks". A 200 whose body is not JSON raises
+    ``json.JSONDecodeError`` from the same parser; swallow that too, matching the
+    dispatch-side fail-open, so a proxy HTML page cannot fail the required gate.
+    """
+    try:
+        status_code, _etag, body = gh_api_conditional(f"repos/{repo}/pulls/{number}")
+    except (SystemExit, json.JSONDecodeError) as unreadable:
+        print(
+            f"::warning::could not read pull request #{number} ({unreadable}); "
+            "continuing to wait."
+        )
+        return None
+    if status_code != 200 or not isinstance(body, dict):
+        print(
+            f"::warning::could not read pull request #{number} "
+            f"(HTTP {status_code}); continuing to wait."
+        )
+        return None
+    head = body.get("head")
+    if not isinstance(head, dict) or not isinstance(head.get("sha"), str):
+        return None
+    return head["sha"].strip().lower()
 
 
 def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
@@ -106,6 +180,46 @@ def gh_api_conditional(path: str, *, etag: str | None = None):
     return status_code, new_etag, body_json
 
 
+def check_run_age_key(check_run: dict) -> tuple[str, int]:
+    """Sort key that orders same-named check runs oldest-first.
+
+    ``started_at`` is the semantic answer and GitHub renders it as a Zulu
+    ISO-8601 stamp, which sorts correctly as a plain string. It is the primary
+    key rather than ``id`` because it is the field that means "when this attempt
+    began"; ``id`` only breaks ties (same-second creations, or a missing
+    ``started_at``), where its monotonicity is what makes it usable at all.
+    """
+    started_at = check_run.get("started_at")
+    check_id = check_run.get("id")
+    return (
+        started_at if isinstance(started_at, str) else "",
+        check_id if isinstance(check_id, int) else 0,
+    )
+
+
+def remember_newest(latest: dict[str, dict], check_run: dict) -> None:
+    """Keep only the newest check run per name in ``latest``.
+
+    A SHA can carry SEVERAL check runs under one name: create_check_run.py POSTs
+    a new one per dispatch rather than PATCHing the old one, so every re-dispatch
+    for the same commit — the supported way to retry a failed connector leg, see
+    e2e_dispatch_guard.py's ``is_my_run`` — leaves the previous attempt's check
+    behind alongside the new one.
+
+    This used to be a bare ``latest[name] = check_run``, i.e. whichever entry the
+    API happened to list last. The listing order of that endpoint is not
+    documented, so on a retried SHA the gate could resolve to the SUPERSEDED
+    attempt and report the old failure against a leg that had since passed (or
+    the reverse). Newest wins, explicitly.
+    """
+    name = check_run["name"]
+    incumbent = latest.get(name)
+    if incumbent is None or check_run_age_key(check_run) >= check_run_age_key(
+        incumbent
+    ):
+        latest[name] = check_run
+
+
 def list_all_check_runs(repo: str, sha: str) -> list[dict]:
     """Full, uncached fetch of every check run on `sha` across all pages.
 
@@ -145,10 +259,15 @@ def wait_for_checks(
     *,
     interval_seconds: int = 30,
     timeout_seconds: int = 7800,
+    pr_number: int | None = None,
     sleep=time.sleep,
 ) -> bool:
     """Poll until every name in `expected_names` has a 'completed' check run
-    on `sha`, or the timeout elapses. Returns True iff all conclusions pass."""
+    on `sha`, or the timeout elapses. Returns True iff all conclusions pass.
+
+    Raises `Superseded` when `pr_number` is given and `sha` has stopped being
+    that PR's head while checks are still missing — nothing will create them.
+    """
     path = f"repos/{repo}/commits/{sha}/check-runs?per_page=100"
     etag: str | None = None
     latest: dict[str, dict] = {}
@@ -167,7 +286,7 @@ def wait_for_checks(
             check_runs = list_all_check_runs(repo, sha)
             for check_run in check_runs:
                 if check_run.get("name") in expected_names:
-                    latest[check_run["name"]] = check_run
+                    remember_newest(latest, check_run)
         else:
             status_code, etag, body = gh_api_conditional(path, etag=etag)
             if status_code == 200 and body is not None:
@@ -188,7 +307,7 @@ def wait_for_checks(
                     check_runs = list_all_check_runs(repo, sha)
                 for check_run in check_runs:
                     if check_run.get("name") in expected_names:
-                        latest[check_run["name"]] = check_run
+                        remember_newest(latest, check_run)
             elif status_code != 304:
                 raise SystemExit(
                     f"::error::unexpected status {status_code} polling {path}"
@@ -202,6 +321,19 @@ def wait_for_checks(
         ]
         if not missing and not pending:
             break
+
+        # Only ever asked about a check that is MISSING, never one that is merely
+        # pending: a pending check has a connector run behind it that will report,
+        # and abandoning that wait would throw away a real verdict.
+        #
+        # Attempt 1 is where this normally fires — the checks are created by the
+        # dispatch job this one `needs`, so on the head commit they already exist
+        # by the first poll. The periodic re-ask afterwards covers the push that
+        # lands mid-wait, at one call per five minutes rather than one per poll.
+        if missing and pr_number and (attempt == 1 or attempt % 10 == 0):
+            head = pr_head_sha(repo, pr_number)
+            if head is not None and head != sha.strip().lower():
+                raise Superseded(head)
 
         print(
             f"[{attempt}/{max_attempts}] waiting on checks — missing={missing} pending={pending}"
@@ -280,6 +412,15 @@ def main(argv: list[str] | None = None) -> int:
         default=7800,
         help="Overall poll budget (default 7800s = 130min, safely above the 120min connector job ceiling).",
     )
+    parser.add_argument(
+        "--pr-number",
+        default="",
+        help="The PR whose head --sha is, on the pull_request path. Given, a "
+        "poll for checks that will never exist because this SHA was superseded "
+        "stops early instead of waiting out the whole budget. Empty (the "
+        "merge_group path) keeps the previous behaviour: a queue entry's SHA is "
+        "not any PR's head, so there is nothing for it to fall behind.",
+    )
     args = parser.parse_args(argv)
 
     if args.names_json is not None:
@@ -292,13 +433,24 @@ def main(argv: list[str] | None = None) -> int:
     else:
         names = args.names
 
-    ok = wait_for_checks(
-        args.repo,
-        args.sha,
-        names,
-        interval_seconds=args.interval_seconds,
-        timeout_seconds=args.timeout_seconds,
-    )
+    pr_number = args.pr_number.strip()
+    try:
+        ok = wait_for_checks(
+            args.repo,
+            args.sha,
+            names,
+            interval_seconds=args.interval_seconds,
+            timeout_seconds=args.timeout_seconds,
+            pr_number=int(pr_number) if pr_number.isdigit() else None,
+        )
+    except Superseded as superseded:
+        print(
+            f"::notice::not waiting for connector checks on {args.sha[:8]}: it is "
+            f"no longer the head of PR #{pr_number} ({superseded.head[:8]} is), so "
+            "no dispatch was made for it and no check will ever appear. The head "
+            "commit's own run carries the verdict."
+        )
+        return 0
     return 0 if ok else 1
 
 

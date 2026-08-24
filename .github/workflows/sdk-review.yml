@@ -391,18 +391,30 @@ jobs:
       # failed SDK Review would dispatch the same session id into a sandbox that
       # mothership may still have in its DB — causing the same resume-of-a-dead-
       # session failure the RUN_ID addition fixed for multi-trigger cases.
+      #
+      # Kept SHORT on purpose. Mothership names the sandbox after this id, and
+      # that name is a DNS label — `/sandbox/create` rejects anything over 63
+      # chars. This used to carry `${REPO_FULL_NAME//\//-}`, which put the base
+      # at 62 and every `-retry1` id at 69: attempt 1 booted, and every
+      # re-dispatch the lane authorised died on sandbox create instead of
+      # reviewing (FND-677, seen on #3326). The repo name bought nothing the
+      # dispatch payload does not already carry — it sends
+      # `repositories: ["atlanhq/application-sdk"]` and a `source_id` of
+      # `<repo>#<pr>` — so it is gone, leaving ~18 chars of headroom for the
+      # retry suffix. `attempt_session_id()` enforces the 63-char cap as an
+      # invariant, and a test asserts this format still fits without it having
+      # to truncate. Do not lengthen this without re-reading that test.
       - name: Compute mothership session id
         id: session
         if: steps.lock_gate.outputs.decision != 'skip'
         env:
           PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
           HEAD_SHA_SHORT: ${{ steps.pr.outputs.head_sha_short }}
-          REPO_FULL_NAME: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          echo "session_id=sdk-review-${REPO_FULL_NAME//\//-}-${PR_NUMBER}-${HEAD_SHA_SHORT}-${RUN_ID}-${RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+          echo "session_id=sdk-review-${PR_NUMBER}-${HEAD_SHA_SHORT}-${RUN_ID}-${RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
 
       - name: Post 'review starting' notice to PR
         id: starter
@@ -628,10 +640,13 @@ jobs:
       # `final_err_msg`) are a contract: `sdk_review_verdict_gate.py`, the
       # starter-comment stamper and `sdk_review_approve.py` all read them.
       #
-      # The step can boot TWO sandboxes: it re-dispatches once on a different
-      # main model when the first dies on a hard error a model swap could
-      # survive (FND-641, ported in FND-643). `final_cost` is then the sum, and
-      # the step summary carries the per-attempt trail.
+      # The step can boot TWO sandboxes. It re-dispatches once, on one of
+      # three classes: a hard error a model swap could survive (FND-641, ported
+      # in FND-643) goes to a DIFFERENT main model; a clean `status=completed`
+      # that delivered no verdict (FND-645) and a dropped RPC to the sandbox
+      # (FND-647) re-run the SAME one, because neither is a model fault. All
+      # three fire only on a confirmed-empty verdict read. `final_cost` is then
+      # the sum, and the step summary carries the per-attempt trail.
       - name: Dispatch to mothership Rover Direct API
         id: dispatch
         if: steps.lock_gate.outputs.decision != 'skip'
@@ -709,9 +724,10 @@ jobs:
       # and masking the real outcome with a teardown error helps nobody.
       #
       # SESSION_ID is the BASE id. A run can boot more than one sandbox (the
-      # dispatcher re-dispatches once on a different model when the first dies),
-      # and each attempt gets its own derived id, so the script walks the same
-      # ladder rather than trusting an id this step cannot know.
+      # dispatcher re-dispatches once when the first delivers nothing — on the
+      # same model or a different one, depending on the fault), and each attempt
+      # gets its own derived id, so the script walks the same ladder rather than
+      # trusting an id this step cannot know.
       - name: Terminate mothership sandbox on cancel
         if: cancelled() && steps.session.outputs.session_id != ''
         env:

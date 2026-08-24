@@ -122,6 +122,24 @@ class TestWorkflowGuards:
         )
         assert "chore(deps): bound the refreshed locks" in self.job["if"]
 
+    def test_the_bound_step_pins_the_version_parser_it_needs(self):
+        """The runner image is not a promise.
+
+        The driver's rollback gate needs PEP 440 parsing, and `python3` on a bare
+        runner is not guaranteed to have `packaging` importable. Without it the
+        gate reports every upgrade as a regression, so the dependency is declared
+        at the call site rather than assumed — pinned, and `--no-project` so the
+        bound never waits on a full dev sync.
+        """
+        steps = self.job["steps"]
+        bound_step = next(
+            s for s in steps if s.get("name") == "Bound the refreshed locks"
+        )
+        run = bound_step["run"]
+        assert "bound_lock_branch.py" in run
+        assert "--with 'packaging==" in run, run
+        assert "--no-project" in run, run
+
     def test_the_lane_is_scoped_to_the_lock_refresh_branch(self):
         # Widening this to `renovate/**` would put the bound on the single-package
         # lanes, where a deliberately chosen first-party version has no business
@@ -320,3 +338,25 @@ class TestExportRequirements:
         )
         orchestrator.export_requirements(repo)
         assert (repo / "requirements.txt").read_text() == "bounded==2.0.0\n"
+
+
+class TestOwnsItsCommit:
+    """This script pushes its own commit, and the driver has to be told so.
+
+    Without `--caller-owns-commit` the driver treats "the bound admits nothing" as
+    the postUpgradeTasks substitution risk and exits non-zero, so this script
+    pushes nothing and Renovate's unbounded commit stays on the branch. That is
+    how #3290 merged a 4-hour-old boto3.
+    """
+
+    def test_the_driver_is_told_that_this_script_owns_the_commit(self, monkeypatch):
+        seen: list[list[str]] = []
+
+        def fake_main(argv):
+            seen.append(argv)
+            return 0
+
+        monkeypatch.setattr(orchestrator.bounded, "main", fake_main)
+        project = orchestrator.PROJECTS[0]
+        assert orchestrator.bound_project(project, "P3D", "origin/main", Path(".")) == 0
+        assert "--caller-owns-commit" in seen[0], seen[0]

@@ -131,6 +131,27 @@ def _install_path(
     ]
 
 
+def stood_down(superseded: str) -> bool:
+    """Did the run deliberately abandon e2e because its SDK commit is stale?
+
+    The connector-side recheck (``e2e-dispatch-recheck``, FND-701) skips
+    ``lease-tenant`` and the e2e legs when the application-sdk commit under test
+    is no longer the head of the PR that dispatched the run. That produces the
+    exact shape the matrix-skipped anomaly below exists to catch — a successful
+    discovery with a skipped matrix and no install-path failure to explain it —
+    so without an explanation the gate would red, and ``report-to-sdk`` would
+    mirror ``conclusion=failure`` onto the dispatching SDK commit: "your change
+    broke the connector" for a run that was deliberately stood down. Precisely
+    the misattribution the cancelled/failure split exists to prevent (FND-218).
+
+    Anything other than the literal "true" is False, and the anomaly still fires.
+    A stand-down has to be positively asserted by the job that decided it; an
+    absent, empty or unparseable value means the skip is still unexplained, which
+    is the state worth reddening.
+    """
+    return superseded.strip().lower() == "true"
+
+
 def evaluate(
     unit: str,
     integration: str,
@@ -142,6 +163,7 @@ def evaluate(
     merge_e2e_image: str = "skipped",
     prepare_tenant: str = "skipped",
     lease_tenant: str = "skipped",
+    superseded: str = "false",
 ) -> list[str]:
     """Return human-readable failure reasons (empty ⇒ the gate passes).
 
@@ -197,8 +219,14 @@ def evaluate(
     # Suppressed when an install-path job already failed: that IS the explanation
     # for the skip, and it is reported above with the failing job named. Firing
     # both would bury the cause under the symptom.
+    #
+    # Suppressed for the same reason by a stand-down (FND-701): the run skipped
+    # its own e2e because the SDK commit it was dispatched for is no longer the
+    # head of its PR. That is an explained skip, and it is asserted by the job
+    # that decided it rather than inferred from the shape of the results.
     if (
-        discover_e2e == "success"
+        not stood_down(superseded)
+        and discover_e2e == "success"
         and e2e == "skipped"
         and all(
             result in _OK_OPTIONAL
@@ -224,6 +252,7 @@ def cancelled_only(
     merge_e2e_image: str = "skipped",
     prepare_tenant: str = "skipped",
     lease_tenant: str = "skipped",
+    superseded: str = "false",
 ) -> bool:
     """True when at least one job was cancelled and nothing actually failed.
 
@@ -241,8 +270,13 @@ def cancelled_only(
     # gate error that is never cancellation-attributable, so its presence means
     # the block is not a pure cancellation — spell it "failure" and surface the
     # misconfiguration, never "just re-run".
+    #
+    # A stand-down is exempt for the same reason it is exempt above: it is not an
+    # anomaly at all, so it must not force the "never a pure cancellation" answer
+    # and relabel a genuinely cancelled run as a failure.
     if (
-        discover_e2e == "success"
+        not stood_down(superseded)
+        and discover_e2e == "success"
         and e2e == "skipped"
         and all(
             result in _OK_OPTIONAL
@@ -320,6 +354,7 @@ def _e2e_status(
     merge_e2e_image: str = "skipped",
     prepare_tenant: str = "skipped",
     lease_tenant: str = "skipped",
+    superseded: str = "false",
 ) -> str:
     if discover_e2e == "skipped":
         return "⊘ Skipped — add `e2e` label to trigger"
@@ -344,6 +379,12 @@ def _e2e_status(
             return f"❌ {row} failed"
     if e2e == "success":
         return "✅ Passed"
+    # Before the anomaly row, and mirroring the order in `evaluate`: a stand-down
+    # produces exactly the anomaly's shape, so whichever check runs first decides
+    # what the reader is told. "Matrix skipped despite discovered suites" would
+    # send them looking for a workflow misconfiguration that is not there.
+    if stood_down(superseded) and e2e == "skipped":
+        return "⊘ Stood down — superseded SDK commit"
     if discover_e2e == "success" and e2e == "skipped":
         return "❌ Matrix skipped despite discovered suites"
     if e2e == "skipped":
@@ -364,6 +405,7 @@ def render(
     merge_e2e_image: str = "skipped",
     prepare_tenant: str = "skipped",
     lease_tenant: str = "skipped",
+    superseded: str = "false",
 ) -> dict[str, str]:
     """Compute the gate's outputs: pass/fail + the display status strings.
 
@@ -394,6 +436,7 @@ def render(
         merge_e2e_image,
         prepare_tenant,
         lease_tenant,
+        superseded,
     )
     blocked_by_cancellation = errors and cancelled_only(
         unit,
@@ -406,6 +449,7 @@ def render(
         merge_e2e_image,
         prepare_tenant,
         lease_tenant,
+        superseded,
     )
     return {
         "passed": "true" if not errors else "false",
@@ -427,6 +471,7 @@ def render(
             merge_e2e_image,
             prepare_tenant,
             lease_tenant,
+            superseded,
         ),
         "overall-status": (
             "✅ All passed"
@@ -480,6 +525,15 @@ def main(argv: list[str] | None = None) -> int:
         help="needs.prepare-tenant.result",
     )
     parser.add_argument("--e2e", required=True, help="needs.e2e.result")
+    parser.add_argument(
+        "--superseded",
+        default="false",
+        help='needs.sdk-head-recheck.outputs.superseded. "true" explains a '
+        "skipped e2e matrix as a deliberate stand-down rather than the "
+        "misconfiguration the matrix-skipped anomaly exists to catch. Optional "
+        'and defaulting to "false" so callers pinned at @main that have not '
+        "wired the job keep the previous behaviour.",
+    )
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
     # Annotate each failure reason (shows on the gate step regardless of the
@@ -495,6 +549,7 @@ def main(argv: list[str] | None = None) -> int:
         args.merge_e2e_image,
         args.prepare_tenant,
         args.lease_tenant,
+        args.superseded,
     ):
         print(f"::error::{reason}", file=sys.stderr)
 
@@ -511,6 +566,7 @@ def main(argv: list[str] | None = None) -> int:
         args.merge_e2e_image,
         args.prepare_tenant,
         args.lease_tenant,
+        args.superseded,
     ):
         print(f"::error::{_CANCELLED_GUIDANCE}", file=sys.stderr)
 
@@ -525,6 +581,7 @@ def main(argv: list[str] | None = None) -> int:
         args.merge_e2e_image,
         args.prepare_tenant,
         args.lease_tenant,
+        args.superseded,
     ).items():
         print(f"{key}={value}")
     return 0

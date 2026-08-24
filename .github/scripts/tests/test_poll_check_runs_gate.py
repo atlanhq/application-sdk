@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -463,3 +464,352 @@ def test_main_rejects_both_name_and_names_json(monkeypatch):
         assert False, "expected SystemExit (argparse mutually exclusive)"
     except SystemExit:
         pass
+
+
+# --- stopping early when the SHA stops mattering ---------------------------
+#
+# A missing check is waited out for the full 130min, because a connector can
+# legitimately take two hours to report. The one case where that wait is
+# knowably pointless: the dispatch guard declined to dispatch because this SHA
+# is no longer the PR's head, so nothing will ever create the checks (FND-696).
+# These tests pin the boundary — the wait ends only for a MISSING check on a
+# superseded SHA, and never on a doubt.
+
+_HEAD = "d47789e0"
+
+
+def _route(monkeypatch, *, pr_answer, check_runs):
+    """Answer the PR read and the check-run listing separately."""
+    seen = {"pulls": 0}
+
+    def fake_run(cmd, **kwargs):
+        url = cmd[-1]
+        if "/pulls/" in url:
+            seen["pulls"] += 1
+            return pr_answer
+        return _http_response(200, '"v1"', _check_runs_body(check_runs))
+
+    monkeypatch.setattr(mod, "run", fake_run)
+    return seen
+
+
+def test_a_superseded_sha_stops_waiting(monkeypatch):
+    _route(
+        monkeypatch,
+        pr_answer=_http_response(200, None, {"head": {"sha": _HEAD}}),
+        check_runs=[],
+    )
+    with pytest.raises(mod.Superseded) as raised:
+        mod.wait_for_checks(
+            REPO, SHA, NAMES, pr_number=3322, timeout_seconds=7800, sleep=lambda s: None
+        )
+    assert raised.value.head == _HEAD
+
+
+def test_a_superseded_sha_exits_zero_rather_than_failing(monkeypatch):
+    """Green without a verdict is normally the bug; here the commit is no longer
+    under review, so no verdict is required — and a red on an abandoned run is a
+    false alarm that automation reads as a real failure."""
+    _route(
+        monkeypatch,
+        pr_answer=_http_response(200, None, {"head": {"sha": _HEAD}}),
+        check_runs=[],
+    )
+    assert (
+        mod.main(
+            [
+                "--repo",
+                REPO,
+                "--sha",
+                SHA,
+                "--names-json",
+                json.dumps(NAMES),
+                "--pr-number",
+                "3322",
+            ]
+        )
+        == 0
+    )
+
+
+def test_the_head_sha_keeps_waiting(monkeypatch):
+    _route(
+        monkeypatch,
+        pr_answer=_http_response(200, None, {"head": {"sha": SHA}}),
+        check_runs=[],
+    )
+    ok = mod.wait_for_checks(
+        REPO,
+        SHA,
+        NAMES,
+        pr_number=3322,
+        interval_seconds=1,
+        timeout_seconds=2,
+        sleep=lambda s: None,
+    )
+    assert ok is False
+
+
+@pytest.mark.parametrize(
+    "pr_answer",
+    [
+        _http_response(404, None, {"message": "Not Found"}),
+        _http_response(403, None, {"message": "Resource not accessible"}),
+        _http_response(500, None, {"message": "boom"}),
+        _http_response(200, None, {"number": 3322}),
+        _completed_raw(200, "<html>proxy error</html>"),
+    ],
+)
+def test_an_unreadable_pr_head_keeps_waiting(monkeypatch, pr_answer):
+    """Unknown is not superseded. Being wrong here abandons the wait for checks
+    that were genuinely on their way, which loses a real verdict."""
+    _route(monkeypatch, pr_answer=pr_answer, check_runs=[])
+    ok = mod.wait_for_checks(
+        REPO,
+        SHA,
+        NAMES,
+        pr_number=3322,
+        interval_seconds=1,
+        timeout_seconds=2,
+        sleep=lambda s: None,
+    )
+    assert ok is False
+
+
+def test_a_pending_check_is_never_abandoned(monkeypatch):
+    """The distinction that matters. A check that EXISTS has a connector run
+    behind it that will report; only a check that was never created can be known
+    to be never coming. A superseded SHA whose checks are all present must still
+    be waited out, or a real verdict is thrown away."""
+    seen = _route(
+        monkeypatch,
+        pr_answer=_http_response(200, None, {"head": {"sha": _HEAD}}),
+        check_runs=[{"name": n, "status": "in_progress"} for n in NAMES],
+    )
+    ok = mod.wait_for_checks(
+        REPO,
+        SHA,
+        NAMES,
+        pr_number=3322,
+        interval_seconds=1,
+        timeout_seconds=2,
+        sleep=lambda s: None,
+    )
+    assert ok is False
+    assert seen["pulls"] == 0, "a pending check must not even ask about the head"
+
+
+def test_no_pr_number_never_asks(monkeypatch):
+    """The merge_group path, unchanged: a queue entry's SHA is not any PR's head,
+    so asking would spend a call to learn that a 404 means "carry on"."""
+    seen = _route(
+        monkeypatch,
+        pr_answer=_http_response(200, None, {"head": {"sha": _HEAD}}),
+        check_runs=[],
+    )
+    ok = mod.wait_for_checks(
+        REPO, SHA, NAMES, interval_seconds=1, timeout_seconds=2, sleep=lambda s: None
+    )
+    assert ok is False
+    assert seen["pulls"] == 0
+
+
+def test_the_head_is_re_checked_periodically_not_every_poll(monkeypatch):
+    """A push can land mid-wait, so the question is asked again — but at one call
+    per five minutes, not one per poll: this token's budget is 1000 requests an
+    hour for the whole repository."""
+    seen = _route(
+        monkeypatch,
+        pr_answer=_http_response(200, None, {"head": {"sha": SHA}}),
+        check_runs=[],
+    )
+    mod.wait_for_checks(
+        REPO,
+        SHA,
+        NAMES,
+        pr_number=3322,
+        interval_seconds=1,
+        timeout_seconds=25,
+        sleep=lambda s: None,
+    )
+    # Attempt 1, then every tenth: 1, 10, 20 out of 25 attempts.
+    assert seen["pulls"] == 3
+
+
+# --- wiring: the caller has to pass it, and be allowed to ------------------
+
+
+def _connector_gate() -> dict:
+    workflow = Path(__file__).resolve().parents[2] / "workflows" / "pull_request.yaml"
+    return yaml.safe_load(workflow.read_text(encoding="utf-8"))["jobs"][
+        "connector-gate"
+    ]
+
+
+def _poll_step(job: dict) -> dict:
+    for step in job["steps"]:
+        if "poll_check_runs_gate.py" in str(step.get("run", "")):
+            return step
+    raise AssertionError("connector-gate no longer polls check runs")
+
+
+def test_the_gate_passes_the_pr_number_from_the_event() -> None:
+    """From the event, not an input: the number has to belong to the same PR as
+    the SHA being polled, or the early exit would fire against a stranger's
+    commit. Empty on merge_group, which is what leaves that path unchanged."""
+    step = _poll_step(_connector_gate())
+    assert step["env"]["PR_NUMBER"] == "${{ github.event.pull_request.number }}"
+    assert "--pr-number" in step["run"], (
+        "without the flag the early exit is silently off and a superseded run "
+        "waits out the full 130min for checks nobody will ever create"
+    )
+
+
+def test_the_gate_may_read_the_pull_request() -> None:
+    """A job-level permissions block REPLACES the workflow default rather than
+    merging with it, so dropping this does not fail loudly — the read 403s, the
+    poll warns, and it waits the full budget exactly as it used to."""
+    assert _connector_gate()["permissions"]["pull-requests"] == "read"
+
+
+# --- newest-wins among same-named check runs ------------------------------
+#
+# A retried commit carries MORE THAN ONE check run per name: create_check_run.py
+# POSTs a fresh one per dispatch instead of PATCHing the previous attempt, so
+# re-running the claiming run (the supported same-commit retry — see
+# e2e_dispatch_guard.py's is_my_run) leaves the old attempt's check alongside the
+# new one. The gate used to keep whichever the API listed LAST, and that
+# endpoint's ordering is undocumented, so the verdict it reported was a coin
+# flip between the two attempts. Both listing orders are pinned below, because
+# either one alone passes with the broken implementation half the time.
+
+STALE_FAIL = {
+    "name": NAMES[0],
+    "status": "completed",
+    "conclusion": "failure",
+    "started_at": "2026-08-21T00:53:41Z",
+    "id": 100,
+}
+FRESH_PASS = {
+    "name": NAMES[0],
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-08-21T01:41:00Z",
+    "id": 200,
+}
+OTHER_LEG_PASS = {
+    "name": NAMES[1],
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-08-21T01:41:00Z",
+    "id": 201,
+}
+
+
+@pytest.mark.parametrize(
+    "newest_first", [False, True], ids=["oldest-first", "newest-first"]
+)
+def test_wait_for_checks_keeps_the_newest_of_two_same_named_checks(
+    monkeypatch, newest_first
+):
+    listing = [FRESH_PASS, STALE_FAIL] if newest_first else [STALE_FAIL, FRESH_PASS]
+    monkeypatch.setattr(
+        mod,
+        "run",
+        lambda cmd, **kw: _http_response(
+            200, '"v1"', _check_runs_body([*listing, OTHER_LEG_PASS])
+        ),
+    )
+
+    assert (
+        mod.wait_for_checks(REPO, SHA, NAMES, sleep=lambda s: None) is True
+    ), "the superseded attempt's failure was reported over the retry that passed"
+
+
+@pytest.mark.parametrize(
+    "newest_first", [False, True], ids=["oldest-first", "newest-first"]
+)
+def test_wait_for_checks_does_not_let_a_stale_pass_mask_a_fresh_failure(
+    monkeypatch, newest_first
+):
+    """The other direction, which matters more: newest-wins must not have been
+    implemented as "prefer the passing one"."""
+    stale_pass = {**STALE_FAIL, "conclusion": "success"}
+    fresh_fail = {**FRESH_PASS, "conclusion": "failure"}
+    listing = [fresh_fail, stale_pass] if newest_first else [stale_pass, fresh_fail]
+    monkeypatch.setattr(
+        mod,
+        "run",
+        lambda cmd, **kw: _http_response(
+            200, '"v1"', _check_runs_body([*listing, OTHER_LEG_PASS])
+        ),
+    )
+
+    assert (
+        mod.wait_for_checks(REPO, SHA, NAMES, sleep=lambda s: None) is False
+    ), "a superseded pass masked the retry's failure"
+
+
+def test_wait_for_checks_waits_when_the_newest_attempt_is_still_running(monkeypatch):
+    """A concluded older attempt must not satisfy the gate while the retry that
+    superseded it is still in flight — that declares a verdict from a run nobody
+    is waiting on any more.
+
+    The stale attempt is the PASSING one and is listed last, so the old
+    last-wins code returns True here immediately. Making it the failing one
+    instead would give False either way and prove nothing.
+    """
+    stale_pass = {**STALE_FAIL, "conclusion": "success"}
+    running_retry = {
+        "name": NAMES[0],
+        "status": "in_progress",
+        "started_at": "2026-08-21T01:41:00Z",
+        "id": 200,
+    }
+    monkeypatch.setattr(
+        mod,
+        "run",
+        lambda cmd, **kw: _http_response(
+            200, '"v1"', _check_runs_body([running_retry, stale_pass, OTHER_LEG_PASS])
+        ),
+    )
+
+    assert (
+        mod.wait_for_checks(
+            REPO,
+            SHA,
+            NAMES,
+            interval_seconds=1,
+            timeout_seconds=2,
+            sleep=lambda s: None,
+        )
+        is False
+    ), "a superseded pass satisfied the gate while the retry was still running"
+
+
+def test_check_run_age_key_breaks_ties_on_id_and_tolerates_no_timestamp():
+    same_second_old = {"name": NAMES[0], "started_at": "2026-08-21T01:41:00Z", "id": 1}
+    same_second_new = {"name": NAMES[0], "started_at": "2026-08-21T01:41:00Z", "id": 2}
+    assert mod.check_run_age_key(same_second_new) > mod.check_run_age_key(
+        same_second_old
+    )
+    # A check run with no started_at must still be orderable rather than blow up
+    # the whole poll on a TypeError comparing None to str.
+    assert mod.check_run_age_key({"name": NAMES[0], "id": 5}) == ("", 5)
+    assert mod.check_run_age_key({"name": NAMES[0]}) == ("", 0)
+
+
+def test_remember_newest_is_the_only_way_latest_is_populated():
+    """Guards the fix itself. Every behavioural test above still passes if only
+    ONE of the two assignment sites is converted, so a future edit that
+    re-introduces a bare ``latest[name] = check_run`` in either branch would
+    silently restore the coin flip."""
+    source = (Path(__file__).parent.parent / "poll_check_runs_gate.py").read_text()
+    poll_body = source.split("def wait_for_checks(", 1)[1]
+    assert "latest[check_run[" not in poll_body, (
+        "wait_for_checks assigns into `latest` directly again — route it through "
+        "remember_newest() so same-named check runs stay newest-wins"
+    )
+    assert (
+        poll_body.count("remember_newest(latest, check_run)") == 2
+    ), "both the conditional-GET and the full-pagination branch must dedupe"

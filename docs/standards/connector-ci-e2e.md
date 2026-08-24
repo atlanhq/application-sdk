@@ -53,6 +53,170 @@ than cancelling it (`cancel-in-progress: false`). That is deliberate —
 cancelling mid-run abandons a live Automation Engine run and leaves tenant state
 behind — and it is a separate decision from the gating above.
 
+### One dispatch per commit, however many events GitHub sends
+
+GitHub can emit several `pull_request` events for one head SHA. Observed on
+PR #3306: `opened`, then `labeled e2e` **twice**, one second apart — three
+events, one commit, three full `PR Checks` runs, and three independent
+dispatches into the same connector. Those three connector runs then fought over
+the same three cloud tenants: one ran the suite in ten minutes, the other two
+split the freed leases between them and blocked on each other for the whole
+90-minute wait budget (FND-646).
+
+No workflow `if:` can tell two identical `labeled` events apart, so `e2e-apps`
+(`wait-mode: callback`) claims a dispatch slot before it dispatches:
+
+* One ref per commit and app — `refs/e2e-dispatch/<app>/<sha>`, created by an
+  atomic CAS. `POST /git/refs` returns 422 when the ref exists, and exactly one
+  of N simultaneous callers sees 201. Same primitive as the `(app, cloud)`
+  tenant lease.
+* A run that loses creates **no check run** and dispatches nothing. It stays
+  green: the verdict for that commit is the single `Connector E2E run / <app>`
+  check the winner created, and every duplicate run's own Connector Tests Gate
+  polls that same check and reports the same answer.
+* **Re-running the dispatch job still re-dispatches.** The claim is owned by a
+  *run*, not a run attempt, so a re-run of the run that claimed it proceeds.
+* A claim whose run died before dispatching is reclaimed by the next contender,
+  so a crashed dispatcher cannot leave a commit with no e2e.
+* Every failure of the guard itself — no permission, a rate limit, an
+  unreadable answer — **dispatches anyway** with a warning. A commit whose e2e
+  silently never ran is far worse than a duplicate, which is only the
+  pre-existing behaviour.
+
+Duplicate `PR Checks` runs still appear, and each still pays for its base-image
+build. That is accepted: it is cheap and it never reaches a tenant.
+
+Explicitly rejected: `concurrency: cancel-in-progress` on the dispatching
+workflow. Once the dispatch has fired it achieves nothing — the dispatch is
+fire-and-forget, so cancelling the SDK-side run orphans the connector run it
+already started rather than stopping it, and a cancelled connector run is not
+even safe, because `prepare-tenant` carries `if: always()` and finishes
+installing onto the tenants it had already leased on its way out.
+
+That is not an argument that cancellation *never* helps, and the section below
+is the counter-example: for the ~8 minutes a run spends building the base image
+before it dispatches, cancelling it would have stopped the fan-out outright. It
+is still not the lever to reach for there — a run cancelled between creating its
+check run and dispatching leaves a check nothing will ever complete, and a
+queueing group holds exactly ONE pending run, so a third arrival is evicted with
+no log at all (FND-218). The head check below buys the same tenant time without
+either hazard.
+
+### No dispatch for a commit the PR has moved past
+
+The claim above keys on the SHA, which makes it blind by construction to the
+*sequential* duplicate: commit A's `PR Checks` run is still working its way
+towards the dispatch when commit B lands. Two SHAs, two uncontested claims, two
+full fan-outs — nothing duplicated in the CAS's terms, everything duplicated in
+the tenants'. The lease then behaves exactly as advertised and **queues**, so the
+head commit waits out the obsolete commit's entire install-plus-legs cycle. On
+PR #3322 that was 3m38s, 10m12s and 12m of pure lease wait across three
+connectors, all of it behind a commit already superseded by a bot push 59
+seconds later (FND-696).
+
+So the guard also asks whether `check-sha` is still the head of the PR it came
+from, and skips if it is not:
+
+* **One API call, on the `pull_request` path only.** A merge-queue entry's SHA is
+  not any PR's head and cannot fall behind, so `--pr-number` is empty there and
+  the check does not run.
+* **Skip, not cancel.** At that point the stale run has not dispatched yet, so
+  there is nothing to cancel — and cancelling a connector run that *has* started
+  is unsafe for the `prepare-tenant` reason above.
+* **Unreadable means "not superseded".** A stale run costs tenant time; a
+  wrongly-skipped head commit costs the PR its e2e outright.
+* The stale run's own `Connector Tests Gate` would otherwise wait 130 minutes for
+  a check nobody is going to create, so `poll_check_runs_gate.py` takes the same
+  `--pr-number` and stops as soon as it can see that its SHA is no longer the
+  head. It exits **0**: no verdict is required from a commit that is no longer
+  under review, and a red there is a false alarm on an abandoned run that
+  automation reads as a real failure. Only the head commit's gate can satisfy a
+  required check.
+
+This closes the window up to the dispatch, and nothing after it. A push landing
+later leaves a connector run already in flight, and that run splits into two
+cases that want opposite answers:
+
+* It has **acquired a lease**. Nothing to be done: cancelling is unsafe for the
+  `prepare-tenant` reason above, so the queue is the right answer and the head
+  commit waits.
+* It has **dispatched but not leased yet** — it is still building, unit-testing
+  and integration-testing, which was 2m30s on the openapi leg of PR #3322
+  (dispatched 21:07:38, leased 21:10:10). It holds nothing, so it can stand down
+  for free, and the head commit takes the tenant instead.
+
+The second case is the connector-side recheck below.
+
+### Standing down before the lease
+
+`sdk-head-recheck` runs in `tests-reusable.yaml` immediately before
+`lease-tenant` and asks the same question the dispatch guard asked, at the last
+moment the answer can still save a tenant. When it says the SHA has been
+superseded, `lease-tenant` skips — and `prepare-tenant`, the `e2e` legs and
+`release-tenant` skip with it (FND-701).
+
+**Finding the pull request.** The connector run is handed `application_sdk_ref`
+and nothing else, and a SHA alone is not enough:
+`GET /commits/{sha}/pulls` answers with an **empty list** for a commit a
+force-push has moved past, which is precisely the case worth detecting. Verified
+against the incident itself — `be82fade` is associated with no pull request,
+while `d47789e0`, the head that replaced it, resolves normally.
+
+So the PR number comes from the record that authorised the dispatch. The guard
+already writes `refs/e2e-dispatch/<app>/<sha>` pointing at a blob describing the
+claim; that blob now carries `pr_number`, and the recheck reads it back. It is a
+positive identification rather than an inference, and the claim is guaranteed to
+outlive the run that needs it: the guard's prune only deletes a claim once that
+SHA's `Connector E2E run / <app>` check has settled, which cannot happen while
+this run is the thing that has yet to complete it.
+
+A run with **no** claim ref is therefore not an SDK pull-request dispatch —
+someone pinning `application_sdk_ref` by hand to test a connector against a
+particular SDK commit — and is left alone. Without that, a deliberate manual run
+would be skipped as a silent no-op.
+
+**Where the gates read from, and why it matters.** Both `lease-tenant` and the
+`e2e` legs gate on the job's `outputs.superseded`, never on its `result`:
+
+* A `needs.<job>.result` check would make an infrastructure failure of the
+  recheck **skip** the lease, and a skipped lease skips the install and greens
+  the run vacuously. Reading the output means an absent answer — job failed, job
+  skipped, output never written — leases exactly as before. The script exits 0
+  on every path for the same reason.
+* `lease-tenant` needs `always()` for that gate to be consulted at all: without
+  a status-check function GitHub applies an implicit `success()` over every
+  need and skips the job before the `if:` is read. That is also why
+  `discover-e2e` and `merge-e2e-image` are now named explicitly there.
+* The `e2e` legs need their **own** clause. A *skipped* `lease-tenant` is the
+  benign value in their existing gate — it is the `install-app-to-tenant: false`
+  path — so gating the lease alone would leave the legs running against a tenant
+  nobody installed onto with `expected-app-version` empty: a silently passing
+  wrong-version run, the exact FND-31 failure the lease exists to prevent.
+
+**The Tests Gate has to be told.** A stand-down produces the exact tuple the gate
+driver's "matrix skipped despite discovered suites" anomaly exists to catch — a
+successful discovery, a skipped matrix, and no install-path failure to explain
+it. Left untold, `tests-passed` reds the required check *and* `report-to-sdk`
+mirrors `conclusion=failure` onto the dispatching SDK commit: "your change broke
+the connector" for a run that deliberately stood down, which is exactly the
+misattribution the cancelled/failure split exists to prevent (FND-218).
+
+So `verify-test-gate` takes a `superseded` input, and both call sites pass it —
+they are one decision evaluated twice, and a gate told while the callback is not
+would put them back in disagreement. Only the literal `"true"` explains the skip:
+an absent, empty or unparseable value means the recheck job never answered, and
+an unanswered skip is still unexplained. The input is optional and defaults to
+`"false"`, so a connector pinned at `@main` that has not wired the job keeps the
+previous behaviour, and a future re-wiring of the e2e `if` still cannot green the
+gate by skipping the matrix. The e2e row then reads
+`⊘ Stood down — superseded SDK commit` rather than pointing a reader at a
+workflow misconfiguration that is not there.
+
+A stood-down run therefore reports green to the dispatching SDK commit — the same
+vacuous green the SDK-side gate gives that commit, for the same reason: it is no
+longer the commit under review, and only the head commit's run can satisfy a
+required check.
+
 ## SDR composite action inputs
 
 ```yaml
@@ -601,6 +765,37 @@ Two seams worth knowing about when editing either action:
   `setup-deps` — both already inside this sequence — have the same property. A PR
   editing the build steps is covered by the remote `@main` path and the merge
   queue, not by a local-action dispatch.
+
+## When a tenant-side node stalls (FND-708)
+
+A full-DAG run dispatches most of its nodes to **tenant-side system apps** — `publish`, `lineage-publish` and `qi` run on the tenant's own queues (`atlan-publish-<deployment>`, …), not on the connector under test. So a node can sit for the whole poll for two quite different reasons: nothing is polling that queue (those apps are KEDA scale-to-zero on the Temporal queue, so a mid-redeploy app picks nothing up), **or** a worker took the activity promptly and then stopped making progress. Either way the connector is not at fault; the tell is the other clouds' legs passing on the same commit and the same manifest.
+
+AE's node status cannot tell you which. It holds a node at `Pending` while that node's child workflow is running: on the run this section was written from, `lineage-publish` read `Pending` from t=489s to the ceiling while its child workflow had started 331ms into that window and spent 4,810 of its 4,882 seconds retrying one activity through repeated heartbeat timeouts (~72s was real work). It then completed successfully. So the harness reports the status, names the queue, and points at the child workflow instead of asserting a cause.
+
+**Reading the failure.** A poll that ends on `ae_poll_timeout_seconds` is not a verdict on the nodes — it means the harness stopped watching. `poll_native_status` stamps that on the result it returns (`timed_out_after_seconds`, `seconds_since_last_progress`), and the assertion says so, per node:
+
+```
+DAG did not complete within 1800s (AE status=Running); no DAG node changed state for the last 1311s
+DAG nodes:
+  - publish: succeeded in 152s
+  - lineage-publish: AE reports Pending at the 1800s poll ceiling — task queue
+    'atlan-publish-production', app_name=publish, per the seed DAG; no DAG state change
+    for the last 1311s. AE holds a node at Pending whether nothing picked it up OR its
+    child workflow is running, so read the child workflow
+    '<ae_run_id>-lineage-publish' on the tenant's Temporal: no such execution means
+    nothing polled that queue (check the owning app's workers); an execution means it is
+    running or retrying (check its history for heartbeat timeouts).
+```
+
+The child workflow ID is `{ae_run_id}-{node_id}`, and both halves are already in the failure, so that next click needs nothing the message does not carry.
+
+Three states used to render identically as `status=<X> error=None`, which read as a node failure and named no queue: AE-reports-not-started (`Pending` / `Scheduled`), dispatched and then frozen (`Running` at the ceiling), and ran-and-failed. Only the third is a node failure. The queue name comes from the harness's seed DAG, which is the only place it is knowable locally — `native-status` reports statuses, not routing — so the line says "per the seed DAG" rather than claiming to know what the tenant dispatched.
+
+**The watchdog must stay reachable.** `dag_progress_stall_seconds` fires when `elapsed - last_progress_elapsed` reaches the window, and the poll returns as soon as `elapsed` reaches `ae_poll_timeout_seconds`. A window that is not *strictly* below the ceiling can therefore only ever close on a run that stalls at t=0 — for every real stall the poll exits first. It used to default to an absolute 1800s, which silently disabled it on every suite with a ceiling of 1800s or lower; those suites burned the full 30 minutes on a wedge and then reported the ceiling. It now defaults to `None` = derived from the ceiling (a third of it, floored at 300s and capped at 1800s), so raising the ceiling widens the watchdog instead of putting it out of reach, and `setup_method` rejects a pinned value that is not below the ceiling. Set `0` to opt out deliberately.
+
+Because a reachable watchdog closes *before* the ceiling, it — not the ceiling — is now the exit a stall actually takes on any suite whose ceiling is 1800s or lower. It raises `DAGProgressStalledError` rather than returning, so the same per-node breakdown is rendered onto that exception: the error carries the last observation (`DAGRunResult.progress_stalled_after_seconds`, alongside the ceiling's `timed_out_after_seconds`) and `run_full_dag` re-raises it through the one renderer above. The only difference in the output is the clause naming which exit closed — `AE reports Pending when the 600s progress watchdog closed` instead of `at the 1800s poll ceiling`. A node wedged `Running` reads the same way rather than falling back to `status=Running error=None`.
+
+**Why the harness cannot shorten the timeouts that actually bind.** The node-level budget is generous by design: `publish` and `lineage-publish` default to a 3-day `startToCloseTimeoutSeconds` (right for a large tenant doing real work, see [contract-toolkit reference](../../contract-toolkit/docs/reference.md)). But the timeout that produced the stall above was one layer down — a `heartbeat_timeout_seconds` of 3600 on the `publish` activity, which turns each lost heartbeat into an hour of dead time before the retry, well past any e2e budget. Neither is reachable from the harness: at AE submit Heracles re-fetches the manifest from the **tenant-deployed pod** and that DAG is what executes (see [Building the image once](#building-the-image-once)); the seed DAG establishes the workflow record, not the graph. The only effective place is the app's own committed contract — which is the manifest that also ships to production, so shortening it for CI would mean e2e no longer exercises the contract we ship. Precise reporting plus a reachable watchdog is what the harness can do; a heartbeat watchdog in the owning system app ([ADR-0018](../adr/0018-progress-aware-heartbeat.md)) is where that class of stall actually gets fixed.
 
 ## Contract regeneration before tests
 

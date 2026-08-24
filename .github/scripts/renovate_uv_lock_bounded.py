@@ -608,6 +608,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--project-dir", default=".")
     parser.add_argument(
+        "--caller-owns-commit",
+        action="store_true",
+        help="The caller controls what gets committed, so a bound that admits "
+        "nothing is an ordinary no-op: write back the bounded resolve, whose "
+        "versions match the baseline, and exit 0, and let the caller commit "
+        "that. Set by bound_lock_branch.py (FND-376), whose workflow owns the "
+        "push. Leave it off under Renovate's postUpgradeTasks, where Renovate "
+        "commits the working tree itself and substitutes its own unbounded "
+        "artifact whenever this command leaves the tree matching HEAD — there, "
+        "admitting nothing has to fail visibly instead.",
+    )
+    parser.add_argument(
         "--baseline-ref",
         default="HEAD",
         help="Git ref whose uv.lock is the PRE-refresh baseline for retention "
@@ -667,6 +679,23 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         baseline = ""
+
+    if Version is None:
+        # `packaging` is imported defensively at the top of this module, and every
+        # version comparison here degrades to "cannot compare" without it. The
+        # rollback gate reports what it cannot compare, so a run in that state
+        # accuses every ordinary upgrade of moving backwards — a wedged lane whose
+        # message blames the dependency data. Say the true cause instead, and say
+        # it before uv spends a minute resolving.
+        withhold(lock_path, baseline, args.window)
+        print(
+            "`packaging` is not importable, so no version can be compared and the "
+            "rollback gate cannot do its job. Refusing rather than bounding "
+            "blind: install packaging for the interpreter running this command "
+            "(the workflow pins it) and re-run.",
+            file=sys.stderr,
+        )
+        return 1
 
     before = lock_versions(baseline)
     cutoff = dt.datetime.now(dt.timezone.utc) - window
@@ -730,7 +759,9 @@ def main(argv: list[str] | None = None) -> int:
             "been YANKED upstream — `pip index versions <name>` or the PyPI JSON "
             "API will say — because no resolve can keep a yanked pin and every "
             "one of them will land here until the base branch moves off it. A "
-            "changed constraint is the other candidate. Either way it wants a "
+            "changed constraint is the other candidate, as is a version string "
+            "that is not valid PEP 440 — those are reported here too rather than "
+            "silently skipped. Either way it wants a "
             "human, so this run bounds nothing and leaves the lock deliberately "
             "un-installable — baseline versions plus a tripwire `[options]` "
             "table — for a required check to hold the branch on.",
@@ -744,18 +775,29 @@ def main(argv: list[str] | None = None) -> int:
             for name, version in sorted(renovate_versions.items())
             if before.get(name) != version
         )
-        withhold(lock_path, baseline, args.window)
-        print(
-            f"The bound admits nothing today, but Renovate's own unbounded "
-            f"resolve moved: {moved}. Leaving the tree matching HEAD would hand "
-            "Renovate's copy straight to the branch — a valid lock that passes "
-            "every check while carrying releases minutes old — so the lock is "
-            "left deliberately un-installable instead and this run fails. "
-            "Nothing needs fixing in the repo: the window will admit these "
-            f"versions once they are `{args.window}` old.",
-            file=sys.stderr,
-        )
-        return 1
+        if args.caller_owns_commit:
+            # Informational only: this lane commits whatever we write, so a hold
+            # is a no-op rather than a refusal. Keep the window's contents in
+            # the log so a net-empty PR still explains itself.
+            print(
+                f"The bound admits nothing today; Renovate's unbounded resolve "
+                f"moved: {moved}. The caller owns the commit, so this is an "
+                "ordinary no-op rather than a hold.",
+                file=sys.stderr,
+            )
+        else:
+            withhold(lock_path, baseline, args.window)
+            print(
+                f"The bound admits nothing today, but Renovate's own unbounded "
+                f"resolve moved: {moved}. Leaving the tree matching HEAD would "
+                "hand Renovate's copy straight to the branch — a valid lock "
+                "that passes every check while carrying releases minutes old — "
+                "so the lock is left deliberately un-installable instead and "
+                "this run fails. Nothing needs fixing in the repo: the window "
+                f"will admit these versions once they are `{args.window}` old.",
+                file=sys.stderr,
+            )
+            return 1
 
     lock_path.write_text(strip_options(lock_path.read_text()))
 

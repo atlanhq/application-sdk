@@ -1,5 +1,27 @@
 # Changelog
 
+## v3.28.3 (August 21, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.28.2...v3.28.3
+
+### Bug Fixes
+
+- recover an ambiguous submit instead of failing the leg (#3328) (by @cmgrote in [e714bb8](https://github.com/atlanhq/application-sdk/commit/e714bb8))
+- name the wedged queue instead of blaming the node (FND-708) (#3345) (by @cmgrote in [875f088](https://github.com/atlanhq/application-sdk/commit/875f088))
+- sandbox-safe pool resolution and e2e stall attribution (#3343) (by @fyzanshaik-atlan in [194b51f](https://github.com/atlanhq/application-sdk/commit/194b51f))
+
+
+## v3.28.2 (August 20, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.28.1...v3.28.2
+
+### Bug Fixes
+
+- readiness-gate the AE submit on the tenant app pod (FND-402) (#3276) (by @hritika-atlan in [184ea05](https://github.com/atlanhq/application-sdk/commit/184ea05))
+- normalise STS credential expiry to stdlib UTC for obstore | CONNECT-800 (#3285) (by @sachi-atlan in [5b0ab1a](https://github.com/atlanhq/application-sdk/commit/5b0ab1a))
+- let the dual-write deployment leg express a same-store copy (FND-536) (#3280) (by @cmgrote in [0e5bedb](https://github.com/atlanhq/application-sdk/commit/0e5bedb))
+
+
 ## v3.28.1 (August 18, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.28.0...v3.28.1

@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "3.28.1"
+version = "3.28.3"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -162,7 +162,7 @@ test = [
     "coverage>=7.6.1,<8.0.0",
     "pytest-asyncio>=1.4.0,<2.0.0",
     "pytest-timeout>=2.3.0,<3.0.0",
-    "pytest-rerunfailures>=16.5,<16.6",
+    "pytest-rerunfailures>=16.6,<16.7",
     "pytest-socket>=0.7.0,<1.0.0",
     "hypothesis>=6.114.0,<7.0.0",
     "trustme>=1.2.1,<2.0.0",

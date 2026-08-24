@@ -66,6 +66,11 @@ Postcondition (deterministic validator — never render-attested):
 - `scope` — repository root path (provided by the top-level responsibility at
   expansion time).
 - `mode` — `"default"` or `"strict"` (propagated from the top-level entry).
+- `rule_ids` — optional list of exact rule IDs (propagated from the
+  top-level entry). Forwarded verbatim into every runner invocation this
+  area makes — the loop's detect calls and the suggest-only
+  `detect-violations` calls alike — so a `--rule`-scoped run stays scoped
+  here rather than silently widening to the whole series at this hop.
 
 ### Continuity
 
@@ -80,6 +85,7 @@ Claude Code skill path the skill caller re-invokes on demand.
 call detect-fix-recheck
   scope: scope
   series: "K"
+  rule_ids: rule_ids
   mode: mode
   max_attempts: 5
 ```

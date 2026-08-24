@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+import urllib.error
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -58,7 +59,7 @@ def test_payload_pins_all_three_model_lanes():
     # mothership's Claude defaults (main -> claude-opus-5, sub-agent ->
     # claude-sonnet-5), and `small_fast_model` unset resolves to `model`.
     p = sr.build_payload("1", "u", 8, "2026-07-08", "reviewer-one", "requester-login")
-    assert p["model"] == "x-ai/grok-4.6"
+    assert p["model"] == "xai/grok-4.6"
     assert p["small_fast_model"] == "gpt-5.6-luna"
     assert p["env_vars"]["CLAUDE_CODE_SUBAGENT_MODEL"] == "gpt-5.6-luna"
     # Every pinned value must survive JSON encoding as a non-blank string —
@@ -278,7 +279,7 @@ def test_no_complete_but_phase4_summary_soft_completes():
     fragments = [
         line
         for chunk in _SUMMARY_BLOCK.splitlines(keepends=True)
-        for line in ("event: response", f'data: {json.dumps({"text": chunk})}')
+        for line in ("event: response", f"data: {json.dumps({'text': chunk})}")
     ]
     st = _stream(*fragments)
     assert not st.completed
@@ -344,7 +345,7 @@ def test_mine_summary_from_delta_response():
     fragments = [
         line
         for chunk in _SUMMARY_BLOCK.splitlines(keepends=True)
-        for line in ("event: response", f'data: {json.dumps({"text": chunk})}')
+        for line in ("event: response", f"data: {json.dumps({'text': chunk})}")
     ]
     st = _stream(*fragments)
     got = sr.mine_summary(st)
@@ -743,6 +744,98 @@ def test_attempt_model_swaps_on_the_second_attempt():
     assert sr.attempt_model(2) == sr.RETRY_MAIN_MODEL
 
 
+# ---------------------------------------------------------------------------
+# dispatch-level HTTP status vs stream-transport error (FND-660 follow-up)
+# ---------------------------------------------------------------------------
+
+
+def _raising_opener(exc):
+    def opener(req, timeout=0):
+        raise exc
+
+    return opener
+
+
+def test_an_http_status_on_the_post_is_not_a_stream_error():
+    # Regression for run 32347771368: mothership answered the dispatch POST
+    # with a 504, and because HTTPError is a URLError subclass it was caught
+    # by the stream-error clause and logged "code=stream_error is not a known
+    # model/provider fault" — no retry, no out-of-band poll, zero work done.
+    exc = urllib.error.HTTPError(
+        "http://m/api/sandbox/execute", 504, "Gateway Time-out", {}, None
+    )
+    st = sr.dispatch_once("http://m", "tok", {}, opener=_raising_opener(exc))
+    assert st.err_code == "http_504"
+    assert st.errored is True
+    ok, reason = sr.retry_decision(st, 1, sr.DISPATCH_BUDGET_SECONDS)
+    assert ok is True
+    assert sr.RETRY_MAIN_MODEL in reason
+
+
+def test_a_permanent_http_status_still_does_not_retry():
+    for code, reason_phrase in ((401, "Unauthorized"), (400, "Bad Request")):
+        exc = urllib.error.HTTPError(
+            "http://m/api/sandbox/execute", code, reason_phrase, {}, None
+        )
+        st = sr.dispatch_once("http://m", "tok", {}, opener=_raising_opener(exc))
+        assert st.err_code == f"http_{code}"
+        # The 400 case is the important one: "400" sits in RETRYABLE_ERR_CODES
+        # for a provider fault carried inside the stream, and must NOT rescue
+        # a dispatch-level 400 — a malformed payload fails identically on any
+        # model, so the http_ codespace must stay separate from that one.
+        assert sr.is_retryable_fault(st) is False, code
+
+
+def test_a_genuine_transport_drop_is_still_never_retried():
+    # Guards the fix from over-reaching: a plain URLError (not an HTTPError)
+    # must still land on the never-retried stream_error path.
+    exc = urllib.error.URLError("timed out")
+    st = sr.dispatch_once("http://m", "tok", {}, opener=_raising_opener(exc))
+    assert st.err_code == "stream_error"
+    assert sr.is_retryable_fault(st) is False
+
+
+def test_the_http_error_body_reaches_the_error_message():
+    body = b"Invalid model name passed in model=xai/grok-4.6" + b"x" * 600
+
+    class _FakeFp:
+        def read(self):
+            return body
+
+        def close(self):
+            pass
+
+    exc = urllib.error.HTTPError(
+        "http://m/api/sandbox/execute", 400, "Bad Request", {}, _FakeFp()
+    )
+    st = sr.dispatch_once("http://m", "tok", {}, opener=_raising_opener(exc))
+    assert "Invalid model name" in st.err_msg
+    assert len(st.err_msg) < len(body.decode()) + 100  # truncated, not dumped whole
+
+    # e.read() itself raising must not escape dispatch_once.
+    class _BrokenFp:
+        def read(self):
+            raise OSError("already consumed")
+
+        def close(self):
+            pass
+
+    exc2 = urllib.error.HTTPError(
+        "http://m/api/sandbox/execute", 502, "Bad Gateway", {}, _BrokenFp()
+    )
+    st2 = sr.dispatch_once("http://m", "tok", {}, opener=_raising_opener(exc2))
+    assert st2.err_code == "http_502"
+
+
+def test_main_model_is_not_an_openrouter_style_id():
+    # Weak guard, deliberately: CI has no LiteLLM key, so the real check
+    # (GET /v1/models on llmproxy.atlan.dev) cannot run here. This only catches
+    # the specific `x-ai/` vs `xai/` prefix confusion that broke FND-660 —
+    # `x-ai/grok-4.6` is the OpenRouter-style id and this proxy rejects it.
+    assert "x-ai/" not in sr.MAIN_MODEL
+    assert "x-ai/" not in sr.FAST_MODEL
+
+
 def test_total_cost_sums_attempts_and_skips_unreported_ones():
     a = sr.SSEState()
     a.cost = "1.75"
@@ -986,3 +1079,119 @@ def test_main_skips_the_oob_poll_and_the_retry_when_the_budget_is_spent(
     assert polled == []
     assert len(payloads) == 1
     assert "job budget" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# a dropped RPC to the sandbox: long poll, never a re-dispatch (FND-647)
+# ---------------------------------------------------------------------------
+
+# Verbatim from run 32309963717 (PR #3276): the code is flattened to `unknown`
+# and the provider text arrives as a nested JSON blob, so the pattern has to
+# match inside it.
+_RPC_DROP = (
+    '{"type":"error","message":"ReadableStream received over RPC '
+    'disconnected prematurely."}'
+)
+
+
+def _error_event(code: str, message: str) -> list[str]:
+    return ["event: error", f"data: {json.dumps({'code': code, 'message': message})}"]
+
+
+def _rpc_dropped():
+    """That run's ending: a clean `complete`, then a dropped-RPC error event."""
+    return _stream(
+        "event: complete",
+        'data: {"status": "completed", "cost_usd": "0.686704"}',
+        "",
+        *_error_event("unknown", _RPC_DROP),
+    )
+
+
+def test_a_dropped_rpc_outranks_the_noop_classification():
+    """The live hazard this closes, and why the branch is ranked where it is.
+
+    An error event leaves `run_completed` False, so a clean `complete` plus a
+    dropped RPC is indistinguishable from a sandbox that stopped having done
+    nothing — and FND-644's no-op branch answers `is_retryable_fault` True on
+    that basis. Left alone it would spend a second resolver against a first one
+    of UNKNOWN liveness, which is the double-push this lane cannot undo. (The
+    run that motivated FND-647 predates that branch by a day, so its log shows
+    the older, opposite failure: no retry at all.)
+    """
+    st = _rpc_dropped()
+    assert sr.is_transport_fault(st) is True
+    assert sr.resolved_nothing(st) is True
+    assert sr.is_retryable_fault(st) is True  # would have re-dispatched
+    # `errored` also makes it look dead, which is what bought it the 120s poll.
+    assert sr.sandbox_terminated_abnormally(st) is True
+    assert sr.retry_decision(st, 1, sr.DISPATCH_BUDGET_SECONDS)[0] is False
+
+
+def test_a_dropped_rpc_gets_the_long_out_of_band_poll():
+    """The pipe dropped, not the resolver — it may be minutes from Phase 4."""
+    assert sr.oob_poll_budget(_rpc_dropped()) == sr.OOB_POLL_SECONDS_STREAM_DROP
+    assert sr.OOB_POLL_SECONDS_STREAM_DROP > sr.OOB_POLL_SECONDS_HARD_ERROR
+
+
+def test_a_dropped_rpc_is_never_re_dispatched_on_this_lane():
+    """A resolver pushes commits; two on one branch cannot be undone."""
+    ok, reason = sr.retry_decision(_rpc_dropped(), 1, sr.DISPATCH_BUDGET_SECONDS)
+    assert ok is False
+    assert "dropped RPC" in reason and "cannot be undone" in reason
+
+
+def test_a_known_code_is_never_overridden_by_the_transport_patterns():
+    """A code that carries information decides on its own, as everywhere else."""
+    st = _stream(*_error_event("401", _RPC_DROP))
+    assert sr.is_transport_fault(st) is False
+    assert sr.retry_decision(st, 1, sr.DISPATCH_BUDGET_SECONDS)[0] is False
+
+
+def test_a_dispatch_level_http_status_is_never_the_transport_class():
+    """No sandbox was ever started, so no RPC to one can have dropped."""
+    st = sr.SSEState()
+    st.got_event = st.errored = True
+    st.err_code, st.err_msg = "http_504", f"HTTP 504 on dispatch POST: {_RPC_DROP}"
+    assert sr.is_transport_fault(st) is False
+    # And it keeps the model swap the http_ codespace already earned it.
+    assert sr.retry_decision(st, 1, sr.DISPATCH_BUDGET_SECONDS)[0] is True
+
+
+def test_a_model_fault_still_swaps_the_model():
+    """No regression on FND-641: the model-swap class keeps its own axis."""
+    st = sr.SSEState()
+    st.got_event = st.completed = st.errored = True
+    st.status, st.err_code = "error", "429"
+    st.err_msg = "temporarily rate-limited upstream"
+    assert sr.is_transport_fault(st) is False
+    ok, reason = sr.retry_decision(st, 1, sr.DISPATCH_BUDGET_SECONDS)
+    assert ok is True and sr.RETRY_MAIN_MODEL in reason
+
+
+def test_main_waits_out_a_dropped_rpc_instead_of_re_dispatching(monkeypatch, capsys):
+    """End-to-end: the long poll finds the hand-off and the run is recovered."""
+    _main_env(monkeypatch)
+    budgets = []
+
+    def fake_poll(pr, token, since, budget, **_k):
+        budgets.append(budget)
+        return "http://handoff"
+
+    monkeypatch.setattr(sr, "poll_for_oob_summary", fake_poll)
+    payloads = _record_dispatches(monkeypatch, [_rpc_dropped()])
+
+    assert sr.main() == 0
+    assert len(payloads) == 1  # never a second resolver on the branch
+    assert budgets == [sr.OOB_POLL_SECONDS_STREAM_DROP]
+    assert "out-of-band" in capsys.readouterr().out
+
+
+def test_main_fails_a_dropped_rpc_whose_handoff_never_lands(monkeypatch, capsys):
+    """Nothing to show for it, but still no second resolver: the run is spent."""
+    _main_env(monkeypatch)
+    payloads = _record_dispatches(monkeypatch, [_rpc_dropped()])
+
+    assert sr.main() == 1
+    assert len(payloads) == 1
+    assert "Not re-dispatching" in capsys.readouterr().out

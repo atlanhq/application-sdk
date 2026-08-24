@@ -168,6 +168,54 @@ it, or kept out of that file in the first place.
 `export_extra_env.py` and `test_export_extra_env.py` are the worked example,
 including a static check that every call site masks before it writes.
 
+## Never pass a credential as a Docker `build-arg`
+
+**Rule:** a step that builds an image must not put a token, password, or key in
+`build-args:`. Feed it through `secrets:` instead, and have the Dockerfile read
+it with `RUN --mount=type=secret`.
+
+```yaml
+# WRONG — publishes the credential with the image
+build-args: |
+  ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
+
+# RIGHT — the value is available during the RUN and nowhere after it
+secrets: |
+  git_token=${{ secrets.ORG_PAT_GITHUB }}
+```
+
+```dockerfile
+RUN --mount=type=secret,id=git_token,uid=1000 \
+    UV_GIT_TOKEN="$(cat /run/secrets/git_token)" \
+    uv sync --frozen --no-dev
+```
+
+**Why:** a build arg is not a build-time-only variable. BuildKit records the
+`ARG` name *and its value* in the image config, so `docker history <image>`
+prints it back to anyone who can pull the image — no repo access, no Actions
+log access, no runner access needed. The credential is published as part of the
+artifact, and it stays published in every tag ever built that way; deleting the
+workflow line does not retract the images. `::add-mask::` does not help here for
+the same reason it does not help with artifacts: it rewrites the log stream, not
+bytes written elsewhere.
+
+A `--mount=type=secret` is exposed as a tmpfs file for the duration of one `RUN`
+and is not part of that layer, the image config, or the history. It is also the
+only form that survives layer caching correctly: a build arg changes the cache
+key, so rotating the credential invalidates every layer after the `ARG`.
+
+**Migrating a consumer:** `build-args` and `secrets` are not interchangeable at
+the Dockerfile end, so the two sides have to move together. Land the Dockerfile
+change first — a Dockerfile that mounts `git_token` ignores an
+`ACCESS_TOKEN_PWD` build arg it no longer reads, so it builds green under both
+the old and the new workflow — then drop the build arg from the workflow. Doing
+it the other way round leaves the build with an empty credential, and `uv sync`
+against a private git dependency fails on the next build rather than at merge.
+
+**Scope note:** this covers credentials only. Non-secret build inputs — a
+version string, a target arch, a base-image reference — are what `build-args`
+are for, and recording those in image history is a feature.
+
 ## Renovate post-upgrade commands
 
 Two run today, both installed as bare PATH commands by `.github/workflows/renovate.yaml`
@@ -438,15 +486,75 @@ any contender decides, and nothing enforces that. Use an atomic primitive and
 derive nothing from ids. The cost is fairness — acquisition becomes a scramble,
 so bound starvation with the wait budget below rather than with a queue position.
 
-Three consequences to design for:
+**But when one run needs SEVERAL of these locks, it must take them in a fixed
+order — and that is a different rule, not a contradiction of the one above.**
+The lease job used to be a per-cloud matrix that acquired every cloud's lease in
+parallel and held each for the whole run while blocking on the rest. That is
+textbook hold-and-wait, and it deadlocked the first time two runs queued behind
+one holder (FND-646): the holder released all three leases at once, the two
+waiters raced for the freed set and **split** it — one took aws + azure, the
+other gcp — and each then blocked on what the other held for the whole 90-minute
+wait budget. Any time two or more runs are queued behind a holder, a parallel
+matrix makes that split the *expected* outcome, not a rare interleaving.
+
+The fix is resource ordering: one job takes every lock it needs, one at a time,
+in an order that is a **pure function of the resource names** (`sorted()`). Two
+runs can then never hold locks the other needs out of order, so the worst case
+degrades from mutual blocking to plain serialisation. Note what is and is not
+being ordered — the CAS still grants every lease, and the order governs only the
+sequence in which *one* run takes several of them. That is why this does not
+re-open the rejected-ordering trap above.
+
+Consequences worth spelling out:
+
+* The wait budget becomes a **total** across the set, not per resource, or N
+  locks can outlast the job timeout by N times over and the runner's bare
+  "cancelled after Nm" replaces the actionable error.
+* Acquisition has to be **all-or-nothing**: a run that cannot get the whole set
+  hands back what it took, immediately, rather than waiting for its cleanup job.
+* Derive the order from the names only. Run id, arrival order, or the caller's
+  list order all make two contenders disagree about which lock comes first,
+  which is the entire guarantee.
+* Release can stay parallel. It cannot block, so there is no wait to order.
+
+Three further consequences to design for:
 
 * A waiting run occupies a runner, so give the wait a budget and fail loudly past
   it, **naming the holder**. A contention outcome must never be phrased as a test
   failure.
 * Ref writes need `contents: write`, so put acquire/release in their own small
   jobs and leave the jobs that execute test code read-only.
-* If the lease fails open when it cannot be taken (the right default when a
-  separate assertion already catches the underlying hazard), then a broken lease
-  looks exactly like a working one — green, with a warning. **Assert the acquire
-  step's `state` output in anger** when verifying, rather than concluding from an
-  absence of red.
+* **A fail-open is only a fail-open if every consumer downstream agrees.** This
+  lease used to warn and return `disabled` when it could not write refs, on the
+  reasoning that failing an ungrantable lease would turn a safety improvement
+  into a fleet-wide red. It did not proceed: the install job verifies its own
+  tenant's lease before installing, needs only `contents: read` to do it, finds
+  nothing, and reds — so the run went red anyway, two jobs later, with an error
+  saying "re-run this job" when re-running could not help (FND-702). The posture
+  was not being chosen; it was being *reversed* by a consumer, at the cost of the
+  one message that could have explained it. Before writing a fail-open, walk
+  every consumer of the thing you are failing open on and check that it tolerates
+  the degraded value; if any one of them does not, the fail-open is fiction, and
+  the honest version is to fail where the cause is still in hand.
+
+### Declare the permissions a reusable workflow needs, in the caller
+
+A called workflow's `permissions` can only **equal or narrow** its caller's, so a
+job in the reusable declaring `contents: write` is a ceiling, never a grant. A
+caller with no block at all satisfies it purely from the repository's
+`default_workflow_permissions` — which means tightening that setting, an ordinary
+hardening step, silently strips the grant from every adopted repo at once, with
+nothing in the resulting failure pointing at the cause.
+
+So the canonical scaffolded `tests.yaml` declares the set explicitly. Two things
+make that edit easy to get wrong:
+
+* **A `permissions:` block is exhaustive, not additive.** Every scope it omits
+  becomes `none`. A well-meaning `permissions: {contents: read}` on the caller is
+  strictly *worse* than declaring nothing, because it clamps a job whose
+  repository default would have carried it.
+* **Derive the set from the reusable, in a test.** `test_tests_yaml_permissions`
+  reads every `permissions:` block in `tests-reusable.yaml`, takes the strongest
+  level each scope is used at, and asserts the scaffolded caller declares exactly
+  that — so adding a scope to a job of the reusable fails there rather than
+  silently arriving as `none` in every connector.

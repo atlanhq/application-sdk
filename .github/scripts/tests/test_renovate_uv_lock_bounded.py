@@ -936,6 +936,129 @@ class TestWithholds:
         assert bounded.main(["--window", "P3D", "--project-dir", str(project)]) == 1
         self._assert_withheld(project, baseline)
 
+    def test_a_missing_version_parser_fails_before_uv_runs(self, monkeypatch, tmp_path):
+        """`packaging` absent must read as `packaging` absent.
+
+        Every comparison in this module degrades to "cannot compare" without it,
+        and the rollback gate reports what it cannot compare — so a run in that
+        state accuses every ordinary upgrade of moving backwards. Observed while
+        probing the driver under an interpreter without it: six forward moves
+        reported as regressions. Fail on the real cause, before uv spends a
+        minute resolving, and hold the branch while doing it.
+        """
+        baseline = lock(boto3="1.43.72")
+        project = self._repo(tmp_path, baseline)
+
+        def fail_if_called(command, cwd):
+            raise AssertionError("uv must not run when versions cannot be compared")
+
+        monkeypatch.setattr(bounded, "Version", None)
+        monkeypatch.setattr(bounded, "run_uv_lock", fail_if_called)
+        assert bounded.main(["--window", "P3D", "--project-dir", str(project)]) == 1
+        self._assert_withheld(project, baseline)
+
+    def test_a_hold_is_an_ordinary_no_op_when_the_caller_owns_the_commit(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        """The lane distinction, asserted against the case above.
+
+        application-sdk's own lane runs from a workflow that owns the push, so a
+        bound admitting nothing means "commit the baseline and let the PR go
+        net-empty". Failing there pushes nothing and leaves Renovate's unbounded
+        commit standing on the branch — which is how a 4-hour-old boto3 reached
+        main on 2026-08-20.
+        """
+        baseline = lock(boto3="1.43.74")
+        project = self._repo(tmp_path, baseline)
+        (project / "uv.lock").write_text(lock(boto3="1.43.75"))
+
+        def fake_run(command, cwd):
+            (Path(cwd) / "uv.lock").write_text(with_options(baseline))
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        exit_code = bounded.main(
+            [
+                "--window",
+                "P3D",
+                "--project-dir",
+                str(project),
+                "--caller-owns-commit",
+            ]
+        )
+        assert exit_code == 0
+        # The bounded resolve, stripped: versions match the baseline so the
+        # caller commits a net-empty PR rather than a held branch.
+        assert (project / "uv.lock").read_text() == baseline
+        # The window's contents still belong in the log even though this lane
+        # does not fail on them — otherwise a daily no-op PR is silent about
+        # what Renovate wanted.
+        assert "boto3 1.43.74 -> 1.43.75" in capsys.readouterr().err
+
+    def test_caller_owns_commit_keeps_bounded_bytes_when_versions_match(
+        self, monkeypatch, tmp_path
+    ):
+        """Versions matching the baseline is not the same as writing the baseline.
+
+        The bounded resolve can carry extra metadata the committed lock does not.
+        The caller-owns path writes that resolve (stripped of [options]), not the
+        baseline text — writing the baseline would risk a lock that no longer
+        satisfies the current pyproject.toml.
+        """
+        baseline = lock(boto3="1.43.74")
+        project = self._repo(tmp_path, baseline)
+        (project / "uv.lock").write_text(lock(boto3="1.43.75"))
+        # Same versions as the baseline, plus a metadata line strip_options keeps.
+        bounded_resolve = lock(boto3="1.43.74") + "# resolver-metadata: extra\n"
+
+        def fake_run(command, cwd):
+            (Path(cwd) / "uv.lock").write_text(with_options(bounded_resolve))
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        exit_code = bounded.main(
+            [
+                "--window",
+                "P3D",
+                "--project-dir",
+                str(project),
+                "--caller-owns-commit",
+            ]
+        )
+        assert exit_code == 0
+        final = (project / "uv.lock").read_text()
+        assert bounded.lock_versions(final) == bounded.lock_versions(baseline)
+        assert final != baseline
+        assert "# resolver-metadata: extra" in final
+
+    def test_a_rejected_downgrade_still_fails_when_the_caller_owns_the_commit(
+        self, monkeypatch, tmp_path
+    ):
+        # The flag narrows the hold-everything case only. A genuine refusal still
+        # refuses in either lane.
+        baseline = lock(pytest_timeout="2.5.0")
+        project = self._repo(tmp_path, baseline)
+
+        def fake_run(command, cwd):
+            (Path(cwd) / "uv.lock").write_text(
+                with_options(lock(pytest_timeout="2.4.0"))
+            )
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        assert (
+            bounded.main(
+                [
+                    "--window",
+                    "P3D",
+                    "--project-dir",
+                    str(project),
+                    "--caller-owns-commit",
+                ]
+            )
+            == 1
+        )
+
     def test_a_genuinely_quiet_run_is_left_clean_and_passes(
         self, monkeypatch, tmp_path
     ):

@@ -1,7 +1,7 @@
-"""P-series SDR-readiness checks (P029, P030, P037, P038, P039, P041, P042).
+"""P-series SDR-readiness checks (P029, P030, P037, P038, P039, P042).
 
 Cross-artifact checks that gate on ``self_deployed_runtime: true`` in
-``atlan.yaml`` and verify seven structural invariants:
+``atlan.yaml`` and verify six structural invariants:
 
 * ``P029`` — an agent extraction manifest under ``app/generated/`` must surface
   ``agent_json`` AND ``extraction_method`` at the TOP LEVEL of
@@ -66,14 +66,6 @@ Cross-artifact checks that gate on ``self_deployed_runtime: true`` in
   ``*ExtractionInput`` family (which declares ``agent_json``) or set
   ``allow_unbounded_fields=True`` / ``extra="allow"`` are exempt.  WARN.
 
-* ``P041`` — an SDR app that unconditionally sets
-  ``preflight_gate_mode = "hard"``.  In agent mode, preflight checks that
-  depend on non-secret config (a database name for a schema-existence check)
-  fail spuriously because customers rightly mirror only secrets into the
-  secret store — a hard gate then aborts the whole workflow (observed for a
-  query-engine connector in fleet testing).  A run-mode-differentiated
-  conditional (``"soft" if ENABLE_ATLAN_UPLOAD else "hard"``) is not
-  flagged.  WARN (suggest-only).
 
 P026–P028 are reserved by a concurrent PR (GetattrOnTypedContractField,
 AppStateAsCrossTaskChannel, ManualQualifiedNameFString — PR #2417).
@@ -102,7 +94,6 @@ RULE_P030 = "P030"
 RULE_P037 = "P037"
 RULE_P038 = "P038"
 RULE_P039 = "P039"
-RULE_P041 = "P041"
 RULE_P042 = "P042"
 
 _SDR_FLAG_RE = re.compile(
@@ -1214,246 +1205,13 @@ def _check_p039(manifests: list[Path], root: Path) -> list[Finding]:
     return findings
 
 
-# ── P041: hard preflight gate in an SDR app ──────────────────────────────────
-
-#: The SDK ``App`` class attribute that opts preflight verdicts into aborting
-#: the run (``"hard"``) instead of logging-and-proceeding (``"soft"``).
-_PREFLIGHT_GATE_MODE_ATTR = "preflight_gate_mode"
-
-
-def _is_env_lookup_call(node: ast.Call) -> bool:
-    """Whether *node* calls a known environment-variable lookup.
-
-    Matches ``os.environ.get(...)``, ``os.getenv(...)``, and
-    ``os.environ.setdefault(...)`` — the shapes through which a deployment can
-    override the gate mode, per the rule's documentation.  Anything else
-    (``resolve_gate(...)``, ``config.get(...)``, …) returns a value this check
-    cannot see, so its arguments are not evidence of the runtime mode.
-    """
-    func = node.func
-    if isinstance(func, ast.Attribute):
-        if func.attr == "getenv" and isinstance(func.value, ast.Name):
-            return func.value.id == "os"
-        if (
-            func.attr in {"get", "setdefault"}
-            and isinstance(func.value, ast.Attribute)
-            and func.value.attr == "environ"
-            and isinstance(func.value.value, ast.Name)
-        ):
-            return func.value.value.id == "os"
-    return False
-
-
-def _is_unconditional_hard(
-    value: ast.AST, constants: dict[str, object] | None = None
-) -> bool:
-    """Whether *value* yields ``"hard"`` on the always-on / default path.
-
-    Semantic rather than structural: exempting every non-``Constant`` node lets
-    an *inverted* ternary (``"hard" if ENABLE_ATLAN_UPLOAD else "soft"`` — hard
-    exactly when upload is on), a both-arms-hard ternary, and an env default of
-    ``"hard"`` all escape, which are the very postures the rule audits.
-
-    Safe is ``"hard"`` in the *else* arm only — the documented run-mode split
-    ``"soft" if ENABLE_ATLAN_UPLOAD else "hard"``.  A nested conditional in an
-    env-var default (``os.environ.get(VAR, "soft" if ... else "hard")``) is the
-    same posture spelled through the override and stays silent too.
-    """
-    if isinstance(value, ast.Constant):
-        return value.value == "hard"
-    if isinstance(value, ast.IfExp):
-        # Hard in the true arm (or in both) is unconditional-in-effect; hard
-        # only in the else arm is the recommended run-mode-differentiated split.
-        return _is_unconditional_hard(value.body, constants)
-    if isinstance(value, ast.Call):
-        # An env-var override: `os.environ.get("ATLAN_PREFLIGHT_GATE_MODE",
-        # "hard")` is hard on every deployment that does not set the var.
-        # Only the known env-lookup callees are read this way — for any other
-        # call the returned value is opaque to a static check, so a constant
-        # argument (a helper's `default="hard"`, say) proves nothing about the
-        # mode the app actually runs with.
-        if not _is_env_lookup_call(value):
-            return False
-        return any(
-            _is_unconditional_hard(arg, constants)
-            for arg in [*value.args[1:], *(kw.value for kw in value.keywords)]
-        )
-    if isinstance(value, ast.Name) and constants is not None:
-        # A module-level `MODE = "hard"` indirection is still always hard;
-        # only an unambiguous single binding is resolved (no flow analysis).
-        return constants.get(value.id) == "hard"
-    if isinstance(value, ast.BoolOp) and isinstance(value.op, ast.Or):
-        # `os.environ.get(VAR) or "hard"` — the or-default idiom, semantically
-        # identical to the `.get(VAR, "hard")` form above.
-        return _is_unconditional_hard(value.values[-1], constants)
-    return False
-
-
-def _string_constants(body: list[ast.stmt]) -> dict[str, object]:
-    """``NAME = "literal"`` bindings among the straight-line statements of *body*.
-
-    Used for module bodies AND class bodies: ``preflight_gate_mode`` is
-    conventionally a class attribute, so ``class C: MODE = "hard"`` followed by
-    ``preflight_gate_mode = MODE`` in the same body is at least as natural as
-    the module-level form.
-
-    Deliberately not constant propagation — only direct children of *body* are
-    considered, so control flow is straight-line and the last write wins. A name
-    ever assigned a computed value is dropped rather than guessed at.
-    """
-    seen: dict[str, object] = {}
-    poisoned: set[str] = set()
-    for stmt in body:
-        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
-            target = stmt.targets[0]
-        elif isinstance(stmt, ast.AnnAssign) and stmt.value is not None:
-            target = stmt.target  # `MODE: str = "hard"`
-        else:
-            continue
-        if not isinstance(target, ast.Name):
-            continue
-        name = target.id
-        if isinstance(stmt.value, ast.Constant):
-            # Straight-line statements only, so the last write wins:
-            # `MODE = "soft"` then `MODE = "hard"` is deterministically hard.
-            seen[name] = stmt.value.value
-        else:
-            poisoned.add(name)  # a computed value — do not guess at it
-    return {k: v for k, v in seen.items() if k not in poisoned}
-
-
-def _gate_target_names(targets: list[ast.expr]) -> list[str]:
-    return [t.id for t in targets if isinstance(t, ast.Name)] + [
-        t.attr for t in targets if isinstance(t, ast.Attribute)
-    ]
-
-
-def _gate_assignments(stmts: list[ast.stmt]) -> list[tuple[ast.stmt, ast.expr]]:
-    """``(node, value)`` for each ``preflight_gate_mode`` assignment in *stmts*."""
-    out: list[tuple[ast.stmt, ast.expr]] = []
-    for stmt in stmts:
-        for node in ast.walk(stmt):
-            if isinstance(node, ast.Assign):
-                targets, value = list(node.targets), node.value
-            elif isinstance(node, ast.AnnAssign):
-                targets, value = [node.target], node.value
-            else:
-                continue
-            if value is None:
-                continue
-            if _PREFLIGHT_GATE_MODE_ATTR in _gate_target_names(targets):
-                out.append((node, value))
-    return out
-
-
-def _run_mode_split_exempt(
-    tree: ast.Module, constants: dict[str, object] | None = None
-) -> set[int]:
-    """ids of gate assigns that are the ``else`` arm of an if/else run-mode split.
-
-    ``if ENABLE_ATLAN_UPLOAD: ... = "soft"`` / ``else: ... = "hard"`` is the
-    documented posture spelled across two statements instead of as a ternary —
-    an ordinary style choice once the branches grow past one line — and must not
-    be flagged.  The polarity check mirrors the ternary's: ``"hard"`` on the
-    *true* arm is the inverted posture and still fires, as does both-arms-hard.
-    """
-    exempt: set[int] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.If) or not node.orelse:
-            continue
-        body = _gate_assignments(node.body)
-        orelse = _gate_assignments(node.orelse)
-        if not body or not orelse:
-            continue
-        if any(_is_unconditional_hard(value, constants) for _n, value in body):
-            continue  # hard on the true arm — inverted/both-hard, keep firing
-        for assign, value in orelse:
-            if _is_unconditional_hard(value, constants):
-                exempt.add(id(assign))
-    return exempt
-
-
-def _check_p041(paths: list[Path], root: Path) -> list[Finding]:
-    """P041: an SDR app must not hard-code ``preflight_gate_mode = "hard"``.
-
-    Flags an assignment to ``preflight_gate_mode`` (plain or annotated) whose
-    value is ``"hard"`` on the always-on or default path — see
-    :func:`_is_unconditional_hard`.  The documented run-mode-differentiated
-    posture (``"soft" if ENABLE_ATLAN_UPLOAD else "hard"``, env-overridable via
-    ``ATLAN_PREFLIGHT_GATE_MODE``) is never flagged, in either its ternary or
-    its ``if``/``else`` spelling.
-    """
-    findings: list[Finding] = []
-    for path in paths:
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-        except (OSError, SyntaxError, ValueError):
-            continue
-        try:
-            rel = str(path.relative_to(root))
-        except ValueError:
-            rel = str(path)
-        module_constants = _string_constants(tree.body)
-        # `preflight_gate_mode` is conventionally a class attribute, so a
-        # same-class `MODE = "hard"` shadows the module-level one.
-        class_constants: dict[int, dict[str, object]] = {}
-        for cls in ast.walk(tree):
-            if not isinstance(cls, ast.ClassDef):
-                continue
-            merged = {**module_constants, **_string_constants(cls.body)}
-            for item in ast.walk(cls):
-                class_constants[id(item)] = merged
-        split_exempt = _run_mode_split_exempt(tree, module_constants)
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Assign):
-                targets = list(node.targets)
-                value = node.value
-            elif isinstance(node, ast.AnnAssign):
-                targets = [node.target]
-                value = node.value
-            else:
-                continue
-            if value is None:
-                continue
-            if _PREFLIGHT_GATE_MODE_ATTR not in _gate_target_names(targets):
-                continue
-            if id(node) in split_exempt:
-                continue
-            if _is_unconditional_hard(
-                value, class_constants.get(id(node), module_constants)
-            ):
-                findings.append(
-                    Finding(
-                        rule_id=RULE_P041,
-                        file=rel,
-                        line=node.lineno,
-                        column=1,
-                        message=(
-                            f"{rel}:{node.lineno}: preflight_gate_mode is "
-                            "unconditionally 'hard' in an SDR app. In agent mode the "
-                            "app resolves config through the customer's secret "
-                            "store, and non-secret values (e.g. a database name for "
-                            "a schema-existence check) are rightly not mirrored "
-                            "there — the preflight check then fails spuriously and "
-                            "the hard gate aborts the whole workflow. Derive the "
-                            "gate from the run mode instead (e.g. "
-                            "preflight_gate_mode = 'soft' if ENABLE_ATLAN_UPLOAD "
-                            "else 'hard') and keep it env-overridable via "
-                            "ATLAN_PREFLIGHT_GATE_MODE, until SDK-side run-mode-"
-                            "differentiated gate enforcement lands."
-                        ),
-                    )
-                )
-    return findings
-
-
 def scan_path(path: Path, root: Path) -> list[Finding]:  # noqa: ARG001
     """No-op: the SDR checks require cross-artifact analysis; use scan_all."""
     return []
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:
-    """Check the SDR-readiness rules (P029, P030, P037–P039, P041, P042).
+    """Check the SDR-readiness rules (P029, P030, P037–P039, P042).
 
     Parameters
     ----------
@@ -1461,8 +1219,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         Python source files to inspect (as returned by :func:`discover`).
         These are the files checked by P030/P042 for a ``self.upload(`` call /
         upload-bridge shape, by P037 for the credential-resolution shape, by
-        P038 for the object-store prefix rooting, and by P041 for the
-        preflight-gate posture.
+        P038 for the object-store prefix rooting.
     root:
         Repo root — used to locate ``atlan.yaml`` and ``app/generated/`` (P039
         also inspects the generated ``_input.py`` contract models).
@@ -1479,7 +1236,6 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     findings.extend(_check_p037(paths, root))
     findings.extend(_check_p038(paths, root))
     findings.extend(_check_p039(manifests, root))
-    findings.extend(_check_p041(paths, root))
     return findings
 
 
@@ -1489,8 +1245,7 @@ main = make_cli_main(
         "SDR-readiness checks — manifest agent_json slot (P029), "
         "upload call presence / no-op bridge stubs (P030), agent-aware "
         "credential resolution (P037), object-store prefix rooting (P038), "
-        "agent_json input-contract consumption (P039), and preflight-gate "
-        "posture (P041)."
+        "and agent_json input-contract consumption (P039)."
     ),
 )
 

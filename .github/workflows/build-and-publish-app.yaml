@@ -1248,13 +1248,18 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-          build-args: |
-            ACCESS_TOKEN_USR=${{ github.actor }}
-            ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
-          # This job already logs into GHCR with the PAT above, so there's no
-          # benefit to minting a separate App token just for this BuildKit
-          # secret (Dockerfiles cloning a private git dependency, e.g.
-          # atlan-query-redaction) -- the PAT is already in play either way.
+          # The org PAT reaches the build ONLY as a BuildKit secret, never as a
+          # build arg. Build args are recorded in image config and are readable
+          # via `docker history` by anyone who can pull the image, so the
+          # `ACCESS_TOKEN_USR`/`ACCESS_TOKEN_PWD` args this step used to pass
+          # published the credential rather than merely using it (FND-697). A
+          # `--mount=type=secret` is never written to a layer or to history.
+          #
+          # Dockerfiles cloning a private git dependency (e.g. atlan-query-redaction)
+          # read it via `--mount=type=secret,id=git_token`. This job already logs
+          # into GHCR with the PAT above, so there's no benefit to minting a
+          # separate App token just for this -- the PAT is already in play either
+          # way.
           secrets: |
             git_token=${{ secrets.ORG_PAT_GITHUB }}
 
@@ -1504,12 +1509,17 @@ jobs:
           # attribution collapses to the triggering actor with nothing red.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          # A tagged release marks the run PR-derived on its own, so attribution
+          # holds even where the event name is unavailable. Callers set this
+          # only for `github.event_name == 'release'`.
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
           python3 .sdk-entrypoint/.github/scripts/resolve_release_actor.py \
             --event-name "${GITHUB_EVENT_NAME}" \
             --repo "${GITHUB_REPOSITORY}" \
             --sha "${GITHUB_SHA}" \
+            --release-tag "${RELEASE_TAG}" \
             --triggering-actor "${TRIGGERING_ACTOR}" >> "${GITHUB_OUTPUT}"
 
       - name: Publish version
