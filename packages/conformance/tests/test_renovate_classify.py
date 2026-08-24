@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from conformance.renovate.classify import STALE_AFTER_DAYS, classify
+from conformance.renovate.classify import (
+    STALE_AFTER_DAYS,
+    bounded_lock_refusal_expired,
+    classify,
+)
 from conformance.renovate.classify import lock_refusal_window as extract_refusal_window
 from conformance.renovate.classify import parse_window
 from conformance.renovate.models import (
@@ -824,3 +828,16 @@ def test_expired_refusal_counts_as_auto_merge_eligible_but_stuck() -> None:
     pr = classify(_refusal_pr())
     assert pr.auto_merge_expected is True
     assert pr.blocking_reason is not BlockingReason.AWAITING_HUMAN_REVIEW
+
+
+def test_refusal_expiry_tolerates_a_naive_clock_from_a_caller() -> None:
+    # blocking_reason() accepts a caller-supplied `now`. A naive one against an
+    # aware head_committed_at would raise on subtraction; both sides get the same
+    # UTC coercion classify() applies to created_at.
+    naive_now = _NOW.replace(tzinfo=None)
+    assert (
+        bounded_lock_refusal_expired(
+            _refusal_pr(), Category.LOCK_MAINTENANCE, naive_now
+        )
+        is True
+    )

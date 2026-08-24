@@ -153,6 +153,15 @@ def _post_graphql(token: str, payload: dict) -> dict:
         raise RuntimeError(
             f"GraphQL request failed: {exc.code} {exc.reason}: {body}"
         ) from exc
+    # Every transport failure leaves here as a RuntimeError, so a caller that
+    # wants to degrade on one — fetch_lock_texts skips the PR and lets it
+    # classify as an ordinary red build — can express that with one handler.
+    # HTTPError is a URLError subclass, hence the ordering; urlopen raises
+    # TimeoutError directly rather than wrapping it, hence both.
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise RuntimeError(f"GraphQL request failed: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"GraphQL response was not JSON: {exc}") from exc
 
 
 def fetch_all_prs(
@@ -277,9 +286,13 @@ def fetch_lock_texts(token: str, prs: list[dict], post: PostFn = _post_graphql) 
     """Attach ``uvLockText`` to every PR that could be carrying a lock refusal.
 
     Mutates the nodes in place and returns how many were fetched. A blob that
-    cannot be read (deleted branch, permissions, an unexpected object type) is
-    warned about and skipped: the PR then classifies exactly as it did before this
-    signal existed, which is the safe direction to fail.
+    cannot be read — deleted branch, permissions, an unexpected object type, or a
+    timed-out request — is warned about and skipped: the PR then classifies
+    exactly as it did before this signal existed, which is the safe direction to
+    fail. This pass is an enrichment, so one flaky fetch must never abort the
+    whole dashboard update; ``_post_graphql`` normalises transport failures to
+    ``RuntimeError`` precisely so that is one handler rather than a list that
+    quietly falls behind ``urllib``.
     """
     candidates = [(pr, path) for pr in prs if (path := lock_refusal_candidate(pr))]
     if len(candidates) > MAX_LOCK_FETCHES:

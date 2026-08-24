@@ -192,8 +192,14 @@ def bounded_lock_refusal_expired(
         # ordinary red-build reason rather than guessing from created_at, which
         # Renovate's in-place branch rewrites make unrelated to the refusal.
         return False
+    # Both sides get the same naive->UTC coercion classify() applies to
+    # created_at. Normalising only one of them makes a naive clock a TypeError on
+    # subtraction rather than a wrong-by-an-offset answer, which is a worse
+    # failure for a caller passing its own `now` in a test.
     if head.tzinfo is None:
         head = head.replace(tzinfo=timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
     return now - head >= window
 
 

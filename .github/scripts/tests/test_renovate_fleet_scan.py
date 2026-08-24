@@ -543,3 +543,45 @@ def test_open_pr_fields_request_the_head_commit_date():
     # The clock the refusal signal expires against rides on a selection the query
     # already makes; a rename upstream would silently disable the signal.
     assert "committedDate" in rfs._OPEN_PR_FIELDS
+
+
+def test_post_graphql_wraps_transport_errors_as_runtime_error(monkeypatch):
+    # urlopen raises URLError for DNS/connect failures. Left unwrapped it escapes
+    # fetch_lock_texts' handler and one flaky blob fetch aborts the whole
+    # dashboard update before any repo file is written.
+    def boom(req, timeout=None):
+        raise rfs.urllib.error.URLError("name resolution failed")
+
+    monkeypatch.setattr(rfs.urllib.request, "urlopen", boom)
+    try:
+        rfs._post_graphql("tok", {"query": "{}"})
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "name resolution failed" in str(exc)
+
+
+def test_post_graphql_wraps_timeouts_as_runtime_error(monkeypatch):
+    # urlopen raises TimeoutError directly rather than wrapping it in URLError,
+    # so it needs naming separately.
+    def boom(req, timeout=None):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(rfs.urllib.request, "urlopen", boom)
+    try:
+        rfs._post_graphql("tok", {"query": "{}"})
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "timed out" in str(exc)
+
+
+def test_fetch_lock_texts_survives_a_transport_failure(capsys):
+    # The whole point of the wrap: an enrichment pass degrades to "no signal for
+    # this PR", never to a dashboard that skipped every repo.
+    prs = [_candidate()]
+
+    def flaky_post(token, payload):
+        raise RuntimeError("GraphQL request failed: <urlopen error timed out>")
+
+    assert rfs.fetch_lock_texts("tok", prs, flaky_post) == 0
+    assert "uvLockText" not in prs[0]
+    assert "could not read uv.lock" in capsys.readouterr().err
