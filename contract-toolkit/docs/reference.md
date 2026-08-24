@@ -212,7 +212,7 @@ with the consumer.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `name` | `ArtifactFieldPath` | — | Dotted path to the field within a record: `"a"`, `"a.b"`, `"a.b.c"`. Empty segments (`".a"`, `"a."`, `"a..b"`) fail generation. |
+| `name` | `ArtifactFieldPath` | — | Path to the field within a record, built from two step kinds: `.name` descends into a container's named member (`"a.b"`), `[]` descends into an array's element (`"tags[]"`, `"columns[].name"`). Empty segments (`".a"`, `"a."`, `"a..b"`) and malformed brackets (`"[]"`, `"a["`, `"a[0]"`) fail generation. |
 | `type` | `ArtifactFieldTypeExtended` | `"any"` | Logical type asserted for this field. |
 | `required` | Boolean | `true` | Whether the field must be present in every record / in the parquet schema. Always rendered. |
 | `description` | String (non-empty) | — | **Required.** What the field carries and what the consumer expects of it. Never asserted at runtime — it is documentation, enforced at authoring time, and always present in the output. |
@@ -276,10 +276,43 @@ not asserted" — declare it rather than inventing a wrong type to satisfy the e
 
 #### Nesting
 
-Nested payloads are declared as **dotted field paths plus a container type**, not a
-recursive type grammar: declare `attributes` as `struct` and `attributes.name` as
-`string`. Deeply-nested cases with thousands of properties are not declared here at
-all — the SDK's model-backed schema source delegates to the executable model instead.
+Nested payloads are declared as **paths plus a container type**, not a recursive type
+grammar. There are two step kinds:
+
+| Step | Means | Example |
+|---|---|---|
+| `.name` | descend into a container's named member | `attributes` (`struct`) → `attributes.name` (`string`) |
+| `[]` | descend into an array's **element** | `columns` (`array`) → `columns[]` (`struct`) → `columns[].name` (`string`) |
+
+An array of scalars carries a leaf type on the element step instead of a struct:
+`tags` as `array`, `tags[]` as `string`.
+
+`[]` is the explicit "descend into the list" step precisely because the physical
+encoding is not. Parquet spells the same leaf `columns.list.element.name` under the
+3-level list encoding and `columns.bag.array.name` under the legacy 2-level one, so a
+declaration written in physical terms would be pinned to an encoding the producer can
+change without telling anyone. `[]` says what is *meant*; each validator resolves it
+for its own format.
+
+On an element path, **`required` reads per element**: `columns[].name` required means
+every element must carry `name`, and an empty array satisfies it vacuously. Declaring
+the array itself `required = false` is the separate statement that the array may be
+absent entirely.
+
+**Every path prefix must itself be declared, with a container type that can hold what
+the path descends into.** Declaring `attributes.name` while leaving `attributes`
+undeclared fails generation — it would drop exactly the check that catches a producer
+which flattened the struct away, since the leaf assertion can still pass against a
+flattened record. Declaring `attributes` as `string` alongside `attributes.name` fails
+too: that is a contradiction the validator would otherwise have to resolve by guessing.
+A `.name` step needs its container declared `struct`/`map`/`json`/`any`; an `[]` step
+needs `array`/`any`.
+
+Index selection (`columns[0]`) is rejected by the grammar: a schema describes every
+element, not one of them.
+
+Deeply-nested cases with thousands of properties are not declared here at all — the
+SDK's model-backed schema source delegates to the executable model instead.
 
 ```pkl
 artifactSchemas {
@@ -323,6 +356,22 @@ artifactSchemas {
         type = "string"
         description = "Stable identity of the entity. Publish upserts on it."
       }
+      new ArtifactField {
+        name = "attributes.columns"
+        type = "array"
+        required = false
+        description = "Child columns carried inline. Absent for types that have none."
+      }
+      new ArtifactField {
+        name = "attributes.columns[]"
+        type = "struct"
+        description = "One column."
+      }
+      new ArtifactField {
+        name = "attributes.columns[].name"
+        type = "string"
+        description = "Column name as it appears in the source."
+      }
     }
   }
 }
@@ -344,9 +393,12 @@ artifactSchemas {
     "transformed_entities": {
       "format": "ndjson",
       "fields": [
-        { "name": "typeName",                 "type": "string", "required": true, "description": "Atlan type this record instantiates. Publish routes on it." },
-        { "name": "attributes",               "type": "struct", "required": true, "description": "Container for the entity's attributes." },
-        { "name": "attributes.qualifiedName", "type": "string", "required": true, "description": "Stable identity of the entity. Publish upserts on it." }
+        { "name": "typeName",                 "type": "string", "required": true,  "description": "Atlan type this record instantiates. Publish routes on it." },
+        { "name": "attributes",               "type": "struct", "required": true,  "description": "Container for the entity's attributes." },
+        { "name": "attributes.qualifiedName", "type": "string", "required": true,  "description": "Stable identity of the entity. Publish upserts on it." },
+        { "name": "attributes.columns",       "type": "array",  "required": false, "description": "Child columns carried inline. Absent for types that have none." },
+        { "name": "attributes.columns[]",     "type": "struct", "required": true,  "description": "One column." },
+        { "name": "attributes.columns[].name","type": "string", "required": true,  "description": "Column name as it appears in the source." }
       ]
     }
   }

@@ -367,6 +367,71 @@ check_artifact_schemas "empty field description" 'isEmpty' "$(artifact_schemas_b
     fields { new ArtifactField { name = "START_TIME"; type = "timestamp"; description = "" } }
   }')"
 
+# A nested path whose container is undeclared drops exactly the check that catches a
+# producer which flattened the container away — the leaf assertion can still pass
+# against a flattened record. And a container declared with a scalar type is a
+# contradiction the validator would have to resolve by guessing.
+check_artifact_schemas "nested path with undeclared container" 'without their container' "$(artifact_schemas_body '  ["raw_queries"] = new ArtifactSchema {
+    format = "ndjson"
+    fields { new ArtifactField { name = "attributes.name"; type = "string"; description = "d" } }
+  }')"
+
+check_artifact_schemas "element path with undeclared element" 'without their container' "$(artifact_schemas_body '  ["raw_queries"] = new ArtifactSchema {
+    format = "ndjson"
+    fields {
+      new ArtifactField { name = "columns"; type = "array"; description = "d" }
+      new ArtifactField { name = "columns[].name"; type = "string"; description = "d" }
+    }
+  }')"
+
+check_artifact_schemas "named-member step into a scalar container" 'descends into' "$(artifact_schemas_body '  ["raw_queries"] = new ArtifactSchema {
+    format = "ndjson"
+    fields {
+      new ArtifactField { name = "attributes"; type = "string"; description = "d" }
+      new ArtifactField { name = "attributes.name"; type = "string"; description = "d" }
+    }
+  }')"
+
+check_artifact_schemas "[] step into a non-array container" 'descends into' "$(artifact_schemas_body '  ["raw_queries"] = new ArtifactSchema {
+    format = "ndjson"
+    fields {
+      new ArtifactField { name = "columns"; type = "struct"; description = "d" }
+      new ArtifactField { name = "columns[]"; type = "struct"; description = "d" }
+    }
+  }')"
+
+# Index selection is not a declaration — a schema describes every element, not one of
+# them — so `columns[0]` must fail the path grammar rather than be read as `columns[]`.
+check_artifact_schemas "index selection in a path" 'Type constraint' "$(artifact_schemas_body '  ["raw_queries"] = new ArtifactSchema {
+    format = "ndjson"
+    fields { new ArtifactField { name = "columns[0]"; type = "struct"; description = "d" } }
+  }')"
+
+# Control: a fully-declared array of structs must generate cleanly. Without this, the
+# four refusals above would pass even if every element path were rejected outright.
+echo ":: Checking a fully-declared array of structs still generates (control)..."
+AS_ARR_CONTRACT="$(mktemp "$REPO_ROOT/test-artifact-schemas-arr-XXXXXX.pkl")"
+AS_ARR_OUT="$(mktemp -d "$REPO_ROOT/test-artifact-schemas-arr-out-XXXXXX")"
+artifact_schemas_body '  ["transformed_entities"] = new ArtifactSchema {
+    format = "ndjson"
+    fields {
+      new ArtifactField { name = "columns"; type = "array"; description = "d" }
+      new ArtifactField { name = "columns[]"; type = "struct"; description = "d" }
+      new ArtifactField { name = "columns[].name"; type = "string"; description = "d" }
+    }
+  }' > "$AS_ARR_CONTRACT"
+AS_ARR_ERR="$(pkl eval -m "$AS_ARR_OUT" "$AS_ARR_CONTRACT" 2>&1 || true)"
+if echo "$AS_ARR_ERR" | grep -q "Pkl Error"; then
+  echo "FAIL: control contract with a fully-declared array of structs failed to generate"
+  echo "  Got: $AS_ARR_ERR"
+  fail=1
+elif ! grep -q '"columns\[\].name"' "$AS_ARR_OUT/app/generated/artifact_schemas.json"; then
+  echo "FAIL: control contract did not render the element path columns[].name"
+  fail=1
+fi
+rm -f "$AS_ARR_CONTRACT"
+rm -rf "$AS_ARR_OUT"
+
 # A bundle root has no contract model, so a key there could not name a real
 # FileReference field, and the file it would emit could be picked up as a fallback
 # for an entrypoint that declares nothing. Generation must refuse.

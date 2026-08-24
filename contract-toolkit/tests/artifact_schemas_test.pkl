@@ -8,6 +8,10 @@
 //   - an app that declares nothing emits NO `artifact_schemas.json`, so adopting
 //     the block is opt-in and existing consumer repos see no spurious diff.
 //   - declarations are keyed by contract field name, never by path shape.
+//   - nesting stays flat: a container declaration plus leaf paths, with `[]` as the
+//     "descend into the list" step, so arrays of structs are expressible without a
+//     recursive type grammar. (The refusals for an undeclared or wrongly-typed
+//     container live in scripts/check-invariants.sh.)
 //   - a bundle relocates each entrypoint's declarations under
 //     `app/generated/{entrypoint}/` with no bundle-specific wiring.
 
@@ -200,6 +204,62 @@ local extendedSchemas = parser.parse(
   extendedApp.output.files["app/generated/artifact_schemas.json"].text
 )
 
+// ── Element paths: arrays of structs, and scalar arrays ───────────────────────
+
+local arraysApp = (App) {
+  name = "arrays-app"
+  displayName = "Arrays App"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  uiConfig = bundleUiConfig
+
+  artifactSchemas {
+    ["entities"] = new App.ArtifactSchema {
+      format = "ndjson"
+      fields {
+        new App.ArtifactField {
+          name = "columns"
+          type = "array"
+          description = "Child columns carried inline."
+        }
+        new App.ArtifactField {
+          name = "columns[]"
+          type = "struct"
+          description = "One column."
+        }
+        new App.ArtifactField {
+          name = "columns[].name"
+          type = "string"
+          description = "Column name."
+        }
+        new App.ArtifactField {
+          name = "columns[].order"
+          type = "int"
+          required = false
+          description = "Ordinal position, when the source exposes one."
+        }
+        new App.ArtifactField {
+          name = "tags"
+          type = "array"
+          description = "Source-side tags."
+        }
+        new App.ArtifactField {
+          name = "tags[]"
+          type = "string"
+          description = "One tag. Elements are plain strings."
+        }
+      }
+    }
+  }
+}
+
+local arraysSchemas = parser.parse(
+  arraysApp.output.files["app/generated/artifact_schemas.json"].text
+)
+
+local arraysFields = arraysSchemas["schemas"]["entities"]["fields"]
+
 facts {
   // ── Opt-in: no declaration, no artifact ────────────────────────────────────
   ["an app that declares nothing emits no artifact_schemas.json"] {
@@ -288,6 +348,41 @@ facts {
   ["extension types are declarable without widening the floor"] {
     extendedSchemas["schemas"]["wide"]["fields"].toList().map((f) -> f["type"]) ==
       List("decimal", "binary", "time", "array", "struct", "map")
+  }
+
+  // ── Element paths ──────────────────────────────────────────────────────────
+  // An array of structs is three declarations, not a recursive grammar: the array,
+  // its element, and each leaf under the element.
+  ["an array of structs is declared as array + element + leaves"] {
+    arraysFields.toList().map((f) -> f["name"]) == List(
+      "columns", "columns[]", "columns[].name", "columns[].order", "tags", "tags[]"
+    )
+    arraysFields[0]["type"] == "array"
+    arraysFields[1]["type"] == "struct"
+    arraysFields[2]["type"] == "string"
+  }
+
+  // A scalar array carries a leaf type on the element step rather than a struct —
+  // the case an `elementType` property would have handled, expressed with the same
+  // mechanism as everything else.
+  ["a scalar array carries its element type on the [] step"] {
+    arraysFields[4]["name"] == "tags"
+    arraysFields[4]["type"] == "array"
+    arraysFields[5]["name"] == "tags[]"
+    arraysFields[5]["type"] == "string"
+  }
+
+  // `required` is per element on an element path, so it renders exactly as declared
+  // and the validator (not the toolkit) owns the vacuous-on-empty-array reading.
+  ["required renders per element on an element path"] {
+    arraysFields[2]["required"] == true
+    arraysFields[3]["required"] == false
+  }
+
+  // The committed example carries the same shape, so step 3's fixture exercises it.
+  ["the example fixture declares an array of structs"] {
+    exampleSchemas["schemas"]["transformed_entities"]["fields"].toList()
+      .map((f) -> f["name"]).contains("attributes.columns[].name")
   }
 
   // ── Bundle relocation ──────────────────────────────────────────────────────

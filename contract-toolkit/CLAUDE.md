@@ -63,7 +63,7 @@ demonstrates distinct feature surface, verified by `tests/*.pkl`.
 - `connection-ref`: `ConnectionRefInput` widget, `pipeline.publish = null`.
 - `publish-controls`: publish toggles, `includeInputFields`, `errorHandling`.
 - `fanin`: multi-parent fan-in via `dependsOn`, explicit `DependencyCondition`.
-- `artifact-schemas`: `artifactSchemas` data hand-off declarations — parquet + NDJSON, dotted nested paths, an input artifact.
+- `artifact-schemas`: `artifactSchemas` data hand-off declarations — parquet + NDJSON, nested paths, arrays of structs (`[]` element step), an input artifact.
 
 ## Editing Rules
 

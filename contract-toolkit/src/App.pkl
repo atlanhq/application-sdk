@@ -3867,13 +3867,48 @@ typealias ArtifactFormat = "ndjson"|"parquet"
 /// nothing and silently validate zero records.
 typealias ContractFieldName = String(matches(Regex("[A-Za-z_][A-Za-z0-9_]*")))
 
-/// Dotted path to a field inside an artifact record: `"a"`, `"a.b"`, `"a.b.c"`.
+/// Path to a field inside an artifact record, built from two step kinds:
 ///
-/// Nested payloads are declared as dotted paths plus a container type — declare
-/// `attributes` as `struct` and `attributes.name` as `string` — rather than a
-/// recursive type grammar. Empty segments (`""`, `".a"`, `"a."`, `"a..b"`) are
-/// rejected at eval time.
-typealias ArtifactFieldPath = String(matches(Regex("[^.]+(\\.[^.]+)*")))
+///   - `.name` — descend into a container's named member: `"a"`, `"a.b"`, `"a.b.c"`
+///   - `[]` — descend into an array's **element**: `"tags[]"`, `"columns[].name"`
+///
+/// Nested payloads are declared as paths plus a container type — declare
+/// `attributes` as `struct` and `attributes.name` as `string`; declare `columns` as
+/// `array`, `columns[]` as `struct`, and `columns[].name` as `string` — rather than
+/// a recursive type grammar. The flat form is what parquet already uses to address
+/// nested leaves, and it lets a static diff compare two *sets* of paths instead of
+/// two trees.
+///
+/// `[]` is the explicit "descend into the list" step precisely because the physical
+/// encoding is not: parquet spells the same leaf `columns.list.element.name` under a
+/// 3-level encoding and `columns.bag.array.name` under the legacy 2-level one, so a
+/// declaration written in physical terms would be pinned to an encoding the producer
+/// can change. `[]` says what is meant; the validator resolves it per format.
+///
+/// On an element path, `required` reads per element — `columns[].name` required means
+/// every element must carry `name`, and an empty array satisfies it vacuously.
+///
+/// Rejected at eval time: empty segments (`""`, `".a"`, `"a."`, `"a..b"`) and
+/// malformed brackets (`"[]"`, `"a["`, `"a]"`, `"a[0]"` — index selection is not a
+/// declaration, since a schema describes every element, not one of them).
+typealias ArtifactFieldPath =
+  String(matches(Regex("[^.\\[\\]]+(\\[\\])*(\\.[^.\\[\\]]+(\\[\\])*)*")))
+
+/// The path one step up from `p`, or `null` when `p` is already top level.
+/// `"a.b"` → `"a"`, `"a[]"` → `"a"`, `"a[].b"` → `"a[]"`.
+const local function artifactFieldParentPath(p: String): String? =
+  if (p.endsWith("[]")) p.dropLast(2)
+  else
+    let (i = p.lastIndexOfOrNull("."))
+    if (i == null) null else p.take(i)
+
+/// Types that can carry a named member (`parent.child`). `json` qualifies because a
+/// JSON blob in a string column is descended into; `any` qualifies because "type not
+/// asserted" must not also mean "cannot be nested into".
+const local artifactNamedMemberContainers: List<String> = List("struct", "map", "json", "any")
+
+/// Types that can carry an element (`parent[]`).
+const local artifactElementContainers: List<String> = List("array", "any")
 
 /// One declared field within an artifact.
 class ArtifactField {
@@ -3920,6 +3955,45 @@ class ArtifactSchema {
 
   /// Free-form note for humans reading the generated artifact. Never asserted.
   description: String?
+
+  /// Every nested path must have its container declared, and that container must be
+  /// a type that can actually hold what the path descends into.
+  ///
+  /// Declaring `attributes.name` while leaving `attributes` undeclared drops exactly
+  /// the check that catches a producer which flattened the struct away — the leaf
+  /// assertion still passes against a flattened record in some readers. And
+  /// declaring `attributes` as `string` while also declaring `attributes.name` is a
+  /// contradiction the validator would have to resolve by guessing. Both fail here.
+  hidden _nestingCheck: Any =
+    let (byName = fields.toList().toMap((f) -> f.name, (f) -> f))
+    let (orphans = fields.toList().filter((f) ->
+      let (parent = artifactFieldParentPath(f.name))
+      parent != null && !byName.containsKey(parent)
+    ))
+    if (!orphans.isEmpty)
+      throw("ArtifactSchema: nested path(s) \(orphans.map((f) -> "'\(f.name)' (declare '\(artifactFieldParentPath(f.name))')").join(", ")) "
+        + "declared without their container. Declare every path prefix with its "
+        + "container type — `columns` as `array`, `columns[]` as `struct`, then "
+        + "`columns[].name` — so a producer that flattened the container away is "
+        + "caught rather than passing on the leaf assertion alone.")
+    else
+      let (mismatches = fields.toList().filter((f) ->
+        let (parent = artifactFieldParentPath(f.name))
+        if (parent == null) false
+        else if (f.name.endsWith("[]"))
+          !artifactElementContainers.contains(byName[parent].type)
+        else
+          !artifactNamedMemberContainers.contains(byName[parent].type)
+      ))
+      if (!mismatches.isEmpty)
+        throw("ArtifactSchema: \(mismatches.map((f) ->
+            let (parent = artifactFieldParentPath(f.name)!!)
+            "'\(f.name)' descends into '\(parent)', declared `\(byName[parent].type)`"
+          ).join("; ")). "
+          + "A path with a named-member step needs its container declared as one of "
+          + "\(artifactNamedMemberContainers.join("/")); a path with an `[]` step needs "
+          + "\(artifactElementContainers.join("/")).")
+      else null
 }
 
 local function renderArtifactField(f: ArtifactField): Mapping<String, Any> = new Mapping {
@@ -3931,7 +4005,11 @@ local function renderArtifactField(f: ArtifactField): Mapping<String, Any> = new
   ["description"] = f.description
 }
 
-local function renderArtifactSchema(s: ArtifactSchema): Mapping<String, Any> = new Mapping {
+local function renderArtifactSchema(s: ArtifactSchema): Mapping<String, Any> =
+  // Hidden properties are lazy — reference the validator so its `throw` fires at eval
+  // time rather than silently rendering a declaration with an undeclared container.
+  let (_nesting = s._nestingCheck)
+  new Mapping {
   ["format"] = s.format
   when (s.description != null) { ["description"] = s.description }
   ["fields"] = new Listing {

@@ -15,9 +15,10 @@
 ///   - a **parquet** hand-off whose `START_TIME` is declared `timestamp`. Arrow
 ///     `timestamp[*]` satisfies that at any unit; arrow `string` does not. That
 ///     one asymmetry is the check a 73-day frozen-lineage RCA needed.
-///   - an **NDJSON** hand-off with nested fields declared as dotted paths plus a
-///     container type (`attributes` is `struct`, `attributes.name` is `string`)
-///     — no recursive type grammar.
+///   - an **NDJSON** hand-off with nested fields declared as paths plus a container
+///     type — `attributes` is `struct` and `attributes.name` is `string`; an array
+///     of structs is `attributes.columns` (`array`), `attributes.columns[]`
+///     (`struct`), `attributes.columns[].name` (`string`). No recursive grammar.
 ///   - an artifact declared on the app's **input**: the consumer owns the
 ///     declaration, so a consuming app states what it requires of what it reads.
 ///
@@ -128,6 +129,41 @@ artifactSchemas {
         type = "timestamp"
         required = false
         description = "When this entity was last written by a run. Absent on the first sync, set on every later one."
+      }
+      new ArtifactField {
+        name = "attributes.columns"
+        type = "array"
+        required = false
+        description = "Child columns carried inline on a table entity. Absent for entity types that have none."
+      }
+      new ArtifactField {
+        // The array's ELEMENT, addressed with the `[]` step. Declaring it as a struct
+        // is what lets the two leaf paths below mean anything.
+        name = "attributes.columns[]"
+        type = "struct"
+        description = "One column. `required` on the paths below reads per element, so an empty columns array satisfies them vacuously."
+      }
+      new ArtifactField {
+        name = "attributes.columns[].name"
+        type = "string"
+        description = "Column name as it appears in the source."
+      }
+      new ArtifactField {
+        name = "attributes.columns[].order"
+        type = "int"
+        description = "Ordinal position of the column within the table, 1-based."
+      }
+      new ArtifactField {
+        // A scalar array: the element step carries a leaf type rather than a struct.
+        name = "attributes.tags"
+        type = "array"
+        required = false
+        description = "Source-side tags on the entity. Absent when the source has no tagging."
+      }
+      new ArtifactField {
+        name = "attributes.tags[]"
+        type = "string"
+        description = "One tag. Elements are plain strings, not objects."
       }
       new ArtifactField {
         // Present-but-unasserted: a thin contract states presence without anyone
