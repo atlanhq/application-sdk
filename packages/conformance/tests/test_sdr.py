@@ -1257,99 +1257,6 @@ def test_p030_absence_message_covers_sqlapp_run_delegation(tmp_path: Path) -> No
     assert "full-DAG e2e" in p030[0].message
 
 
-# ── P041: hard preflight gate in an SDR app ──────────────────────────────────
-
-
-def test_p041_rule_metadata() -> None:
-    rule = get_rule("P041")
-    assert rule.name == "SdrHardPreflightGate"
-    assert rule.tier == EnforcementTier.WARN
-    assert rule.scope == RuleScope.APP
-    assert rule.autofixable is False
-    assert rule.rationale.strip()
-    assert rule.since == "0.18.0"
-    assert rule.category == "sdr-readiness"
-
-
-_APP_WITH_UPLOAD = (
-    "class Connector:\n    async def run(self):\n        await self.upload('o')\n"
-)
-
-
-def test_p041_fires_on_unconditional_hard_gate(tmp_path: Path) -> None:
-    _write(
-        tmp_path,
-        {
-            "atlan.yaml": _SDR_ATLAN_YAML,
-            "app/connector.py": _APP_WITH_UPLOAD,
-            "app/main.py": ("class MyApp(App):\n" '    preflight_gate_mode = "hard"\n'),
-        },
-    )
-    p041 = [f for f in _run(tmp_path) if f.rule_id == "P041"]
-    assert len(p041) == 1
-    assert p041[0].file == "app/main.py"
-    assert p041[0].line == 2
-    assert "ATLAN_PREFLIGHT_GATE_MODE" in p041[0].message
-
-
-def test_p041_fires_on_annotated_assignment(tmp_path: Path) -> None:
-    _write(
-        tmp_path,
-        {
-            "atlan.yaml": _SDR_ATLAN_YAML,
-            "app/connector.py": _APP_WITH_UPLOAD,
-            "app/main.py": (
-                "class MyApp(App):\n" '    preflight_gate_mode: str = "hard"\n'
-            ),
-        },
-    )
-    assert any(f.rule_id == "P041" for f in _run(tmp_path))
-
-
-def test_p041_silent_on_soft_gate(tmp_path: Path) -> None:
-    _write(
-        tmp_path,
-        {
-            "atlan.yaml": _SDR_ATLAN_YAML,
-            "app/connector.py": _APP_WITH_UPLOAD,
-            "app/main.py": ("class MyApp(App):\n" '    preflight_gate_mode = "soft"\n'),
-        },
-    )
-    assert not any(f.rule_id == "P041" for f in _run(tmp_path))
-
-
-def test_p041_silent_on_run_mode_conditional(tmp_path: Path) -> None:
-    """The recommended interim posture — a run-mode conditional — never fires."""
-    _write(
-        tmp_path,
-        {
-            "atlan.yaml": _SDR_ATLAN_YAML,
-            "app/connector.py": _APP_WITH_UPLOAD,
-            "app/main.py": (
-                "class MyApp(App):\n"
-                "    preflight_gate_mode = (\n"
-                '        "soft" if ENABLE_ATLAN_UPLOAD else "hard"\n'
-                "    )\n"
-            ),
-        },
-    )
-    assert not any(f.rule_id == "P041" for f in _run(tmp_path))
-
-
-def test_p041_silent_on_non_sdr_app(tmp_path: Path) -> None:
-    _write(
-        tmp_path,
-        {
-            "atlan.yaml": _NON_SDR_ATLAN_YAML,
-            "app/main.py": ("class MyApp(App):\n" '    preflight_gate_mode = "hard"\n'),
-        },
-    )
-    assert not any(f.rule_id == "P041" for f in _run(tmp_path))
-
-
-# ── Regression: evidence must come from the scope being graded ───────────────
-
-
 def test_p030_absence_not_cleared_by_a_comment_mentioning_self_upload(
     tmp_path: Path,
 ) -> None:
@@ -1509,75 +1416,8 @@ def test_p030_real_fleet_bridge_shapes_are_not_flagged(tmp_path: Path) -> None:
         assert not any(f.rule_id == "P030" for f in _run(root)), body
 
 
-def test_p041_silent_on_if_else_run_mode_split(tmp_path: Path) -> None:
-    """The if/else spelling of the posture the rule's own remediation recommends.
-
-    Semantically identical to the documented ternary — an ordinary style choice
-    once the branches grow past one line.
-    """
-    _write(
-        tmp_path,
-        {
-            "atlan.yaml": _SDR_ATLAN_YAML,
-            "app/connector.py": (
-                "class Connector:\n"
-                "    def configure(self):\n"
-                "        if ENABLE_ATLAN_UPLOAD:\n"
-                "            self.preflight_gate_mode = 'soft'\n"
-                "        else:\n"
-                "            self.preflight_gate_mode = 'hard'\n"
-            ),
-        },
-    )
-    assert not any(f.rule_id == "P041" for f in _run(tmp_path))
-
-
-def test_p041_fires_on_inverted_and_both_hard_and_env_default(
-    tmp_path: Path,
-) -> None:
-    """Structural exemption of every non-Constant let these three escape."""
-    cases = {
-        "inverted": "'hard' if ENABLE_ATLAN_UPLOAD else 'soft'",
-        "both_hard": "'hard' if FLAG else 'hard'",
-        "env_default": "os.environ.get('ATLAN_PREFLIGHT_GATE_MODE', 'hard')",
-    }
-    for label, expr in cases.items():
-        root = tmp_path / label
-        _write(
-            root,
-            {
-                "atlan.yaml": _SDR_ATLAN_YAML,
-                "app/connector.py": (
-                    "class Connector:\n    preflight_gate_mode = " + expr + "\n"
-                ),
-            },
-        )
-        assert any(f.rule_id == "P041" for f in _run(root)), label
-
-
-def test_p041_silent_on_env_override_of_the_run_mode_split(tmp_path: Path) -> None:
-    """The full documented posture: env-overridable, defaulting to the split."""
-    _write(
-        tmp_path,
-        {
-            "atlan.yaml": _SDR_ATLAN_YAML,
-            "app/connector.py": (
-                "class Connector:\n"
-                "    preflight_gate_mode = os.environ.get(\n"
-                "        'ATLAN_PREFLIGHT_GATE_MODE',\n"
-                "        'soft' if ENABLE_ATLAN_UPLOAD else 'hard',\n"
-                "    )\n"
-            ),
-        },
-    )
-    assert not any(f.rule_id == "P041" for f in _run(tmp_path))
-
-
-# ── Round-2 regressions ──────────────────────────────────────────────────────
-
-
 def test_sdr_scan_survives_non_utf8_files(tmp_path: Path) -> None:
-    """_is_sdr_app gates P030 and P041 — one bad byte must not take them out."""
+    """_is_sdr_app gates the SDR rules — one bad byte must not take them out."""
     _write(
         tmp_path,
         {
@@ -1664,69 +1504,6 @@ def test_p030_two_hop_same_class_delegation_is_not_a_stub(tmp_path: Path) -> Non
     assert not any(f.rule_id == "P030" for f in _run(tmp_path))
 
 
-def test_p041_fires_on_or_default_and_name_indirection(tmp_path: Path) -> None:
-    """The or-default env idiom and one hop of module-level indirection."""
-    cases = {
-        "or_default": (
-            "import os\n"
-            "class Connector:\n"
-            "    preflight_gate_mode = os.environ.get('ATLAN_PREFLIGHT_GATE_MODE')"
-            " or 'hard'\n"
-        ),
-        "name_indirection": (
-            "MODE = 'hard'\nclass Connector:\n    preflight_gate_mode = MODE\n"
-        ),
-    }
-    for label, src in cases.items():
-        root = tmp_path / label
-        _write(root, {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": src})
-        assert any(f.rule_id == "P041" for f in _run(root)), label
-
-
-def test_p041_silent_on_or_default_soft(tmp_path: Path) -> None:
-    _write(
-        tmp_path,
-        {
-            "atlan.yaml": _SDR_ATLAN_YAML,
-            "app/connector.py": (
-                "import os\n"
-                "class Connector:\n"
-                "    preflight_gate_mode = os.environ.get('ATLAN_PREFLIGHT_GATE_MODE')"
-                " or 'soft'\n"
-            ),
-        },
-    )
-    assert not any(f.rule_id == "P041" for f in _run(tmp_path))
-
-
-def test_p041_silent_on_helper_call_with_hard_default(tmp_path: Path) -> None:
-    """An arbitrary helper call is opaque — its `default="hard"` proves nothing.
-
-    Only the documented env-lookup callees (`os.environ.get` / `os.getenv`)
-    have their default read as the deployment mode; for any other callable the
-    returned value is invisible to a static check, so a constant keyword must
-    not fire the rule.
-    """
-    cases = {
-        "helper_kw_default": (
-            "class Connector:\n"
-            "    preflight_gate_mode = resolve_gate(env_mode, default='hard')\n"
-        ),
-        "helper_positional_default": (
-            "class Connector:\n"
-            "    preflight_gate_mode = resolve_gate(env_mode, 'hard')\n"
-        ),
-        "config_getter": (
-            "class Connector:\n"
-            "    preflight_gate_mode = self.config.get('gate_mode', 'hard')\n"
-        ),
-    }
-    for label, src in cases.items():
-        root = tmp_path / label
-        _write(root, {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": src})
-        assert not any(f.rule_id == "P041" for f in _run(root)), label
-
-
 def test_p030_compound_upload_names_still_need_a_store(tmp_path: Path) -> None:
     """`upload` as one token of a compound name proves nothing on its own.
 
@@ -1789,39 +1566,6 @@ def test_p030_bare_sdk_storage_helpers_are_transfers(tmp_path: Path) -> None:
         assert not any(f.rule_id == "P030" for f in _run(root)), body
 
 
-def test_p041_fires_on_class_body_constant_indirection(tmp_path: Path) -> None:
-    """`preflight_gate_mode` is conventionally a class attribute."""
-    _write(
-        tmp_path,
-        {
-            "atlan.yaml": _SDR_ATLAN_YAML,
-            "app/connector.py": (
-                "class Connector:\n"
-                "    MODE = 'hard'\n"
-                "    preflight_gate_mode = MODE\n"
-            ),
-        },
-    )
-    assert any(f.rule_id == "P041" for f in _run(tmp_path))
-
-
-def test_p041_fires_on_deterministic_reassigned_constant(tmp_path: Path) -> None:
-    """Two straight-line module assignments have a deterministic final value."""
-    _write(
-        tmp_path,
-        {
-            "atlan.yaml": _SDR_ATLAN_YAML,
-            "app/connector.py": (
-                "MODE = 'soft'\n"
-                "MODE = 'hard'\n"
-                "class Connector:\n"
-                "    preflight_gate_mode = MODE\n"
-            ),
-        },
-    )
-    assert any(f.rule_id == "P041" for f in _run(tmp_path))
-
-
 def test_p030_positional_store_argument_is_a_transfer(tmp_path: Path) -> None:
     """The SDK's own callers pass the store positionally."""
     _write(
@@ -1836,19 +1580,3 @@ def test_p030_positional_store_argument_is_a_transfer(tmp_path: Path) -> None:
         },
     )
     assert not any(f.rule_id == "P030" for f in _run(tmp_path))
-
-
-def test_p041_fires_on_annotated_constant_indirection(tmp_path: Path) -> None:
-    """`MODE: str = "hard"` is the annotated spelling of a resolved constant."""
-    _write(
-        tmp_path,
-        {
-            "atlan.yaml": _SDR_ATLAN_YAML,
-            "app/connector.py": (
-                "MODE: str = 'hard'\n"
-                "class Connector:\n"
-                "    preflight_gate_mode = MODE\n"
-            ),
-        },
-    )
-    assert any(f.rule_id == "P041" for f in _run(tmp_path))

@@ -458,7 +458,7 @@ drafting.
   — route to residue with the proposed shape; do not mechanically rename the
   class.  Leave `AsyncAtlanClient` usage untouched.
 
-**SDR-readiness rules (P029/P030, P037/P038/P039, P041, P042)** — all suggest-only,
+**SDR-readiness rules (P029/P030, P037/P038/P039, P042)** — all suggest-only,
 scope=app; `classification` is always `"judgment"`.  All gate on
 `self_deployed_runtime: true` in `atlan.yaml`.  Suggest-only is about *how the
 loop treats them* — never auto-edit an SDR finding, always draft and route to
@@ -592,31 +592,6 @@ say so.
   Pkl-layer change: declare `agent_json` on the extract-input contract in
   `contract/app.pkl` (or set `allow_unbounded_fields=True`) and regenerate; do
   not hand-edit the generated `_input.py`.  Route to residue for confirmation.
-
-- **P041 SdrHardPreflightGate** (WARN) — the app unconditionally sets
-  `preflight_gate_mode = "hard"`.  In SDR (agent) mode config resolves through
-  the customer's secret store, and customers rightly mirror only *secrets*
-  into it — a preflight check depending on non-secret config (e.g. a
-  database/schema existence check) then fails spuriously and the hard gate
-  aborts the whole workflow, while connectors with soft gates run the same
-  checks non-fatally and succeed.  Draft a proposal for the interim
-  run-mode-differentiated posture — `preflight_gate_mode = "soft" if
-  ENABLE_ATLAN_UPLOAD else "hard"` — noting the `ATLAN_PREFLIGHT_GATE_MODE`
-  env override as the per-deployment escape hatch; the intended long-term fix
-  is SDK-side (gate enforcement differentiated by run mode), so route to
-  residue for confirmation rather than auto-applying.
-
-  The exemption is **semantic, not structural**: `"hard"` is safe only in the
-  *else* arm.  Silent on `"soft" if ENABLE_ATLAN_UPLOAD else "hard"` and on its
-  `if`/`else` statement spelling (an ordinary style choice once the branches
-  grow), and on `os.environ.get("ATLAN_PREFLIGHT_GATE_MODE", <that ternary>)`.
-  Still fires on the inverted ternary (`"hard" if ENABLE_ATLAN_UPLOAD else
-  "soft"` — hard exactly when upload is on), on a both-arms-hard ternary, and
-  on `os.environ.get("ATLAN_PREFLIGHT_GATE_MODE", "hard")`, which is hard on
-  every deployment that does not set the variable.  Known limit: a condition
-  written with inverted polarity (`"hard" if not ENABLE_ATLAN_UPLOAD else
-  "soft"`) reads as the true-arm shape and is flagged — suppress it inline with
-  the reason.
 
 **Transform-template rule (P040)** — suggest-only, scope=app,
 `classification = "judgment"`; backed by `suite.checks.transform_templates`,

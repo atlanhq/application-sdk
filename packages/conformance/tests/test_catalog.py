@@ -319,8 +319,6 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # duckdb; the SDK is the publisher of the [sql]/[incremental] extras.
     # P040: transform-template reserved keywords — only connector apps ship
     # transform YAML templates consumed by the query transformer.
-    # P041: hard preflight gate in an SDR app — gated on self_deployed_runtime,
-    # which the SDK never declares (fleet SDR sweep).
     # P042: hand-rolled upload_to_atlan bridge in an SDR app — same gating as
     # P030, which it was split out of.
     # P043/P045: error-seam — apps must build control flow on the SDK's public
@@ -333,7 +331,6 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "B007",
         "D010",
         "P040",
-        "P041",
         "P042",
         "P043",
         "P044",
@@ -561,9 +558,6 @@ def test_catalog_p_series_present() -> None:
     P040 is TransformTemplateReservedKeyword — an unquoted DuckDB reserved
     keyword used as an identifier in a transform SQL template (ParserException
     at runtime on the daft-less SDK >= 3.22 runtime; fleet SDR sweep).
-    P041 is SdrHardPreflightGate — an SDR app that unconditionally sets
-    preflight_gate_mode = "hard", aborting agent-mode workflows on
-    non-secret-config preflight failures (fleet SDR sweep).
     P042 is SdrHandRolledUploadBridge — a working custom upload_to_atlan
     standing in for App.upload(), split out of P030 so the "bytes move but the
     SDK contract is reimplemented" shape carries its own severity, its own
@@ -619,7 +613,6 @@ def test_catalog_p_series_present() -> None:
         "P038",
         "P039",
         "P040",
-        "P041",
         "P042",
         "P043",
         "P044",
