@@ -1,4 +1,4 @@
-"""Tests for the D-series (D001-D009) dependency_conformance check."""
+"""Tests for the D-series (D001-D011) dependency_conformance check."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from conformance.suite.checks.dependency_conformance import (
     SDK_PYTHON_FLOOR,
     _collect_dialect_drivers,
     _is_bounded_specifier,
+    _is_floating_range,
     _iter_dep_entries,
     _iter_dependency_group_entries,
     _normalise_name,
@@ -888,10 +889,13 @@ def test_main_sarif_output_validates(tmp_path: Path) -> None:
     # Use an unresolvable dependency name so D003 (which inspects installed
     # metadata) treats it as unanalysable and stays silent — keeping this an
     # exactly-one-D001 scenario regardless of what is installed in the test env.
+    # The conformance dev group keeps D011 quiet for the same reason.
     _scratch_pyproject(
         tmp_path,
         '[project]\nname = "x"\nversion = "0"\n'
-        'dependencies = ["nonexistent-fixture-pkg-zzz>=1,<2"]\n',
+        'dependencies = ["nonexistent-fixture-pkg-zzz>=1,<2"]\n'
+        "\n[dependency-groups]\n"
+        'dev = [\n    "atlan-application-sdk-conformance>=0.17.0,<1.0.0",\n]\n',
     )
     sarif_file = tmp_path / "out.sarif"
     main(
@@ -1736,3 +1740,277 @@ def test_d010_fires_when_the_duckdb_edge_is_platform_gated(tmp_path: Path) -> No
         uv_lock=lock,
     )
     assert len(findings) == 1
+
+
+# ── D011: conformance suite undeclared ───────────────────────────────────────
+
+
+def _d011_scan(tmp_path: Path, body: str) -> list:
+    """Write a root pyproject and return only the D011 findings.
+
+    D011 lives in ``scan_all`` (repo-level), not ``scan_text``: it is an
+    *absence* rule about the repo, so a monorepo must not collect one finding
+    per sub-package pyproject.
+    """
+    pp = tmp_path / "pyproject.toml"
+    pp.write_text(body, encoding="utf-8")
+    findings = scan_all(
+        [pp],
+        tmp_path,
+        imported_modules=set(),
+        dist_import_map={},
+        dialect_drivers=set(),
+    )
+    return [f for f in findings if f.rule_id == "D011"]
+
+
+_D011_HEAD = (
+    '[project]\nname = "demo-app"\nversion = "0.1.0"\n'
+    'dependencies = [\n    "atlan-application-sdk>=3.17.2,<4.0.0",\n]\n'
+)
+
+
+def test_d011_fires_when_conformance_undeclared(tmp_path: Path) -> None:
+    findings = _d011_scan(
+        tmp_path,
+        _D011_HEAD + '\n[dependency-groups]\ndev = [\n    "pytest>=8,<9",\n]\n',
+    )
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.rule_id == "D011"
+    # anchored at the [dependency-groups] header (line 8: 6 lines of [project],
+    # then the blank separator) so the reviewer sees where the declaration belongs
+    assert f.line == 8
+    assert "atlan-application-sdk-conformance" in f.message
+    assert not f.suppressed
+
+
+def test_d011_satisfied_by_dependency_group_dev(tmp_path: Path) -> None:
+    findings = _d011_scan(
+        tmp_path,
+        _D011_HEAD + "\n[dependency-groups]\ndev = [\n"
+        '    "atlan-application-sdk-conformance>=0.17.0,<1.0.0",\n]\n',
+    )
+    assert findings == []
+
+
+def test_d011_satisfied_by_any_group_not_only_dev(tmp_path: Path) -> None:
+    """Apps differ on which group they use; any of them satisfies the rule."""
+    findings = _d011_scan(
+        tmp_path,
+        _D011_HEAD + '\n[dependency-groups]\ndev = [\n    "pytest>=8,<9",\n]\n'
+        'test = [\n    "atlan-application-sdk-conformance>=0.17.0,<1.0.0",\n]\n',
+    )
+    assert findings == []
+
+
+def test_d011_satisfied_by_optional_dependencies_array(tmp_path: Path) -> None:
+    """The optional-dependencies shape is in real fleet use; it must not fire."""
+    findings = _d011_scan(
+        tmp_path,
+        _D011_HEAD + "\n[project.optional-dependencies]\ndev = [\n"
+        '    "atlan-application-sdk-conformance>=0.17.0,<1.0.0",\n]\n',
+    )
+    assert findings == []
+
+
+def test_d011_normalises_the_package_name(tmp_path: Path) -> None:
+    """PEP 503 normalisation: underscores/case must still count as declared."""
+    findings = _d011_scan(
+        tmp_path,
+        _D011_HEAD + "\n[dependency-groups]\ndev = [\n"
+        '    "Atlan_Application_SDK_Conformance>=0.17.0,<1.0.0",\n]\n',
+    )
+    assert findings == []
+
+
+def test_d011_anchors_at_line_one_without_dependency_groups_table(
+    tmp_path: Path,
+) -> None:
+    findings = _d011_scan(tmp_path, _D011_HEAD)
+    assert len(findings) == 1
+    assert findings[0].line == 1
+
+
+def test_d011_exempts_the_sdk_itself(tmp_path: Path) -> None:
+    """D011 is app-scoped: the SDK publishes the package, it does not consume it."""
+    findings = _d011_scan(
+        tmp_path,
+        '[project]\nname = "atlan-application-sdk"\nversion = "0.1.0"\n'
+        "dependencies = []\n",
+    )
+    assert findings == []
+
+
+def test_d011_suppressed_inline_directive(tmp_path: Path) -> None:
+    findings = _d011_scan(
+        tmp_path,
+        _D011_HEAD
+        + "\n# conformance: ignore[D011] tool runs from a sibling repo here\n"
+        '[dependency-groups]\ndev = [\n    "pytest>=8,<9",\n]\n',
+    )
+    assert len(findings) == 1
+    assert findings[0].suppressed
+
+
+def test_d011_reported_once_for_a_monorepo_with_sub_pyprojects(
+    tmp_path: Path,
+) -> None:
+    """The reason D011 lives in scan_all: one finding per repo, not per file."""
+    sub = tmp_path / "packages" / "inner"
+    sub.mkdir(parents=True)
+    (sub / "pyproject.toml").write_text(_D011_HEAD, encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(_D011_HEAD, encoding="utf-8")
+    findings = [
+        f
+        for f in scan_all(
+            [tmp_path / "pyproject.toml", sub / "pyproject.toml"],
+            tmp_path,
+            imported_modules=set(),
+            dist_import_map={},
+            dialect_drivers=set(),
+        )
+        if f.rule_id == "D011"
+    ]
+    assert len(findings) == 1
+    assert findings[0].file == "pyproject.toml"
+
+
+def _d011_group(spec: str) -> str:
+    return f'\n[dependency-groups]\ndev = [\n    "{spec}",\n]\n'
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        "atlan-application-sdk-conformance==0.13.0",  # exact pin (worst case)
+        "atlan-application-sdk-conformance===0.13.0",  # arbitrary equality
+        "atlan-application-sdk-conformance~=0.17.0",  # compatible-release pin
+        "atlan-application-sdk-conformance>=0.17.0",  # one-sided, no upper
+        "atlan-application-sdk-conformance<1.0.0",  # one-sided, no floor
+        "atlan-application-sdk-conformance",  # bare name
+    ],
+)
+def test_d011_fires_on_specifier_that_cannot_float(tmp_path: Path, spec: str) -> None:
+    findings = _d011_scan(tmp_path, _D011_HEAD + _d011_group(spec))
+    assert len(findings) == 1
+    assert "cannot" in findings[0].message and "float" in findings[0].message
+    # prescribes the canonical two-sided form
+    assert "atlan-application-sdk-conformance>=0.17.0,<1.0.0" in findings[0].message
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        "atlan-application-sdk-conformance>=0.17.0,<1.0.0",
+        "atlan-application-sdk-conformance>=0.17.0,<=1.0.0",
+        "atlan-application-sdk-conformance>0.16,<1.0.0",
+    ],
+)
+def test_d011_accepts_two_sided_floating_ranges(tmp_path: Path, spec: str) -> None:
+    assert _d011_scan(tmp_path, _D011_HEAD + _d011_group(spec)) == []
+
+
+def test_d011_pin_branch_anchors_at_the_declaring_line(tmp_path: Path) -> None:
+    findings = _d011_scan(
+        tmp_path,
+        _D011_HEAD + '\n[dependency-groups]\ndev = [\n    "pytest>=8,<9",\n'
+        '    "atlan-application-sdk-conformance==0.13.0",\n]\n',
+    )
+    assert len(findings) == 1
+    # line 11: 6 header lines, blank, [dependency-groups], dev = [, pytest, entry
+    assert findings[0].line == 11
+
+
+# ── D011 branch 3: declared and floating, but absent from uv.lock ────────────
+
+
+def _write_lock(tmp_path: Path, *, include_conformance: bool) -> None:
+    body = 'version = 1\nrequires-python = ">=3.11"\n\n'
+    body += '[[package]]\nname = "pytest"\nversion = "8.3.0"\n'
+    if include_conformance:
+        body += (
+            '\n[[package]]\nname = "atlan-application-sdk-conformance"\n'
+            'version = "0.19.1"\n'
+        )
+    (tmp_path / "uv.lock").write_text(body, encoding="utf-8")
+
+
+_D011_OK_GROUP = _d011_group("atlan-application-sdk-conformance>=0.17.0,<1.0.0")
+
+
+def test_d011_fires_when_declared_but_missing_from_lock(tmp_path: Path) -> None:
+    _write_lock(tmp_path, include_conformance=False)
+    findings = _d011_scan(tmp_path, _D011_HEAD + _D011_OK_GROUP)
+    assert len(findings) == 1
+    assert "no entry in uv.lock" in findings[0].message
+    assert "uv lock" in findings[0].message
+
+
+def test_d011_clean_when_declared_and_present_in_lock(tmp_path: Path) -> None:
+    _write_lock(tmp_path, include_conformance=True)
+    assert _d011_scan(tmp_path, _D011_HEAD + _D011_OK_GROUP) == []
+
+
+def test_d011_lock_branch_matches_normalised_lock_name(tmp_path: Path) -> None:
+    """The lock entry is matched PEP 503-normalised, not by raw string."""
+    (tmp_path / "uv.lock").write_text(
+        'version = 1\n\n[[package]]\nname = "Atlan_Application_SDK_Conformance"\n'
+        'version = "0.19.1"\n',
+        encoding="utf-8",
+    )
+    assert _d011_scan(tmp_path, _D011_HEAD + _D011_OK_GROUP) == []
+
+
+def test_d011_lock_branch_skipped_when_no_lock_exists(tmp_path: Path) -> None:
+    """No lock is not a violation — many app repos are scanned without one."""
+    assert _d011_scan(tmp_path, _D011_HEAD + _D011_OK_GROUP) == []
+
+
+def test_d011_lock_branch_skipped_when_lock_unparseable(tmp_path: Path) -> None:
+    """A malformed lock must never manufacture a finding."""
+    (tmp_path / "uv.lock").write_text("not [valid toml", encoding="utf-8")
+    assert _d011_scan(tmp_path, _D011_HEAD + _D011_OK_GROUP) == []
+
+
+def test_d011_undeclared_takes_precedence_over_the_lock_branch(
+    tmp_path: Path,
+) -> None:
+    """Exactly one finding per repo, and it names the most fundamental problem."""
+    _write_lock(tmp_path, include_conformance=False)
+    findings = _d011_scan(tmp_path, _D011_HEAD)
+    assert len(findings) == 1
+    assert "does not declare" in findings[0].message
+
+
+# ── _is_floating_range unit coverage ────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "spec,expected",
+    [
+        (">=0.17.0,<1.0.0", True),
+        ("<1.0.0,>=0.17.0", True),  # clause order is irrelevant
+        (">0.16,<=1.0.0", True),
+        ("==0.13.0", False),
+        ("===0.13.0", False),
+        ("~=0.17.0", False),
+        (">=0.17.0", False),
+        ("<1.0.0", False),
+        ("", False),
+        ("   ", False),
+    ],
+)
+def test_is_floating_range(spec: str, expected: bool) -> None:
+    assert _is_floating_range(spec) is expected
+
+
+def test_is_floating_range_is_stricter_than_is_bounded_specifier() -> None:
+    """The two predicates deliberately disagree on pins.
+
+    D001 accepts ``==X`` as bounded (an exact SDK pin is reviewable); D011 must
+    not, because an exact conformance pin freezes the ruleset that grades the
+    repo.
+    """
+    assert _is_bounded_specifier("==0.13.0") is True
+    assert _is_floating_range("==0.13.0") is False

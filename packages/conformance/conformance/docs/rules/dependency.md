@@ -5,7 +5,7 @@
 
 # Dependency Rules (D-series)
 
-**10 rules** · Checker: `suite.checks.dependency_conformance` (TOML-based, static)
+**11 rules** · Checker: `suite.checks.dependency_conformance` (TOML-based, static)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -25,6 +25,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [D008](#d008) | `WeakenedTypeChecking` | `warn` | `app` | `tooling-baseline` | yes | 0.5.0 |
 | [D009](#d009) | `RemoteDaprComponentFetch` | `block` | `app` | `dapr-components` | yes | 0.12.0 |
 | [D010](#d010) | `QueryTransformerWithoutDuckdb` | `block` | `app` | `runtime-dependencies` | — | 0.18.0 |
+| [D011](#d011) | `ConformanceDependencyContract` | `warn` | `app` | `dependency-tooling` | yes | 0.23.0 |
 
 ---
 
@@ -306,5 +307,58 @@ Note for the `[daft]`-pinned population above: with a parseable `uv.lock` the ch
 walks what the app's own extras actually resolve, so once the SDK bump to >= 3.28.0 is
 locked (where `[daft]` aliases `[sql]`) `duckdb` is reachable and the finding clears
 with no app-side edit.  Bump the SDK; do not reach for a suppression.
+
+---
+
+## D011 — `ConformanceDependencyContract` {#d011}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `dependency-tooling` · **Autofixable:** yes · **Since:** 0.23.0
+
+> atlan-application-sdk-conformance is undeclared, pinned to a non-floating specifier, or missing from uv.lock
+
+**Rationale:** The published remediation programs and the bootstrapped per-app 'remediate' skill invoke
+the suite as 'uv run atlan-application-sdk-conformance'. In a repo that does not declare
+the package that is a hard failure — 'error: Failed to spawn', exit 2 — because no
+transitive dependency exposes the console script, not even a full SDK sync (211
+packages, 31 scripts, none of them this one). So the whole remediation loop is
+unavailable in a non-declaring repo: CI can report findings that nobody can then
+remediate locally or in-PR. A dev-group declaration restores the loop and never reaches
+the runtime image, because dev groups are not installed by a production sync (FND-419).
+The declaration alone is not enough, which is why this rule also grades its shape: the
+D-series leg resolves the suite out of the app's uv.lock, so an exact pin ('==0.13.0'),
+a '~=' compatible-release pin, or a one-sided '>=0.17.0' either freezes the ruleset
+grading the repo or leaves it unbounded, and a pyproject-only edit that never reaches
+uv.lock leaves the console script absent in CI, which installs from the lock. A floor
+plus the 1.0.0 major boundary, locked, is the one shape that keeps the repo on a current
+ruleset without admitting an unreviewed major.
+
+Every app should declare `atlan-application-sdk-conformance` in a dev/test dependency
+array, with a specifier that can float, and have it resolved in `uv.lock`.  At most one
+finding is reported per repo; three things are checked, in order:
+
+1. **Declared at all** — satisfied by an entry in **any**    `[dependency-groups.*]`
+group or any    `[project.optional-dependencies.*]` array, because apps    legitimately
+differ on which group they use. 2. **Specifier can float** — a floor *and* an upper
+bound, and    not a pin.  `==0.13.0`, `===0.13.0`, `~=0.17.0`, a bare    `>=0.17.0` and
+a bare `<1.0.0` are all rejected. 3. **Present in** `uv.lock` — checked only when a lock
+exists    and parses, so a missing or malformed lock never manufactures    a finding.
+
+The canonical form is `[dependency-groups].dev`, matching `atlan-app-template`:
+`"atlan-application-sdk-conformance>=0.17.0,<1.0.0"`.
+
+The package is not needed at runtime and must never be added to `[project.dependencies]`
+— dev groups are excluded from a production sync, so the declaration cannot reach the
+shipped image.
+
+**Known trade-off, tracked in FND-419.**  Declaring the package also pins the ruleset
+used by one CI leg.  The D-series leg is the only one that runs `uv run --with
+atlan-application-sdk-conformance` against the app's synced environment; because that
+`--with` requirement is unconstrained, uv satisfies it from the app's `uv.lock` rather
+than resolving fresh, while the other series legs run `uvx` (latest from PyPI).  A
+declaring repo therefore grades its dependency rules with whatever version its lockfile
+holds, and the aggregate report can show two driver versions.  Keeping the lockfile
+current is what limits that; the structural fix is to stop the D leg reading the
+lockfile at all, which is FND-419's Step 1 + Step 2 and does not require any app-repo
+change.
 
 ---

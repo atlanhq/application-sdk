@@ -17,9 +17,9 @@ findings in the working tree, as reported by `suite.runner --series D`.
 #### violations-dependency
 
 The fingerprint-set of all unsuppressed FAILING D-series results.  Extends to
-include WARNING results in strict mode — D002/D003/D004/D006/D007/D008 are
-WARN-tier, so they are processed in strict mode; D001, D005, D009 and D010 are
-BLOCK-tier and processed in both modes.
+include WARNING results in strict mode — D002/D003/D004/D006/D007/D008/D011
+are WARN-tier, so they are processed in strict mode; D001, D005, D009 and D010
+are BLOCK-tier and processed in both modes.
 
 This facet's fingerprint moves when any D-series finding is resolved (fixed or
 suppressed with justification) or when new ones appear.  An unchanged
@@ -54,6 +54,18 @@ next major so the range includes the pinned version) is therefore the sole
 safeguard for cap correctness; the remediator must follow it exactly, and the
 human review of residue is the
 backstop.
+
+**`D011` validates the specifier's *shape*, not its *values*.**  The detector
+rejects pins and one-sided ranges, so a bare name or `==0.13.0` cannot slip
+through as `D001`'s wrong cap can.  What it does **not** check is whether the
+floor is sensible: rewriting `>=0.17.0` to `>=0.1.0,<1.0.0` clears the finding
+while admitting ancient releases.  The prescription below (keep the app's floor
+when it is higher; never lower one) is the only safeguard for that, and human
+review of residue is the backstop.
+
+Branch 3 is also the one D-series finding whose fix is **not** a
+`pyproject.toml` edit — it needs `uv lock`.  The re-detection gate reads the
+lock for that branch, so an edit that does not run `uv lock` will not clear it.
 
 ### Requires
 
@@ -122,6 +134,37 @@ fix.  The re-detection gate is authoritative for this area — see
   genuinely needs, prefer pulling it in via `atlan-application-sdk[tests]`
   instead (note that as a follow-up in the edit description).  Remove only that
   one entry.
+
+- **D011 ConformanceDependencyContract** — one rule, three branches; read the
+  message to tell them apart, because the fix differs.  The canonical target in
+  all three cases is
+  `"atlan-application-sdk-conformance>=0.17.0,<1.0.0"` in
+  `[dependency-groups].dev`, matching `atlan-app-template`.
+
+  1. *"does not declare"* — the package appears in no dependency array, so
+     `uv run atlan-application-sdk-conformance` (the form this loop and the
+     bootstrapped `remediate` skill use) fails to spawn.  Add the canonical
+     entry; create the `[dependency-groups]` table with a `dev` array if the
+     file has none.  `finding.line` anchors at the `[dependency-groups]`
+     header, or line 1 when there is no such table.  **Never** add it to
+     `[project.dependencies]` — that ships a dev-only tool in the runtime
+     image.
+  2. *"cannot float"* — declared, but the specifier is a pin (`==0.13.0`,
+     `===0.13.0`, `~=0.17.0`) or one-sided (`>=0.17.0` with no upper bound, or
+     a bare `<1.0.0` with no floor).  Rewrite **that entry only** to the
+     canonical two-sided form, preserving its position in the array.  Keep the
+     app's existing floor if it is higher than `0.17.0`; never lower a floor.
+     `finding.line` anchors at the declaring line.
+  3. *"no entry in uv.lock"* — declared and floating, but unresolved in the
+     lock.  This one is **not** a `pyproject.toml` edit: run `uv lock` and
+     commit the result.  Classify it `judgment` and route to residue if the
+     loop cannot run `uv lock` in its environment — a hand-edited `uv.lock` is
+     never an acceptable fix.
+
+  For branches 1 and 2, note in the edit description that `uv lock` must be
+  re-run so the change reaches the lockfile: the re-detection gate reads
+  `pyproject.toml` for those branches and will pass without it, and branch 3
+  then becomes the next finding.
 
 - **D006 IncompatibleRequiresPython** — the app's `[project].requires-python`
   lower bound is below the SDK's floor.  Replace only the lower-bound clause
@@ -227,7 +270,7 @@ When `mode == "strict"` and `finding.disposition == "warning"`, the model may
 propose an inline suppression instead of a fix if the deviation is a deliberate,
 justified exception for this app.  Applicable rules and notes:
 
-- **D002 / D004 / D005 / D006 / D007 / D008 / D010** — standard inline
+- **D002 / D004 / D005 / D006 / D007 / D008 / D010 / D011** — standard inline
   suppression.
   TOML uses `#` for comments, so the directive trails the entry or sits on the
   line above it:
