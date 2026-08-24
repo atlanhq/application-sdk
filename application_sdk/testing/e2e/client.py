@@ -1623,6 +1623,19 @@ class AEWorkflowClient:
         to attribute the fault; hardening this into an invariant is a follow-up
         for once the logged shape is known. FND-402 / FND-656.
         """
+        # Unconditional, because the shape is the unknown. AE's submit response
+        # is undocumented; a detector that only reports when it fires can never
+        # tell us WHY it did not (verified against a real tenant: the response
+        # carries no Argo parameter block at all, so the scan below is inert
+        # there). Top-level keys only — never values, which can carry a source
+        # credential. This is what makes the next run diagnostic instead of
+        # silent.
+        logger.info(
+            "submit_workflow: AE accepted run %s; response keys=%s data keys=%s",
+            run_id,
+            sorted(body.keys()),
+            sorted(body["data"].keys()) if isinstance(body.get("data"), dict) else None,
+        )
         leftover = _unsubstituted_parameter_tokens(body)
         if not leftover:
             return
@@ -1632,13 +1645,12 @@ class AEWorkflowClient:
             "them the run WILL fail on the extract node with [AAF-CRD-005] "
             "Invalid credential GUID — AE did not turn the submit's payload[] "
             "credential block into a GUID. That is a tenant/AE control-plane "
-            "fault, not a connector defect; response keys=%s",
+            "fault, not a connector defect.",
             run_id,
             len(leftover),
             ", ".join(
                 f"{name} -> {{{{{token}}}}}" for name, token in sorted(leftover.items())
             ),
-            sorted(body.keys()),
         )
 
     def get_native_status(self, run_id: str) -> DAGRunResult:

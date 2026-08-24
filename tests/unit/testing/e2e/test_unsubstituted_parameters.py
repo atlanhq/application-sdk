@@ -194,3 +194,39 @@ class TestSubmitWarnsOnUnsubstituted:
         ):
             client.submit_workflow(self._payload(), retries=0)
         assert "s3cr3t-should-never-be-logged" not in self._rendered(log.warning)
+
+    def test_logs_response_shape_even_when_nothing_is_unresolved(self):
+        """The shape is the unknown — it must be logged on EVERY accepted submit.
+
+        Regression guard: the first cut logged the shape only inside the
+        warning, so a real tenant whose submit response carries no parameter
+        block at all produced total silence and no way to learn why.
+        """
+        client = _make_client()
+        resp = _submit_response(
+            {"name": "credential-guid", "value": "a1b2c3d4-dead-beef-0000-111122223333"}
+        )
+        with (
+            patch.object(client, "_request", return_value=(200, resp)),
+            patch("application_sdk.testing.e2e.client.logger") as log,
+        ):
+            client.submit_workflow(self._payload(), retries=0)
+        assert not log.warning.called
+        fmt, *args = log.info.call_args.args
+        rendered = fmt % tuple(args)
+        assert "response keys=" in rendered
+        assert "'data'" in rendered and "'spec'" in rendered
+
+    def test_response_shape_log_never_prints_values(self):
+        client = _make_client()
+        resp = {"data": {"run_id": "run-xyz", "token": "s3cr3t-value"}}
+        with (
+            patch.object(client, "_request", return_value=(200, resp)),
+            patch("application_sdk.testing.e2e.client.logger") as log,
+        ):
+            client.submit_workflow(self._payload(), retries=0)
+        fmt, *args = log.info.call_args.args
+        rendered = fmt % tuple(args)
+        assert "s3cr3t-value" not in rendered
+        # the KEY is fine to name; only the value must not appear
+        assert "token" in rendered
