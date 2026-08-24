@@ -1,6 +1,7 @@
 name: CI script tests
 
-# Runs the pytest suite for the CI driver scripts in .github/scripts/.
+# Runs the pytest suite for the CI driver scripts in .github/scripts/, plus the
+# shell tests for the PR-review scripts in .mothership/pr-review/scripts/.
 # These scripts carry the conditional logic for our automations (release
 # bumps, allowlist validation, renovate sync, …); per docs/standards/ci.md
 # that logic must live in tested external scripts rather than inlined shell.
@@ -22,6 +23,12 @@ name: CI script tests
 # guards exist to remove. Any list we could write would silently stop firing on
 # the change it was written to catch. The suite is a sub-minute pytest run, so
 # running it unconditionally is cheaper than getting that list wrong.
+#
+# The .mothership/pr-review/scripts/ tests are here for the same reason the
+# pytest suite is: they existed and ran nowhere. A redaction rule that rewrote
+# the machine-readable REVIEWED_HEAD marker shipped unnoticed and silently cost
+# every toolkit review its atlan-ci approval, because the test that would have
+# caught it was only ever run by hand.
 #
 # Not a *required* check yet. Now that it is unfiltered it can safely become one:
 # add it to branch protection (it concludes on every PR, so it will not sit
@@ -51,3 +58,9 @@ jobs:
 
       - name: Run script tests
         run: uv run --extra workflows --with pytest python -m pytest .github/scripts/tests -q
+
+      # Plain bash, no uv — the script under test is bash + perl and the harness
+      # asserts on its output, so keeping it dependency-free keeps it runnable
+      # by hand in the review sandbox exactly as it runs here.
+      - name: Run PR-review redaction tests
+        run: .mothership/pr-review/scripts/test-redact-toolkit-public-review.sh
