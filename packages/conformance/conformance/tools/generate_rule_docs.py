@@ -367,6 +367,91 @@ def _rule_anchor(rule: RuleDefinition) -> str:
     return rule.id.lower()
 
 
+def _render_rule_block(rule: RuleDefinition) -> list[str]:
+    """One rule's full documentation block (shared by the per-series doc and
+    the per-rule file, so the two can never drift)."""
+    lines: list[str] = []
+    anchor = _rule_anchor(rule)
+    since = rule.since or "—"
+    autofixable = _bool_icon(rule.autofixable)
+
+    lines.append(f"## {rule.id} — `{rule.name}` {{#{anchor}}}")
+    lines.append("")
+
+    # Metadata row
+    lines.append(
+        f"**Tier:** {_tier_badge(rule.tier)} · "
+        f"**Scope:** `{rule.scope.value}` · "
+        f"**Category:** `{rule.category}` · "
+        f"**Autofixable:** {autofixable} · "
+        f"**Since:** {since}"
+    )
+    lines.append("")
+
+    # Short description as a blockquote
+    if rule.short_description:
+        lines.append(f"> {_rst_to_md(rule.short_description)}")
+        lines.append("")
+
+    # Rationale — why the rule exists
+    if rule.rationale:
+        rationale_text = _rst_to_md(rule.rationale)
+        wrapped = textwrap.fill(
+            rationale_text, width=88, break_long_words=False, break_on_hyphens=False
+        )
+        lines.append(f"**Rationale:** {wrapped}")
+        lines.append("")
+
+    # Full description — convert RST backticks, preserve paragraph breaks,
+    # and render literal blocks verbatim as fenced code (not reflowed).
+    if rule.full_description:
+        desc = _rst_to_md(rule.full_description.strip())
+        for chunk, is_code, lang in _split_literal_blocks(desc):
+            if is_code:
+                lines.append(f"```{lang}\n{chunk}\n```")
+                lines.append("")
+                continue
+            # Rewrap each prose paragraph individually to 88 chars for clean diff
+            for para in re.split(r"\n{2,}", chunk):
+                wrapped = textwrap.fill(
+                    para, width=88, break_long_words=False, break_on_hyphens=False
+                )
+                lines.append(wrapped)
+                lines.append("")
+
+    return lines
+
+
+def _render_rule_file(meta: SeriesMeta, rule: RuleDefinition) -> str:
+    """A standalone single-rule document (``by-id/<RULE>.md``).
+
+    Exists for context-squeezing consumers — remediation agents and tooling
+    that need exactly one rule's guidance should not have to fetch (or be
+    prompted with) a whole series document. Same generated-file contract as
+    the series docs: deterministic bytes, covered by ``--check``.
+    """
+    lines: list[str] = []
+    lines.append(_AUTOGEN_BANNER.format(source_module=meta.source_module))
+    lines.append(f"# {rule.id} · {meta.title}")
+    lines.append("")
+    lines.append(
+        f"Single-rule view — the full series catalog lives at "
+        f"[`{meta.output_filename}`](../{meta.output_filename}#{_rule_anchor(rule)})."
+    )
+    lines.append("")
+    lines.append(
+        "Suppress a finding on the violating line or the line directly above it:"
+    )
+    lines.append("")
+    lines.append(f"```python\n{meta.suppression_example}\n```")
+    lines.append("")
+    lines.extend(_render_rule_block(rule))
+    while lines and lines[-1] == "":
+        lines.pop()
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _render_series(meta: SeriesMeta, rules: list[RuleDefinition]) -> str:
     """Return the full Markdown content for one rule series."""
     lines: list[str] = []
@@ -418,54 +503,7 @@ def _render_series(meta: SeriesMeta, rules: list[RuleDefinition]) -> str:
 
     # Per-rule sections
     for rule in rules:
-        anchor = _rule_anchor(rule)
-        since = rule.since or "—"
-        autofixable = _bool_icon(rule.autofixable)
-
-        lines.append(f"## {rule.id} — `{rule.name}` {{#{anchor}}}")
-        lines.append("")
-
-        # Metadata row
-        lines.append(
-            f"**Tier:** {_tier_badge(rule.tier)} · "
-            f"**Scope:** `{rule.scope.value}` · "
-            f"**Category:** `{rule.category}` · "
-            f"**Autofixable:** {autofixable} · "
-            f"**Since:** {since}"
-        )
-        lines.append("")
-
-        # Short description as a blockquote
-        if rule.short_description:
-            lines.append(f"> {_rst_to_md(rule.short_description)}")
-            lines.append("")
-
-        # Rationale — why the rule exists
-        if rule.rationale:
-            rationale_text = _rst_to_md(rule.rationale)
-            wrapped = textwrap.fill(
-                rationale_text, width=88, break_long_words=False, break_on_hyphens=False
-            )
-            lines.append(f"**Rationale:** {wrapped}")
-            lines.append("")
-
-        # Full description — convert RST backticks, preserve paragraph breaks,
-        # and render literal blocks verbatim as fenced code (not reflowed).
-        if rule.full_description:
-            desc = _rst_to_md(rule.full_description.strip())
-            for chunk, is_code, lang in _split_literal_blocks(desc):
-                if is_code:
-                    lines.append(f"```{lang}\n{chunk}\n```")
-                    lines.append("")
-                    continue
-                # Rewrap each prose paragraph individually to 88 chars for clean diff
-                for para in re.split(r"\n{2,}", chunk):
-                    wrapped = textwrap.fill(
-                        para, width=88, break_long_words=False, break_on_hyphens=False
-                    )
-                    lines.append(wrapped)
-                    lines.append("")
-
+        lines.extend(_render_rule_block(rule))
         lines.append("---")
         lines.append("")
 
@@ -562,6 +600,25 @@ def main(argv: list[str] | None = None) -> None:
         else:
             target.write_text(content, encoding="utf-8")
             print(f"Wrote {target}")
+
+        # Per-rule files: by-id/<RULE>.md — the context-squeezed single-rule
+        # view, generated from the same blocks so it can never drift from the
+        # series doc.
+        by_id = outdir / "by-id"
+        if not check_mode:
+            by_id.mkdir(parents=True, exist_ok=True)
+        for rule in rules:
+            rule_content = _render_rule_file(meta, rule)
+            rule_target = by_id / f"{rule.id}.md"
+            if check_mode:
+                if not rule_target.exists():
+                    print(f"MISSING: {rule_target}", file=sys.stderr)
+                    stale.append(str(rule_target))
+                elif rule_target.read_text(encoding="utf-8") != rule_content:
+                    print(f"STALE: {rule_target}", file=sys.stderr)
+                    stale.append(str(rule_target))
+            else:
+                rule_target.write_text(rule_content, encoding="utf-8")
 
     if check_mode:
         if stale:

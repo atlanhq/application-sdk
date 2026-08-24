@@ -94,3 +94,37 @@ def test_reassembled_prose_has_no_leftover_double_colons() -> None:
     segments = _split_literal_blocks(text)
     prose = " ".join(chunk for chunk, is_code, _ in segments if not is_code)
     assert "::" not in prose
+
+
+# ── per-rule files (by-id/) — the context-squeezed single-rule view ────────
+
+
+def test_by_id_files_are_generated_for_every_rule(tmp_path) -> None:
+    from conformance.suite.rules import CATALOG
+    from conformance.tools import generate_rule_docs as g
+
+    g.main(["--outdir", str(tmp_path)])
+    by_id = tmp_path / "by-id"
+    generated = {p.stem for p in by_id.glob("*.md")}
+    assert generated == set(CATALOG.keys())
+
+
+def test_by_id_file_carries_the_same_block_as_the_series_doc(tmp_path) -> None:
+    """Shared renderer = the two views can never drift."""
+    from conformance.tools import generate_rule_docs as g
+
+    g.main(["--outdir", str(tmp_path)])
+    single = (tmp_path / "by-id" / "E010.md").read_text()
+    series = (tmp_path / "error-handling.md").read_text()
+    block_heading = "## E010 — `AsyncioGatherExceptionsUnexamined`"
+    assert block_heading in single and block_heading in series
+
+
+def test_check_mode_catches_a_missing_by_id_file(tmp_path) -> None:
+    import pytest
+    from conformance.tools import generate_rule_docs as g
+
+    g.main(["--outdir", str(tmp_path)])
+    (tmp_path / "by-id" / "E010.md").unlink()
+    with pytest.raises(SystemExit):
+        g.main(["--outdir", str(tmp_path), "--check"])
