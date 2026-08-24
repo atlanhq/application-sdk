@@ -36,6 +36,7 @@ def _observation(**overrides) -> SizingObservation:
         "peak_memory_fraction": 0.375,
         "peak_source": "poll",
         "memory_limit_bytes": 16 * 1024**3,
+        "start_memory_bytes": 1024**3,
         "cpu_seconds": 78.4,
         "cpu_throttled_seconds": 12.1,
         "cpu_throttled_fraction": 0.31,
@@ -193,6 +194,26 @@ class TestProcessRecord:
         row = sink.process_record(_observation(input_bytes=None, cpu_seconds=None))
         assert row["peak_per_input_byte"] is None
         assert row["mean_cpu_cores"] is None
+
+    def test_carries_the_baseline_and_the_unbiased_ratio(self, sink):
+        """The delta columns are what a multiplier gets fitted on.
+
+        Without them a reader can only fall back to rows that ran first in their
+        pod, which on a busy tenant throws away most of the dataset.
+        """
+        row = sink.process_record(_observation())
+        assert row["start_memory_bytes"] == 1024**3
+        assert row["peak_delta_bytes"] == 5 * 1024**3
+        assert row["delta_per_input_byte"] == pytest.approx(2.5)
+        # The biased ratio stays, so v3 rows remain comparable with v2 ones.
+        assert row["peak_per_input_byte"] == pytest.approx(3.0)
+
+    def test_delta_columns_are_none_without_a_baseline(self, sink):
+        """A pre-fix row must read as "unknown", never as a zero-size baseline."""
+        row = sink.process_record(_observation(start_memory_bytes=None))
+        assert row["start_memory_bytes"] is None
+        assert row["peak_delta_bytes"] is None
+        assert row["delta_per_input_byte"] is None
 
     def test_carries_the_join_keys(self, sink):
         """pod + started_at + duration is how overlap is rebuilt at analysis time."""

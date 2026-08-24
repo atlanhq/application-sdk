@@ -147,6 +147,39 @@ def reset_memory_peak() -> bool:
     return False
 
 
+def prepare_memory_watermark(current: int | None = None) -> bool:
+    """Whether ``memory.peak`` can be read as *this* block's peak afterwards.
+
+    Pass ``current`` when the caller has already read ``memory.current``: the
+    comparison and the caller's baseline must describe the same instant, and it
+    saves a second read of a file that can fail on its own.
+
+    Two ways that holds, and only the first needs a write:
+
+    * the watermark sits above current usage, so it carries an earlier peak that
+      has to be cleared — :func:`reset_memory_peak` does that and proves it;
+    * the watermark already equals current usage, so there is no earlier peak to
+      clear and a later read is this block's peak by construction.
+
+    The second case used to be rejected, because the provability guard lives in
+    ``reset_memory_peak`` and an unprovable reset cannot be told from a no-op. But
+    with nothing stale to clear, not resetting is *correct* rather than merely
+    unproven. That case is the common one on a pool KEDA scales to zero between
+    runs, which is why every row collected so far fell back to polling on a 6.12
+    kernel where the write works.
+    """
+    before = memory_peak_bytes()
+    if before is None:
+        return False
+    if current is None:
+        current = memory_usage_bytes()
+        if current is None:
+            return False
+    if before <= current:
+        return True
+    return reset_memory_peak()
+
+
 @dataclass(frozen=True)
 class CpuStat:
     """Point-in-time container CPU accounting.
@@ -242,6 +275,12 @@ class ContainerTrace:
     peak_memory_fraction: float | None = None
     peak_source: str = "unavailable"
     memory_limit_bytes: int | None = None
+    #: Container memory already resident when the block started. Not overhead to
+    #: subtract and forget — it is what makes the absolute peak un-comparable
+    #: across pods, because ``memory.current`` is pod-wide and cumulative and
+    #: neither DuckDB nor Arrow returns freed pages to the kernel promptly. So the
+    #: Nth activity in a pod starts from whatever the (N-1)th left pooled.
+    start_memory_bytes: int | None = None
     cpu_seconds: float | None = None
     cpu_throttled_seconds: float | None = None
     cpu_throttled_periods: int | None = None
@@ -259,6 +298,25 @@ class ContainerTrace:
                 self.peak_memory_fraction = used / limit
 
     @property
+    def peak_delta_bytes(self) -> int | None:
+        """Peak *above* the starting baseline — what this block itself allocated.
+
+        The unbiased driver for fitting: the absolute peak carries the pod's
+        history, so pooling absolute peaks across pods with different histories
+        fits the slope to allocator carryover as much as to the workload.
+
+        Sizing a pod still needs the absolute peak — that is the number the OOM
+        killer compares. Both travel together for that reason: fit on the delta,
+        provision on the delta plus a baseline term.
+
+        Floored at zero: memory freed back to the kernel mid-block can leave the
+        peak below the start, and a negative "allocation" is not a thing.
+        """
+        if self.peak_memory_bytes is None or self.start_memory_bytes is None:
+            return None
+        return max(0, self.peak_memory_bytes - self.start_memory_bytes)
+
+    @property
     def throttled_fraction(self) -> float | None:
         """Share of CFS periods that exhausted the quota — the starvation number."""
         if not self.cpu_periods or self.cpu_throttled_periods is None:
@@ -274,9 +332,14 @@ async def track_container_usage(
     """Measure peak memory and CPU throttling across a block.
 
     Picks the cheapest instrument that works, recorded as ``peak_source``:
-    ``watermark`` (reset + read, catches spikes of any duration), ``poll``
-    (background sampling, only when the reset was unprovable), or ``unavailable``
-    (no cgroup — trace stays ``None``, which is "no data", not zero).
+    ``watermark`` (read the kernel high-water mark, catches spikes of any
+    duration), ``poll`` (background sampling, only when the watermark cannot be
+    trusted), or ``unavailable`` (no cgroup — trace stays ``None``, which is "no
+    data", not zero).
+
+    Always records ``start_memory_bytes``, whichever instrument is used, because
+    both report a peak that includes memory already resident at entry. See
+    :attr:`ContainerTrace.peak_delta_bytes`.
 
     ``allow_watermark_reset=False`` forbids the reset. Pass it when more than one
     activity shares this process: ``memory.peak`` is a single kernel counter, so two
@@ -297,12 +360,24 @@ async def track_container_usage(
         start_cpu = cpu_stat()
         trace.cpu_quota_cores = cpu_quota_cores()
 
-        if memory_usage_bytes() is None:
+        # Read once and keep it: this is both the "is there a cgroup" test and the
+        # baseline the peak is differenced against, and two reads would sample two
+        # different instants.
+        trace.start_memory_bytes = memory_usage_bytes()
+
+        if trace.start_memory_bytes is None:
             trace.peak_source = "unavailable"
-        elif allow_watermark_reset and reset_memory_peak():
+        elif allow_watermark_reset and prepare_memory_watermark(
+            trace.start_memory_bytes
+        ):
             trace.peak_source = "watermark"
         elif poll_interval_seconds > 0:
             trace.peak_source = "poll"
+            # Seed with the baseline. It is a genuine reading taken inside the
+            # block (at t=0), and seeding keeps the peak from ever landing below
+            # the start, which is what makes ``peak_delta_bytes`` well defined for
+            # a block shorter than one poll interval.
+            trace.observe(trace.start_memory_bytes, trace.memory_limit_bytes)
 
             async def _poll() -> None:
                 while True:

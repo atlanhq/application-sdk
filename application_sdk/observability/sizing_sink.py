@@ -46,7 +46,13 @@ logger = get_logger(__name__)
 #: months after they were written, mixed across SDK versions.
 #: 2 — added started_at / pod / concurrency_max / is_attributable. A v1 row cannot
 #: say whether its peak was pod-wide, so v1 and v2 must not be pooled.
-SIZING_SCHEMA_VERSION = 2
+#: 3 — added start_memory_bytes / peak_delta_bytes / delta_per_input_byte, and made
+#: peak_source reach "watermark". A v2 row's peak silently includes memory left
+#: pooled by earlier activities in the same pod, which biases it upward by roughly
+#: a gigabyte with no way to recover the baseline after the fact. So v2 peaks are
+#: usable only for rows that ran first in their pod, and v2 and v3 must not be
+#: pooled when fitting a multiplier.
+SIZING_SCHEMA_VERSION = 3
 
 
 class SizingObservabilitySink(AtlanObservability[Any]):
@@ -116,6 +122,8 @@ class SizingObservabilitySink(AtlanObservability[Any]):
         # Derived here so every consumer computes them identically.
         row["mean_cpu_cores"] = record.mean_cpu_cores
         row["peak_per_input_byte"] = record.peak_per_input_byte
+        row["peak_delta_bytes"] = record.peak_delta_bytes
+        row["delta_per_input_byte"] = record.delta_per_input_byte
         # Written out rather than left for the reader to derive from
         # concurrency_max: it is the flag that decides which model a row feeds,
         # and a consumer that forgets to apply it pools two different quantities.

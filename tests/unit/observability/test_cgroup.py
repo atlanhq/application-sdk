@@ -146,6 +146,88 @@ class TestResetMemoryPeak:
         assert cgroup.reset_memory_peak() is False
 
 
+class TestPrepareMemoryWatermark:
+    def test_usable_without_a_write_when_nothing_is_stale(self, tmp_path, monkeypatch):
+        """Watermark already at current usage: no earlier peak to clear.
+
+        This is the case that made the watermark path unreachable in practice. On a
+        pool KEDA scales to zero, a pod's first activity sees peak == current, and
+        rejecting it sent every measurement to the 1s poller.
+        """
+        peak = tmp_path / "memory.peak"
+        peak.write_text("1000")
+        monkeypatch.setattr(cgroup, "_MEMORY_PEAK_PATHS", (str(peak),))
+        monkeypatch.setattr(
+            cgroup,
+            "_MEMORY_CURRENT_PATHS",
+            (_write(tmp_path, "memory.current", "1000"),),
+        )
+        assert cgroup.prepare_memory_watermark() is True
+        # Left alone: there was nothing to clear, so no write was needed.
+        assert peak.read_text() == "1000"
+
+    def test_resets_when_the_watermark_carries_an_earlier_peak(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(
+            cgroup, "_MEMORY_PEAK_PATHS", (_write(tmp_path, "memory.peak", "5000"),)
+        )
+        monkeypatch.setattr(
+            cgroup,
+            "_MEMORY_CURRENT_PATHS",
+            (_write(tmp_path, "memory.current", "1000"),),
+        )
+        assert cgroup.prepare_memory_watermark() is True
+        assert cgroup.memory_peak_bytes() == 0
+
+    def test_false_when_a_stale_watermark_cannot_be_cleared(
+        self, tmp_path, monkeypatch
+    ):
+        """Read-only ``memory.peak`` (pre-6.8) with a stale peak — must poll."""
+        peak = tmp_path / "memory.peak"
+        peak.write_text("5000")
+        os.chmod(peak, 0o444)
+        monkeypatch.setattr(cgroup, "_MEMORY_PEAK_PATHS", (str(peak),))
+        monkeypatch.setattr(
+            cgroup,
+            "_MEMORY_CURRENT_PATHS",
+            (_write(tmp_path, "memory.current", "1000"),),
+        )
+        assert cgroup.prepare_memory_watermark() is False
+
+    def test_false_when_no_cgroup(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cgroup, "_MEMORY_PEAK_PATHS", _missing(tmp_path))
+        monkeypatch.setattr(cgroup, "_MEMORY_CURRENT_PATHS", _missing(tmp_path))
+        assert cgroup.prepare_memory_watermark() is False
+
+
+class TestPeakDelta:
+    def test_delta_excludes_memory_resident_at_entry(self):
+        trace = cgroup.ContainerTrace(peak_memory_bytes=3000, start_memory_bytes=1000)
+        assert trace.peak_delta_bytes == 2000
+
+    def test_delta_is_none_without_a_baseline(self):
+        """No baseline means the bias cannot be removed — not that it is zero."""
+        assert cgroup.ContainerTrace(peak_memory_bytes=3000).peak_delta_bytes is None
+        assert cgroup.ContainerTrace(start_memory_bytes=1000).peak_delta_bytes is None
+
+    def test_delta_floors_at_zero(self):
+        """Memory returned to the kernel mid-block can leave peak below start."""
+        trace = cgroup.ContainerTrace(peak_memory_bytes=800, start_memory_bytes=1000)
+        assert trace.peak_delta_bytes == 0
+
+    def test_two_pods_with_different_history_agree_on_the_delta(self):
+        """The point of the field.
+
+        A cold pod and a warm one running the identical workload report absolute
+        peaks a gigabyte apart, and the delta is what makes them comparable.
+        """
+        cold = cgroup.ContainerTrace(peak_memory_bytes=2_500, start_memory_bytes=400)
+        warm = cgroup.ContainerTrace(peak_memory_bytes=3_600, start_memory_bytes=1_500)
+        assert cold.peak_memory_bytes != warm.peak_memory_bytes
+        assert cold.peak_delta_bytes == warm.peak_delta_bytes == 2_100
+
+
 class TestCpuStat:
     def test_v2(self, tmp_path, monkeypatch):
         p = _write(
@@ -285,6 +367,60 @@ class TestTrackContainerUsage:
         assert trace.peak_source == "watermark"
         assert trace.peak_memory_bytes == 9000
         assert trace.peak_memory_fraction == pytest.approx(0.9)
+        # Captured in watermark mode too: resetting the counter does not free the
+        # pages, so the watermark still starts from whatever was resident.
+        assert trace.start_memory_bytes == 1000
+        assert trace.peak_delta_bytes == 8000
+
+    @pytest.mark.asyncio
+    async def test_watermark_mode_on_a_pod_with_no_earlier_peak(
+        self, tmp_path, monkeypatch
+    ):
+        """peak == current at entry: the shape of a pod's first activity.
+
+        Every row collected on the dev tenants landed here and fell back to
+        polling, so a spike shorter than the poll interval went unrecorded on a
+        kernel whose watermark was available the whole time.
+        """
+        peak = tmp_path / "memory.peak"
+        peak.write_text("1000")
+        monkeypatch.setattr(cgroup, "_MEMORY_PEAK_PATHS", (str(peak),))
+        monkeypatch.setattr(
+            cgroup,
+            "_MEMORY_CURRENT_PATHS",
+            (_write(tmp_path, "memory.current", "1000"),),
+        )
+        monkeypatch.setattr(
+            cgroup, "_MEMORY_LIMIT_PATHS", (_write(tmp_path, "memory.max", "10000"),)
+        )
+
+        async with cgroup.track_container_usage(poll_interval_seconds=60) as trace:
+            peak.write_text("7000")  # a spike far shorter than the poll interval
+
+        assert trace.peak_source == "watermark"
+        assert trace.peak_memory_bytes == 7000
+        assert trace.start_memory_bytes == 1000
+        assert trace.peak_delta_bytes == 6000
+
+    @pytest.mark.asyncio
+    async def test_poll_mode_still_records_the_baseline(self, tmp_path, monkeypatch):
+        """The delta has to survive the fallback, or it is absent when most needed."""
+        current = tmp_path / "memory.current"
+        current.write_text("1200")
+        monkeypatch.setattr(cgroup, "_MEMORY_PEAK_PATHS", _missing(tmp_path))
+        monkeypatch.setattr(cgroup, "_MEMORY_CURRENT_PATHS", (str(current),))
+        monkeypatch.setattr(
+            cgroup, "_MEMORY_LIMIT_PATHS", (_write(tmp_path, "memory.max", "10000"),)
+        )
+
+        async with cgroup.track_container_usage(poll_interval_seconds=0.01) as trace:
+            current.write_text("4200")
+            await asyncio.sleep(0.05)
+
+        assert trace.peak_source == "poll"
+        assert trace.start_memory_bytes == 1200
+        assert trace.peak_memory_bytes == 4200
+        assert trace.peak_delta_bytes == 3000
 
     @pytest.mark.asyncio
     async def test_poll_mode_when_the_watermark_is_unavailable(

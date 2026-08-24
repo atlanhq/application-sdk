@@ -47,6 +47,7 @@ class SizingObservation:
     peak_memory_fraction: float | None = None
     peak_source: str = "unavailable"
     memory_limit_bytes: int | None = None
+    start_memory_bytes: int | None = None
 
     cpu_seconds: float | None = None
     cpu_throttled_seconds: float | None = None
@@ -86,15 +87,43 @@ class SizingObservation:
         return self.concurrency_max <= 1
 
     @property
+    def peak_delta_bytes(self) -> int | None:
+        """Peak above the memory already resident at entry.
+
+        See :attr:`ContainerTrace.peak_delta_bytes`. Fit on this; provision on
+        :attr:`peak_memory_bytes`, which is what the OOM killer compares.
+        """
+        if self.peak_memory_bytes is None or self.start_memory_bytes is None:
+            return None
+        return max(0, self.peak_memory_bytes - self.start_memory_bytes)
+
+    @property
     def peak_per_input_byte(self) -> float | None:
         """Peak memory per input byte — the ratio a memory tier is fitted from.
 
         ``None`` without an input size: a peak with no driver variable can size one
         envelope but cannot key a rule.
+
+        Carries the pod's allocation history, so it is comparable only within one
+        pod. Use :attr:`delta_per_input_byte` to compare across pods.
         """
         if not self.input_bytes or self.peak_memory_bytes is None:
             return None
         return self.peak_memory_bytes / self.input_bytes
+
+    @property
+    def delta_per_input_byte(self) -> float | None:
+        """The same ratio with the entry baseline removed — comparable across pods.
+
+        This is the multiplier a tier rule should be keyed on. Measured on merge,
+        the two differ by enough to matter: pooling absolute peaks made two tenants
+        look like they needed different coefficients when the difference was
+        entirely how many activities their pods had already served.
+        """
+        delta = self.peak_delta_bytes
+        if not self.input_bytes or delta is None:
+            return None
+        return delta / self.input_bytes
 
     @classmethod
     def from_trace(
@@ -123,6 +152,7 @@ class SizingObservation:
             peak_memory_fraction=trace.peak_memory_fraction,
             peak_source=trace.peak_source,
             memory_limit_bytes=trace.memory_limit_bytes,
+            start_memory_bytes=trace.start_memory_bytes,
             cpu_seconds=trace.cpu_seconds,
             cpu_throttled_seconds=trace.cpu_throttled_seconds,
             cpu_throttled_fraction=trace.throttled_fraction,
@@ -173,6 +203,20 @@ def _peak_memory_mib():
             ),
         )
     return _INSTRUMENTS["peak_mem"]
+
+
+def _peak_delta_mib():
+    if "peak_delta" not in _INSTRUMENTS:
+        _INSTRUMENTS["peak_delta"] = _meter().create_histogram(
+            "activity.sizing.peak_delta_mib",
+            unit="MiBy",
+            description=(
+                "Peak container memory above what was already resident at entry. "
+                "The comparable one: peak_memory_mib carries the pod's earlier "
+                "activities, so it varies with pod age rather than workload."
+            ),
+        )
+    return _INSTRUMENTS["peak_delta"]
 
 
 def _peak_memory_fraction():
@@ -242,6 +286,9 @@ def record_observation(observation: SizingObservation) -> None:
             )
         if observation.peak_memory_bytes is not None:
             _peak_memory_mib().record(observation.peak_memory_bytes / _MIB, attrs)
+        peak_delta = observation.peak_delta_bytes
+        if peak_delta is not None:
+            _peak_delta_mib().record(peak_delta / _MIB, attrs)
         if observation.peak_memory_fraction is not None:
             _peak_memory_fraction().record(observation.peak_memory_fraction, attrs)
         if observation.cpu_throttled_fraction is not None:
@@ -252,6 +299,8 @@ def record_observation(observation: SizingObservation) -> None:
 
         payload = asdict(observation)
         payload["mean_cpu_cores"] = mean_cores
+        payload["peak_delta_bytes"] = peak_delta
+        payload["delta_per_input_byte"] = observation.delta_per_input_byte
         # One JSON object per line, so a log pipeline lifts the dataset with one grep.
         _logger.info(
             "activity_sizing_observation %s",
