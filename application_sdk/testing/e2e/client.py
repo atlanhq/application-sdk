@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -459,6 +460,49 @@ def _rotate_submit_credential_name(body: dict[str, Any] | None) -> None:
     base, _, tail = str(name).rpartition("-retry")
     n = int(tail) + 1 if base and tail.isdigit() else 1
     cred["body"]["name"] = f"{base or name}-retry{n}"
+
+
+# One mustache token, e.g. ``{{credentialGuid}}``, capturing the name. Applied
+# with fullmatch below, so the brace-free inner class is what keeps a value like
+# ``{{a}}{{b}}`` from reading as a single token.
+_MUSTACHE_TOKEN_RE = re.compile(r"\{\{([^{}]+)\}\}")
+
+
+def _unsubstituted_parameter_tokens(body: Any) -> dict[str, str]:
+    """Map ``parameter name -> mustache token`` for values AE left unresolved.
+
+    The harness submits ``{{credentialGuid}}`` as a *deliberate* literal: the
+    ``payload[]`` block asks AE to create a credential and substitute the token
+    in the request's own Argo parameters (see :func:`build_ae_payload`). When
+    that substitution silently does not happen, AE still answers 2xx with a
+    run_id, so the harness polls happily and the literal only surfaces ~2min
+    later as a worker-side ``[AAF-CRD-005] Invalid credential GUID`` on the
+    extract node — a connector-looking error for a control-plane fault. This
+    reads the submit response so the fault can be named where it happens.
+
+    Returns parameter names and token names only, never values: an Argo
+    parameter value can carry a source credential, and this feeds a log line.
+
+    Only reports when a value is EXACTLY one token. A value that merely embeds
+    braces (a JSON blob, a regex) is not evidence of failed substitution.
+    """
+    found: dict[str, str] = {}
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, dict):
+            name, value = node.get("name"), node.get("value")
+            if isinstance(name, str) and isinstance(value, str):
+                m = _MUSTACHE_TOKEN_RE.fullmatch(value.strip())
+                if m:
+                    found[name] = m.group(1)
+            for v in node.values():
+                _walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                _walk(v)
+
+    _walk(body)
+    return found
 
 
 def _node_glyph(node) -> str:
@@ -1532,6 +1576,7 @@ class AEWorkflowClient:
             data = body.get("data") if isinstance(body.get("data"), dict) else body
             run_id = data.get("run_id") if isinstance(data, dict) else None
             if run_id:
+                self._warn_on_unsubstituted_parameters(body, run_id)
                 return run_id
             raise AtlanApiResponseInvariantError(
                 message=f"AE submit returned no run_id\nresponse={body!r}",
@@ -1556,6 +1601,44 @@ class AEWorkflowClient:
             message=f"AE submit failed: HTTP {status}\nresponse={body!r}",
             target=f"POST /api/service/package-workflows?submit=true HTTP {status}",
             retry_after_seconds=_requested_retry_after(body),
+        )
+
+    def _warn_on_unsubstituted_parameters(
+        self, body: dict[str, Any], run_id: str
+    ) -> None:
+        """Log the parameters AE accepted but left as literal mustache tokens.
+
+        A 2xx submit with a run_id is currently the harness's only success
+        signal, so an AE that creates the run without resolving ``payload[]``
+        into the request's Argo parameters produces a run that cannot work and
+        a harness that does not know it. The extract activity then dies on the
+        literal (``[AAF-CRD-005] Invalid credential GUID — must match
+        [a-zA-Z0-9_-]+: '{{credentialGuid}}'``) one poll interval later, which
+        reads as a connector bug rather than a control-plane one.
+
+        Warn rather than raise, deliberately. AE's submit response shape is
+        undocumented (see this method's caller) and may legitimately echo the
+        request unmodified, which would make a hard assertion fail every
+        connector's green run. A warning is safe on every tenant and is enough
+        to attribute the fault; hardening this into an invariant is a follow-up
+        for once the logged shape is known. FND-402 / FND-656.
+        """
+        leftover = _unsubstituted_parameter_tokens(body)
+        if not leftover:
+            return
+        logger.warning(
+            "submit_workflow: AE accepted run %s but left %d parameter(s) as "
+            "unresolved mustache literals: %s. If 'credential-guid' is among "
+            "them the run WILL fail on the extract node with [AAF-CRD-005] "
+            "Invalid credential GUID — AE did not turn the submit's payload[] "
+            "credential block into a GUID. That is a tenant/AE control-plane "
+            "fault, not a connector defect; response keys=%s",
+            run_id,
+            len(leftover),
+            ", ".join(
+                f"{name} -> {{{{{token}}}}}" for name, token in sorted(leftover.items())
+            ),
+            sorted(body.keys()),
         )
 
     def get_native_status(self, run_id: str) -> DAGRunResult:
