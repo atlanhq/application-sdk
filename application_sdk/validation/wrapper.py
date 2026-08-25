@@ -125,7 +125,7 @@ def validate_artifact(
     """
     source_kind = _safe_kind(source)
 
-    if not isinstance(source, SchemaSource):
+    if not _implements(source, SchemaSource):
         return _plugin_broken(
             f"schema source {type(source).__name__} does not implement SchemaSource",
             schema_source=source_kind,
@@ -292,6 +292,43 @@ def validate_artifact(
 # ---------------------------------------------------------------------------
 
 
+def _implements(candidate: object, protocol: type) -> bool:
+    """``isinstance`` against a runtime protocol, with the check itself guarded.
+
+    **The membership test runs the plug-in's own code on Python 3.11.** There,
+    ``_ProtocolMeta.__instancecheck__`` reaches every protocol member with
+    ``hasattr``, so a member declared as a ``@property`` is *invoked*, and anything
+    it raises other than ``AttributeError`` propagates straight out of ``isinstance``.
+    Python 3.12 switched to ``inspect.getattr_static``, which reads the descriptor
+    without calling it, so the identical call is inert there — which is exactly how
+    this stayed invisible until the 3.11 leg of the matrix went red.
+
+    The guardrail that exists to stop a broken plug-in from reaching the hand-off
+    cannot itself be the thing that raises into it, so it is wrapped on every
+    version rather than on the one that currently needs it.
+
+    A raise is treated as "not a usable plug-in" — the same answer a missing member
+    gets, because the consequence is the same: the SDK cannot rely on it.
+
+    One consequence worth knowing when reading the tests: on 3.11 a plug-in with a
+    raising property is rejected *here*, while on 3.12+ it survives this check and
+    is caught at the later read. The outcome differs (``unsupported`` vs ``absent``)
+    but the invariant does not — a broken plug-in never yields a pass, and never
+    raises into the caller.
+    """
+    try:
+        return isinstance(candidate, protocol)
+    except Exception as exc:  # noqa: BLE001 - a plug-in seam; nothing may escape
+        logger.warning(
+            "Artifact validation: %s raised while being checked against %s: %s",
+            type(candidate).__name__,
+            protocol.__name__,
+            exc,
+            exc_info=True,
+        )
+        return False
+
+
 def _safe_kind(source: object) -> str:
     """``source.kind``, or "" when asking for it fails.
 
@@ -320,15 +357,16 @@ def _select_validator(
 ) -> FormatValidator | None:
     """First validator claiming ``artifact_format``, or ``None``.
 
-    Mis-shaped plug-ins are skipped rather than raising: ``isinstance`` against a
-    ``runtime_checkable`` protocol checks member *presence*, so this is the
-    guardrail that turns "an app passed us the wrong object" into a reported
-    ``unsupported`` instead of an ``AttributeError`` mid-scan.
+    Mis-shaped plug-ins are skipped rather than raising: a ``runtime_checkable``
+    protocol checks member *presence*, so this is the guardrail that turns "an app
+    passed us the wrong object" into a reported ``unsupported`` instead of an
+    ``AttributeError`` mid-scan. The check goes through :func:`_implements` because
+    on 3.11 it invokes the plug-in's properties and can raise on its own.
     """
     if not artifact_format:
         return None
     for validator in validators:
-        if not isinstance(validator, FormatValidator):
+        if not _implements(validator, FormatValidator):
             logger.warning(
                 "Artifact validation: ignoring %s — it does not implement "
                 "FormatValidator",
