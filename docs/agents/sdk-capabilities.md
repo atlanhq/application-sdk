@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.28.3
-source-sha:    2c3451b251449c2b97fafad7256613b9f804e528
-source-date:   2026-08-25T16:54:01Z
+source-sha:    552d36d15f0be66f01885adcc7b51c20e9406128
+source-date:   2026-08-25T22:34:28+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -3135,7 +3135,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Import:** `from application_sdk.testing.full_dag import BaseFullDAGE2ETest`
 - **Signature:** `class BaseFullDAGE2ETest`
-- **Summary:** Pytest base — subclass per connector, set class attrs.
+- **Summary:** Deprecated (v4.0) — pytest base; use ``application_sdk.testing.e2e.BaseE2ETest``.
 - **Defined in:** `application_sdk/testing/full_dag/base.py`
 
 #### `BaseIntegrationTest`
@@ -3313,7 +3313,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Import:** `from application_sdk.testing.full_dag import SQLAppE2EFullTest`
 - **Signature:** `class SQLAppE2EFullTest`
-- **Summary:** Full-DAG e2e harness pre-wired for SQL connectors.
+- **Summary:** Deprecated (v4.0) — SQL full-DAG base; use ``application_sdk.testing.e2e.SQLAppE2ETest``.
 - **Defined in:** `application_sdk/testing/full_dag/sql_app.py`
 
 #### `SQLAppE2ETest`
@@ -3357,14 +3357,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Import:** `from application_sdk.testing.full_dag import build_ae_payload`
 - **Signature:** `build_ae_payload(*, *, ...)`
-- **Summary:** Assemble the AE submit body.
+- **Summary:** Deprecated (v4.0) — AE submit body; use ``application_sdk.testing.e2e.payload``.
 - **Defined in:** `application_sdk/testing/full_dag/payload.py`
 
 #### `build_seed_dag`
 
 - **Import:** `from application_sdk.testing.full_dag import build_seed_dag`
 - **Signature:** `build_seed_dag(*, *, ...)`
-- **Summary:** Build a seed-version DAG matching the connector's manifest.json shape.
+- **Summary:** Deprecated (v4.0) — seed-version DAG; use ``application_sdk.testing.e2e.payload``.
 - **Defined in:** `application_sdk/testing/full_dag/payload.py`
 
 #### `clean_app_registry`

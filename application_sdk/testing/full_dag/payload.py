@@ -132,7 +132,9 @@ def build_seed_dag(
     agent: AgentSpec | None = None,
     database: DatabaseSpec | None = None,
 ) -> dict[str, Any]:
-    """Build a seed-version DAG matching the connector's manifest.json shape.
+    """Deprecated (v4.0) — seed-version DAG; use ``application_sdk.testing.e2e.payload``.
+
+    Build a seed-version DAG matching the connector's manifest.json shape.
 
     Workflows need at least one PUBLISHED version before package-
     workflows submit will accept them; the seed version is a no-op
@@ -353,7 +355,9 @@ def build_ae_payload(
     agent_json: dict[str, Any] | None = None,
     ae_workflow_slug: str = "",
 ) -> dict[str, Any]:
-    """Assemble the AE submit body.
+    """Deprecated (v4.0) — AE submit body; use ``application_sdk.testing.e2e.payload``.
+
+    Assemble the AE submit body.
 
     Args:
         run_id: Run identifier (typically ``int(time.time())`` or
