@@ -600,6 +600,62 @@ Scenario(
 )
 ```
 
+### Naming the entrypoint on a multi-entrypoint app
+
+`api="workflow"` means "POST `/workflows/v1/start`". It does not say **which**
+`@entrypoint` gets started. Omitting the selector does not fail: the app resolves
+its default entrypoint (the one marked `default=True`, else the alphabetically
+first), so a suite meaning to exercise the miner can run the crawler instead and
+pass, with nothing surfacing the mismatch.
+
+Declare it with `entrypoint=`:
+
+```python
+Scenario(
+    name="miner_workflow",
+    api="workflow",
+    entrypoint="miner",          # → POST /start?entrypoint=miner
+    args={"miner_start_time_epoch": "0"},
+    assert_that={"success": equals(True)},
+)
+```
+
+Or suite-wide, when every scenario in the class targets one entrypoint:
+
+```python
+class MinerIntegrationTest(BaseIntegrationTest):
+    entrypoint = "miner"         # applies to every workflow scenario
+    scenarios = miner_scenarios
+```
+
+Resolution order, most specific first:
+
+| | |
+|---|---|
+| `scenario.endpoint` | full path override, wins outright (may carry its own query string) |
+| `scenario.entrypoint` | appended to `workflow_endpoint` |
+| `cls.entrypoint` | suite-wide default |
+| neither | bare `workflow_endpoint`, exactly as before |
+
+The value is URL-encoded and joined with `&` when `workflow_endpoint` already has
+a query string. A single-entrypoint app can leave all of this unset — the target
+is unambiguous and the emitted endpoint is unchanged.
+
+> `endpoint="/start?entrypoint=miner"` still works and still wins, but prefer
+> `entrypoint=` — it is what makes "which product workflow does this scenario
+> cover" machine-readable instead of recoverable only by reading the source.
+
+**In-process tests: pass `entry_point=` too.** The recommended in-process pattern
+resolves the workflow type from the app name plus the entry point, and a
+multi-entrypoint app registers only `{app}:{entry-point}` — never the bare
+`{app}`. Submitting without `entry_point` therefore used to open a run no worker
+claims and await it forever; the executor now raises `EntryPointRequiredError`
+instead, but the fix is still to name it:
+
+```python
+await executor.execute(MyApp, input_data, entry_point="extract-metadata")
+```
+
 ### Setup and Teardown Hooks
 
 ```python

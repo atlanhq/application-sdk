@@ -67,16 +67,25 @@ from conformance.suite.schema.sarif import (
 )
 
 
-def _fingerprint(rule_id: str, uri: str, start_line: int) -> str:
+def _fingerprint(
+    rule_id: str, uri: str, start_line: int, discriminator: str | None = None
+) -> str:
     """Stable ``atlanConformance/v1`` fingerprint for a result.
 
-    Hashed from (rule_id, normalised URI, start_line) so that:
+    Hashed from (rule_id, normalised URI, start_line, discriminator) so that:
     * the same finding across runs produces the same key (dedup / oscillation
       detection),
     * moving a block of code changes the line → new fingerprint (correct
-      invalidation).
+      invalidation),
+    * findings that share a rule and location but name different subjects
+      (e.g. T025 reporting each uncovered bundle entrypoint at
+      ``pyproject.toml:1``) hash apart via *discriminator*, so per-subject
+      dedup and suppression can tell them apart. ``None`` keeps the
+      pre-discriminator key byte-for-byte.
     """
     key = f"{rule_id}\x00{uri.lstrip('./')}\x00{start_line}"
+    if discriminator is not None:
+        key = f"{key}\x00{discriminator}"
     return hashlib.sha256(key.encode()).hexdigest()[:16]
 
 
@@ -161,6 +170,7 @@ class ReportBuilder:
         hint: str | None = None,
         snippet: str | None = None,
         extra_properties: dict[str, Any] | None = None,
+        discriminator: str | None = None,
     ) -> ReportBuilder:
         """Record a rule violation (``kind="fail"``).
 
@@ -184,6 +194,10 @@ class ReportBuilder:
             Short source snippet for context (stored in ``region.snippet``).
         extra_properties:
             Additional ``atlan/*`` properties to merge into ``result.properties``.
+        discriminator:
+            Optional per-subject key mixed into the result's fingerprint, for
+            rules that emit several findings at one location (see
+            :func:`_fingerprint`). ``None`` keeps the legacy fingerprint.
         """
         from conformance.suite.schema.extensions import AtlanResultProperties
 
@@ -200,7 +214,7 @@ class ReportBuilder:
                 region=region,
             )
         )
-        fingerprint = _fingerprint(rule_id, file_uri, start_line)
+        fingerprint = _fingerprint(rule_id, file_uri, start_line, discriminator)
         props: dict[str, Any] = AtlanResultProperties(hint=hint).to_properties()
         if extra_properties:
             props.update(extra_properties)

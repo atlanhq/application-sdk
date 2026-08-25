@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from conformance.renovate.classify import classify
+from conformance.renovate.classify import classify, lock_refusal_window
 from conformance.renovate.models import (
     AutoMergeStats,
     BlockingReason,
@@ -86,8 +86,32 @@ def _parse_checks_state(rollup: list[dict]) -> ChecksState:
     return ChecksState.GREEN
 
 
+def _parse_head_committed_at(raw: dict) -> Optional[datetime]:
+    """``headCommittedAt`` if the producer supplied one, else None.
+
+    Not a `gh pr list --json` field: renovate_fleet_scan.py augments each record
+    with it (the branch head's committedDate, one extra GraphQL selection on a
+    query it already runs). Absent input is not an error — it only means the
+    bounded-lock refusal signal has no clock to expire against.
+    """
+    value = raw.get("headCommittedAt")
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
 def _parse_pr(raw: dict) -> Optional[RenovatePR]:
-    """Parse a single item from `gh pr list --json` output."""
+    """Parse a single item from `gh pr list --json` output.
+
+    Two fields beyond that schema are read when present, both supplied by
+    renovate_fleet_scan.py: ``headCommittedAt`` and ``uvLockText`` (the branch
+    head's uv.lock, fetched only for the handful of PRs that could be carrying a
+    bounded-lock refusal). The text is reduced to its window here and dropped —
+    the model never holds the lockfile.
+    """
     try:
         created = datetime.fromisoformat(raw["createdAt"].replace("Z", "+00:00"))
         updated = datetime.fromisoformat(raw["updatedAt"].replace("Z", "+00:00"))
@@ -109,6 +133,8 @@ def _parse_pr(raw: dict) -> Optional[RenovatePR]:
             is_draft=raw.get("isDraft", False),
             body=raw.get("body") or "",
             auto_merge_enabled=bool(raw.get("autoMergeEnabled") or False),
+            head_committed_at=_parse_head_committed_at(raw),
+            lock_refusal_window=lock_refusal_window(raw.get("uvLockText") or ""),
         )
     except (KeyError, ValueError) as exc:
         print(f"Warning: skipping malformed PR record: {exc}", file=sys.stderr)
@@ -210,6 +236,14 @@ def _pr_to_dict(pr: RenovatePR) -> dict:
         "ageDays": pr.age_days,
         "createdAt": pr.created_at.isoformat(),
         "updatedAt": pr.updated_at.isoformat(),
+        # Bounded-lock refusal evidence, so a blockingReason of
+        # bounded_lock_refusal_expired can be rendered with the window it named
+        # and how long the branch has actually been frozen. Both null/empty on
+        # every PR that carries no tripwire, which is nearly all of them.
+        "headCommittedAt": pr.head_committed_at.isoformat()
+        if pr.head_committed_at
+        else None,
+        "lockRefusalWindow": pr.lock_refusal_window,
         # Which packages this PR delivers (parsed from body table / title) —
         # lets the fleet-freshness dashboard join "repo behind on tool X" to
         # the exact PR that fixes it. Empty for lock-maintenance PRs.

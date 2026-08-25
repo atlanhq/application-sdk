@@ -1,0 +1,203 @@
+/// Artifact-schemas example — demonstrates declaring the shape of the files an
+/// app hands off (ADR-0020).
+///
+/// `artifactSchemas` is keyed by the name of a `FileReference` field on this
+/// entrypoint's input/output contract model, never by a storage path. Each entry
+/// declares a format and a non-empty list of fields; the toolkit renders them to
+/// `app/generated/artifact_schemas.json` and the SDK checks the real artifact
+/// against the declaration at the hand-off.
+///
+/// Every field carries a `description`. It is required: a declaration is read by
+/// whoever is debugging the hand-off that just failed, and `name` + `type` alone
+/// state the assertion without stating why it holds.
+///
+/// The three cases worth seeing here:
+///   - a **parquet** hand-off whose `START_TIME` is declared `timestamp`. Arrow
+///     `timestamp[*]` satisfies that at any unit; arrow `string` does not. That
+///     one asymmetry is the check a 73-day frozen-lineage RCA needed.
+///   - an **NDJSON** hand-off with nested fields declared as paths plus a container
+///     type — `attributes` is `struct` and `attributes.name` is `string`; an array
+///     of structs is `attributes.columns` (`array`), `attributes.columns[]`
+///     (`struct`), `attributes.columns[].name` (`string`). No recursive grammar.
+///   - an artifact declared on the app's **input**: the consumer owns the
+///     declaration, so a consuming app states what it requires of what it reads.
+///
+/// Generated layout:
+///   atlan.yaml
+///   app.yaml
+///   app/generated/artifact-schemas-example.json  ← workflow setup config
+///   app/generated/artifact_schemas.json          ← the declarations
+///   app/generated/manifest.json
+///   app/generated/_input.py
+amends "../../src/App.pkl"
+
+name = "artifact-schemas-example"
+displayName = "Artifact Schemas Example"
+icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
+hasCredentialConfig = false
+
+pipeline {
+  publish = null
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["lookback-days"] = new NumericInput {
+          title = "Query lookback (days)"
+          helpText = "How much query history to read."
+          default = 30
+          width = 4
+        }
+      }
+    }
+  }
+}
+
+artifactSchemas {
+  // Output hand-off: partitioned parquet this app writes for a downstream parser.
+  ["raw_queries"] = new ArtifactSchema {
+    format = "parquet"
+    description = "Query-history rows written for the downstream parser."
+    fields {
+      new ArtifactField {
+        name = "QUERY_ID"
+        type = "string"
+        description = "Warehouse-assigned query id, unique within the account. The parser's join key."
+      }
+      new ArtifactField {
+        name = "START_TIME"
+        type = "timestamp"
+        description = "When the query began executing. Must be a real timestamp column — a stringified timestamp here is the defect this declaration exists to catch."
+      }
+      new ArtifactField {
+        name = "CREDITS_USED"
+        type = "float"
+        required = false
+        description = "Compute credits billed for the query. Absent on warehouses that do not meter per query."
+      }
+      new ArtifactField {
+        // Snowflake NUMBER lands as parquet decimal128; asserting float would
+        // either mis-flag the column or lose precision.
+        name = "ROWS_PRODUCED"
+        type = "decimal"
+        required = false
+        description = "Row count the query returned. Declared decimal because a Snowflake NUMBER lands as parquet decimal128; asserting float would mis-flag it or lose precision."
+      }
+      new ArtifactField {
+        name = "YEAR"
+        type = "int"
+        description = "Partition column derived from START_TIME. The parser prunes on it, so a string here silently disables partition pruning."
+      }
+      new ArtifactField {
+        name = "SESSION_PARAMS"
+        type = "json"
+        required = false
+        description = "Session settings in force for the query. Physically a string column, semantically a JSON blob — collapsing the two would defeat this hop's check."
+      }
+    }
+  }
+
+  // Output hand-off: NDJSON entities, nested fields as dotted paths.
+  ["transformed_entities"] = new ArtifactSchema {
+    format = "ndjson"
+    description = "Transformed entities streamed to the publish step."
+    fields {
+      new ArtifactField {
+        name = "typeName"
+        type = "string"
+        description = "Atlan type this record instantiates, e.g. Table. Publish routes on it."
+      }
+      new ArtifactField {
+        name = "attributes"
+        type = "struct"
+        description = "Container for the entity's attributes. Declared so a record that flattened them to top level is caught before publish reads it."
+      }
+      new ArtifactField {
+        name = "attributes.qualifiedName"
+        type = "string"
+        description = "Stable identity of the entity. Publish upserts on it, so a missing or non-string value creates duplicates rather than failing."
+      }
+      new ArtifactField {
+        name = "attributes.name"
+        type = "string"
+        description = "Display name shown in the UI."
+      }
+      new ArtifactField {
+        name = "attributes.lastSyncRunAt"
+        type = "timestamp"
+        required = false
+        description = "When this entity was last written by a run. Absent on the first sync, set on every later one."
+      }
+      new ArtifactField {
+        name = "attributes.columns"
+        type = "array"
+        required = false
+        description = "Child columns carried inline on a table entity. Absent for entity types that have none."
+      }
+      new ArtifactField {
+        // The array's ELEMENT, addressed with the `[]` step. Declaring it as a struct
+        // is what lets the two leaf paths below mean anything.
+        name = "attributes.columns[]"
+        type = "struct"
+        description = "One column. `required` on the paths below reads per element, so an empty columns array satisfies them vacuously."
+      }
+      new ArtifactField {
+        name = "attributes.columns[].name"
+        type = "string"
+        description = "Column name as it appears in the source."
+      }
+      new ArtifactField {
+        name = "attributes.columns[].order"
+        type = "int"
+        description = "Ordinal position of the column within the table, 1-based."
+      }
+      new ArtifactField {
+        // A scalar array: the element step carries a leaf type rather than a struct.
+        name = "attributes.tags"
+        type = "array"
+        required = false
+        description = "Source-side tags on the entity. Absent when the source has no tagging."
+      }
+      new ArtifactField {
+        name = "attributes.tags[]"
+        type = "string"
+        description = "One tag. Elements are plain strings, not objects."
+      }
+      new ArtifactField {
+        // Present-but-unasserted: a thin contract states presence without anyone
+        // inventing a wrong type to satisfy the enum.
+        name = "customAttributes"
+        type = "any"
+        required = false
+        description = "Source-specific extras passed through untouched. Type deliberately unasserted — the shape is the source's, not ours."
+      }
+    }
+  }
+
+  // Input hand-off: what this app requires of an artifact another app produced.
+  // The consumer owns the declaration; the producer references it rather than
+  // re-authoring the field list.
+  ["upstream_lineage"] = new ArtifactSchema {
+    format = "ndjson"
+    description = "Lineage edges this app reads from an upstream producer."
+    fields {
+      new ArtifactField {
+        name = "source_qualified_name"
+        type = "string"
+        description = "Qualified name of the upstream asset the edge starts at."
+      }
+      new ArtifactField {
+        name = "target_qualified_name"
+        type = "string"
+        description = "Qualified name of the downstream asset the edge ends at."
+      }
+      new ArtifactField {
+        name = "process_id"
+        type = "string"
+        description = "Id of the process that produced the edge. Groups edges into one lineage process on read."
+      }
+    }
+  }
+}

@@ -21,7 +21,12 @@ from ._pytest_collection import (
     is_test_function,
 )
 from ._scope import SDK_PACKAGE_PREFIX, detect_scope, is_sdk_package_name
-from ._toml_suppress import _is_suppressed, make_toml_finding, parse_toml_suppressions
+from ._toml_suppress import (
+    SuppressionsMap,
+    _is_suppressed,
+    make_toml_finding,
+    parse_toml_suppressions,
+)
 
 __all__ = [
     "safe_read_json",
@@ -29,6 +34,7 @@ __all__ = [
     "EXCLUDE_DIRS",
     "SDK_PACKAGE_PREFIX",
     "TOOL_VERSION",
+    "SuppressionsMap",
     "_IgnoreDirective",
     "_is_suppressed",
     "_parse_directives",

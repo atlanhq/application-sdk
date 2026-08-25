@@ -12,11 +12,21 @@ Dispatch + SSE parsing + GITHUB_STEP_SUMMARY rendering live here (tested) rather
 than in inline workflow shell, per docs/standards/ci.md. Parses the
 `=== SDK RESOLVE SUMMARY ===` block the resolver emits (ORCHESTRATION Phase 4).
 
-One re-dispatch is allowed when the sandbox dies on a hard error that a
-different model could survive — see MAX_DISPATCH_ATTEMPTS and retry_decision().
-The retry fires only after the out-of-band poll has come back empty, which is
-the single point where the sandbox is provably dead and nothing further will
-land; every other stream ending stays fail-fast.
+One re-dispatch is allowed when the sandbox dies on a hard error a second
+attempt could survive — see MAX_DISPATCH_ATTEMPTS and retry_decision(). Two
+classes qualify, and they differ on which model attempt 2 runs: a model/provider
+fault swaps the model (FND-641), while a fault in mothership's own sandbox-api
+wrapper keeps it (FND-764), because nothing about the model failed there. The
+retry fires only after the out-of-band poll has come back empty, which is the
+single point where the sandbox is provably dead and nothing further will land;
+every other stream ending stays fail-fast.
+
+That poll establishes "nothing was DELIVERED", not "nothing was PUSHED" — it
+only looks for the Phase-4 hand-off, so a resolver that pushed in earlier rounds
+and died before Phase 4 leaves it empty too. Each retry class therefore has to
+carry its own evidence that no first resolver exists: the model-fault class
+because the sandbox died on its own first turn, and the sandbox-api class
+because it additionally requires an empty `cost_usd` (see `billed_nothing`).
 
 That is a strictly narrower rule than the review lane's, on purpose (FND-647).
 The reviewer also retries a fault it cannot prove killed the sandbox, because
@@ -179,6 +189,58 @@ RETRYABLE_TRANSPORT_PATTERNS = ("disconnected prematurely",)
 # Auth/permission and prompt faults are excluded by the allowlist above rather
 # than named here: they will fail the same way on any model, forever.
 NEVER_RETRY_ERR_CODES = frozenset({"elicitation", "stream_error"})
+# FND-764. mothership's own sandbox-api codespace: `code=internal` carries a
+# message stamped with the wrapper that reported it (`_err_msg(e,
+# "sandbox-api/_execute_sync")` in its `sandbox_api.py`). Every observed
+# instance is plumbing on mothership's side of the API, never the model:
+#
+#   [sandbox-api/_execute_sync] generator didn't stop after throw()     (x8)
+#   [sandbox-api/_execute_sync] Failed to clone repository: ...         (x1)
+#                               Command timeout after 60000ms
+#
+# Those two do NOT share a cause — the clone timeout is legible and plainly
+# transient, while `generator didn't stop after throw()` is mothership's
+# `langfuse_lifecycle_span` swallowing the real exception and yielding a second
+# time (FND-765), so the actual fault is destroyed before it reaches us. What
+# they share is what licenses the retry: nothing was delivered and nothing was
+# billed. Both arrive with an empty `cost_usd` while other failures on this lane
+# report real spend ($0.48 / $2.26 / $6.58 / $28.34), so no model produced a
+# token, and all 9 affected PRs were checked for a resolver push or Phase-4
+# hand-off — there were none.
+#
+# That empty `cost_usd` is CHECKED, not merely observed — see `billed_nothing`.
+# It has to be, because it is the whole safety argument on a lane that pushes
+# commits, and it does not follow from anything else the classifier sees. The
+# masked shape is `langfuse_lifecycle_span` destroying the real exception, so
+# the wrapper fault can originate anywhere inside `_execute_sync` — including
+# AFTER a run did work — and such an occurrence would be byte-identical to the
+# 9 pre-first-token ones. The out-of-band poll does not cover the gap either:
+# it runs for OOB_POLL_SECONDS_HARD_ERROR and looks only for the Phase-4
+# hand-off, so a resolver that pushed in rounds 1..N without reaching Phase 4
+# leaves it empty. "The poll came back empty" is not "nothing was pushed".
+#
+# This conjunct is the ONE place this class deliberately diverges from the
+# review lane's copy, for the same reason RETRYABLE_TRANSPORT_PATTERNS diverges:
+# the entry conditions are per-lane. A second reviewer costs a duplicate comment
+# that FND-636's dedupe collapses; a second resolver pushes to a branch and
+# cannot be undone.
+#
+# Matched on the code AND the message, not the code alone: `internal` is a
+# generic label and a future non-plumbing use of it must not inherit a retry
+# it was never argued for. The message test keeps this an allowlist instead of
+# letting the class rot into a denylist. It is a substring rather than a prefix
+# test because mothership does not consistently deliver the message bare: the
+# transport class on this same lane exists because the provider text arrived
+# wrapped in a nested JSON blob, and `[sandbox-api/` is specific enough that
+# matching it anywhere in the message keeps the allowlist just as tight.
+SANDBOX_API_ERR_CODE = "internal"
+SANDBOX_API_ERR_MARKER = "[sandbox-api/"
+# Long enough to survive the clone-timeout shape, which is ~150 chars and buries
+# its actual cause ("Command timeout after 60000ms") at the very end, behind the
+# JSON envelope. That is the ONE variant of this class whose message carries a
+# recoverable cause, so truncating it at the 80 the other classes use would
+# discard the only thing worth reading in the line a human triages from.
+SANDBOX_API_ERR_PREVIEW_CHARS = 200
 # Dispatch-level HTTP statuses live in their own `http_` codespace, kept apart
 # from the stream's provider codes on purpose: a provider 400 carried inside the
 # stream is worth a different model, while a 400 on the POST itself is a
@@ -304,7 +366,14 @@ def _reviewer_handles(reviewers: str, requester: str) -> list[str]:
 
 
 def attempt_model(attempt: int) -> str:
-    """Main model for this attempt — the swap that makes a retry worth booting."""
+    """Default main model for this attempt — the swap a model-fault retry needs.
+
+    Only a default, and only ever right for attempt 1: `retry_decision()` names
+    the model for the attempt it authorises, because the retry classes differ on
+    exactly this axis. A same-model re-dispatch (mothership's own sandbox-api
+    wrapper faulted, FND-764) must NOT be dragged onto RETRY_MAIN_MODEL —
+    nothing about the model failed.
+    """
     return MAIN_MODEL if attempt <= 1 else RETRY_MAIN_MODEL
 
 
@@ -316,14 +385,17 @@ def build_payload(
     reviewers: str,
     requester: str,
     *,
+    model: str,
     attempt: int = 1,
     max_timeout_seconds: int = STREAM_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     # `attempt` > 1 is a re-dispatch after the previous sandbox died on a hard
     # error: same prompt (the resolver re-reads live PR state in Phase 0, so the
-    # second sandbox resumes wherever the first stopped), different main model.
-    # The source_id is suffixed so the two runs are distinguishable on the
-    # mothership side rather than colliding on one id.
+    # second sandbox resumes wherever the first stopped), on whichever main
+    # model the caller's RetryPlan named — a model fault swaps it, a fault in
+    # mothership's own wrapper keeps it. The source_id is suffixed so the two
+    # runs are distinguishable on the mothership side rather than colliding on
+    # one id.
     suffix = "" if attempt <= 1 else f"-retry{attempt - 1}"
     return {
         "mode": "direct",
@@ -340,7 +412,12 @@ def build_payload(
         # the main lane runs. `small_fast_model` must be pinned explicitly:
         # mothership's model_routing_env does `fast = small_fast_model or model`,
         # so pinning `model` alone would put the background lane on MAIN_MODEL.
-        "model": attempt_model(attempt),
+        # `model` is required from the caller because it is NOT a function of
+        # the attempt number — a sandbox-api plumbing fault retries on the SAME
+        # model where a model fault swaps it (see RetryPlan). Deliberately no
+        # `or attempt_model(attempt)` fallback: that would let a caller that
+        # forgot the argument silently get the swap back.
+        "model": model,
         "small_fast_model": FAST_MODEL,
         "env_vars": {"CLAUDE_CODE_SUBAGENT_MODEL": FAST_MODEL},
         "prompt": build_prompt(
@@ -548,6 +625,21 @@ def _rounds_completed(summary: dict[str, str]) -> int | None:
         return int(summary["rounds"].strip())
     except (KeyError, ValueError, AttributeError):
         return None
+
+
+class RetryPlan(NamedTuple):
+    """Whether to re-dispatch, why, and which main model attempt N+1 runs.
+
+    `model` is empty when `retry` is False. It cannot be derived from the
+    attempt number alone: the retry classes differ on exactly that axis — a
+    dead sandbox needs a DIFFERENT model, a sandbox-api plumbing fault needs
+    the SAME one. Ported from the review lane, which already had to make this
+    distinction (FND-645 / FND-647).
+    """
+
+    retry: bool
+    reason: str
+    model: str = ""
 
 
 class Attempt(NamedTuple):
@@ -870,6 +962,51 @@ def oob_poll_budget(st: SSEState) -> int:
     return OOB_POLL_SECONDS_STREAM_DROP
 
 
+def _squash(text: str) -> str:
+    r"""Collapse whitespace runs so a multi-line fault fits one log line."""
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def billed_nothing(st: SSEState) -> bool:
+    """True when the run reported no spend, i.e. no model ever produced a token.
+
+    This is the evidence that licenses a re-dispatch on THIS lane, so it is
+    checked rather than assumed. All 9 observed FND-764 occurrences reported an
+    empty `cost_usd` while other failures on this lane reported real spend
+    ($0.48 / $2.26 / $6.58 / $28.34).
+
+    Deliberately fails OPEN on a cost it cannot read. `total_cost` above
+    documents mothership's cost telemetry as unreliable, and that unreliability
+    is false-EMPTY — runs that streamed hundreds of responses have reported no
+    cost. So an unreadable value can only ever return this to the behaviour
+    that shipped without the guard, never to something stricter than the
+    evidence supports.
+    """
+    try:
+        return float(st.cost) == 0.0
+    except (TypeError, ValueError):
+        return True  # absent or unparseable — no positive evidence of spend
+
+
+def is_sandbox_api_fault(st: SSEState) -> bool:
+    """True when mothership's sandbox-api reported a fault in its own plumbing.
+
+    Self-deciding on the code, like every other classifier here: `internal` is
+    informative, so this never consults RETRYABLE_ERR_PATTERNS. The message
+    prefix is part of the discriminator rather than a fallback — see
+    SANDBOX_API_ERR_CODE for why the code alone is not enough.
+
+    The empty-cost conjunct is what makes this safe ON THIS LANE, and it is why
+    this predicate is NOT byte-identical to the review lane's copy — see
+    SANDBOX_API_ERR_CODE.
+    """
+    if st.err_code != SANDBOX_API_ERR_CODE:
+        return False
+    if not billed_nothing(st):
+        return False
+    return SANDBOX_API_ERR_MARKER in st.err_msg
+
+
 def is_retryable_fault(st: SSEState) -> bool:
     """True when the cause looks like a model/provider fault, not a fixed one.
 
@@ -898,22 +1035,25 @@ def is_retryable_fault(st: SSEState) -> bool:
     return any(p in st.err_msg.lower() for p in RETRYABLE_ERR_PATTERNS)
 
 
-def retry_decision(st: SSEState, attempt: int, seconds_left: float) -> tuple[bool, str]:
-    """Whether to re-dispatch after this attempt, and the reason either way.
+def _retry_class(st: SSEState, attempt: int, current_model: str) -> RetryPlan:
+    """Which retry class this ending falls into, if any, and on which model.
+
+    `current_model` is the model THIS attempt actually ran, threaded down from
+    `main()`. The same-model classes must not re-derive it from `attempt`:
+    `attempt_model` answers "what attempt N would have run by default", which
+    stops being the same answer the moment a same-model retry has happened.
 
     Called only once the out-of-band poll has come back empty, so "posted
     nothing" is established for every branch, and "the sandbox is dead" for the
     abnormal-termination branch — with one exception, which is why the transport
     branch below exists: a dropped RPC reports a terminal fault without proving
     the resolver stopped, and on this lane an unproven death is never retried.
-    The reason is logged verbatim so a run that did NOT retry says why.
     """
-    if attempt >= MAX_DISPATCH_ATTEMPTS:
-        return False, f"already used all {MAX_DISPATCH_ATTEMPTS} attempts"
     if not sandbox_terminated_abnormally(st):
-        return False, (
+        return RetryPlan(
+            False,
             "the stream ended without a hard error — the sandbox may still be "
-            "running, and a re-dispatch would double-run the resolver"
+            "running, and a re-dispatch would double-run the resolver",
         )
     if is_transport_fault(st):
         # FND-647, and it must be ranked ABOVE `is_retryable_fault` rather than
@@ -931,31 +1071,80 @@ def retry_decision(st: SSEState, attempt: int, seconds_left: float) -> tuple[boo
         # rather than by default: what the fault buys instead is the long
         # out-of-band poll above, which recovers the run without ever risking a
         # second resolver. If that poll came back empty, the run is spent.
-        return False, (
+        return RetryPlan(
+            False,
             f"code={st.err_code or 'none'} reports a dropped RPC to the sandbox, "
             "not a dead one — the resolver may still be pushing, and two "
             "resolvers on one branch cannot be undone, so this lane waits for "
-            "the out-of-band hand-off instead of re-dispatching"
+            "the out-of-band hand-off instead of re-dispatching",
+        )
+    if is_sandbox_api_fault(st):
+        # FND-764. Ranked below the transport branch and above the model one,
+        # because it is neither: mothership reported a fault in its OWN wrapper
+        # around the run, so nothing about the model failed and the swap axis is
+        # the wrong one — attempt 2 re-runs the same model on a fresh sandbox.
+        #
+        # Unlike the transport case just above, this one is safe on this lane.
+        # The distinction is where the fault is: a dropped RPC leaves a sandbox
+        # of unknown liveness behind the broken pipe, while a sandbox-api fault
+        # is mothership saying its own execution wrapper never delivered a run
+        # at all — empty `cost_usd`, no first token, and (checked across all 9
+        # occurrences) not one resolver push or Phase-4 hand-off. There is no
+        # first resolver for a second to race.
+        same = current_model
+        return RetryPlan(
+            True,
+            f"code={st.err_code} is a fault in mothership's own sandbox-api "
+            f"wrapper ({_squash(st.err_msg)[:SANDBOX_API_ERR_PREVIEW_CHARS]}), "
+            f"not in the model or the "
+            f"resolver — re-dispatching on the same model ({same}) "
+            f"(attempt {attempt + 1} of {MAX_DISPATCH_ATTEMPTS})",
+            same,
         )
     if not is_retryable_fault(st):
-        return False, (
+        return RetryPlan(
+            False,
             f"code={st.err_code or 'none'} is not a known model/provider fault, "
-            "so a different model would fail the same way"
-        )
-    if seconds_left < RETRY_MIN_REMAINING_SECONDS:
-        return False, (
-            f"only {int(seconds_left)}s of the job budget remain, below the "
-            f"{RETRY_MIN_REMAINING_SECONDS}s a retry needs to finish a round"
+            "so a different model would fail the same way",
         )
     cause = (
         "the sandbox reported success but emitted no Phase 4 summary (no-op run)"
         if resolved_nothing(st)
         else f"code={st.err_code or 'none'} looks like a model/provider fault"
     )
-    return True, (
+    return RetryPlan(
+        True,
         f"{cause} — re-dispatching on {RETRY_MAIN_MODEL} (attempt {attempt + 1} "
-        f"of {MAX_DISPATCH_ATTEMPTS})"
+        f"of {MAX_DISPATCH_ATTEMPTS})",
+        RETRY_MAIN_MODEL,
     )
+
+
+def retry_decision(
+    st: SSEState, attempt: int, seconds_left: float, current_model: str
+) -> RetryPlan:
+    """Whether to re-dispatch after this attempt, on what, and why either way.
+
+    The reason is logged verbatim so a run that did NOT retry says why — the
+    part that is otherwise invisible. The attempt cap and the wall-clock floor
+    bound EVERY class; only the classification in `_retry_class` differs.
+
+    `current_model` is required rather than defaulted: a caller that omitted it
+    would silently reintroduce the attempt-number derivation this signature
+    exists to remove. See `_retry_class`.
+    """
+    if attempt >= MAX_DISPATCH_ATTEMPTS:
+        return RetryPlan(False, f"already used all {MAX_DISPATCH_ATTEMPTS} attempts")
+    plan = _retry_class(st, attempt, current_model)
+    if not plan.retry:
+        return plan
+    if seconds_left < RETRY_MIN_REMAINING_SECONDS:
+        return RetryPlan(
+            False,
+            f"only {int(seconds_left)}s of the job budget remain, below the "
+            f"{RETRY_MIN_REMAINING_SECONDS}s a retry needs to finish a round",
+        )
+    return plan
 
 
 def poll_for_oob_summary(
@@ -1120,8 +1309,11 @@ def main() -> int:
     attempts: list[Attempt] = []
     oob_url: str | None = None
     attempt = 1
+    # Named by the previous attempt's RetryPlan; empty on the first pass. The
+    # model is NOT a function of the attempt number — see RetryPlan.
+    next_model = ""
     while True:
-        model = attempt_model(attempt)
+        model = next_model or attempt_model(attempt)
         # Clamp the sandbox's own cap to what is left of this step's budget.
         # Cancelling the job does not stop the sandbox, so an unclamped retry
         # started late would keep billing for up to 2h after the runner dies.
@@ -1134,6 +1326,7 @@ def main() -> int:
             reviewers,
             requester,
             attempt=attempt,
+            model=model,
             max_timeout_seconds=max(1, min(STREAM_TIMEOUT_SECONDS, int(seconds_left))),
         )
         print(f"[attempt {attempt}/{MAX_DISPATCH_ATTEMPTS}] dispatching on {model}")
@@ -1184,19 +1377,23 @@ def main() -> int:
         # a resolver that is still working, or one that finished just before it
         # died. Phase 0 re-reads live PR state, so a second sandbox resumes
         # rather than restarts.
-        should_retry, reason = retry_decision(
-            st, attempt, DISPATCH_BUDGET_SECONDS - (time.time() - run_start_epoch)
+        plan = retry_decision(
+            st,
+            attempt,
+            DISPATCH_BUDGET_SECONDS - (time.time() - run_start_epoch),
+            model,
         )
-        if not should_retry:
-            print(f"::warning::Not re-dispatching: {reason}")
+        if not plan.retry:
+            print(f"::warning::Not re-dispatching: {plan.reason}")
             break
-        print(f"::warning::Re-dispatching on a fresh sandbox: {reason}")
+        print(f"::warning::Re-dispatching on a fresh sandbox: {plan.reason}")
+        next_model = plan.model
         attempt += 1
 
     if code != 0 and len(attempts) > 1:
         message += (
-            f" (retried on {attempt_model(len(attempts))} after "
-            f"{attempt_model(1)} failed; both attempts failed)"
+            f" (retried on {attempts[-1].model} after {attempts[0].model} "
+            "failed; both attempts failed)"
         )
 
     write_step_summary(

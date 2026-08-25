@@ -1041,4 +1041,102 @@ RULES: tuple[RuleDefinition, ...] = (
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k014"
         ),
     ),
+    RuleDefinition(
+        id="K016",
+        scope=RuleScope.APP,
+        name="EntrypointArtifactSchemaMissing",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="contract-toolkit",
+        autofixable=False,
+        since="0.23.0",
+        orthogonal_gate="pkl-eval",
+        rationale=(
+            "Data crosses app boundaries as files, and at every hand-off the "
+            "producer's idea of the artifact's shape and the consumer's idea of "
+            "it are independent beliefs that nothing checks. A production RCA "
+            "traced 73 days of frozen lineage to one column that had become a "
+            "string where the consumer expected a timestamp; every workflow in "
+            "the chain reported success throughout, because each one did "
+            "exactly what its own code said and no layer compared the two "
+            "beliefs. Checksums do not help -- storage integrity attests that "
+            "the bytes read are the bytes written and is explicit that this "
+            "proves nothing about the artifact being semantically what the "
+            "reader expects. artifactSchemas is where the shape gets written "
+            "down, and this rule requires it exactly where the hand-off is "
+            "public: an entry point's contracts are read by another app or by "
+            "the DAG, so an undeclared FileReference there is an interface "
+            "nobody can check. Internal @task contracts are deliberately "
+            "exempt -- that processing is the app's own, and the app decides "
+            "whether it wants the check. The absence of a declaration is a "
+            "structural fact about two committed files, not a heuristic, so "
+            "this rule cannot produce a false positive; it needs only a "
+            "deprecation window, which the SDK's matching registration-time "
+            "warning provides."
+        ),
+        short_description=(
+            "An entry point's input/output contract declares a FileReference "
+            "field that no artifactSchemas entry describes"
+        ),
+        full_description=(
+            "An entry point's ``input``/``return`` contract declares a "
+            "``FileReference`` field -- directly or inherited from a base or "
+            "SDK mixin -- and the entry point's committed "
+            "``artifact_schemas.json`` carries no entry keyed by that field "
+            "name.\n"
+            "\n"
+            "**Why the entry-point boundary specifically.** An entry point's "
+            "contracts are public by definition: another app or the platform "
+            "DAG reads them. The default ``run()`` method is registered as an "
+            "*implicit* entry point carrying the same metadata as an explicit "
+            "``@entrypoint``, so the rule is uniformly every entry point's "
+            "``input_type`` and ``output_type`` and needs no special-casing. "
+            "Internal ``@task`` contracts never become entry points and are "
+            "exempt.\n"
+            "\n"
+            "**Both directions are checked.** For a cross-app hand-off the "
+            "*consumer* declares what it requires of its input, and the "
+            "producer references the consumer's published declaration rather "
+            "than re-authoring the field list -- so an entry point's Input "
+            "carries declarations exactly like its Output does.\n"
+            "\n"
+            "**Fix -- declare the shape in the contract, then regenerate.** "
+            "``artifactSchemas`` is a per-entry-point pkl property, keyed by "
+            "the contract field name (never by a storage path):\n"
+            "\n"
+            "    artifactSchemas {\n"
+            '      ["raw_queries"] = new ArtifactSchema {\n'
+            '        format = "parquet"   // or "ndjson"\n'
+            "        fields {\n"
+            "          new ArtifactField {\n"
+            '            name = "QUERY_ID"\n'
+            '            type = "string"\n'
+            '            description = "Warehouse-assigned query id; the join key."\n'
+            "          }\n"
+            "        }\n"
+            "      }\n"
+            "    }\n"
+            "\n"
+            "Then ``pkl eval -m . contract/app.pkl``. A single-entry-point app "
+            "emits ``app/generated/artifact_schemas.json``; a multi-entry-point "
+            "bundle emits ``app/generated/{entrypoint}/artifact_schemas.json`` "
+            "per entry point. Declaring ``artifactSchemas`` on a bundle *root* "
+            "is a generation error -- the root has no contract model, so a key "
+            "there could not name a real field.\n"
+            "\n"
+            "Never hand-edit the generated ``artifact_schemas.json``: it is a "
+            "pkl eval output and the next toolkit run reverts the edit.\n"
+            "\n"
+            "**Suppress** with ``# conformance: ignore[K016] <reason>`` on the "
+            "field declaration, or on the contract class definition for a field "
+            "inherited from a base. Suppressing states that this hand-off is "
+            "deliberately unchecked -- which is a defensible call for an "
+            "artifact no other app reads, and the wrong call for one that "
+            "crosses an app boundary.\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k016"
+        ),
+    ),
 )

@@ -278,3 +278,18 @@ One App = one `ATLAN_APP_MODULE` entry (no comma-separated list):
 ```dockerfile
 ENV ATLAN_APP_MODULE=app.connector:SnowflakeApp
 ```
+
+### Testing each entry point
+
+Adding an entry point adds a workflow nothing tests by default. Both test tiers
+need it named explicitly, because in both cases the silent fallback is a *pass*
+against the wrong workflow rather than an error:
+
+- **Integration** — set `entrypoint=` on the `Scenario`, or `entrypoint` on the
+  suite class. In-process tests pass `entry_point=` to the executor. See
+  [Integration testing — Naming the entrypoint](../guides/integration-testing.md#naming-the-entrypoint-on-a-multi-entrypoint-app).
+- **e2e** — one `tests/e2e/test_*.py` file per entry point (the CI matrix fans out
+  one leg per file), each subclassing that entry point's generated
+  `app/generated/<ep>/_e2e_base.py`. Conformance rule `T025` reports any bundle
+  entry point without one. See
+  [Connector CI e2e — Multi-entrypoint apps](../standards/connector-ci-e2e.md#multi-entrypoint-bundle-apps-one-suite-per-entrypoint).

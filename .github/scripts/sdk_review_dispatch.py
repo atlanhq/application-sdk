@@ -30,27 +30,34 @@ have, because the review lane needs them:
     its summary to the PR, the review WAS delivered, so a later stream
     breakage is a mothership-side finalize glitch and must not red the check.
 
-One re-dispatch is allowed, in any of three classes — see
+One re-dispatch is allowed, in any of four classes — see
 MAX_DISPATCH_ATTEMPTS and retry_decision():
 
   * the sandbox died on a hard error a DIFFERENT model could survive;
   * the sandbox reached `status=completed` and posted no verdict, which is the
     turn ending early rather than the model failing, so attempt 2 runs the SAME
-    model; and
+    model;
   * mothership reported a dropped RPC to the sandbox, which is a fault in the
-    pipe rather than in the model — so attempt 2 also runs the SAME model.
+    pipe rather than in the model — so attempt 2 also runs the SAME model; and
+  * mothership reported a fault in its OWN sandbox-api wrapper (FND-764), which
+    is again not the model, so attempt 2 runs the SAME model. Precautionary
+    here: all 9 observed occurrences were on the resolve lane.
 
-All three fire only after the verdict check has come back empty — confirmed
+All four fire only after the verdict check has come back empty — confirmed
 empty, sharing `sdk_review_verdict_gate`'s recheck, because the comments API is
 not read-after-write consistent. That is the single point where nothing was
 delivered; every other stream ending stays fail-fast, because a second reviewer
 would post a second summary on the same PR.
 
-The first two classes also have the sandbox provably finished. The third does
-not — a dropped pipe says nothing about the sandbox behind it — and is admitted
-anyway because this lane is self-repairing: both attempts carry the same
-`GHA_RUN_URL`, so FND-636's dedupe collapses a double post. The resolve lane
-gets no such class, for exactly that reason (FND-647).
+Three of the four also have the sandbox provably finished: the clean `complete`
+is terminal, and a sandbox-api fault is mothership reporting that its own
+execution wrapper never delivered a run. The dropped RPC does not — a dropped
+pipe says nothing about the sandbox behind it — and is admitted anyway because
+this lane is self-repairing: both attempts carry the same `GHA_RUN_URL`, so
+FND-636's dedupe collapses a double post. The resolve lane gets no dropped-RPC
+class, for exactly that reason (FND-647); it does take the sandbox-api class,
+with an extra empty-`cost_usd` conjunct to prove nothing ran before it
+re-dispatches a lane that pushes commits.
 
 Environment (all supplied by the `Dispatch to mothership Rover Direct API`
 step in `.github/workflows/sdk-review.yml`):
@@ -244,6 +251,31 @@ RETRYABLE_TRANSPORT_PATTERNS = ("disconnected prematurely",)
 # Fails identically on any model, so never spend a second sandbox on it: the
 # sandbox wants interactive input, which GHA can never give.
 NEVER_RETRY_ERR_CODES = frozenset({"elicitation"})
+# FND-764. mothership's own sandbox-api codespace — a fault in its execution
+# wrapper rather than in the model. Precautionary on THIS lane: all 9 observed
+# occurrences were on the resolve lane and none here, but the two lanes POST the
+# same `mode: "direct"` endpoint and reach the same five unguarded
+# `langfuse_lifecycle_span` blocks in mothership's `_execute_direct`, so the
+# review lane is exposed to it identically. Matched on the code AND the message
+# so a future non-plumbing `internal` cannot inherit a retry that was never
+# argued for. The message test is a substring rather than a prefix because
+# mothership does not consistently deliver the message bare — the transport
+# class above exists because the provider text arrived wrapped in a nested JSON
+# blob — and `[sandbox-api/` is specific enough that matching it anywhere keeps
+# the allowlist just as tight.
+#
+# Kept as its own per-lane copy, like RETRYABLE_TRANSPORT_PATTERNS above,
+# because the entry conditions are per-lane. The resolve lane's copy carries an
+# extra empty-`cost_usd` conjunct that this one deliberately omits: a second
+# reviewer costs a duplicate comment that FND-636's dedupe collapses, so this
+# lane does not need to prove nothing ran before re-dispatching, while a second
+# resolver pushes to a branch and cannot be undone.
+SANDBOX_API_ERR_CODE = "internal"
+SANDBOX_API_ERR_MARKER = "[sandbox-api/"
+# Wider than the 80 the other classes use: the clone-timeout variant of this
+# class is ~150 chars and buries its actual cause at the very end, behind a JSON
+# envelope, so the usual cap would discard the only readable part.
+SANDBOX_API_ERR_PREVIEW_CHARS = 200
 # Dispatch-level HTTP statuses live in their own `http_` codespace, kept apart
 # from the stream's provider codes on purpose: a provider 400 carried inside the
 # stream is worth a different model, while a 400 on the POST itself is a
@@ -320,9 +352,10 @@ ORCHESTRATION.md Phase 0 step 7."""
 def attempt_model(attempt: int) -> str:
     """Default main model for this attempt — the swap the hard-error retry needs.
 
-    Only a default: `retry_decision()` names the model for the attempt it
-    authorises, because the two retry classes differ on exactly this axis. A
-    same-model re-dispatch (the sandbox finished cleanly and said nothing) must
+    Only a default, and only ever right for attempt 1: `retry_decision()` names
+    the model for the attempt it authorises, because the retry classes differ on
+    exactly this axis. A same-model re-dispatch (the sandbox finished cleanly
+    and said nothing; the RPC dropped; mothership's own wrapper faulted) must
     NOT be dragged onto RETRY_MAIN_MODEL — nothing about the model failed.
     """
     return MAIN_MODEL if attempt <= 1 else RETRY_MAIN_MODEL
@@ -751,8 +784,9 @@ class RetryPlan(NamedTuple):
     """Whether to re-dispatch, why, and which main model attempt N+1 runs.
 
     `model` is empty when `retry` is False. It cannot be derived from the
-    attempt number alone: the two retry classes differ on exactly that axis — a
-    dead sandbox needs a DIFFERENT model, a silent one needs the SAME one.
+    attempt number alone: the retry classes differ on exactly that axis — a
+    dead sandbox needs a DIFFERENT model, while a silent one, a dropped RPC and
+    a sandbox-api plumbing fault all need the SAME one.
     """
 
     retry: bool
@@ -793,6 +827,20 @@ def is_retryable_fault(st: SSEState) -> bool:
     return any(p in st.err_msg.lower() for p in RETRYABLE_ERR_PATTERNS)
 
 
+def is_sandbox_api_fault(st: SSEState) -> bool:
+    """True when mothership's sandbox-api reported a fault in its own plumbing.
+
+    Self-deciding on the code, like `is_retryable_fault`: `internal` is
+    informative, so this never consults the message-pattern ladder. The message
+    test is part of the discriminator rather than a fallback — see
+    SANDBOX_API_ERR_CODE, which also explains why this lane's copy carries no
+    empty-`cost_usd` conjunct where the resolve lane's does.
+    """
+    if st.err_code != SANDBOX_API_ERR_CODE:
+        return False
+    return SANDBOX_API_ERR_MARKER in st.err_msg
+
+
 def is_transport_fault(st: SSEState) -> bool:
     """True when the reported fault is the RPC to the sandbox, not the model.
 
@@ -819,11 +867,16 @@ def sandbox_completed_cleanly(st: SSEState) -> bool:
     return st.completed and st.status == "completed" and not st.errored
 
 
-def _retry_class(st: SSEState, attempt: int) -> RetryPlan:
-    """Which retry class this ending falls into, if either, and on which model.
+def _retry_class(st: SSEState, attempt: int, current_model: str) -> RetryPlan:
+    """Which retry class this ending falls into, if any, and on which model.
 
     Called only once the verdict check has come back CONFIRMED empty, so
     "nothing was delivered" is already established for every branch below.
+
+    `current_model` is the model THIS attempt actually ran, threaded down from
+    `main()`. The same-model classes must not re-derive it from `attempt`:
+    `attempt_model` answers "what attempt N would have run by default", which
+    stops being the same answer the moment a same-model retry has happened.
     """
     if sandbox_completed_cleanly(st):
         # Ranked above the cut-stream guard deliberately: `complete` IS the
@@ -831,7 +884,7 @@ def _retry_class(st: SSEState, attempt: int) -> RetryPlan:
         # nothing further even if our socket then died on the way out. And
         # nothing about the MODEL failed here — the turn ended early — so the
         # swap axis is irrelevant and attempt 2 re-runs the same one.
-        same = attempt_model(attempt)
+        same = current_model
         return RetryPlan(
             True,
             "the sandbox reached status=completed and posted no verdict — the "
@@ -863,11 +916,28 @@ def _retry_class(st: SSEState, attempt: int) -> RetryPlan:
         # sandbox of unknown liveness — the drop is in the pipe, not the sandbox
         # — and that is affordable only because both attempts carry the same
         # GHA_RUN_URL and FND-636's dedupe collapses a double post.
-        same = attempt_model(attempt)
+        same = current_model
         return RetryPlan(
             True,
             f"code={st.err_code or 'none'} reports a dropped RPC to the sandbox "
             f"({_squash(st.err_msg)[:80]}) — the model never failed, so "
+            f"re-dispatching on the same model ({same}) (attempt {attempt + 1} "
+            f"of {MAX_DISPATCH_ATTEMPTS})",
+            same,
+        )
+    if is_sandbox_api_fault(st):
+        # FND-764. mothership reported a fault in its OWN wrapper around the run
+        # (`sandbox-api/...`), not in the model — so, like the transport class
+        # above, the swap axis is the wrong one and attempt 2 re-runs the same
+        # model on a fresh session id. Ranked above `is_retryable_fault` because
+        # `internal` is an informative code and would otherwise fall out of it
+        # as "not a known model/provider fault" — true, and beside the point.
+        same = current_model
+        return RetryPlan(
+            True,
+            f"code={st.err_code} is a fault in mothership's own sandbox-api "
+            f"wrapper ({_squash(st.err_msg)[:SANDBOX_API_ERR_PREVIEW_CHARS]}), "
+            f"not in the model — "
             f"re-dispatching on the same model ({same}) (attempt {attempt + 1} "
             f"of {MAX_DISPATCH_ATTEMPTS})",
             same,
@@ -887,16 +957,22 @@ def _retry_class(st: SSEState, attempt: int) -> RetryPlan:
     )
 
 
-def retry_decision(st: SSEState, attempt: int, seconds_left: float) -> RetryPlan:
+def retry_decision(
+    st: SSEState, attempt: int, seconds_left: float, current_model: str
+) -> RetryPlan:
     """Whether to re-dispatch after this attempt, on what, and why either way.
 
     The reason is logged verbatim so a run that did NOT retry says why — the
     part that is otherwise invisible. The attempt cap and the wall-clock floor
-    bound BOTH classes; only the classification in `_retry_class` differs.
+    bound EVERY class; only the classification in `_retry_class` differs.
+
+    `current_model` is required rather than defaulted: a caller that omitted it
+    would silently reintroduce the attempt-number derivation this signature
+    exists to remove. See `_retry_class`.
     """
     if attempt >= MAX_DISPATCH_ATTEMPTS:
         return RetryPlan(False, f"already used all {MAX_DISPATCH_ATTEMPTS} attempts")
-    plan = _retry_class(st, attempt)
+    plan = _retry_class(st, attempt, current_model)
     if not plan.retry:
         return plan
     if seconds_left < RETRY_MIN_REMAINING_SECONDS:
@@ -1380,7 +1456,10 @@ def main() -> int:
         # declines, the outcome is exactly what it was before: exit 0, and
         # `sdk_review_verdict_gate.py` reds the run one step later.
         plan = retry_decision(
-            st, attempt, DISPATCH_BUDGET_SECONDS - (time.monotonic() - run_start)
+            st,
+            attempt,
+            DISPATCH_BUDGET_SECONDS - (time.monotonic() - run_start),
+            model,
         )
         if not plan.retry:
             print(f"::warning::Not re-dispatching: {plan.reason}")

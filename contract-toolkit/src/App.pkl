@@ -411,6 +411,53 @@ manifestTopLevelArgs: Mapping<String, String> = new Mapping {
 /// ```
 pipeline: Pipeline = new Pipeline {}
 
+// ── ARTIFACT SCHEMAS ─────────────────────────────────────────────────────────
+
+/// Per-artifact field declarations, rendered to `app/generated/artifact_schemas.json`.
+///
+/// Default: empty — an app that declares nothing generates **byte-identical**
+/// output to before this block existed, so adopting it is opt-in per app.
+///
+/// Each key is the name of a `FileReference` field on this entrypoint's input or
+/// output contract model (`ContractFieldName`) — never a path, prefix, or glob.
+/// Keying by contract field is the whole point: the runtime knows which field it
+/// is materialising, so nothing is inferred from the shape of a storage path.
+///
+/// The toolkit is transport, not owner. Every field below is authored by the app
+/// that *consumes* the artifact; the SDK ships no field list. For a cross-app
+/// hand-off the consumer declares what it requires of its input, and the producer
+/// references the consumer's published declaration rather than re-authoring it.
+///
+/// Multi-entrypoint apps declare `artifactSchemas` on each entrypoint contract;
+/// the bundle re-exports them to `app/generated/{entrypoint}/artifact_schemas.json`
+/// like every other per-entrypoint artifact, so the entrypoint dimension is the
+/// file's location and the key inside the file stays the contract field name.
+/// Declaring it on a bundle **root** is a generation error: the root has no contract
+/// model, so a key there could not name a real field, and the file it would emit
+/// could be picked up as a fallback for an entrypoint that declares nothing.
+///
+/// ```pkl
+/// artifactSchemas {
+///   ["raw_queries"] = new ArtifactSchema {
+///     format = "parquet"
+///     description = "Query-history rows the parser reads."
+///     fields {
+///       new ArtifactField {
+///         name = "QUERY_ID"
+///         type = "string"
+///         description = "Warehouse-assigned id, unique within the account."
+///       }
+///       new ArtifactField {
+///         name = "START_TIME"
+///         type = "timestamp"
+///         description = "When the query began. A stringified timestamp here is the defect this catches."
+///       }
+///     }
+///   }
+/// }
+/// ```
+artifactSchemas: Mapping<ContractFieldName, ArtifactSchema> = new Mapping {}
+
 // ── DEPLOY CONFIG ─────────────────────────────────────────────────────────────
 
 /// Deployment configuration. Leave unset (null, the default) to let Heracles
@@ -3204,6 +3251,154 @@ local function generateE2EBasePy(): FileOutput = new FileOutput {
     (if (emitConnCat) "    connection_category = \"\(escapePyStr(connector!!.category))\"\n" else "")
 }
 
+// ── Bundle (multi-entrypoint) e2e base ────────────────────────────────────────
+//
+// A bundle's per-entrypoint contract is rendered as a standalone App and its
+// files are then re-rooted under `app/generated/<ep>/`. That relocation is
+// invisible to the sub-contract, so its own `generateE2EBasePy()` output is
+// wrong in four ways for a bundle: `connector_short_name` / `app_service_url` /
+// `argo_*` come from the ENTRYPOINT's name rather than the bundle's, and neither
+// `manifest_path` nor `entrypoint` is emitted at all — so `manifest_path` falls
+// back to `app/generated/manifest.json`, which does not exist in a bundle, and
+// Automation Engine gets no entrypoint selector and 404s "No manifest available"
+// at submit.
+//
+// These functions run in the BUNDLE's scope, where both the bundle and the
+// `Entrypoint` are in hand, and their output replaces the relocated file. They
+// are reachable only from the multi-entrypoint output block, so a
+// single-entrypoint app's generated base is byte-for-byte unaffected.
+
+// SQL-family selection for a bundle entrypoint. The bundle root usually declares
+// no `connector`, so the category comes from the entrypoint's own `sourceCategory`
+// (the same vocabulary `e2eBaseClass()` matches on).
+local function e2eBaseClassForCategory(cat: String?): String =
+  if (cat == "warehouse" || cat == "database" || cat == "lake" || cat == "queryengine")
+    "SQLAppE2ETest"
+  else "BaseE2ETest"
+
+// True when this entrypoint's pipeline publishes to Atlas — i.e. it lands a
+// Connection and assets beneath it. Mirrors `generateDAG()`'s own condition for
+// emitting the `publish` node, so the harness expectations cannot disagree with
+// the DAG that was generated.
+local function epPublishes(c: Typed): Boolean =
+  c.pipeline.publish != null || c.extraNodes.toMap().containsKey("publish")
+
+// True when this entrypoint's pipeline produces lineage. Mirrors every form
+// `generateDAG()` emits a lineage node for: the typed `pipeline.lineage` step
+// (→ `lineage-app`), the `pipeline.publish.lineagePublish` sub-step
+// (→ `lineage-publish`), and an app that carries its lineage stage in an
+// `extraNodes` override (`lineage-app` / `lineage-publish`) — a documented DAG
+// shape. Reading only `pipeline.lineage` would generate a suite that never
+// asserts the lineage landed for exactly the apps that wired it by hand.
+local function epProducesLineage(c: Typed): Boolean =
+  c.pipeline.lineage != null
+    || (c.pipeline.publish != null && c.pipeline.publish!!.lineagePublish != null)
+    || c.extraNodes.toMap().containsKey("lineage-app")
+    || c.extraNodes.toMap().containsKey("lineage-publish")
+
+// Nodes that must genuinely succeed for the run to count as a pass. Only
+// `extract` and `publish`: `qi`, `popularity`, `lineage-*` and `notifications`
+// are legitimately Skipped by AE, and the harness's skip-tolerant gate is built
+// for exactly that. This reproduces the SDK's own ("extract", "publish") default
+// on a full crawler pipeline, and narrows it to ("extract",) on a miner.
+local function epRequiredDagNodes(c: Typed): String =
+  let (parts = (new Listing {
+    when (c.pipeline.extract != null) { "\"extract\"" }
+    when (epPublishes(c)) { "\"publish\"" }
+  }).toList())
+  // A 1-tuple needs its trailing comma or Python reads it as a parenthesised string.
+  if (parts.length == 1) "(\(parts.first),)" else "(\(parts.join(", ")))"
+
+local function pyBool(b: Boolean): String = if (b) "True" else "False"
+
+// Last path segment of a marketplace package id: "@atlan/teradata-miner" -> "teradata-miner".
+local function pkgLeaf(pkg: String): String = pkg.split("/").last
+
+// The `argoPackageNames` entry that belongs to this entrypoint, or null.
+//
+// A bundle ships one package per marketplace card, and a miner leg must submit
+// against the MINER's package/template — submitting against the crawler's runs
+// the wrong workflow and passes. `packageId` states the mapping outright; when it
+// is absent, match on the package leaf, which covers both shapes in the fleet:
+//
+//   argoPackageNames { "@atlan/crawler"; "@atlan/miner" }            leaf == ep.name
+//   argoPackageNames { "@atlan/teradata"; "@atlan/teradata-miner" }  leaf ends with the name
+//
+// Returns null when nothing matches — e.g. teradata's `crawler` entrypoint, whose
+// package is the bare "@atlan/teradata". The caller then falls back to the
+// bundle's own resolved package and template, which is right for exactly that
+// case: the card that carries no suffix IS the bundle's primary one.
+local function epMatchedPackage(ep: Entrypoint): String? =
+  if (ep.packageId != null) ep.packageId
+  else
+    let (suffix = "-" + ep.name)
+    let (hits = (new Listing {
+      for (pkg in argoPackageNames) {
+        when (pkgLeaf(pkg) == ep.name || pkgLeaf(pkg).endsWith(suffix)) { pkg }
+      }
+    }).toList())
+    if (hits.isEmpty) null else hits.first
+
+local function epPackageName(ep: Entrypoint): String =
+  epMatchedPackage(ep) ?? resolvedArgoPackageName
+
+// Cluster WorkflowTemplate name. Derived from the matched package's leaf, because
+// the deployed template is named after the package ("atlan-teradata-miner"), not
+// after the bundle. Falls back to the bundle's `argoTemplateName` when no package
+// matched, keeping the unmatched primary entrypoint on the bundle's own template.
+local function epTemplateName(ep: Entrypoint): String =
+  let (matched = epMatchedPackage(ep))
+  if (matched == null) argoTemplateName else "atlan-" + pkgLeaf(matched)
+
+local function generateBundleE2EBasePy(ep: Entrypoint): FileOutput = new FileOutput {
+  local c = ep.contract!!
+  local baseClass = e2eBaseClassForCategory(ep.sourceCategory ?? c.connector?.category)
+  local cname = pascalCase(ep.name)
+  // Identity is the BUNDLE's, not the entrypoint's: every entrypoint of a bundle
+  // is served by one deployed app service, and `connector_short_name` drives the
+  // DAG's `app_name`, the QI `vendor_name`, and the default
+  // `connector_config_name` (`atlan-connectors-<short-name>`) — which must
+  // resolve to the bundle's shared credential configmap, not a per-entrypoint one
+  // that was never generated.
+  local shortName = name
+  // Per-entrypoint marketplace package and template — see `epMatchedPackage`.
+  local pkgName = epPackageName(ep)
+  local tmplName = epTemplateName(ep)
+  local publishes = epPublishes(c)
+  local expectsLineage = epProducesLineage(c)
+  // `connection_type` is always emitted (never gated on `value != name`): the SDK
+  // falls back to `connector_short_name`, which is now the BUNDLE name and so is
+  // wrong for every bundle whose source differs from it.
+  local connType = ep.source ?? c.connector?.value
+  local connCat = ep.sourceCategory ?? c.connector?.category
+  text =
+    "# Generated from contract/app.pkl via contract-toolkit. DO NOT EDIT.\n" +
+    "# Regenerate with: pkl eval -m . contract/app.pkl\n" +
+    "from application_sdk.testing.e2e import \(baseClass)\n\n\n" +
+    "class \(cname)GeneratedE2EBase(\(baseClass)):\n" +
+    "    connector_short_name = \"\(escapePyStr(shortName))\"\n" +
+    "    argo_package_name = \"\(escapePyStr(pkgName))\"\n" +
+    "    argo_template_name = \"\(escapePyStr(tmplName))\"\n" +
+    "    app_service_url = \"\(escapePyStr(appServiceUrl))\"\n" +
+    (if (connType != null) "    connection_type = \"\(escapePyStr(connType))\"\n" else "") +
+    (if (connCat != null && connCat != "warehouse") "    connection_category = \"\(escapePyStr(connCat))\"\n" else "") +
+    "    connector_config_name = \"\(escapePyStr(connectorConfigName))\"\n" +
+    "    # This entrypoint's own manifest. Without it the harness reads the\n" +
+    "    # single-entrypoint default (app/generated/manifest.json), which a bundle\n" +
+    "    # does not have, and fails with ManifestFileNotFoundError.\n" +
+    "    manifest_path = \"app/generated/\(escapePyStr(ep.name))/manifest.json\"\n" +
+    "    # Sent as metadata.entrypoint on the AE submit so Automation Engine\n" +
+    "    # fetches THIS entrypoint's manifest from the deployed pod. A bare fetch\n" +
+    "    # 404s \"No manifest available\" on a multi-entrypoint app.\n" +
+    "    entrypoint = \"\(escapePyStr(ep.name))\"\n" +
+    "    # Derived from this entrypoint's pipeline, so the assertions match the\n" +
+    "    # DAG that was generated rather than the crawler-shaped SDK defaults.\n" +
+    "    required_dag_nodes = \(epRequiredDagNodes(c))\n" +
+    "    expect_connection = \(pyBool(publishes))\n" +
+    "    require_nonempty_assets = \(pyBool(publishes))\n" +
+    "    expect_lineage = \(pyBool(expectsLineage))\n"
+}
+
 local function generateE2ESubstitutionsPy(): FileOutput? =
   let (props = uiConfig?.properties ?? Map())
   let (skip = e2eSubsSkip())
@@ -3625,6 +3820,239 @@ local appYamlOutput: FileOutput = new FileOutput {
   text = generatedYamlHeader + renderer.renderDocument(value)
 }
 
+// ── Artifact schema declarations (ADR-0020) ──────────────────────────────────
+//
+// Apps declare the shape of the files they hand off, and the SDK checks the real
+// artifact against that declaration at the hand-off. The toolkit's whole job here
+// is transport: it owns the *type vocabulary* and the file format; every field is
+// the app's. Nothing in `src/` names a column.
+
+/// Logical field types every validator must map, for every format. The stable floor.
+///
+/// This is a *logical* vocabulary, not a physical one — one member can cover several
+/// physical encodings (`int` matches any arrow width and signedness; `timestamp`
+/// matches `timestamp[*]` at any unit, tz-aware or not). The load-bearing member is
+/// `timestamp`: an arrow `string` does **not** satisfy it, which is the single
+/// asymmetry the capability exists to assert.
+///
+/// `any` means "must be present, type not asserted" — declare it rather than
+/// inventing a wrong type to satisfy the enum.
+typealias ArtifactFieldType =
+  "string"|"int"|"float"|"bool"|"timestamp"|"date"|"json"|"any"
+
+/// Additive extension of `ArtifactFieldType`. A member here may resolve to
+/// "unsupported for this format" in a given validator without widening the floor
+/// above, so a contract can declare it before every validator supports it.
+///
+/// `decimal` exists because a Snowflake `NUMBER` lands as parquet `decimal128` and
+/// asserting `float` would either mis-flag it or lose precision. `binary`, `time`,
+/// `array`, `struct` and `map` are real in warehouse sources but on no current hop.
+typealias ArtifactFieldTypeExtended =
+  ArtifactFieldType|"decimal"|"binary"|"time"|"array"|"struct"|"map"
+
+/// Physical container format of a declared artifact. Each format has its own
+/// validator with its own dependency floor — NDJSON streams line by line on the
+/// stdlib, parquet reads only the file footer and needs pyarrow.
+///
+/// Content format, not file extension: SDK NDJSON artifacts are conventionally
+/// written with a `.json` suffix and are still `"ndjson"` here.
+typealias ArtifactFormat = "ndjson"|"parquet"
+
+/// Name of a `FileReference` field on an entrypoint's input/output contract model:
+/// a Python identifier.
+///
+/// Deliberately **not** a path, prefix, or glob. The runtime resolves a declaration
+/// from the contract field it is materialising, never from the shape of a storage
+/// path — path-shape inference is what let the earlier upload-time hook match
+/// nothing and silently validate zero records.
+typealias ContractFieldName = String(matches(Regex("[A-Za-z_][A-Za-z0-9_]*")))
+
+/// Path to a field inside an artifact record, built from two step kinds:
+///
+///   - `.name` — descend into a container's named member: `"a"`, `"a.b"`, `"a.b.c"`
+///   - `[]` — descend into an array's **element**: `"tags[]"`, `"columns[].name"`
+///
+/// Nested payloads are declared as paths plus a container type — declare
+/// `attributes` as `struct` and `attributes.name` as `string`; declare `columns` as
+/// `array`, `columns[]` as `struct`, and `columns[].name` as `string` — rather than
+/// a recursive type grammar. The flat form is what parquet already uses to address
+/// nested leaves, and it lets a static diff compare two *sets* of paths instead of
+/// two trees.
+///
+/// `[]` is the explicit "descend into the list" step precisely because the physical
+/// encoding is not: parquet spells the same leaf `columns.list.element.name` under a
+/// 3-level encoding and `columns.bag.array.name` under the legacy 2-level one, so a
+/// declaration written in physical terms would be pinned to an encoding the producer
+/// can change. `[]` says what is meant; the validator resolves it per format.
+///
+/// On an element path, `required` reads per element — `columns[].name` required means
+/// every element must carry `name`, and an empty array satisfies it vacuously.
+///
+/// Rejected at eval time: empty segments (`""`, `".a"`, `"a."`, `"a..b"`) and
+/// malformed brackets (`"[]"`, `"a["`, `"a]"`, `"a[0]"` — index selection is not a
+/// declaration, since a schema describes every element, not one of them).
+typealias ArtifactFieldPath =
+  String(matches(Regex("[^.\\[\\]]+(\\[\\])*(\\.[^.\\[\\]]+(\\[\\])*)*")))
+
+/// The path one step up from `p`, or `null` when `p` is already top level.
+/// `"a.b"` → `"a"`, `"a[]"` → `"a"`, `"a[].b"` → `"a[]"`.
+const local function artifactFieldParentPath(p: String): String? =
+  if (p.endsWith("[]")) p.dropLast(2)
+  else
+    let (i = p.lastIndexOfOrNull("."))
+    if (i == null) null else p.take(i)
+
+/// Types that can carry a named member (`parent.child`). `json` qualifies because a
+/// JSON blob in a string column is descended into; `any` qualifies because "type not
+/// asserted" must not also mean "cannot be nested into".
+const local artifactNamedMemberContainers: List<String> = List("struct", "map", "json", "any")
+
+/// Types that can carry an element (`parent[]`).
+const local artifactElementContainers: List<String> = List("array", "any")
+
+/// One declared field within an artifact.
+class ArtifactField {
+  /// Dotted path to the field within a record. See `ArtifactFieldPath`.
+  name: ArtifactFieldPath
+
+  /// Logical type asserted for this field. Use `"any"` to assert presence only.
+  type: ArtifactFieldTypeExtended = "any"
+
+  /// Whether the field must be present in every record / in the parquet schema.
+  /// Default `true` — a declared field is expected to be there. Set `false` for a
+  /// field that is genuinely optional but must carry `type` when it does appear.
+  required: Boolean = true
+
+  /// What this field carries and what the consumer expects of it. **Required and
+  /// non-empty** — a declaration is read by whoever is debugging the hand-off that
+  /// just failed, and a bare `name`/`type` pair tells them the assertion but not
+  /// why it holds. It is also the only place a `type = "any"` field can say what it
+  /// is, and the only place a `required = false` field can say when it appears.
+  /// Never asserted at runtime; it is documentation, enforced at authoring time.
+  ///
+  /// The default `throw` is how a required property gets an actionable error: Pkl's
+  /// own "value is undefined" message names neither the field nor the reason.
+  description: String(!isEmpty) =
+    throw("ArtifactField '\(name)': `description` is required — say what the field "
+      + "carries and what the consumer expects of it. A name and a type state the "
+      + "assertion but not why it holds, and a declaration is read by whoever is "
+      + "debugging the hand-off that just failed.")
+}
+
+/// The declared shape of one artifact handed off through a contract `FileReference`.
+///
+/// `fields` must be non-empty: a schema declaring zero fields checks nothing while
+/// reporting as declared, which is exactly the "looks adopted, validates nothing"
+/// state this capability exists to remove. Field names must be distinct — a
+/// duplicate would silently collapse to one assertion.
+class ArtifactSchema {
+  /// Physical format of the artifact. No default: the app must say which validator
+  /// applies, because the answer is not derivable from the contract field.
+  format: ArtifactFormat
+
+  /// Declared fields. Non-empty, names distinct.
+  fields: Listing<ArtifactField>(!isEmpty, this.toList().map((f) -> f.name).isDistinct)
+
+  /// Free-form note for humans reading the generated artifact. Never asserted.
+  description: String?
+
+  /// Every nested path must have its container declared, and that container must be
+  /// a type that can actually hold what the path descends into.
+  ///
+  /// Declaring `attributes.name` while leaving `attributes` undeclared drops exactly
+  /// the check that catches a producer which flattened the struct away — the leaf
+  /// assertion still passes against a flattened record in some readers. And
+  /// declaring `attributes` as `string` while also declaring `attributes.name` is a
+  /// contradiction the validator would have to resolve by guessing. Both fail here.
+  hidden _nestingCheck: Any =
+    let (byName = fields.toList().toMap((f) -> f.name, (f) -> f))
+    let (orphans = fields.toList().filter((f) ->
+      let (parent = artifactFieldParentPath(f.name))
+      parent != null && !byName.containsKey(parent)
+    ))
+    if (!orphans.isEmpty)
+      throw("ArtifactSchema: nested path(s) \(orphans.map((f) -> "'\(f.name)' (declare '\(artifactFieldParentPath(f.name))')").join(", ")) "
+        + "declared without their container. Declare every path prefix with its "
+        + "container type — `columns` as `array`, `columns[]` as `struct`, then "
+        + "`columns[].name` — so a producer that flattened the container away is "
+        + "caught rather than passing on the leaf assertion alone.")
+    else
+      let (mismatches = fields.toList().filter((f) ->
+        let (parent = artifactFieldParentPath(f.name))
+        if (parent == null) false
+        else if (f.name.endsWith("[]"))
+          !artifactElementContainers.contains(byName[parent].type)
+        else
+          !artifactNamedMemberContainers.contains(byName[parent].type)
+      ))
+      if (!mismatches.isEmpty)
+        throw("ArtifactSchema: \(mismatches.map((f) ->
+            let (parent = artifactFieldParentPath(f.name)!!)
+            "'\(f.name)' descends into '\(parent)', declared `\(byName[parent].type)`"
+          ).join("; ")). "
+          + "A path with a named-member step needs its container declared as one of "
+          + "\(artifactNamedMemberContainers.join("/")); a path with an `[]` step needs "
+          + "\(artifactElementContainers.join("/")).")
+      else null
+}
+
+local function renderArtifactField(f: ArtifactField): Mapping<String, Any> = new Mapping {
+  ["name"] = f.name
+  ["type"] = f.type
+  ["required"] = f.required
+  // Always present — `description` is required on `ArtifactField`, so a consumer
+  // never has to branch on it.
+  ["description"] = f.description
+}
+
+local function renderArtifactSchema(s: ArtifactSchema): Mapping<String, Any> =
+  // Hidden properties are lazy — reference the validator so its `throw` fires at eval
+  // time rather than silently rendering a declaration with an undeclared container.
+  let (_nesting = s._nestingCheck)
+  new Mapping {
+  ["format"] = s.format
+  when (s.description != null) { ["description"] = s.description }
+  ["fields"] = new Listing {
+    for (f in s.fields) {
+      renderArtifactField(f)
+    }
+  }
+}
+
+/// Envelope version of `artifact_schemas.json`. Bump only on a breaking change to
+/// the file's shape; the SDK loader reads it to decide how to parse.
+local artifactSchemasVersion: Int = 1
+
+local artifactSchemasData: Mapping<String, Any> = new Mapping {
+  ["version"] = artifactSchemasVersion
+  ["schemas"] = new Mapping {
+    for (fieldName, schema in artifactSchemas) {
+      [fieldName] = renderArtifactSchema(schema)
+    }
+  }
+}
+
+local artifactSchemasOutput: FileOutput = new FileOutput {
+  value = artifactSchemasData
+  renderer = new JsonRenderer {}
+}
+
+// A bundle root has no contract model of its own, so a key here could never name a
+// real `FileReference` field. Emitting it anyway would put a shared
+// `app/generated/artifact_schemas.json` next to the per-entrypoint ones, where a
+// loader looking up an entrypoint that declares nothing could fall back onto it and
+// check the wrong declarations — the silent-wrong-answer failure mode this whole
+// capability exists to remove. Refuse instead. Two entrypoints that genuinely share
+// an artifact assign one shared `ArtifactSchema` value into both contracts.
+hidden _bundleArtifactSchemaCheck: Any =
+  if (!entrypoints.isEmpty && !artifactSchemas.isEmpty)
+    throw("App.pkl: `artifactSchemas` is declared on a multi-entrypoint bundle root, "
+      + "which has no contract model of its own. Declarations are keyed by a FileReference "
+      + "field on an entrypoint's input/output contract, so move them onto each "
+      + "entrypoint's `contract`. Entrypoints that share an artifact can assign one "
+      + "shared ArtifactSchema value into both.")
+  else null
+
 // ── Multi-entrypoint credential dedup (from NativeAppBundle.pkl) ──────────────
 
 class ContractFile {
@@ -3691,6 +4119,10 @@ output =
   // is a supported opt-out, and a lazily-evaluated check inside that node would
   // let a reserved-name collision through for exactly those contracts.
   let (_reservedUiCheck = reservedUiFieldInvariant)
+  // Forced for the same reason: the single-entrypoint emission below is the only
+  // reader of `artifactSchemas`, so a bundle root's declaration would otherwise
+  // never be evaluated and would vanish without a word.
+  let (_bundleSchemaCheck = _bundleArtifactSchemaCheck)
   let (_e2eCredOutput = generateE2ECredentialPy())
   let (_e2eSubsOutput = generateE2ESubstitutionsPy())
   new ModuleOutput {
@@ -3724,6 +4156,15 @@ output =
         when (_e2eSubsOutput != null) {
           ["app/generated/_e2e_substitutions.py"] = _e2eSubsOutput!!
         }
+        // artifact schema declarations (ADR-0020) — also independent of uiConfig:
+        // a declaration describes data hand-offs, which an app has whether or not
+        // it renders a setup form. Gated on non-empty so an app that declares
+        // nothing generates byte-identical output to before this block existed.
+        // Multi-entrypoint apps declare these on each entrypoint's contract; the
+        // re-export loop below relocates each one to `app/generated/{entrypoint}/`.
+        when (!artifactSchemas.isEmpty) {
+          ["app/generated/artifact_schemas.json"] = artifactSchemasOutput
+        }
       }
 
       // ── multi-entrypoint mode (entrypoints is non-empty) ──────────────────
@@ -3737,10 +4178,18 @@ output =
           for (entrypoint in entrypoints) {
             when (entrypoint.contract != null) {
               for (fileName, fileOutput in entrypoint.contract!!.output.files) {
-                when (normalizeContractFileName(fileName) != "" && !isCredentialFile(entrypoint, fileName)) {
+                // `_e2e_base.py` is deliberately NOT relocated: the sub-contract
+                // rendered it believing it was a standalone app, so its identity
+                // fields name the entrypoint instead of the bundle and it carries
+                // neither `manifest_path` nor `entrypoint`. The bundle-scoped
+                // generator below replaces it. Every other file relocates as before.
+                when (normalizeContractFileName(fileName) != ""
+                      && normalizeContractFileName(fileName) != "_e2e_base.py"
+                      && !isCredentialFile(entrypoint, fileName)) {
                   ["app/generated/\(entrypoint.name)/\(normalizeContractFileName(fileName))"] = fileOutput
                 }
               }
+              ["app/generated/\(entrypoint.name)/_e2e_base.py"] = generateBundleE2EBasePy(entrypoint)
             }
           }
         }

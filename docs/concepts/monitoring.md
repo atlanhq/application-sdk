@@ -426,6 +426,46 @@ Emitting `outcome="clean"` too gives a denominator, so a dashboard can rank conn
 flag-rate rather than only seeing failures. Uploads with nothing to validate (validation disabled, or
 a non-`transformed/` path) emit no event.
 
+### Artifact-validation outcome event
+
+The generic artifact-validation wrapper ([ADR-0020](../adr/0020-artifact-validation.md)) emits
+`"Artifact validation outcome"` — one row per artifact hand-off, whatever the format and whichever
+schema source declared it.
+
+!!! note "Not yet emitted"
+
+    The attribute contract below ships ahead of its emitter. The wrapper's report, matrix and event
+    fields exist, and `validate_artifact(...)` and both schema sources (`ContractSource`,
+    `ModelSource`) are callable — but no format validator has landed yet, so a declared artifact
+    resolves to `unsupported`, and nothing calls the wrapper automatically until the `FileReference`
+    interceptor wiring lands. The table is the reference for what the allowlist admits, not a
+    description of rows you will find in ClickHouse today.
+
+| Attribute | Meaning |
+|-----------|---------|
+| `outcome` | `clean`, `flagged`, `not_declared`, `unsupported` or `absent` |
+| `reason` | short explanation, chiefly for the three non-scan outcomes |
+| `artifact_format` | `ndjson`, `parquet` — empty when nothing was read |
+| `artifact_schema_source` | `contract` or `model` |
+| `artifact_field` | output-contract field the artifact came from; with `entrypoint` this keys the declaration |
+| `artifact_unit` | what the counts count: `record` (streaming scan) or `column` (footer diff) |
+| `artifact_total` | units examined — always the whole artifact, never a sample |
+| `artifact_passed` | units with no failure |
+| `artifact_failed` | units that failed |
+| `artifact_undecodable` | units that could not be parsed at all |
+| `artifact_fields_declared` | fields the declaration named (0 for a model declaration) |
+| `boundary` | whether the hand-off sits on an entrypoint's public interface |
+| `artifact_validation_matrix` | compact JSON array of per-failure detail (bounded rows), `JSONExtract`-able |
+
+Two properties are worth relying on. **Every hand-off emits**, the negative outcomes included — a
+check that reports nothing is indistinguishable from a check that passed, so `not_declared`,
+`unsupported` and `absent` are rows, not silence. And **every attribute is present on every
+outcome**, the matrix as `"[]"` when there is nothing to show, so a consumer parses it
+unconditionally instead of branching on presence.
+
+The event body and its attribute keys are a pinned contract, like the two preflight-gate events and
+the asset-validation one; all four names live in `application_sdk/observability/events.py`.
+
 ### Replay suppression
 
 `self.logger` suppresses log output during Temporal workflow replay by default, matching the behaviour of Temporal's native `workflow.logger`. This prevents duplicate bare lines (missing `workflow_id`/`run_id`) that would otherwise appear in Grafana when a worker replays history after a sticky-cache eviction.

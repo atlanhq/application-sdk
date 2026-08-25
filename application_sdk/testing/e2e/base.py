@@ -37,6 +37,7 @@ import secrets
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
@@ -54,12 +55,20 @@ from application_sdk.contracts.types import ConnectionRef
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.e2e._errors import (
     DAGProgressStalledError,
+    DeployedManifestMismatchError,
     HarnessMethodNotImplementedError,
     ManifestDagMissingError,
     ManifestFileNotFoundError,
     MissingHarnessClassAttrError,
     MissingHarnessEnvError,
     ProgressWatchdogUnreachableError,
+    SeededConnectionNotSearchableError,
+    UnknownConnectorTypeError,
+)
+from application_sdk.testing.e2e._manifest_identity import (
+    DagNodeIdentity,
+    compare_node_identities,
+    node_identities,
 )
 from application_sdk.testing.e2e._poll import until_deadline
 from application_sdk.testing.e2e.client import (
@@ -67,6 +76,7 @@ from application_sdk.testing.e2e.client import (
     DAGNodeResult,
     DAGNodeStatus,
     DAGRunResult,
+    PublishedVersion,
     cold_start_submit_kwargs,
 )
 from application_sdk.testing.e2e.credential import CredentialBody
@@ -102,6 +112,15 @@ _PROGRESS_STALL_MIN_SECONDS = 300
 # DAG is frozen.
 _PROGRESS_STALL_MAX_SECONDS = 1800
 
+# Teardown purges assets in batches of this size. pyatlan's purge_by_guid puts
+# one ``guid=`` query param per asset into a single DELETE, and httpx refuses to
+# build a URL whose query exceeds MAX_URL_LENGTH (65536) — at ~42 bytes per GUID
+# that is a hard ceiling near 1,550 assets, raised client-side so *nothing* is
+# deleted. A crawl routinely produces more than that, so the list has to be
+# chunked. Kept well under the ceiling: purge is expensive server-side, and a
+# smaller batch means a single failing chunk orphans less.
+_PURGE_BATCH_SIZE = 50
+
 
 def _derive_progress_stall_seconds(timeout_seconds: int) -> int:
     """Progress-watchdog window to use when a suite pins no explicit value.
@@ -129,6 +148,31 @@ def _derive_progress_stall_seconds(timeout_seconds: int) -> int:
     # halves to 0 — no positive window is reachable, so the watchdog is off,
     # which is the honest answer for a ceiling that tight.
     return min(window, timeout_seconds // 2)
+
+
+def _supersedes(published: int | None, seed: int | None) -> bool:
+    """Whether *published* provably replaced the harness's *seed* version.
+
+    Provably is the whole point. AE's version number is optional on the wire
+    (``_safe_int`` yields ``None`` for a missing or non-numeric one), and
+    ``None != seed`` is true — so an inequality test alone reads an unknown
+    version as a supersede and goes on to compare a DAG it cannot attribute to
+    the tenant. An absent number cannot prove anything, so it answers False.
+
+    ``seed is None`` is the one case where no proof is needed: the harness
+    published no seed version, so there is nothing for AE to have superseded
+    and whatever it serves is not the harness's own DAG echoed back.
+
+    Args:
+        published: Version number AE reports for the published version.
+        seed: Version number the harness published, if it published one.
+
+    Returns:
+        True only when the comparison that follows is meaningful.
+    """
+    if seed is None:
+        return True
+    return published is not None and published != seed
 
 
 @dataclass(frozen=True)
@@ -161,8 +205,12 @@ class FullDAGOutcome:
         ae_result: Native-status snapshot from AE for the run.
         connection_qualified_name: QN of the Connection the seed DAG
             would have materialised on success.
-        connection_in_atlas: True iff the Connection asset existed in
-            Atlas before the harness gave up.
+        connection_in_atlas: True iff the harness OBSERVED the Connection
+            asset in Atlas before giving up. False therefore means "not
+            observed", which covers both "absent" and "never probed" — the
+            latter when the suite sets ``expect_connection = False``, where
+            the Atlas probes are skipped and this field is not consulted by
+            :meth:`BaseE2ETest.test_full_dag_runs_end_to_end`.
         asset_counts: Per-typeName counts of descendant assets under the
             Connection QN. Empty when the Connection probe didn't succeed.
         lineage_present: True iff at least one Process / ColumnProcess
@@ -180,11 +228,23 @@ class FullDAGOutcome:
     total_assets: int = 0
     lineage_present: bool = False
     asset_qn_samples: dict[str, list[str]] = field(default_factory=dict)
+    connection_expected: bool = True
+    """Mirror of the suite's ``expect_connection``, carried here so
+    :attr:`succeeded` can tell "the connection is missing" apart from "this
+    entrypoint was never going to publish one". Defaults True, so an outcome
+    built without it grades exactly as before."""
 
     @property
     def succeeded(self) -> bool:
-        """True iff every DAG node succeeded *and* Atlas has the Connection."""
-        return self.ae_result.all_nodes_succeeded and self.connection_in_atlas
+        """True iff every DAG node succeeded and the Connection landed.
+
+        The Connection clause is dropped when :attr:`connection_expected` is
+        False — an entrypoint that publishes no inventory (a query-history
+        miner, a marker promotion) is graded on its DAG alone.
+        """
+        return self.ae_result.all_nodes_succeeded and (
+            self.connection_in_atlas or not self.connection_expected
+        )
 
 
 class BaseE2ETest:
@@ -257,6 +317,20 @@ class BaseE2ETest:
     # never mutated in place, so the class-level empty default is not shared
     # state.
     _node_dispatch: dict[str, NodeDispatch] = {}
+    # Node name -> the identity the app under test declares for that node,
+    # captured from the manifest-derived seed DAG in _bootstrap_workflow and
+    # read only by _assert_deployed_manifest_matches. Empty means there is
+    # nothing to compare against (a hand-crafted legacy seed DAG, or a suite
+    # reusing a pre-existing ae_workflow_slug), and the check self-skips. Plain
+    # instance field, same reason as source_available above.
+    _expected_node_identities: dict[str, DagNodeIdentity] = {}
+    # AE's version number for the seed version this harness published, or None
+    # when the harness published none. _assert_deployed_manifest_matches waits
+    # for the published version to differ from this before comparing: while AE
+    # still serves the seed, the only DAG on offer is the harness's own, and
+    # comparing it to itself would report a match no matter what the tenant
+    # runs. Plain instance field, same reason as source_available above.
+    _seed_version: int | None = None
     # Health endpoint the worker-up tier probes. The CI worker container
     # serves it on localhost:8000 (the sdr-e2e action gates on the same URL
     # before pytest). Override via E2E_WORKER_HEALTH_URL for other topologies.
@@ -307,6 +381,32 @@ class BaseE2ETest:
     # the 5 min headline.
     app_ready_timeout_seconds: ClassVar[int] = 300
     app_ready_poll_interval_seconds: ClassVar[int] = 5
+
+    # --- deployed-manifest identity check (FND-129) --------------------
+    # Whether to assert, right after submit, that the DAG AE published is the
+    # DAG this repo's manifest declares. Verifying the installed *version*
+    # (which CI does, via the sdr-e2e action's `expected-app-version`) says the
+    # right image is on the tenant; this says the graph that ran is the graph we
+    # built — a different claim, because at submit Heracles re-fetches the
+    # manifest from the tenant-deployed pod and supersedes the harness's seed
+    # version with it.
+    #
+    # On by default, but it only ever *fails* a leg on a positive finding: an
+    # unreadable response, a published version that never superseded the seed,
+    # or a connector with no manifest to compare all log and continue. So an
+    # unonboarded caller is untouched without opting out, the same way the CI
+    # version check self-skips on an empty `expected-app-version`. Set False on
+    # a connector whose deployed DAG legitimately diverges from its committed
+    # manifest — and say why in the override, because the default position is
+    # that such a divergence is the bug this check exists to find.
+    assert_deployed_manifest: ClassVar[bool] = True
+    # Budget for the published version to supersede the harness's seed. This is
+    # AE's own create+publish, server-side and already done by the time submit
+    # answers, so the wait is for read-after-write visibility rather than for
+    # work: seconds, not minutes. Exhausting it is not a failure — the check
+    # reports the supersede as unobserved and the run continues to the poll.
+    deployed_manifest_timeout_seconds: ClassVar[int] = 60
+    deployed_manifest_poll_interval_seconds: ClassVar[int] = 5
 
     # --- optional class attrs ------------------------------------------
     connection_type: ClassVar[str] = ""
@@ -385,6 +485,14 @@ class BaseE2ETest:
     dag_progress_stall_seconds: ClassVar[int | None] = None
     atlas_poll_interval_seconds: ClassVar[int] = 30
     atlas_poll_timeout_seconds: ClassVar[int] = 1500
+    # Probe errors that can never heal by retrying: a deterministic bug in the
+    # probe itself (a wrong call signature, a bad config value) raises the same
+    # exception on every attempt, so waiting out the timeout only delays the
+    # failure. ``seed_connection`` re-raises these immediately.
+    _PROBE_NON_TRANSIENT_ERRORS: ClassVar[tuple[type[BaseException], ...]] = (
+        TypeError,
+        ValueError,
+    )
     # Asset counts use a much shorter poll window: Elasticsearch is eventually
     # consistent but assets that will appear do so within seconds of the
     # publish step completing. No point holding CI for 25 minutes.
@@ -407,6 +515,25 @@ class BaseE2ETest:
     # themselves assert zero (only non-positive floors/exacts).
     require_nonempty_assets: ClassVar[bool] = True
     expect_lineage: ClassVar[bool] = True
+    # Whether this entrypoint is expected to land a Connection (and assets under
+    # it) in Atlas. True for a crawler, whose whole job is to publish a
+    # connection's inventory. False for an entrypoint that publishes no assets —
+    # a query-history miner, a marker-promotion step — where the pass criterion
+    # is the DAG itself plus whatever the suite explicitly declares.
+    #
+    # When False the Atlas probes (connection poll, per-type counts, lineage) are
+    # skipped entirely and ``connection_in_atlas`` drops out of the assertion, so
+    # the run is NOT silently graded against expectations it can never meet. It
+    # does NOT relax the DAG gate: ``_core_dag_ok`` still decides, so a failing
+    # extract still fails the test.
+    #
+    # A miner that enriches a connection still wants that connection to exist —
+    # but it must create it itself, in ``seed_prerequisites()``, under this
+    # harness's own ephemeral qualified name so ``teardown_method`` purges it.
+    # Never point a suite at a long-lived shared connection: a left-over,
+    # half-set-up connection is exactly what greens a later run that should have
+    # failed.
+    expect_connection: ClassVar[bool] = True
 
     # Crawler-pipeline nodes that MUST genuinely succeed for the run to count as
     # a pass under the skip-tolerant gate (see ``_core_dag_ok``). Only consulted
@@ -469,6 +596,8 @@ class BaseE2ETest:
                 )
 
         self._node_dispatch = {}
+        self._expected_node_identities = {}
+        self._seed_version = None
 
         # A pinned progress-stall window that is not strictly below the poll
         # ceiling is a disabled watchdog (see ProgressWatchdogUnreachableError).
@@ -661,10 +790,58 @@ class BaseE2ETest:
         if not conn_qn:
             return
 
+        client = self._teardown_client()
+        if client is None:
+            return
+
+        # Two independently-guarded phases. Sharing one guard is what let a
+        # single child-purge failure orphan the connection as well: the raise
+        # jumped past the connection purge entirely, and the teardown warning
+        # is post-verdict, so the leg still went green while leaking everything.
+        self._purge_child_assets(client, conn_qn)
+        self._purge_connection(client, conn_qn)
+
+    @staticmethod
+    def _teardown_client() -> Any | None:
+        """Sync pyatlan client for teardown, or ``None`` when unavailable.
+
+        Returns:
+            An ``AtlanClient``, or ``None`` if the harness env isn't configured
+            (nothing to clean up) or the client couldn't be built.
+        """
+        tenant_url = os.environ.get("ATLAN_BASE_URL", "")
+        api_token = os.environ.get("ATLAN_API_KEY", "")
+        if not tenant_url or not api_token:
+            return None
         try:
             from pyatlan.client.atlan import (  # noqa: PLC0415; type: ignore[import]
                 AtlanClient,
             )
+
+            # conformance: ignore[P024] e2e harness asset lookup runs outside the async execution path; sync pyatlan is intentional
+            return AtlanClient(base_url=tenant_url, api_key=api_token)
+        except Exception:
+            logger.warning(
+                "e2e cleanup: could not build a tenant client — manual purge "
+                "may be needed",
+                exc_info=True,
+            )
+            return None
+
+    @staticmethod
+    def _purge_child_assets(client: Any, conn_qn: str) -> None:
+        """Purge every descendant of ``conn_qn`` in bounded batches.
+
+        Every GUID is collected *before* the first delete on purpose. pyatlan's
+        default search pagination is offset-based (``from``/``size``), so
+        purging between pages shifts the result window and silently skips
+        assets; a list of 36-char strings is cheap even at six figures.
+
+        Args:
+            client: Sync pyatlan client.
+            conn_qn: Qualified name of the connection being torn down.
+        """
+        try:
             from pyatlan.model.assets import (  # noqa: PLC0415; type: ignore[import]
                 Asset,
             )
@@ -672,35 +849,86 @@ class BaseE2ETest:
                 FluentSearch,
             )
 
-            tenant_url = os.environ.get("ATLAN_BASE_URL", "")
-            api_token = os.environ.get("ATLAN_API_KEY", "")
-            if not tenant_url or not api_token:
-                return
-
-            # conformance: ignore[P024] e2e harness asset lookup runs outside the async execution path; sync pyatlan is intentional
-            client = AtlanClient(base_url=tenant_url, api_key=api_token)
-
-            # Collect GUIDs for all descendant assets.
-            child_guids: list[str] = []
             child_request = (
                 FluentSearch()
                 .where(Asset.QUALIFIED_NAME.startswith(conn_qn + "/"))
                 .include_on_results(Asset.GUID)
             ).to_request()
             child_request.dsl.size = 200
-            for asset in client.asset.search(child_request):
-                if asset.guid:
-                    child_guids.append(asset.guid)
+            child_guids: list[str] = [
+                asset.guid for asset in client.asset.search(child_request) if asset.guid
+            ]
+        except Exception:
+            logger.warning(
+                "e2e cleanup: could not list child assets under %s — manual "
+                "purge may be needed",
+                conn_qn,
+                exc_info=True,
+            )
+            return
 
-            if child_guids:
-                client.asset.purge_by_guid(child_guids)
-                logger.info(
-                    "e2e cleanup: purged %d child assets under %s",
-                    len(child_guids),
-                    conn_qn,
+        if not child_guids:
+            return
+
+        # Batch failures are counted and reported once after the loop rather
+        # than logged per batch: a large crawl is hundreds of batches, and a
+        # tenant-wide outage would otherwise emit one warning per batch.
+        purged = 0
+        failed_batches = 0
+        last_error: Exception | None = None
+        for offset in range(0, len(child_guids), _PURGE_BATCH_SIZE):
+            batch = child_guids[offset : offset + _PURGE_BATCH_SIZE]
+            try:
+                client.asset.purge_by_guid(batch)
+            # conformance: ignore[E004] teardown boundary — a batch failure must never propagate and mask the test verdict; the aggregate is logged at WARNING with exc_info below
+            except Exception as exc:
+                # DEBUG per batch, WARNING for the summary below: a tenant-wide
+                # outage is hundreds of failing batches, and one line each would
+                # bury the count that actually says how much leaked.
+                logger.debug(
+                    "e2e cleanup: purge batch at offset %d failed",
+                    offset,
+                    exc_info=True,
                 )
+                failed_batches += 1
+                last_error = exc
+            else:
+                purged += len(batch)
 
-            # Purge the connection itself.
+        if last_error is not None:
+            logger.warning(
+                "e2e cleanup: purged %d of %d child assets under %s; %d batch(es) "
+                "of %d failed — manual purge may be needed",
+                purged,
+                len(child_guids),
+                conn_qn,
+                failed_batches,
+                _PURGE_BATCH_SIZE,
+                exc_info=last_error,
+            )
+        else:
+            logger.info(
+                "e2e cleanup: purged %d child assets under %s",
+                purged,
+                conn_qn,
+            )
+
+    @staticmethod
+    def _purge_connection(client: Any, conn_qn: str) -> None:
+        """Purge the connection asset itself.
+
+        Args:
+            client: Sync pyatlan client.
+            conn_qn: Qualified name of the connection being torn down.
+        """
+        try:
+            from pyatlan.model.assets import (  # noqa: PLC0415; type: ignore[import]
+                Asset,
+            )
+            from pyatlan.model.fluent_search import (  # noqa: PLC0415; type: ignore[import]
+                FluentSearch,
+            )
+
             conn_request = (
                 FluentSearch()
                 .where(Asset.QUALIFIED_NAME.eq(conn_qn))
@@ -713,13 +941,193 @@ class BaseE2ETest:
                     client.asset.purge_by_guid(asset.guid)
                     # conformance: ignore[L006] loop bounded to a single result via dsl.size=1; one purge event per connection
                     logger.info("e2e cleanup: purged connection %s", conn_qn)
-
         except Exception:
             logger.warning(
                 "e2e cleanup failed for connection %s — manual purge may be needed",
                 conn_qn,
                 exc_info=True,
             )
+
+    # ------------------------------------------------------------------
+    # Pre-run seeding
+    # ------------------------------------------------------------------
+
+    def seed_prerequisites(self) -> None:
+        """Set up whatever must exist in Atlas *before* the DAG runs.
+
+        Called by :meth:`test_full_dag_runs_end_to_end` immediately before
+        :meth:`run_full_dag`. Default: no-op, so a crawler suite is unaffected.
+
+        Override this on an entrypoint that consumes state instead of creating
+        it. A query-history miner enriches a Connection it does not create; run
+        bare, it has nothing to enrich. The override creates that Connection —
+        via :meth:`seed_connection` — plus any assets the entrypoint expects to
+        find, and the run proceeds against them.
+
+        The seeded state MUST live under this test's own
+        ``self.connection_qualified_name``, which :meth:`teardown_method` purges
+        along with every descendant. That keeps each run isolated: nothing
+        survives to green a later run that should have failed. Do not point a
+        suite at a long-lived shared connection to dodge the seeding work — a
+        half-set-up left-over is precisely the false pass this design prevents.
+        """
+
+    def seed_connection(self, probe: Callable[[], object] | None = None) -> str:
+        """Create this test's Connection in Atlas and wait until it is usable.
+
+        Three steps, all of which a seeding suite would otherwise hand-roll:
+
+        1. Create the Connection with ``Connection.creator`` under the
+           connector type and admin ACL this suite already resolved in
+           ``setup_method``. ``creator`` assigns the ``qualifiedName``
+           client-side, so the result is adopted onto
+           ``self.connection_qualified_name`` — which is what the AE payload,
+           the Atlas polls, and the ``teardown_method`` purge all key off.
+           The connection therefore stays ephemeral and still gets torn down.
+        2. Poll until the Connection is searchable, so policy provisioning has
+           started before anything tries to write beneath it.
+        3. If *probe* is given, retry it until it succeeds. A freshly created
+           Connection rejects child writes with a 403 until its access policies
+           go live, and there is no API that reports when that has happened —
+           a successful child write is the only signal. Pass a callable that
+           writes the asset your entrypoint needs; asset-type knowledge stays
+           in the suite, the retry loop stays here.
+
+        Args:
+            probe: Optional zero-arg callable performing a representative child
+                write. Retried until it stops raising, bounded by
+                ``atlas_poll_timeout_seconds``. Its return value is ignored.
+                Errors in ``_PROBE_NON_TRANSIENT_ERRORS`` (``TypeError``,
+                ``ValueError``) are re-raised immediately: they indicate a
+                deterministic bug in the probe itself, which no retry can heal,
+                so probe authors should raise only transient errors (permission
+                / not-yet-provisioned) from the callable.
+
+        Returns:
+            The Connection's qualified name (also now on
+            ``self.connection_qualified_name``).
+
+        Raises:
+            Exception: whatever *probe* last raised, if it never succeeded
+                within the timeout. Propagated rather than swallowed — a suite
+                whose seed never became writable must fail, not run against a
+                connection it cannot populate.
+        """
+        # pyatlan is a heavy import and testing-time only; mirrors setup_method
+        # and teardown_method, which import it the same way.
+        from pyatlan.client.atlan import (  # noqa: PLC0415; type: ignore[import]
+            AtlanClient,
+        )
+        from pyatlan.model.assets import (  # noqa: PLC0415; type: ignore[import]
+            Connection,
+        )
+        from pyatlan.model.enums import (  # noqa: PLC0415; type: ignore[import]
+            AtlanConnectorType,
+        )
+
+        conn_type = self.connection_type or self.connector_short_name
+        try:
+            connector_type = AtlanConnectorType(conn_type)
+        except ValueError as exc:
+            raise UnknownConnectorTypeError(
+                message=(
+                    f"{type(self).__name__}: cannot seed a Connection because "
+                    f"'{conn_type}' is not a pyatlan AtlanConnectorType. Set "
+                    "`connection_type` on the test class to the Atlan catalog "
+                    "type segment (e.g. 'api' for the OpenAPI connector, whose "
+                    "connector_short_name is 'openapi')."
+                ),
+                value_summary=conn_type,
+            ) from exc
+
+        # conformance: ignore[P024] e2e harness connection seeding runs outside the async execution path; sync pyatlan is intentional
+        client = AtlanClient(
+            base_url=os.environ["ATLAN_BASE_URL"],
+            api_key=os.environ["ATLAN_API_KEY"],
+        )
+        admin_roles = list(self.connection_admin_roles or self._auto_admin_roles)
+        admin_users = list(self.connection_admin_users or self._auto_admin_users)
+        connection = Connection.creator(
+            client=client,
+            name=self.connection_display_name,
+            connector_type=connector_type,
+            admin_roles=admin_roles or None,
+            admin_users=admin_users or None,
+            admin_groups=list(self.connection_admin_groups) or None,
+        )
+        client.asset.save(connection)
+        # creator assigns the qualifiedName client-side. Adopt it so the AE
+        # payload, the Atlas polls and the teardown purge all agree.
+        self.connection_qualified_name = connection.qualified_name or ""
+        logger.info("e2e seed: created connection %s", self.connection_qualified_name)
+
+        if not self.client.poll_atlas_for_connection(
+            self.connection_qualified_name,
+            interval_seconds=self.atlas_poll_interval_seconds,
+            timeout_seconds=self.atlas_poll_timeout_seconds,
+        ):
+            raise SeededConnectionNotSearchableError(
+                message=(
+                    f"Seeded connection {self.connection_qualified_name} never "
+                    f"became searchable within {self.atlas_poll_timeout_seconds}s. "
+                    "The DAG would run against a connection Atlas cannot see."
+                ),
+                resource=self.connection_qualified_name,
+                actual_state="not returned by Atlas search",
+            )
+
+        if probe is not None:
+            deadline = time.monotonic() + self.atlas_poll_timeout_seconds
+            attempts = 0
+            while True:
+                attempts += 1
+                try:
+                    probe()
+                except Exception as exc:
+                    if isinstance(exc, self._PROBE_NON_TRANSIENT_ERRORS):
+                        # A deterministic probe bug (a TypeError from a wrong
+                        # call signature, a config ValueError) will fail every
+                        # retry identically — burning the whole timeout before
+                        # surfacing. Re-raise immediately instead.
+                        logger.error(
+                            "e2e seed: probe write under %s raised %s, a "
+                            "non-transient error — failing fast rather than "
+                            "retrying until the %ds timeout",
+                            self.connection_qualified_name,
+                            type(exc).__name__,
+                            self.atlas_poll_timeout_seconds,
+                            exc_info=True,
+                        )
+                        raise
+                    if time.monotonic() >= deadline:
+                        logger.error(
+                            "e2e seed: probe write under %s still failing after "
+                            "%d attempt(s) / %ds — a fresh connection 403s child "
+                            "writes until its access policies go live, so this "
+                            "means provisioning never completed",
+                            self.connection_qualified_name,
+                            attempts,
+                            self.atlas_poll_timeout_seconds,
+                            exc_info=True,
+                        )
+                        raise
+                    logger.info(
+                        "e2e seed: probe write under %s not yet permitted "
+                        "(attempt %d) — connection policies not live; retrying",
+                        self.connection_qualified_name,
+                        attempts,
+                    )
+                    time.sleep(self.atlas_poll_interval_seconds)
+                else:
+                    logger.info(
+                        "e2e seed: probe write under %s succeeded after %d "
+                        "attempt(s) — connection policies are live",
+                        self.connection_qualified_name,
+                        attempts,
+                    )
+                    break
+
+        return self.connection_qualified_name
 
     # ------------------------------------------------------------------
     # Subclass hooks — override these
@@ -1082,6 +1490,30 @@ class BaseE2ETest:
             )
         self._node_dispatch = dispatch
 
+    def _capture_expected_node_identities(self, seed_dag: dict[str, Any]) -> None:
+        """Record the node identities the app under test declares.
+
+        Read back only by :meth:`_assert_deployed_manifest_matches`.
+
+        Captured from the seed DAG rather than by re-reading the file: the seed
+        DAG *is* the manifest's ``dag``, already carrying this harness's
+        ``{app_name}`` substitution, so the two sides of the later comparison
+        are normalised the same way. A connector with no ``manifest_path`` built
+        its seed DAG by hand (``_build_legacy_seed_dag``) — that is an
+        approximation of the app's graph, not a copy of it, so there is nothing
+        to compare and the identities stay empty.
+        """
+        if not self.manifest_path:
+            logger.info(
+                "manifest_path empty — the deployed-manifest identity check has "
+                "no committed DAG to compare against and will self-skip"
+            )
+            self._expected_node_identities = {}
+            return
+        self._expected_node_identities = node_identities(
+            seed_dag, app_name=self.connector_short_name
+        )
+
     def _bootstrap_workflow(self) -> str:
         """Ensure an AE workflow exists with a published version.
 
@@ -1113,6 +1545,7 @@ class BaseE2ETest:
             seed_dag = self._build_legacy_seed_dag(extract_queue)
 
         self._capture_node_dispatch(seed_dag)
+        self._capture_expected_node_identities(seed_dag)
 
         version = self.client.create_version(
             slug,
@@ -1120,6 +1553,7 @@ class BaseE2ETest:
         )
         logger.info("Created seed version %d under slug %s", version, slug)
         self.client.publish_version(slug, version)
+        self._seed_version = version
         return slug
 
     # ------------------------------------------------------------------
@@ -1299,6 +1733,135 @@ class BaseE2ETest:
             self.app_ready_poll_interval_seconds,
         )
 
+    # ------------------------------------------------------------------
+    # Deployed-manifest identity check
+    # ------------------------------------------------------------------
+
+    def _read_superseding_published_version(self, slug: str) -> PublishedVersion | None:
+        """Wait briefly for AE to serve a published version past the seed.
+
+        Args:
+            slug: The AE workflow slug the harness submitted against.
+
+        Returns:
+            The published version once it carries a DAG and provably superseded
+            the harness's seed, else ``None`` — the honest answer for both an
+            unreadable response and a supersede that never showed up inside the
+            budget. ``None`` is never a mismatch.
+        """
+        seed = self._seed_version
+        # The last read that came back at all, not the last read: a transient
+        # blip after a good read must not make the diagnostic claim AE was never
+        # readable, which is a different (and wronger) thing to tell an operator.
+        published: PublishedVersion | None = None
+        for attempt in until_deadline(
+            self.deployed_manifest_timeout_seconds,
+            self.deployed_manifest_poll_interval_seconds,
+            label=f"the DAG AE published for slug {slug}",
+            heartbeat_seconds=0,
+        ):
+            read = self.client.get_published_version(slug)
+            if read is not None:
+                published = read
+                if read.dag and _supersedes(read.version, seed):
+                    return read
+            if attempt.is_last:
+                break
+        if published is None:
+            # get_published_version already logged why each read failed.
+            logger.warning(
+                "Deployed-manifest identity check skipped for slug %s: AE's "
+                "published version was never readable within %ds, so whether "
+                "the executed DAG is this repo's DAG stays unverified",
+                slug,
+                self.deployed_manifest_timeout_seconds,
+            )
+            return None
+        logger.warning(
+            "Deployed-manifest identity check skipped for slug %s: after %ds AE "
+            "serves version %r (the harness's own seed version is %r) with %d "
+            "node(s), which does not prove Heracles' re-fetch of the tenant "
+            "pod's manifest superseded the seed — an absent version number "
+            "cannot, and an equal one says it did not. Comparing the seed DAG "
+            "against itself would report a match regardless of what the tenant "
+            "runs, so nothing is asserted",
+            slug,
+            self.deployed_manifest_timeout_seconds,
+            published.version,
+            seed,
+            len(published.dag),
+        )
+        return None
+
+    def _assert_deployed_manifest_matches(self, slug: str) -> None:
+        """Assert the DAG AE published is the DAG this repo's manifest declares.
+
+        Runs immediately after submit and before the poll loop. Post-submit is
+        the one thing lost versus the preflight this replaces (which AE does not
+        offer — see
+        :meth:`~application_sdk.testing.e2e.client.AEWorkflowClient.get_published_version`),
+        but it still fails within seconds of submit and long before any
+        assertion, with a node-level diff instead of a confusing downstream
+        failure.
+
+        Compares node identity, not the DAG blob: template variables are
+        substituted at submit, so a byte comparison would fail on every run.
+
+        Raises:
+            DeployedManifestMismatchError: The read got through, AE's published
+                version provably superseded the harness's seed, and the node
+                identities still disagree.
+        """
+        if not self.assert_deployed_manifest:
+            logger.info(
+                "assert_deployed_manifest is off for %s — not checking whether "
+                "the executed DAG is this repo's DAG",
+                type(self).__name__,
+            )
+            return
+        expected = self._expected_node_identities
+        if not expected:
+            logger.info(
+                "Deployed-manifest identity check skipped for slug %s: this "
+                "suite has no manifest-derived seed DAG to compare against",
+                slug,
+            )
+            return
+        published = self._read_superseding_published_version(slug)
+        if published is None:
+            return
+        actual = node_identities(published.dag, app_name=self.connector_short_name)
+        diff = compare_node_identities(expected, actual)
+        if diff.matches:
+            logger.info(
+                "Deployed-manifest identity check passed: AE published version "
+                "%r for slug %s runs the %d node(s) this repo's manifest "
+                "declares (%s), so the executed DAG is the app under test's",
+                published.version,
+                slug,
+                len(expected),
+                ", ".join(sorted(expected)),
+            )
+            return
+        raise DeployedManifestMismatchError(
+            message=(
+                f"The DAG AE published at submit is not the DAG "
+                f"{type(self).__name__} built from {self.manifest_path}.\n"
+                f"At submit, Heracles re-fetches the manifest from the "
+                f"tenant-deployed pod and publishes it over the harness's seed "
+                f"version, so this is the graph that will actually run — and it "
+                f"is not this repo's. The tenant is very likely running a "
+                f"different build of the app than the one under test.\n"
+                f"slug={slug} published_version={published.version!r} "
+                f"seed_version={self._seed_version!r}\n"
+                f"local nodes:     {', '.join(sorted(expected)) or '(none)'}\n"
+                f"published nodes: {', '.join(sorted(actual)) or '(none)'}\n"
+                f"differences:\n{diff.render()}"
+            ),
+            observed=diff.render(),
+            location=f"AE workflow slug {slug}",
+        )
+
     def run_full_dag(self) -> FullDAGOutcome:
         """Submit, poll AE, poll Atlas, return the combined outcome."""
         slug = self._bootstrap_workflow()
@@ -1327,6 +1890,12 @@ class BaseE2ETest:
             payload, slug=slug, **self._submit_retry_kwargs()
         )
         logger.info("AE submit returned run_id=%s", run_id)
+
+        # Before the poll: submit is what makes Heracles fetch the tenant pod's
+        # manifest and publish it over our seed, so this is the earliest point
+        # the executed graph is knowable — and still seconds in, long before any
+        # assertion could pass against the wrong app.
+        self._assert_deployed_manifest_matches(slug)
 
         try:
             ae_result = self.client.poll_native_status(
@@ -1368,7 +1937,22 @@ class BaseE2ETest:
         asset_qn_samples: dict[str, list[str]] = {}
         total_assets = 0
         lineage_present = False
-        if self._core_dag_ok(ae_result):
+        if not self.expect_connection:
+            # This entrypoint publishes no connection inventory, so every Atlas
+            # probe below would assert against something it never produces. Skip
+            # them and let _core_dag_ok be the verdict.
+            #
+            # connection_in_atlas stays False because nothing was observed — the
+            # field means "the harness saw it", never "it is absent". The
+            # assertion does not consult it in this mode (see
+            # test_full_dag_runs_end_to_end), so a False here cannot fail a run.
+            logger.info(
+                "expect_connection is False for %s — skipping the Atlas connection, "
+                "asset-count and lineage probes; the DAG outcome is the verdict",
+                type(self).__name__,
+            )
+            connection_in_atlas = False
+        elif self._core_dag_ok(ae_result):
             connection_in_atlas = self.client.poll_atlas_for_connection(
                 self.connection_qualified_name,
                 interval_seconds=self.atlas_poll_interval_seconds,
@@ -1484,6 +2068,7 @@ class BaseE2ETest:
             total_assets=total_assets,
             lineage_present=lineage_present,
             asset_qn_samples=asset_qn_samples,
+            connection_expected=self.expect_connection,
         )
 
     # ------------------------------------------------------------------
@@ -1647,6 +2232,11 @@ class BaseE2ETest:
     def test_full_dag_runs_end_to_end(self) -> None:
         """Submit, run, assert success.
 
+        Calls :meth:`seed_prerequisites` first (a no-op unless the suite
+        overrides it), so an entrypoint that consumes state rather than creating
+        it — a query-history miner — can put that state in place without
+        replacing this whole method and losing the assertion ladder below.
+
         Asserts (in order):
           1. Every DAG node succeeded.
           2. The Connection asset exists in Atlas.
@@ -1657,6 +2247,11 @@ class BaseE2ETest:
              the depth declared in ``expected_asset_qn_depth`` (opt-in).
           5. At least one Process/ColumnProcess exists (unless ``expect_lineage``
              is False).
+
+        Assertions 2-5 are all about published inventory, so ``expect_connection
+        = False`` drops them and leaves assertion 1 as the verdict. That is the
+        whole gate for an entrypoint that publishes nothing; such a suite is
+        expected to add its own terminal evidence on top.
 
         When no extraction source is provisioned (``source_available`` False),
         this degrades to a worker-up-only check — see :meth:`assert_worker_up`.
@@ -1683,21 +2278,51 @@ class BaseE2ETest:
                 "DAG."
             )
 
+        # Put any state this entrypoint consumes in place before the DAG runs.
+        # No-op by default; a miner suite creates the connection it enriches
+        # here, under this test's own ephemeral QN so teardown purges it.
+        self.seed_prerequisites()
+
         outcome = self.run_full_dag()
-        if not (self._core_dag_ok(outcome.ae_result) and outcome.connection_in_atlas):
+        # The Connection clause only applies to an entrypoint that publishes
+        # inventory. With expect_connection False the Atlas probes never ran, so
+        # consulting connection_in_atlas here would fail every such run.
+        dag_ok = self._core_dag_ok(outcome.ae_result)
+        if not (dag_ok and (outcome.connection_in_atlas or not self.expect_connection)):
             ae_result = outcome.ae_result
             nodes_msg = (
                 self._describe_dag_nodes(ae_result)
                 if ae_result.failed_nodes
                 else "  (all DAG nodes succeeded; Connection just didn't land in Atlas)"
             )
+            # Reporting the connection line on a suite that never probed for one
+            # would send the reader hunting a connection that was never meant to
+            # exist. Say so instead.
+            connection_line = (
+                f"Connection in Atlas? {outcome.connection_in_atlas}\n"
+                if self.expect_connection
+                else "Connection in Atlas? not applicable (expect_connection=False)\n"
+            )
             raise AssertionError(
                 f"Full-DAG e2e failed for connector={self.connector_short_name}\n"
                 f"AE run_id={ae_result.run_id} slug={ae_result.workflow_slug}\n"
                 f"{self._dag_outcome_headline(ae_result)}\n"
-                f"Connection in Atlas? {outcome.connection_in_atlas}\n"
+                f"{connection_line}"
                 f"DAG nodes:\n{nodes_msg}"
             )
+
+        if not self.expect_connection:
+            # Assertions 2-5 are all about published inventory, and the probes
+            # that feed them never ran. Evaluating them against empty counts
+            # would fail every run — the zero-asset backstop in
+            # _evaluate_asset_expectations most obviously. The DAG gate above is
+            # the verdict; anything further is the suite's own to assert.
+            logger.info(
+                "%s declares expect_connection=False — DAG succeeded; skipping the "
+                "asset-count, asset-location and lineage assertions",
+                type(self).__name__,
+            )
+            return
 
         asset_failures = self._evaluate_asset_expectations(
             outcome.asset_counts, total_assets=outcome.total_assets

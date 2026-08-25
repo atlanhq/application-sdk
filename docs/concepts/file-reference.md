@@ -111,6 +111,13 @@ class FileReference(BaseModel, frozen=True):
 You never set `storage_path`, `is_durable`, or `file_count` yourself — the SDK
 fills them in during persist and materialize.
 
+> **On an entry point's contract, a `FileReference` must declare its shape.** An entry point's
+> `input`/return contracts are a public boundary — another app or the platform DAG reads what you
+> write there — so every `FileReference` field on one needs an `artifactSchemas` entry in your pkl
+> contract. Omitting it warns at worker build today and is an error in v4.0. A `FileReference` on an
+> internal `@task` contract is exempt. See
+> [Apps — Declaring artifact schemas](apps.md#declaring-artifact-schemas).
+
 ### Constructing a FileReference
 
 Constructing a `FileReference` is just a Pydantic model instantiation — it works

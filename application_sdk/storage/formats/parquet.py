@@ -82,10 +82,12 @@ class _ThreadConfinedParquetReader:
             if self._closed:
                 return None
             if self._batches is None:
-                self._parquet_file = pq.ParquetFile(self._file_path)
-                self._batches = self._parquet_file.iter_batches(
-                    batch_size=self._chunk_size
-                )
+                # Bound locally so the batch iterator is derived from the
+                # inferred type, not the deferred-import attribute annotation
+                # (which pyright cannot resolve at class scope).
+                parquet_file = pq.ParquetFile(self._file_path)
+                self._parquet_file = parquet_file
+                self._batches = parquet_file.iter_batches(batch_size=self._chunk_size)
             batch = next(self._batches, None)
             return None if batch is None else batch.to_pandas()
 

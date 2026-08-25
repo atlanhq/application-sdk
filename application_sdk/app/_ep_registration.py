@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, get_type_hints
 
+from application_sdk.app._artifact_schema_guard import warn_undeclared_artifact_schemas
 from application_sdk.app.entrypoint import (
     EntryPointContractError,
     EntryPointMetadata,
@@ -301,3 +302,8 @@ def _apply_app_registration(
     cls._app_metadata = metadata
 
     _register_tasks(cls, name)
+
+    # Boundary artifact-schema guard. Runs last so a missing declaration never
+    # blocks registration: it is advisory in 3.x and becomes an
+    # EntryPointContractError in 4.0 (see _artifact_schema_guard).
+    warn_undeclared_artifact_schemas(name, entry_points or {})
