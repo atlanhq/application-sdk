@@ -380,6 +380,20 @@ def validate_transformed_dir(
     and the check it enabled was the single largest source of false ``invalid``
     findings on the fleet (FND-803).
 
+    Note what this restores: **pyatlan's own signature is
+    ``validate(self, for_creation: bool = False)``**, and its docstring names
+    this exact caller — "only by explicit user invocation (e.g., validating
+    JSONL before sending to Atlan)". This SDK was overriding that default. So
+    this is not a loosened check; it is the library's intended default for the
+    JSONL case, restored.
+
+    Fixing it in pyatlan instead would be a regression. Under
+    ``for_creation=True`` the requirement is *correct*: ``GCSObject.creator()``
+    takes ``gcs_bucket_name`` as a required keyword argument (the
+    qualifiedName derives from the bucket), so the check faithfully mirrors the
+    contract it guards. Dropping it there would make ``for_creation=True`` pass
+    objects ``creator()`` cannot construct.
+
     ``for_creation=True`` enforces pyatlan's ``creator()`` contract — the
     parent-hierarchy fields a caller must supply when *constructing* an asset
     from scratch. Transformed output is not that. It is an **upsert** payload
