@@ -73,6 +73,7 @@ def test_payload_declares_attributed_gateway_key():
     )
     assert p["ai_gateway_key_name"] == "sdk_review"
 
+
 def test_payload_pins_all_three_model_lanes():
     # All three lanes must be pinned: leaving any unset silently falls back to
     # mothership's Claude defaults (main -> claude-opus-5, sub-agent ->
