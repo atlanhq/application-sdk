@@ -12,10 +12,13 @@ seams — *where the declaration comes from* and *how a format is checked* — a
 :mod:`application_sdk.validation.protocols`; the shared outcome surface is
 :mod:`application_sdk.validation.artifacts`. The two schema sources that ship are
 :mod:`application_sdk.validation.sources` (``ContractSource``, ``ModelSource`` —
-there is no inline source), and the public entry point is ``validate_artifact``
-in :mod:`application_sdk.validation.wrapper`. The parquet format validator is
-:mod:`application_sdk.validation.parquet` — a footer schema diff that reads **no
-rows**, and the check that would have caught the 73-day marker-freeze RCA.
+there is no inline source), and both format validators ADR-0020 names now ship:
+:mod:`application_sdk.validation.ndjson` (``NdjsonValidator`` — a streaming,
+constant-memory, per-record check, plus ``iter_ndjson_lines``, the one NDJSON walk
+in the tree) and :mod:`application_sdk.validation.parquet`
+(``ParquetFooterValidator`` — a footer schema diff that reads **no rows**, and the
+check that would have caught the 73-day marker-freeze RCA). The public entry point
+is ``validate_artifact`` in :mod:`application_sdk.validation.wrapper`.
 
 **Asset validation** (BLDX-1555) is the concrete NDJSON x typed-model check that
 predates the wrapper, built on the per-asset ``.validate()`` backbone that
@@ -75,6 +78,7 @@ from application_sdk.validation.assets import (
     validate_asset,
     validate_transformed_dir,
 )
+from application_sdk.validation.ndjson import NdjsonValidator, iter_ndjson_lines
 from application_sdk.validation.parquet import ParquetFooterValidator
 from application_sdk.validation.protocols import FormatValidator, SchemaSource
 from application_sdk.validation.sources import (
@@ -109,6 +113,7 @@ __all__ = [
     "FormatValidator",
     "ModelDeclaration",
     "ModelSource",
+    "NdjsonValidator",
     "ParquetFooterValidator",
     "SchemaSource",
     "artifact_schema_paths",
@@ -116,6 +121,7 @@ __all__ = [
     "artifact_validation_matrix_json",
     "builtin_format_validators",
     "declared_artifact_fields",
+    "iter_ndjson_lines",
     "validate_artifact",
     # Asset validation (BLDX-1555)
     "AssetValidationFailure",

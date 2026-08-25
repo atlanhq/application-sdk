@@ -152,6 +152,18 @@ class SQLAppE2ETest(BaseE2ETest):
         """Connection identity with ``$admin`` role on the admin ACL."""
         if not hasattr(self, "_admin_role_guid"):
             self._admin_role_guid = self._resolve_admin_role_guid()
+        # Same fallback the base spec applies (base.py): when a suite pins no
+        # explicit admin users, fall back to the current API token's username.
+        # Without it this spec goes out with an EMPTY adminUsers, the connection
+        # the publish path creates lists only its own service account as admin,
+        # and teardown_method — which runs as the API token — is then not an
+        # admin of the connection it must purge. Atlas denies the purge
+        # (ATLAS-403-00-001 "not authorized to perform delete entity") and the
+        # connection plus every descendant is orphaned on the tenant, while the
+        # leg still passes because teardown failures are only warnings.
+        admin_users = self.connection_admin_users or getattr(
+            self, "_auto_admin_users", ()
+        )
         return ConnectionSpec(
             name=self.connection_display_name,
             qualified_name=self.connection_qualified_name,
@@ -159,7 +171,7 @@ class SQLAppE2ETest(BaseE2ETest):
             source_logo=(
                 f"https://assets.atlan.com/assets/{self.connector_short_name}.png"
             ),
-            admin_users=self.connection_admin_users,
+            admin_users=admin_users,
             admin_groups=self.connection_admin_groups,
             admin_roles=(self._admin_role_guid,),
         )

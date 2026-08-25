@@ -25,6 +25,11 @@ Design constraints worth preserving if you edit this file:
   cross-validates that every referenced ``(typeName, qualifiedName)`` also
   appears as an emitted asset. There is deliberately no per-type parent map —
   Atlan has hundreds of relationships and the set changes constantly.
+* **One NDJSON walk in the tree.** The line iterator this module used to own now
+  lives in :mod:`application_sdk.validation.ndjson` as ``iter_ndjson_lines`` and is
+  imported from there. It was already format-generic, and a second copy would be a
+  second set of decisions about blank lines, file ordering and directory recursion
+  to keep in sync.
 * **Bounded memory.** The referential pass keys on the compound
   ``(typeName, qualifiedName)`` and spills both the present-asset set and the
   referenced-target set to disk via
@@ -37,7 +42,6 @@ from __future__ import annotations
 import functools
 import typing
 from dataclasses import dataclass, field
-from glob import glob
 from pathlib import Path
 from typing import Iterator
 
@@ -49,6 +53,7 @@ from pyatlan_v9.model.transform import from_atlas_json
 from application_sdk.common.spillable_dict import SpillableDict
 from application_sdk.constants import ASSET_VALIDATION_MAX_ITEMS_PER_AXIS
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.validation.ndjson import iter_ndjson_lines
 
 logger = get_logger(__name__)
 
@@ -333,27 +338,6 @@ def validate_asset(asset: Asset, *, for_creation: bool = True) -> list[str]:
     return []
 
 
-def _iter_ndjson_lines(path: str | Path) -> Iterator[tuple[str, int, bytes]]:
-    """Yield ``(file, 1-based line number, raw bytes)`` for every non-blank line.
-
-    Accepts a directory (walked recursively for ``*.json``, sorted for stable
-    ordering) or a single file. A missing path yields nothing.
-    """
-    root = Path(path)
-    if root.is_dir():
-        files = sorted(glob(str(root / "**" / "*.json"), recursive=True))
-    elif root.is_file():
-        files = [str(root)]
-    else:
-        files = []
-    for file_path in files:
-        with open(file_path, "rb") as handle:
-            for line_no, raw in enumerate(handle, start=1):
-                stripped = raw.strip()
-                if stripped:
-                    yield file_path, line_no, stripped
-
-
 def validate_transformed_dir(
     path: str | Path,
     *,
@@ -416,7 +400,7 @@ def validate_transformed_dir(
         )
 
     try:
-        for file_path, line_no, raw in _iter_ndjson_lines(path):
+        for file_path, line_no, raw in iter_ndjson_lines(path):
             report.total += 1
             try:
                 asset = _deserialize(raw)

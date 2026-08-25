@@ -24,6 +24,7 @@ from pathlib import Path
 import pytest
 
 from application_sdk.validation.artifacts import (
+    ARTIFACT_FORMATS,
     ARTIFACT_VALIDATION_OUTCOMES,
     FORMAT_NDJSON,
     FORMAT_PARQUET,
@@ -227,20 +228,34 @@ def test_no_validator_for_the_format_is_unsupported(tmp_path: Path) -> None:
     assert report.artifact_format == FORMAT_NDJSON
 
 
-def test_the_builtins_carry_parquet_and_not_yet_ndjson(tmp_path: Path) -> None:
-    """FND-689 landed parquet; FND-688 has still to land NDJSON.
+def test_the_builtins_carry_every_format_the_adr_names() -> None:
+    """NDJSON (FND-688) and parquet (FND-689) both ship. Neither is silently absent.
 
-    The point of asserting the gap is that the interim state is *reported*, not
-    silent — an app that has adopted declarations can see in its outcome events that
-    its NDJSON hand-offs are not being checked yet, which is the failure mode this
-    whole capability exists to remove.
+    Asserted as a set against the format vocabulary rather than as a hand-written
+    list, so adding a format to :data:`ARTIFACT_FORMATS` without registering its
+    validator fails here instead of resolving to ``unsupported`` in production.
     """
-    assert [v.artifact_format for v in builtin_format_validators()] == [FORMAT_PARQUET]
+    assert {v.artifact_format for v in builtin_format_validators()} == ARTIFACT_FORMATS
 
-    report = validate_artifact(tmp_path, _StubSource(DECLARATION))
+
+def test_a_format_with_no_builtin_validator_says_so_out_loud(tmp_path: Path) -> None:
+    """The invariant outlives the gap it was first written for.
+
+    Both formats now ship, but the SDK deliberately does not police the format
+    vocabulary at load time: a newer toolkit can declare a format this SDK has no
+    validator for, and the honest answer is ``unsupported`` *naming the format* —
+    never ``absent`` (which would claim the declaration was unreadable) and never
+    silence (which would read as a pass).
+    """
+    from_a_newer_toolkit = FieldMapDeclaration(
+        fields=(DeclaredField(path="QUERY_ID", type="string"),),
+        artifact_format="avro",
+    )
+    report = validate_artifact(tmp_path, _StubSource(from_a_newer_toolkit))
+
     _assert_emits(report, OUTCOME_UNSUPPORTED)
     assert "no validator registered" in report.reason
-    assert FORMAT_NDJSON in report.reason
+    assert "avro" in report.reason
 
 
 def test_the_builtin_parquet_validator_is_wired_end_to_end(tmp_path: Path) -> None:

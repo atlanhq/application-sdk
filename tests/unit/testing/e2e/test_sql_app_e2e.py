@@ -318,6 +318,39 @@ class TestSQLAppE2ETestHooks:
         spec = t.connection_spec()
         assert "role-guid-123" in spec.admin_roles
 
+    def test_connection_spec_falls_back_to_auto_admin_users(self) -> None:
+        """A suite that pins no admin users still gets the API token on the ACL.
+
+        Without this the spec ships an EMPTY adminUsers, the publish path
+        creates the connection with only its own service account as admin, and
+        teardown_method — running as the API token — cannot purge it. Atlas
+        answers ATLAS-403-00-001 and the connection plus every descendant is
+        orphaned while the leg still passes.
+        """
+        t = self._make_test()
+        assert not t.connection_admin_users  # suite pins none
+        t._auto_admin_users = ("service-account-apikey-abc",)
+        spec = t.connection_spec()
+        assert spec.admin_users == ("service-account-apikey-abc",)
+
+    def test_connection_spec_prefers_explicit_admin_users(self) -> None:
+        """An explicit class-level ACL still wins over the fallback."""
+        t = self._make_test()
+        t.__class__.connection_admin_users = ("explicit-user",)
+        try:
+            t._auto_admin_users = ("service-account-apikey-abc",)
+            spec = t.connection_spec()
+            assert spec.admin_users == ("explicit-user",)
+        finally:
+            t.__class__.connection_admin_users = ()
+
+    def test_connection_spec_survives_missing_auto_admin_users(self) -> None:
+        """No setup_method run (hence no _auto_admin_users) must not explode."""
+        t = self._make_test()
+        assert not hasattr(t, "_auto_admin_users")
+        spec = t.connection_spec()
+        assert spec.admin_users == ()
+
     def test_mustache_substitutions_returns_sql_type(self) -> None:
         from application_sdk.testing.e2e.substitutions import SQLMustacheSubstitutions
 

@@ -88,8 +88,9 @@ DEFAULT_MAX_ROUNDS = 8
 # code says which: 400 means the pinned name is not one the
 # llmproxy.atlan.dev catalog recognises (its own message is "Invalid model
 # name passed in model=..."), 403 means the gateway key does not allowlist it.
-# This lane declares no `ai_gateway_key_name`, so that key is mothership's
-# LITELLM_KEY_DEFAULT - not the review lane's scoped `sdk_review` key.
+# This lane sends the `sdk_review` alias, so its spend is billed to the
+# shared SDK-lane key LITELLM_KEY_SDK_REVIEW, and resolve runs therefore
+# share the review lane's budget.
 #
 # Mothership itself does not validate the name at all: `_validate_model_ids`
 # in `harness/api/models/sandbox.py` only rejects blank/whitespace/control-char
@@ -405,6 +406,7 @@ def build_payload(
         "repositories": ["atlanhq/application-sdk"],
         "base_branch": "main",
         "snapshot": "_base",
+        "ai_gateway_key_name": "sdk_review",
         # Model pinning, same three lanes as sdk-review.yml (PR #2985). Without
         # these the lane inherits mothership's DEFAULT_CLAUDE_MODEL
         # (claude-opus-5) and `_base` leaves CLAUDE_CODE_SUBAGENT_MODEL on

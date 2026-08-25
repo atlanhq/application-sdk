@@ -68,15 +68,19 @@ def builtin_format_validators() -> tuple[FormatValidator, ...]:
     parquet artifact is actually validated, and degrades to skip-with-warning when
     the extra is not installed.
 
-    NDJSON (FND-688) is still to land, so an NDJSON artifact resolves to
-    ``unsupported`` naming the format that had no validator — the honest report,
-    visible in the outcome events rather than looking like a pass.
+    Both formats ADR-0020 names now ship: NDJSON (FND-688) streams line by line,
+    parquet (FND-689) diffs a footer. A format neither claims still resolves to
+    ``unsupported`` naming it — the honest report, visible in the outcome events
+    rather than looking like a pass.
     """
+    from application_sdk.validation.ndjson import (  # noqa: PLC0415 — deferred on purpose: the parquet import below must stay inside this function, and both are resolved together
+        NdjsonValidator,
+    )
     from application_sdk.validation.parquet import (  # noqa: PLC0415 — deferred: keeps the parquet reader off a JSON-only caller's import path
         ParquetFooterValidator,
     )
 
-    return (ParquetFooterValidator(),)
+    return (NdjsonValidator(), ParquetFooterValidator())
 
 
 def validate_artifact(
