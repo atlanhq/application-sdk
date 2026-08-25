@@ -26,7 +26,7 @@ from __future__ import annotations
 import asyncio
 import math
 import time
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -899,6 +899,7 @@ def build_preflight_gate_activity(
     app_name: str,
     *,
     enforce: bool = False,
+    entrypoint_modes: Mapping[str, str] | None = None,
     budget_seconds: float = GATE_TIMEOUT_DEFAULT_SECONDS,
     attempts: int = GATE_ATTEMPTS_DEFAULT,
 ) -> Callable[..., Awaitable[Any]]:
@@ -908,14 +909,13 @@ def build_preflight_gate_activity(
     because the gate is mandatory. Binds the same per-invocation handler context
     the HTTP and SDR paths use (:func:`bind_invocation_context`).
 
-    ``enforce`` is the gate's posture for this app, resolved once at worker
-    build (see ``_resolve_gate_enforcement`` in the worker). Soft (``False``,
-    the default) never raises: the verdict stays honest ``NOT_READY``, the run
-    proceeds, and the dodged block is emitted as ``outcome="would_block"`` so
-    connector-pulse can rank apps whose checks would have blocked real runs.
-    Hard (``True``) is the per-app opt-in: it raises and aborts the run. The
-    handler is never consulted about posture — verdict and enforcement are
-    deliberately separate concerns.
+    ``enforce`` is the app-wide gate posture, resolved at worker build. An
+    ``entrypoint_modes`` ``"hard"`` declaration overrides it only for the named
+    entrypoint from ``PreflightGateInput``. Soft (``False``, the default) never
+    raises: the verdict stays honest ``NOT_READY``, the run proceeds, and the
+    dodged block is emitted as ``outcome="would_block"``. Hard (``True``) raises
+    and aborts the run. The handler is never consulted about posture — verdict
+    and enforcement are deliberately separate concerns.
 
     ``budget_seconds`` is the handler's check budget, already clamped by
     :func:`resolve_gate_budget_seconds`. The activity enforces it itself rather
@@ -931,10 +931,18 @@ def build_preflight_gate_activity(
     fail-open. Handlers must keep their probes awaitable.
     """
 
+    hard_entrypoints = {
+        entrypoint
+        for entrypoint, mode in (entrypoint_modes or {}).items()
+        if str(mode).strip().lower() == "hard"
+    }
+
     @activity.defn(name=preflight_gate_activity_name(app_name))
     async def preflight_gate(input: PreflightGateInput) -> PreflightOutput:
         entry = input.entrypoint or "<implicit>"
-        gate_mode = "hard" if enforce else "soft"
+        entrypoint_enforces = input.entrypoint in hard_entrypoints
+        effective_enforce = enforce or entrypoint_enforces
+        gate_mode = "hard" if effective_enforce else "soft"
 
         def _emit_outcome(
             outcome: str,
@@ -997,7 +1005,7 @@ def build_preflight_gate_activity(
                 "Preflight gate could not verify the source (gate_mode=%s): %s",
                 gate_mode,
                 "blocking the run before extraction"
-                if enforce
+                if effective_enforce
                 else "proceeding without source verification",
                 # The exception, not exc_info=True: on the budget-overrun path this
                 # runs outside any ``except`` (the AppTimeoutError is constructed,
@@ -1006,12 +1014,12 @@ def build_preflight_gate_activity(
                 exc_info=exc,
             )
             _emit_outcome(
-                "blocked" if enforce else "would_block",
+                "blocked" if effective_enforce else "would_block",
                 block_error.details[0].code,
                 unverifiable.checks,
                 CLASSIFICATION_SOURCE_UNVERIFIABLE,
             )
-            if enforce:
+            if effective_enforce:
                 raise block_error
             return unverifiable
 
@@ -1126,12 +1134,12 @@ def build_preflight_gate_activity(
         if result.status is PreflightStatus.NOT_READY:
             block_error = _build_block_error(result, app_name)
             _emit_outcome(
-                "blocked" if enforce else "would_block",
+                "blocked" if effective_enforce else "would_block",
                 block_error.details[0].code,
                 result.checks,
                 CLASSIFICATION_VERDICT,
             )
-            if enforce:
+            if effective_enforce:
                 raise block_error
             # Soft: the verdict stays honest NOT_READY; the gate just does not
             # enforce it. The would_block row above is the loud record.

@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Callable
 from datetime import timedelta
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 from temporalio.client import Client
@@ -233,21 +234,37 @@ async def _log_worker_fatal_error(exc: BaseException) -> None:
 
 
 def _resolve_gate_enforcement(app_cls: type | None) -> bool:
-    """Resolve the preflight gate's posture for one app.
+    """Resolve the app-wide preflight gate posture.
 
     ``True`` = hard (block on ``NOT_READY``); ``False`` = soft (emit
-    ``would_block``, proceed). Precedence: ``ATLAN_PREFLIGHT_GATE_MODE`` env
-    (deploy-time ops lever, no app release needed) > the app's declared
-    ``App.preflight_gate_mode`` (git-blamed opt-in) > soft default. Only the
-    literal ``"hard"`` enforces; an unknown or malformed value falls back to
-    soft — a run is never blocked by accident, blocking is always a deliberate
-    opt-in.
+    ``would_block``, proceed). ``ATLAN_PREFLIGHT_GATE_MODE`` remains the
+    deploy-time override. Entrypoint declarations are bound separately into the
+    activity because the entrypoint is only available in ``PreflightGateInput``.
     """
     val = os.environ.get(PREFLIGHT_GATE_MODE_ENV)
     if val:
         return val.strip().lower() == "hard"
     declared = getattr(app_cls, "preflight_gate_mode", "soft")
     return str(declared).strip().lower() == "hard"
+
+
+def _resolve_gate_entrypoint_modes(app_cls: type | None) -> dict[str, str]:
+    """Return validated per-entrypoint posture declarations for one app.
+
+    A deployment-wide environment override must apply to every entrypoint, so
+    it suppresses app declarations here. Unknown modes degrade to soft, matching
+    the app-wide posture contract and avoiding accidental blocks from typos.
+    """
+    if os.environ.get(PREFLIGHT_GATE_MODE_ENV):
+        return {}
+    declared = getattr(app_cls, "preflight_gate_entrypoint_modes", {})
+    if not isinstance(declared, dict):
+        return {}
+    return {
+        str(entrypoint): "hard"
+        for entrypoint, mode in declared.items()
+        if str(mode).strip().lower() == "hard"
+    }
 
 
 class AppWorker:
@@ -626,6 +643,7 @@ def create_worker(
     for name in gate_app_names:
         app_cls = name_to_app_cls.get(name)
         enforce = _resolve_gate_enforcement(app_cls)
+        entrypoint_modes = _resolve_gate_entrypoint_modes(app_cls)
         budget_seconds = resolve_gate_budget_seconds(
             getattr(app_cls, "preflight_gate_timeout_seconds", None)
         )
@@ -652,6 +670,7 @@ def create_worker(
                 gate_handler,
                 name,
                 enforce=enforce,
+                entrypoint_modes=entrypoint_modes,
                 budget_seconds=budget_seconds,
                 attempts=attempts,
             )

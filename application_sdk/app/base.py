@@ -811,6 +811,18 @@ class App(ABC):
     store outage, rate limit, worker unavailable) always fail open, in both
     postures — a platform blip must not fail a healthy run."""
 
+    preflight_gate_entrypoint_modes: ClassVar[dict[str, Literal["hard", "soft"]]] = {}
+    """Optional posture overrides keyed by extraction workflow entrypoint.
+
+    An entrypoint declared ``"hard"`` blocks on source-attributable
+    ``NOT_READY`` outcomes while every undeclared entrypoint keeps this app's
+    :attr:`preflight_gate_mode`. This supports workflows such as a miner that
+    requires an audit table while the crawler does not. The deployment-wide
+    ``ATLAN_PREFLIGHT_GATE_MODE`` override still wins for every entrypoint.
+    Unknown values resolve to soft, so malformed declarations never block a run
+    by accident.
+    """
+
     preflight_gate_timeout_seconds: ClassVar[int] = 150
     """Seconds the preflight handler gets to run all its checks.
 

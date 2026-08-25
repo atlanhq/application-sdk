@@ -411,6 +411,17 @@ class MyConnector(App):
     preflight_gate_mode = "hard"   # checks are trusted to block runs
 ```
 
+An app with entrypoints that have different readiness requirements can harden
+only the one that needs it. Undeclared entrypoints retain `preflight_gate_mode`:
+
+```python
+class RedshiftConnector(App):
+    preflight_gate_entrypoint_modes = {"miner": "hard"}
+```
+
+This does not weaken the deployment override: a non-empty
+`ATLAN_PREFLIGHT_GATE_MODE` still decides the posture for every entrypoint.
+
 #### What hard mode covers
 
 Hard mode applies to every outcome the gate can attribute to the **source**, not only a
