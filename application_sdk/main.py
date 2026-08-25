@@ -1203,8 +1203,7 @@ async def _supervise_worker(
                     await reconnect()
                 except Exception:
                     logger.warning(
-                        "Reconnect before worker restart failed; "
-                        "restarting anyway",
+                        "Reconnect before worker restart failed; restarting anyway",
                         exc_info=True,
                     )
             elif auth_manager is not None:
@@ -1212,8 +1211,7 @@ async def _supervise_worker(
                     await auth_manager.force_refresh(client)
                 except Exception:
                     logger.warning(
-                        "Token refresh before worker restart failed; "
-                        "restarting anyway",
+                        "Token refresh before worker restart failed; restarting anyway",
                         exc_info=True,
                     )
 
@@ -1320,6 +1318,7 @@ async def run_worker_mode(config: AppConfig) -> None:
         logger.info("Acquired initial auth token")
 
     logger.info("Connecting to Temporal %s", config.temporal_host)
+
     async def _connect_temporal(key: str | None) -> Any:
         return await create_temporal_client(
             config.temporal_host,
@@ -1628,6 +1627,7 @@ async def run_combined_mode(config: AppConfig) -> None:
         logger.info("Acquired initial auth token")
 
     logger.info("Connecting to Temporal %s", config.temporal_host)
+
     async def _connect_temporal(key: str | None) -> Any:
         return await create_temporal_client(
             config.temporal_host,
