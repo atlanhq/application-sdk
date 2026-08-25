@@ -409,6 +409,18 @@ on:
           Forwarded to the connector-integration-tests action: how long to wait
           for the app server to become healthy in the INTEGRATION tier.  Raise
           for connectors with slow imports (heavy native/analytics deps).
+      run-integration-workflow-tests:
+        required: false
+        type: boolean
+        default: false
+        description: |
+          Set E2E_RUN_WORKFLOW=1 for the INTEGRATION tier so a connector's
+          full-workflow / transformed-output-contract scenarios execute; they
+          skip by default (dispatch-only today). Non-secret opt-in, set as
+          job-level env (like git-lfs-skip-smudge) rather than through the masked
+          E2E_SOURCE_ENV_JSON path — routing '1' through the secret blob would
+          register it with the runner's log masker and redact every '1' in the
+          job log. Default false preserves the current skip-by-default behavior.
 
     secrets:
       # Declared so a caller that maps secrets EXPLICITLY (instead of
@@ -764,6 +776,12 @@ jobs:
       summary: ${{ steps.integration.outputs.summary }}
     env:
       GIT_LFS_SKIP_SMUDGE: ${{ inputs.git-lfs-skip-smudge && '1' || '' }}
+      # Non-secret opt-in flag (see the run-integration-workflow-tests input):
+      # turns on the connector's full-workflow / transformed-output-contract
+      # integration scenarios, which skip unless E2E_RUN_WORKFLOW is set. Set as
+      # job-level env — NOT via the masked E2E_SOURCE_ENV_JSON path — so '1' is
+      # never registered with the log masker (which would redact every '1').
+      E2E_RUN_WORKFLOW: ${{ inputs.run-integration-workflow-tests && '1' || '' }}
       # Surfaced as env because a step-level `if:` cannot read the secrets
       # context, and the export steps below are gated on it being set.
       E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
