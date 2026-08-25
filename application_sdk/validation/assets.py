@@ -321,10 +321,12 @@ def validate_asset(asset: Asset, *, for_creation: bool = True) -> list[str]:
 
     Args:
         asset: A concrete pyatlan_v9 asset instance.
-        for_creation: When True (default), also enforce the create-time hierarchy
-            checks. Connector runs currently assume a first-time run against a
-            source, so everything they emit as transformed output is for initial
-            creation.
+        for_creation: When True (default), also enforce pyatlan's create-time
+            hierarchy checks. This is the strict primitive and keeps the strict
+            default; :func:`validate_transformed_dir` deliberately defaults the
+            other way, because transformed output is an **upsert** payload
+            rather than a ``creator()`` call. See FND-803 and that function's
+            docstring for the measurement behind the asymmetry.
     """
     try:
         asset.validate(for_creation=for_creation)
@@ -357,7 +359,7 @@ def _iter_ndjson_lines(path: str | Path) -> Iterator[tuple[str, int, bytes]]:
 def validate_transformed_dir(
     path: str | Path,
     *,
-    for_creation: bool = True,
+    for_creation: bool = False,
     check_referential_integrity: bool = True,
 ) -> AssetValidationReport:
     """Validate every transformed-output asset under ``path``.
@@ -372,9 +374,38 @@ def validate_transformed_dir(
     from the data, not a hard-coded list. **Every line is always scanned** — the
     report reflects the full batch, not a sample.
 
+    **Why ``for_creation`` defaults to False.** It used to default True, on the
+    premise that "connector runs assume a first-time run against a source, so
+    everything they emit is for initial creation". That premise does not hold,
+    and the check it enabled was the single largest source of false ``invalid``
+    findings on the fleet (FND-803).
+
+    ``for_creation=True`` enforces pyatlan's ``creator()`` contract — the
+    parent-hierarchy fields a caller must supply when *constructing* an asset
+    from scratch. Transformed output is not that. It is an **upsert** payload
+    for assets whose parents already exist in Atlas, so the fields the contract
+    demands are legitimately absent, and Atlas accepts the payload regardless.
+    Measured: a well-formed ``Column`` carrying name, qualifiedName and
+    connectionQualifiedName **fails** under ``for_creation=True``. On one day
+    the flag alone accounted for ~2.0M fivetran, ~330k thoughtspot and ~55k gcs
+    assets reported invalid, every message ending "is required for creation".
+    A connector team independently confirmed the finding was wrong: GCSObject
+    assets ingest successfully without ``gcsBucketName``, and many already had.
+
+    Turning it off does **not** hollow out the check. Still caught, verified by
+    test: a ``qualifiedName`` that does not match its type's expected pattern
+    (this is what found a real defect — an empty path segment producing
+    ``.../afvc//cum/cuguid``), a missing ``qualifiedName``, and a structurally
+    wrong payload. What stops being reported is precisely the class Atlas never
+    required.
+
+    Callers who genuinely are creating assets — a pre-create gate rather than a
+    post-transform observation — pass ``for_creation=True`` explicitly.
+
     Args:
         path: A transformed-output directory (e.g. ``.../transformed``) or file.
-        for_creation: Passed through to each asset's ``.validate()``.
+        for_creation: Passed through to each asset's ``.validate()``. Defaults
+            to False — see "Why ``for_creation`` defaults to False" above.
         check_referential_integrity: Run the referential second pass.
 
     Returns:

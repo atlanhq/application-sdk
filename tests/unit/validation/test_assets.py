@@ -660,3 +660,107 @@ def test_scalar_gaps_are_not_claimed_to_be_fixed():
     # ...but the missing scalars are still correctly reported.
     assert any("schema_name is required" in e for e in errors), errors
     assert any("database_name is required" in e for e in errors), errors
+
+
+# ---------------------------------------------------------------------------
+# FND-803 — for_creation=True was the largest source of false `invalid`.
+#
+# It enforces pyatlan's creator() contract (the parent-hierarchy fields a
+# caller supplies when CONSTRUCTING an asset). Transformed output is an upsert
+# payload whose parents already exist in Atlas, so those fields are
+# legitimately absent and Atlas accepts the record. A connector team confirmed
+# it independently: GCSObject ingests fine without gcsBucketName.
+# ---------------------------------------------------------------------------
+
+
+def _raw(type_name: str, **attributes) -> bytes:
+    import json
+
+    return json.dumps(
+        {"typeName": type_name, "status": "ACTIVE", "attributes": attributes}
+    ).encode()
+
+
+_GOOD_COLUMN = dict(
+    name="c",
+    qualifiedName="default/snow/1/DB/SCH/T/c",
+    connectionQualifiedName="default/snow/1",
+)
+
+
+def test_well_formed_column_fails_only_under_for_creation():
+    """The headline: for_creation=True rejects an asset with nothing wrong."""
+    asset = assets_module._deserialize(_raw("Column", **_GOOD_COLUMN))
+
+    assert validate_asset(asset, for_creation=True) != []
+    assert validate_asset(asset, for_creation=False) == []
+
+
+def test_gcs_object_without_bucket_name_is_not_a_finding():
+    """The connector team's report, as a test. Every message on this axis ended
+    "is required for creation", and this was the one confirmed from the
+    ingestion side: these assets land in Atlas without the attribute."""
+    asset = assets_module._deserialize(
+        _raw(
+            "GCSObject",
+            name="chunk-0-part0.json",
+            qualifiedName="default/gcs/1787291630/ip_snapshot_prod/obj",
+            connectionQualifiedName="default/gcs/1787291630",
+        )
+    )
+
+    creation_errors = validate_asset(asset, for_creation=True)
+    assert "gcs_bucket_name is required for creation" in creation_errors[0]
+    assert validate_asset(asset, for_creation=False) == []
+
+
+@pytest.mark.parametrize(
+    "raw,expected_fragment",
+    [
+        # The real defect this found in production: an empty path segment.
+        pytest.param(
+            _raw(
+                "Column",
+                name="cuguid",
+                qualifiedName="default/athena/1/AwsDataCatalog/db/afvc//cum/cuguid",
+                connectionQualifiedName="default/athena/1",
+            ),
+            "does not match expected pattern",
+            id="empty-path-segment",
+        ),
+        pytest.param(
+            _raw("Column", name="c", qualifiedName="not-a-qualified-name"),
+            "does not match expected pattern",
+            id="garbage-qualified-name",
+        ),
+        pytest.param(
+            _raw("Column", name="c", connectionQualifiedName="default/snow/1"),
+            "qualified_name is required",
+            id="missing-qualified-name",
+        ),
+    ],
+)
+def test_real_defects_are_still_caught_without_for_creation(raw, expected_fragment):
+    """Turning the flag off must not hollow out the check."""
+    asset = assets_module._deserialize(raw)
+
+    errors = validate_asset(asset, for_creation=False)
+
+    assert errors, "a real defect must still be reported"
+    assert expected_fragment in errors[0]
+
+
+def test_validate_transformed_dir_defaults_to_upsert_semantics(tmp_path):
+    """The batch walker's default is what the upload hook gets, so pin it."""
+    transformed = tmp_path / "transformed"
+    transformed.mkdir()
+    (transformed / "entities.json").write_bytes(_raw("Column", **_GOOD_COLUMN) + b"\n")
+
+    default = validate_transformed_dir(transformed, check_referential_integrity=False)
+    strict = validate_transformed_dir(
+        transformed, for_creation=True, check_referential_integrity=False
+    )
+
+    assert default.passed == 1 and default.failed == 0
+    # The flag is still honoured for callers who genuinely are creating.
+    assert strict.failed == 1
