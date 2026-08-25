@@ -117,9 +117,10 @@ class DatabaseSpec:
 class AgentSpec:
     """Optional agent routing (tier 4 only).
 
-    ``agent_name`` is used by the Argo cluster template to derive the
-    Temporal task queue (``atlan-<app>-<agent_name>``). The CI worker
-    listens on the same queue; AE then dispatches the extract to it.
+    ``agent_name`` is what AE reads out of the parsed ``agent-json`` blob
+    to derive the Temporal task queue (``atlan-<app>-<agent_name>``). The
+    CI worker listens on the same queue; AE then dispatches the extract
+    to it.
     """
 
     agent_name: str
@@ -330,10 +331,17 @@ def build_seed_dag(
     }
 
 
-# Top-level agent_json keys emitted as flat ``agent-json.<key>`` Argo routing
-# rows by build_ae_payload. These are the routing / secret-store-pointer fields
-# the shared cluster WorkflowTemplate reads directly (the connector's actual
-# credential ref-keys ride inside the JSON blob, not as flat rows). Only keys
+# Top-level agent_json keys emitted as flat ``agent-json.<key>`` parameter rows
+# by build_ae_payload. These dotted names are frontend dynamic-form field ids:
+# the UI dumps its flattened formState into the parameter list, and this harness
+# reproduces that dump so a submit matches what production sends. No backend
+# consumer reads them. On the native/AE path Heracles flattens every row into
+# allParams and then only substitutes ``{{<row name>}}`` placeholders that
+# appear in the connector's manifest DAG — no manifest references a dotted row.
+# Agent routing itself reads the parsed ``agent-json`` blob (``agent-name`` out
+# of it), never these rows. They are emitted for UI-shape fidelity alone, which
+# is reason enough for an e2e harness — but it is not a reason for a connector
+# to hand-append more of them in a ``_build_ae_payload`` override. Only keys
 # present in the supplied agent_json are emitted.
 _AGENT_JSON_ROUTING_KEYS = (
     "host",
@@ -395,17 +403,20 @@ def build_ae_payload(
             ``extra`` ref-keys, or the dotted ``basic.*`` / ``keypair.*`` shape
             from :func:`build_agent_json`). When supplied, the ``agent-json``
             JSON-blob parameter is (re)written from it and the flat
-            ``agent-json.<key>`` routing rows (:data:`_AGENT_JSON_ROUTING_KEYS`)
-            plus the ``credential-guid.*`` rows the shared cluster template reads
-            are emitted — so agent-mode connectors no longer hand-roll a
-            ``_build_ae_payload`` override to append them. Absent (default None)
+            ``agent-json.<key>`` rows (:data:`_AGENT_JSON_ROUTING_KEYS`) plus
+            the ``credential-guid.*`` rows are emitted alongside it — so
+            agent-mode connectors no longer hand-roll a ``_build_ae_payload``
+            override to append them. The blob is what agent routing actually
+            parses; the flat rows only reproduce the UI's submit shape and have
+            no backend consumer (see :data:`_AGENT_JSON_ROUTING_KEYS`). Absent
+            (default None)
             => no flat rows and no blob rewrite (backward-compatible: the blob,
             if any, comes from ``mustache_subs``'s ``{{agent-json}}`` field).
         credential_type: The connector's credential-config name (e.g.
             ``atlan-connectors-mysql``); defaults to
             ``f"atlan-connectors-{connector_short_name}"`` when empty. Two
-            consumers: (a) the flat ``credential-guid.credential-type`` routing
-            row, emitted only in agent mode (when ``agent_json`` is given); and
+            consumers: (a) the flat ``credential-guid.credential-type`` row,
+            emitted only in agent mode (when ``agent_json`` is given); and
             (b) the credential body's ``connectorConfigName``, backfilled
             when that field is absent so the submit matches what the real UI
             always sends (see the inline comment at the backfill site) — i.e.
@@ -449,12 +460,13 @@ def build_ae_payload(
         elif value is not None:
             parameters.append({"name": param_name, "value": value})
 
-    # Agent-mode routing rows. When an ``agent_json`` dict is supplied, it is
+    # Agent-mode parameter rows. When an ``agent_json`` dict is supplied, it is
     # the source of truth for the ``agent-json`` blob (overriding any emitted
-    # from mustache_subs) and we emit the flat ``agent-json.<key>`` +
-    # ``credential-guid.*`` rows the shared cluster template routes on. No-op
-    # when agent_json is None, so single-entrypoint / direct-mode submits are
-    # unaffected.
+    # from mustache_subs) — that blob is the one row agent routing actually
+    # parses. The flat ``agent-json.<key>`` + ``credential-guid.*`` rows below
+    # are emitted only because the real UI sends them; nothing downstream reads
+    # them (see :data:`_AGENT_JSON_ROUTING_KEYS`). No-op when agent_json is
+    # None, so single-entrypoint / direct-mode submits are unaffected.
     if agent_json is not None:
         parameters = [p for p in parameters if p.get("name") != "agent-json"]
         parameters.append(
