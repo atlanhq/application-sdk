@@ -118,8 +118,13 @@ inputs:
       tenant, which is the race the lease exists to close, whereas breaking one
       late costs a blocked tenant that a waiter is already reporting loudly.
       0 disables the backstop.
+
+      Raised from 14400 when prepare-tenant's ceiling went to 48 min to fit the
+      publish retry (FND-760). That is the sizing test doing its job, not a
+      margin being spent: the hold this must clear is now 48+120 min, and a TTL
+      that no longer cleared it by 1.5x would start breaking live holders.
     required: false
-    default: "14400"
+    default: "16200"
   on-timeout:
     description: |
       "fail" (default) — go red naming the holding run. "warn" — proceed

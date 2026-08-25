@@ -48,6 +48,14 @@ shape:
    non-fast-forward rejection. That workflow skips this branch and hands the file
    over here, keeping a single writer per branch.
 
+5. **The npm lock is bounded too, by a different driver.** The lane rewrites a
+   fourth file, ``packages/conformance/conformance/package-lock.json``, and npm
+   can express none of the per-package retention ceilings the uv bound depends
+   on — so ``renovate_npm_lock_bounded`` gates the whole file instead: take the
+   bounded resolve, or restore the base branch's lock verbatim. FND-380. It rides
+   in the same commit for the same reason the two uv locks do.
+
+
 Fail-closed, like the driver it wraps. If any project's bound cannot be applied,
 this exits non-zero having committed nothing — a red check on the PR, which the
 auto-approve gate then declines to approve. A control whose failure mode is a log
@@ -64,6 +72,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+import renovate_npm_lock_bounded as npm_bounded
 import renovate_uv_lock_bounded as bounded
 
 COMMIT_MESSAGE = "chore(deps): bound the refreshed locks to the release-age window"
@@ -100,6 +109,12 @@ PROJECTS: tuple[Project, ...] = (
     ),
 )
 
+# The one npm project the refresh lane rewrites: dev-only devDependencies for the
+# remediation programs, never bundled in the published wheel. Its bound is a
+# different mechanism from the uv projects' (see renovate_npm_lock_bounded), so it
+# is declared separately rather than squeezed into Project.
+NPM_PROJECT = "packages/conformance/conformance"
+
 # Regenerated from the ROOT lock. Flags match dependabot-requirements-sync.yaml
 # byte for byte so the file this produces is the same file that workflow produces
 # — deliberately not --all-extras, which would widen what the export pins.
@@ -126,6 +141,26 @@ def bound_project(project: Project, window: str, baseline_ref: str, root: Path) 
     for name in project.exempt:
         argv += ["--exempt", name]
     return bounded.main(argv)
+
+
+def bound_npm(window: str, baseline_ref: str, root: Path) -> int:
+    """Run the npm driver over the one npm project. Returns its exit code.
+
+    Same window as the uv projects deliberately — see the driver's docstring for
+    what that leaves on the table against the org checker's own threshold, and why
+    closing that gap is the checker's change to make rather than a second window
+    here.
+    """
+    return npm_bounded.main(
+        [
+            "--window",
+            window,
+            "--baseline-ref",
+            baseline_ref,
+            "--project-dir",
+            str(root / NPM_PROJECT),
+        ]
+    )
 
 
 def export_requirements(root: Path) -> None:
@@ -217,6 +252,15 @@ def main(argv: list[str] | None = None) -> int:
             )
             return code
 
+    code = bound_npm(args.window, args.baseline_ref, root)
+    if code != 0:
+        print(
+            f"npm bound failed for {NPM_PROJECT!r}; committing nothing so the "
+            "unbounded locks cannot merge.",
+            file=sys.stderr,
+        )
+        return code
+
     try:
         export_requirements(root)
     except RuntimeError as error:
@@ -224,6 +268,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     paths = [f"{p.directory}/uv.lock".removeprefix("./") for p in PROJECTS]
+    paths.append(f"{NPM_PROJECT}/{npm_bounded.LOCKFILE}")
     paths.append(REQUIREMENTS_PATH)
     stage_and_commit(root, paths)
     return 0

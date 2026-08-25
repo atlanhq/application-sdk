@@ -61,6 +61,31 @@ had its install miss, so waiting on GM's release status is not sufficient.
 Hence ``--install-retry-seconds`` (default 600): the install itself is retried
 while LM catches up. ``--scan-wait-seconds`` stays at 0 — waiting on the scan
 would not have helped, and a base-image CVE must not red an unrelated PR.
+
+The marketplace service is not always there
+-------------------------------------------
+Every call this script makes goes through Heracles to the marketplace service,
+and that service is a **shared** dependency: the e2e fan-out sends every
+connector's run at the same three tenants, and the tenant lease cannot space
+them out (it is keyed ``(app, cloud)`` and its ref lives in each app's *own*
+repo, so two different apps never contend). When it degrades it degrades for
+everyone at once.
+
+On 2026-08-24 it did, for about eight minutes, and took five connector PRs with
+it (FND-760). One fault, four different-looking symptoms:
+
+* ``POST /marketplace/publish`` → HTTP 400 ``code 1000`` "Please check your
+  request parameters", message ``error getting response from marketplace
+  service`` — a *validation* shape for something that is not a validation
+  failure. Four apps across all three clouds, two of them in the same second.
+* the same publish → a 60s client-side read timeout. Hanging, not rejecting.
+* ``POST .../install`` → ``status_code=500`` inside an HTTP 200 envelope.
+* ``GET .../deployments/{id}`` → the same HTTP 400, nine times running.
+
+Only the last of those survived, because ``_poll_deployment`` is the one caller
+that already retried a bad read. So ``--publish-retry-seconds`` (default 240)
+gives ``_publish`` the same tolerance: see :func:`_publish` for which half of
+the failure space is retried and why the other half must stay fatal.
 """
 
 from __future__ import annotations
@@ -68,6 +93,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import re
 import sys
 import time
@@ -106,12 +132,31 @@ _SCAN_POLL_SECONDS = 10
 #: Gap between install retries while LM's catalog snapshot catches up.
 _INSTALL_RETRY_POLL_SECONDS = 20
 
-#: The two waits this script can spend, as module constants rather than argparse
-#: literals, because a caller's job `timeout-minutes` has to stay above their sum:
-#: if the runner's timeout fires first, a slow LM sync reports as "job cancelled"
-#: and the actionable error this script was about to print is never written. The
-#: workflows' guards assert their timeouts against these, so raising one here
-#: fails the guard rather than silently making a job timeout reachable.
+#: Base gap between publish retries, and the band of jitter added to it.
+#:
+#: Jittered rather than fixed — the only place in this file that is. The other
+#: two retries wait on something tenant-local (LM's own catalog sync, one
+#: deployment reconciling), so their spacing affects nobody else. This one waits
+#: on the *shared* marketplace service, which fails for the whole fan-out at
+#: once (see the module docstring), and nothing upstream spaces those runs out.
+#: A fixed interval would put every connector that just failed onto the same
+#: retry beat and re-apply, in lockstep, the load the service was already
+#: failing under.
+_PUBLISH_RETRY_POLL_SECONDS = 15
+_PUBLISH_RETRY_JITTER_SECONDS = 10
+
+#: The three waits this script can spend, as module constants rather than
+#: argparse literals, because a caller's job `timeout-minutes` has to stay above
+#: their sum: if the runner's timeout fires first, a slow LM sync reports as "job
+#: cancelled" and the actionable error this script was about to print is never
+#: written. The workflows' guards assert their timeouts against these, so raising
+#: one here fails the guard rather than silently making a job timeout reachable.
+#:
+#: 240 for the publish because the outage it exists for is measured in minutes,
+#: not seconds: on 2026-08-24 the failures ran 09:00:27 → 09:02:25 and the next
+#: success was 09:03:50, so anything under ~3 min would have bought nothing on
+#: the one event there is real evidence from.
+DEFAULT_PUBLISH_RETRY_SECONDS = 240
 DEFAULT_INSTALL_RETRY_SECONDS = 600
 DEFAULT_DEPLOYMENT_TIMEOUT_SECONDS = 600
 
@@ -683,6 +728,64 @@ def _looks_like_cicd_managed(response: Response) -> bool:
     return "managed by ci/cd" in rendered or "cicd_managed" in rendered
 
 
+#: Heracles' wording when its own call to the marketplace service did not come
+#: back. It arrives as HTTP 400 with ``code 1000`` / "Please check your request
+#: parameters" — i.e. Heracles reports an upstream that never answered *as if*
+#: the caller had sent a bad payload — so neither the status nor the top-level
+#: ``error`` distinguishes it from a real rejection. This message is the only
+#: field that does.
+_UPSTREAM_UNREACHABLE_MARKER = "error getting response from marketplace service"
+
+
+def _looks_like_upstream_unreachable(response: Response) -> bool:
+    """True when Heracles is saying the marketplace service did not answer *it*.
+
+    Matched on the message text and deliberately not on the status. The status is
+    400, indistinguishable from a genuine payload rejection, and treating every
+    publish 400 as transient would make a real bad request wait out the whole
+    retry budget before failing with the same error.
+
+    Fails closed: if Heracles rewords this, the match stops firing and a publish
+    is fatal on its first response again — today's behaviour, not a new one. That
+    is the right direction to fail in, and the reason this is not widened to
+    something loose like "marketplace" or "not reach".
+    """
+    rendered = json.dumps(response.body).lower() if response.body else ""
+    return _UPSTREAM_UNREACHABLE_MARKER in rendered
+
+
+def _publish_is_retryable(response: Response) -> bool:
+    """True when a failed publish is worth sending again.
+
+    The split is between "the marketplace service could not answer" and "the
+    marketplace service answered, and the answer was no". Only the first
+    self-heals; retrying the second just delays a failure that was already
+    correct — and on the credential and provenance rejections it delays the one
+    error a human actually needs to read.
+    """
+    # Credentials do not come good on a retry, and 401/403 already carries the
+    # which-of-two-credentials hint. Checked before the marker so a reworded
+    # upstream can never drag an auth failure into the retry loop.
+    if response.status in (401, 403):
+        return False
+    if response.status == 429 or response.status >= 500:
+        return True
+    return _looks_like_upstream_unreachable(response)
+
+
+def _wait_before_publish_retry(attempt: int, deadline: float, why: str) -> None:
+    """Sleep out one publish-retry gap, never past ``deadline``."""
+    jitter = random.uniform(0, _PUBLISH_RETRY_JITTER_SECONDS)  # noqa: S311 — spacing retries across a fan-out, not a security decision
+    remaining = deadline - time.monotonic()
+    gap = max(0.0, min(_PUBLISH_RETRY_POLL_SECONDS + jitter, remaining))
+    print(
+        f"::warning::marketplace publish attempt {attempt} failed ({why}); the "
+        f"marketplace service is a shared dependency and this is its transient "
+        f"shape — retrying in {gap:.0f}s, {max(0.0, remaining):.0f}s of budget left"
+    )
+    time.sleep(gap)
+
+
 def _looks_like_scan_gate_text(text: str) -> bool:
     """Scan-gate detection over a plain message string.
 
@@ -746,15 +849,71 @@ def _wait_for_scan(
     return status
 
 
-def _publish(client: TenantClient, request: PublishRequest) -> tuple[str, str]:
-    """Register the version. Returns ``(version_id, release_id)``."""
+def _publish(
+    client: TenantClient,
+    request: PublishRequest,
+    *,
+    retry_seconds: int = 0,
+) -> tuple[str, str]:
+    """Register the version. Returns ``(version_id, release_id)``.
+
+    Retries only the half of the failure space that self-heals — see
+    :func:`_publish_is_retryable` for the split, and the module docstring for the
+    outage that made it necessary. A transport-level failure (the read timeout
+    Heracles produces when the marketplace service hangs rather than answers) is
+    retried on the same budget: it is the client-side view of the same fault.
+
+    On re-sending after an ambiguous failure
+    ----------------------------------------
+    A retry cannot know whether the attempt it is replacing reached GM, so this
+    can re-register a version GM already has. That is a deliberate trade rather
+    than an oversight, and it is cheap here for two specific reasons:
+
+    * The version string is the image tag, so a retry re-registers *the same*
+      version rather than a second, differently-named one.
+    * The registration is ``allowed_tenants``-scoped to one e2e tenant, so the
+      worst case is a duplicate row GM will never surface to a real tenant.
+
+    Weighed against a fault that redded four connector PRs inside eight minutes,
+    a duplicate row on a test tenant is the cheaper failure. If a retry does come
+    back rejected because the version already exists, the error below says which
+    attempt it was on, so that reads as what it is rather than as a mystery.
+    """
     try:
         body = build(request)
     except PublishBodyError as exc:
         raise TenantAppError(str(exc)) from exc
 
-    response = client.post(PUBLISH_PATH, body=body)
-    if not response.ok:
+    deadline = time.monotonic() + max(retry_seconds, 0)
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            response = client.post(PUBLISH_PATH, body=body)
+        except TenantApiError as exc:
+            # Transport-level, so there is no status to branch on and
+            # _publish_is_retryable never sees it. Retried anyway: the tenant
+            # resolved and was reachable minutes ago in this same job, so a
+            # timeout here is the service hanging, not a misconfigured base URL.
+            if time.monotonic() >= deadline:
+                raise TenantAppError(
+                    f"marketplace publish never completed — {attempt} attempt(s) "
+                    f"over a {retry_seconds}s budget, none of which got a response. "
+                    f"Last: {exc}"
+                ) from exc
+            _wait_before_publish_retry(attempt, deadline, str(exc))
+            continue
+
+        if response.ok:
+            break
+        if _publish_is_retryable(response) and time.monotonic() < deadline:
+            _wait_before_publish_retry(
+                attempt,
+                deadline,
+                f"HTTP {response.status} {_render_body(response.body)}",
+            )
+            continue
+
         # 401/403 here is the credential question: publish authorises on the
         # OAuth client, so name that explicitly rather than leaving an operator
         # to guess which of two credentials was rejected.
@@ -777,6 +936,25 @@ def _publish(client: TenantClient, request: PublishRequest) -> tuple[str, str]:
                 "/marketplace/apps/<id>/info did not expose it — check that read, "
                 "or pass --repo-url with the APP'S OWN repo (not the repo whose "
                 "CI is running: GM would repoint the app's provenance to it)."
+            )
+        elif _looks_like_upstream_unreachable(response):
+            # Retryable in shape, so getting here means the budget ran out. Say
+            # that, because the body claims a bad request and an operator who
+            # takes it at face value goes looking at the payload for a fault that
+            # is not in it.
+            hint = (
+                f" The body says 'check your request parameters', but this is "
+                f"Heracles reporting that the marketplace service did not answer "
+                f"IT — the payload is not the problem. Retried for {retry_seconds}s "
+                "and it stayed down, so this is an outage to raise rather than a "
+                "run to re-trigger."
+            )
+        elif attempt > 1:
+            hint = (
+                f" This was attempt {attempt}; an earlier attempt may have reached "
+                "GM before its response was lost, so a rejection naming an "
+                "existing version means the registration landed and only the "
+                "answer went missing."
             )
         raise TenantAppError(
             f"marketplace publish failed with HTTP {response.status}.{hint}\n"
@@ -1272,7 +1450,9 @@ def install(args: argparse.Namespace) -> InstallOutcome:
         release_model=args.release_model,
         created_by=args.created_by,
     )
-    version_id, release_id = _publish(publish_client, request)
+    version_id, release_id = _publish(
+        publish_client, request, retry_seconds=args.publish_retry_seconds
+    )
     print(f"registered version_id={version_id} release_id={release_id}")
 
     if args.scan_wait_seconds > 0:
@@ -1473,6 +1653,18 @@ def main(argv: list[str] | None = None) -> int:
             "Seconds to wait for GM's release scan before installing. 0 (the "
             "default) does not wait: a base-image CVE must not red an unrelated "
             "PR's e2e. Raise only if GM refuses to install an unscanned release."
+        ),
+    )
+    p_install.add_argument(
+        "--publish-retry-seconds",
+        type=int,
+        default=DEFAULT_PUBLISH_RETRY_SECONDS,
+        help=(
+            "How long to keep retrying the version-create while the marketplace "
+            "service is not answering. Covers Heracles' HTTP 400 'error getting "
+            "response from marketplace service', its 5xx, and the client-side "
+            "read timeout — not a real rejection, which stays fatal on the first "
+            "response. 0 disables the retry."
         ),
     )
     p_install.add_argument(

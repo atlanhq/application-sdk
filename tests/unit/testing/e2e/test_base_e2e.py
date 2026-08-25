@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import urllib.error
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -26,6 +27,7 @@ from application_sdk.testing.e2e._errors import (
     ProgressWatchdogUnreachableError,
 )
 from application_sdk.testing.e2e.base import (
+    _PURGE_BATCH_SIZE,
     BaseE2ETest,
     FullDAGOutcome,
     NodeDispatch,
@@ -1575,3 +1577,174 @@ class TestProgressStallDiagnostics:
         with pytest.raises(DAGProgressStalledError) as exc:
             harness.run_full_dag()
         assert exc.value is original
+
+
+# ---------------------------------------------------------------------------
+# teardown_method — batched purge (FND-779)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _StubAsset:
+    """Minimal stand-in for a pyatlan search hit."""
+
+    guid: str | None
+
+
+class _StubAssetClient:
+    """Records purge batches and replays canned search results.
+
+    ``search`` answers the child query first and the connection query second,
+    matching the order ``teardown_method`` issues them.
+    """
+
+    def __init__(
+        self,
+        children: list[_StubAsset],
+        connection: list[_StubAsset] | None = None,
+        failing_batches: frozenset[int] = frozenset(),
+        search_error: Exception | None = None,
+    ) -> None:
+        self._children = children
+        self._connection = (
+            connection if connection is not None else [_StubAsset("conn-guid")]
+        )
+        self._failing_batches = failing_batches
+        self._search_error = search_error
+        self.search_count = 0
+        self.purge_batches: list[list[str]] = []
+
+    def search(self, request: object) -> list[_StubAsset]:
+        self.search_count += 1
+        if self.search_count == 1:
+            if self._search_error is not None:
+                raise self._search_error
+            return self._children
+        return self._connection
+
+    def purge_by_guid(self, guid: str | list[str]) -> None:
+        batch = [guid] if isinstance(guid, str) else list(guid)
+        self.purge_batches.append(batch)
+        if len(self.purge_batches) in self._failing_batches:
+            raise RuntimeError("simulated purge failure")
+
+
+class _StubTenantClient:
+    def __init__(self, asset: _StubAssetClient) -> None:
+        self.asset = asset
+
+
+class TestTeardownPurgeBatching:
+    """A crawl's full GUID list must never go out as one oversized request.
+
+    pyatlan puts one ``guid=`` query param per asset into a single DELETE, and
+    httpx refuses to build a URL whose query exceeds 65536 bytes — raised
+    client-side, so an unbatched purge deletes nothing at all.
+    """
+
+    HTTPX_MAX_URL_LENGTH = 65536
+
+    def _harness(
+        self, monkeypatch: pytest.MonkeyPatch, asset_client: _StubAssetClient
+    ) -> _ConcreteE2ETest:
+        harness = _ConcreteE2ETest()
+        harness.connection_qualified_name = "default/openapi/1787587123106596"
+        monkeypatch.setattr(
+            BaseE2ETest,
+            "_teardown_client",
+            staticmethod(lambda: _StubTenantClient(asset_client)),
+        )
+        return harness
+
+    def test_large_child_set_is_purged_in_bounded_batches(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        children = [_StubAsset(f"guid-{i:04d}") for i in range(2000)]
+        asset_client = _StubAssetClient(children)
+        self._harness(monkeypatch, asset_client).teardown_method(method=None)
+
+        child_batches = asset_client.purge_batches[:-1]
+        assert len(child_batches) == 2000 // _PURGE_BATCH_SIZE
+        assert all(len(batch) <= _PURGE_BATCH_SIZE for batch in child_batches)
+        # Every GUID goes out exactly once — batching must not drop or duplicate.
+        assert [guid for batch in child_batches for guid in batch] == [
+            f"guid-{i:04d}" for i in range(2000)
+        ]
+
+    def test_a_full_batch_stays_under_the_httpx_url_cap(self) -> None:
+        """The batch size is what keeps the built URL constructible at all."""
+        guid_len = len("0004b475-1234-4abc-8def-0123456789ab")
+        query_len = len("deleteType=PURGE") + _PURGE_BATCH_SIZE * (
+            len("&guid=") + guid_len
+        )
+        assert query_len < self.HTTPX_MAX_URL_LENGTH
+
+    def test_ragged_final_batch_is_still_purged(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        children = [_StubAsset(f"guid-{i}") for i in range(_PURGE_BATCH_SIZE + 3)]
+        asset_client = _StubAssetClient(children)
+        self._harness(monkeypatch, asset_client).teardown_method(method=None)
+
+        child_batches = asset_client.purge_batches[:-1]
+        assert [len(batch) for batch in child_batches] == [_PURGE_BATCH_SIZE, 3]
+
+    def test_a_failing_batch_does_not_abort_the_remaining_batches(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        children = [_StubAsset(f"guid-{i}") for i in range(_PURGE_BATCH_SIZE * 3)]
+        asset_client = _StubAssetClient(children, failing_batches=frozenset({2}))
+        self._harness(monkeypatch, asset_client).teardown_method(method=None)
+
+        # 3 child batches attempted (the failing one included) + the connection.
+        assert len(asset_client.purge_batches) == 4
+
+    def test_child_purge_failure_still_purges_the_connection(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The regression: one guard for both phases orphaned the connection."""
+        children = [_StubAsset("guid-0")]
+        asset_client = _StubAssetClient(children, failing_batches=frozenset({1}))
+        self._harness(monkeypatch, asset_client).teardown_method(method=None)
+
+        assert asset_client.purge_batches[-1] == ["conn-guid"]
+
+    def test_child_search_failure_still_purges_the_connection(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        asset_client = _StubAssetClient([], search_error=RuntimeError("search down"))
+        self._harness(monkeypatch, asset_client).teardown_method(method=None)
+
+        assert asset_client.purge_batches == [["conn-guid"]]
+
+    def test_assets_without_a_guid_are_skipped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        children = [_StubAsset("guid-0"), _StubAsset(None), _StubAsset("guid-1")]
+        asset_client = _StubAssetClient(children)
+        self._harness(monkeypatch, asset_client).teardown_method(method=None)
+
+        assert asset_client.purge_batches[0] == ["guid-0", "guid-1"]
+
+    def test_no_children_purges_only_the_connection(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        asset_client = _StubAssetClient([])
+        self._harness(monkeypatch, asset_client).teardown_method(method=None)
+
+        assert asset_client.purge_batches == [["conn-guid"]]
+
+    def test_unconfigured_env_is_a_no_op(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No tenant creds means nothing to clean up — and nothing to raise.
+
+        The real ``_teardown_client`` runs here: stubbing it out would skip the
+        very env branch this covers, and building an AtlanClient against an
+        empty base URL is what would raise.
+        """
+        monkeypatch.delenv("ATLAN_BASE_URL", raising=False)
+        monkeypatch.delenv("ATLAN_API_KEY", raising=False)
+        assert BaseE2ETest._teardown_client() is None
+
+        harness = _ConcreteE2ETest()
+        harness.connection_qualified_name = "default/openapi/1787587123106596"
+        harness.teardown_method(method=None)  # should not raise

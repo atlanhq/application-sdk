@@ -8,6 +8,8 @@ blocks so the renderer can emit them verbatim inside a fenced code block instead
 
 from __future__ import annotations
 
+import re
+
 from conformance.tools.generate_rule_docs import _split_literal_blocks
 
 
@@ -94,3 +96,91 @@ def test_reassembled_prose_has_no_leftover_double_colons() -> None:
     segments = _split_literal_blocks(text)
     prose = " ".join(chunk for chunk, is_code, _ in segments if not is_code)
     assert "::" not in prose
+
+
+# ── per-rule files (by-id/) — the context-squeezed single-rule view ────────
+
+
+def test_by_id_files_are_generated_for_every_rule(tmp_path) -> None:
+    from conformance.suite.rules import CATALOG
+    from conformance.tools import generate_rule_docs as g
+
+    g.main(["--outdir", str(tmp_path)])
+    by_id = tmp_path / "by-id"
+    generated = {p.stem for p in by_id.glob("*.md")}
+    assert generated == set(CATALOG.keys())
+
+
+def test_by_id_file_carries_the_same_block_as_the_series_doc(tmp_path) -> None:
+    """Shared renderer = the two views can never drift."""
+    from conformance.tools import generate_rule_docs as g
+
+    g.main(["--outdir", str(tmp_path)])
+    single = (tmp_path / "by-id" / "E010.md").read_text()
+    series = (tmp_path / "error-handling.md").read_text()
+    block_heading = "## E010 — `AsyncioGatherExceptionsUnexamined`"
+    assert block_heading in single and block_heading in series
+
+
+def test_check_mode_catches_a_missing_by_id_file(tmp_path) -> None:
+    import pytest
+    from conformance.tools import generate_rule_docs as g
+
+    g.main(["--outdir", str(tmp_path)])
+    (tmp_path / "by-id" / "E010.md").unlink()
+    with pytest.raises(SystemExit):
+        g.main(["--outdir", str(tmp_path), "--check"])
+
+
+def test_by_id_file_prints_a_directive_for_its_own_rule(tmp_path) -> None:
+    """A by-id file is a one-rule fetch, so the suppression directive it prints
+    must name that rule — copying a sibling's id leaves the finding live."""
+    from conformance.suite.rules import CATALOG
+    from conformance.tools import generate_rule_docs as g
+
+    g.main(["--outdir", str(tmp_path)])
+    for rule_id in CATALOG:
+        text = (tmp_path / "by-id" / f"{rule_id}.md").read_text()
+        assert f"ignore[{rule_id}]" in text, rule_id
+        # No other rule id may appear inside a suppression directive.
+        assert not re.findall(
+            r"ignore\[(?!" + re.escape(rule_id) + r"\])[A-Z]\d+\]", text
+        ), rule_id
+
+
+def test_by_id_directive_keeps_the_series_comment_syntax(tmp_path) -> None:
+    """K-series directives are ``//``, not ``#`` — the syntax comes from the
+    series example, so re-pointing the id must not rewrite it to Python."""
+    from conformance.tools import generate_rule_docs as g
+
+    g.main(["--outdir", str(tmp_path)])
+    assert (
+        "// conformance: ignore[K001]" in (tmp_path / "by-id" / "K001.md").read_text()
+    )
+    assert "# conformance: ignore[E010]" in (tmp_path / "by-id" / "E010.md").read_text()
+
+
+def test_check_mode_catches_an_orphaned_by_id_file(tmp_path) -> None:
+    """A by-id file whose rule id has left the catalog is invisible to the
+    expected-file loop; only an orphan sweep can fail it."""
+    import pytest
+    from conformance.tools import generate_rule_docs as g
+
+    g.main(["--outdir", str(tmp_path)])
+    orphan = tmp_path / "by-id" / "E999.md"
+    orphan.write_text("# E999 — a rule that no longer exists\n")
+    with pytest.raises(SystemExit):
+        g.main(["--outdir", str(tmp_path), "--check"])
+
+
+def test_regeneration_removes_an_orphaned_by_id_file(tmp_path) -> None:
+    """--check's remedy is 'regenerate', so regeneration has to be able to fix
+    what --check reports."""
+    from conformance.tools import generate_rule_docs as g
+
+    g.main(["--outdir", str(tmp_path)])
+    orphan = tmp_path / "by-id" / "E999.md"
+    orphan.write_text("# E999 — a rule that no longer exists\n")
+    g.main(["--outdir", str(tmp_path)])
+    assert not orphan.exists()
+    g.main(["--outdir", str(tmp_path), "--check"])

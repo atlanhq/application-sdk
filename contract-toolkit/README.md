@@ -106,6 +106,7 @@ The `examples/` directory contains executable contracts that teach stable toolki
 - [`examples/fanin/`](examples/fanin/) — multi-parent fan-in via `dependsOn`, explicit `DependencyCondition`.
 - [`examples/agent-e2e/`](examples/agent-e2e/) — agent/SDR e2e codegen: `_e2e_credential.py` emits both `<Name>CredentialBody` (direct) and `<Name>AgentCredentialBody` (lightweight), plus an `extraction-method` ConditionalInput whose `overrideEnum` widens the substitutions `Literal` to `["direct", "agent"]`.
 - [`examples/scheduled/`](examples/scheduled/) — cron background job via `schedules`; renders `triggers.schedules` into `manifest.json` (multiple schedules, non-UTC timezone, a `PAUSED` one). See [Schedules](docs/reference.md#schedules-background-jobs).
+- [`examples/artifact-schemas/`](examples/artifact-schemas/) — data hand-off declarations via `artifactSchemas`; renders `app/generated/artifact_schemas.json` (parquet + NDJSON, nested paths, arrays of structs via the `[]` element step, an input artifact). See [Artifact Schemas](docs/reference.md#artifact-schemas-data-hand-off-declarations).
 
 ## What Gets Generated
 
@@ -186,6 +187,34 @@ Typed Python `AppInputContract` dataclass. SDK-owned fields inherited from `Extr
 Framework-populated fields (`workflow_id`, `correlation_id`, `app_name`) are declared by
 the SDK's base `Input` and are never regenerated from a `uiConfig` property — redeclaring
 one would shadow the base field with the author's type and fail only at workflow dispatch.
+
+### Artifact Schemas (`app/generated/artifact_schemas.json`)
+
+Declared shapes for the files this app hands off, keyed by the contract `FileReference`
+field the runtime materialises — never by a storage path. The SDK checks the real
+artifact against the declaration at the hand-off, so a column that has quietly become a
+string where the consumer expects a timestamp is reported instead of flowing on.
+
+The toolkit is transport, not owner: it fixes the logical type vocabulary
+(`string`/`int`/`float`/`bool`/`timestamp`/`date`/`json`/`any`, plus the additive
+`decimal`/`binary`/`time`/`array`/`struct`/`map`) and the file shape; every field is
+authored by the app. Nested payloads are paths plus a container type, not a recursive
+grammar: `.name` descends into a container's named member and `[]` descends into an
+array's element, so an array of structs is `columns` (`array`) → `columns[]` (`struct`)
+→ `columns[].name` (`string`). Every path prefix must be declared, with a type that can
+hold what the path descends into — otherwise a producer that flattened the container
+away would still pass on the leaf assertion alone.
+
+Every field must carry a non-empty `description`. A declaration is read by whoever is
+debugging the hand-off that just failed, and a bare `name` + `type` pair states the
+assertion without stating why it holds.
+
+**Opt-in and emitted only when declared.** An app with no `artifactSchemas` block
+generates byte-identical output to before the block existed — no new file. Unlike the
+workflow config and manifest, this file does not depend on `uiConfig`. Multi-entrypoint
+apps declare it per entrypoint and each copy lands under
+`app/generated/{entrypoint}/`. See
+[`docs/reference.md`](docs/reference.md#artifact-schemas-data-hand-off-declarations).
 
 ## Modules
 

@@ -54,6 +54,8 @@ Each `@entrypoint` method becomes its own Temporal workflow (`{app-name}:{entry-
 
 See [Entry Points — Default entrypoint resolution](entry-points.md#default-entrypoint-resolution) for the full resolution rules.
 
+Every entry point's contracts are a **public boundary**: a `FileReference` on one must declare its shape. See [Declaring artifact schemas](#declaring-artifact-schemas).
+
 ### Dynamic manifest (compute_manifest)
 
 A static `manifest.json` is enough for most apps. A multi-entry-point app that must **compute** its manifest per submission (placeholder fill-in, SQL generation, full DAG rewrite) drops a `core.py` in its per-entry-point package exposing a `compute_manifest` hook:
@@ -530,6 +532,108 @@ OTLP.
 > (process-isolation fix [#2769](https://github.com/atlanhq/application-sdk/pull/2769)), so a native
 > fault in the decode path is contained and downgraded to a best-effort skip rather than killing the
 > worker. Set `ATLAN_VALIDATE_ASSETS_ON_UPLOAD=false` to disable per-deployment.
+
+### Declaring artifact schemas
+
+Data crosses app boundaries as **files**, and at every hand-off the producer's idea of the
+artifact's shape and the consumer's idea of it are independent beliefs that nothing checks. A
+production RCA traced 73 days of frozen lineage to one column that had become a string where the
+consumer expected a timestamp — every workflow in the chain reported success throughout. Checksums
+do not help: storage integrity attests that the bytes read are the bytes written, and is explicit
+that this proves nothing about the artifact being semantically what the reader expects.
+
+`artifactSchemas` in your pkl contract is where that shape gets written down.
+
+**Required on an entry point's boundary. Optional on a `@task`.**
+
+| Surface | Declaration | Why |
+|---|---|---|
+| An entry point's `input` / return contract | **Required** | Public by definition — another app or the platform DAG reads it |
+| An internal `@task` contract | Optional | App-internal processing; the app decides whether it wants the check |
+
+There is no special case for `run()`. The default `run()` method is registered as an *implicit*
+entry point carrying the same metadata as an explicit `@entrypoint`, so "every entry point's
+contracts" already means "every public boundary". `@task` contracts never become entry points, so
+they are exempt by construction — not by a list that could drift.
+
+Declare it keyed by the **contract field name**, never by a storage path (a path-shaped key fails
+generation, by design — path-shape inference is what let an earlier upload-time hook match nothing
+and silently validate zero records):
+
+```pkl
+artifactSchemas {
+  ["raw_queries"] = new ArtifactSchema {
+    format = "parquet"   // or "ndjson" — the content format, not the file suffix
+    fields {
+      new ArtifactField {
+        name = "QUERY_ID"
+        type = "string"
+        description = "Warehouse-assigned query id; the parser's join key."
+      }
+      new ArtifactField {
+        name = "START_TIME"
+        type = "timestamp"
+        description = "When the query began executing. A stringified timestamp here is the defect this declaration exists to catch."
+      }
+    }
+  }
+}
+```
+
+`description` is required on every field and is never asserted at runtime — it is read by whoever is
+debugging the hand-off that just failed, so `name` + `type` alone do not satisfy it.
+
+**Inputs are declarable too.** For a cross-app hand-off the **consumer** declares what it requires of
+its input, and the producer references the consumer's published declaration rather than re-authoring
+the field list. Ownership stays with the consumer.
+
+**Where the generated file lands** is decided by your *contract*, not by how many `@entrypoint`
+methods you wrote. The warning reads the committed `app/generated/` tree and names the file your
+toolkit output actually writes:
+
+| Generated tree | Artifact-schema path |
+|---|---|
+| One `manifest.json` at the root | `app/generated/artifact_schemas.json` |
+| A `manifest.json` per entry-point subdirectory (a bundle) | `app/generated/{entry-point}/artifact_schemas.json`, one per entry point |
+
+A **route/card-split** app — one marketplace card plus extra `@entrypoint`s the DAG invokes by
+`workflow_type` — has a flat tree, so all of its entry points share the one flat file. That is why
+the entry-point count is the wrong signal: counting it as a bundle would send you to a nested path
+the toolkit never writes for that app.
+
+`artifactSchemas` is a **per-entry-point** property, like `pipeline` and `uiConfig`. Declaring it on
+a **bundle root** is a generation error: the root has no contract model, so a key there could not
+name a real field. Two entry points that genuinely share an artifact assign one shared
+`ArtifactSchema` value into both contracts.
+
+Regenerate with `pkl eval -m . contract/app.pkl` (or `uv run poe generate`). Never hand-edit the
+generated `artifact_schemas.json` — it is a pkl eval output and the next toolkit run reverts the
+edit.
+
+#### What you will see if you skip it
+
+**A warning today, an error in v4.0.** An undeclared boundary `FileReference` is reported at worker
+build, naming the field, the entry point and the file the declaration belongs in:
+
+```
+App 'my-connector' entry point 'run': output contract 'ExtractOutput' declares a
+FileReference field 'transformed_entities' with no artifact schema. […] Declare it in
+the app's pkl contract as artifactSchemas { ["transformed_entities"] = new
+ArtifactSchema { ... } } and regenerate, so it lands in
+app/generated/artifact_schemas.json. […] This is a warning today and will be an error
+in v4.0.
+```
+
+It arrives as both a `DeprecationWarning` and a `warning` log line, and it never blocks
+registration. Conformance rule **K016** (`EntrypointArtifactSchemaMissing`, WARN-tier) reports the
+same gap in review, before a worker is ever built.
+
+A *malformed* `artifact_schemas.json` is not treated as "declares nothing" — the entry point is
+skipped with a log line saying why, so one bad JSON blob cannot produce a warning on every boundary
+field.
+
+See [FileReference & App.upload()](file-reference.md) for what a `FileReference` is and how it moves,
+and the contract toolkit's `examples/artifact-schemas/` for a full worked contract.
 
 ## Passthrough Modules
 

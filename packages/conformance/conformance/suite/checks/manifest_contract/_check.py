@@ -21,6 +21,11 @@ from conformance.suite.checks._ast_common import (
     _parse_directives,
     make_finding,
 )
+from conformance.suite.checks._entrypoint_contract_classes import (
+    CodeContractScan,
+    EntrypointContract,
+    scan_file_for_entrypoint_contracts,
+)
 from conformance.suite.checks._entrypoint_contract_fields import resolve_contract_fields
 from conformance.suite.checks.entrypoint_alignment._contract_entrypoints import (
     scan_contract as scan_contract_entrypoints,
@@ -35,11 +40,6 @@ from conformance.suite.checks.prescriptions._error_code_prefix import (
 )
 from conformance.suite.schema.findings import Finding
 
-from ._code_outputs import (
-    CodeOutputScan,
-    EntrypointOutput,
-    scan_file_for_entrypoint_outputs,
-)
 from ._manifest_refs import ManifestDag, manifest_paths_for_contract, read_manifest
 
 _RULE_ID = "K006"
@@ -48,8 +48,8 @@ _RULE_ID = "K006"
 def _target_entrypoint(
     manifest: ManifestDag,
     mode: str,
-    entrypoints: list[EntrypointOutput],
-) -> EntrypointOutput | None:
+    entrypoints: list[EntrypointContract],
+) -> EntrypointContract | None:
     """Resolve which entrypoint a manifest's own (``"extract"``) node belongs to.
 
     ``single`` mode: unambiguous only when code declares exactly one
@@ -125,13 +125,13 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
             by_name.setdefault(rec.name, rec)
 
     # Pass 2: collect the per-entrypoint (wire_name -> Output class) map.
-    code = CodeOutputScan()
+    code = CodeContractScan()
     app_cache: dict[str, bool | None] = {}
     for rel, tree in file_trees.items():
         if not isinstance(tree, ast.Module):
             continue
         prov = collect_import_provenance(tree)
-        scan_file_for_entrypoint_outputs(
+        scan_file_for_entrypoint_contracts(
             tree, rel, file_aliases.get(rel, {}), prov, by_name, app_cache, code
         )
 

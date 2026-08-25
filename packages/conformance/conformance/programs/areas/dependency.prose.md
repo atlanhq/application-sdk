@@ -18,8 +18,8 @@ findings in the working tree, as reported by `suite.runner --series D`.
 
 The fingerprint-set of all unsuppressed FAILING D-series results.  Extends to
 include WARNING results in strict mode — D002/D003/D004/D006/D007/D008 are
-WARN-tier, so they are processed in strict mode; D001, D005, D009 and D010 are
-BLOCK-tier and processed in both modes.
+WARN-tier, so they are processed in strict mode; D001, D005, D009, D010 and
+D011 are BLOCK-tier and processed in both modes.
 
 This facet's fingerprint moves when any D-series finding is resolved (fixed or
 suppressed with justification) or when new ones appear.  An unchanged
@@ -54,6 +54,19 @@ next major so the range includes the pinned version) is therefore the sole
 safeguard for cap correctness; the remediator must follow it exactly, and the
 human review of residue is the
 backstop.
+
+**`D011` validates the specifier's *shape*, not its *values*.**  The detector
+rejects pins and one-sided ranges, so a bare name or `==0.13.0` cannot slip
+through as `D001`'s wrong cap can.  What it does **not** check is whether the
+floor is sensible: rewriting `>=0.17.0` to `>=0.1.0,<1.0.0` clears the finding
+while admitting ancient releases.  The prescription below (keep the app's floor
+when it is higher; never lower one) is the only safeguard for that, and human
+review of residue is the backstop.
+
+The lock branch (branch 4) is also the one D-series finding whose fix is
+**not** a `pyproject.toml` edit — it needs `uv lock`.  The re-detection gate
+reads the lock for that branch, so an edit that does not run `uv lock` will not
+clear it.
 
 ### Requires
 
@@ -122,6 +135,48 @@ fix.  The re-detection gate is authoritative for this area — see
   genuinely needs, prefer pulling it in via `atlan-application-sdk[tests]`
   instead (note that as a follow-up in the edit description).  Remove only that
   one entry.
+
+- **D011 ConformanceDependencyContract** (`classification = "mechanical"` for
+  branches 1, 2 and 3) — BLOCK-tier, no suppress path in default mode, same as
+  D001.  One rule, four branches; read the message to tell them apart, because
+  the fix differs.  The canonical target in
+  all four cases is
+  `"atlan-application-sdk-conformance>=0.17.0,<1.0.0"` in
+  `[dependency-groups].dev`, matching `atlan-app-template`.
+
+  1. *"does not declare"* — the package appears in no dependency array, so
+     `uv run atlan-application-sdk-conformance` (the form this loop and the
+     bootstrapped `remediate` skill use) fails to spawn.  Add the canonical
+     entry; create the `[dependency-groups]` table with a `dev` array if the
+     file has none.  `finding.line` anchors at the `[dependency-groups]`
+     header, or line 1 when there is no such table.  **Never** add it to
+     `[project.dependencies]` — that ships a dev-only tool in the runtime
+     image, and branch 2 below will then fire on your own edit.
+  2. *"is declared in `[project.dependencies]`"* — a placement violation, not
+     a spawn one: the script does run, so nothing else fires.  **Move** the
+     entry — delete the `[project.dependencies]` line and add the canonical
+     entry to `[dependency-groups].dev` (or to the dev group the repo already
+     uses) — do not leave the runtime line in place beside a new dev-group
+     entry, which is the failure mode this branch exists to catch.  If a
+     correct dev-group entry already exists, deleting the runtime line is the
+     whole fix.  `finding.line` anchors at the offending
+     `[project.dependencies]` entry.
+  3. *"cannot float"* — declared, but the specifier is a pin (`==0.13.0`,
+     `===0.13.0`, `~=0.17.0`) or one-sided (`>=0.17.0` with no upper bound, or
+     a bare `<1.0.0` with no floor).  Rewrite **that entry only** to the
+     canonical two-sided form, preserving its position in the array.  Keep the
+     app's existing floor if it is higher than `0.17.0`; never lower a floor.
+     `finding.line` anchors at the declaring line.
+  4. *"no entry in uv.lock"* — declared and floating, but unresolved in the
+     lock.  This one is **not** a `pyproject.toml` edit: run `uv lock` and
+     commit the result.  Classify it `judgment` and route to residue if the
+     loop cannot run `uv lock` in its environment — a hand-edited `uv.lock` is
+     never an acceptable fix.
+
+  For branches 1, 2 and 3, note in the edit description that `uv lock` must be
+  re-run so the change reaches the lockfile: the re-detection gate reads
+  `pyproject.toml` for those branches and will pass without it, and branch 4
+  then becomes the next finding.
 
 - **D006 IncompatibleRequiresPython** — the app's `[project].requires-python`
   lower bound is below the SDK's floor.  Replace only the lower-bound clause
@@ -244,5 +299,5 @@ justified exception for this app.  Applicable rules and notes:
 
 The justification must describe *why* the deviation is acceptable here, not
 merely that the rule is being suppressed.  Route every suppression to residue
-for human audit.  D001 and D009 are BLOCK-tier and have no suppress path in
+for human audit.  D001, D009 and D011 are BLOCK-tier and have no suppress path in
 default mode.

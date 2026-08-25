@@ -209,6 +209,10 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     legitimately calls ``create_worker`` and ``uvicorn.run`` — that is its job;
     consumer apps must delegate those calls to the SDK launcher (BLDX-1411).
 
+    D011 (conformance suite undeclared) is app-scoped: the SDK *publishes* the
+    package, so it has no reason to declare it as a consumer, and the rule would
+    be pure noise there.
+
     B001 (deprecated-symbol usage) is app-scoped: the SDK deliberately retains
     and internally uses its own deprecated shims.  B002–B004 (deprecation
     authoring hygiene) are SDK-only — they grade how the SDK *declares* its
@@ -286,6 +290,10 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # K015: legacy_workflow_types agreement — the rule compares a consumer app's
     # generated manifest against its App subclass; the SDK declares neither
     # (CONNECT-1081).
+    # K016: undeclared artifact on an entry-point boundary — artifactSchemas is
+    # authored in an app's pkl contract and rendered into its app/generated/
+    # tree; the SDK ships neither, and the hand-offs the rule protects are
+    # between apps, not inside the framework (ADR-0020).
     # E020: HTTP-failure-to-empty-return — the harm (publishing a partial crawl as
     # complete) is a connector extract/publish concern; the SDK's matching sites are
     # legitimate best-effort infra (health/metric scrapes), not crawlers (BLDX-1503).
@@ -347,6 +355,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "D007",
         "D008",
         "D009",
+        "D011",
         "E020",
         "K001",
         "K002",
@@ -363,6 +372,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "K013",
         "K014",
         "K015",
+        "K016",
         "P004",
         "P005",
         "P008",
@@ -405,6 +415,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "T022",
         "T023",
         "T024",
+        "T025",
         "O002",
         "O003",
         "O004",
@@ -646,10 +657,11 @@ def test_catalog_t_series_present() -> None:
     unset relative to a broadened fixture loop scope), T020-T022 (full-DAG e2e
     must run through the reusable Tests workflow: no bespoke sdr-e2e workflow,
     suites reachable in CI, two-store posture on SDR apps), and T023/T024 (e2e
-    harness scaffold generated from contract/app.pkl; RunMode declared)."""
+    harness scaffold generated from contract/app.pkl; RunMode declared), and T025
+    (every bundle entrypoint has an e2e suite, not just the default one)."""
     rules = load_catalog()
     t_ids = {r.id for r in rules if r.id.startswith("T")}
-    expected = {f"T{n:03d}" for n in range(1, 25)}
+    expected = {f"T{n:03d}" for n in range(1, 26)}
     missing = expected - t_ids
     assert not missing, f"Missing T-series rules: {missing}"
     extra = t_ids - expected
@@ -704,6 +716,7 @@ def test_catalog_k_series_present() -> None:
         "K013",
         "K014",
         "K015",
+        "K016",
     }
     missing = expected - k_ids
     assert not missing, f"Missing K-series rules: {missing}"

@@ -29,6 +29,7 @@ import conformance.suite.checks.sdr_test_checks as sdr_test_checks
 from conformance.suite.checks import (
     actions_pinning,
     app_name_alignment,
+    artifact_schema_declared,
     asyncio_loop_scope,
     bootstrap_drift,
     client_seam,
@@ -44,6 +45,7 @@ from conformance.suite.checks import (
     e2e_generated_harness,
     e2e_workflow_shape,
     entrypoint_alignment,
+    entrypoint_e2e_coverage,
     error_handling,
     error_seam,
     generated_freshness,
@@ -215,6 +217,12 @@ _CHECKS: list[CheckRegistration] = [
         scan_all=e2e_generated_harness.scan_all,
     ),
     CheckRegistration(
+        series=entrypoint_e2e_coverage.SERIES,
+        discover=entrypoint_e2e_coverage.discover,
+        scan_path=entrypoint_e2e_coverage.scan_path,
+        scan_all=entrypoint_e2e_coverage.scan_all,
+    ),
+    CheckRegistration(
         series=dockerfile_conformance.SERIES,
         discover=dockerfile_conformance.discover,
         scan_path=dockerfile_conformance.scan_path,
@@ -253,6 +261,12 @@ _CHECKS: list[CheckRegistration] = [
         discover=generated_freshness.discover,
         scan_path=generated_freshness.scan_path,
         scan_all=generated_freshness.scan_all,
+    ),
+    CheckRegistration(
+        series=artifact_schema_declared.SERIES,
+        discover=artifact_schema_declared.discover,
+        scan_path=artifact_schema_declared.scan_path,
+        scan_all=artifact_schema_declared.scan_all,
     ),
     CheckRegistration(
         series=manifest_contract.SERIES,
@@ -456,6 +470,27 @@ def _emit_github_summary_annotations(
         print(f"::notice title=Conformance: excluded paths ({label})::{msg}")
 
 
+def parse_rule_ids(raw: str) -> set[str]:
+    """Validate a comma-separated ``--rule`` value against the catalog.
+
+    Unknown ids fail loudly here rather than yielding a silently-empty run —
+    the exact bug class ``--series L004`` used to cause (a series letter match
+    against a full rule id selected zero checks and reported a clean repo).
+    """
+    from conformance.suite.rules import CATALOG  # noqa: PLC0415
+
+    ids = {r.strip().upper() for r in raw.split(",") if r.strip()}
+    if not ids:
+        raise SystemExit("--rule was provided but contained no rule ids")
+    unknown = sorted(i for i in ids if i not in CATALOG)
+    if unknown:
+        raise SystemExit(
+            f"unknown rule id(s): {', '.join(unknown)} — "
+            "see conformance/docs/rules/ for the catalog"
+        )
+    return ids
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Atlan conformance suite runner.")
     parser.add_argument("--repo", default=".", metavar="DIR")
@@ -469,6 +504,16 @@ def main(argv: list[str] | None = None) -> int:
         help=(
             "Comma-separated series letters to run, e.g. 'C' or 'C,E'. "
             "Default: all registered checks."
+        ),
+    )
+    parser.add_argument(
+        "--rule",
+        metavar="IDS",
+        help=(
+            "Comma-separated rule ids to run, e.g. 'E010' or 'L004,E010'. "
+            "The series is derived from the ids; findings, the exit code and "
+            "the emitted SARIF rule catalog are scoped to exactly these rules. "
+            "Mutually exclusive with --series."
         ),
     )
     parser.add_argument(
@@ -506,7 +551,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    if args.series:
+    rule_ids: set[str] | None = None
+    if args.rule:
+        if args.series:
+            parser.error(
+                "--rule and --series are mutually exclusive (--rule implies its series)"
+            )
+        rule_ids = parse_rule_ids(args.rule)
+        requested = {rid[0] for rid in rule_ids}
+        active = [c for c in _CHECKS if c.series in requested]
+    elif args.series:
         requested = {s.strip().upper() for s in args.series.split(",")}
         active = [c for c in _CHECKS if c.series in requested]
     else:
@@ -558,18 +612,27 @@ def main(argv: list[str] | None = None) -> int:
         if _rule_in_scope(get_rule(f.rule_id).scope, active_scope)
     ]
 
+    # --rule: keep exactly the requested rules. The series module may have
+    # scanned siblings in the same pass; they are out of this run's contract.
+    if rule_ids is not None:
+        all_findings = [f for f in all_findings if f.rule_id in rule_ids]
+
     # Always surface violations in a human-readable form so CI logs are actionable.
-    _print_human_summary(all_findings, args.series, excluded_prefixes)
+    _print_human_summary(all_findings, args.rule or args.series, excluded_prefixes)
 
     if os.getenv("GITHUB_ACTIONS") == "true":
         _emit_github_summary_annotations(
-            all_findings, args.series, excluded_prefixes, exit_zero=args.exit_zero
+            all_findings,
+            args.rule or args.series,
+            excluded_prefixes,
+            exit_zero=args.exit_zero,
         )
 
     report = findings_to_report(
         all_findings,
         tool_version=args.tool_version,
         excluded_paths=list(excluded_prefixes),
+        rule_ids=rule_ids,
     )
     payload = json.dumps(report.model_dump(by_alias=True, exclude_none=True), indent=2)
 
