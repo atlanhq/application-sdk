@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.28.3
-source-sha:    816d6fd930c6524ddcf2bcba0f433b094ee46473
-source-date:   2026-08-25T02:45:24+01:00
+source-sha:    d9608448f11e6d6f4b39f4ae1f8b4061d751090e
+source-date:   2026-08-25T03:31:37+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -35,7 +35,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 97 |
-| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 43 |
+| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 45 |
 
 ## Subpackage Details
 
@@ -3844,6 +3844,14 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** A declaration that *is* an executable typed model — e.g. pyatlan_v9's ``Asset``.
 - **Defined in:** `application_sdk/validation/sources.py`
 
+#### `NdjsonValidator`
+
+- **Import:** `from application_sdk.validation import NdjsonValidator`
+- **Also importable from:** `application_sdk.validation.ndjson`
+- **Signature:** `class NdjsonValidator()`
+- **Summary:** Streams an NDJSON artifact and checks every record against a field map.
+- **Defined in:** `application_sdk/validation/ndjson.py`
+
 #### `ReferentialFailure`
 
 - **Import:** `from application_sdk.validation import ReferentialFailure`
@@ -3900,6 +3908,14 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Signature:** `declared_artifact_fields(*, entrypoint: str = '', generated_dir: Path | None = None)`
 - **Summary:** Every contract field name declared for one entrypoint.
 - **Defined in:** `application_sdk/validation/sources.py`
+
+#### `iter_ndjson_lines`
+
+- **Import:** `from application_sdk.validation import iter_ndjson_lines`
+- **Also importable from:** `application_sdk.validation.ndjson`
+- **Signature:** `iter_ndjson_lines(path: str | Path)`
+- **Summary:** Yield ``(file, 1-based line number, raw bytes)`` for every non-blank line.
+- **Defined in:** `application_sdk/validation/ndjson.py`
 
 #### `validate_artifact`
 
