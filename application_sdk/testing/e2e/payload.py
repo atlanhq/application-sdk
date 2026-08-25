@@ -395,10 +395,13 @@ def build_ae_payload(
             ``extra`` ref-keys, or the dotted ``basic.*`` / ``keypair.*`` shape
             from :func:`build_agent_json`). When supplied, the ``agent-json``
             JSON-blob parameter is (re)written from it and the flat
-            ``agent-json.<key>`` routing rows (:data:`_AGENT_JSON_ROUTING_KEYS`)
-            plus the ``credential-guid.*`` rows the shared cluster template reads
-            are emitted — so agent-mode connectors no longer hand-roll a
-            ``_build_ae_payload`` override to append them. Absent (default None)
+            ``agent-json.<key>`` routing rows (:data:`_AGENT_JSON_ROUTING_KEYS`),
+            the dotted ``agent-json.basic.*`` ref-key rows, plus the
+            ``credential-guid.*`` rows (``credential-type`` / ``auth-type`` /
+            ``port``) the shared cluster template reads are emitted — so
+            agent-mode connectors no longer hand-roll a ``_build_ae_payload``
+            override to append them. The emitted row set matches the legacy
+            ``testing/full_dag`` builder's agent branch. Absent (default None)
             => no flat rows and no blob rewrite (backward-compatible: the blob,
             if any, comes from ``mustache_subs``'s ``{{agent-json}}`` field).
         credential_type: The connector's credential-config name (e.g.
@@ -473,11 +476,30 @@ def build_ae_payload(
             parameters.append(
                 {"name": "credential-guid.auth-type", "value": agent_json["auth-type"]}
             )
+        # The legacy full_dag builder also emits credential-guid.port in agent
+        # mode, and every agent-mode connector (mysql / metabase / mode) was
+        # hand-appending it back after calling this function. Emit it here so the
+        # row set matches what the cluster template has always been sent.
+        if "port" in agent_json:
+            parameters.append(
+                {"name": "credential-guid.port", "value": agent_json["port"]}
+            )
         for key in _AGENT_JSON_ROUTING_KEYS:
             if key in agent_json:
                 parameters.append(
                     {"name": f"agent-json.{key}", "value": agent_json[key]}
                 )
+        # Dotted credential-material keys from :func:`build_agent_json`
+        # (``basic.username`` / ``basic.password``, and any future ``basic.*``).
+        # These are secret-store KEY NAMES, never values, so flattening them
+        # leaks nothing — and the cluster template reads the flat rows separately
+        # even though it could unpack the blob, so omitting them was the third
+        # row each connector had to append by hand. Distinct from the
+        # single-bundle shape's bare ``username`` / ``password`` keys, which stay
+        # in the blob only (they are not in _AGENT_JSON_ROUTING_KEYS).
+        for key, value in agent_json.items():
+            if key.startswith("basic."):
+                parameters.append({"name": f"agent-json.{key}", "value": value})
 
     # Flat connection.* parameter rows (UI sends both the nested JSON
     # and these for the orchestrator's convenience).

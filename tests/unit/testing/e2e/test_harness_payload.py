@@ -429,6 +429,79 @@ class TestAgentJsonInjection:
         )
         assert params["credential-guid.auth-type"] == "basic"
 
+    def test_port_row_emitted(self) -> None:
+        # The legacy testing/full_dag builder emits credential-guid.port in its
+        # agent branch; mysql / metabase / mode all hand-appended it back after
+        # this builder dropped it.
+        params = _params(self._build(agent_json=_BUNDLE_AGENT_JSON))
+        assert params["credential-guid.port"] == 443
+
+    def test_no_port_row_when_agent_json_has_no_port(self) -> None:
+        bundle = {k: v for k, v in _BUNDLE_AGENT_JSON.items() if k != "port"}
+        params = _params(self._build(agent_json=bundle))
+        assert "credential-guid.port" not in params
+
+    def test_dotted_basic_ref_keys_flattened(self) -> None:
+        # build_agent_json's shape: basic.username / basic.password carry
+        # secret-store KEY NAMES, and the cluster template reads the flat rows.
+        params = _params(
+            self._build(
+                agent_json={
+                    **_BUNDLE_AGENT_JSON,
+                    "basic.username": "SDR_SALESFORCE_USERNAME",
+                    "basic.password": "SDR_SALESFORCE_PASSWORD",
+                }
+            )
+        )
+        assert params["agent-json.basic.username"] == "SDR_SALESFORCE_USERNAME"
+        assert params["agent-json.basic.password"] == "SDR_SALESFORCE_PASSWORD"
+
+    def test_bare_username_password_still_not_flattened(self) -> None:
+        # Only the dotted basic.* shape is flattened. The single-bundle shape's
+        # bare username / password keys stay in the blob (they are not routing
+        # keys), so this change does not widen what leaves the harness.
+        params = _params(
+            self._build(
+                agent_json={
+                    **_BUNDLE_AGENT_JSON,
+                    "basic.username": "SDR_SALESFORCE_USERNAME",
+                }
+            )
+        )
+        assert "agent-json.username" not in params
+        assert "agent-json.password" not in params
+
+    def test_build_agent_json_row_set_matches_legacy_agent_branch(self) -> None:
+        # Regression lock: the full row set an agent-mode connector needs, so no
+        # connector has to append any of it in a _build_ae_payload override.
+        db = DatabaseSpec(
+            host="db.example.com",
+            port=3306,
+            username="u",
+            password="p",
+            connector_config_name="atlan-connectors-mysql",
+        )
+        agent = AgentSpec(agent_name="mysql-e2e-ci-1234")
+        params = _params(self._build(agent_json=build_agent_json(db, agent, "mysql")))
+        for name in (
+            "credential-guid.credential-type",
+            "credential-guid.auth-type",
+            "credential-guid.port",
+            "agent-json.host",
+            "agent-json.port",
+            "agent-json.auth-type",
+            "agent-json.agent-name",
+            "agent-json.agent-type",
+            "agent-json.key-type",
+            "agent-json.aws-auth-method",
+            "agent-json.azure-auth-method",
+            "agent-json.basic.username",
+            "agent-json.basic.password",
+        ):
+            assert name in params, f"missing routing row {name}"
+        assert params["agent-json.basic.username"] == "SDR_MYSQL_USERNAME"
+        assert params["credential-guid.port"] == 3306
+
     def test_credential_type_override(self) -> None:
         params = _params(
             self._build(
