@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.28.3
-source-sha:    816d6fd930c6524ddcf2bcba0f433b094ee46473
-source-date:   2026-08-25T02:45:24+01:00
+source-sha:    d977b106745bfeb35c138ba08b01535f03affefd
+source-date:   2026-08-25T13:32:41+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -3734,7 +3734,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `validate_transformed_dir`
 
 - **Import:** `from application_sdk.testing.integration import validate_transformed_dir`
-- **Signature:** `validate_transformed_dir(path: str | Path, *, for_creation: bool = True, check_referential_integrity: bool = True)`
+- **Signature:** `validate_transformed_dir(path: str | Path, *, for_creation: bool = False, check_referential_integrity: bool = True)`
 - **Summary:** Validate every transformed-output asset under ``path``.
 - **Defined in:** `application_sdk/validation/assets.py`
 
@@ -3919,7 +3919,7 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 #### `validate_transformed_dir`
 
 - **Import:** `from application_sdk.validation import validate_transformed_dir`
-- **Signature:** `validate_transformed_dir(path: str | Path, *, for_creation: bool = True, check_referential_integrity: bool = True)`
+- **Signature:** `validate_transformed_dir(path: str | Path, *, for_creation: bool = False, check_referential_integrity: bool = True)`
 - **Summary:** Validate every transformed-output asset under ``path``.
 - **Defined in:** `application_sdk/validation/assets.py`
 
