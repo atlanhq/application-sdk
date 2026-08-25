@@ -77,6 +77,7 @@ from application_sdk.handler.contracts import (
     PreflightCheck,
     PreflightInput,
     PreflightOutput,
+    PreflightStatus,
     SubscriptionConfig,
 )
 from application_sdk.handler.contracts import (
@@ -2878,22 +2879,25 @@ def create_app_handler_service(
                         "successMessage": msg if check.passed else "",
                         "failureMessage": "" if check.passed else msg,
                     }
-                # Envelope ``success`` reports whether preflight executed at
-                # all, not whether every check passed — per-check pass/fail
-                # belongs in ``data.<check>.success``. The SageV2 widget at
-                # SageV2.vue:249 short-circuits on ``!response.success`` and
-                # skips the per-check render loop entirely, so collapsing
-                # envelope success to ``status == READY`` (the previous
-                # behaviour) made every PARTIAL/NOT_READY response surface
-                # as "Check failed" with a blank "Hide details" panel
-                # (DBBI-665). Tying envelope success to "any check ran"
-                # keeps it false when a handler produced no checks and lets
-                # the widget render per-check rows otherwise. The canonical
-                # status is exposed separately under ``preflight``.
+                # Envelope ``success`` reflects the preflight VERDICT: it is
+                # false only when a blocking check failed, i.e. the gate
+                # returned ``NOT_READY``. ``READY`` and ``PARTIAL`` (advisory-
+                # only failures that still let the run proceed) are successes.
+                # Per-check pass/fail remains in ``data.<check>.success`` and
+                # the canonical status in ``preflight.status``.
+                #
+                # A prior revision tied ``success`` to ``len(result.checks) > 0``
+                # ("did any check run") to work around SageV2.vue:249 skipping
+                # the per-check render loop on ``!response.success`` (DBBI-665).
+                # That made the envelope report success even for wrong creds /
+                # an unreachable host, so callers could not trust the top-level
+                # flag (FND-391). The correct blast-radius fix is on the widget
+                # (render per-check detail even when ``success`` is false); the
+                # envelope now tells the truth.
                 response = _wrap_response(
                     v2_data,
                     message=result.message or f"Preflight check {result.status.value}",
-                    success=len(result.checks) > 0,
+                    success=result.status != PreflightStatus.NOT_READY,
                 )
                 response["preflight"] = _preflight_runtime_summary(result)
                 return JSONResponse(content=response)

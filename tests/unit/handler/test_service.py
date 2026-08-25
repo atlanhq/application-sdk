@@ -394,11 +394,10 @@ class TestPreflightEndpoint:
         )
         assert response.status_code == 200
         body = response.json()
-        # _TestHandler returns no checks, so envelope success is false
-        # (envelope success now means "preflight produced checks" — a handler
-        # that returns zero checks is treated as a preflight-system failure
-        # so the widget falls back to the top-level "Check failed" path).
-        assert body["success"] is False
+        # _TestHandler returns status READY (no blocking failure), so the
+        # envelope reports success — envelope success reflects the verdict
+        # (``status != NOT_READY``), not the check count (FND-391).
+        assert body["success"] is True
         # v2 format: data is a dict of check results keyed by camelCase name.
         assert body["data"] == {}
         assert body["message"] == "ready"
@@ -415,9 +414,9 @@ class TestPreflightEndpoint:
 
         assert response.status_code == 200
         body = response.json()
-        # No checks emitted, so the SageV2 envelope is success=False (same as
-        # any zero-check handler).
-        assert body["success"] is False
+        # DefaultHandler returns status READY, so the envelope reports success
+        # (verdict-based, not check-count-based — FND-391).
+        assert body["success"] is True
         assert body["data"] == {}
         assert body["message"] == "No preflight handler registered"
         assert body["preflight"]["status"] == "ready"
@@ -638,7 +637,8 @@ class TestPreflightEndpoint:
         client = _make_client(handler=_OneCheck())
         body = client.post("/workflows/v1/check", json={"credentials": []}).json()
 
-        assert body["success"] is True
+        # NOT_READY is a blocking failure → envelope success false (FND-391).
+        assert body["success"] is False
         assert list(body["data"]) == ["loginCheck"]
         assert body["data"]["loginCheck"]["success"] is False
         assert "should_block" not in body["preflight"]
@@ -714,15 +714,16 @@ class TestPreflightEndpoint:
         assert entry["failureMessage"] == ""
 
     # ------------------------------------------------------------------
-    # Envelope ``success`` reports preflight execution, not per-check pass
-    # (DBBI-665 root cause).
+    # Envelope ``success`` reflects the preflight VERDICT (FND-391):
+    # false only when a blocking check failed (status ``NOT_READY``);
+    # ``READY`` and ``PARTIAL`` are successes.
     # ------------------------------------------------------------------
     #
-    # The previous behaviour ``success = (status == READY)`` made every
-    # PARTIAL/NOT_READY response surface as a blank "Check failed" panel
-    # because SageV2.vue:249 short-circuits on ``!response.success`` and
-    # never iterates the per-check data. These tests pin the new contract:
-    # envelope success is true as long as preflight produced any checks.
+    # An earlier revision tied ``success`` to "any check ran"
+    # (``len(checks) > 0``) to dodge SageV2.vue:249 skipping the per-check
+    # render loop on ``!response.success`` (DBBI-665). That reported success
+    # even for wrong creds / unreachable hosts. The envelope now tells the
+    # truth; the widget-render concern is a separate frontend fix.
 
     def test_preflight_envelope_success_true_when_all_checks_pass(self) -> None:
         """Status READY → envelope success true (regression guard)."""
@@ -745,13 +746,14 @@ class TestPreflightEndpoint:
         )
         assert body["success"] is True
 
-    def test_preflight_envelope_success_true_when_a_check_fails(self) -> None:
-        """Status NOT_READY → envelope success TRUE so SageV2 still renders per-check rows.
+    def test_preflight_envelope_success_false_when_a_blocking_check_fails(
+        self,
+    ) -> None:
+        """Status NOT_READY → envelope success FALSE (blocking failure — FND-391).
 
-        This is the DBBI-665 case: previously a failed check forced envelope
-        success=false, which made the widget skip the per-check loop entirely
-        and show a blank "Hide details" panel. Pinning envelope success=true
-        whenever checks ran lets the per-check rows render.
+        A failed blocking check (wrong creds / unreachable host) must make the
+        top-level ``success`` false so callers can trust it. The per-check
+        detail stays on the wire so the widget can still render the failure.
         """
 
         class _OneCheck(_TestHandler):
@@ -774,7 +776,7 @@ class TestPreflightEndpoint:
             .post("/workflows/v1/check", json={"credentials": []})
             .json()
         )
-        assert body["success"] is True
+        assert body["success"] is False
         # Per-check detail is still on the wire so the widget can render it.
         assert body["data"]["apiVersion"]["success"] is False
         assert body["data"]["apiVersion"]["failureMessage"] == (
@@ -6770,10 +6772,9 @@ class TestPerEntrypointHandlerHook:
         )
         assert response.status_code == 200
         body = response.json()
-        # Envelope success reports that preflight ran (a check was produced), not
-        # that every check passed — per DBBI-665. The failing check surfaces in
-        # data.recipientCheck.
-        assert body["success"] is True
+        # NOT_READY is a blocking failure → envelope success false (FND-391).
+        # The failing check still surfaces in data.recipientCheck.
+        assert body["success"] is False
         assert body["data"]["recipientCheck"] == {
             "success": False,
             "message": "recipient missing",
