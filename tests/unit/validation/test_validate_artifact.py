@@ -163,7 +163,7 @@ def test_unreadable_declaration_is_absent_not_not_declared(tmp_path: Path) -> No
     """
     report = validate_artifact(
         tmp_path,
-        _StubSource(raises=ArtifactDeclarationError("envelope version 2")),
+        _StubSource(raises=ArtifactDeclarationError(message="envelope version 2")),
         boundary=True,
     )
 
@@ -187,6 +187,8 @@ def test_a_mis_shaped_source_is_reported_not_raised(tmp_path: Path) -> None:
     An app that passes the wrong object gets a named reason on the outcome event
     rather than an ``AttributeError`` surfacing from inside a scan.
     """
+    # Deliberate: an object that is not a SchemaSource is exactly what this
+    # guardrail exists for, so the checker's objection is the scenario.
     report = validate_artifact(tmp_path, object())  # type: ignore[arg-type]
 
     _assert_emits(report, OUTCOME_ABSENT)
@@ -271,10 +273,93 @@ def test_a_mis_shaped_validator_is_skipped(tmp_path: Path) -> None:
     report = validate_artifact(
         tmp_path,
         _StubSource(DECLARATION),
+        # Deliberate: a validator of the wrong shape is the scenario under test.
         validators=[object()],  # type: ignore[list-item]
     )
 
     _assert_emits(report, OUTCOME_UNSUPPORTED)
+
+
+def test_a_source_resolving_to_a_non_declaration_is_reported(tmp_path: Path) -> None:
+    """`isinstance` against a runtime protocol never checked `resolve()`'s return.
+
+    A structurally-matching source can hand back anything at all, and the wrapper
+    dereferences `.artifact_format` on whatever it gets. That read has to sit behind
+    a check, or a plug-in the SDK did not write raises straight into the hand-off
+    this function exists not to break.
+    """
+    report = validate_artifact(
+        tmp_path,
+        _StubSource("just a string"),  # type: ignore[arg-type]
+        validators=[_StubValidator()],
+    )
+
+    _assert_emits(report, OUTCOME_ABSENT)
+    assert "not an artifact declaration" in report.reason
+
+
+def test_a_validator_whose_format_property_raises_is_skipped(tmp_path: Path) -> None:
+    class _Hostile:
+        @property
+        def artifact_format(self) -> str:
+            raise RuntimeError("nope")
+
+        unit = UNIT_RECORD
+
+        def supports(self, declaration: ArtifactDeclaration) -> bool:
+            return True
+
+        def validate(
+            self, path: Path, declaration: ArtifactDeclaration
+        ) -> ArtifactValidationReport:
+            return ArtifactValidationReport()
+
+    report = validate_artifact(
+        tmp_path, _StubSource(DECLARATION), validators=[_Hostile()]
+    )
+
+    _assert_emits(report, OUTCOME_UNSUPPORTED)
+
+
+def test_a_validator_returning_a_non_report_is_reported(tmp_path: Path) -> None:
+    report = validate_artifact(
+        tmp_path,
+        _StubSource(DECLARATION),
+        validators=[_StubValidator(report="clean")],  # type: ignore[arg-type]
+    )
+
+    _assert_emits(report, OUTCOME_ABSENT)
+    assert "not a report" in report.reason
+
+
+def test_a_validator_whose_unit_raises_on_the_way_out(tmp_path: Path) -> None:
+    """The last two plug-in reads happen after the scan; they are in the seam too.
+
+    A complete, correct report would still be thrown away by an ``AttributeError``
+    raised while the wrapper asks the validator to name its own cell.
+    """
+
+    class _BrokenUnit:
+        artifact_format = FORMAT_NDJSON
+
+        @property
+        def unit(self) -> str:
+            raise RuntimeError("no unit")
+
+        def supports(self, declaration: ArtifactDeclaration) -> bool:
+            return True
+
+        def validate(
+            self, path: Path, declaration: ArtifactDeclaration
+        ) -> ArtifactValidationReport:
+            return ArtifactValidationReport(total=5, passed=5)
+
+    report = validate_artifact(
+        tmp_path, _StubSource(DECLARATION), validators=[_BrokenUnit()]
+    )
+
+    _assert_emits(report, OUTCOME_ABSENT)
+    assert "naming its cell" in report.reason
 
 
 def test_first_matching_validator_wins(tmp_path: Path) -> None:
@@ -467,7 +552,7 @@ def test_end_to_end_over_a_malformed_file(tmp_path: Path) -> None:
     [
         _StubSource(None),
         _StubSource(DECLARATION),
-        _StubSource(raises=ArtifactDeclarationError("bad")),
+        _StubSource(raises=ArtifactDeclarationError(message="bad")),
         _StubSource(raises=RuntimeError("worse")),
         ModelSource(model=_StubValidator, artifact_format=FORMAT_PARQUET),
         ModelSource(model=int),
@@ -485,6 +570,8 @@ def test_every_path_emits_exactly_one_outcome(tmp_path: Path, source: object) ->
     """The no-silent-no-op invariant, swept across every branch of the wrapper."""
     report = validate_artifact(
         tmp_path,
+        # Deliberate: the sweep includes deliberately broken sources, so the
+        # parameter is typed `object` and widened here at the one call site.
         source,  # type: ignore[arg-type]
         validators=[_StubValidator(artifact_format=FORMAT_PARQUET, supports=False)],
     )

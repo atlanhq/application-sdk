@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.28.3
-source-sha:    e43eb3b9e5be5963aa661c1b0386d31b32c77f98
-source-date:   2026-08-25T01:06:54+01:00
+source-sha:    a8708cb4fc2b77a95596a84ed06a24116fb9d907
+source-date:   2026-08-25T02:07:00+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -3762,7 +3762,7 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 
 - **Import:** `from application_sdk.validation import ArtifactDeclarationError`
 - **Also importable from:** `application_sdk.validation.sources`
-- **Signature:** `class ArtifactDeclarationError`
+- **Signature:** `class ArtifactDeclarationError(*, ...)`
 - **Summary:** A declaration artifact exists but could not be turned into a declaration.
 - **Defined in:** `application_sdk/validation/sources.py`
 

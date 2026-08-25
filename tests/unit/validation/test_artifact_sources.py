@@ -263,6 +263,8 @@ def test_declarations_are_frozen(generated_dir: Path) -> None:
     ).resolve()
     assert declaration is not None
     with pytest.raises(dataclasses.FrozenInstanceError):
+        # Deliberate: assigning to a frozen field is the thing under test, so the
+        # checker's complaint is the behaviour being asserted at runtime.
         declaration.fields[0].type = "string"  # type: ignore[misc]
 
 
@@ -590,4 +592,6 @@ def test_non_callable_validate_is_an_error() -> None:
 def test_an_instance_is_not_a_model() -> None:
     """An easy mistake — passing the asset rather than its class."""
     with pytest.raises(ArtifactDeclarationError, match="must be a class"):
+        # Deliberate: passing an instance where a class is required is the mistake
+        # under test — the checker catching it is the point, not an obstacle.
         ModelSource(model=_Model()).resolve()  # type: ignore[arg-type]

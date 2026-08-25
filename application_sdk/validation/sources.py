@@ -42,11 +42,12 @@ import functools
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Mapping
+from typing import ClassVar, Final, Mapping
 
 import orjson
 
 from application_sdk.constants import CONTRACT_GENERATED_DIR
+from application_sdk.errors.leaves import DataIntegrityError
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.validation.artifacts import (
     FORMAT_NDJSON,
@@ -82,7 +83,8 @@ nobody promised.
 """
 
 
-class ArtifactDeclarationError(Exception):
+@dataclass(kw_only=True)
+class ArtifactDeclarationError(DataIntegrityError):
     """A declaration artifact exists but could not be turned into a declaration.
 
     Raised by a :class:`~application_sdk.validation.protocols.SchemaSource` whose
@@ -91,12 +93,27 @@ class ArtifactDeclarationError(Exception):
     to. Distinct from ``resolve()`` returning ``None``, which means the honest
     "this artifact has no declaration".
 
-    A plain ``Exception`` rather than an
-    :class:`~application_sdk.common.error_codes.AtlanError` because it never
-    escapes :func:`~application_sdk.validation.wrapper.validate_artifact` — the
-    wrapper catches it, warns, and reports ``absent``. It carries no operator-facing
-    error code because no operator ever sees it as an exception.
+    A typed :class:`~application_sdk.errors.leaves.DataIntegrityError` rather than a
+    bare ``Exception``, because it does not only travel to
+    :func:`~application_sdk.validation.wrapper.validate_artifact`, which swallows it.
+    :func:`declared_artifact_fields` re-raises it to registration-time callers that
+    have no wrapper underneath them, and an unclassified exception reaching one of
+    those carries no audience, no retry disposition and no ``suggested_action`` — so
+    the one error whose entire content is "your generated contract is unreadable"
+    would arrive with nothing telling its owner what to change.
+
+    ``DATA_INTEGRITY`` is the right category and ``APP_OWNER`` the right audience: the
+    file is generated from the app's own ``contract/app.pkl``, so the app owner is
+    who fixes it. Not retryable — a malformed file does not become well-formed on a
+    second read.
     """
+
+    code: ClassVar[str] = "DATA_INTEGRITY_ARTIFACT_DECLARATION"
+    suggested_action: str | None = (
+        "Regenerate the app's contract so app/generated/artifact_schemas.json "
+        "matches the toolkit's output, or upgrade the SDK if the file was written "
+        "by a newer contract toolkit than this SDK reads."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -188,29 +205,45 @@ def _parse_field(raw: object, *, field_key: str, path: Path) -> DeclaredField:
     where = f"{path}: schema '{field_key}'"
     if not isinstance(raw, dict):
         raise ArtifactDeclarationError(
-            f"{where} has a field entry that is not an object"
+            message=f"{where} has a field entry that is not an object",
+            location=str(path),
+            expectation="each entry in 'fields' is a JSON object",
+            observed=type(raw).__name__,
         )
 
     name = raw.get("name")
     if not isinstance(name, str) or not name:
-        raise ArtifactDeclarationError(f"{where} has a field with no usable 'name'")
+        raise ArtifactDeclarationError(
+            message=f"{where} has a field with no usable 'name'",
+            location=str(path),
+            expectation="every field carries a non-empty string 'name'",
+        )
 
     declared_type = raw.get("type", "any")
     if not isinstance(declared_type, str) or not declared_type:
         raise ArtifactDeclarationError(
-            f"{where} field '{name}' has a non-string 'type'"
+            message=f"{where} field '{name}' has a non-string 'type'",
+            location=str(path),
+            expectation="'type' is a non-empty string",
+            observed=type(declared_type).__name__,
         )
 
     required = raw.get("required", True)
     if not isinstance(required, bool):
         raise ArtifactDeclarationError(
-            f"{where} field '{name}' has a non-boolean 'required'"
+            message=f"{where} field '{name}' has a non-boolean 'required'",
+            location=str(path),
+            expectation="'required' is a JSON boolean",
+            observed=type(required).__name__,
         )
 
     description = raw.get("description", "")
     if not isinstance(description, str):
         raise ArtifactDeclarationError(
-            f"{where} field '{name}' has a non-string 'description'"
+            message=f"{where} field '{name}' has a non-string 'description'",
+            location=str(path),
+            expectation="'description' is a string",
+            observed=type(description).__name__,
         )
 
     # The logical-type vocabulary is deliberately *not* policed here. A newer
@@ -221,6 +254,8 @@ def _parse_field(raw: object, *, field_key: str, path: Path) -> DeclaredField:
     # typos at generation time.
     return DeclaredField(
         path=name,
+        # Widened on purpose: an unrecognised member from a newer toolkit is passed
+        # through for the validator to report, per the comment above.
         type=declared_type,  # type: ignore[arg-type]
         required=required,
         description=description,
@@ -232,44 +267,87 @@ def _parse_schemas(path: Path, raw_bytes: bytes) -> Mapping[str, FieldMapDeclara
     try:
         document = orjson.loads(raw_bytes)
     except orjson.JSONDecodeError as exc:
-        raise ArtifactDeclarationError(f"{path}: not valid JSON ({exc})") from exc
+        raise ArtifactDeclarationError(
+            # The decoder's text goes in `observed`, not in `message`: interpolating
+            # it here would make one dashboard group per parse position (E015).
+            message=f"{path}: not valid JSON",
+            location=str(path),
+            expectation="a JSON object written by the contract toolkit",
+            observed=str(exc),
+            cause=exc,
+        ) from exc
 
     if not isinstance(document, dict):
-        raise ArtifactDeclarationError(f"{path}: top level is not a JSON object")
+        raise ArtifactDeclarationError(
+            message=f"{path}: top level is not a JSON object",
+            location=str(path),
+            expectation="a JSON object at the top level",
+            observed=type(document).__name__,
+        )
 
     version = document.get("version")
     if version != ARTIFACT_SCHEMAS_ENVELOPE_VERSION:
         raise ArtifactDeclarationError(
-            f"{path}: envelope version {version!r} is not the version this SDK reads "
-            f"({ARTIFACT_SCHEMAS_ENVELOPE_VERSION}); upgrade the SDK or regenerate "
-            f"the contract"
+            message=(
+                f"{path}: envelope version {version!r} is not the version this SDK "
+                f"reads ({ARTIFACT_SCHEMAS_ENVELOPE_VERSION}); upgrade the SDK or "
+                f"regenerate the contract"
+            ),
+            location=str(path),
+            expectation=f"version {ARTIFACT_SCHEMAS_ENVELOPE_VERSION}",
+            observed=repr(version),
         )
 
     schemas = document.get("schemas")
     if not isinstance(schemas, dict):
-        raise ArtifactDeclarationError(f"{path}: 'schemas' is not a JSON object")
+        raise ArtifactDeclarationError(
+            message=f"{path}: 'schemas' is not a JSON object",
+            location=str(path),
+            expectation="'schemas' maps contract field names to declarations",
+            observed=type(schemas).__name__,
+        )
 
     declarations: dict[str, FieldMapDeclaration] = {}
     for field_key, entry in schemas.items():
         where = f"{path}: schema '{field_key}'"
         if not isinstance(entry, dict):
-            raise ArtifactDeclarationError(f"{where} is not a JSON object")
+            raise ArtifactDeclarationError(
+                message=f"{where} is not a JSON object",
+                location=str(path),
+                expectation="each schema is a JSON object",
+                observed=type(entry).__name__,
+            )
 
         artifact_format = entry.get("format")
         if not isinstance(artifact_format, str) or not artifact_format:
-            raise ArtifactDeclarationError(f"{where} declares no 'format'")
+            raise ArtifactDeclarationError(
+                message=f"{where} declares no 'format'",
+                location=str(path),
+                expectation="a non-empty string 'format'",
+                observed=type(artifact_format).__name__,
+            )
 
         fields = entry.get("fields")
         if not isinstance(fields, list):
-            raise ArtifactDeclarationError(f"{where} has no 'fields' list")
+            raise ArtifactDeclarationError(
+                message=f"{where} has no 'fields' list",
+                location=str(path),
+                expectation="a 'fields' list",
+                observed=type(fields).__name__,
+            )
         # The toolkit refuses to generate a zero-field schema, because one reports
         # as declared while asserting nothing — the "looks adopted, validates
         # nothing" state this capability exists to remove. Refuse to load one too,
         # so a hand-edited file cannot reintroduce it behind the toolkit's back.
         if not fields:
             raise ArtifactDeclarationError(
-                f"{where} declares zero fields, which would report as declared "
-                f"while checking nothing"
+                message=(
+                    f"{where} declares zero fields, which would report as declared "
+                    f"while checking nothing"
+                ),
+                location=str(path),
+                expectation="at least one declared field",
+                observed="0 fields",
             )
 
         declarations[field_key] = FieldMapDeclaration(
@@ -302,7 +380,12 @@ def _load_schemas(path: Path) -> Mapping[str, FieldMapDeclaration] | None:
         logger.debug("No artifact schema declarations at %s", path)
         return None
     except OSError as exc:
-        raise ArtifactDeclarationError(f"{path}: could not be read ({exc})") from exc
+        raise ArtifactDeclarationError(
+            message=f"{path}: could not be read",
+            location=str(path),
+            observed=str(exc),
+            cause=exc,
+        ) from exc
     return _parse_schemas(path, raw_bytes)
 
 
@@ -454,9 +537,19 @@ class ModelSource:
         """
         if not isinstance(self.model, type):
             raise ArtifactDeclarationError(
-                f"ModelSource.model must be a class, got {type(self.model).__name__}"
+                message=(
+                    f"ModelSource.model must be a class, got "
+                    f"{type(self.model).__name__}"
+                ),
+                location="ModelSource.model",
+                expectation="a class exposing a callable validate()",
+                observed=type(self.model).__name__,
             )
         problem = _delegation_error(self.model)
         if problem:
-            raise ArtifactDeclarationError(f"ModelSource: {problem}")
+            raise ArtifactDeclarationError(
+                message=f"ModelSource: {problem}",
+                location=f"{self.model.__module__}.{self.model.__qualname__}",
+                expectation="a class exposing a callable validate()",
+            )
         return ModelDeclaration(model=self.model, artifact_format=self.artifact_format)

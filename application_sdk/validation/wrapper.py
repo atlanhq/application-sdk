@@ -44,6 +44,8 @@ from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.validation.artifacts import (
     ArtifactDeclaration,
     ArtifactValidationReport,
+    FieldMapDeclaration,
+    ModelDeclaration,
 )
 from application_sdk.validation.protocols import FormatValidator, SchemaSource
 from application_sdk.validation.sources import ArtifactDeclarationError
@@ -81,7 +83,15 @@ def validate_artifact(
 
     Example::
 
-        from application_sdk.validation import ContractSource, validate_artifact
+        from application_sdk.observability.events import ARTIFACT_VALIDATION_EVENT
+        from application_sdk.observability.logger_adaptor import get_logger
+        from application_sdk.validation import (
+            ContractSource,
+            artifact_validation_event_fields,
+            validate_artifact,
+        )
+
+        logger = get_logger(__name__)
 
         report = validate_artifact(
             local_path,
@@ -152,6 +162,25 @@ def validate_artifact(
     if declaration is None:
         return ArtifactValidationReport.not_declared(boundary=boundary)
 
+    if not isinstance(declaration, (FieldMapDeclaration, ModelDeclaration)):
+        # `isinstance` against a runtime protocol never checked what `resolve()`
+        # *returns*, only that the method exists. A structurally-matching source can
+        # hand back anything, and reading `.artifact_format` off it would raise
+        # straight into the hand-off this function exists not to break.
+        logger.warning(
+            "Artifact validation: %s source resolved to %s, not an artifact "
+            "declaration",
+            source_kind or type(source).__name__,
+            type(declaration).__name__,
+        )
+        return _plugin_broken(
+            f"schema source resolved to {type(declaration).__name__}, not an "
+            f"artifact declaration",
+            schema_source=source_kind,
+            boundary=boundary,
+        )
+
+    # Safe from here: a dataclass attribute on a type this module owns.
     artifact_format = declaration.artifact_format
     validator = _select_validator(
         artifact_format,
@@ -218,13 +247,44 @@ def validate_artifact(
             boundary=boundary,
         )
 
-    return _stamp(
-        report,
-        validator=validator,
-        declaration=declaration,
-        schema_source=source_kind,
-        boundary=boundary,
-    )
+    if not isinstance(report, ArtifactValidationReport):
+        logger.warning(
+            "Artifact validation: %s validator returned %s, not a report",
+            artifact_format,
+            type(report).__name__,
+        )
+        return _plugin_broken(
+            f"validator returned {type(report).__name__}, not a report",
+            artifact_format=artifact_format,
+            schema_source=source_kind,
+            boundary=boundary,
+        )
+
+    try:
+        return _stamp(
+            report,
+            validator=validator,
+            declaration=declaration,
+            schema_source=source_kind,
+            boundary=boundary,
+        )
+    except Exception as exc:  # noqa: BLE001 - a plug-in seam; nothing may escape
+        # `_stamp` reads `artifact_format` and `unit` off the validator. They are
+        # properties on a plug-in the SDK did not write, so the last two reads in
+        # this function are inside the seam too — the report is complete and would
+        # still be thrown away by an AttributeError raised on the way out.
+        logger.warning(
+            "Artifact validation: %s validator raised while naming its cell: %s",
+            artifact_format,
+            exc,
+            exc_info=True,
+        )
+        return _plugin_broken(
+            f"validator raised while naming its cell: {type(exc).__name__}",
+            artifact_format=artifact_format,
+            schema_source=source_kind,
+            boundary=boundary,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +301,8 @@ def _safe_kind(source: object) -> str:
     the report already has a meaning for.
     """
     try:
+        # Deliberate: this probes a plug-in that may not have `kind` at all — that
+        # is the case being handled, not a type the checker should have to accept.
         kind = source.kind  # type: ignore[attr-defined]
     except Exception as exc:  # noqa: BLE001 - a plug-in seam; nothing may escape
         logger.warning(
@@ -273,7 +335,17 @@ def _select_validator(
                 type(validator).__name__,
             )
             continue
-        if validator.artifact_format == artifact_format:
+        try:
+            claimed = validator.artifact_format
+        except Exception as exc:  # noqa: BLE001 - a plug-in seam; nothing may escape
+            logger.warning(
+                "Artifact validation: ignoring %s — its artifact_format raised: %s",
+                type(validator).__name__,
+                exc,
+                exc_info=True,
+            )
+            continue
+        if claimed == artifact_format:
             return validator
     return None
 
@@ -309,6 +381,11 @@ def _stamp(
     whether the hand-off is on a public boundary. Those four are facts the wrapper
     already holds, so it writes them — a validator that forgot to set them, or set
     them inconsistently, cannot make the telemetry lie.
+
+    Two of the four are read off the validator, so **this can raise** if a plug-in's
+    ``artifact_format`` or ``unit`` property misbehaves. The caller catches it: these
+    are the last two reads inside the plug-in seam, and a complete report would
+    otherwise be thrown away on the way out.
     """
     report.artifact_format = validator.artifact_format
     report.schema_source = schema_source
