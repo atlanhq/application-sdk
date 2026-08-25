@@ -1098,9 +1098,10 @@ async def _observe_worker_poll_state(
             previous_state = state
         except Exception:
             # An observer must never take the worker down with it. A failed
-            # reading is not evidence that the worker is dead, so the gate is
-            # left open rather than counting it toward suppression.
+            # reading is not evidence that the worker is dead, so reopen the
+            # gate rather than leaving a prior suppression in place.
             logger.warning("Worker poll-state observation failed", exc_info=True)
+            worker_poll_state.record("unknown")
 
 
 async def _run_worker_with_restart(
