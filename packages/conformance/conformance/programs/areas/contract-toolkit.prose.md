@@ -105,7 +105,7 @@ generated artifact directly** — those are outputs of `pkl eval`, and K004/K005
 catch the staleness that hand-editing causes.  The *only* sanctioned way to
 change a generated artifact is to regenerate it from the contract.  After every
 edit to `contract/**/*.pkl`, `contract/PklProject`, or the Pkl lock (K001–K005,
-K007–K011, K013), the `pkl-eval` gate runs `pkl eval` to verify the contract compiled
+K007–K011, K013, K016), the `pkl-eval` gate runs `pkl eval` to verify the contract compiled
 and regenerated cleanly.  **K006 and K012 are the exceptions**: K006's fix is a
 plain Python edit and K012's is a `pyproject.toml` edit (both see below), neither
 involving `.pkl` or generated artifacts, so both are verified by the standard
@@ -572,11 +572,75 @@ residue rather than guessing which file to edit.
 
 ---
 
+**K016 EntrypointArtifactSchemaMissing** — an entry point's `input`/`return`
+contract declares a `FileReference` field that the entry point's committed
+`artifact_schemas.json` does not describe.  **WARN-tier** (strict mode only).
+`classification = "judgment"` — the *content* of a declaration (which fields, what
+logical type, what is required) is domain knowledge about the artifact, not
+derivable from the contract class.
+
+**Never invent a field list.**  The whole point of the declaration is that it
+states what the producer and the consumer agree the file contains; a guessed list
+is a comment that documents a guess *as the spec*, which is precisely the failure
+mode this rule exists to end.  Read what actually writes and reads the artifact —
+the task that produces it, the downstream app or DAG node that consumes it — and
+declare that.  When the artifact's real shape cannot be established from the repo,
+route to residue with the question, rather than declaring a plausible-looking
+schema.
+
+*Procedure:*
+
+1. **Find what writes the field.**  Follow the `FileReference` named in the
+   finding to the code that populates it — the writer's columns (parquet) or
+   record keys (NDJSON) are the declaration's field list.  If the artifact is an
+   *input*, the declaration states what this app **requires** of what it reads;
+   the consumer owns it, so read this app's own reader, not the producer's writer.
+2. **Declare it in the pkl contract**, keyed by the contract field name — never by
+   a storage path (a path-shaped key fails generation, by design):
+
+   ```
+   artifactSchemas {
+     ["raw_queries"] = new ArtifactSchema {
+       format = "parquet"   // or "ndjson" — the content format, not the suffix
+       fields {
+         new ArtifactField {
+           name = "QUERY_ID"
+           type = "string"
+           description = "Warehouse-assigned query id; the parser's join key."
+         }
+       }
+     }
+   }
+   ```
+
+   `description` is required on every field and is never asserted at runtime —
+   it is read by whoever is debugging the hand-off that just failed, so `name` +
+   `type` alone do not satisfy it.  `artifactSchemas` is a **per-entry-point**
+   property: a single-entry-point app declares it at the top level; a
+   multi-entry-point bundle declares it on each entry point's `contract`.
+   Declaring it on a **bundle root** is a generation error — the root has no
+   contract model, so a key there could not name a real field.
+3. **Regenerate** with `pkl eval -m . contract/app.pkl` (or `uv run poe generate`)
+   and set `touched_files` the K003-step-4 way so a gate rejection reverts every
+   regenerated artifact.  **Never hand-edit `artifact_schemas.json`.**
+   **requires `pkl`.**  Verified by the `pkl-eval` gate.
+4. **Suppression** (strict mode): `# conformance: ignore[K016] <reason>` on the
+   field declaration, or on the contract class definition for a field inherited
+   from a base.  Legitimate when the hand-off is deliberately unchecked — which is
+   defensible for an artifact no other app reads, and the wrong call for one that
+   crosses an app boundary.  Route every suppression to residue.
+
+If `pkl` is unavailable the declaration cannot be regenerated or gate-verified;
+route to residue with the proposed field list in the note rather than
+hand-editing the generated file.
+
+---
+
 **Suppress outcome (strict mode only, WARNING-tier findings)**: the model may
 propose an inline suppression comment — `// conformance: ignore[Kxxx]
 <8–40 word justification>` for the `.pkl`-source / `PklProject`-anchored rules
 (K001–K005, K007, K008, K010; `//` comments) or `# conformance: ignore[Kxxx]
-<8–40 word justification>` for the artifact/Python-anchored rules (K006 Python,
+<8–40 word justification>` for the artifact/Python-anchored rules (K006 and K016 Python,
 K009 text artifact, K014 `atlan.yaml`; `#` comments) — on the violating line or
 the comment-only
 line directly above it when a legitimate exception exists (e.g. a K001 finding on

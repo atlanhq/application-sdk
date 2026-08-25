@@ -287,6 +287,10 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # marketplace publish, so neither rule applies to it (CONNECT release-pipeline).
     # K014: same release-readiness family — release_model selects how the app
     # reaches tenants, and only a consumer app has an atlan.yaml declaring it.
+    # K016: undeclared artifact on an entry-point boundary — artifactSchemas is
+    # authored in an app's pkl contract and rendered into its app/generated/
+    # tree; the SDK ships neither, and the hand-offs the rule protects are
+    # between apps, not inside the framework (ADR-0020).
     # E020: HTTP-failure-to-empty-return — the harm (publishing a partial crawl as
     # complete) is a connector extract/publish concern; the SDK's matching sites are
     # legitimate best-effort infra (health/metric scrapes), not crawlers (BLDX-1503).
@@ -364,6 +368,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "K012",
         "K013",
         "K014",
+        "K016",
         "P004",
         "P005",
         "P008",
@@ -704,6 +709,7 @@ def test_catalog_k_series_present() -> None:
         "K012",
         "K013",
         "K014",
+        "K016",
     }
     missing = expected - k_ids
     assert not missing, f"Missing K-series rules: {missing}"

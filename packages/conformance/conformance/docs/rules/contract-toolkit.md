@@ -5,7 +5,7 @@
 
 # Contract-Toolkit Conformance Rules (K-series)
 
-**14 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts)
+**15 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -29,6 +29,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [K012](#k012) | `GeneratePoeTaskMissing` | `block` | `app` | `contract-toolkit` | — | 0.14.0 |
 | [K013](#k013) | `ManifestNodeAppNameMisattributed` | `warn` | `app` | `contract-toolkit` | — | 0.18.0 |
 | [K014](#k014) | `ReleaseModelUndeclared` | `warn` | `app` | `contract-toolkit` | — | 0.18.0 |
+| [K016](#k016) | `EntrypointArtifactSchemaMissing` | `warn` | `app` | `contract-toolkit` | — | 0.23.0 |
 
 ---
 
@@ -657,5 +658,68 @@ it directly.
 **Suppress** with `# conformance: ignore[K014] <reason>` on the first line of
 `atlan.yaml` (or the line above the key). A suppression is rarely the right answer:
 declaring the value is one line and is the entire point of the rule.
+
+---
+
+## K016 — `EntrypointArtifactSchemaMissing` {#k016}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.23.0
+
+> An entry point's input/output contract declares a FileReference field that no artifactSchemas entry describes
+
+**Rationale:** Data crosses app boundaries as files, and at every hand-off the producer's idea of the
+artifact's shape and the consumer's idea of it are independent beliefs that nothing
+checks. A production RCA traced 73 days of frozen lineage to one column that had become
+a string where the consumer expected a timestamp; every workflow in the chain reported
+success throughout, because each one did exactly what its own code said and no layer
+compared the two beliefs. Checksums do not help -- storage integrity attests that the
+bytes read are the bytes written and is explicit that this proves nothing about the
+artifact being semantically what the reader expects. artifactSchemas is where the shape
+gets written down, and this rule requires it exactly where the hand-off is public: an
+entry point's contracts are read by another app or by the DAG, so an undeclared
+FileReference there is an interface nobody can check. Internal @task contracts are
+deliberately exempt -- that processing is the app's own, and the app decides whether it
+wants the check. The absence of a declaration is a structural fact about two committed
+files, not a heuristic, so this rule cannot produce a false positive; it needs only a
+deprecation window, which the SDK's matching registration-time warning provides.
+
+An entry point's `input`/`return` contract declares a `FileReference` field -- directly
+or inherited from a base or SDK mixin -- and the entry point's committed
+`artifact_schemas.json` carries no entry keyed by that field name.
+
+**Why the entry-point boundary specifically.** An entry point's contracts are public by
+definition: another app or the platform DAG reads them. The default `run()` method is
+registered as an *implicit* entry point carrying the same metadata as an explicit
+`@entrypoint`, so the rule is uniformly every entry point's `input_type` and
+`output_type` and needs no special-casing. Internal `@task` contracts never become entry
+points and are exempt.
+
+**Both directions are checked.** For a cross-app hand-off the *consumer* declares what
+it requires of its input, and the producer references the consumer's published
+declaration rather than re-authoring the field list -- so an entry point's Input carries
+declarations exactly like its Output does.
+
+**Fix -- declare the shape in the contract, then regenerate.** `artifactSchemas` is a
+per-entry-point pkl property, keyed by the contract field name (never by a storage
+path):
+
+    artifactSchemas {       ["raw_queries"] = new ArtifactSchema {         format =
+"parquet"   // or "ndjson"         fields {           new ArtifactField {
+name = "QUERY_ID"             type = "string"             description =
+"Warehouse-assigned query id; the join key."           }         }       }     }
+
+Then `pkl eval -m . contract/app.pkl`. A single-entry-point app emits
+`app/generated/artifact_schemas.json`; a multi-entry-point bundle emits
+`app/generated/{entrypoint}/artifact_schemas.json` per entry point. Declaring
+`artifactSchemas` on a bundle *root* is a generation error -- the root has no contract
+model, so a key there could not name a real field.
+
+Never hand-edit the generated `artifact_schemas.json`: it is a pkl eval output and the
+next toolkit run reverts the edit.
+
+**Suppress** with `# conformance: ignore[K016] <reason>` on the field declaration, or on
+the contract class definition for a field inherited from a base. Suppressing states that
+this hand-off is deliberately unchecked -- which is a defensible call for an artifact no
+other app reads, and the wrong call for one that crosses an app boundary.
 
 ---
