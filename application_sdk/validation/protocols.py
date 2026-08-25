@@ -50,10 +50,12 @@ __all__ = ["FormatValidator", "SchemaSource"]
 class SchemaSource(Protocol):
     """Where an artifact's declaration comes from.
 
-    Two implementations ship (FND-686): ``ContractSource`` loads the app's
+    Two implementations ship in :mod:`application_sdk.validation.sources`:
+    :class:`~application_sdk.validation.sources.ContractSource` loads the app's
     generated ``app/generated/artifact_schemas.json`` — versioned, pinned,
-    statically diffable, readable by non-Python consumers — and ``ModelSource``
-    resolves to an executable typed model, so nothing is authored at all.
+    statically diffable, readable by non-Python consumers — and
+    :class:`~application_sdk.validation.sources.ModelSource` resolves to an
+    executable typed model, so nothing is authored at all.
 
     **There is no inline source**, and there will not be one: no literal field map,
     no dict escape hatch, not even for a three-field artifact. Every declaration is
@@ -84,9 +86,18 @@ class SchemaSource(Protocol):
         ``not_declared`` outcome, a finding on an entrypoint's public boundary and
         informational on an internal ``@task``. Either way it emits.
 
-        A *malformed or absent* declaration artifact must also degrade — to a
-        warning and an ``absent`` outcome — rather than raise into the caller. The
-        validation scaffold is defense in depth; it may never break a real hand-off.
+        A *malformed or absent* declaration artifact is a **different** answer and
+        keeps its own channel: raise
+        :class:`~application_sdk.validation.sources.ArtifactDeclarationError`, which
+        :func:`~application_sdk.validation.wrapper.validate_artifact` degrades to a
+        warning and an ``absent`` outcome. Nothing reaches the app either way — the
+        validation scaffold is defense in depth and may never break a real hand-off
+        — but collapsing the two into ``None`` would report a *loader* failure as
+        ``not_declared``, blaming the app on its own public boundary for a file it
+        wrote correctly.
+
+        Any other exception is caught by the wrapper too, on the "our validator
+        broke" axis, which always fails open.
         """
         ...
 

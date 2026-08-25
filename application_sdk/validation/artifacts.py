@@ -59,8 +59,11 @@ from application_sdk.observability.logger_adaptor import (
 __all__ = [
     "ARTIFACT_FIELD_TYPES",
     "ARTIFACT_FIELD_TYPES_EXTENDED",
+    "ARTIFACT_FORMATS",
     "ARTIFACT_VALIDATION_EVENT",
     "ARTIFACT_VALIDATION_OUTCOMES",
+    "FORMAT_NDJSON",
+    "FORMAT_PARQUET",
     "OUTCOME_ABSENT",
     "OUTCOME_CLEAN",
     "OUTCOME_FLAGGED",
@@ -72,6 +75,7 @@ __all__ = [
     "ArtifactFailureKind",
     "ArtifactFieldType",
     "ArtifactFieldTypeExtended",
+    "ArtifactFormat",
     "ArtifactValidationFailure",
     "ArtifactValidationOutcome",
     "ArtifactValidationReport",
@@ -132,6 +136,34 @@ ARTIFACT_FIELD_TYPES_EXTENDED: Final[frozenset[str]] = ARTIFACT_FIELD_TYPES | fr
 
 
 # ---------------------------------------------------------------------------
+# The format vocabulary
+# ---------------------------------------------------------------------------
+#
+# Mirrors the contract toolkit's ``ArtifactFormat`` typealias. This is the
+# *content* format, not the file extension: SDK NDJSON artifacts are
+# conventionally written with a ``.json`` suffix and are still ``ndjson`` here.
+#
+# The SDK does not police this vocabulary when loading a declaration. A newer
+# toolkit may declare a format this SDK has no validator for, and the honest
+# answer to that is ``unsupported`` at dispatch — naming the format that had no
+# validator — rather than ``absent``, which would claim the declaration itself was
+# unreadable.
+
+FORMAT_NDJSON: Final = "ndjson"
+"""Line-delimited JSON. Streamed line by line; stdlib and ``orjson`` only."""
+
+FORMAT_PARQUET: Final = "parquet"
+"""Columnar. Checked by reading the file footer — no row is ever read."""
+
+ArtifactFormat = Literal["ndjson", "parquet"]
+"""Physical container format of a declared artifact. Each format has its own
+validator with its own dependency floor."""
+
+ARTIFACT_FORMATS: Final[frozenset[str]] = frozenset({FORMAT_NDJSON, FORMAT_PARQUET})
+"""Runtime membership test for :data:`ArtifactFormat`."""
+
+
+# ---------------------------------------------------------------------------
 # What a schema source resolves to
 # ---------------------------------------------------------------------------
 
@@ -154,6 +186,16 @@ class DeclaredField:
     to satisfy the vocabulary."""
     required: bool = True
     """When False the field is type-checked only if present."""
+    description: str = ""
+    """What the field carries and what the consumer expects of it, carried through
+    from the declaration verbatim.
+
+    Never asserted — the contract toolkit requires it at authoring time precisely
+    because a bare name/type pair states the assertion but not why it holds, and a
+    declaration is read by whoever is debugging the hand-off that just failed.
+    Dropping it at the loader would throw that away exactly where it is wanted.
+    Defaults to "" so a source that has no such text is not forced to invent one.
+    """
 
 
 @dataclass(frozen=True)
@@ -165,6 +207,16 @@ class FieldMapDeclaration:
     """
 
     fields: tuple[DeclaredField, ...] = ()
+    artifact_format: str = ""
+    """Format the app declared this artifact is in — see :data:`ArtifactFormat`.
+
+    Carried on the declaration rather than passed alongside it because the app
+    states it explicitly (the contract toolkit gives ``format`` no default) and the
+    wrapper dispatches on it. The alternative is a caller inferring the format from
+    the path suffix, which is the same path-shape inference that let the earlier
+    upload-time hook match nothing and silently validate zero records. "" means no
+    format was declared, and dispatch reports ``unsupported`` rather than guessing.
+    """
 
     @property
     def field_count(self) -> int:
@@ -184,6 +236,14 @@ class ModelDeclaration:
     """
 
     model: type
+    artifact_format: str = FORMAT_NDJSON
+    """Format this model is being delegated to for — see :data:`ArtifactFormat`.
+
+    Unlike a field map, a model carries no format of its own, so the source states
+    which hand-off it is standing in for. Defaults to :data:`FORMAT_NDJSON`, the
+    only cell that can actually delegate; ``parquet`` is accepted and resolves to
+    ``unsupported``, which is the point — the cell says so out loud.
+    """
 
     @property
     def field_count(self) -> int:

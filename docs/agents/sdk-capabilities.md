@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.28.3
-source-sha:    fc4b272b8ccd28c598abc514cb57c30b4959a4c6
-source-date:   2026-08-24T20:25:58Z
+source-sha:    e43eb3b9e5be5963aa661c1b0386d31b32c77f98
+source-date:   2026-08-25T01:06:54+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -35,7 +35,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 97 |
-| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 30 |
+| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 43 |
 
 ## Subpackage Details
 
@@ -3758,6 +3758,14 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 
 ### Classes
 
+#### `ArtifactDeclarationError`
+
+- **Import:** `from application_sdk.validation import ArtifactDeclarationError`
+- **Also importable from:** `application_sdk.validation.sources`
+- **Signature:** `class ArtifactDeclarationError`
+- **Summary:** A declaration artifact exists but could not be turned into a declaration.
+- **Defined in:** `application_sdk/validation/sources.py`
+
 #### `ArtifactValidationFailure`
 
 - **Import:** `from application_sdk.validation import ArtifactValidationFailure`
@@ -3788,11 +3796,19 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** Aggregate outcome of validating a batch of transformed assets.
 - **Defined in:** `application_sdk/validation/assets.py`
 
+#### `ContractSource`
+
+- **Import:** `from application_sdk.validation import ContractSource`
+- **Also importable from:** `application_sdk.validation.sources`
+- **Signature:** `class ContractSource(field: str, entrypoint: str = '', generated_dir: Path | None = None)`
+- **Summary:** One artifact's declaration, loaded from the app's generated contract.
+- **Defined in:** `application_sdk/validation/sources.py`
+
 #### `DeclaredField`
 
 - **Import:** `from application_sdk.validation import DeclaredField`
 - **Also importable from:** `application_sdk.validation.artifacts`
-- **Signature:** `class DeclaredField(path: str, type: ArtifactFieldTypeExtended = 'any', required: bool = True)`
+- **Signature:** `class DeclaredField(path: str, type: ArtifactFieldTypeExtended = 'any', required: bool = True, description: str = '')`
 - **Summary:** One field an app declares it requires of an artifact.
 - **Defined in:** `application_sdk/validation/artifacts.py`
 
@@ -3800,7 +3816,7 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 
 - **Import:** `from application_sdk.validation import FieldMapDeclaration`
 - **Also importable from:** `application_sdk.validation.artifacts`
-- **Signature:** `class FieldMapDeclaration(fields: tuple[DeclaredField, ...] = ())`
+- **Signature:** `class FieldMapDeclaration(fields: tuple[DeclaredField, ...] = (), artifact_format: str = '')`
 - **Summary:** A declaration resolved to an explicit field map — the ``ContractSource`` shape.
 - **Defined in:** `application_sdk/validation/artifacts.py`
 
@@ -3816,9 +3832,17 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 
 - **Import:** `from application_sdk.validation import ModelDeclaration`
 - **Also importable from:** `application_sdk.validation.artifacts`
-- **Signature:** `class ModelDeclaration(model: type)`
+- **Signature:** `class ModelDeclaration(model: type, artifact_format: str = FORMAT_NDJSON)`
 - **Summary:** A declaration resolved to an executable typed model — the ``ModelSource`` shape.
 - **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `ModelSource`
+
+- **Import:** `from application_sdk.validation import ModelSource`
+- **Also importable from:** `application_sdk.validation.sources`
+- **Signature:** `class ModelSource(model: type, artifact_format: str = FORMAT_NDJSON)`
+- **Summary:** A declaration that *is* an executable typed model — e.g. pyatlan_v9's ``Asset``.
+- **Defined in:** `application_sdk/validation/sources.py`
 
 #### `ReferentialFailure`
 
@@ -3837,6 +3861,14 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 
 ### Functions
 
+#### `artifact_schema_paths`
+
+- **Import:** `from application_sdk.validation import artifact_schema_paths`
+- **Also importable from:** `application_sdk.validation.sources`
+- **Signature:** `artifact_schema_paths(*, entrypoint: str = '', generated_dir: Path | None = None)`
+- **Summary:** Where an entrypoint's declaration file is looked for, in order.
+- **Defined in:** `application_sdk/validation/sources.py`
+
 #### `artifact_validation_event_fields`
 
 - **Import:** `from application_sdk.validation import artifact_validation_event_fields`
@@ -3852,6 +3884,30 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Signature:** `artifact_validation_matrix_json(report: ArtifactValidationReport, *, ...)`
 - **Summary:** Compact per-failure drill-down for the outcome event, as one JSON string.
 - **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `builtin_format_validators`
+
+- **Import:** `from application_sdk.validation import builtin_format_validators`
+- **Also importable from:** `application_sdk.validation.wrapper`
+- **Signature:** `builtin_format_validators()`
+- **Summary:** The format validators that ship with the SDK.
+- **Defined in:** `application_sdk/validation/wrapper.py`
+
+#### `declared_artifact_fields`
+
+- **Import:** `from application_sdk.validation import declared_artifact_fields`
+- **Also importable from:** `application_sdk.validation.sources`
+- **Signature:** `declared_artifact_fields(*, entrypoint: str = '', generated_dir: Path | None = None)`
+- **Summary:** Every contract field name declared for one entrypoint.
+- **Defined in:** `application_sdk/validation/sources.py`
+
+#### `validate_artifact`
+
+- **Import:** `from application_sdk.validation import validate_artifact`
+- **Also importable from:** `application_sdk.validation.wrapper`
+- **Signature:** `validate_artifact(path: Path | str, *, ...)`
+- **Summary:** Validate one artifact against the declaration its source resolves to.
+- **Defined in:** `application_sdk/validation/wrapper.py`
 
 #### `validate_asset`
 
@@ -3882,6 +3938,28 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Signature:** `ARTIFACT_FIELD_TYPES_EXTENDED: Final[frozenset[str]]`
 - **Summary:** Runtime membership test for :data:`ArtifactFieldTypeExtended`.
 - **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `ARTIFACT_FORMATS`
+
+- **Import:** `from application_sdk.validation import ARTIFACT_FORMATS`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `ARTIFACT_FORMATS: Final[frozenset[str]]`
+- **Summary:** Runtime membership test for :data:`ArtifactFormat`.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `ARTIFACT_SCHEMAS_ENVELOPE_VERSION`
+
+- **Import:** `from application_sdk.validation.sources import ARTIFACT_SCHEMAS_ENVELOPE_VERSION`
+- **Signature:** `ARTIFACT_SCHEMAS_ENVELOPE_VERSION: Final`
+- **Summary:** Envelope version of ``artifact_schemas.json`` this loader understands.
+- **Defined in:** `application_sdk/validation/sources.py`
+
+#### `ARTIFACT_SCHEMAS_FILENAME`
+
+- **Import:** `from application_sdk.validation.sources import ARTIFACT_SCHEMAS_FILENAME`
+- **Signature:** `ARTIFACT_SCHEMAS_FILENAME: Final`
+- **Summary:** Name of the generated declaration artifact, as the contract toolkit emits it.
+- **Defined in:** `application_sdk/validation/sources.py`
 
 #### `ARTIFACT_VALIDATION_EVENT`
 
@@ -3929,12 +4007,36 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** Additive extension. Declarations use this, so a member can be declared before
 - **Defined in:** `application_sdk/validation/artifacts.py`
 
+#### `ArtifactFormat`
+
+- **Import:** `from application_sdk.validation import ArtifactFormat`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `ArtifactFormat`
+- **Summary:** Physical container format of a declared artifact. Each format has its own
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
 #### `ArtifactValidationOutcome`
 
 - **Import:** `from application_sdk.validation import ArtifactValidationOutcome`
 - **Also importable from:** `application_sdk.validation.artifacts`
 - **Signature:** `ArtifactValidationOutcome`
 - **Summary:** Every artifact hand-off emits exactly one of these — the negatives included.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `FORMAT_NDJSON`
+
+- **Import:** `from application_sdk.validation import FORMAT_NDJSON`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `FORMAT_NDJSON: Final`
+- **Summary:** Line-delimited JSON. Streamed line by line; stdlib and ``orjson`` only.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `FORMAT_PARQUET`
+
+- **Import:** `from application_sdk.validation import FORMAT_PARQUET`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `FORMAT_PARQUET: Final`
+- **Summary:** Columnar. Checked by reading the file footer — no row is ever read.
 - **Defined in:** `application_sdk/validation/artifacts.py`
 
 #### `OUTCOME_ABSENT`

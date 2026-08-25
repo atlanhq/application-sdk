@@ -10,7 +10,10 @@ the bytes written and is explicit that this proves nothing about the artifact be
 semantically complete; this is that missing third leg. Its two orthogonal plug-in
 seams — *where the declaration comes from* and *how a format is checked* — are
 :mod:`application_sdk.validation.protocols`; the shared outcome surface is
-:mod:`application_sdk.validation.artifacts`.
+:mod:`application_sdk.validation.artifacts`. The two schema sources that ship are
+:mod:`application_sdk.validation.sources` (``ContractSource``, ``ModelSource`` —
+there is no inline source), and the public entry point is ``validate_artifact``
+in :mod:`application_sdk.validation.wrapper`.
 
 **Asset validation** (BLDX-1555) is the concrete NDJSON x typed-model check that
 predates the wrapper, built on the per-asset ``.validate()`` backbone that
@@ -42,10 +45,14 @@ reader, and pandera stays test-only.
 """
 
 from application_sdk.validation.artifacts import (
+    ARTIFACT_FORMATS,
+    FORMAT_NDJSON,
+    FORMAT_PARQUET,
     ArtifactDeclaration,
     ArtifactFailureKind,
     ArtifactFieldType,
     ArtifactFieldTypeExtended,
+    ArtifactFormat,
     ArtifactValidationFailure,
     ArtifactValidationOutcome,
     ArtifactValidationReport,
@@ -63,23 +70,45 @@ from application_sdk.validation.assets import (
     validate_transformed_dir,
 )
 from application_sdk.validation.protocols import FormatValidator, SchemaSource
+from application_sdk.validation.sources import (
+    ArtifactDeclarationError,
+    ContractSource,
+    ModelSource,
+    artifact_schema_paths,
+    declared_artifact_fields,
+)
+from application_sdk.validation.wrapper import (
+    builtin_format_validators,
+    validate_artifact,
+)
 
 __all__ = [
     # Artifact validation (ADR-0020)
+    "ARTIFACT_FORMATS",
+    "FORMAT_NDJSON",
+    "FORMAT_PARQUET",
     "ArtifactDeclaration",
+    "ArtifactDeclarationError",
     "ArtifactFailureKind",
     "ArtifactFieldType",
     "ArtifactFieldTypeExtended",
+    "ArtifactFormat",
     "ArtifactValidationFailure",
     "ArtifactValidationOutcome",
     "ArtifactValidationReport",
+    "ContractSource",
     "DeclaredField",
     "FieldMapDeclaration",
     "FormatValidator",
     "ModelDeclaration",
+    "ModelSource",
     "SchemaSource",
+    "artifact_schema_paths",
     "artifact_validation_event_fields",
     "artifact_validation_matrix_json",
+    "builtin_format_validators",
+    "declared_artifact_fields",
+    "validate_artifact",
     # Asset validation (BLDX-1555)
     "AssetValidationFailure",
     "AssetValidationReport",
