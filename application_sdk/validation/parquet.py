@@ -17,12 +17,23 @@ caller that only ever sees JSON.
 
 **pyarrow is an extra, not core** (``sql`` and ``incremental`` in
 ``pyproject.toml``). It is therefore imported *inside*
-:meth:`ParquetFooterValidator.validate`, and its absence degrades to a warning plus
-an ``unsupported`` outcome — the same skip-with-warning shape
-:mod:`application_sdk.validation.assets` uses for the optional ``rocksdict``. A
-module-level import here would put a parquet reader on the import path of every
+:meth:`ParquetFooterValidator.validate`, and both an absent install and a broken one
+degrade to a warning plus an ``unsupported`` outcome — the same skip-with-warning
+shape :mod:`application_sdk.validation.assets` uses for the optional ``rocksdict``.
+A module-level import here would put a parquet reader on the import path of every
 JSON-only caller, which is what
 ``tests/unit/validation/test_artifact_dependency_floor.py`` exists to prevent.
+
+**Whether the artifact exists is decided before pyarrow is probed.** That is a fact
+about the hand-off and needs no reader, so a producer that wrote nothing reports
+``absent`` on every install rather than hiding behind our own missing extra.
+
+**A footer establishes carriers, not contents.** Where a declared type asks for more
+than metadata can settle — ``json``, whose ADR definition is "``string`` whose
+content parses as JSON" — the carrier is asserted and the unparsed half is named on
+the report's ``reason``. Reading rows to close that gap is the one thing this
+validator will not do, and quietly reporting the partial check as a full one is the
+ambiguity the whole capability exists to remove.
 
 **parquet x model is unsupported and says so.**
 :meth:`ParquetFooterValidator.supports` answers ``False`` for a
@@ -34,6 +45,7 @@ quiet, are both worse than saying so.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Final, Iterator, Mapping, Sequence
@@ -94,10 +106,12 @@ _TYPE_PREDICATES: Final[Mapping[str, tuple[str, ...]]] = {
         "is_fixed_size_binary",
         "is_binary_view",
     ),
-    # A JSON blob in a parquet column is *physically* a string. Whether its content
-    # parses is a row-level question and this validator does not read rows, so the
-    # footer attests the carrier and nothing more. Keeping `json` distinct from
-    # `string` is still what lets a hop declare which one it means.
+    # ADR-0020 defines parquet `json` as "`string` whose content parses as JSON".
+    # Only the carrier is a metadata question, so only the carrier is asserted — a
+    # payload that became a struct or an int is still caught, which is what keeps
+    # `json` from collapsing into `string`. The unparsed half is not passed off as a
+    # full check: every `json` pass is recorded on `_ScanNotes.carrier_only` and
+    # named on the report's `reason`.
     "json": _STRING_PREDICATES,
     "array": (
         "is_list",
@@ -188,7 +202,34 @@ class ParquetFooterValidator:
                 ),
             )
 
+        # Path shape is resolved *before* the optional dependency is probed. Whether
+        # an artifact exists is a fact about the artifact and needs no reader, so a
+        # missing or empty hand-off must report `absent` on every install — reversing
+        # these two would relabel it `unsupported` on a JSON-only box and hide a
+        # producer that wrote nothing behind our own missing extra.
+        files = _parquet_files(path)
+        if not files:
+            return ArtifactValidationReport.absent(
+                artifact_format=FORMAT_PARQUET,
+                reason=f"no parquet file at {path}",
+            )
+
         loaded = _load_pyarrow()
+        if isinstance(loaded, BaseException):
+            # Installed but unusable — a partial wheel, a missing shared library, an
+            # arrow too old to expose `read_schema`. Unlike absence this is *not* an
+            # expected shape, so `_load_pyarrow` has already logged it with its
+            # traceback; it still degrades rather than raising, because `validate()`
+            # documents that it never raises and a direct caller has no wrapper to
+            # catch it.
+            return ArtifactValidationReport.unsupported(
+                artifact_format=FORMAT_PARQUET,
+                schema_source="",
+                reason=(
+                    "pyarrow is installed but unusable "
+                    f"({type(loaded).__name__}); parquet footers cannot be read"
+                ),
+            )
         if loaded is None:
             # pyarrow is extra-only, so its absence is benign and expected on a
             # JSON-only install: warn and skip rather than fail the hand-off.
@@ -204,15 +245,8 @@ class ParquetFooterValidator:
             )
         read_schema, arrow_types = loaded
 
-        files = _parquet_files(path)
-        if not files:
-            return ArtifactValidationReport.absent(
-                artifact_format=FORMAT_PARQUET,
-                reason=f"no parquet file at {path}",
-            )
-
         report = ArtifactValidationReport(artifact_format=FORMAT_PARQUET)
-        unmapped: set[str] = set()
+        notes = _ScanNotes()
         first_read_error = ""
         readable = 0
 
@@ -234,7 +268,7 @@ class ParquetFooterValidator:
             report.total += len(declaration.fields)
             for field in declaration.fields:
                 failure = _check_field(
-                    field, schema, arrow_types, file=file, unmapped=unmapped
+                    field, schema, arrow_types, file=file, notes=notes
                 )
                 if failure is not None:
                     report.failures.append(failure)
@@ -248,15 +282,7 @@ class ParquetFooterValidator:
             )
 
         report.passed = report.total - len(report.failures)
-        if unmapped:
-            # Not silence, and not a flag against the artifact either: a declared
-            # type this SDK has no parquet mapping for is *our* gap, so those fields
-            # are checked for presence and the gap is named on the outcome event.
-            report.reason = (
-                f"presence checked but type not asserted for {len(unmapped)} "
-                "declared type(s) this parquet validator has no mapping for: "
-                f"{', '.join(sorted(unmapped))}"
-            )
+        report.reason = notes.reason()
         return report
 
 
@@ -265,8 +291,71 @@ class ParquetFooterValidator:
 # ---------------------------------------------------------------------------
 
 
-def _load_pyarrow() -> tuple[Callable[..., object], object] | None:
-    """``(read_schema, pyarrow.types)``, or ``None`` when pyarrow is absent.
+@dataclass
+class _ScanNotes:
+    """Assertions a footer read could only make *partially*, gathered across a scan.
+
+    Neither kind is a failure — the artifact is not at fault for either — but both
+    would otherwise be indistinguishable from a full check, and "reported clean"
+    silently meaning "checked less than you asked for" is the exact ambiguity this
+    capability exists to remove. They surface on the report's ``reason``, which is an
+    attribute of the outcome event, so the weakening is queryable rather than
+    folklore.
+    """
+
+    unmapped_types: set[str] = dataclasses.field(default_factory=set)
+    """Declared types this validator has no parquet mapping for — *our* gap.
+
+    Presence is asserted, the type is not. Flagging would blame the app for a
+    mapping the SDK has not written; going quiet is worse.
+    """
+
+    carrier_only: set[str] = dataclasses.field(default_factory=set)
+    """Fields declared ``json``, whose *content* a footer read cannot establish.
+
+    ADR-0020 defines parquet ``json`` as "``string`` whose content parses as JSON",
+    and only the first half of that is a metadata question. Parsing the second half
+    means reading rows, which this validator never does at any file size — so the
+    carrier is asserted (a payload that became a struct or an int is still caught,
+    which is what keeps ``json`` from collapsing into ``string``) and the unparsed
+    half is declared here rather than passed off as a full check.
+    """
+
+    def reason(self) -> str:
+        """One line naming every partial assertion, or "" when all were complete."""
+        clauses = []
+        if self.unmapped_types:
+            clauses.append(
+                f"presence checked but type not asserted for "
+                f"{len(self.unmapped_types)} declared type(s) this parquet "
+                f"validator has no mapping for: "
+                f"{', '.join(sorted(self.unmapped_types))}"
+            )
+        if self.carrier_only:
+            clauses.append(
+                f"string carrier checked but JSON content not parsed for "
+                f"{len(self.carrier_only)} json field(s) — a footer read "
+                f"establishes the carrier, never the content: "
+                f"{', '.join(sorted(self.carrier_only))}"
+            )
+        return "; ".join(clauses)
+
+
+def _load_pyarrow() -> tuple[Callable[..., object], object] | BaseException | None:
+    """``(read_schema, pyarrow.types)``, or why it is unavailable.
+
+    Three answers, because the caller must report three different things:
+
+    * the pair — pyarrow is usable;
+    * ``None`` — pyarrow is **not installed**. Benign and expected: it is an extra,
+      so this is a normal install shape, not a fault, and carries no traceback.
+    * the exception — pyarrow is installed and **unusable**: a partial wheel, a
+      missing shared library, an arrow too old to expose ``read_schema``. That is a
+      genuine fault, so it is logged here with its traceback (the only place with a
+      live one) and handed back so the caller can name it without logging twice.
+
+    Collapsing the last two into ``None`` would report a broken install as a missing
+    one and send someone to install a package they already have.
 
     Imported here rather than at module scope so a JSON-only caller never loads a
     parquet reader, and resolved through the module on every call rather than bound
@@ -278,6 +367,12 @@ def _load_pyarrow() -> tuple[Callable[..., object], object] | None:
     try:
         import pyarrow.parquet  # noqa: PLC0415 — optional dep: pyarrow
         from pyarrow import types  # noqa: PLC0415 — optional dep: pyarrow
+
+        # Resolved inside the try: an arrow whose `parquet` module exists but has no
+        # `read_schema` is an incompatible install, not a missing one, and belongs on
+        # the same degrade path as a half-imported wheel rather than raising an
+        # AttributeError out of a function documented never to raise.
+        loaded = (pyarrow.parquet.read_schema, types)
     # NB: keep the directive short enough that ruff-format leaves this on one line —
     # E008 anchors on the `except` line, and a wrapped `except (\n ImportError\n):`
     # moves the anchor off the comment and silently un-suppresses the finding.
@@ -288,7 +383,18 @@ def _load_pyarrow() -> tuple[Callable[..., object], object] | None:
         # ImportError traceback stays out of the log — exactly the shape the
         # rocksdict degrade in `validation/assets.py` uses.
         return None  # conformance: ignore[E007] optional-dep probe; the caller warns and reports `unsupported`
-    return pyarrow.parquet.read_schema, types
+    except Exception as exc:  # noqa: BLE001 - a broken install must never reach the hand-off
+        # Not benign, so unlike absence it keeps its traceback. Anything an
+        # incompatible pyarrow raises on import lands here; the alternative is this
+        # escaping into a hand-off that a direct caller has no wrapper to catch.
+        logger.warning(
+            "pyarrow is installed but could not be loaded, so parquet footers "
+            "cannot be read: %s",
+            exc,
+            exc_info=True,
+        )
+        return exc
+    return loaded
 
 
 def _parquet_files(path: Path) -> tuple[Path, ...]:
@@ -344,9 +450,14 @@ def _check_field(
     arrow_types: object,
     *,
     file: Path,
-    unmapped: set[str],
+    notes: _ScanNotes,
 ) -> ArtifactValidationFailure | None:
-    """Check one declared field against one footer schema, or ``None`` if it holds."""
+    """Check one declared field against one footer schema, or ``None`` if it holds.
+
+    Records any *partial* assertion on ``notes`` — a type with no mapping, or a
+    ``json`` field whose content a footer cannot reach — so the report can say which
+    of its passes were complete.
+    """
     arrow_type = _resolve(schema, field.path, arrow_types)
     if arrow_type is None:
         if not field.required:
@@ -363,12 +474,19 @@ def _check_field(
     if predicates is None:
         # `any`, or an extension member from a newer toolkit this SDK has no parquet
         # mapping for. Presence has been asserted; the type has not, and the caller
-        # is told which is which through the report's `reason`.
+        # is told which is which through the report's `reason`. `any` is excluded
+        # because it asserts presence *by definition* — declaring it is not a gap.
         if field.type != "any":
-            unmapped.add(field.type)
+            notes.unmapped_types.add(field.type)
         return None
 
     if _satisfies(arrow_type, predicates, arrow_types):
+        if field.type == "json":
+            # The carrier held. The content is a row-level question this validator
+            # never asks, so record the half that was not established rather than
+            # letting a `json` pass read as identical to a `string` pass — the
+            # collapse ADR-0020 warns defeats a JSON-blob hop's check.
+            notes.carrier_only.add(field.path)
         return None
     return ArtifactValidationFailure(
         kind="type_mismatch",

@@ -344,6 +344,79 @@ class TestTheLogicalTypeMapping:
         assert report.outcome == OUTCOME_FLAGGED, report.format_report()
         assert report.failures[0].kind == "type_mismatch"
 
+    def test_a_json_pass_is_not_indistinguishable_from_a_string_pass(
+        self, tmp_path: Path
+    ) -> None:
+        """ADR-0020: parquet ``json`` is "``string`` whose content parses as JSON".
+
+        Only the carrier half is a metadata question. Asserting it and reporting
+        `clean` with no further word would collapse `json` into `string` — the
+        collapse the ADR says defeats a JSON-blob hop's check — so the unparsed half
+        is named on the report. Rows are still never read to close it.
+        """
+        artifact = _write_parquet(
+            tmp_path / "part.parquet",
+            pa.schema(
+                [pa.field("PAYLOAD", pa.string()), pa.field("NAME", pa.string())]
+            ),
+        )
+
+        as_json = _validate(
+            artifact, _declare(DeclaredField(path="PAYLOAD", type="json"))
+        )
+        as_string = _validate(
+            artifact, _declare(DeclaredField(path="NAME", type="string"))
+        )
+
+        # Both pass on the carrier...
+        assert as_json.outcome == OUTCOME_CLEAN
+        assert as_string.outcome == OUTCOME_CLEAN
+        # ...but only the json one says what it did not establish.
+        assert "PAYLOAD" in as_json.reason
+        assert "content not parsed" in as_json.reason
+        assert as_string.reason == ""
+
+    def test_a_json_carrier_that_is_not_a_string_is_still_flagged(
+        self, tmp_path: Path
+    ) -> None:
+        """The half a footer *can* settle is still enforced, not waved through."""
+        artifact = _write_parquet(
+            tmp_path / "part.parquet",
+            pa.schema([pa.field("PAYLOAD", pa.struct([pa.field("a", pa.int64())]))]),
+        )
+
+        report = _validate(
+            artifact, _declare(DeclaredField(path="PAYLOAD", type="json"))
+        )
+
+        assert report.outcome == OUTCOME_FLAGGED
+        assert report.failures[0].kind == "type_mismatch"
+        # A flagged carrier is not also reported as an unestablished content check.
+        assert report.reason == ""
+
+    def test_both_partial_assertions_are_reported_together(
+        self, tmp_path: Path
+    ) -> None:
+        """One `reason` carries every partial assertion, not just the first kind."""
+        artifact = _write_parquet(
+            tmp_path / "part.parquet",
+            pa.schema(
+                [pa.field("PAYLOAD", pa.string()), pa.field("SHAPE", pa.string())]
+            ),
+        )
+
+        report = _validate(
+            artifact,
+            _declare(
+                DeclaredField(path="PAYLOAD", type="json"),
+                DeclaredField(path="SHAPE", type="geography"),  # type: ignore[arg-type]
+            ),
+        )
+
+        assert report.outcome == OUTCOME_CLEAN
+        assert "geography" in report.reason
+        assert "PAYLOAD" in report.reason
+
     def test_an_unmapped_extension_type_checks_presence_and_says_so(
         self, tmp_path: Path
     ) -> None:
@@ -683,6 +756,52 @@ class TestPyarrowAbsent:
         assert report.artifact_format == FORMAT_PARQUET
         assert "pyarrow is not installed" in report.reason
         assert report.ok  # the hand-off is not failed by our own missing extra
+
+    def test_a_missing_artifact_is_absent_even_with_no_pyarrow(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Whether the producer wrote anything needs no reader.
+
+        Probing the optional dependency first would relabel "the app wrote nothing"
+        as "we could not check it" on a JSON-only install — hiding a real producer
+        failure behind our own missing extra, on exactly the boxes least likely to
+        have it.
+        """
+        empty = tmp_path / "raw_queries"
+        empty.mkdir()
+        self._hide_pyarrow(monkeypatch)
+
+        report = _validate(empty, _DECLARATION)
+
+        assert report.outcome == OUTCOME_ABSENT
+        assert "no parquet file" in report.reason
+
+    def test_an_installed_but_unusable_pyarrow_degrades_and_names_itself(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An incompatible install is a fault, not an absence, and must not raise.
+
+        `validate()` documents that it never raises and a direct caller has no
+        wrapper to catch it, so anything an arrow too old (or half-installed) throws
+        on load has to land on the degrade path. Reporting it as "not installed"
+        would send someone to install a package they already have.
+        """
+        artifact = _write_parquet(tmp_path / "part.parquet", _HEALTHY)
+        # The realistic shape of the comment's "an arrow too old to expose
+        # read_schema": the module imports fine, the symbol is not there.
+        monkeypatch.delattr(pq, "read_schema")
+
+        with patch.object(parquet_module, "logger") as logger:
+            report = _validate(artifact, _DECLARATION)
+
+            # A genuine fault, so unlike absence it keeps its traceback.
+            logger.warning.assert_called_once()
+            assert logger.warning.call_args.kwargs.get("exc_info") is True
+
+        assert report.outcome == OUTCOME_UNSUPPORTED
+        assert "installed but unusable" in report.reason
+        assert "AttributeError" in report.reason
+        assert report.ok  # our broken install is not a verdict on the artifact
 
     def test_the_wrapper_still_emits_one_outcome(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
