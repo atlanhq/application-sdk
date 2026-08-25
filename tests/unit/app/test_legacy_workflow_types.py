@@ -455,6 +455,94 @@ class TestAppRegistration:
         meta = AppRegistry.get_instance().get("unexpired-alias")
         assert "OldWorkflow" in meta.workflow_types
 
+    def test_prerelease_of_removal_version_is_not_expired(
+        self,
+        clean_app_registry: object,
+        clean_task_registry: object,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A release candidate of the removal version is still pre-removal:
+        4.2.0rc1 orders strictly below 4.2.0, so the aliases stay alive."""
+        monkeypatch.setattr("application_sdk.version.__version__", "4.2.0rc1")
+
+        class RcAliasApp(App):
+            name = "rc-alias"
+            legacy_workflow_types = {"OldWorkflow": "work"}
+            legacy_workflow_types_removal_version = "4.2.0"
+
+            @entrypoint
+            async def work(
+                self, input: _QiInput
+            ) -> _QiOutput:  # pragma: no cover - not executed
+                return _QiOutput()
+
+        meta = AppRegistry.get_instance().get("rc-alias")
+        assert "OldWorkflow" in meta.workflow_types
+
+    def test_prerelease_past_removal_version_is_expired(
+        self,
+        clean_app_registry: object,
+        clean_task_registry: object,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("application_sdk.version.__version__", "4.2.1rc1")
+        with pytest.raises(EntryPointContractError, match="removal"):
+
+            class PastRcAliasApp(App):
+                name = "past-rc-alias"
+                legacy_workflow_types = {"OldWorkflow": "work"}
+                legacy_workflow_types_removal_version = "4.2.0"
+
+                @entrypoint
+                async def work(
+                    self, input: _QiInput
+                ) -> _QiOutput:  # pragma: no cover - not executed
+                    return _QiOutput()
+
+    @pytest.mark.parametrize("installed", ["4.2.0a1", "4.2.0b2", "4.2.0.dev1"])
+    def test_prerelease_segments_do_not_blame_the_removal_version(
+        self,
+        clean_app_registry: object,
+        clean_task_registry: object,
+        monkeypatch: pytest.MonkeyPatch,
+        installed: str,
+    ) -> None:
+        """An alpha/beta/dev build of the removal version must register, not
+        raise the error reserved for a malformed removal declaration."""
+        monkeypatch.setattr("application_sdk.version.__version__", installed)
+
+        class PreReleaseAliasApp(App):
+            name = "prerelease-alias"
+            legacy_workflow_types = {"OldWorkflow": "work"}
+            legacy_workflow_types_removal_version = "4.2.0"
+
+            @entrypoint
+            async def work(
+                self, input: _QiInput
+            ) -> _QiOutput:  # pragma: no cover - not executed
+                return _QiOutput()
+
+        meta = AppRegistry.get_instance().get("prerelease-alias")
+        assert "OldWorkflow" in meta.workflow_types
+
+    def test_non_numeric_removal_version_is_rejected(
+        self, clean_app_registry: object, clean_task_registry: object
+    ) -> None:
+        """The removal declaration itself stays dotted-numeric: a final
+        release is the only expiry the contract accepts."""
+        with pytest.raises(EntryPointContractError, match="dotted numeric"):
+
+            class BadRemovalApp(App):
+                name = "bad-removal"
+                legacy_workflow_types = {"OldWorkflow": "work"}
+                legacy_workflow_types_removal_version = "4.2.0rc1"
+
+                @entrypoint
+                async def work(
+                    self, input: _QiInput
+                ) -> _QiOutput:  # pragma: no cover - not executed
+                    return _QiOutput()
+
     def test_removal_version_without_aliases_is_ignored(
         self, clean_app_registry: object, clean_task_registry: object
     ) -> None:

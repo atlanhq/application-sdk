@@ -74,16 +74,18 @@ class ContractEntrypointScan:
     declaration alone cannot make it reach this one."""
 
     own_app_names: frozenset[str] = field(default_factory=frozenset)
-    """App names this manifest's own DAG claims — the ``<app>`` half of every
-    colon-qualified ``workflow_type`` it routes.
+    """The app identity this manifest's own DAG node claims, as an at-most-one
+    element set (empty when no identity can be established, and in
+    ``multi``/``absent`` modes).
 
     This is the manifest's own identity, taken from the same artifact that
-    declares the aliases. A bare node whose ``app_name`` falls outside this set
-    dispatches on another app's worker, so a local alias declaration cannot make
-    it reach an entry point here. Deriving it from the manifest rather than from
-    the App classes found in code matters in a repo that defines more than one
-    App: a node naming the *other* app must not launder an alias belonging to
-    this one. Empty in ``multi``/``absent`` modes.
+    declares the aliases — seeded from the entry point's own node, never from
+    sibling nodes' colon prefixes (see :func:`_routes_from_dag`). A bare node
+    whose ``app_name`` falls outside this set dispatches on another app's
+    worker, so a local alias declaration cannot make it reach an entry point
+    here. Deriving it from the manifest rather than from the App classes found
+    in code matters in a repo that defines more than one App: a node naming the
+    *other* app must not launder an alias belonging to this one.
     """
 
     legacy_aliases: frozenset[tuple[str, str]] = field(default_factory=frozenset)
@@ -169,20 +171,23 @@ def _routes_from_dag(
         node's ``app_name`` does not name a different app.
 
     ``own_app_names``
-        The app identities this manifest claims as its own: the ``app_name`` its
-        entry point's own DAG node carries, plus the ``<app>`` half of any
-        colon-qualified type it routes.
+        The single app identity this manifest claims as its own, seeded from
+        the entry point's own node: the ``app_name`` the toolkit stamps onto it
+        (``inputs.app_name``, CNCT-93), falling back to the ``<app>`` half of
+        that node's own colon-qualified ``workflow_type``.
 
-        Both sources are needed. The toolkit stamps the contract ``name`` onto
-        the entry point's own node (``inputs.app_name``, CNCT-93) but emits a
-        *bare* ``workflow_type`` for it, so a generated manifest usually carries
-        no colon at all — reading only colon prefixes would leave this set empty
-        on every manifest the toolkit actually produces. Colon-qualified types
-        appear on route/card-split apps and are this app's own too.
+        Other nodes never widen the identity. A colon prefix elsewhere in the
+        DAG is accepted only when it equals the seeded identity — which adds
+        nothing — because a ``"<other>:<wire>"`` route names *that* app, and
+        treating it as a second identity of this one would let a foreign bare
+        node launder a declared alias (silencing P016 on a genuinely unrouted
+        entry point). When no own node exists, the identity falls back to the
+        one colon prefix the whole DAG agrees on; disagreeing prefixes
+        establish nothing and the set stays empty.
 
     The walk is scoped to the ``dag`` subtree, so a ``workflow_type`` appearing
-    elsewhere in the manifest is not collected.  It does **not** pin the
-    ``<app>`` prefix to this app's own name — the (rare) cross-app
+    elsewhere in the manifest is not collected.  ``routes`` does **not** pin
+    the ``<app>`` prefix to this app's own name — the (rare) cross-app
     ``"<other>:<wire>"`` node inside the DAG would also contribute its wire
     name.  In a generated single-mode manifest every routed node is this app's
     own, so in practice this returns this app's DAG-routed entry points.
@@ -192,13 +197,20 @@ def _routes_from_dag(
 
     wire_names: set[str] = set()
     dag_types: set[tuple[str, str | None]] = set()
-    app_names: set[str] = set()
+    prefixes: set[str] = set()
 
     def _node_app_name(node: dict[str, Any]) -> str | None:
         inputs = node.get("inputs")
         source = inputs if isinstance(inputs, dict) else node
         app_name = source.get("app_name")
         return app_name if isinstance(app_name, str) and app_name else None
+
+    def _node_workflow_type(node: dict[str, Any]) -> str | None:
+        wt = node.get("workflow_type")
+        if not isinstance(wt, str) or not wt:
+            inputs = node.get("inputs")
+            wt = inputs.get("workflow_type") if isinstance(inputs, dict) else None
+        return wt if isinstance(wt, str) and wt else None
 
     def _walk(node: Any) -> None:
         if isinstance(node, dict):
@@ -209,7 +221,7 @@ def _routes_from_dag(
                     prefix, wire = wt.split(":", 1)
                     wire_names.add(wire)
                     if prefix:
-                        app_names.add(prefix)
+                        prefixes.add(prefix)
             for value in node.values():
                 _walk(value)
         elif isinstance(node, list):
@@ -218,17 +230,30 @@ def _routes_from_dag(
 
     _walk(dag)
 
-    # The entry point's own node id is always the literal "extract" (App.pkl's
-    # generateDAG()), and the toolkit bakes the contract `name` onto it. That is the
-    # manifest's own identity even when nothing in the DAG is colon-qualified.
+    # The manifest's own identity is seeded from its own node alone — id
+    # "extract" (App.pkl's generateDAG()), carrying the contract `name` the
+    # toolkit bakes onto it, or that node's own `<app>:` prefix. A prefix on
+    # any *other* node names that node's app and must never widen this set: a
+    # foreign `<other>:<wire>` route would otherwise admit a bare alias node
+    # whose app_name is `<other>` (untrusted-own-app-identity). Without an own
+    # node, the one prefix the whole DAG agrees on is the identity; disagreeing
+    # prefixes establish nothing.
+    own_identity: str | None = None
     if isinstance(dag, dict):
         own_node = dag.get(_OWN_NODE_ID)
         if isinstance(own_node, dict):
-            own_name = _node_app_name(own_node)
-            if own_name is not None:
-                app_names.add(own_name)
+            own_identity = _node_app_name(own_node)
+            if own_identity is None:
+                own_wt = _node_workflow_type(own_node)
+                if own_wt is not None and ":" in own_wt:
+                    own_identity = own_wt.split(":", 1)[0] or None
+    if own_identity is None and len(prefixes) == 1:
+        own_identity = next(iter(prefixes))
 
-    return frozenset(wire_names), frozenset(dag_types), frozenset(app_names)
+    own_app_names = (
+        frozenset({own_identity}) if own_identity is not None else frozenset()
+    )
+    return frozenset(wire_names), frozenset(dag_types), own_app_names
 
 
 def scan_contract(root: Path) -> ContractEntrypointScan:

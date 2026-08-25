@@ -685,16 +685,16 @@ def _require_aliases_not_expired(cls: type, app_name: str) -> None:
         __version__,
     )
 
-    def parse(version: str) -> tuple[int, ...]:
-        try:
-            return tuple(int(part) for part in version.split("."))
-        except ValueError:
-            raise EntryPointContractError(
-                f"App '{app_name}': legacy_workflow_types_removal_version must "
-                f"be a dotted numeric version, got {version!r}."
-            ) from None
+    if not all(part.isdigit() for part in removal.split(".")):
+        raise EntryPointContractError(
+            f"App '{app_name}': legacy_workflow_types_removal_version must "
+            f"be a dotted numeric version, got {removal!r}."
+        )
+    from packaging.version import (  # noqa: PLC0415 — cheap, lazy like __version__
+        Version,
+    )
 
-    if parse(__version__.split("+")[0].split("rc")[0]) >= parse(removal):
+    if Version(__version__) >= Version(removal):
         raise EntryPointContractError(
             f"App '{app_name}': legacy_workflow_types declared with removal "
             f"version {removal}, and the installed SDK is {__version__}. The "

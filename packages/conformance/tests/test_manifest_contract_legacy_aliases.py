@@ -364,6 +364,34 @@ def test_k015_does_not_let_a_sibling_app_satisfy_a_manifest_alias(
     assert any("SiblingLegacyWorkflow -> sibling-crawler" in m for m in msgs)
 
 
+def test_k015_foreign_colon_prefix_does_not_pull_a_sibling_into_scope(
+    tmp_path: Path,
+) -> None:
+    """A `<other>:<wire>` route elsewhere in the DAG names *that* app.
+
+    Treating its prefix as a second identity of this manifest put the sibling
+    App into the owning scope, so the sibling's aliases read as missing from a
+    manifest that was never meant to carry them.
+    """
+    manifest = {
+        "dag": {
+            "extract": {"workflow_type": "myapp:extract-metadata"},
+            "sibling-route": {"workflow_type": "sibling:other"},
+        },
+        "legacy_workflow_types": {
+            "aliases": [{"alias": "LegacyCrawlerWorkflow", "entrypoint": "crawler"}]
+        },
+    }
+    path = tmp_path / "app" / "generated" / "manifest.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    paths = _write_py(
+        tmp_path,
+        {"app/connector.py": _app_source(), "app/sibling.py": _SIBLING_APP},
+    )
+    assert _k015(scan_all(paths, tmp_path)) == []
+
+
 def test_k015_no_ops_when_no_app_class_owns_the_manifest(tmp_path: Path) -> None:
     """Only a foreign App is defined — nothing here can be attributed."""
     _write_manifest(

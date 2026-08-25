@@ -964,6 +964,76 @@ def test_p016_generated_shape_still_refuses_a_foreign_node(tmp_path: Path) -> No
     assert any("Entry point 'keifu'" in m for m in msgs)
 
 
+def test_p016_foreign_colon_prefix_does_not_widen_identity(tmp_path: Path) -> None:
+    """A sibling `<other>:<wire>` node must not launder a foreign bare node.
+
+    Identity is seeded from the entry point's own node; a colon-qualified type
+    naming a different app is that app's route, not a second identity of this
+    one. Adding every prefix let `platform:other` admit a bare alias node whose
+    `app_name` is `platform`, silencing P016 on a genuinely unrouted entry point.
+    """
+    import json
+
+    gen = tmp_path / "app" / "generated"
+    gen.mkdir(parents=True)
+    manifest = {
+        "dag": {
+            "extract": {
+                "inputs": {
+                    "workflow_type": "ExtractMetadataWorkflow",
+                    "app_name": "app",
+                    "task_queue": "atlan-app",
+                }
+            },
+            "foreign-route": {"workflow_type": "platform:other"},
+            "aliased": {
+                "workflow_type": "OverrideWorkflow",
+                "inputs": {"app_name": "platform"},
+            },
+        },
+        **_alias_block([("OverrideWorkflow", "keifu")]),
+    }
+    (gen / "manifest.json").write_text(json.dumps(manifest))
+    paths = _write_py(tmp_path, {"app/connector.py": _ALIASED_APP_SOURCE})
+    findings = scan_all(paths, tmp_path)
+    msgs = [f.message for f in findings if f.rule_id == "P016"]
+    assert any("Entry point 'keifu'" in m for m in msgs)
+
+
+def test_p016_no_own_node_and_disagreeing_prefixes_stay_conservative(
+    tmp_path: Path,
+) -> None:
+    """Without an own node, a single DAG-wide colon prefix is the only identity.
+
+    When the colon prefixes disagree, no identity can be established, so a bare
+    alias node carrying any `app_name` does not route — conservative for the
+    same reason a foreign node does not.
+    """
+    import json
+
+    gen = tmp_path / "app" / "generated"
+    gen.mkdir(parents=True)
+    manifest = {
+        "dag": {
+            "local": {
+                "workflow_type": "app:extract-metadata",
+                "inputs": {"app_name": "app", "task_queue": "shared-queue"},
+            },
+            "foreign-route": {"workflow_type": "platform:other"},
+            "aliased": {
+                "workflow_type": "OverrideWorkflow",
+                "inputs": {"app_name": "platform"},
+            },
+        },
+        **_alias_block([("OverrideWorkflow", "keifu")]),
+    }
+    (gen / "manifest.json").write_text(json.dumps(manifest))
+    paths = _write_py(tmp_path, {"app/connector.py": _ALIASED_APP_SOURCE})
+    findings = scan_all(paths, tmp_path)
+    msgs = [f.message for f in findings if f.rule_id == "P016"]
+    assert any("Entry point 'keifu'" in m for m in msgs)
+
+
 def test_p016_a_second_app_class_does_not_launder_a_foreign_node(
     tmp_path: Path,
 ) -> None:
