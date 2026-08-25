@@ -6,6 +6,7 @@ thin dispatcher. Nothing in this module is part of the public SDK surface.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, get_type_hints
 
@@ -266,6 +267,7 @@ def _apply_app_registration(
     input_type: type[Input],
     output_type: type[Output],
     entry_points: dict[str, EntryPointMetadata] | None = None,
+    legacy_workflow_types: Mapping[str, str] | None = None,
 ) -> None:
     """Register an App class with the AppRegistry.
 
@@ -279,6 +281,8 @@ def _apply_app_registration(
         input_type: Input dataclass type.
         output_type: Output dataclass type.
         entry_points: Entry point metadata keyed by entry point name.
+        legacy_workflow_types: Inbound-only Temporal type aliases declared on
+            the class itself (``{alias: entry-point name}``).
     """
     cls._app_registered = True
     cls._app_name = name
@@ -297,6 +301,10 @@ def _apply_app_registration(
         tags=tags,
         passthrough_modules=passthrough_modules,
         entry_points=entry_points or {},
+        # Verbatim on purpose: build_workflow_type_index is the single
+        # validation site, and an `or {}` here would silently absorb a falsy
+        # bad declaration such as [].
+        legacy_workflow_types=legacy_workflow_types,
         allow_override=True,
     )
     cls._app_metadata = metadata

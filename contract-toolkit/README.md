@@ -172,6 +172,14 @@ the extract node bakes the contract `name` so failure logs stay attributable —
 tenant-typed value would render a widget that reaches nothing. See
 [`docs/reference.md`](docs/reference.md) → *Per-node `app_name` in `inputs.args`*.
 
+A `legacy_workflow_types` block is emitted when the contract declares
+`legacyWorkflowTypes` — inbound-only Temporal workflow type aliases that keep the worker
+answering a pre-migration type while every SDK-initiated dispatch still emits the
+canonical one. The block is the contracted declaration site: the SDK's
+`App.legacy_workflow_types` class attribute must declare the same pairs, and conformance
+`K015` fails the app on any disagreement. Nothing is emitted when no alias is declared.
+See [`docs/reference.md`](docs/reference.md) → *Legacy Workflow Type Aliases*.
+
 ### `_input.py` (`app/generated/_input.py`)
 
 Typed Python `AppInputContract` dataclass. SDK-owned fields inherited from `ExtractionInput`; app-specific fields generated from `uiConfig.properties`. Inherited `include_filter` and `exclude_filter` fields accept APITree object selections by normalizing them to the SDK filter-map shape before validation.

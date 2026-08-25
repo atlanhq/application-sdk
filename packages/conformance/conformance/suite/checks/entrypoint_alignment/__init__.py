@@ -19,20 +19,14 @@ Currently implemented:
 
 from __future__ import annotations
 
-import ast
 import sys
 from pathlib import Path
 
-from conformance.suite.checks._ast_common import (
-    _IgnoreDirective,
-    _parse_directives,
-    discover,
-    make_cli_main,
-)
+from conformance.suite.checks._ast_common import discover, make_cli_main
 from conformance.suite.schema.findings import Finding
 
 from ._check import check_p016
-from ._code_entrypoints import CodeEntrypointScan, scan_file_for_entrypoints
+from ._code_entrypoints import scan_paths_for_entrypoints
 from ._contract_entrypoints import scan_contract
 
 SERIES = "P"
@@ -58,28 +52,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         Repo root — used both for relative-URI construction in findings and for
         locating the ``app/generated/`` directory.
     """
-    code = CodeEntrypointScan()
-    directives_by_file: dict[str, dict[int, _IgnoreDirective]] = {}
-
-    for path in paths:
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-        try:
-            tree = ast.parse(text, filename=str(path))
-        except SyntaxError:
-            continue
-        if not isinstance(tree, ast.Module):
-            continue
-        try:
-            rel = path.relative_to(root)
-        except ValueError:
-            rel = path
-        rel_str = str(rel)
-        directives_by_file[rel_str] = _parse_directives(text)
-        scan_file_for_entrypoints(tree, rel_str, code)
-
+    code, directives_by_file = scan_paths_for_entrypoints(paths, root)
     contract = scan_contract(root)
     return check_p016(code, contract, directives_by_file)
 

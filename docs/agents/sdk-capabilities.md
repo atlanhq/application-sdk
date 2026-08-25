@@ -18,7 +18,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 
 | Subpackage | Purpose | Exports |
 |---|---|---|
-| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 42 |
+| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 43 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 20 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 34 |
@@ -257,6 +257,13 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Summary:** Wrap @task methods on an instance to execute as Temporal activities.
 - **Defined in:** `application_sdk/app/base.py`
 
+#### `canonical_workflow_type`
+
+- **Import:** `from application_sdk.app import canonical_workflow_type`
+- **Signature:** `canonical_workflow_type(app_name: str, ep: EntryPointMetadata)`
+- **Summary:** The convention-derived Temporal workflow type for *ep*.
+- **Defined in:** `application_sdk/app/entrypoint.py`
+
 #### `entrypoint_module_segment`
 
 - **Import:** `from application_sdk.app import entrypoint_module_segment`
@@ -267,7 +274,7 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 #### `generate_workflow_class`
 
 - **Import:** `from application_sdk.app.base import generate_workflow_class`
-- **Signature:** `generate_workflow_class(app_cls: type[App], ep: EntryPointMetadata) -> type`
+- **Signature:** `generate_workflow_class(app_cls: type[App], ep: EntryPointMetadata, workflow_name: str | None = None) -> type`
 - **Summary:** Generate a Temporal workflow class for one entry point.
 - **Defined in:** `application_sdk/app/base.py`
 

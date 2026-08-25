@@ -361,6 +361,44 @@ schedules: Listing<ScheduleSpec>(this.toList().map((s) -> s.name).isDistinct) = 
 /// constraint fails a contract with duplicate names at eval time.
 events: Listing<EventTriggerSpec>(this.toList().map((e) -> e.name).isDistinct) = new Listing {}
 
+/// Inbound-only legacy Temporal workflow type aliases (CONNECT-1081). When non-empty,
+/// the toolkit renders a `legacy_workflow_types` block into `manifest.json`, and the
+/// SDK's `App.legacy_workflow_types` class attribute must declare exactly the same
+/// pairs — conformance K015 fails the app on any disagreement.
+///
+/// An alias is accepted, never produced: the worker keeps answering a pre-migration
+/// type that unmigrated callers still dispatch, while every SDK-initiated dispatch
+/// still emits the canonical `{app-name}:{entrypoint-name}` type. That asymmetry is
+/// what lets the `temporal.workflow.type` telemetry dimension count exactly the callers
+/// that have not migrated, so an alias can be dropped once the count reaches zero.
+///
+/// Default is empty (no `legacy_workflow_types` key emitted), so existing manifests are
+/// byte-identical.
+///
+/// The block is **app-level**, unlike `schedules`: the SDK's
+/// `App.legacy_workflow_types` is one map across every entry point, and its values name
+/// entry points other than the declaring one. A multi-entrypoint bundle root renders no
+/// `manifest.json` of its own and cannot reach into an entry point's already-generated
+/// output, so declaring aliases there is refused at eval time. Declare the **same block
+/// on every entrypoint contract** instead — each one then carries an identical copy, and
+/// K015 fails the app if a copy is missing or diverges.
+///
+/// `alias` is the reconcile identity key; duplicates would collapse to one entry, so
+/// the constraint fails such a contract at eval time.
+legacyWorkflowTypes: Listing<LegacyWorkflowTypeSpec>(this.toList().map((a) -> a.alias).isDistinct) = new Listing {}
+
+/// Opt-in expiry for `legacyWorkflowTypes`, as an SDK version string (`"4.2.0"`).
+/// Mirrors the SDK's app-level `legacy_workflow_types_removal_version`: once the
+/// installed SDK reaches this version, registration fails while any alias remains, so
+/// keeping the aliases becomes a loud decision rather than drift. Empty (the default)
+/// declares no expiry and emits no `removal_version` key. The expiry is app-level, not
+/// per-alias, because the SDK gates the whole declaration on one version.
+/// Constrained to a dotted numeric version or empty: the SDK parses this with
+/// `int()` per dot-separated part and refuses registration on anything else, so a
+/// free-form String here would generate a clean contract whose worker then dies at
+/// boot — the same failure mode the alias charset constraint closes.
+legacyWorkflowTypesRemovalVersion: String(isEmpty || matches(Regex("\\d+(\\.\\d+)*"))) = ""
+
 /// Top-level on/off for app notifications.
 ///
 /// When `true`, appends a run-level notification node (`NotificationNode`, key
@@ -2360,6 +2398,34 @@ class EventTriggerSpec {
   status: "ACTIVE"|"PAUSED" = "ACTIVE"
 }
 
+/// One inbound-only legacy Temporal workflow type alias. `alias` is the wire type an
+/// unmigrated caller still dispatches; `entrypoint` is the entry-point name it routes
+/// to. The pair mirrors one `{alias: entrypoint-name}` entry of the SDK's
+/// `App.legacy_workflow_types` mapping.
+///
+/// Both fields carry the shape rules the SDK enforces at registration
+/// (`_validate_legacy_workflow_type`): no whitespace, no control or other non-printable
+/// characters, and at least one alphanumeric. The alphanumeric class is Unicode, not
+/// ASCII, because the SDK tests it with `str.isalnum()` — a non-Latin legacy type the
+/// worker would register must not be refused here. A `:` is deliberately allowed: a
+/// legacy type may itself be a qualified `{app-name}:{wire-name}` string.
+///
+/// Keeping these aligned matters because the two checks fire at different times. A shape
+/// pkl accepts and the SDK rejects generates a clean contract and then fails at worker
+/// boot, which is the slowest possible place to learn it.
+class LegacyWorkflowTypeSpec {
+  alias: String(
+    matches(Regex("\\S+")),
+    !matches(Regex(".*\\p{C}.*")),
+    matches(Regex(".*[\\p{IsAlphabetic}\\p{IsDigit}].*"))
+  )
+  entrypoint: String(
+    matches(Regex("\\S+")),
+    !matches(Regex(".*\\p{C}.*")),
+    matches(Regex(".*[\\p{IsAlphabetic}\\p{IsDigit}].*"))
+  )
+}
+
 local function renderFilterRule(rule: FilterRuleSpec): Mapping<String, Any> =
   // Hidden properties are lazy — reference the validator so its `throw` fires at eval
   // time rather than silently rendering an invalid rule.
@@ -2418,6 +2484,26 @@ local manifestData: Mapping<String, Any> = new Mapping {
             }
           }
         }
+      }
+    }
+  }
+  // CONNECT-1081: the manifest is the contracted declaration site for inbound-only
+  // workflow type aliases. Conformance K015 reads this block and fails the app when it
+  // disagrees with the SDK's `App.legacy_workflow_types`. Guarded so a contract that
+  // declares no alias renders a byte-identical manifest.
+  when (legacyWorkflowTypes.length > 0) {
+    ["legacy_workflow_types"] = new Mapping {
+      ["aliases"] = new Listing {
+        for (a in legacyWorkflowTypes) {
+          new Mapping {
+            ["alias"] = a.alias
+            ["entrypoint"] = a.entrypoint
+          }
+        }
+      }
+      // Omit rather than render "" so "no expiry declared" is one shape, not two.
+      when (legacyWorkflowTypesRemovalVersion != "") {
+        ["removal_version"] = legacyWorkflowTypesRemovalVersion
       }
     }
   }
@@ -4101,6 +4187,30 @@ local credentialConflictNames: List<String> =
     !files.every((file) -> file.output.text == files.first.output.text)
   )
 
+// CONNECT-1081: a bundle root re-exports each entrypoint contract's already-generated
+// files verbatim and emits no `manifest.json` of its own, so aliases declared here
+// would reach no manifest at all. Refuse at eval time rather than let the declaration
+// vanish and surface later as conformance drift pointing at the wrong file.
+// Refuse a declaration that would reach no manifest. Two contracts generate none: a
+// multi-entrypoint bundle root (which re-exports each entry point's already-generated
+// files) and a single-entrypoint contract with no uiConfig (manifest.json is emitted
+// only `when (uiConfig != null)`). `local`, not `hidden`, so an amending contract cannot
+// assign the guard away and generate silently.
+local _legacyWorkflowTypesPlacementCheck: Any =
+  if (legacyWorkflowTypes.isEmpty)
+    null
+  else if (!entrypoints.isEmpty)
+    throw("legacyWorkflowTypes cannot be declared on a multi-entrypoint bundle root: "
+      + "the root emits no manifest.json, so the aliases would never be generated. "
+      + "The block is app-level — declare the same block on the contract of every "
+      + "entrypoint, so each generated manifest carries an identical copy.")
+  else if (uiConfig == null)
+    throw("legacyWorkflowTypes requires a contract that generates a manifest.json, "
+      + "but this one declares no uiConfig, so no manifest is emitted and the aliases "
+      + "would never be generated. Declare a uiConfig, or drop legacyWorkflowTypes and "
+      + "keep App.legacy_workflow_types as the app's only declaration site.")
+  else null
+
 hidden _credentialConflictCheck: Any =
   if (!credentialConflictNames.isEmpty)
     throw("App.pkl found credential config filename(s) generated with different content: \(credentialConflictNames.join(", ")). "
@@ -4115,6 +4225,9 @@ output =
   let (_jdbcCheck = jdbcInvariant)
   let (_connectorCheck = connectorInvariant)
   let (_credCheck = _credentialConflictCheck)
+  // Forced here because a bundle root never evaluates manifestData, which is the only
+  // other reader of legacyWorkflowTypes — the misplacement would otherwise stay lazy.
+  let (_legacyAliasPlacementCheck = _legacyWorkflowTypesPlacementCheck)
   // Forced here rather than inside generateExtractNode: `pipeline { extract = null }`
   // is a supported opt-out, and a lazily-evaluated check inside that node would
   // let a reserved-name collision through for exactly those contracts.
