@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 
 from application_sdk.testing.e2e.base import FullDAGOutcome
@@ -273,6 +275,21 @@ class _ConcreteSQLTest(SQLAppE2ETest):
         return "role-guid-123"
 
 
+@pytest.fixture(autouse=True)
+def _restore_class_mode() -> Iterator[None]:
+    """Put ``_ConcreteSQLTest.mode`` back after a test rebinds the ClassVar.
+
+    ``_make_test`` sets the mode on the *class*, not the instance, so without
+    this every test leaks its mode into the shared class default and a later
+    reader of that default becomes order-dependent.
+    """
+    original = _ConcreteSQLTest.mode
+    try:
+        yield
+    finally:
+        _ConcreteSQLTest.mode = original
+
+
 class TestSQLAppE2ETestHooks:
     def _make_test(self, mode: RunMode = RunMode.AGENT) -> _ConcreteSQLTest:
         t = _ConcreteSQLTest()
@@ -376,3 +393,97 @@ class TestSQLAppE2ETestHooks:
         t = self._make_test()
         dag = t._build_legacy_seed_dag("atlan-mysql-ci-agent-1")
         assert dag["extract"]["inputs"]["task_queue"] == "atlan-mysql-ci-agent-1"
+
+
+# ---------------------------------------------------------------------------
+# SQLAppE2ETest.agent_json — the hook that feeds build_ae_payload's agent branch
+# ---------------------------------------------------------------------------
+
+
+def _submit_params(payload: dict) -> dict[str, object]:
+    tasks = payload["spec"]["templates"][0]["dag"]["tasks"]
+    return {p["name"]: p["value"] for p in tasks[0]["arguments"]["parameters"]}
+
+
+class TestSQLAppAgentJsonHook:
+    """One derivation: the mustache blob and the flat AE rows share a source.
+
+    Before the hook was wired, ``BaseE2ETest.agent_json()`` returned None for
+    every SQL connector, ``build_ae_payload`` skipped its whole agent branch,
+    and each connector overrode ``_build_ae_payload`` to re-append the routing
+    rows by hand — a second derivation that could drift from the blob.
+    """
+
+    def _make_test(self, mode: RunMode = RunMode.AGENT) -> _ConcreteSQLTest:
+        t = _ConcreteSQLTest()
+        t.run_id = 1
+        t.connection_qualified_name = "default/mysql/1"
+        t.connection_display_name = "mysql-1"
+        t._admin_role_guid = "role-guid-123"
+        t.__class__.mode = mode
+        return t
+
+    def test_returns_none_in_direct_mode(self) -> None:
+        assert self._make_test(RunMode.DIRECT).agent_json() is None
+
+    def test_matches_build_agent_json(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("ATLAN_APPLICATION_NAME", raising=False)
+        monkeypatch.delenv("ATLAN_DEPLOYMENT_NAME", raising=False)
+        t = self._make_test(RunMode.AGENT)
+        agent = t.agent_spec()
+        assert agent is not None
+        assert t.agent_json() == build_agent_json(_DATABASE, agent, "mysql")
+
+    def test_mustache_blob_comes_from_the_same_hook(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ATLAN_APPLICATION_NAME", raising=False)
+        monkeypatch.delenv("ATLAN_DEPLOYMENT_NAME", raising=False)
+        t = self._make_test(RunMode.AGENT)
+        subs = t._mustache_substitutions()
+        assert subs.model_dump(by_alias=True)["{{agent-json}}"] == t.agent_json()
+
+    def test_subclass_emits_routing_rows_with_no_payload_override(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The point of the issue: no ``_build_ae_payload`` override needed."""
+        monkeypatch.delenv("ATLAN_APPLICATION_NAME", raising=False)
+        monkeypatch.delenv("ATLAN_DEPLOYMENT_NAME", raising=False)
+        assert "_build_ae_payload" not in vars(_ConcreteSQLTest)
+        t = self._make_test(RunMode.AGENT)
+        agent = t.agent_spec()
+        assert agent is not None
+
+        params = _submit_params(t._build_ae_payload("mysql-slug"))
+
+        assert params["agent-json.host"] == _DATABASE.host
+        assert params["agent-json.port"] == _DATABASE.port
+        assert params["agent-json.auth-type"] == _DATABASE.auth_type
+        assert params["agent-json.agent-name"] == agent.agent_name
+        assert params["agent-json.agent-type"] == agent.agent_type
+        assert params["agent-json.key-type"] == agent.key_type
+        assert params["agent-json.aws-auth-method"] == agent.aws_auth_method
+        assert params["agent-json.azure-auth-method"] == agent.azure_auth_method
+        assert params["credential-guid.auth-type"] == _DATABASE.auth_type
+        assert params["credential-guid.credential-type"] == "atlan-connectors-mysql"
+
+    def test_blob_and_flat_rows_agree(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Same source, so the JSON blob cannot disagree with the flat rows."""
+        import orjson
+
+        monkeypatch.delenv("ATLAN_APPLICATION_NAME", raising=False)
+        monkeypatch.delenv("ATLAN_DEPLOYMENT_NAME", raising=False)
+        t = self._make_test(RunMode.AGENT)
+        params = _submit_params(t._build_ae_payload("mysql-slug"))
+        blob = orjson.loads(params["agent-json"])
+        assert blob == t.agent_json()
+        for key, value in blob.items():
+            flat = f"agent-json.{key}"
+            if flat in params:
+                assert params[flat] == value
+
+    def test_direct_mode_emits_no_routing_rows(self) -> None:
+        t = self._make_test(RunMode.DIRECT)
+        params = _submit_params(t._build_ae_payload("mysql-slug"))
+        assert not [k for k in params if k.startswith("agent-json.")]
+        assert not [k for k in params if k.startswith("credential-guid.")]
