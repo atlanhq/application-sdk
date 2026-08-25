@@ -18,7 +18,11 @@ constant-memory, per-record check, plus ``iter_ndjson_lines``, the one NDJSON wa
 in the tree) and :mod:`application_sdk.validation.parquet`
 (``ParquetFooterValidator`` — a footer schema diff that reads **no rows**, and the
 check that would have caught the 73-day marker-freeze RCA). The public entry point
-is ``validate_artifact`` in :mod:`application_sdk.validation.wrapper`.
+is ``validate_artifact`` in :mod:`application_sdk.validation.wrapper`. Both
+enforcement points — consumer-side at ingest and producer-side before persist — are
+wired to the activity interceptor's one ``FileReference`` seam by
+:mod:`application_sdk.validation.interceptor`, warn-only, with every artifact
+emitting an outcome.
 
 **Asset validation** (BLDX-1555) is the concrete NDJSON x typed-model check that
 predates the wrapper, built on the per-asset ``.validate()`` backbone that
@@ -87,6 +91,14 @@ from application_sdk.validation.assets import (
     validate_assets_as_artifact,
     validate_transformed_dir,
 )
+from application_sdk.validation.interceptor import (
+    ARTIFACT_SIDE_HANDOFF,
+    ARTIFACT_SIDE_INGEST,
+    ARTIFACT_SIDES,
+    boundary_contract_types,
+    entrypoint_index,
+    validate_artifacts,
+)
 from application_sdk.validation.ndjson import NdjsonValidator, iter_ndjson_lines
 from application_sdk.validation.parquet import ParquetFooterValidator
 from application_sdk.validation.protocols import FormatValidator, SchemaSource
@@ -105,6 +117,9 @@ from application_sdk.validation.wrapper import (
 __all__ = [
     # Artifact validation (ADR-0020)
     "ARTIFACT_FORMATS",
+    "ARTIFACT_SIDES",
+    "ARTIFACT_SIDE_HANDOFF",
+    "ARTIFACT_SIDE_INGEST",
     "FORMAT_NDJSON",
     "FORMAT_PARQUET",
     "ArtifactDeclaration",
@@ -128,10 +143,13 @@ __all__ = [
     "artifact_schema_paths",
     "artifact_validation_event_fields",
     "artifact_validation_matrix_json",
+    "boundary_contract_types",
     "builtin_format_validators",
     "declared_artifact_fields",
+    "entrypoint_index",
     "iter_ndjson_lines",
     "validate_artifact",
+    "validate_artifacts",
     # Asset validation (BLDX-1555) — the NDJSON x ModelSource cell (FND-690)
     "AssetArtifactReport",
     "AssetValidationFailure",

@@ -439,17 +439,29 @@ The generic artifact-validation wrapper ([ADR-0020](../adr/0020-artifact-validat
 `"Artifact validation outcome"` — one row per artifact hand-off, whatever the format and whichever
 schema source declared it.
 
-!!! note "Not yet emitted"
+Rows are emitted automatically by the activity interceptor. Every `@task` in every app funnels
+through one seam, and both enforcement points come off the one declaration there:
 
-    The attribute contract below ships ahead of its emitter. The wrapper's report, matrix and event
-    fields exist, both schema sources (`ContractSource`, `ModelSource`) are callable, and
-    `validate_artifact(...)` really does check both formats against a contract declaration — NDJSON
-    record by record, parquet by diffing the file footer — and NDJSON against a model declaration
-    too, via the asset cell the upload hook calls. What is still missing is the *caller*: nothing
-    invokes the wrapper automatically until the `FileReference` interceptor wiring lands. The only
-    rows in ClickHouse today are that upload hook's, and they carry the *asset* event's attributes,
-    not these — so the table is the reference for what the allowlist admits, not a description of
-    rows you will find there.
+```
+  materialize_file_refs(...)   # durable -> local
++ validate(ingest)             <- consumer side, re-validate on read
+  result = await task_method(input_data)
++ validate(handoff)            <- producer side, BEFORE persist, while the bytes are still local
+  persist_file_refs(...)          so a flag blames the producer, not whoever reads it three hops on
+```
+
+The interceptor resolves declarations from the app's generated contract, so every row it emits
+carries `artifact_schema_source=contract` — NDJSON checked record by record, parquet by diffing the
+file footer with no row read. The `model` source is reached the other way, from the upload hook's
+asset cell, and that hand-off emits the *asset* event above rather than this one: one hand-off, one
+row. The single cell that still answers `unsupported` is parquet x `ModelSource` — a model carries no
+column mapping, so a footer diff would have nothing to diff against, and it says so out loud rather
+than going quiet.
+
+Everything is **warn-only**: a flagged artifact is logged and counted, never blocked, and a defect in
+the validation scaffold itself can neither fail an activity nor skip a persist. Set
+`ATLAN_VALIDATE_ARTIFACTS=false` to turn the whole hook off for a deployment — note this stops the
+outcome events too, so an app then has no denominator at all.
 
 | Attribute | Meaning |
 |-----------|---------|
@@ -458,6 +470,7 @@ schema source declared it.
 | `artifact_format` | `ndjson`, `parquet` — empty when nothing was read |
 | `artifact_schema_source` | `contract` or `model` |
 | `artifact_field` | output-contract field the artifact came from; with `entrypoint` this keys the declaration |
+| `artifact_side` | `ingest` (consumer side, after materialise) or `handoff` (producer side, before persist) |
 | `artifact_unit` | what the counts count: `record` (streaming scan) or `column` (footer diff) |
 | `artifact_total` | units examined — always the whole artifact, never a sample |
 | `artifact_passed` | units with no failure |
@@ -472,6 +485,11 @@ check that reports nothing is indistinguishable from a check that passed, so `no
 `unsupported` and `absent` are rows, not silence. And **every attribute is present on every
 outcome**, the matrix as `"[]"` when there is nothing to show, so a consumer parses it
 unconditionally instead of branching on presence.
+
+`boundary` is what makes `not_declared` actionable. An entry point's `input_type`/`output_type` are a
+public interface, so a missing declaration there is a finding against the app; the same gap on an
+internal `@task` contract is informational. The set of boundary contract classes is resolved once at
+worker build, so the attribute costs nothing per hand-off.
 
 The event body and its attribute keys are a pinned contract, like the two preflight-gate events and
 the asset-validation one; all four names live in `application_sdk/observability/events.py`.

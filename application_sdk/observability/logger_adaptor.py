@@ -105,6 +105,14 @@ ARTIFACT_FAILED_KEY = "artifact_failed"
 ARTIFACT_UNDECODABLE_KEY = "artifact_undecodable"
 ARTIFACT_FIELDS_DECLARED_KEY = "artifact_fields_declared"
 
+# Which of the two enforcement points emitted the row: ``ingest`` (consumer side,
+# re-validated on read, after materialise) or ``handoff`` (producer side, checked
+# before persist while the bytes are still local so blame lands on the producer).
+# Both come off one declaration at one site, and without this key the two are
+# indistinguishable in ClickHouse — a producer-side flag and the consumer-side
+# re-read of the same artifact would collapse into one number.
+ARTIFACT_SIDE_KEY = "artifact_side"
+
 # Whether the undeclared artifact sat on an entrypoint's public boundary
 # (a finding) or on an app-internal ``@task`` contract (informational). Both emit;
 # neither is silent. Deliberately unprefixed, matching the equally generic
@@ -186,6 +194,7 @@ _KNOWN_EXTRA_KEYS = frozenset(
         ARTIFACT_FAILED_KEY,
         ARTIFACT_UNDECODABLE_KEY,
         ARTIFACT_FIELDS_DECLARED_KEY,
+        ARTIFACT_SIDE_KEY,
         ARTIFACT_BOUNDARY_KEY,
         # ── Misc SDK ─────────────────────────────────────────────────────
         "log_type",

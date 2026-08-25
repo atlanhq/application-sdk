@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.28.3
-source-sha:    cb90e182e88b917795562bdb244c121e8f637398
-source-date:   2026-08-25T13:15:31+01:00
+source-sha:    1f5d397730bccbf41c1cde0a551f10178d004ed2
+source-date:   2026-08-25T13:34:01+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -35,7 +35,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 97 |
-| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 51 |
+| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 57 |
 
 ## Subpackage Details
 
@@ -3929,6 +3929,14 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** Compact per-failure matrix for the outcome event, as one JSON string.
 - **Defined in:** `application_sdk/validation/assets.py`
 
+#### `boundary_contract_types`
+
+- **Import:** `from application_sdk.validation import boundary_contract_types`
+- **Also importable from:** `application_sdk.validation.interceptor`
+- **Signature:** `boundary_contract_types(app_name: str)`
+- **Summary:** Every contract class that sits on one of ``app_name``'s public boundaries.
+- **Defined in:** `application_sdk/validation/interceptor.py`
+
 #### `builtin_format_validators`
 
 - **Import:** `from application_sdk.validation import builtin_format_validators`
@@ -3944,6 +3952,14 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Signature:** `declared_artifact_fields(*, entrypoint: str = '', generated_dir: Path | None = None)`
 - **Summary:** Every contract field name declared for one entrypoint.
 - **Defined in:** `application_sdk/validation/sources.py`
+
+#### `entrypoint_index`
+
+- **Import:** `from application_sdk.validation import entrypoint_index`
+- **Also importable from:** `application_sdk.validation.interceptor`
+- **Signature:** `entrypoint_index(app_name: str)`
+- **Summary:** Map every Temporal workflow type ``app_name`` registers to its entry point.
+- **Defined in:** `application_sdk/validation/interceptor.py`
 
 #### `iter_ndjson_lines`
 
@@ -3967,6 +3983,14 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Signature:** `validate_artifact(path: Path | str, *, ...)`
 - **Summary:** Validate one artifact against the declaration its source resolves to.
 - **Defined in:** `application_sdk/validation/wrapper.py`
+
+#### `validate_artifacts`
+
+- **Import:** `from application_sdk.validation import validate_artifacts`
+- **Also importable from:** `application_sdk.validation.interceptor`
+- **Signature:** `validate_artifacts(data: Any, *, ...)`
+- **Summary:** Validate every ``FileReference`` in ``data`` and emit one outcome each.
+- **Defined in:** `application_sdk/validation/interceptor.py`
 
 #### `validate_asset`
 
@@ -4026,6 +4050,30 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Signature:** `ARTIFACT_SCHEMAS_FILENAME: Final`
 - **Summary:** Name of the generated declaration artifact, as the contract toolkit emits it.
 - **Defined in:** `application_sdk/validation/sources.py`
+
+#### `ARTIFACT_SIDE_HANDOFF`
+
+- **Import:** `from application_sdk.validation import ARTIFACT_SIDE_HANDOFF`
+- **Also importable from:** `application_sdk.validation.interceptor`
+- **Signature:** `ARTIFACT_SIDE_HANDOFF: Final`
+- **Summary:** Producer side: the task has returned and the bytes are still local.
+- **Defined in:** `application_sdk/validation/interceptor.py`
+
+#### `ARTIFACT_SIDE_INGEST`
+
+- **Import:** `from application_sdk.validation import ARTIFACT_SIDE_INGEST`
+- **Also importable from:** `application_sdk.validation.interceptor`
+- **Signature:** `ARTIFACT_SIDE_INGEST: Final`
+- **Summary:** Consumer side: the artifact was just materialised and is about to be read.
+- **Defined in:** `application_sdk/validation/interceptor.py`
+
+#### `ARTIFACT_SIDES`
+
+- **Import:** `from application_sdk.validation import ARTIFACT_SIDES`
+- **Also importable from:** `application_sdk.validation.interceptor`
+- **Signature:** `ARTIFACT_SIDES: Final[frozenset[str]]`
+- **Summary:** Runtime membership test for the two enforcement points.
+- **Defined in:** `application_sdk/validation/interceptor.py`
 
 #### `ARTIFACT_VALIDATION_EVENT`
 

@@ -50,6 +50,7 @@ from application_sdk.observability.logger_adaptor import (
     ARTIFACT_FORMAT_KEY,
     ARTIFACT_PASSED_KEY,
     ARTIFACT_SCHEMA_SOURCE_KEY,
+    ARTIFACT_SIDE_KEY,
     ARTIFACT_TOTAL_KEY,
     ARTIFACT_UNDECODABLE_KEY,
     ARTIFACT_UNIT_KEY,
@@ -567,6 +568,7 @@ def artifact_validation_event_fields(
     report: ArtifactValidationReport,
     *,
     artifact_field: str = "",
+    side: str = "",
     max_items: int = ARTIFACT_VALIDATION_MAX_ITEMS_PER_AXIS,
 ) -> dict[str, str | int | bool]:
     """Build the outcome event's attribute map from a report.
@@ -595,6 +597,13 @@ def artifact_validation_event_fields(
             already-allowlisted ``entrypoint`` identifies the declaration exactly.
             Nothing is inferred from path shape — path-shape inference is precisely
             what made the earlier upload-time hook silently validate nothing.
+        side: Which enforcement point emitted this row —
+            :data:`~application_sdk.validation.interceptor.ARTIFACT_SIDE_INGEST`
+            or
+            :data:`~application_sdk.validation.interceptor.ARTIFACT_SIDE_HANDOFF`.
+            "" for a caller outside the interceptor, which is the honest answer
+            rather than picking a side on its behalf. Always emitted, so a
+            consumer never branches on its presence.
         max_items: Row cap for the matrix; shared with ``format_report``.
 
     Returns:
@@ -606,6 +615,7 @@ def artifact_validation_event_fields(
         ARTIFACT_FORMAT_KEY: report.artifact_format,
         ARTIFACT_SCHEMA_SOURCE_KEY: report.schema_source,
         ARTIFACT_FIELD_KEY: artifact_field,
+        ARTIFACT_SIDE_KEY: side,
         ARTIFACT_UNIT_KEY: report.unit,
         ARTIFACT_TOTAL_KEY: report.total,
         ARTIFACT_PASSED_KEY: report.passed,

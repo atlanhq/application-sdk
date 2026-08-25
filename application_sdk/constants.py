@@ -570,6 +570,19 @@ VALIDATE_ASSETS_ON_UPLOAD: bool = (
 VALIDATE_ASSETS_TIMEOUT_SECONDS: float = float(
     os.getenv("ATLAN_VALIDATE_ASSETS_TIMEOUT_SECONDS", "600")
 )
+#: ADR-0020 step 7: when True, the activity interceptor validates every
+#: ``FileReference`` artifact against its declared artifact schema on both sides
+#: of a task — at ingest (after materialise) and at hand-off (before persist).
+#: Warn-only: an outcome event is emitted for every artifact, including the
+#: negative outcomes, and nothing is ever blocked or raised.
+#:
+#: Defaulted ON. This is a deployment-level kill switch, not a posture knob —
+#: whether a verdict blocks is the app's artifact-validation posture (FND-692),
+#: and turning this off stops the outcome events too, which is exactly why it is
+#: a switch an operator flips deliberately rather than a per-app default.
+VALIDATE_ARTIFACTS: bool = (
+    os.getenv("ATLAN_VALIDATE_ARTIFACTS", "true").lower() == "true"
+)
 #: The single "rows per axis" cap for every validation drill-down surface —
 #: one number, so the human-readable ``format_report(max_items=...)`` listing and
 #: the structured matrix telemetry can never drift apart.
