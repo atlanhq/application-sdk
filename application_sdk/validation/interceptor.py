@@ -309,10 +309,26 @@ def _walk(data: Any) -> Iterator["NamedFileRef"]:
 
 
 def _unique(named: Iterable["NamedFileRef"]) -> Iterator["NamedFileRef"]:
-    """Drop references that would emit an identical row for an identical scan."""
-    seen: set[tuple[type | None, str, str | None]] = set()
+    """Drop references that would emit an identical row for an identical scan.
+
+    Identity is ``(owner, field, artifact)``, where the artifact is the local path
+    if there is one, the storage path otherwise, and — when a reference names
+    neither — the reference object itself.
+
+    **The fallback to object identity is what keeps the denominator honest.** A
+    durable, lazy or freshly-constructed reference has no ``local_path`` at all, so
+    keying on it alone would collapse every such reference under one field into a
+    single row: a ``list[FileReference]`` of ten distinct durable artifacts would
+    report once, understating the denominator FND-694's graduation review reads and
+    hiding nine hand-offs that emitted nothing. Deduplicating is only ever allowed
+    to drop a row that is genuinely a repeat of one already emitted; anything it
+    cannot prove is a repeat has to be its own row.
+    """
+    seen: set[tuple[type | None, str, str | int]] = set()
     for item in named:
-        key = (item.owner, item.field, item.ref.local_path)
+        ref = item.ref
+        artifact = ref.local_path or ref.storage_path or id(ref)
+        key = (item.owner, item.field, artifact)
         if key in seen:
             continue
         seen.add(key)

@@ -439,6 +439,53 @@ class TestBookkeeping:
         assert len(events) == 2
 
     @pytest.mark.asyncio
+    async def test_distinct_durable_refs_under_one_field_each_emit(
+        self, generated_dir: Path
+    ) -> None:
+        """Nothing is materialised yet, so ``local_path`` cannot tell them apart.
+
+        Deduplicating on the local path alone would collapse a whole
+        ``list[FileReference]`` of durable artifacts into one row — understating
+        the denominator and hiding every hand-off but the first.
+        """
+        events = await _run(
+            _ParentOut(
+                parts=[
+                    FileReference(storage_path="artifacts/a", is_durable=True),
+                    FileReference(storage_path="artifacts/b", is_durable=True),
+                ]
+            )
+        )
+        assert len(events) == 2
+
+    @pytest.mark.asyncio
+    async def test_the_same_durable_artifact_twice_is_scanned_once(
+        self, generated_dir: Path
+    ) -> None:
+        """Two references, one storage path: a genuine repeat, so one row."""
+        events = await _run(
+            _ParentOut(
+                parts=[
+                    FileReference(storage_path="artifacts/a", is_durable=True),
+                    FileReference(storage_path="artifacts/a", is_durable=True),
+                ]
+            )
+        )
+        assert len(events) == 1
+
+    @pytest.mark.asyncio
+    async def test_refs_naming_no_artifact_at_all_each_emit(
+        self, generated_dir: Path
+    ) -> None:
+        """Neither path is set, so nothing proves these are the same hand-off.
+
+        Dedup may only ever drop a row it can prove is a repeat; two references
+        that name nothing fall back to object identity rather than collapsing.
+        """
+        events = await _run(_ParentOut(parts=[FileReference(), FileReference()]))
+        assert len(events) == 2
+
+    @pytest.mark.asyncio
     async def test_the_kill_switch_stops_the_hook_entirely(
         self, generated_dir: Path
     ) -> None:

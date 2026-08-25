@@ -17,16 +17,18 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, cast
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import orjson
 import pytest
 
 from application_sdk.app.base import App
+from application_sdk.app.entrypoint import entrypoint
 from application_sdk.app.registry import TaskRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import FileReference
+from application_sdk.execution._temporal import activities as activities_module
 from application_sdk.execution._temporal.activities import (
     TaskContext,
     create_activity_from_task,
@@ -97,6 +99,27 @@ def _internal_activity(output_path: str) -> Any:
             return _EchoOut()
 
     return _activity_for("artifact-internal-app", "crunch")
+
+
+def _bundle_activity(output_path: str) -> Any:
+    """A bundle: two entry points, one legacy inbound alias, one shared @task."""
+
+    class ArtifactBundleApp(App):
+        legacy_workflow_types = {"legacy-extract": "extract"}
+
+        @task(timeout_seconds=60)
+        async def echo(self, input: _EchoIn) -> _EchoOut:
+            return _EchoOut(queries=FileReference(local_path=output_path))
+
+        @entrypoint(name="extract", default=True)
+        async def extract(self, input: _EchoIn) -> _EchoOut:
+            return await self.echo(input)
+
+        @entrypoint(name="enrich")
+        async def enrich(self, input: _EchoIn) -> _EchoOut:
+            return _EchoOut()
+
+    return _activity_for("artifact-bundle-app", "echo")
 
 
 def _activity_for(app_name: str, task_name: str) -> Any:
@@ -239,3 +262,122 @@ async def test_a_raising_validator_never_reaches_the_task(
 
     assert cast(_EchoOut, result).queries is not None
     assert [e["outcome"] for e in events] == ["absent", "absent"]
+
+
+# ---------------------------------------------------------------------------
+# A bundle reads its own entry point's declarations
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def bundle_generated_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A bundle tree whose two declaration files disagree on purpose.
+
+    ``app/generated/extract/artifact_schemas.json`` declares what the artifact
+    actually carries; the flat ``app/generated/artifact_schemas.json`` declares a
+    field it does not. The nested file is tried first and the first file that
+    exists answers, so a ``clean`` outcome can only mean the per-entry-point file
+    was the one read — and a ``flagged`` one would mean the entry point never
+    reached the resolver and the run fell through to the flat file.
+    """
+    generated = tmp_path / "generated"
+    (generated / "extract").mkdir(parents=True)
+    (generated / "extract" / "artifact_schemas.json").write_bytes(
+        orjson.dumps(
+            {
+                "version": 1,
+                "schemas": {
+                    "queries": {
+                        "format": "ndjson",
+                        "fields": [
+                            {"name": "QUERY_ID", "type": "string", "description": "id"}
+                        ],
+                    }
+                },
+            }
+        )
+    )
+    (generated / "artifact_schemas.json").write_bytes(
+        orjson.dumps(
+            {
+                "version": 1,
+                "schemas": {
+                    "queries": {
+                        "format": "ndjson",
+                        "fields": [
+                            {
+                                "name": "NOT_IN_THE_ARTIFACT",
+                                "type": "string",
+                                "description": "only the flat file asks for this",
+                            }
+                        ],
+                    }
+                },
+            }
+        )
+    )
+    monkeypatch.setattr(
+        "application_sdk.validation.sources.CONTRACT_GENERATED_DIR", str(generated)
+    )
+    return generated
+
+
+@pytest.mark.parametrize(
+    "workflow_type",
+    [
+        pytest.param("artifact-bundle-app:extract", id="canonical-type"),
+        pytest.param("legacy-extract", id="legacy-alias"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_the_runs_entry_point_selects_the_declaration_file(
+    tmp_path: Path, bundle_generated_dir: Path, workflow_type: str
+) -> None:
+    """The workflow type the run arrives on picks which declarations apply.
+
+    Stubbed at the Temporal boundary rather than at ``_current_workflow_type``, so
+    the key this asserts on is the one Temporal actually hands the activity — the
+    index is built from ``AppMetadata.workflow_types``, and a legacy inbound alias
+    has to resolve to the same entry point as the canonical type.
+    """
+    output = _ndjson(tmp_path / "out.json", [{"QUERY_ID": "q1"}])
+    activity_fn = _bundle_activity(output)
+
+    with patch.object(
+        activities_module.activity,
+        "info",
+        return_value=MagicMock(workflow_type=workflow_type),
+    ):
+        with patch.object(interceptor_module, "logger") as logger:
+            await activity_fn(_task_context("artifact-bundle-app", "echo"), _EchoIn())
+            events = _events(logger)
+
+    handoff = next(e for e in events if e["artifact_side"] == "handoff")
+    assert handoff["entrypoint"] == "extract"
+    assert handoff["outcome"] == "clean", (
+        "flagged means the flat file answered — the entry point never reached "
+        "ContractSource"
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_unregistered_workflow_type_falls_back_to_the_flat_file(
+    tmp_path: Path, bundle_generated_dir: Path
+) -> None:
+    """The conservative direction: read the flat file, never guess an entry point."""
+    output = _ndjson(tmp_path / "out.json", [{"QUERY_ID": "q1"}])
+    activity_fn = _bundle_activity(output)
+
+    with patch.object(
+        activities_module.activity,
+        "info",
+        return_value=MagicMock(workflow_type="some-type-nobody-registered"),
+    ):
+        with patch.object(interceptor_module, "logger") as logger:
+            await activity_fn(_task_context("artifact-bundle-app", "echo"), _EchoIn())
+            events = _events(logger)
+
+    handoff = next(e for e in events if e["artifact_side"] == "handoff")
+    assert handoff["entrypoint"] == ""
+    # The flat file asks for a field the artifact does not carry.
+    assert handoff["outcome"] == "flagged"
