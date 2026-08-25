@@ -426,6 +426,13 @@ Emitting `outcome="clean"` too gives a denominator, so a dashboard can rank conn
 flag-rate rather than only seeing failures. Uploads with nothing to validate (validation disabled, or
 a non-`transformed/` path) emit no event.
 
+Since [ADR-0020](../adr/0020-artifact-validation.md) this check is the artifact wrapper's
+NDJSON × `ModelSource` cell, reached as `validate_artifact(target, ModelSource(model=Asset))`. **The
+event above is unchanged by that** — name, keys, `outcome` vocabulary and matrix row keys are all a
+shipped contract, and the fold-in was a refactor behind it. One hand-off emits one row, so this
+upload does not additionally emit `"Artifact validation outcome"`; the two events are two
+vocabularies, not two checks.
+
 ### Artifact-validation outcome event
 
 The generic artifact-validation wrapper ([ADR-0020](../adr/0020-artifact-validation.md)) emits
@@ -443,10 +450,13 @@ through one seam, and both enforcement points come off the one declaration there
   persist_file_refs(...)          so a flag blames the producer, not whoever reads it three hops on
 ```
 
-Both formats ADR-0020 names are checked against a contract declaration — NDJSON record by record,
-parquet by diffing the file footer with no row read. The one cell that still answers `unsupported` is
-parquet x `ModelSource`: a model carries no column mapping, so a footer diff would have nothing to
-diff against, and it says so out loud rather than going quiet.
+The interceptor resolves declarations from the app's generated contract, so every row it emits
+carries `artifact_schema_source=contract` — NDJSON checked record by record, parquet by diffing the
+file footer with no row read. The `model` source is reached the other way, from the upload hook's
+asset cell, and that hand-off emits the *asset* event above rather than this one: one hand-off, one
+row. The single cell that still answers `unsupported` is parquet x `ModelSource` — a model carries no
+column mapping, so a footer diff would have nothing to diff against, and it says so out loud rather
+than going quiet.
 
 Everything is **warn-only**: a flagged artifact is logged and counted, never blocked, and a defect in
 the validation scaffold itself can neither fail an activity nor skip a persist. Set

@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.28.3
-source-sha:    55bd467d492a0f4822db703858fdeb0756ffaeb7
-source-date:   2026-08-25T13:15:17+01:00
+source-sha:    1f5d397730bccbf41c1cde0a551f10178d004ed2
+source-date:   2026-08-25T13:34:01+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -35,7 +35,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 97 |
-| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 52 |
+| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 57 |
 
 ## Subpackage Details
 
@@ -3789,6 +3789,13 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** Aggregate outcome of validating one artifact against one declaration.
 - **Defined in:** `application_sdk/validation/artifacts.py`
 
+#### `AssetArtifactReport`
+
+- **Import:** `from application_sdk.validation import AssetArtifactReport`
+- **Signature:** `class AssetArtifactReport(artifact_format: str = '', ...)`
+- **Summary:** The NDJSON x ``ModelSource`` cell's report: the shared shape plus asset detail.
+- **Defined in:** `application_sdk/validation/assets.py`
+
 #### `AssetValidationFailure`
 
 - **Import:** `from application_sdk.validation import AssetValidationFailure`
@@ -3908,6 +3915,20 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** Compact per-failure drill-down for the outcome event, as one JSON string.
 - **Defined in:** `application_sdk/validation/artifacts.py`
 
+#### `asset_validation_event_fields`
+
+- **Import:** `from application_sdk.validation import asset_validation_event_fields`
+- **Signature:** `asset_validation_event_fields(report: AssetValidationReport, *, ...)`
+- **Summary:** Build ``ASSET_VALIDATION_EVENT``'s attribute map from an asset report.
+- **Defined in:** `application_sdk/validation/assets.py`
+
+#### `asset_validation_matrix_json`
+
+- **Import:** `from application_sdk.validation import asset_validation_matrix_json`
+- **Signature:** `asset_validation_matrix_json(report: AssetValidationReport, *, max_items: int = ASSET_VALIDATION_MAX_ITEMS_PER_AXIS)`
+- **Summary:** Compact per-failure matrix for the outcome event, as one JSON string.
+- **Defined in:** `application_sdk/validation/assets.py`
+
 #### `boundary_contract_types`
 
 - **Import:** `from application_sdk.validation import boundary_contract_types`
@@ -3948,6 +3969,13 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** Yield ``(file, 1-based line number, raw bytes)`` for every non-blank line.
 - **Defined in:** `application_sdk/validation/ndjson.py`
 
+#### `supports_asset_model`
+
+- **Import:** `from application_sdk.validation import supports_asset_model`
+- **Signature:** `supports_asset_model(model: object)`
+- **Summary:** True when ``model`` is a class this cell can decode NDJSON records into.
+- **Defined in:** `application_sdk/validation/assets.py`
+
 #### `validate_artifact`
 
 - **Import:** `from application_sdk.validation import validate_artifact`
@@ -3969,6 +3997,13 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Import:** `from application_sdk.validation import validate_asset`
 - **Signature:** `validate_asset(asset: Asset, *, for_creation: bool = True)`
 - **Summary:** Run pyatlan_v9's ``.validate()`` and return its error messages.
+- **Defined in:** `application_sdk/validation/assets.py`
+
+#### `validate_assets_as_artifact`
+
+- **Import:** `from application_sdk.validation import validate_assets_as_artifact`
+- **Signature:** `validate_assets_as_artifact(path: str | Path, *, ...)`
+- **Summary:** The NDJSON x ``ModelSource`` cell: :func:`validate_transformed_dir`, reported
 - **Defined in:** `application_sdk/validation/assets.py`
 
 #### `validate_transformed_dir`

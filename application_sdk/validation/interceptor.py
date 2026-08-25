@@ -36,13 +36,14 @@ FND-692) that does not exist yet.
 
 **Off the event loop.** Validators are plain synchronous scans, so per ADR-0020 the
 interceptor — not each validator — owns the offload decision. Everything reachable
-from here is contract-sourced: an NDJSON stream over ``orjson``, or a parquet footer
-read. Both ride :func:`~application_sdk._runtime.offload.run_in_thread`. The
-model-sourced path is the one that needs an isolated child process — its decode
-enters third-party C extensions, where a native fault would take the whole worker
-down rather than raise — and it is not reachable from here, because this module only
-ever builds a :class:`~application_sdk.validation.sources.ContractSource` (FND-690
-folds the model cell in behind the same seam).
+from here is contract-sourced, because this module only ever builds a
+:class:`~application_sdk.validation.sources.ContractSource`: an NDJSON stream over
+``orjson``, or a parquet footer read. Both ride
+:func:`~application_sdk._runtime.offload.run_in_thread`. The model-sourced cell is
+the one that needs a child process rather than a thread — its decode enters
+third-party C extensions, where a native fault kills the worker instead of raising —
+and it owns that isolation itself, inside the asset cell (FND-690). Nothing here has
+to know about it, which is the point of the two-seam split.
 """
 
 from __future__ import annotations
