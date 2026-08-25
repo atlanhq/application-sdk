@@ -2420,10 +2420,17 @@ def test_the_window_boundary_is_exclusive_across_the_unit_flip(
 ) -> None:
     """Which side of a 90s window each rendering falls on, pinned deliberately.
 
-    kubectl prints seconds below two minutes and minutes above, so the same
-    instant can arrive either way near this boundary. Exactly-at-the-window
-    counts as outside: erring that way hands the decision to the version
-    read-back, which is unconditional, rather than reding a leg on a rounding.
+    Exactly-at-the-window counts as outside. That leniency is safe because the
+    settle only ever gates a DOWNGRADE — an unrecognised reason never reaches
+    this comparison at all — so erring outside hands the decision to the
+    unconditional version read-back, while erring inside would red a healthy leg
+    on a rounding.
+
+    Both renderings are covered because kubectl's `duration.HumanDuration`
+    branches on `seconds < 60*2`: the seconds form holds to 120s, so at the
+    current 90s window `2m` and `2m1s` are outside-the-window cases rather than
+    boundary ones. A settle raised past 120 makes them the common case; see
+    `DEFAULT_SETTLE_SECONDS` for why that is worth knowing first.
     """
     events = f"{age}   Warning   Failed   pod/openapi-0   Error: something\n"
     assert bool(app.ongoing_failures(events, 90)) is inside

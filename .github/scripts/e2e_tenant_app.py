@@ -180,7 +180,18 @@ DEFAULT_DEPLOYMENT_TIMEOUT_SECONDS = 600
 #: diagnostics name only benign pod churn (FND-831). 90s because the observed
 #: window was ~14s of secret-sync lag plus a scale-down: everything that recovers
 #: on its own has recovered well inside it, and anything still warning after it is
-#: not churn. Included in the job-budget sum asserted by
+#: not churn.
+#:
+#: 90 also sits 30s clear of a formatting cliff that is kubectl's, not ours:
+#: ``duration.HumanDuration`` branches on ``seconds < 60*2``, so ``LAST SEEN``
+#: stays in the seconds form (``91s``) all the way to 120s and only then becomes
+#: ``XmYs``. Raising this past 120 makes the minutes form the common case rather
+#: than an edge case — :func:`ongoing_failures` parses both and its fixtures
+#: cover both, so nothing breaks, but the resolution the window compares at
+#: coarsens to whole seconds-within-minutes. Worth knowing before raising it,
+#: rather than rediscovering it.
+#:
+#: Included in the job-budget sum asserted by
 #: ``test_job_timeout_stays_above_the_scripts_own_waits``, so raising it forces
 #: prepare-tenant's ceiling up rather than silently making a runner timeout
 #: reachable. 0 disables the tolerance entirely: without a settle there is no
