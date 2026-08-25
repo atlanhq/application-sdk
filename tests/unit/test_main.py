@@ -2452,6 +2452,78 @@ class TestRunWorkerWithRestart:
         assert calls["n"] == 2
         auth.force_refresh.assert_awaited_once()
 
+    async def test_reconnect_runs_before_rebuild_and_replaces_force_refresh(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A wired reconnect rebuilds the client before the worker is rebuilt.
+
+        Ordering is the whole point: the replacement worker has to be built
+        against the fresh client. Built against the poisoned one it comes up,
+        registers, and then never polls — and because it neither returns nor
+        raises, the supervisor never gets a second chance to notice.
+        """
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_RESTART_BACKOFF_CAP_SECONDS", 0
+        )
+        shutdown = asyncio.Event()
+        auth = AsyncMock()
+        order: list[str] = []
+        calls = {"n": 0}
+
+        async def reconnect() -> None:
+            order.append("reconnect")
+
+        def build() -> _FakeWorker:
+            calls["n"] += 1
+            order.append(f"build{calls['n']}")
+            if calls["n"] == 1:
+                return _FakeWorker(fail=True)
+            return _FakeWorker(fail=False, on_enter=shutdown.set)
+
+        await _run_worker_with_restart(
+            build_worker=build,
+            shutdown_event=shutdown,
+            auth_manager=auth,
+            client=object(),
+            reconnect=reconnect,
+        )
+
+        assert order == ["build1", "reconnect", "build2"]
+        # Reconnect mints its own token, so the token-only path is skipped.
+        auth.force_refresh.assert_not_awaited()
+
+    async def test_restart_proceeds_when_reconnect_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failing reconnect must not strand the worker.
+
+        If Temporal is unreachable at that moment, restarting on the old client
+        is still better than not restarting at all — the next fatal brings us
+        back here after another backoff.
+        """
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_RESTART_BACKOFF_CAP_SECONDS", 0
+        )
+        shutdown = asyncio.Event()
+        calls = {"n": 0}
+
+        async def reconnect() -> None:
+            raise RuntimeError("temporal unreachable")
+
+        def build() -> _FakeWorker:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return _FakeWorker(fail=True)
+            return _FakeWorker(fail=False, on_enter=shutdown.set)
+
+        await _run_worker_with_restart(
+            build_worker=build,
+            shutdown_event=shutdown,
+            reconnect=reconnect,
+        )
+
+        assert calls["n"] == 2
+
     async def test_restarts_on_cancellation_seam_without_propagating_cancel(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

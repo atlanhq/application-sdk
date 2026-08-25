@@ -33,7 +33,7 @@ import random
 import signal
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
@@ -1089,6 +1089,7 @@ async def _run_worker_with_restart(
     auth_manager: Any = None,
     client: Any = None,
     health_server: Any = None,
+    reconnect: Callable[[], Awaitable[None]] | None = None,
 ) -> None:
     """Run a Temporal worker under a bounded restart supervisor.
 
@@ -1112,6 +1113,8 @@ async def _run_worker_with_restart(
         client: The Temporal client passed to ``auth_manager.force_refresh``.
         health_server: Optional ``WorkerHealthServer``; receives the poll-state
             observer's readings so they are also reachable over the probes.
+        reconnect: Optional; rebuilds the Temporal client before each restart.
+            Preferred over ``force_refresh`` — see ``_supervise_worker``.
     """
     # Runs for the whole supervised lifetime, across worker rebuilds, so a
     # rebuilt worker that comes back without pollers is still observed. Purely
@@ -1130,6 +1133,7 @@ async def _run_worker_with_restart(
             shutdown_event=shutdown_event,
             auth_manager=auth_manager,
             client=client,
+            reconnect=reconnect,
         )
     finally:
         observer.cancel()
@@ -1143,6 +1147,7 @@ async def _supervise_worker(
     shutdown_event: asyncio.Event,
     auth_manager: Any = None,
     client: Any = None,
+    reconnect: Callable[[], Awaitable[None]] | None = None,
 ) -> None:
     """The restart loop itself; see ``_run_worker_with_restart`` for the contract."""
     consecutive_failures = 0
@@ -1186,10 +1191,23 @@ async def _supervise_worker(
                 )
                 raise
 
-            # Force a fresh token before restarting — recovers stale/expired
-            # token cases; harmless for a transient frontend key-cache skew
-            # (the backoff itself gives the frontend time to refresh its JWKS).
-            if auth_manager is not None:
+            # Rebuild the client before restarting, when the caller wired a
+            # reconnect. A fresh token on the same channel is not enough: the
+            # rebuilt worker registers and emits worker_start but never resumes
+            # polling, and since run() then neither returns nor raises, this
+            # loop never sees a second failure — the process stays alive with
+            # green probes and a refreshing token, doing nothing. Reconnecting
+            # is what a pod restart does, and a pod restart is what recovers it.
+            if reconnect is not None:
+                try:
+                    await reconnect()
+                except Exception:
+                    logger.warning(
+                        "Reconnect before worker restart failed; "
+                        "restarting anyway",
+                        exc_info=True,
+                    )
+            elif auth_manager is not None:
                 try:
                     await auth_manager.force_refresh(client)
                 except Exception:
@@ -1302,19 +1320,39 @@ async def run_worker_mode(config: AppConfig) -> None:
         logger.info("Acquired initial auth token")
 
     logger.info("Connecting to Temporal %s", config.temporal_host)
-    client = await create_temporal_client(
-        config.temporal_host,
-        config.temporal_namespace,
-        data_converter=data_converter,
-        api_key=api_key,
-        tls_enabled=config.tls_enabled,
-        tls_server_root_ca_cert_path=config.tls_server_root_ca_cert_path,
-        tls_client_cert_path=config.tls_client_cert_path,
-        tls_client_private_key_path=config.tls_client_private_key_path,
-        tls_domain=config.tls_domain,
-        enable_prometheus=config.enable_temporal_core_metrics,
-        prometheus_bind_address=config.prometheus_bind_address,
-    )
+    async def _connect_temporal(key: str | None) -> Any:
+        return await create_temporal_client(
+            config.temporal_host,
+            config.temporal_namespace,
+            data_converter=data_converter,
+            api_key=key,
+            tls_enabled=config.tls_enabled,
+            tls_server_root_ca_cert_path=config.tls_server_root_ca_cert_path,
+            tls_client_cert_path=config.tls_client_cert_path,
+            tls_client_private_key_path=config.tls_client_private_key_path,
+            tls_domain=config.tls_domain,
+            enable_prometheus=config.enable_temporal_core_metrics,
+            prometheus_bind_address=config.prometheus_bind_address,
+        )
+
+    client = await _connect_temporal(api_key)
+
+    async def _reconnect() -> None:
+        """Rebuild the Temporal client, mirroring what a pod restart does.
+
+        ``_build_worker`` closes over ``client``, so rebinding it here is what
+        makes the next rebuild poll on a fresh channel instead of the poisoned
+        one. Re-points the auth refresh loop at the new client too.
+        """
+        nonlocal client
+        key = api_key
+        if auth_manager is not None:
+            await auth_manager.shutdown()
+            key = await auth_manager.acquire_initial_token()
+        client = await _connect_temporal(key)
+        if auth_manager is not None:
+            auth_manager.start_background_refresh(client)
+        logger.info("Reconnected to Temporal before worker restart")
 
     if auth_manager is not None:
         auth_manager.start_background_refresh(client)
@@ -1395,6 +1433,7 @@ async def run_worker_mode(config: AppConfig) -> None:
             auth_manager=auth_manager,
             client=client,
             health_server=health_server,
+            reconnect=_reconnect,
         )
 
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
@@ -1589,19 +1628,39 @@ async def run_combined_mode(config: AppConfig) -> None:
         logger.info("Acquired initial auth token")
 
     logger.info("Connecting to Temporal %s", config.temporal_host)
-    client = await create_temporal_client(
-        config.temporal_host,
-        config.temporal_namespace,
-        data_converter=data_converter,
-        api_key=api_key,
-        tls_enabled=config.tls_enabled,
-        tls_server_root_ca_cert_path=config.tls_server_root_ca_cert_path,
-        tls_client_cert_path=config.tls_client_cert_path,
-        tls_client_private_key_path=config.tls_client_private_key_path,
-        tls_domain=config.tls_domain,
-        enable_prometheus=config.enable_temporal_core_metrics,
-        prometheus_bind_address=config.prometheus_bind_address,
-    )
+    async def _connect_temporal(key: str | None) -> Any:
+        return await create_temporal_client(
+            config.temporal_host,
+            config.temporal_namespace,
+            data_converter=data_converter,
+            api_key=key,
+            tls_enabled=config.tls_enabled,
+            tls_server_root_ca_cert_path=config.tls_server_root_ca_cert_path,
+            tls_client_cert_path=config.tls_client_cert_path,
+            tls_client_private_key_path=config.tls_client_private_key_path,
+            tls_domain=config.tls_domain,
+            enable_prometheus=config.enable_temporal_core_metrics,
+            prometheus_bind_address=config.prometheus_bind_address,
+        )
+
+    client = await _connect_temporal(api_key)
+
+    async def _reconnect() -> None:
+        """Rebuild the Temporal client, mirroring what a pod restart does.
+
+        ``_build_worker`` closes over ``client``, so rebinding it here is what
+        makes the next rebuild poll on a fresh channel instead of the poisoned
+        one. Re-points the auth refresh loop at the new client too.
+        """
+        nonlocal client
+        key = api_key
+        if auth_manager is not None:
+            await auth_manager.shutdown()
+            key = await auth_manager.acquire_initial_token()
+        client = await _connect_temporal(key)
+        if auth_manager is not None:
+            auth_manager.start_background_refresh(client)
+        logger.info("Reconnected to Temporal before worker restart")
 
     if auth_manager is not None:
         auth_manager.start_background_refresh(client)
@@ -1723,6 +1782,7 @@ async def run_combined_mode(config: AppConfig) -> None:
                 auth_manager=auth_manager,
                 client=client,
                 health_server=health_server,
+                reconnect=_reconnect,
             ),
         )
 
