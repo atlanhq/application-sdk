@@ -227,16 +227,20 @@ def test_no_validator_for_the_format_is_unsupported(tmp_path: Path) -> None:
     assert report.artifact_format == FORMAT_NDJSON
 
 
-def test_builtins_are_empty_until_the_validators_land(tmp_path: Path) -> None:
-    """FND-688/689 fill this in. Until then every declared artifact says so out loud.
+def test_a_format_with_no_builtin_validator_says_so_out_loud(tmp_path: Path) -> None:
+    """NDJSON ships (FND-688); parquet lands in FND-689.
 
-    The point of asserting it is that the interim state is *reported*, not silent —
-    an app that has adopted declarations can see in its outcome events that nothing
-    is checking them yet.
+    The point of asserting the interim state is that it is *reported*, not silent —
+    an app that has adopted a parquet declaration can see in its outcome events that
+    nothing is checking it yet, rather than reading a pass.
     """
-    assert builtin_format_validators() == ()
+    assert [v.artifact_format for v in builtin_format_validators()] == [FORMAT_NDJSON]
 
-    report = validate_artifact(tmp_path, _StubSource(DECLARATION))
+    parquet = FieldMapDeclaration(
+        fields=(DeclaredField(path="QUERY_ID", type="string"),),
+        artifact_format=FORMAT_PARQUET,
+    )
+    report = validate_artifact(tmp_path, _StubSource(parquet))
     _assert_emits(report, OUTCOME_UNSUPPORTED)
     assert "no validator registered" in report.reason
 

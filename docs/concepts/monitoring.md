@@ -435,11 +435,11 @@ schema source declared it.
 !!! note "Not yet emitted"
 
     The attribute contract below ships ahead of its emitter. The wrapper's report, matrix and event
-    fields exist, and `validate_artifact(...)` and both schema sources (`ContractSource`,
-    `ModelSource`) are callable — but no format validator has landed yet, so a declared artifact
-    resolves to `unsupported`, and nothing calls the wrapper automatically until the `FileReference`
-    interceptor wiring lands. The table is the reference for what the allowlist admits, not a
-    description of rows you will find in ClickHouse today.
+    fields exist, both schema sources (`ContractSource`, `ModelSource`) are callable, and
+    `validate_artifact(...)` really does check an NDJSON artifact against a contract declaration —
+    but a parquet declaration still resolves to `unsupported`, and nothing calls the wrapper
+    automatically until the `FileReference` interceptor wiring lands. The table is the reference for
+    what the allowlist admits, not a description of rows you will find in ClickHouse today.
 
 | Attribute | Meaning |
 |-----------|---------|
