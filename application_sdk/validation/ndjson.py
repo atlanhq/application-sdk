@@ -174,15 +174,43 @@ def _parses_as(parser: Callable[[str], object], value: object) -> bool:
     return True
 
 
+_DATETIME_SEPARATORS: Final = ("T", "t", " ")
+"""Characters ISO-8601 allows between the date and the time.
+
+Required *before* parsing, because ``datetime.fromisoformat`` is happy to read a
+date-only string as midnight: without this gate ``"2026-08-25"`` would satisfy a
+declared ``timestamp``, while the ``date`` check already rejects
+``"2026-08-25T10:11:12"``. The ADR maps ``date`` and ``timestamp`` as separate
+rows, and a one-directional acceptance is how two logical types quietly collapse
+into one.
+
+It costs nothing in coverage: every datetime form ``fromisoformat`` accepts carries
+one of these — extended (``2026-08-25T10:11:12``), space-separated, lowercase
+``t``, and basic (``20260825T101112``) — and the separator-less ``20260825101112``
+is rejected by the stdlib on every version in the matrix anyway. Requiring it also
+makes the answer independent of how lenient a given Python is about *which*
+character sits in that position.
+"""
+
+
 def _is_timestamp(value: object) -> bool:
-    """ISO-8601 string or epoch number — the ADR's two carriers.
+    """ISO-8601 date-time string or epoch number — the ADR's two carriers.
+
+    A date-only string is **not** a timestamp here; see
+    :data:`_DATETIME_SEPARATORS`.
 
     Epoch numbers are accepted without a range check: the vocabulary distinguishes
     a timestamp from a *string*, not epoch-seconds from epoch-millis, and guessing
     the unit from magnitude is how a validator starts asserting things the
     declaration never said.
     """
-    return _is_number(value) or _parses_as(datetime.fromisoformat, value)
+    if _is_number(value):
+        return True
+    if not isinstance(value, str) or not any(
+        sep in value for sep in _DATETIME_SEPARATORS
+    ):
+        return False
+    return _parses_as(datetime.fromisoformat, value)
 
 
 def _is_date(value: object) -> bool:

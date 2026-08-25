@@ -21,6 +21,8 @@ path** rather than against the primitive underneath it:
 from __future__ import annotations
 
 import ast
+import builtins
+import errno
 import subprocess
 import sys
 import tracemalloc
@@ -168,6 +170,53 @@ def test_an_epoch_number_satisfies_timestamp(tmp_path: Path) -> None:
         tmp_path / "part-0.json",
         [_row(START_TIME=1_756_108_272), _row(START_TIME=1_756_108_272_000.5)],
     )
+
+    assert _validate(tmp_path, DECLARATION).outcome == OUTCOME_CLEAN
+
+
+@pytest.mark.parametrize(
+    "date_only", ["2026-08-25", "20260825", "2026-W35-2"], ids=lambda s: s
+)
+def test_a_date_only_string_does_not_satisfy_timestamp(
+    tmp_path: Path, date_only: str
+) -> None:
+    """``date`` and ``timestamp`` are separate rows in the ADR's mapping.
+
+    ``datetime.fromisoformat`` happily reads a date-only string as midnight, so
+    without a separator gate this would pass — while
+    ``test_the_logical_type_mapping`` already asserts the reverse, that a declared
+    ``date`` rejects a full datetime. A one-directional acceptance is how two
+    logical types quietly collapse into one.
+    """
+    _write(tmp_path / "part-0.json", [_row(START_TIME=date_only)])
+
+    report = _validate(tmp_path, DECLARATION)
+
+    assert report.outcome == OUTCOME_FLAGGED
+    assert report.failures[0].kind == "type_mismatch"
+    assert report.failures[0].field == "START_TIME"
+
+
+@pytest.mark.parametrize(
+    "stamp",
+    [
+        "2026-08-25T10:11:12",
+        "2026-08-25t10:11:12",
+        "2026-08-25 10:11:12",
+        "20260825T101112",
+        "2026-08-25T10:11:12Z",
+        "2026-08-25T10:11:12.123456+05:30",
+    ],
+    ids=lambda s: s,
+)
+def test_the_separator_gate_costs_no_real_timestamp(tmp_path: Path, stamp: str) -> None:
+    """Every date-time form the stdlib reads carries a ``T``, ``t`` or space.
+
+    Asserted across the separators, the basic form and both tz spellings, because
+    the gate is a *pre*-parse rejection: if any accepted form lacked a separator,
+    the gate would silently narrow what counts as a timestamp.
+    """
+    _write(tmp_path / "part-0.json", [_row(START_TIME=stamp)])
 
     assert _validate(tmp_path, DECLARATION).outcome == OUTCOME_CLEAN
 
@@ -379,14 +428,32 @@ def test_an_empty_directory_is_absent_not_clean(tmp_path: Path) -> None:
     assert "no ndjson records" in report.reason
 
 
-def test_an_unreadable_file_is_absent_not_a_partial_scan(tmp_path: Path) -> None:
+def test_an_unreadable_file_is_absent_not_a_partial_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The failure is injected at the opener, deliberately not via ``chmod``.
+
+    ``chmod(0o000)`` does not revoke read on Windows, and Windows is in the unit
+    matrix — so that version of this test would let the scan succeed on one leg
+    while still reporting green, which is the contract going untested rather than
+    tested. Refusing the ``open`` call behaves identically on every platform.
+
+    The second file is the one that fails, so the assertion that matters is
+    ``total == 0``: what was counted before the failure describes a partial scan
+    nobody should act on, and it is discarded rather than reported.
+    """
     _write(tmp_path / "part-0.json", [_row()])
-    unreadable = _write(tmp_path / "part-1.json", [_row()])
-    unreadable.chmod(0o000)
-    try:
-        report = _validate(tmp_path, DECLARATION)
-    finally:
-        unreadable.chmod(0o644)
+    blocked = _write(tmp_path / "part-1.json", [_row()])
+    real_open = builtins.open
+
+    def refusing_open(file: object, *args: object, **kwargs: object) -> object:
+        if isinstance(file, (str, Path)) and Path(file) == blocked:
+            raise PermissionError(errno.EACCES, "Permission denied", str(blocked))
+        return real_open(file, *args, **kwargs)  # type: ignore[arg-type,call-overload]
+
+    monkeypatch.setattr(builtins, "open", refusing_open)
+
+    report = _validate(tmp_path, DECLARATION)
 
     assert report.outcome == OUTCOME_ABSENT
     assert report.total == 0
