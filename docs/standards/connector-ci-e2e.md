@@ -417,17 +417,24 @@ The pull-failure reading above cannot catch that — there was no pull failure
   shutdown, or exit 137 where the events *name this pod's* deletion
   (`KEDAScaleTargetDeactivated` **and** `Deleted pod: <name>`). `OOMKilled` exits
   137 too and stays fatal. Anything unrecognised stays fatal.
-- **Then it has to stop.** The verdict is only downgraded if the namespace goes
-  quiet: `--settle-seconds` (90 by default) later the live events are re-read,
-  and any unhealthy event still inside that window keeps the verdict. A platform
-  container that never recovers keeps warning, so it still fails us. The re-read
-  is of the **events**: LM's `deployment_status` is a terminal record and its
-  failure snapshot is frozen at the moment of failure, so neither can say the
-  namespace is well now. `--settle-seconds 0` disables the tolerance entirely.
+- **Then it must not happen again.** `--settle-seconds` (90 by default) later the
+  live events are re-read, and any unhealthy event still inside that window keeps
+  the verdict. A platform container that never recovers keeps warning, so it
+  still fails us. The re-read is of the **live events** and nothing else: LM's
+  `deployment_status` is a terminal record, and its failure snapshot is
+  *failure-triggered*, so it can only ever depict a failure — never a recovery.
+  The snapshot's `pod_events` must never reach the age comparison either: its
+  ages are relative to its own capture moment (8s behind the live read on the run
+  above, unbounded in general), so the same lines would read as young forever.
+  `--settle-seconds 0` disables the tolerance entirely.
 
-As with the foreign-pod path, the installed-version read-back still decides, and
-its failure message says the verdict was downgraded so the mismatch is not read
-in isolation.
+None of this proves the app is healthy, and nothing downstream should read it
+that way — a one-shot warning on a still-wedged pod ages out of the window and
+takes the window quiet with it. What the two conditions establish is that LM's
+verdict is not evidence **either way**, which hands the decision to the
+installed-version read-back: unconditional, direct, and the only positive
+evidence in the flow. Its failure message says when a verdict was downgraded, so
+a version mismatch is never read in isolation.
 
 Two platform-side fixes would remove the churn rather than tolerate it — KEDA
 `initialCooldownPeriod` on the server ScaledObject, and LM not counting a pod it

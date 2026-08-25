@@ -398,8 +398,13 @@ _UNHEALTHY_EVENT_MARKERS = (
 )
 
 #: kubectl's relative ``LAST SEEN`` column: ``9s``, ``2m``, ``5m1s``, ``3h59m``,
-#: ``2d``. ``<unknown>`` and the header's ``LAST`` match nothing, which is how an
-#: unaged line is told apart from a young one.
+#: ``2d``. Both regimes have to parse, because kubectl switches units at two
+#: minutes — seconds below it (``95s``), minutes and seconds above (``2m13s``) —
+#: and the settle window sits near that flip.
+#:
+#: ``<unknown>`` matches nothing, and so does ``LAST``: the header's first column
+#: is the TWO words ``LAST SEEN``, so its leading token is a word, not an age.
+#: That is what tells an unaged line apart from a young one.
 _EVENT_AGE_RE = re.compile(r"(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?")
 
 #: Per-pod budget for the ``pod_describe`` render, and how many pods to print.
@@ -1703,13 +1708,26 @@ def _event_age_seconds(token: str) -> int | None:
 
 
 def ongoing_failures(events: str, window_seconds: int) -> list[str]:
-    """Event lines that say the namespace is STILL unhealthy, newest-first order.
+    """Event lines showing something failed again inside the last *window_seconds*.
 
-    "Still" is what the age column buys: the events behind the original verdict
-    age past ``window_seconds`` while we wait, so anything left inside the window
-    fired during the settle. A repeating warning keeps its ``LAST SEEN`` young,
-    which is exactly the case that must stay fatal — a platform container that
-    never recovers.
+    The age column is what buys "again": the events behind the original verdict
+    age past the window while we wait, so anything left inside it fired during
+    the settle. A repeating warning keeps its ``LAST SEEN`` young, which is
+    exactly the case that must stay fatal — a platform container that never
+    recovers.
+
+    Read the empty list precisely. It means "nothing failed again recently",
+    NOT "the namespace is healthy": a ONE-SHOT warning on a still-wedged pod
+    ages out of the window and takes the window quiet with it, and the incident's
+    own ``secret not found`` lines fired once per pod. That gap is why nothing
+    downstream may treat this as proof of health — the installed-version
+    read-back is the authority, it is unconditional, and a wrongly quiet window
+    only reaches it sooner.
+
+    The boundary is exclusive: an age of exactly ``window_seconds`` counts as
+    outside. kubectl also switches from seconds to minutes at two minutes, so
+    around a 90s window the same instant can arrive as ``95s`` or ``2m1s``;
+    both parse, and erring outside is the direction the read-back covers.
     """
     lines: list[str] = []
     for line in events.splitlines():
@@ -1777,15 +1795,24 @@ def _live_events(client: TenantClient, app_id: str, title: str) -> str | None:
 
 
 def _settle(client: TenantClient, app_id: str, seconds: int) -> list[str]:
-    """Wait, re-read the live events, and report what is still failing.
+    """Wait, re-read the live events, and report what failed again while we did.
 
     What makes the tolerance above safe: a platform container that genuinely
     never recovers keeps warning, and those warnings are what this returns.
 
-    The re-read is of the EVENTS, not the deployment status. LM's
+    The re-read is of the LIVE EVENTS, and of nothing else. LM's
     ``deployment_status`` is a terminal record — it never flips back to
-    SUCCEEDED — and its failure snapshot is frozen at the moment of failure, so
-    neither can say whether the namespace is well now. The live events can.
+    SUCCEEDED. Its failure snapshot cannot help either, and the reason is
+    stronger than "it does not change": the snapshot is **failure-triggered**, so
+    it can only ever depict a failure. Even a snapshot overwritten by a later
+    flap would depict that flap, never a recovery.
+
+    The snapshot's ``pod_events`` must also never reach :func:`ongoing_failures`.
+    Its ages are relative to its own capture moment, not to now — measured 8s
+    behind the live read on the FND-831 run, and unbounded in general — so the
+    same lines would read as young forever. The two sections have identical
+    shape, which makes that a one-line mistake; hence one function that reads
+    live events and one caller.
     """
     print(
         f"::notice::the FAILED verdict names only benign pod churn. Waiting "
@@ -1798,8 +1825,8 @@ def _settle(client: TenantClient, app_id: str, seconds: int) -> list[str]:
     )
     if events is None:
         return [
-            "the live-events read failed, so recovery could not be confirmed — "
-            "honouring LM's verdict rather than guessing"
+            "the live-events read failed, so nothing could be established either "
+            "way — honouring LM's verdict rather than guessing"
         ]
     return ongoing_failures(events, seconds)
 
@@ -1894,11 +1921,16 @@ def _tolerate_pod_churn(
     """Downgrade a FAILED verdict caused by benign pod churn, or re-raise it.
 
     Two conditions, both required (FND-831). The diagnostics have to NAME why the
-    unhealthy container is not the app under test, and the namespace then has to
-    be seen to stop failing. Naming alone is not enough — a platform container
-    that never recovers names the same reason forever — and settling alone is not
-    enough either, since an app that crash-loops slower than the window would
-    look calm.
+    unhealthy container is not the app under test, and nothing may then be seen
+    to fail again while we wait. Naming alone is not enough — a platform
+    container that never recovers names the same reason forever — and a quiet
+    window alone is not enough either, since an app that crash-loops slower than
+    the window, or fails once and stays wedged, would look calm.
+
+    Neither condition proves the app is healthy, and this function does not
+    claim it. It only establishes that LM's verdict is not evidence EITHER way,
+    which hands the decision to the installed-version read-back — unconditional,
+    direct, and the only positive evidence in the flow.
 
     Returns the reason, for the log lines and for the read-back's failure message.
     Never returns "": everything that is not tolerated leaves by ``raise``.
@@ -1910,21 +1942,22 @@ def _tolerate_pod_churn(
         print(
             f"::warning::the diagnostics name only benign pod churn ({reason}), "
             "but --settle-seconds is 0, so the verdict stands: without a settle "
-            "there is no evidence the churn stopped."
+            "there is nothing to say the churn stopped."
         )
         raise failure
     ongoing = _settle(client, app_id, settle_seconds)
     if ongoing:
         raise DeploymentFailed(
             f"{failure} The diagnostics named benign pod churn ({reason}), but "
-            f"the namespace was still failing {settle_seconds}s later, so the "
-            "verdict stands: " + " | ".join(ongoing[:5])
+            f"something failed again within {settle_seconds}s, so the verdict "
+            "stands: " + " | ".join(ongoing[:5])
         ) from failure
     print(
-        f"::warning::{failure} — but {reason}, and nothing in the namespace was "
-        f"still failing {settle_seconds}s later. LM's health check is "
+        f"::warning::{failure} — but {reason}, and nothing in the namespace "
+        f"failed again in the {settle_seconds}s after. LM's health check is "
         "namespace-scoped and its verdict is an instant, so pod churn the "
-        "platform caused reds an install that is fine. Falling through to the "
+        "platform caused reds an install that is fine. That is not a clean bill "
+        "of health, only the absence of a repeat: falling through to the "
         "installed-version read-back, which decides."
     )
     return reason
@@ -2127,7 +2160,7 @@ def install(args: argparse.Namespace) -> InstallOutcome:
     if churn:
         print(
             f"::notice::tenant serves {installed}; the FAILED verdict was benign "
-            f"pod churn ({churn}) and the namespace settled. Nothing to clean up "
+            f"pod churn ({churn}) that did not repeat. Nothing to clean up "
             "on the tenant, but the churn itself is worth removing at the "
             "platform: KEDA's initialCooldownPeriod would stop a scale-down "
             "racing a still-initialising pod."

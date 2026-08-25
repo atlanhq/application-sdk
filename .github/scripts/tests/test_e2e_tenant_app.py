@@ -2371,11 +2371,19 @@ def test_unreadable_diagnostics_are_never_benign() -> None:
     "token,seconds",
     [
         ("9s", 9),
+        # kubectl switches units at two minutes: seconds below it, minutes above.
+        # The settle window sits near that flip, so both regimes have to parse or
+        # the boundary silently loses resolution.
+        ("95s", 95),
         ("2m", 120),
+        ("2m1s", 121),
         ("5m1s", 301),
         ("3h59m", 14340),
         ("2d", 172800),
+        # The header's first column is the TWO words `LAST SEEN`, so its leading
+        # token is a word. Neither it nor an unaged row may read as young.
         ("LAST", None),
+        ("SEEN", None),
         ("<unknown>", None),
         ("", None),
         ("pod/openapi-0", None),
@@ -2386,10 +2394,10 @@ def test_event_age_parsing(token: str, seconds: int | None) -> None:
 
 
 def test_the_settle_window_is_what_tells_churn_from_a_stuck_platform() -> None:
-    """The same lines, read twice: young means still failing, old means settled."""
+    """The same lines, read twice: young means it failed again, old means quiet."""
     assert app.ongoing_failures(_churn_events(age="21s"), 90) != []
     assert app.ongoing_failures(_churn_events(age="2m21s"), 90) == []
-    # The header row carries no age and must never read as young.
+    # The two-word header row carries no age and must never read as young.
     assert (
         app.ongoing_failures("LAST SEEN   TYPE      REASON   OBJECT   MESSAGE\n", 90)
         == []
@@ -2401,6 +2409,24 @@ def test_the_settle_window_is_what_tells_churn_from_a_stuck_platform() -> None:
         )
         == []
     )
+
+
+@pytest.mark.parametrize(
+    "age,inside",
+    [("89s", True), ("90s", False), ("91s", False), ("2m", False), ("2m1s", False)],
+)
+def test_the_window_boundary_is_exclusive_across_the_unit_flip(
+    age: str, inside: bool
+) -> None:
+    """Which side of a 90s window each rendering falls on, pinned deliberately.
+
+    kubectl prints seconds below two minutes and minutes above, so the same
+    instant can arrive either way near this boundary. Exactly-at-the-window
+    counts as outside: erring that way hands the decision to the version
+    read-back, which is unconditional, rather than reding a leg on a rounding.
+    """
+    events = f"{age}   Warning   Failed   pod/openapi-0   Error: something\n"
+    assert bool(app.ongoing_failures(events, 90)) is inside
 
 
 def test_a_repeating_warning_keeps_the_verdict(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2435,7 +2461,7 @@ def test_an_unreadable_settle_read_honours_the_verdict(
         StubTransport(routes=[StubRoute("GET", "/events", Response(503, {}))]),
     )
     still = app._settle(TenantClient(base_url=_TENANT, bearer="t"), _APP_ID, 90)
-    assert still and "could not be confirmed" in still[0]
+    assert still and "nothing could be established" in still[0]
 
 
 # ── End to end through install() ─────────────────────────────────────────────
@@ -2446,6 +2472,8 @@ def _churn_routes(
     settled_events: str,
     installed: str = _VERSION,
     describe: str = _CHURN_DESCRIBE,
+    snapshot_events: str | None = None,
+    live_events: str | None = None,
 ) -> StubTransport:
     return StubTransport(
         routes=[
@@ -2469,12 +2497,20 @@ def _churn_routes(
                 "/failure",
                 _snapshot_response(
                     failure_reason="HelmRelease not ready",
-                    pod_events=_churn_events(),
+                    pod_events=(
+                        _churn_events() if snapshot_events is None else snapshot_events
+                    ),
                     pod_describe=describe,
                 ),
             ),
             # The live read inside _dump_failure, then the settle's re-read.
-            StubRoute("GET", "/events", _ok({"events": _churn_events()})),
+            StubRoute(
+                "GET",
+                "/events",
+                _ok(
+                    {"events": _churn_events() if live_events is None else live_events}
+                ),
+            ),
             StubRoute("GET", "/events", _ok({"events": settled_events})),
             StubRoute("GET", "/info", _ok({"version": installed})),
         ],
@@ -2496,7 +2532,36 @@ def test_benign_churn_passes_once_the_namespace_settles(
         "::warning::" in line and "atlan-env-seeder" in line
         for line in out.splitlines()
     )
-    assert "settled" in out
+    assert "not a clean bill of health" in out, (
+        "the tolerance establishes that LM's verdict is not evidence either way, "
+        "not that the app is well — a one-shot warning on a wedged pod ages out "
+        "of the window too. Promise the stronger thing and the next change will "
+        "be built on it"
+    )
+
+
+def test_only_the_settles_own_read_reaches_the_age_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The snapshot's `pod_events` must never be measured against the window.
+
+    Its ages are relative to its own capture moment, not to now — measured 8s
+    behind the live read on the FND-831 run, and unbounded in general — so the
+    same lines would read as young forever and no install could ever settle.
+    The two sections have identical shape, which makes that a one-line mistake.
+
+    Here both the snapshot and the at-failure live read are 1s old while the
+    settle's own re-read is quiet: only a leak from either could red this.
+    """
+    _wire(
+        monkeypatch,
+        _churn_routes(
+            snapshot_events=_churn_events(age="1s"),
+            live_events=_churn_events(age="1s"),
+            settled_events=_churn_events(age="4m"),
+        ),
+    )
+    assert app.install(_install_args()).installed_version == _VERSION
 
 
 def test_churn_that_never_settles_still_fails(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2507,7 +2572,7 @@ def test_churn_that_never_settles_still_fails(monkeypatch: pytest.MonkeyPatch) -
     rather than a blanket "ignore init containers".
     """
     _wire(monkeypatch, _churn_routes(settled_events=_churn_events(age="6s")))
-    with pytest.raises(app.DeploymentFailed, match="still failing"):
+    with pytest.raises(app.DeploymentFailed, match="failed again within 90s"):
         app.install(_install_args())
 
 
