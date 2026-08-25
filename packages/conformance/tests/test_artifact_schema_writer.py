@@ -326,6 +326,101 @@ def extract(out_dir: Path) -> ExtractOutput:
     assert "'.jsonl'" in findings[0].message
 
 
+def test_with_suffix_names_the_extension_directly(tmp_path: Path) -> None:
+    """``with_suffix(".parquet")`` passes the extension itself, not a path."""
+    _declare(tmp_path, {"raw_queries": ("ndjson", ["QUERY_ID"])})
+    src = """
+from pathlib import Path
+
+from application_sdk.contracts.base import Output
+from application_sdk.contracts.types import FileReference
+
+
+class ExtractOutput(Output):
+    raw_queries: FileReference | None = None
+
+
+def extract(base: Path) -> ExtractOutput:
+    out_file = base.with_suffix(".parquet")
+    return ExtractOutput(raw_queries=FileReference.from_local(out_file))
+"""
+    findings = _run(tmp_path, {"app/main.py": src})
+
+    assert len(findings) == 1
+    assert "'.parquet'" in findings[0].message
+
+
+def test_an_f_string_tail_carrying_only_the_extension_resolves(
+    tmp_path: Path,
+) -> None:
+    """In ``f"{name}.jsonl"`` the trailing literal is a fragment, not a path."""
+    _declare(tmp_path, {"raw_queries": ("parquet", ["QUERY_ID"])})
+    src = """
+from pathlib import Path
+
+from application_sdk.contracts.base import Output
+from application_sdk.contracts.types import FileReference
+
+
+class ExtractOutput(Output):
+    raw_queries: FileReference | None = None
+
+
+def extract(out_dir: Path, name: str) -> ExtractOutput:
+    out_file = out_dir / f"{name}.jsonl"
+    return ExtractOutput(raw_queries=FileReference.from_local(out_file))
+"""
+    findings = _run(tmp_path, {"app/main.py": src})
+
+    assert len(findings) == 1
+    assert "'.jsonl'" in findings[0].message
+
+
+def test_an_f_string_tail_with_no_extension_is_unresolvable(
+    tmp_path: Path,
+) -> None:
+    _declare(tmp_path, {"raw_queries": ("parquet", ["QUERY_ID"])})
+    src = """
+from pathlib import Path
+
+from application_sdk.contracts.base import Output
+from application_sdk.contracts.types import FileReference
+
+
+class ExtractOutput(Output):
+    raw_queries: FileReference | None = None
+
+
+def extract(out_dir: Path, name: str) -> ExtractOutput:
+    out_file = out_dir / f"{name}_partitions"
+    return ExtractOutput(raw_queries=FileReference.from_local(out_file))
+"""
+    assert _run(tmp_path, {"app/main.py": src}) == []
+
+
+def test_a_dotted_directory_in_a_fragment_is_not_an_extension(
+    tmp_path: Path,
+) -> None:
+    """The dot is on a directory, so the file itself has no extension."""
+    _declare(tmp_path, {"raw_queries": ("parquet", ["QUERY_ID"])})
+    src = """
+from pathlib import Path
+
+from application_sdk.contracts.base import Output
+from application_sdk.contracts.types import FileReference
+
+
+class ExtractOutput(Output):
+    raw_queries: FileReference | None = None
+
+
+def extract(out_dir: Path, name: str) -> ExtractOutput:
+    out_file = out_dir / f"{name}.d/queries"
+    return ExtractOutput(raw_queries=FileReference.from_local(out_file))
+"""
+    assert _run(tmp_path, {"app/main.py": src}) == []
+
+
 def test_a_path_variable_assigned_two_extensions_is_unresolvable(
     tmp_path: Path,
 ) -> None:

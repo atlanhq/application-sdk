@@ -139,15 +139,36 @@ def path_key(node: ast.expr) -> str | None:
 
 
 def _suffix_of_literal(text: str) -> str | None:
-    """Return the lowercased extension of a path literal, or ``None``."""
+    """Return the lowercased extension of a **whole path** literal, or ``None``.
+
+    Whole-path semantics, so ``PurePosixPath``'s rules apply as-is: a leading
+    dot names a hidden file rather than an extension, which is why ``".env"``
+    and a bare ``".jsonl"`` both resolve to nothing here.  A *fragment* of a
+    path — an f-string tail, a ``with_suffix`` argument — is the opposite case
+    and goes through :func:`_suffix_of_fragment` instead.
+    """
     if not text or text.endswith("/"):
         return None
     suffix = PurePosixPath(text).suffix.lower()
-    # ``PurePosixPath(".env").suffix`` is "" already; guard the remaining case
-    # of a bare extension-looking segment such as "…/.jsonl".
-    if not suffix or suffix == text:
+    if not suffix:
         return None
     return suffix
+
+
+def _suffix_of_fragment(text: str) -> str | None:
+    """Return the lowercased extension of a path **fragment**, or ``None``.
+
+    A fragment is the tail of a path someone else supplied the head of, so a
+    leading dot is an extension rather than a hidden-file marker: ``".parquet"``
+    from ``with_suffix(".parquet")`` and ``".jsonl"`` from ``f"{name}.jsonl"``
+    both name the format, and whole-path rules would drop them.
+    """
+    if not text or "/" in text.rpartition(".")[2]:
+        return None
+    head, dot, tail = text.rpartition(".")
+    if not dot or not tail:
+        return None
+    return f".{tail}".lower()
 
 
 def _direct_suffix(node: ast.expr) -> str | None:
@@ -162,10 +183,18 @@ def _direct_suffix(node: ast.expr) -> str | None:
             return None
         tail = inner.values[-1]
         if isinstance(tail, ast.Constant) and isinstance(tail.value, str):
-            return _suffix_of_literal(tail.value)
+            # The tail is a fragment: the head is whatever the interpolations
+            # produced, so ``f"{name}.jsonl"`` ends in a real extension.
+            return _suffix_of_fragment(tail.value)
         return None
     if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Attribute):
-        if inner.func.attr in {"joinpath", "with_suffix", "with_name"} and inner.args:
+        # ``with_suffix`` takes the extension itself, not a path containing one.
+        if inner.func.attr == "with_suffix" and inner.args:
+            arg = inner.args[0]
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                return _suffix_of_fragment(arg.value)
+            return None
+        if inner.func.attr in {"joinpath", "with_name"} and inner.args:
             return _direct_suffix(inner.args[-1])
     return None
 
