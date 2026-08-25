@@ -227,18 +227,41 @@ def test_no_validator_for_the_format_is_unsupported(tmp_path: Path) -> None:
     assert report.artifact_format == FORMAT_NDJSON
 
 
-def test_builtins_are_empty_until_the_validators_land(tmp_path: Path) -> None:
-    """FND-688/689 fill this in. Until then every declared artifact says so out loud.
+def test_the_builtins_carry_parquet_and_not_yet_ndjson(tmp_path: Path) -> None:
+    """FND-689 landed parquet; FND-688 has still to land NDJSON.
 
-    The point of asserting it is that the interim state is *reported*, not silent —
-    an app that has adopted declarations can see in its outcome events that nothing
-    is checking them yet.
+    The point of asserting the gap is that the interim state is *reported*, not
+    silent — an app that has adopted declarations can see in its outcome events that
+    its NDJSON hand-offs are not being checked yet, which is the failure mode this
+    whole capability exists to remove.
     """
-    assert builtin_format_validators() == ()
+    assert [v.artifact_format for v in builtin_format_validators()] == [FORMAT_PARQUET]
 
     report = validate_artifact(tmp_path, _StubSource(DECLARATION))
     _assert_emits(report, OUTCOME_UNSUPPORTED)
     assert "no validator registered" in report.reason
+    assert FORMAT_NDJSON in report.reason
+
+
+def test_the_builtin_parquet_validator_is_wired_end_to_end(tmp_path: Path) -> None:
+    """The default validator set really dispatches, not just reports its members."""
+    pytest.importorskip("pyarrow")
+
+    report = validate_artifact(
+        tmp_path,
+        _StubSource(
+            FieldMapDeclaration(
+                fields=(DeclaredField(path="QUERY_ID", type="string"),),
+                artifact_format=FORMAT_PARQUET,
+            )
+        ),
+    )
+
+    # Empty directory: no part to read, so the honest answer is `absent` — reached
+    # through the builtin validator rather than through "no validator registered".
+    _assert_emits(report, OUTCOME_ABSENT)
+    assert report.artifact_format == FORMAT_PARQUET
+    assert "no parquet file" in report.reason
 
 
 def test_a_declaration_with_no_format_is_unsupported(tmp_path: Path) -> None:

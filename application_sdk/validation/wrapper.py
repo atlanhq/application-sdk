@@ -63,13 +63,19 @@ def builtin_format_validators() -> tuple[FormatValidator, ...]:
     module-level import here would drag it onto the import path of every JSON-only
     caller — exactly the cost coupling the two-seam design exists to prevent
     (``tests/unit/validation/test_artifact_dependency_floor.py`` enforces it).
+    Importing the parquet *module* is cheap: it defers ``pyarrow`` to the moment a
+    parquet artifact is actually validated, and degrades to skip-with-warning when
+    the extra is not installed.
 
-    Empty until the per-format validators land (FND-688 NDJSON, FND-689 parquet).
-    Until then every declared artifact resolves to ``unsupported`` naming the format
-    that had no validator — which is the honest report, and is visible in the
-    outcome events rather than looking like a pass.
+    NDJSON (FND-688) is still to land, so an NDJSON artifact resolves to
+    ``unsupported`` naming the format that had no validator — the honest report,
+    visible in the outcome events rather than looking like a pass.
     """
-    return ()
+    from application_sdk.validation.parquet import (  # noqa: PLC0415 — deferred: keeps the parquet reader off a JSON-only caller's import path
+        ParquetFooterValidator,
+    )
+
+    return (ParquetFooterValidator(),)
 
 
 def validate_artifact(
