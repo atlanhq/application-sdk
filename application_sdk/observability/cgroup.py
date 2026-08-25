@@ -14,7 +14,7 @@ import asyncio
 import contextlib
 import os
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.resource_sampler import parse_pod_memory_limit
@@ -287,7 +287,6 @@ class ContainerTrace:
     cpu_throttled_periods: int | None = None
     cpu_periods: int | None = None
     cpu_quota_cores: float | None = None
-    samples: list[float] = field(default_factory=list)
 
     def observe(self, used: int | None, limit: int | None) -> None:
         """Fold one memory reading into the peak."""
@@ -383,10 +382,7 @@ async def track_container_usage(
             async def _poll() -> None:
                 while True:
                     await asyncio.sleep(poll_interval_seconds)
-                    used = memory_usage_bytes()
-                    trace.observe(used, trace.memory_limit_bytes)
-                    if used is not None and trace.memory_limit_bytes:
-                        trace.samples.append(used / trace.memory_limit_bytes)
+                    trace.observe(memory_usage_bytes(), trace.memory_limit_bytes)
 
             task = asyncio.create_task(_poll())
         else:

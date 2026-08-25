@@ -88,6 +88,28 @@ def _make_mock_client() -> mock.MagicMock:
     return client
 
 
+def _WorkerWrapperForDrain():
+    """A real ``AppWorker`` with its Temporal worker and pusher stubbed.
+
+    Built via ``object.__new__`` rather than a hand-rolled fake so the test drives
+    the production ``__aexit__`` and ``_drain_sizing`` — a fake would pass while
+    the shipped shutdown path stayed broken, which is exactly the failure being
+    guarded against here.
+    """
+    from application_sdk.execution._temporal.worker import AppWorker
+
+    w = object.__new__(AppWorker)
+
+    class _NullWorker:
+        async def __aexit__(self, *a: object) -> None:
+            return None
+
+    w._worker = _NullWorker()
+    w._pusher = None
+    w._start_event_params = {}
+    return w
+
+
 class TestCreateWorker:
     """Tests for create_worker()."""
 
@@ -442,6 +464,68 @@ class TestCreateWorker:
         ]
         assert len(sizing) == 1
         assert sizing[0]._activities == frozenset({"merge", "fetch_entities"})
+
+    # ── sizing drain on shutdown ──────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_shutdown_drains_buffered_sizing_rows(self, monkeypatch) -> None:
+        """The last batch of a pod's life must not die with the process.
+
+        These pools scale to zero, so a pod often handles a handful of activities
+        and exits. The sink's periodic flush closes the gap *between* records;
+        only this closes the gap between the last record and shutdown. Without it
+        the collector silently loses the tail of every pod — which on a low-rate
+        workload is most of the data.
+        """
+        monkeypatch.setenv("APPLICATION_SDK_ENABLE_SIZING_TELEMETRY", "true")
+        monkeypatch.setenv("APPLICATION_SDK_SIZING_TELEMETRY_ACTIVITIES", "merge")
+
+        drained = []
+
+        async def fake_drain() -> None:
+            drained.append(True)
+
+        monkeypatch.setattr(
+            "application_sdk.observability.sizing_sink.drain", fake_drain
+        )
+
+        wrapper = _WorkerWrapperForDrain()
+        await wrapper.__aexit__(None)
+        assert drained == [True], "shutdown did not drain the sizing sink"
+
+    @pytest.mark.asyncio
+    async def test_shutdown_skips_drain_when_collection_is_off(
+        self, monkeypatch
+    ) -> None:
+        """The default path must not import or touch the sink at all."""
+        monkeypatch.delenv("APPLICATION_SDK_ENABLE_SIZING_TELEMETRY", raising=False)
+
+        drained = []
+
+        async def fake_drain() -> None:
+            drained.append(True)
+
+        monkeypatch.setattr(
+            "application_sdk.observability.sizing_sink.drain", fake_drain
+        )
+
+        wrapper = _WorkerWrapperForDrain()
+        await wrapper.__aexit__(None)
+        assert drained == []
+
+    @pytest.mark.asyncio
+    async def test_a_failing_drain_does_not_break_shutdown(self, monkeypatch) -> None:
+        """Telemetry must never hold up or fail a shutdown."""
+        monkeypatch.setenv("APPLICATION_SDK_ENABLE_SIZING_TELEMETRY", "true")
+        monkeypatch.setenv("APPLICATION_SDK_SIZING_TELEMETRY_ACTIVITIES", "merge")
+
+        async def boom() -> None:
+            raise RuntimeError("object store unreachable")
+
+        monkeypatch.setattr("application_sdk.observability.sizing_sink.drain", boom)
+
+        wrapper = _WorkerWrapperForDrain()
+        await wrapper.__aexit__(None)  # must not raise
 
     def test_sizing_interceptor_absent_when_list_set_but_switch_off(
         self, monkeypatch

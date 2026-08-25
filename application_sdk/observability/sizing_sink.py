@@ -38,21 +38,10 @@ from application_sdk.constants import (
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.observability import AtlanObservability
+from application_sdk.observability.sizing import SIZING_SCHEMA_VERSION
 from application_sdk.observability.utils import get_observability_dir
 
 logger = get_logger(__name__)
-
-#: Bump on any change to the record's fields or their meaning. Rows are read
-#: months after they were written, mixed across SDK versions.
-#: 2 — added started_at / pod / concurrency_max / is_attributable. A v1 row cannot
-#: say whether its peak was pod-wide, so v1 and v2 must not be pooled.
-#: 3 — added start_memory_bytes / peak_delta_bytes / delta_per_input_byte, and made
-#: peak_source reach "watermark". A v2 row's peak silently includes memory left
-#: pooled by earlier activities in the same pod, which biases it upward by roughly
-#: a gigabyte with no way to recover the baseline after the fact. So v2 peaks are
-#: usable only for rows that ran first in their pod, and v2 and v3 must not be
-#: pooled when fitting a multiplier.
-SIZING_SCHEMA_VERSION = 3
 
 
 class SizingObservabilitySink(AtlanObservability[Any]):

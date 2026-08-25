@@ -441,8 +441,10 @@ class TestTrackContainerUsage:
             await asyncio.sleep(0.05)
 
         assert trace.peak_source == "poll"
+        # The spike is kept after usage drops back — that is the whole point of
+        # polling for a peak rather than reading the endpoint.
         assert trace.peak_memory_bytes == 7000
-        assert trace.samples
+        assert trace.peak_memory_fraction == pytest.approx(0.7)
 
     @pytest.mark.asyncio
     async def test_zero_interval_disables_polling(self, tmp_path, monkeypatch):

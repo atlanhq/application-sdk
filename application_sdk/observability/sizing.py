@@ -26,6 +26,18 @@ _INSTRUMENTS: dict[str, Any] = {}
 
 _MIB = 1024 * 1024
 
+#: Bump on any change to the record's fields or their meaning. Rows are read
+#: months after they were written, mixed across SDK versions.
+#: 2 — added started_at / pod / concurrency_max / is_attributable. A v1 row cannot
+#: say whether its peak was pod-wide, so v1 and v2 must not be pooled.
+#: 3 — added start_memory_bytes / peak_delta_bytes / delta_per_input_byte, and made
+#: peak_source reach "watermark". A v2 row's peak silently includes memory left
+#: pooled by earlier activities in the same pod, which biases it upward by roughly
+#: a gigabyte with no way to recover the baseline after the fact. So v2 peaks are
+#: usable only for rows that ran first in their pod, and v2 and v3 must not be
+#: pooled when fitting a multiplier.
+SIZING_SCHEMA_VERSION = 3
+
 
 @dataclass(frozen=True)
 class SizingObservation:
@@ -298,9 +310,19 @@ def record_observation(observation: SizingObservation) -> None:
             _mean_cpu_cores().record(mean_cores, attrs)
 
         payload = asdict(observation)
+        # Same derived fields the sink writes, and for the same reason: computed
+        # once here so no consumer derives them slightly differently.
         payload["mean_cpu_cores"] = mean_cores
         payload["peak_delta_bytes"] = peak_delta
         payload["delta_per_input_byte"] = observation.delta_per_input_byte
+        payload["peak_per_input_byte"] = observation.peak_per_input_byte
+        payload["is_attributable"] = observation.is_attributable
+        # ``schema_version`` matters most HERE, not in the sink. The log line is
+        # what reaches the central log store, so it is the copy most analysis
+        # actually reads — and without the version a reader cannot tell a v2 row
+        # (no baseline, peak biased upward by pooled memory) from a v3 one, which
+        # is exactly the distinction that must not be pooled when fitting.
+        payload["schema_version"] = SIZING_SCHEMA_VERSION
         # One JSON object per line, so a log pipeline lifts the dataset with one grep.
         _logger.info(
             "activity_sizing_observation %s",
