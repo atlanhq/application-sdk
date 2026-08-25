@@ -98,8 +98,12 @@ def test_it_is_the_ndjson_record_validator() -> None:
 
 
 def test_it_ships_as_a_builtin() -> None:
-    """An app gets NDJSON checking without naming a validator."""
-    assert builtin_format_validators() == (NdjsonValidator(),)
+    """An app gets NDJSON checking without naming a validator.
+
+    Asserted as membership rather than as the whole tuple, so registering another
+    format's validator (parquet, FND-689) does not read as this one regressing.
+    """
+    assert NdjsonValidator() in builtin_format_validators()
 
 
 def test_a_delegatable_model_declaration_is_claimed() -> None:
@@ -544,14 +548,31 @@ def test_the_wrapper_stamps_the_cell_onto_a_real_scan(tmp_path: Path) -> None:
     assert report.boundary is True
 
 
-def test_parquet_still_has_no_validator(tmp_path: Path) -> None:
-    """FND-689. Reported as ``unsupported``, which is visible, not silent."""
+def test_a_parquet_declaration_is_never_claimed_by_this_validator(
+    tmp_path: Path,
+) -> None:
+    """Dispatch is on the declared format, and NDJSON never answers for parquet.
+
+    FND-689 registered a parquet validator alongside this one, so a parquet
+    declaration now reaches a footer diff rather than "no validator registered".
+    What must not change is that *this* validator never claims it: dispatching a
+    parquet file to a line-by-line scan would read its binary as records and report
+    a whole artifact of undecodable ones — a loud wrong answer in place of a
+    correct check.
+
+    The validator set is pinned rather than left to the builtins, so this stays a
+    statement about NDJSON instead of about whichever formats happen to ship.
+    """
+    assert NdjsonValidator().artifact_format != FORMAT_PARQUET
+
     declaration = FieldMapDeclaration(
         fields=(DeclaredField(path="QUERY_ID", type="string"),),
         artifact_format=FORMAT_PARQUET,
     )
 
-    report = validate_artifact(tmp_path, _StubSource(declaration))
+    report = validate_artifact(
+        tmp_path, _StubSource(declaration), validators=[NdjsonValidator()]
+    )
 
     assert report.outcome == OUTCOME_UNSUPPORTED
     assert "no validator registered" in report.reason

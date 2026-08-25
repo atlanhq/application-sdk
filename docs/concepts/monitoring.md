@@ -443,12 +443,13 @@ schema source declared it.
 
     The attribute contract below ships ahead of its emitter. The wrapper's report, matrix and event
     fields exist, both schema sources (`ContractSource`, `ModelSource`) are callable, and
-    `validate_artifact(...)` really does check an NDJSON artifact — against a contract declaration,
-    and against a model declaration via the asset cell the upload hook calls. But a parquet
-    declaration still resolves to `unsupported`, and nothing calls the wrapper automatically until
-    the `FileReference` interceptor wiring lands. The only rows in ClickHouse today are the asset
-    hook's, and those carry the *asset* event's attributes, not these. The table is the reference for
-    what the allowlist admits, not a description of rows you will find there.
+    `validate_artifact(...)` really does check both formats against a contract declaration — NDJSON
+    record by record, parquet by diffing the file footer — and NDJSON against a model declaration
+    too, via the asset cell the upload hook calls. What is still missing is the *caller*: nothing
+    invokes the wrapper automatically until the `FileReference` interceptor wiring lands. The only
+    rows in ClickHouse today are that upload hook's, and they carry the *asset* event's attributes,
+    not these — so the table is the reference for what the allowlist admits, not a description of
+    rows you will find there.
 
 | Attribute | Meaning |
 |-----------|---------|
