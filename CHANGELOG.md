@@ -1,5 +1,33 @@
 # Changelog
 
+## v3.29.0 (August 25, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.28.3...v3.29.0
+
+### Features
+
+- assert the executed DAG is the app under test's (FND-129) (#3369) (by @cmgrote in [f61511e](https://github.com/atlanhq/application-sdk/commit/f61511e))
+- support multi-entrypoint apps across the e2e and integration tiers (#3286) (by @cmgrote in [3af3bba](https://github.com/atlanhq/application-sdk/commit/3af3bba))
+- name an AE submit that leaves {{credentialGuid}} unresolved (FND-656) (#3375) (by @hritika-atlan in [3867026](https://github.com/atlanhq/application-sdk/commit/3867026))
+- artifact-validation wrapper skeleton + shared event-name registry (FND-684) (#3385) (by @cmgrote in [0e4fdd6](https://github.com/atlanhq/application-sdk/commit/0e4fdd6))
+- require an artifact schema on every entrypoint FileReference (FND-687) (#3389) (by @cmgrote in [e68790c](https://github.com/atlanhq/application-sdk/commit/e68790c))
+- ContractSource + ModelSource and the validate_artifact entry point (FND-686) (#3390) (by @cmgrote in [1f605d8](https://github.com/atlanhq/application-sdk/commit/1f605d8))
+- NDJSON declared-fields validator, streaming and constant-memory (FND-688) (#3391) (by @cmgrote in [df79ce9](https://github.com/atlanhq/application-sdk/commit/df79ce9))
+- accept legacy Temporal workflow types as inbound-only aliases (#3132) (by @fyzanshaik-atlan in [bd90391](https://github.com/atlanhq/application-sdk/commit/bd90391))
+- parquet footer validator — read_schema diff, no rows read (FND-689) (#3392) (by @cmgrote in [d80c0bc](https://github.com/atlanhq/application-sdk/commit/d80c0bc))
+- wire artifact validation into the FileReference interceptor, both sides, warn-only (FND-691) (#3409) (by @cmgrote in [2c3451b](https://github.com/atlanhq/application-sdk/commit/2c3451b))
+- artifact-validation posture — soft/hard at worker build, posture event, would_block (FND-692) (#3415) (by @cmgrote in [0dba013](https://github.com/atlanhq/application-sdk/commit/0dba013))
+- correct the flat agent-json row rationale (FND-846) (#3420) (by @cmgrote in [05793b0](https://github.com/atlanhq/application-sdk/commit/05793b0))
+- mark testing/full_dag deprecated where connector authors actually look (#3421) (by @cmgrote in [cdc21a6](https://github.com/atlanhq/application-sdk/commit/cdc21a6))
+
+### Bug Fixes
+
+- chunk the teardown asset purge (FND-779) (#3376) (by @cmgrote in [e2ddcbb](https://github.com/atlanhq/application-sdk/commit/e2ddcbb))
+- reconnect the Temporal client before a supervised restart (#3406) (by @Lalit3716-atlan in [a713d92](https://github.com/atlanhq/application-sdk/commit/a713d92))
+- stop emitting health events while the poll loop is dead (#3407) (by @Lalit3716-atlan in [e12f5f1](https://github.com/atlanhq/application-sdk/commit/e12f5f1))
+- wire the agent_json() hook on SQLAppE2ETest (FND-843) (#3416) (by @cmgrote in [ded0f2f](https://github.com/atlanhq/application-sdk/commit/ded0f2f))
+
+
 ## v3.28.3 (August 21, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.28.2...v3.28.3
