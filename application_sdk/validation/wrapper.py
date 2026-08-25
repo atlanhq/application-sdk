@@ -72,6 +72,12 @@ def builtin_format_validators() -> tuple[FormatValidator, ...]:
     parquet (FND-689) diffs a footer. A format neither claims still resolves to
     ``unsupported`` naming it — the honest report, visible in the outcome events
     rather than looking like a pass.
+
+    Two validators, three cells. NDJSON claims **both** of its — the field-map diff
+    and the model delegation folded in from the asset validator (FND-690) — because
+    dispatch is by format, so one validator claims ``ndjson`` and then decides per
+    declaration kind. Parquet x model stays genuinely ``unsupported``: a model
+    carries no column mapping, so a footer diff has nothing to diff against.
     """
     from application_sdk.validation.ndjson import (  # noqa: PLC0415 — deferred on purpose: the parquet import below must stay inside this function, and both are resolved together
         NdjsonValidator,

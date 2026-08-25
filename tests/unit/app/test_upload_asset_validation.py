@@ -9,13 +9,20 @@ The scan function is pickled by reference into a spawn child, so test doubles
 for it must be module-level functions in this file — mocks and closures cannot
 cross the process boundary.
 
+Since FND-690 the check is reached through the generic artifact wrapper —
+``validate_artifact(target, ModelSource(model=Asset))``, the NDJSON x ``ModelSource``
+cell — so that is what the offloaded scan doubles below patch. The cell *is*
+``validate_transformed_dir``, so every assertion here is about the same walk it
+always was.
+
 On every *validated* upload the helper emits a structured
 ``ASSET_VALIDATION_EVENT`` (INFO) carrying per-axis counts and a compact
 ``asset_validation_matrix`` JSON attribute — allowlisted so it reaches OTLP /
-ClickHouse. The human-readable WARNING (full ``format_report()``) is additionally
-logged only when the batch is flagged. Uploads with nothing to validate (flag
-off / not a ``transformed/`` subtree) — and scans that crash/time out — emit
-neither.
+ClickHouse. Its name and every attribute key are a shipped contract, pinned
+byte-for-byte in ``tests/unit/validation/test_asset_event.py``. The human-readable
+WARNING (full ``format_report()``) is additionally logged only when the batch is
+flagged. Uploads with nothing to validate (flag off / not a ``transformed/``
+subtree) — and scans that crash/time out — emit neither.
 """
 
 from __future__ import annotations
@@ -43,7 +50,6 @@ _HAS_ROCKSDICT = importlib.util.find_spec("rocksdict") is not None
 APP = "test-app"
 CONN = "default/snow/123"
 SCHEMA_QN = f"{CONN}/DB/SCHEMA"
-TABLE_QN = f"{SCHEMA_QN}/T1"
 
 
 def _write_transformed(base: Path, entity: str, assets: list) -> None:
@@ -58,19 +64,26 @@ def _write_transformed(base: Path, entity: str, assets: list) -> None:
 # Module-level scan doubles: run_best_effort pickles the scan function by
 # reference into a spawn child, so a failing double must be an importable
 # module-level function (a MagicMock cannot cross the process boundary).
-def _raise_runtime_error(path, **kwargs):
+def _raise_runtime_error(path, source, **kwargs):
     raise RuntimeError("boom")
 
 
-def _segfault(path, **kwargs):
+def _segfault(path, source, **kwargs):
     # Not ctypes.string_at(0): on Windows ctypes converts the access violation
     # to OSError instead of dying. faulthandler's test hook faults for real on
     # every platform.
     faulthandler._sigsegv()
 
 
-def _hang(path, **kwargs):
+def _hang(path, source, **kwargs):
     time.sleep(3600)
+
+
+def _absent_report(path, source, **kwargs):
+    # What the wrapper returns when a plug-in seam breaks: a report, never a raise.
+    from application_sdk.validation import ArtifactValidationReport
+
+    return ArtifactValidationReport.absent(reason="validator raised: RuntimeError")
 
 
 def _invalid_table() -> Table:
@@ -280,7 +293,7 @@ class TestWarnOnInvalidTransformedAssets:
         _valid_hierarchy(tmp_path)
         with patch.object(base_module, "_task_logger") as logger:
             with patch(
-                "application_sdk.validation.validate_transformed_dir",
+                "application_sdk.validation.validate_artifact",
                 _raise_runtime_error,
             ):
                 # Must not propagate the RuntimeError (raised in the child,
@@ -292,21 +305,40 @@ class TestWarnOnInvalidTransformedAssets:
 
     async def test_emit_failure_is_swallowed(self, tmp_path: Path) -> None:
         # A defect in the emit path (e.g. matrix encoding) must never break the
-        # upload: it is caught and downgraded to a warning, no raise.
+        # upload: it is caught and downgraded to a warning, no raise. The hook
+        # resolves the projection lazily at call time, so patching it on the
+        # validation package is what the hook actually looks up.
         _valid_hierarchy(tmp_path)
         with patch.object(base_module, "_task_logger") as logger:
-            with patch.object(
-                base_module,
-                "_validation_matrix_json",
+            with patch(
+                "application_sdk.validation.asset_validation_event_fields",
                 side_effect=RuntimeError("encode boom"),
             ):
                 await _warn_on_invalid_transformed_assets(str(tmp_path), APP)
             logger.warning.assert_called_once()
             assert logger.warning.call_args.kwargs.get("exc_info") is True
-            # The matrix is built as an eager arg to _task_logger.info(...), so a
-            # raise there is hit before .info() is called — no partial outcome
+            # The attribute map is built as an eager arg to _task_logger.info(...),
+            # so a raise there is hit before .info() is called — no partial outcome
             # event is emitted (mirrors test_unexpected_scan_error_is_swallowed).
             logger.info.assert_not_called()
+
+    async def test_a_wrapper_outcome_without_counts_emits_no_event(
+        self, tmp_path: Path
+    ) -> None:
+        # The wrapper never raises, so a validator that blows up arrives as a plain
+        # `absent` report rather than as an exception — and a plain report carries no
+        # asset-vocabulary counts. Emitting zeros there would put a fabricated
+        # denominator on the board, so the hook names the skip and emits nothing.
+        _valid_hierarchy(tmp_path)
+        with patch.object(base_module, "_task_logger") as logger:
+            with patch(
+                "application_sdk.validation.validate_artifact",
+                _absent_report,
+            ):
+                await _warn_on_invalid_transformed_assets(str(tmp_path), APP)
+            logger.info.assert_not_called()
+            logger.warning.assert_called_once()
+            assert "produced no counts" in logger.warning.call_args.args[0]
 
     async def test_native_crash_warns_and_continues(self, tmp_path: Path) -> None:
         # CNCT-85: a segfault in the decode path (e.g. a native msgspec bug) is
@@ -315,9 +347,7 @@ class TestWarnOnInvalidTransformedAssets:
         # produced no report, so no outcome event is emitted.
         _valid_hierarchy(tmp_path)
         with patch.object(base_module, "_task_logger") as logger:
-            with patch(
-                "application_sdk.validation.validate_transformed_dir", _segfault
-            ):
+            with patch("application_sdk.validation.validate_artifact", _segfault):
                 await _warn_on_invalid_transformed_assets(str(tmp_path), APP)
             logger.warning.assert_called_once()
             assert "subprocess died" in logger.warning.call_args.args[0]
@@ -331,7 +361,7 @@ class TestWarnOnInvalidTransformedAssets:
         _valid_hierarchy(tmp_path)
         with patch.object(base_module, "_task_logger") as logger:
             with (
-                patch("application_sdk.validation.validate_transformed_dir", _hang),
+                patch("application_sdk.validation.validate_artifact", _hang),
                 patch("application_sdk.constants.VALIDATE_ASSETS_TIMEOUT_SECONDS", 1.0),
             ):
                 await _warn_on_invalid_transformed_assets(str(tmp_path), APP)
@@ -355,7 +385,7 @@ class TestWarnOnInvalidTransformedAssets:
             _valid_hierarchy(base)
         with patch.object(base_module, "_task_logger") as logger:
             with (
-                patch("application_sdk.validation.validate_transformed_dir", _hang),
+                patch("application_sdk.validation.validate_artifact", _hang),
                 patch("application_sdk.constants.VALIDATE_ASSETS_TIMEOUT_SECONDS", 1.0),
             ):
                 results = await asyncio.gather(
@@ -423,114 +453,3 @@ class TestWarnOnInvalidTransformedAssets:
         with patch.object(base_module, "_task_logger") as logger_after:
             await _warn_on_invalid_transformed_assets(str(dirs[0]), APP)
             logger_after.warning.assert_not_called()
-
-
-def _failure(i: int, *, deserialize_error: bool = False, error: str | None = None):
-    from application_sdk.validation.assets import AssetValidationFailure
-
-    return AssetValidationFailure(
-        file="entities.json",
-        line=i,
-        type_name="Table",
-        qualified_name=f"{TABLE_QN}_{i}",
-        errors=[error if error is not None else f"bad {i}"],
-        deserialize_error=deserialize_error,
-    )
-
-
-def _orphan(i: int):
-    from application_sdk.validation.assets import ReferentialFailure
-
-    return ReferentialFailure(
-        missing_type_name="Table",
-        missing_qualified_name=f"{SCHEMA_QN}/T_MISSING_{i}",
-        reference_count=1,
-        file="entities.json",
-        line=i,
-        type_name="Column",
-        qualified_name=f"{SCHEMA_QN}/T_MISSING_{i}/C1",
-        relationship="table",
-    )
-
-
-def test_matrix_is_bounded_to_max_rows_per_axis() -> None:
-    """The matrix caps at ``_VALIDATION_MATRIX_MAX_ROWS`` rows *per axis*, so a
-    pathological batch cannot produce an unbounded LogAttributes value. The report
-    still carries the true totals — only the drill-down sample is bounded."""
-    from application_sdk.validation.assets import AssetValidationReport
-
-    cap = base_module._VALIDATION_MATRIX_MAX_ROWS
-    n = cap + 5
-    report = AssetValidationReport(
-        total=2 * n,
-        passed=0,
-        failures=[_failure(i) for i in range(n)],
-        orphans=[_orphan(i) for i in range(n)],
-    )
-
-    matrix = json.loads(base_module._validation_matrix_json(report))
-    invalid_rows = [r for r in matrix if r["kind"] == "invalid"]
-    orphan_rows = [r for r in matrix if r["kind"] == "orphan"]
-    assert len(invalid_rows) == cap
-    assert len(orphan_rows) == cap
-    assert len(matrix) == 2 * cap
-    # Scalar totals are unbounded (full batch), only the matrix is sampled.
-    assert report.failed == n
-    assert len(report.orphans) == n
-
-
-def test_matrix_marks_undeserializable_rows() -> None:
-    """A failure carrying ``deserialize_error=True`` must surface in the matrix as
-    ``kind="undeserializable"`` (the branch the emitter splits on), never
-    ``"invalid"`` — so a dashboard can tell decode failures from per-asset
-    ``.validate()`` failures. The scalar tests only assert the ``0`` count, so
-    without this the matrix branch is unexercised."""
-    from application_sdk.validation.assets import AssetValidationReport
-
-    report = AssetValidationReport(
-        total=1,
-        passed=0,
-        failures=[_failure(0, deserialize_error=True)],
-        orphans=[],
-    )
-
-    matrix = json.loads(base_module._validation_matrix_json(report))
-    assert [r["kind"] for r in matrix] == ["undeserializable"]
-
-
-def test_matrix_truncates_long_error_to_maxlen() -> None:
-    """Per-row error text is clipped to ``_VALIDATION_MATRIX_ERROR_MAXLEN`` so a
-    single pathological ``.validate()`` message cannot bloat the ClickHouse
-    attribute. Pin the length so a future refactor of the slice can't silently
-    drop the guard."""
-    from application_sdk.validation.assets import AssetValidationReport
-
-    maxlen = base_module._VALIDATION_MATRIX_ERROR_MAXLEN
-    report = AssetValidationReport(
-        total=1,
-        passed=0,
-        failures=[_failure(0, error="x" * (maxlen + 50))],
-        orphans=[],
-    )
-
-    matrix = json.loads(base_module._validation_matrix_json(report))
-    assert len(matrix[0]["error"]) == maxlen
-
-
-def test_asset_validation_outcome_keys_in_allowlist() -> None:
-    """The PR's core promise — the structured outcome attributes reach OTLP /
-    ClickHouse — holds only while these keys stay allowlisted. Pin the six new
-    validation-outcome keys the emitter relies on (mirrors the storage-op and
-    file_ref allowlist guards in tests/unit/observability/test_logger_adaptor.py)."""
-    from application_sdk.observability.logger_adaptor import _KNOWN_EXTRA_KEYS
-
-    required = {
-        ASSET_VALIDATION_MATRIX_KEY,
-        "assets_total",
-        "assets_passed",
-        "assets_invalid",
-        "assets_orphaned",
-        "assets_undeserializable",
-    }
-    missing = required - _KNOWN_EXTRA_KEYS
-    assert not missing, f"_KNOWN_EXTRA_KEYS missing validation keys: {missing}"

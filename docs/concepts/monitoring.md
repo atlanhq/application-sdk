@@ -426,6 +426,13 @@ Emitting `outcome="clean"` too gives a denominator, so a dashboard can rank conn
 flag-rate rather than only seeing failures. Uploads with nothing to validate (validation disabled, or
 a non-`transformed/` path) emit no event.
 
+Since [ADR-0020](../adr/0020-artifact-validation.md) this check is the artifact wrapper's
+NDJSON × `ModelSource` cell, reached as `validate_artifact(target, ModelSource(model=Asset))`. **The
+event above is unchanged by that** — name, keys, `outcome` vocabulary and matrix row keys are all a
+shipped contract, and the fold-in was a refactor behind it. One hand-off emits one row, so this
+upload does not additionally emit `"Artifact validation outcome"`; the two events are two
+vocabularies, not two checks.
+
 ### Artifact-validation outcome event
 
 The generic artifact-validation wrapper ([ADR-0020](../adr/0020-artifact-validation.md)) emits
@@ -437,10 +444,12 @@ schema source declared it.
     The attribute contract below ships ahead of its emitter. The wrapper's report, matrix and event
     fields exist, both schema sources (`ContractSource`, `ModelSource`) are callable, and
     `validate_artifact(...)` really does check both formats against a contract declaration — NDJSON
-    record by record, parquet by diffing the file footer. What is still missing is the *caller*:
-    nothing invokes the wrapper automatically until the `FileReference` interceptor wiring lands, so
-    the table is the reference for what the allowlist admits, not a description of rows you will find
-    in ClickHouse today.
+    record by record, parquet by diffing the file footer — and NDJSON against a model declaration
+    too, via the asset cell the upload hook calls. What is still missing is the *caller*: nothing
+    invokes the wrapper automatically until the `FileReference` interceptor wiring lands. The only
+    rows in ClickHouse today are that upload hook's, and they carry the *asset* event's attributes,
+    not these — so the table is the reference for what the allowlist admits, not a description of
+    rows you will find there.
 
 | Attribute | Meaning |
 |-----------|---------|
