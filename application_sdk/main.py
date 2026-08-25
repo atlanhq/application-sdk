@@ -1336,23 +1336,6 @@ async def run_worker_mode(config: AppConfig) -> None:
 
     client = await _connect_temporal(api_key)
 
-    async def _reconnect() -> None:
-        """Rebuild the Temporal client, mirroring what a pod restart does.
-
-        ``_build_worker`` closes over ``client``, so rebinding it here is what
-        makes the next rebuild poll on a fresh channel instead of the poisoned
-        one. Re-points the auth refresh loop at the new client too.
-        """
-        nonlocal client
-        key = api_key
-        if auth_manager is not None:
-            await auth_manager.shutdown()
-            key = await auth_manager.acquire_initial_token()
-        client = await _connect_temporal(key)
-        if auth_manager is not None:
-            auth_manager.start_background_refresh(client)
-        logger.info("Reconnected to Temporal before worker restart")
-
     if auth_manager is not None:
         auth_manager.start_background_refresh(client)
         logger.info("Background token refresh started")
@@ -1379,6 +1362,28 @@ async def run_worker_mode(config: AppConfig) -> None:
     )
 
     health_server = build_worker_health_server(port=config.health_port, client=client)
+
+    async def _reconnect() -> None:
+        """Rebuild the Temporal client, mirroring what a pod restart does.
+
+        ``_build_worker`` closes over ``client``, so rebinding it here is what
+        makes the next rebuild poll on a fresh channel instead of the poisoned
+        one. Re-points the auth refresh loop and health probes at the new
+        client too. Connect first so a failed reconnect leaves the existing
+        refresh loop running.
+        """
+        from application_sdk.execution._temporal.auth import (  # noqa: PLC0415 — cold path: only on supervised restart
+            reconnect_temporal_client,
+        )
+
+        nonlocal client, api_key
+        client, api_key = await reconnect_temporal_client(
+            connect=_connect_temporal,
+            api_key=api_key,
+            auth_manager=auth_manager,
+            health_server=health_server,
+        )
+        logger.info("Reconnected to Temporal before worker restart")
 
     # Worker-only mode pushes metrics to a Pushgateway since the process has
     # no /metrics endpoint to scrape. Combined mode (run_combined_mode below)
@@ -1645,23 +1650,6 @@ async def run_combined_mode(config: AppConfig) -> None:
 
     client = await _connect_temporal(api_key)
 
-    async def _reconnect() -> None:
-        """Rebuild the Temporal client, mirroring what a pod restart does.
-
-        ``_build_worker`` closes over ``client``, so rebinding it here is what
-        makes the next rebuild poll on a fresh channel instead of the poisoned
-        one. Re-points the auth refresh loop at the new client too.
-        """
-        nonlocal client
-        key = api_key
-        if auth_manager is not None:
-            await auth_manager.shutdown()
-            key = await auth_manager.acquire_initial_token()
-        client = await _connect_temporal(key)
-        if auth_manager is not None:
-            auth_manager.start_background_refresh(client)
-        logger.info("Reconnected to Temporal before worker restart")
-
     if auth_manager is not None:
         auth_manager.start_background_refresh(client)
         logger.info("Background token refresh started")
@@ -1689,6 +1677,28 @@ async def run_combined_mode(config: AppConfig) -> None:
     )
 
     health_server = build_worker_health_server(port=config.health_port, client=client)
+
+    async def _reconnect() -> None:
+        """Rebuild the Temporal client, mirroring what a pod restart does.
+
+        ``_build_worker`` closes over ``client``, so rebinding it here is what
+        makes the next rebuild poll on a fresh channel instead of the poisoned
+        one. Re-points the auth refresh loop and health probes at the new
+        client too. Connect first so a failed reconnect leaves the existing
+        refresh loop running.
+        """
+        from application_sdk.execution._temporal.auth import (  # noqa: PLC0415 — cold path: only on supervised restart
+            reconnect_temporal_client,
+        )
+
+        nonlocal client, api_key
+        client, api_key = await reconnect_temporal_client(
+            connect=_connect_temporal,
+            api_key=api_key,
+            auth_manager=auth_manager,
+            health_server=health_server,
+        )
+        logger.info("Reconnected to Temporal before worker restart")
 
     def _build_worker() -> Any:
         # Rebuilt on each supervisor restart — Worker instances are single-use.
