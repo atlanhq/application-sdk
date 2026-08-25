@@ -64,12 +64,16 @@ def builtin_format_validators() -> tuple[FormatValidator, ...]:
     caller — exactly the cost coupling the two-seam design exists to prevent
     (``tests/unit/validation/test_artifact_dependency_floor.py`` enforces it).
 
-    Empty until the per-format validators land (FND-688 NDJSON, FND-689 parquet).
-    Until then every declared artifact resolves to ``unsupported`` naming the format
-    that had no validator — which is the honest report, and is visible in the
-    outcome events rather than looking like a pass.
+    NDJSON ships (FND-688); parquet lands in FND-689. Until it does, a declared
+    parquet artifact resolves to ``unsupported`` naming the format that had no
+    validator — which is the honest report, and is visible in the outcome events
+    rather than looking like a pass.
     """
-    return ()
+    from application_sdk.validation.ndjson import (  # noqa: PLC0415 — deferred on purpose: FND-689's parquet validator imports pyarrow, an extra, and a module-level import here would put it on every JSON-only caller's path
+        NdjsonValidator,
+    )
+
+    return (NdjsonValidator(),)
 
 
 def validate_artifact(
