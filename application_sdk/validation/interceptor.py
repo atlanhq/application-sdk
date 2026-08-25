@@ -26,13 +26,25 @@ its ``boundary`` attribute), ``unsupported``, and ``absent``. A check that repor
 nothing is indistinguishable from a check that passed, and that ambiguity is itself
 the defect.
 
-**Warn-only, and it never raises into the task.**
+**Only a deliberate posture can fail a hand-off.**
 :func:`~application_sdk.validation.wrapper.validate_artifact` already refuses to
 raise across either plug-in seam; this module adds the outer belt so that a defect
 in the *wiring* — the walk, the offload, the emit — cannot break a hand-off either.
-Nothing here fails an activity, and nothing here blocks a persist. Whether a
-verdict may block is a separate axis (the app's artifact-validation posture,
-FND-692) that does not exist yet.
+The single exception is the app's own opt-in: with
+:attr:`~application_sdk.app.base.App.artifact_validation_mode` resolved to
+``"hard"`` at worker build, a blockable outcome raises
+:class:`ArtifactValidationBlockedError` and fails the activity. Soft is the
+default and the only posture an app gets without asking, and it emits
+``artifact_enforcement="would_block"`` instead — the loud, queryable forecast of
+what hard mode would have done, which is what makes graduating a measured
+decision rather than a leap (FND-694).
+
+Two things stay outside that posture entirely. **A defect in this check always
+fails open**, in either mode: everything the wrapper's guard rails classify
+``validator_broken`` proceeds, because a check that breaks the hand-off it was
+added to protect is worse than no check at all. And an *undeclared* artifact off a
+public boundary never blocks, because ADR-0020 makes declaration optional on
+app-internal ``@task`` contracts on purpose.
 
 **Off the event loop.** Validators are plain synchronous scans, so per ADR-0020 the
 interceptor — not each validator — owns the offload decision. Everything reachable
@@ -48,14 +60,23 @@ to know about it, which is the point of the two-seam split.
 
 from __future__ import annotations
 
+import os
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, Iterable, Iterator, Mapping
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Iterable, Iterator, Mapping
 
-from application_sdk.observability.events import ARTIFACT_VALIDATION_EVENT
-from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.errors.leaves import DataIntegrityError
+from application_sdk.observability.events import (
+    ARTIFACT_VALIDATION_EVENT,
+    ARTIFACT_VALIDATION_POSTURE_EVENT,
+)
+from application_sdk.observability.logger_adaptor import ARTIFACT_MODE_KEY, get_logger
 from application_sdk.validation.artifacts import (
+    ENFORCEMENT_BLOCKED,
     ArtifactValidationReport,
+    artifact_enforcement,
     artifact_validation_event_fields,
+    artifact_validation_mode,
 )
 from application_sdk.validation.sources import ArtifactDeclarationError, ContractSource
 
@@ -69,8 +90,12 @@ __all__ = [
     "ARTIFACT_SIDES",
     "ARTIFACT_SIDE_HANDOFF",
     "ARTIFACT_SIDE_INGEST",
+    "ArtifactValidationBlockedError",
+    "artifact_validation_enforced",
     "boundary_contract_types",
     "entrypoint_index",
+    "log_artifact_validation_posture",
+    "resolve_artifact_enforcement",
     "validate_artifacts",
 ]
 
@@ -211,6 +236,146 @@ def entrypoint_index(app_name: str) -> Mapping[str, str]:
     }
 
 
+def resolve_artifact_enforcement(app_cls: type | None) -> bool:
+    """Resolve one app's artifact-validation posture. ``True`` = hard.
+
+    Precedence, mirroring :func:`~application_sdk.execution._temporal.worker._resolve_gate_enforcement`
+    exactly because an operator should not have to learn two rules:
+
+    1. ``ATLAN_ARTIFACT_VALIDATION_MODE`` — the deploy-time ops lever, so a fleet
+       that starts flagging can be stood down without an app release;
+    2. the app's declared :attr:`~application_sdk.app.base.App.artifact_validation_mode`
+       — the git-blamed opt-in;
+    3. soft.
+
+    **Only the literal** ``"hard"`` **enforces.** Every other set value — a typo, a
+    ``"true"``, a ``"HARD "`` with a stray space (stripped and lowered, so that one
+    does enforce) — falls back to soft. Blocking is always something someone chose,
+    and the failure direction of a mistake is "reported but not blocked".
+
+    An empty or unset env value is *not* an override: it falls through to the
+    declared attribute. That is what lets a deployment leave the variable
+    unset rather than having to spell the app's own default back at it.
+
+    Never raises. An unresolvable app (``None``) resolves to soft, which is the
+    conservative direction — the same one :func:`boundary_contract_types` takes.
+
+    Args:
+        app_cls: The registered app class, or ``None`` when it cannot be resolved.
+
+    Returns:
+        ``True`` for hard mode, ``False`` for soft.
+    """
+    from application_sdk.constants import (  # noqa: PLC0415 — deferred so a deployment can flip the lever under test, mirroring VALIDATE_ARTIFACTS
+        ARTIFACT_VALIDATION_MODE_ENV,
+    )
+
+    val = os.environ.get(ARTIFACT_VALIDATION_MODE_ENV)
+    if val:
+        return val.strip().lower() == "hard"
+    declared = getattr(app_cls, "artifact_validation_mode", "soft")
+    return str(declared).strip().lower() == "hard"
+
+
+def artifact_validation_enforced(app_name: str) -> bool:
+    """:func:`resolve_artifact_enforcement` for a registered app name.
+
+    The form the activity seam needs: ``create_activity_from_task`` holds a task's
+    ``app_name``, not its class. Resolved **once at worker build** and baked into
+    the activity closure alongside :func:`boundary_contract_types` and
+    :func:`entrypoint_index`, so a posture cannot change under a running worker
+    and no hand-off pays a registry lookup for it.
+
+    Routed through the same one rule as the worker's own posture emit, so the row
+    an app's boot event reports is by construction the posture its activities run.
+
+    Args:
+        app_name: The registered app name, from the task's metadata.
+
+    Returns:
+        ``True`` for hard mode, ``False`` for soft (including an unregistered app).
+    """
+    metadata = _app_metadata(app_name)
+    return resolve_artifact_enforcement(None if metadata is None else metadata.app_cls)
+
+
+def log_artifact_validation_posture(
+    app_name: str, *, enforce: bool, enabled: bool
+) -> None:
+    """Emit the boot-time posture row for one app — **every** app, soft included.
+
+    The point is a complete denominator. An app whose tasks hand off no artifacts,
+    or whose worker never runs one, emits no outcome row at all, so from outcomes
+    alone a hard-mode app that has never blocked anything is indistinguishable from
+    one that is not registered. This row is what makes adoption and posture drift
+    measurable rather than a code-search artifact, and it is why the soft rows —
+    the overwhelming majority — are the ones that matter most here.
+
+    ``enabled=False`` reports :data:`~application_sdk.validation.artifacts.MODE_OFF`
+    rather than the declared posture: a hard-mode app on a deployment with
+    ``ATLAN_VALIDATE_ARTIFACTS`` down blocks nothing, and a row promising
+    enforcement that is not happening is worse than no row.
+
+    Mirrors ``preflight_gate.log_gate_posture`` down to the split from the
+    human-facing hard-mode boot warning: this body is a pinned contract string that
+    must never be reworded, that one is prose an operator reads.
+
+    Args:
+        app_name: The registered app name.
+        enforce: Whether the app resolved to hard mode.
+        enabled: Whether artifact validation runs at all on this deployment.
+    """
+    # conformance: ignore[L018] app_name is in _KNOWN_EXTRA_KEYS and the mode key is a pinned attribute; %-style would lose the OTLP promotion this event exists for
+    logger.info(
+        ARTIFACT_VALIDATION_POSTURE_EVENT,
+        app_name=app_name,
+        **{
+            ARTIFACT_MODE_KEY: artifact_validation_mode(
+                enforce=enforce, enabled=enabled
+            )
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# The block
+# ---------------------------------------------------------------------------
+
+
+@dataclass(kw_only=True)
+class ArtifactValidationBlockedError(DataIntegrityError):
+    """A hard-mode app's artifact validation failed a hand-off.
+
+    Raised **only** when the app resolved to
+    :attr:`~application_sdk.app.base.App.artifact_validation_mode` ``"hard"`` and
+    the outcome was one a posture is allowed to block on
+    (:attr:`~application_sdk.validation.artifacts.ArtifactValidationReport.enforceable`).
+    In soft mode the identical outcome emits ``artifact_enforcement="would_block"``
+    and the hand-off proceeds.
+
+    ``DATA_INTEGRITY`` is the category and ``APP_OWNER`` the audience for the same
+    reason ``ArtifactDeclarationError`` uses them: the artifact and the declaration
+    it disagreed with both belong to the app. Not retryable — an artifact that does
+    not match its declaration does not start matching it on a second attempt, and
+    retrying would only multiply the blast radius the producer-side check exists to
+    keep at one workflow.
+
+    Raised from inside the activity, so the SDK's standard translation stamps it
+    onto ``ApplicationError.details[0]`` as ``FailureDetails``: the red activity
+    pane, Temporal history and the Automation Engine all get the field, the side
+    and the declared-vs-found detail without anyone parsing a message string.
+    """
+
+    code: ClassVar[str] = "DATA_INTEGRITY_ARTIFACT_VALIDATION"
+    suggested_action: str | None = (
+        "Fix the artifact so it matches the schema the app declared for that "
+        "contract field, or correct the declaration in contract/app.pkl and "
+        "regenerate. To stop blocking while the disagreement is investigated, set "
+        "ATLAN_ARTIFACT_VALIDATION_MODE=soft on the deployment — the check keeps "
+        "reporting and the run proceeds."
+    )
+
+
 # ---------------------------------------------------------------------------
 # The hook
 # ---------------------------------------------------------------------------
@@ -223,12 +388,13 @@ async def validate_artifacts(
     app_name: str = "",
     entrypoint: str = "",
     boundary_contracts: frozenset[type] = frozenset(),
+    enforce: bool = False,
 ) -> None:
     """Validate every ``FileReference`` in ``data`` and emit one outcome each.
 
     Called twice per task — once with the materialised input, once with the
-    returned output before it is persisted. Warn-only and total: every reference
-    reachable in the tree produces exactly one
+    returned output before it is persisted. Total: every reference reachable in the
+    tree produces exactly one
     :data:`~application_sdk.observability.events.ARTIFACT_VALIDATION_EVENT`,
     including the references that turn out to have no declaration, no supported
     validator, or no readable artifact.
@@ -238,9 +404,19 @@ async def validate_artifacts(
     would emit byte-identical rows, so scanning the file twice would only inflate
     the denominator FND-694's graduation review reads.
 
-    Never raises, never blocks, and never fails the activity — including when the
-    walk, the offload or the emit is what broke. A check that breaks the hand-off it
-    was added to protect is worse than no check at all.
+    **Raises only under a deliberate posture.** With ``enforce=False`` — the default
+    and every app's starting point — this never raises, never blocks and never
+    fails the activity, including when the walk, the offload or the emit is what
+    broke. With ``enforce=True`` a blockable outcome raises
+    :class:`ArtifactValidationBlockedError`, and *only* a blockable one: everything
+    the wrapper classified ``validator_broken`` still proceeds, because a check that
+    breaks the hand-off it was added to protect is worse than no check at all.
+
+    **Every reference emits before any of them blocks.** The loop runs to the end
+    and the raise happens after it, so a flagged first artifact cannot silence the
+    references behind it — the same no-silent-no-op rule that makes the negative
+    outcomes emit at all. Blocking early would make an app's row count depend on
+    which artifact failed, and that count is the denominator FND-694 reads.
 
     Args:
         data: The task's input (at ingest) or output (at hand-off).
@@ -250,6 +426,13 @@ async def validate_artifacts(
             "" reads the flat generated declaration file.
         boundary_contracts: From :func:`boundary_contract_types`, resolved at
             worker build.
+        enforce: The app's posture, from :func:`artifact_validation_enforced` and
+            resolved once at worker build. ``True`` blocks; ``False`` emits
+            ``would_block`` and proceeds.
+
+    Raises:
+        ArtifactValidationBlockedError: ``enforce=True`` and at least one reference
+            reached a blockable outcome.
     """
     from application_sdk.constants import (  # noqa: PLC0415 — deferred so a deployment can flip the switch under test, mirroring VALIDATE_ASSETS_ON_UPLOAD
         VALIDATE_ARTIFACTS,
@@ -258,9 +441,11 @@ async def validate_artifacts(
     if not VALIDATE_ARTIFACTS:
         return
 
+    mode = artifact_validation_mode(enforce=enforce)
+
     try:
         named = list(_unique(_walk(data)))
-    except Exception:  # noqa: BLE001 — the scaffold may not break the hand-off
+    except Exception:  # noqa: BLE001 — the walk is our own plumbing, so it fails open in either posture
         logger.warning(
             "Artifact validation: could not walk the %s payload; skipping it "
             "(the hand-off continues)",
@@ -269,6 +454,7 @@ async def validate_artifacts(
         )
         return
 
+    blocked: list[tuple[str, ArtifactValidationReport]] = []
     for item in named:
         boundary = item.owner is not None and item.owner in boundary_contracts
         try:
@@ -281,17 +467,78 @@ async def validate_artifacts(
                 item.field,
                 exc_info=True,
             )
+            # `validator_broken`: this is the hook itself failing, not the
+            # artifact. Classified so even a hard-mode app proceeds — a defect
+            # here may not fail a healthy run.
             report = ArtifactValidationReport.absent(
                 reason="the artifact-validation hook raised",
                 boundary=boundary,
+                validator_broken=True,
             )
+        # The one site that decides, so the value emitted and the value acted on
+        # are the same value: `blocked` and `would_block` cannot come to disagree
+        # about which outcomes are blockable, which is what makes the soft rows a
+        # forecast of hard mode rather than a guess at it.
+        enforcement = artifact_enforcement(report, enforce=enforce)
         _emit(
             report,
             side=side,
             app_name=app_name,
             entrypoint=entrypoint,
             artifact_field=item.field,
+            mode=mode,
+            enforcement=enforcement,
         )
+        if enforcement == ENFORCEMENT_BLOCKED:
+            blocked.append((item.field, report))
+
+    if blocked:
+        raise _blocked_error(
+            blocked, side=side, app_name=app_name, entrypoint=entrypoint
+        )
+
+
+def _blocked_error(
+    blocked: list[tuple[str, ArtifactValidationReport]],
+    *,
+    side: str,
+    app_name: str,
+    entrypoint: str,
+) -> ArtifactValidationBlockedError:
+    """Build the attributable failure for one or more blocked references.
+
+    The first blocked reference is the primary — its declared-vs-found detail goes
+    on the typed fields, so the red activity pane names a field and a disagreement
+    rather than a count. Any others are counted in the message, so a task that
+    broke five artifacts does not read as having broken one.
+
+    ``location`` carries the side alongside the field because the two sides fail
+    for opposite reasons and want opposite fixes: at ``handoff`` this task wrote
+    the artifact, at ``ingest`` it was handed one.
+    """
+    field, report = blocked[0]
+    label = field or "<unnamed reference>"
+    extra = len(blocked) - 1
+    others = (
+        f" (and {extra} more blocked reference{'s' if extra > 1 else ''} in the "
+        f"same {side} payload)"
+        if extra
+        else ""
+    )
+    return ArtifactValidationBlockedError(
+        message=(
+            f"Artifact validation blocked the {side} of contract field "
+            f"'{label}': {report.reason or report.outcome}{others}"
+        ),
+        app_name=app_name or None,
+        retryable=False,
+        expectation=(
+            f"an artifact matching the declaration for field '{label}'"
+            + (f" on entrypoint '{entrypoint}'" if entrypoint else "")
+        ),
+        observed=report.format_report(),
+        location=f"{side} payload, contract field '{label}'",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -371,10 +618,23 @@ def _no_local_artifact(
     A lazy field the interceptor deliberately did not download, a durable reference
     that was never materialised, an output field left unset. There is nothing to
     read, but silence is the one answer that is not allowed, so the declaration is
-    resolved anyway to keep the two facts apart: "this artifact has no declaration"
-    is ``not_declared`` and is a finding only on a boundary, while "it is declared
-    and we could not read it" is ``absent``. Collapsing them would report an app
-    that declared its artifact correctly as having declared nothing.
+    resolved anyway to keep the three facts apart:
+
+    * "this artifact has no declaration" is ``not_declared``, a finding only on a
+      boundary. Collapsing it into ``absent`` would report an app that declared its
+      artifact correctly as having declared nothing.
+    * "it is declared and there was no local copy to read" is ``absent``, and under
+      a hard posture it blocks — the app asked for a check it could not be given.
+    * "it is declared and the SDK could not read the *declaration*" is ``absent``
+      too, but ``validator_broken``, so it never blocks.
+
+    That last split is this function's twin of the wrapper's own
+    ``ArtifactDeclarationError`` branch, and it has to agree with it: the same
+    unreadable ``artifact_schemas.json`` reaches whichever of the two the reference
+    happens to route through, and one of them failing a hard-mode activity for it
+    while the other proceeds would make blocking depend on whether the artifact had
+    been materialised. A malformed generated file is the SDK's read failing, not
+    evidence about the artifact.
     """
     try:
         declaration = source.resolve()
@@ -386,9 +646,13 @@ def _no_local_artifact(
             reason=f"declaration unreadable: {exc}",
             schema_source=source.kind,
             boundary=boundary,
+            validator_broken=True,
         )
     if declaration is None:
         return ArtifactValidationReport.not_declared(boundary=boundary)
+    # Not `validator_broken`: nothing on our side failed. The app declared this
+    # artifact and the hand-off could not be proved against it, which is exactly
+    # what a hard posture exists to catch.
     return ArtifactValidationReport.absent(
         reason="the reference carries no local artifact to check",
         artifact_format=declaration.artifact_format,
@@ -404,12 +668,22 @@ def _emit(
     app_name: str,
     entrypoint: str,
     artifact_field: str,
+    mode: str = "",
+    enforcement: str = "",
 ) -> None:
-    """Emit the one queryable row, plus a readable WARNING when it is flagged.
+    """Emit the one queryable row, plus a readable WARNING when it needs one.
 
     Wrapped end to end: a defect in the emit path — a matrix that will not encode,
     an adapter that rejects a kwarg — must not be able to break the hand-off the
-    row was describing.
+    row was describing. That includes the blocking path: the raise happens in the
+    caller, after this returns, so an emit that falls over cannot turn a hard-mode
+    block into a silent pass or an unattributable crash.
+
+    The prose WARNING stays keyed on ``report.ok`` — a real finding against the
+    artifact — and on an actual block, deliberately *not* on ``would_block``. Most
+    of the fleet has declared nothing yet, so warning on every ``would_block``
+    would put a line in every task's log for a state the app has not been asked to
+    fix. The event row carries it, and the event row is what FND-694 reads.
     """
     try:
         # conformance: ignore[L018] app_name/entrypoint are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion, and a pinned outcome event exists precisely so its attributes are queryable columns
@@ -418,10 +692,23 @@ def _emit(
             app_name=app_name,
             entrypoint=entrypoint,
             **artifact_validation_event_fields(
-                report, artifact_field=artifact_field, side=side
+                report,
+                artifact_field=artifact_field,
+                side=side,
+                mode=mode,
+                enforcement=enforcement,
             ),
         )
-        if not report.ok:
+        if enforcement == ENFORCEMENT_BLOCKED:
+            logger.warning(
+                "Artifact validation BLOCKED the %s hand-off of '%s' — this app "
+                "declares artifact_validation_mode='hard', so the activity fails: "
+                "%s",
+                side,
+                artifact_field or "<unnamed reference>",
+                report.format_report(),
+            )
+        elif not report.ok:
             logger.warning(
                 "Artifact validation flagged the %s hand-off of '%s' "
                 "(the hand-off continues): %s",

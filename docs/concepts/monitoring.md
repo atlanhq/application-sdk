@@ -458,8 +458,8 @@ row. The single cell that still answers `unsupported` is parquet x `ModelSource`
 column mapping, so a footer diff would have nothing to diff against, and it says so out loud rather
 than going quiet.
 
-Everything is **warn-only**: a flagged artifact is logged and counted, never blocked, and a defect in
-the validation scaffold itself can neither fail an activity nor skip a persist. Set
+Whether a negative outcome **blocks** is the app's own posture, and the default is that it never
+does — see [Artifact-validation posture](#artifact-validation-posture) below. Set
 `ATLAN_VALIDATE_ARTIFACTS=false` to turn the whole hook off for a deployment — note this stops the
 outcome events too, so an app then has no denominator at all.
 
@@ -478,6 +478,9 @@ outcome events too, so an app then has no denominator at all.
 | `artifact_undecodable` | units that could not be parsed at all |
 | `artifact_fields_declared` | fields the declaration named (0 for a model declaration) |
 | `boundary` | whether the hand-off sits on an entrypoint's public interface |
+| `artifact_classification` | `verdict`, `artifact_unverifiable` or `validator_broken` — see below |
+| `artifact_validation_mode` | the app's resolved posture: `hard` or `soft` |
+| `artifact_enforcement` | `blocked`, `would_block`, or empty when the outcome was never blockable |
 | `artifact_validation_matrix` | compact JSON array of per-failure detail (bounded rows), `JSONExtract`-able |
 
 Two properties are worth relying on. **Every hand-off emits**, the negative outcomes included — a
@@ -492,7 +495,68 @@ internal `@task` contract is informational. The set of boundary contract classes
 worker build, so the attribute costs nothing per hand-off.
 
 The event body and its attribute keys are a pinned contract, like the two preflight-gate events and
-the asset-validation one; all four names live in `application_sdk/observability/events.py`.
+the asset-validation one; all five names live in `application_sdk/observability/events.py`.
+
+### Artifact-validation posture
+
+An app declares whether an artifact-validation outcome may fail the activity, exactly as it does for
+the preflight gate:
+
+```python
+class MyApp(App):
+    artifact_validation_mode = "hard"   # default: "soft"
+```
+
+`ATLAN_ARTIFACT_VALIDATION_MODE` overrides the declaration at deploy time, so a fleet that starts
+flagging can be stood down without an app release. **Only the literal `hard` enforces** — a typo, a
+`true`, an unset variable all resolve to soft, so a run is never blocked by accident. Both the
+attribute and the variable are read **once at worker build** and baked into the activity closure, so
+a worker's blocking behaviour cannot change under a running activity.
+
+In hard mode a blockable outcome raises `ArtifactValidationBlockedError`, which the activity path
+translates into a non-retryable `ApplicationError` carrying `FailureDetails` — the field, the side
+and the declared-vs-found detail land in the red activity pane without anyone parsing a message. In
+soft mode the identical outcome emits `artifact_enforcement="would_block"` and the hand-off
+continues. Both values come off one call on one report, so the soft rows are an exact forecast of
+what hard mode would have done: that is what makes graduating a measured decision.
+
+`artifact_classification` is the second axis, and it is what keeps hard mode safe:
+
+| Classification | Meaning | Subject to posture? |
+|----------------|---------|---------------------|
+| `verdict` | a scan ran and answered | yes |
+| `artifact_unverifiable` | nothing on the SDK's side broke; there was nothing to check, or nothing to check against | yes |
+| `validator_broken` | the SDK's own plumbing failed — a plug-in raised, a declaration file was unreadable | **no, always fails open** |
+
+Every plumbing failure degrades to `outcome=absent`, which it shares with the honest "the artifact
+was not there", so the outcome alone cannot separate them — the classification can, and only one of
+the two is ever allowed to block. One more outcome is exempt: `not_declared` off a public boundary
+never blocks, because declaration is deliberately optional on app-internal `@task` contracts.
+
+To find every hand-off a hard-mode graduation would break, without graduating:
+
+```sql
+SELECT LogAttributes['app_name'] AS app,
+       LogAttributes['artifact_field'] AS field,
+       LogAttributes['artifact_side'] AS side,
+       count() AS n
+FROM otel_logs.service_logs
+WHERE Body = 'Artifact validation outcome'
+  AND LogAttributes['artifact_enforcement'] = 'would_block'
+GROUP BY app, field, side
+ORDER BY n DESC
+```
+
+### Artifact-validation posture event
+
+`"Artifact validation posture"` fires **once per registered app at worker build** — soft apps and
+switched-off deployments included. It carries `app_name` and `artifact_validation_mode`
+(`hard`/`soft`/`off`, where `off` means `ATLAN_VALIDATE_ARTIFACTS` is down for that deployment).
+
+It exists because the outcome events cannot supply a denominator. An app whose tasks hand off no
+artifacts, or whose worker never runs one, emits no outcome row at all — so from outcomes alone a
+hard-mode app that has never blocked anything is indistinguishable from one that is not registered.
+This row is what makes adoption and posture drift measurable rather than a code-search artifact.
 
 ### Replay suppression
 

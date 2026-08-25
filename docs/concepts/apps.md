@@ -645,13 +645,34 @@ field.
 The activity interceptor validates every `FileReference` artifact against its declaration on both
 sides of every task — at ingest (right after the file is materialised, before your code reads it)
 and at hand-off (right after your task returns, while the bytes are still local so a flag blames the
-producer). It is warn-only: a mismatch is logged and counted, never blocked.
+producer). By default it is report-only: a mismatch is logged and counted, never blocked.
 
 Every artifact emits one `"Artifact validation outcome"` row either way, including the negatives —
 `not_declared`, `unsupported`, `absent` — because a check that reports nothing is indistinguishable
 from a check that passed. So a boundary field you never declared is visible in ClickHouse as
 `outcome=not_declared, boundary=true` rather than as an app that quietly validates zero records. See
 [Monitoring — Artifact-validation outcome event](monitoring.md#artifact-validation-outcome-event).
+
+#### Blocking on a bad artifact
+
+Once an app's outcome rows show a false-positive rate it trusts, it can opt into blocking:
+
+```python
+class MyApp(App):
+    artifact_validation_mode = "hard"   # default: "soft"
+```
+
+In `hard` mode a bad artifact fails the activity — blast radius one workflow, and at hand-off the
+producing task is still on the stack, so the failure names whoever wrote the file rather than
+whoever reads it three hops later. In `soft` mode the identical outcome emits
+`artifact_enforcement="would_block"` and the run continues, which is how you measure what
+graduating would cost before paying it.
+
+Two things never block, whatever the mode: a failure of the SDK's own validator (it always fails
+open — a defect in the check may not fail a healthy run), and an *undeclared* artifact on an
+internal `@task` contract, since declaration is optional there by design. `ATLAN_ARTIFACT_VALIDATION_MODE`
+overrides the attribute at deploy time, and only the literal `hard` enforces. See
+[Monitoring — Artifact-validation posture](monitoring.md#artifact-validation-posture).
 
 See [FileReference & App.upload()](file-reference.md) for what a `FileReference` is and how it moves,
 and the contract toolkit's `examples/artifact-schemas/` for a full worked contract.

@@ -1369,3 +1369,142 @@ class TestReadCorePollerCounts:
         )
         with self._patch_client(self._response(text=exposition)):
             assert await read_core_poller_counts() is None
+
+
+class TestArtifactValidationPostureAtBoot:
+    """The boot-time denominator for artifact validation (FND-692, ADR-0020).
+
+    Artifact validation rides the activity interceptor rather than a registered
+    activity, so the worker's only job for it is this row — and the row has to fire
+    for **every** app, because an app whose tasks hand off no artifacts emits no
+    outcome row at all and is otherwise indistinguishable from one that never
+    registered.
+    """
+
+    def setup_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    @staticmethod
+    def _posture_rows(logger: mock.MagicMock) -> list[dict]:
+        from application_sdk.observability.events import (
+            ARTIFACT_VALIDATION_POSTURE_EVENT,
+        )
+
+        return [
+            call.kwargs
+            for call in logger.info.call_args_list
+            if call.args and call.args[0] == ARTIFACT_VALIDATION_POSTURE_EVENT
+        ]
+
+    def _build(self, monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+        from application_sdk.validation import interceptor as interceptor_module
+
+        client = _make_mock_client()
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.Worker"
+        ) as MockWorker:
+            MockWorker.return_value = mock.MagicMock()
+            with mock.patch.object(interceptor_module, "logger") as logger:
+                create_worker(client)
+            return self._posture_rows(logger)
+
+    def test_a_soft_app_still_emits_exactly_one_row(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ATLAN_ARTIFACT_VALIDATION_MODE", raising=False)
+
+        class _SoftPostureApp(App):
+            @task(timeout_seconds=60)
+            async def do_work(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        rows = self._build(monkeypatch)
+        assert len(rows) == 1
+        assert rows[0]["app_name"] == "_soft-posture-app"
+        assert rows[0]["artifact_validation_mode"] == "soft"
+
+    def test_a_hard_app_reports_hard(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("ATLAN_ARTIFACT_VALIDATION_MODE", raising=False)
+
+        class _HardPostureApp(App):
+            artifact_validation_mode = "hard"
+
+            @task(timeout_seconds=60)
+            async def do_work(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        rows = self._build(monkeypatch)
+        assert [r["artifact_validation_mode"] for r in rows] == ["hard"]
+
+    def test_the_env_override_is_what_the_row_reports(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Otherwise the boot row would advertise a posture the deployment had
+        already stood down."""
+        monkeypatch.setenv("ATLAN_ARTIFACT_VALIDATION_MODE", "soft")
+
+        class _OverriddenPostureApp(App):
+            artifact_validation_mode = "hard"
+
+            @task(timeout_seconds=60)
+            async def do_work(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        rows = self._build(monkeypatch)
+        assert [r["artifact_validation_mode"] for r in rows] == ["soft"]
+
+    def test_the_kill_switch_reports_off_rather_than_a_posture(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ATLAN_ARTIFACT_VALIDATION_MODE", raising=False)
+        monkeypatch.setattr(
+            "application_sdk.constants.VALIDATE_ARTIFACTS", False, raising=False
+        )
+
+        class _DisabledPostureApp(App):
+            artifact_validation_mode = "hard"
+
+            @task(timeout_seconds=60)
+            async def do_work(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        rows = self._build(monkeypatch)
+        assert [r["artifact_validation_mode"] for r in rows] == ["off"]
+
+    def test_one_row_per_app_not_per_task(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The posture is a property of the app; emitting it per task would
+        multiply the denominator by an app's task count."""
+        monkeypatch.delenv("ATLAN_ARTIFACT_VALIDATION_MODE", raising=False)
+
+        class _MultiTaskPostureApp(App):
+            @task(timeout_seconds=60)
+            async def first(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+            @task(timeout_seconds=60)
+            async def second(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        assert len(self._build(monkeypatch)) == 1

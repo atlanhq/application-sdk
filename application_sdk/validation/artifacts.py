@@ -44,10 +44,13 @@ from application_sdk.constants import ARTIFACT_VALIDATION_MAX_ITEMS_PER_AXIS
 from application_sdk.observability.events import ARTIFACT_VALIDATION_EVENT
 from application_sdk.observability.logger_adaptor import (
     ARTIFACT_BOUNDARY_KEY,
+    ARTIFACT_CLASSIFICATION_KEY,
+    ARTIFACT_ENFORCEMENT_KEY,
     ARTIFACT_FAILED_KEY,
     ARTIFACT_FIELD_KEY,
     ARTIFACT_FIELDS_DECLARED_KEY,
     ARTIFACT_FORMAT_KEY,
+    ARTIFACT_MODE_KEY,
     ARTIFACT_PASSED_KEY,
     ARTIFACT_SCHEMA_SOURCE_KEY,
     ARTIFACT_SIDE_KEY,
@@ -58,13 +61,25 @@ from application_sdk.observability.logger_adaptor import (
 )
 
 __all__ = [
+    "ARTIFACT_CLASSIFICATIONS",
+    "ARTIFACT_ENFORCEMENTS",
     "ARTIFACT_FIELD_TYPES",
     "ARTIFACT_FIELD_TYPES_EXTENDED",
     "ARTIFACT_FORMATS",
     "ARTIFACT_VALIDATION_EVENT",
+    "ARTIFACT_VALIDATION_MODES",
     "ARTIFACT_VALIDATION_OUTCOMES",
+    "CLASSIFICATION_ARTIFACT_UNVERIFIABLE",
+    "CLASSIFICATION_VALIDATOR_BROKEN",
+    "CLASSIFICATION_VERDICT",
+    "ENFORCEMENT_BLOCKED",
+    "ENFORCEMENT_NONE",
+    "ENFORCEMENT_WOULD_BLOCK",
     "FORMAT_NDJSON",
     "FORMAT_PARQUET",
+    "MODE_HARD",
+    "MODE_OFF",
+    "MODE_SOFT",
     "OUTCOME_ABSENT",
     "OUTCOME_CLEAN",
     "OUTCOME_FLAGGED",
@@ -73,18 +88,23 @@ __all__ = [
     "UNIT_COLUMN",
     "UNIT_RECORD",
     "ArtifactDeclaration",
+    "ArtifactClassification",
+    "ArtifactEnforcement",
     "ArtifactFailureKind",
     "ArtifactFieldType",
     "ArtifactFieldTypeExtended",
     "ArtifactFormat",
     "ArtifactValidationFailure",
+    "ArtifactValidationMode",
     "ArtifactValidationOutcome",
     "ArtifactValidationReport",
     "DeclaredField",
     "FieldMapDeclaration",
     "ModelDeclaration",
+    "artifact_enforcement",
     "artifact_validation_event_fields",
     "artifact_validation_matrix_json",
+    "artifact_validation_mode",
 ]
 
 
@@ -302,6 +322,144 @@ ARTIFACT_VALIDATION_OUTCOMES: Final[frozenset[str]] = frozenset(
 """Runtime membership test for :data:`ArtifactValidationOutcome`."""
 
 
+# ---------------------------------------------------------------------------
+# The posture axes
+# ---------------------------------------------------------------------------
+#
+# Three small vocabularies, and they are deliberately three rather than one. The
+# outcome above says what was found; these say what the app's posture *is*, why
+# the outcome landed where it did, and what the posture then did about it.
+# Collapsing any pair produces the failure the preflight gate already learned to
+# avoid: a single "blocked" value that cannot distinguish "the artifact is wrong"
+# from "our check fell over".
+
+MODE_HARD: Final = "hard"
+"""A negative verdict fails the activity. Always a deliberate per-app opt-in."""
+
+MODE_SOFT: Final = "soft"
+"""A negative verdict is reported as ``would_block`` and the hand-off proceeds."""
+
+MODE_OFF: Final = "off"
+"""The ``ATLAN_VALIDATE_ARTIFACTS`` kill switch is down — no check runs at all.
+
+Never declared by an app; only ever *resolved*. It exists because the posture
+event has to be able to say "this app emitted no outcome rows because nothing
+ran", which is a different fact from "this app is soft and nothing was flagged".
+"""
+
+ArtifactValidationMode = Literal["hard", "soft", "off"]
+"""An app's resolved artifact-validation posture."""
+
+ARTIFACT_VALIDATION_MODES: Final[frozenset[str]] = frozenset(
+    {MODE_HARD, MODE_SOFT, MODE_OFF}
+)
+"""Runtime membership test for :data:`ArtifactValidationMode`."""
+
+
+CLASSIFICATION_VERDICT: Final = "verdict"
+"""A scan ran and returned a real answer about the artifact. Subject to mode."""
+
+CLASSIFICATION_ARTIFACT_UNVERIFIABLE: Final = "artifact_unverifiable"
+"""Nothing on the SDK's side broke; there was simply nothing to check, or nothing
+to check against — ``not_declared``, ``unsupported``, a missing artifact.
+
+Subject to mode, on the same reasoning the gate applies to
+``source_unverifiable``: in hard mode an app has asked for its hand-offs to be
+provable, and "we could not prove it" is not a pass."""
+
+CLASSIFICATION_VALIDATOR_BROKEN: Final = "validator_broken"
+"""The SDK's own plumbing failed — a plug-in raised, a declaration file could not
+be read, the wrapper mis-stepped.
+
+**Always fails open, in either posture.** This is the artifact-side twin of the
+gate's ``gate_broken``: a defect in the check may never fail a healthy run, or
+the check becomes a new source of outages instead of a guard against them."""
+
+ArtifactClassification = Literal["verdict", "artifact_unverifiable", "validator_broken"]
+"""Why an outcome landed where it did — the second axis, orthogonal to the
+outcome itself. Two of the three are subject to mode; the third never is."""
+
+ARTIFACT_CLASSIFICATIONS: Final[frozenset[str]] = frozenset(
+    {
+        CLASSIFICATION_VERDICT,
+        CLASSIFICATION_ARTIFACT_UNVERIFIABLE,
+        CLASSIFICATION_VALIDATOR_BROKEN,
+    }
+)
+"""Runtime membership test for :data:`ArtifactClassification`."""
+
+
+ENFORCEMENT_BLOCKED: Final = "blocked"
+"""Hard mode, and this outcome failed the activity."""
+
+ENFORCEMENT_WOULD_BLOCK: Final = "would_block"
+"""Soft mode, and this outcome *would* have failed the activity in hard mode.
+
+The whole point of the soft posture: it is the loud, queryable record that makes
+the false-positive rate measurable before anyone graduates (FND-694)."""
+
+ENFORCEMENT_NONE: Final = ""
+"""This outcome was never blockable — a clean scan, a validator that broke, or an
+undeclared artifact on an app-internal contract.
+
+Empty rather than absent, and always emitted, so a consumer filters on a value
+instead of branching on presence."""
+
+ArtifactEnforcement = Literal["blocked", "would_block", ""]
+"""What the posture actually did with this outcome."""
+
+ARTIFACT_ENFORCEMENTS: Final[frozenset[str]] = frozenset(
+    {ENFORCEMENT_BLOCKED, ENFORCEMENT_WOULD_BLOCK, ENFORCEMENT_NONE}
+)
+"""Runtime membership test for :data:`ArtifactEnforcement`."""
+
+
+def artifact_validation_mode(*, enforce: bool, enabled: bool = True) -> str:
+    """Render the resolved posture for an app as its event value.
+
+    One site, so the posture event and every outcome row agree on the spelling.
+
+    Args:
+        enforce: Whether the app resolved to hard mode.
+        enabled: Whether artifact validation runs at all
+            (``ATLAN_VALIDATE_ARTIFACTS``). ``False`` wins over ``enforce``: a
+            hard-mode app on a deployment with the switch down blocks nothing,
+            and the posture row must say so rather than promising enforcement
+            that is not happening.
+
+    Returns:
+        :data:`MODE_HARD`, :data:`MODE_SOFT` or :data:`MODE_OFF`.
+    """
+    if not enabled:
+        return MODE_OFF
+    return MODE_HARD if enforce else MODE_SOFT
+
+
+def artifact_enforcement(
+    report: "ArtifactValidationReport", *, enforce: bool
+) -> ArtifactEnforcement:
+    """What the app's posture does with one report — the single decision site.
+
+    The caller emits this value and blocks on exactly this value, so
+    ``"blocked"`` and ``"would_block"`` are two returns from one expression over
+    one input. They cannot come to disagree about which outcomes are blockable,
+    and the outcome event cannot carry an attribute set for one that it does not
+    carry for the other — which is what makes the soft-mode rows a usable
+    forecast of what hard mode would have done.
+
+    Args:
+        report: The outcome to judge.
+        enforce: Whether the app resolved to hard mode.
+
+    Returns:
+        :data:`ENFORCEMENT_BLOCKED`, :data:`ENFORCEMENT_WOULD_BLOCK`, or
+        :data:`ENFORCEMENT_NONE` when the outcome was never blockable.
+    """
+    if not report.enforceable:
+        return ENFORCEMENT_NONE
+    return ENFORCEMENT_BLOCKED if enforce else ENFORCEMENT_WOULD_BLOCK
+
+
 ArtifactFailureKind = Literal["missing", "type_mismatch", "undecodable", "invalid"]
 """Why one unit failed. ``missing``/``type_mismatch`` come from a field-map diff,
 ``undecodable`` from a unit that could not be parsed at all, ``invalid`` from a
@@ -378,6 +536,17 @@ class ArtifactValidationReport:
     """Every failing unit. Unbounded: only the *output* surfaces are capped."""
     boundary: bool = False
     """Whether this hand-off sits on an entrypoint's public interface."""
+    validator_broken: bool = False
+    """The SDK's own plumbing failed, rather than anything being wrong with the
+    artifact — a plug-in raised, a declaration file was unreadable, the wrapper
+    mis-stepped.
+
+    One boolean rather than a stored classification, so :attr:`classification`
+    stays derived and "reported broken" and "actually broke" cannot come apart —
+    the same reason :attr:`outcome` derives from :attr:`verdict` and the failure
+    list. Set only by the wrapper's own guard rails; a format validator never sets
+    it, because a validator reporting on itself is the one report that has to come
+    from outside it."""
     reason: str = ""
     """Short explanation, chiefly for the non-scan outcomes."""
     verdict: ArtifactValidationOutcome | None = None
@@ -409,6 +578,60 @@ class ArtifactValidationReport:
         problem-row count and can exceed this.
         """
         return self.total - self.passed
+
+    @property
+    def classification(self) -> ArtifactClassification:
+        """Which axis this outcome sits on — the posture's second input.
+
+        Derived, never stored: :data:`CLASSIFICATION_VALIDATOR_BROKEN` when the
+        SDK's own plumbing failed, :data:`CLASSIFICATION_VERDICT` when a scan
+        actually ran, and :data:`CLASSIFICATION_ARTIFACT_UNVERIFIABLE` for the
+        non-scan outcomes, where nothing on our side broke and there was simply
+        nothing to check or nothing to check against.
+
+        The broken case is tested first on purpose. Every plumbing failure
+        degrades to ``absent``, so it shares an outcome with the honest "the
+        artifact was not there" — and those two must never share a posture
+        answer.
+        """
+        if self.validator_broken:
+            return CLASSIFICATION_VALIDATOR_BROKEN
+        if self.verdict is None:
+            return CLASSIFICATION_VERDICT
+        return CLASSIFICATION_ARTIFACT_UNVERIFIABLE
+
+    @property
+    def enforceable(self) -> bool:
+        """Whether an app's posture is allowed to block on this outcome.
+
+        Three exclusions, each for its own reason:
+
+        * :data:`CLASSIFICATION_VALIDATOR_BROKEN` — a defect in the SDK's check
+          may never fail a healthy run, in either posture. This is the axis the
+          gate calls ``gate_broken`` and it always fails open.
+        * :data:`OUTCOME_CLEAN` — nothing was wrong.
+        * :data:`OUTCOME_NOT_DECLARED` off a public boundary — ADR-0020 makes
+          declaration *optional* on app-internal ``@task`` contracts, so blocking
+          there would enforce a rule the ADR deliberately did not make. On an
+          entrypoint's ``input_type``/``output_type`` it is a finding like any
+          other, because that interface is read by another app or by the DAG.
+
+        Everything else is enforceable: ``flagged`` is a verdict against the
+        artifact, and ``unsupported``/``absent`` mean the app declared something
+        the hand-off could not be proved against.
+
+        Note this is a property of the *report*, not of the posture — soft mode
+        evaluates it identically and emits ``would_block``, which is what makes
+        the soft rows a forecast rather than a guess.
+        """
+        if self.classification == CLASSIFICATION_VALIDATOR_BROKEN:
+            return False
+        outcome = self.outcome
+        if outcome == OUTCOME_CLEAN:
+            return False
+        if outcome == OUTCOME_NOT_DECLARED:
+            return self.boundary
+        return True
 
     @property
     def undecodable(self) -> int:
@@ -454,14 +677,22 @@ class ArtifactValidationReport:
         artifact_format: str = "",
         schema_source: str = "",
         boundary: bool = False,
+        validator_broken: bool = False,
     ) -> "ArtifactValidationReport":
-        """The artifact or its declaration could not be read at all."""
+        """The artifact or its declaration could not be read at all.
+
+        ``validator_broken`` splits the one outcome across both classifications:
+        default ``False`` for the honest "the artifact was not there", ``True``
+        when it was the SDK's own plumbing that failed. The outcome is the same
+        because there is nothing else it could be; the posture answer is not.
+        """
         return cls(
             verdict=OUTCOME_ABSENT,
             artifact_format=artifact_format,
             schema_source=schema_source,
             reason=reason,
             boundary=boundary,
+            validator_broken=validator_broken,
         )
 
     # -- rendering -------------------------------------------------------
@@ -569,6 +800,8 @@ def artifact_validation_event_fields(
     *,
     artifact_field: str = "",
     side: str = "",
+    mode: str = "",
+    enforcement: str = "",
     max_items: int = ARTIFACT_VALIDATION_MAX_ITEMS_PER_AXIS,
 ) -> dict[str, str | int | bool]:
     """Build the outcome event's attribute map from a report.
@@ -604,6 +837,15 @@ def artifact_validation_event_fields(
             "" for a caller outside the interceptor, which is the honest answer
             rather than picking a side on its behalf. Always emitted, so a
             consumer never branches on its presence.
+        mode: The app's resolved posture, from :func:`artifact_validation_mode`.
+            "" for a caller with no posture of its own — the same honest answer
+            ``side`` gives, rather than defaulting to ``"soft"`` and reporting a
+            posture nobody declared.
+        enforcement: What that posture did with this report, from
+            :func:`artifact_enforcement`. Passed in rather than recomputed here
+            because the caller both *emits* and *acts on* it, and one value
+            reaching both is the whole point — a second derivation here could
+            emit ``would_block`` on a row the caller blocked.
         max_items: Row cap for the matrix; shared with ``format_report``.
 
     Returns:
@@ -623,6 +865,9 @@ def artifact_validation_event_fields(
         ARTIFACT_UNDECODABLE_KEY: report.undecodable,
         ARTIFACT_FIELDS_DECLARED_KEY: report.fields_declared,
         ARTIFACT_BOUNDARY_KEY: report.boundary,
+        ARTIFACT_CLASSIFICATION_KEY: report.classification,
+        ARTIFACT_MODE_KEY: mode,
+        ARTIFACT_ENFORCEMENT_KEY: enforcement,
         ARTIFACT_VALIDATION_MATRIX_KEY: artifact_validation_matrix_json(
             report, max_items=max_items
         ),

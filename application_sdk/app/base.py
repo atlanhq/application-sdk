@@ -827,6 +827,39 @@ class App(ABC):
     :attr:`preflight_gate_timeout_seconds` usually wants ``1`` here — at the 300s
     ceiling, two attempts reserve a ~10 minute ``schedule_to_close``."""
 
+    artifact_validation_mode: ClassVar[Literal["hard", "soft"]] = "soft"
+    """Artifact-validation posture (ADR-0020). ``"soft"`` (default) never blocks.
+
+    Every ``FileReference`` crossing a ``@task`` boundary is checked against the
+    artifact schema the app declared for that contract field, on both sides — at
+    ingest (after materialise) and at hand-off (before persist). This attribute
+    decides only what happens to a *negative* verdict:
+
+    * ``"soft"`` — the outcome event carries ``artifact_enforcement="would_block"``
+      and the hand-off proceeds. This is where every app starts.
+    * ``"hard"`` — the same outcome fails the activity with a typed
+      :class:`~application_sdk.validation.interceptor.ArtifactValidationBlockedError`.
+      Blast radius is one workflow, and the blame lands on the task that was
+      handed, or that produced, the artifact.
+
+    ``ATLAN_ARTIFACT_VALIDATION_MODE`` overrides this at deploy time; any set value
+    other than ``"hard"`` resolves to soft, and an empty or unset value is not an
+    override. Only the literal ``"hard"`` enforces, so blocking is always a
+    deliberate opt-in and a typo falls back to reporting.
+
+    Two things are never subject to this posture. **A validator that breaks always
+    fails open** — a defect in the SDK's own check may not fail a healthy run, in
+    either posture — and it says so on the event as
+    ``artifact_classification="validator_broken"``. And an *undeclared* artifact on
+    an app-internal ``@task`` contract never blocks, because ADR-0020 makes
+    declaration optional there on purpose; on an entrypoint's public boundary it is
+    a finding like any other.
+
+    Do not set ``"hard"`` before the app's false-positive rate has been measured
+    from the outcome events (FND-694). ``ATLAN_VALIDATE_ARTIFACTS=false`` is the
+    separate deployment kill switch that stops the check running at all — this
+    attribute never turns reporting off."""
+
     # Marker to track if class has been registered
     _app_registered: ClassVar[bool] = False
 

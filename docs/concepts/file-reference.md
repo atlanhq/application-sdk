@@ -118,10 +118,12 @@ fills them in during persist and materialize.
 > internal `@task` contract is exempt. See
 > [Apps — Declaring artifact schemas](apps.md#declaring-artifact-schemas).
 >
-> Declared or not, every `FileReference` the interceptor sees emits one warn-only
+> Declared or not, every `FileReference` the interceptor sees emits one
 > [artifact-validation outcome](monitoring.md#artifact-validation-outcome-event) on each side of the
 > task — at ingest after materialize and at hand-off before persist. A declared artifact is scanned
 > against its declaration; an undeclared one reports `not_declared` rather than nothing at all.
+> Report-only unless the app opts into
+> [`artifact_validation_mode = "hard"`](monitoring.md#artifact-validation-posture).
 
 ### Constructing a FileReference
 

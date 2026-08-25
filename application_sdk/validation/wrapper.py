@@ -23,6 +23,16 @@ up is ``absent`` plus a warning. The earlier upload-time hook returned early and
 validating zero records — a check that reports nothing is indistinguishable from a
 check that passed, and that ambiguity is itself the defect.
 
+**Two axes, not one.** Every plumbing failure in this module degrades to
+``absent``, which it shares with the honest "the artifact was not there" — so the
+outcome alone cannot tell them apart, and an app that opted into blocking would be
+failed by a defect in the SDK's own check. ``ArtifactValidationReport``'s second
+axis carries the difference: everything built through ``_plugin_broken`` is
+classified ``validator_broken`` and always fails open, whatever the app's posture
+(ADR-0020, FND-692). Nothing outside this module's guard rails ever sets it — a
+validator reporting on whether *it* broke is the one report that has to come from
+outside it.
+
 **It never raises into the caller.** The validation scaffold is defense in depth; a
 check that breaks the hand-off it was added to protect is worse than no check at
 all. Both plug-in seams are therefore wrapped: a source that raises, a validator
@@ -162,6 +172,7 @@ def validate_artifact(
             reason=f"declaration unreadable: {exc}",
             schema_source=source_kind,
             boundary=boundary,
+            validator_broken=True,
         )
     except Exception as exc:  # noqa: BLE001 - a plug-in seam; nothing may escape
         logger.warning(
@@ -174,6 +185,7 @@ def validate_artifact(
             reason=f"schema source raised: {type(exc).__name__}",
             schema_source=source_kind,
             boundary=boundary,
+            validator_broken=True,
         )
 
     if declaration is None:
@@ -437,12 +449,20 @@ def _plugin_broken(
     schema_source: str = "",
     boundary: bool,
 ) -> ArtifactValidationReport:
-    """An ``absent`` report for "our own plug-in broke", never for a bad artifact."""
+    """An ``absent`` report for "our own plug-in broke", never for a bad artifact.
+
+    ``validator_broken=True`` is what carries that distinction past this function:
+    every plumbing failure degrades to ``absent``, so the outcome alone cannot
+    tell "we could not read the artifact" from "we fell over trying". The second
+    axis can, and it is what keeps a hard-mode app from being failed by a defect
+    in the SDK's own check (FND-692) — this classification always fails open.
+    """
     return ArtifactValidationReport.absent(
         reason=reason,
         artifact_format=artifact_format,
         schema_source=schema_source,
         boundary=boundary,
+        validator_broken=True,
     )
 
 
