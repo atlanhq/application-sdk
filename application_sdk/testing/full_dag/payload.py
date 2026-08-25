@@ -477,10 +477,9 @@ def build_ae_payload(
             }
         )
     else:
-        # Agent mode duplicates a subset under agent-json.* — the Argo
-        # cluster template reads these flat parameters separately even
-        # though it could also unpack agent-json JSON. Reproducing the
-        # exact UI shape avoids subtle service-side validation drift.
+        # Agent mode duplicates a subset under agent-json.* — flat rows the
+        # UI sends and no backend consumer reads (agent routing parses the
+        # agent-json blob). Emitted for submit-shape fidelity only.
         assert agent is not None
         parameters.extend(
             [
