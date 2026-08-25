@@ -14,12 +14,13 @@ from __future__ import annotations
 
 import json
 import warnings
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
 from application_sdk.app._artifact_schema_guard import (
     ARTIFACT_SCHEMA_REMOVAL_VERSION,
+    _Declarations,
     _declared_artifact_schema_keys,
     _mentions_file_reference,
 )
@@ -305,6 +306,23 @@ class TestTheWarningNamesAnActionablePath:
         assert (
             "app/generated/extract-metadata/artifact_schemas.json" in messages[0]
         ), messages[0]
+
+    def test_the_cited_path_uses_forward_slashes_on_every_platform(self) -> None:
+        """A Windows developer must be able to match the message against the docs.
+
+        ``str(Path(...))`` renders the OS separator, so without this the same app
+        reports ``app\\generated\\artifact_schemas.json`` on Windows and
+        ``app/generated/artifact_schemas.json`` everywhere else — while the docs,
+        the pkl contract and conformance K016 all spell it one way. Asserted
+        against a ``PureWindowsPath`` so the guarantee is checked on every
+        platform's CI leg, not only the Windows one.
+        """
+        windows_path = PureWindowsPath("app/generated/run/artifact_schemas.json")
+
+        rendered = _Declarations(path=windows_path).display_path  # type: ignore[arg-type]
+
+        assert rendered == "app/generated/run/artifact_schemas.json"
+        assert "\\" not in rendered
 
     def test_the_path_cited_is_the_one_that_answered(self, tmp_path: Path) -> None:
         """When a file exists, name *that* file, not where one would belong."""

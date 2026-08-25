@@ -82,12 +82,26 @@ class _Declarations:
     path: Path | None = None
     """The file that answered, or — when none exists — the file where this entry
     point's declarations belong, so a warning can name a location the author can
-    actually act on."""
+    actually act on.  Render it with :meth:`display_path`, never with ``str()``."""
 
     readable: bool = True
     """``False`` when a file exists but could not be understood.  The caller
     skips the entry point entirely rather than reporting every field as
     undeclared off one bad JSON blob."""
+
+    @property
+    def display_path(self) -> str:
+        """``path`` rendered with forward slashes on every platform.
+
+        ``str(Path(...))`` uses the OS separator, so the same app would report
+        ``app\\generated\\artifact_schemas.json`` on Windows and
+        ``app/generated/artifact_schemas.json`` everywhere else.  The path is
+        repo-relative and names a committed file read cross-platform — the docs,
+        the pkl contract and conformance K016's finding all spell it with
+        forward slashes, so the warning must too, or a Windows developer cannot
+        match the message against any of them.
+        """
+        return self.path.as_posix() if self.path is not None else ""
 
 
 def _declared_artifact_schema_keys(
@@ -148,7 +162,7 @@ def _declared_artifact_schema_keys(
                 "Artifact-schema declarations at %s are not valid JSON; skipping "
                 "the boundary check for this entry point rather than reporting "
                 "every field as undeclared.",
-                candidate,
+                candidate.as_posix(),
                 exc_info=True,
             )
             return _Declarations(readable=False, path=candidate)
@@ -158,7 +172,7 @@ def _declared_artifact_schema_keys(
                 "Artifact-schema declarations at %s have no top-level 'schemas' "
                 "object; skipping the boundary check for this entry point rather "
                 "than reporting every field as undeclared.",
-                candidate,
+                candidate.as_posix(),
             )
             return _Declarations(readable=False, path=candidate)
         return _Declarations(
@@ -259,7 +273,7 @@ def warn_undeclared_artifact_schemas(
                         f"app's pkl contract as "
                         f'artifactSchemas {{ ["{field_name}"] = new ArtifactSchema '
                         f"{{ ... }} }} and regenerate, so it lands in "
-                        f"{declarations.path}. See docs/concepts/apps.md "
+                        f"{declarations.display_path}. See docs/concepts/apps.md "
                         f"('Declaring artifact schemas'). Internal @task "
                         f"contracts are exempt; entry-point contracts are not. "
                         f"This is a warning today and will be an error in "
