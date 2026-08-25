@@ -4,6 +4,14 @@ See :mod:`application_sdk.validation` for the why. This module holds the typed
 result models, the single-asset check, and the transformed-output directory
 walk (per-asset validation + referential-integrity second pass).
 
+Since FND-690 it is also **the artifact wrapper's NDJSON x ``ModelSource`` cell** —
+same walk, reached through :func:`~application_sdk.validation.wrapper.validate_artifact`
+and reported in the shared :class:`~application_sdk.validation.artifacts.ArtifactValidationReport`
+shape by :func:`validate_assets_as_artifact`. Nothing above that fold-in line changed:
+the fold-in is a projection over the findings this walk already produced, plus the
+shipped ``ASSET_VALIDATION_EVENT`` attribute map moved here from ``app.base`` so the
+event and the check that feeds it live together.
+
 Design constraints worth preserving if you edit this file:
 
 * **Decode through ``from_atlas_json``, not ``<ConcreteType>.from_json``.**
@@ -43,16 +51,26 @@ import functools
 import typing
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator
+from typing import Final, Iterator
 
 import msgspec
+import orjson
 from pyatlan_v9.model.assets import Asset
 from pyatlan_v9.model.assets.referenceable import RelatedReferenceable
 from pyatlan_v9.model.transform import from_atlas_json
 
 from application_sdk.common.spillable_dict import SpillableDict
 from application_sdk.constants import ASSET_VALIDATION_MAX_ITEMS_PER_AXIS
-from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.logger_adaptor import (
+    ASSET_VALIDATION_MATRIX_KEY,
+    get_logger,
+)
+from application_sdk.validation.artifacts import (
+    OUTCOME_ABSENT,
+    ArtifactValidationFailure,
+    ArtifactValidationReport,
+    ModelDeclaration,
+)
 from application_sdk.validation.ndjson import iter_ndjson_lines
 
 logger = get_logger(__name__)
@@ -495,3 +513,300 @@ def validate_transformed_dir(
             present.close()
 
     return report
+
+
+# ---------------------------------------------------------------------------
+# The wrapper cell: NDJSON x ModelSource (ADR-0020, FND-690)
+# ---------------------------------------------------------------------------
+#
+# Everything above predates the wrapper and is unchanged. Everything below is the
+# same check reached through the generic seam: ``validate_transformed_dir`` *is* the
+# NDJSON x ``ModelSource`` cell, so this is a projection, not a second scan. One
+# walk, one set of findings, two report vocabularies over it.
+#
+# Why two vocabularies rather than one: the shared ``ArtifactValidationReport``
+# speaks in units, declared fields and failure kinds, while ``ASSET_VALIDATION_EVENT``
+# shipped speaking in assets, orphans and undeserializable records. That event's
+# name and every attribute key are a contract — dashboards and alert rules key off
+# the exact strings and v3 has shipped consumers — so the asset vocabulary is kept
+# verbatim and carried *alongside* the shared shape rather than translated into it.
+
+
+def supports_asset_model(model: object) -> bool:
+    """True when ``model`` is a class this cell can decode NDJSON records into.
+
+    The cell delegates to ``pyatlan_v9``'s per-asset ``.validate()`` and decodes
+    through ``from_atlas_json``, both specific to the asset model — so an arbitrary
+    class exposing a callable ``validate`` is **not** something this cell can check,
+    however well-shaped it looks to
+    :class:`~application_sdk.validation.sources.ModelSource`.
+
+    Answering ``False`` there is what turns "we cannot check this" into a reported
+    ``unsupported`` outcome naming the cell. The alternative is worse in a specific
+    way: decoding every record with the wrong decoder would report a whole artifact
+    as ``undecodable``, which reads as a data defect and blames the app for the
+    SDK's inability to delegate.
+    """
+    return isinstance(model, type) and issubclass(model, Asset)
+
+
+@dataclass
+class AssetArtifactReport(ArtifactValidationReport):
+    """The NDJSON x ``ModelSource`` cell's report: the shared shape plus asset detail.
+
+    An :class:`~application_sdk.validation.artifacts.ArtifactValidationReport`, so
+    the wrapper stamps it and every generic consumer reads it unchanged — with the
+    scan's own :class:`AssetValidationReport` carried on :attr:`assets` for the two
+    surfaces that speak the asset vocabulary: the shipped ``ASSET_VALIDATION_EVENT``
+    attribute map and its human-readable ``format_report()`` body.
+
+    The detail is *carried*, not re-derived, which is what makes the event
+    byte-identical across the fold-in by construction:
+    :func:`asset_validation_event_fields` is handed the very object the pre-wrapper
+    hook emitted from.
+
+    The shared counts and :attr:`assets` are populated together in
+    :func:`validate_assets_as_artifact`, off one walk — they cannot disagree.
+    """
+
+    assets: AssetValidationReport = field(default_factory=AssetValidationReport)
+    """The scan's findings in the asset vocabulary (per-asset failures + orphans)."""
+
+
+def _as_record_failure(failure: AssetValidationFailure) -> ArtifactValidationFailure:
+    """Project one per-asset finding onto the shared failure shape.
+
+    ``deserialize_error`` becomes ``undecodable`` and everything else becomes
+    ``invalid`` — the same split the matrix makes, so the shared report's derived
+    ``undecodable`` count *equals* ``AssetValidationReport.undeserializable`` rather
+    than approximating it.
+
+    ``field`` stays "" and the messages are carried verbatim. The shared vocabulary
+    addresses a unit positionally (``file:line``) and has no room for an asset's
+    ``(typeName, qualifiedName)``; rewriting the model's own ``.validate()``
+    messages to smuggle it in would make the two surfaces disagree about what the
+    model said. The identity is on :attr:`AssetArtifactReport.assets` instead.
+    """
+    return ArtifactValidationFailure(
+        kind="undecodable" if failure.deserialize_error else "invalid",
+        file=failure.file,
+        line=failure.line,
+        errors=list(failure.errors),
+    )
+
+
+def _as_reference_failure(orphan: ReferentialFailure) -> ArtifactValidationFailure:
+    """Project one orphan onto the shared failure shape.
+
+    ``missing`` is the shared vocabulary's word for it, and ``field`` carries the
+    relationship attribute the reference came through — a relationship *is* a field
+    of the referencing record, so this is the same "which field" question the
+    field-map cell answers, asked of a reference.
+
+    An orphan does not move ``passed``: a record can be perfectly valid on its own
+    terms and still point at a parent nobody emitted, which is exactly why the
+    referential pass is a second axis. So this lands in ``failures`` (a problem
+    count) without changing ``failed`` (a unit count) — the divergence the shared
+    report already documents.
+    """
+    return ArtifactValidationFailure(
+        kind="missing",
+        field=orphan.relationship,
+        file=orphan.file,
+        line=orphan.line,
+        errors=[
+            f"[{orphan.missing_type_name}] {orphan.missing_qualified_name} is "
+            f"referenced through '{orphan.relationship}' by "
+            f"{orphan.reference_count} asset(s) in this batch but is not itself "
+            f"present"
+        ],
+    )
+
+
+def validate_assets_as_artifact(
+    path: str | Path,
+    declaration: ModelDeclaration | None = None,
+    *,
+    for_creation: bool = True,
+    check_referential_integrity: bool = True,
+) -> AssetArtifactReport:
+    """The NDJSON x ``ModelSource`` cell: :func:`validate_transformed_dir`, reported
+    in the shared shape.
+
+    Reached through :func:`~application_sdk.validation.wrapper.validate_artifact`
+    with a :class:`~application_sdk.validation.sources.ModelSource`; the
+    :class:`~application_sdk.validation.ndjson.NdjsonValidator` dispatches a model
+    declaration here. Callable directly too, which is how the projection is tested
+    without standing up the wrapper.
+
+    Args:
+        path: A transformed-output directory (e.g. ``.../transformed``) or file.
+        declaration: The resolved model declaration. Accepted for the
+            :class:`~application_sdk.validation.protocols.FormatValidator` shape and
+            for the model check; ``None`` skips that check, for a direct caller with
+            no declaration to hand.
+        for_creation: Passed through to each asset's ``.validate()``.
+        check_referential_integrity: Run the referential (orphan) second pass.
+            Defaults on, as the upload hook has always run it: extracts and
+            transforms are full by design, so the batch is complete and the pass is
+            accurate.
+
+    Returns:
+        An :class:`AssetArtifactReport`. ``absent`` when the scan found no records at
+        all — the same answer the field-map arm gives, because "zero records checked"
+        reported as ``clean`` is the exact failure this capability exists to remove.
+        :func:`asset_validation_event_fields` still projects that to ``clean`` on the
+        legacy event, whose outcome vocabulary shipped as clean/flagged only.
+    """
+    if declaration is not None and not supports_asset_model(declaration.model):
+        # Unreachable through the wrapper, which honours ``supports``. Guarded for
+        # the direct caller: decoding with the wrong decoder would report the whole
+        # artifact as a data defect.
+        name = getattr(declaration.model, "__name__", type(declaration.model).__name__)
+        return AssetArtifactReport(
+            verdict=OUTCOME_ABSENT,
+            reason=(
+                f"the ndjson x model cell delegates to pyatlan_v9 assets; "
+                f"{name} is not one"
+            ),
+        )
+
+    assets = validate_transformed_dir(
+        path,
+        for_creation=for_creation,
+        check_referential_integrity=check_referential_integrity,
+    )
+
+    if assets.total == 0:
+        return AssetArtifactReport(
+            verdict=OUTCOME_ABSENT,
+            reason=f"no ndjson records found at {path}",
+            assets=assets,
+        )
+
+    return AssetArtifactReport(
+        total=assets.total,
+        passed=assets.passed,
+        failures=(
+            [_as_record_failure(f) for f in assets.failures]
+            + [_as_reference_failure(o) for o in assets.orphans]
+        ),
+        assets=assets,
+    )
+
+
+# ---------------------------------------------------------------------------
+# The shipped ASSET_VALIDATION_EVENT projection
+# ---------------------------------------------------------------------------
+#
+# Moved here verbatim from ``app.base`` by FND-690, so the event and the check that
+# feeds it live in one module. **Nothing about the emitted row changed in that
+# move** — same event name, same attribute keys, same row keys and key order inside
+# the matrix, same caps. ``tests/unit/validation/test_asset_event.py`` pins all of
+# it against a golden payload precisely so a later refactor cannot quietly reword a
+# string a dashboard matches on.
+
+ASSET_VALIDATION_MATRIX_ERROR_MAXLEN: Final = 300
+"""Per-row error message cap (chars). pyatlan_v9 ``.validate()`` messages can be
+long; truncate so a single row cannot bloat the ClickHouse attribute."""
+
+
+def asset_validation_matrix_json(
+    report: AssetValidationReport,
+    *,
+    max_items: int = ASSET_VALIDATION_MAX_ITEMS_PER_AXIS,
+) -> str:
+    """Compact per-failure matrix for the outcome event, as one JSON string.
+
+    Lands as a single ``LogAttributes`` value in ClickHouse so connector-pulse can
+    ``JSONExtract`` the per-failure detail against workflow outcomes with no schema
+    change (mirrors the preflight gate's ``check_matrix``). Small fixed fields only,
+    bounded to ``max_items`` rows **per axis** — the headline counts on the event
+    carry the full totals, and the human-readable ``format_report()`` still rides in
+    the WARNING body for flagged runs.
+
+    Not internally guarded (``orjson.dumps`` can raise): the emitting hook wraps the
+    whole emit in ``try/except``, so a raise here is caught there and never blocks
+    the handoff.
+    """
+    rows: list[dict[str, object]] = []
+    for f in report.failures[:max_items]:
+        rows.append(
+            {
+                "kind": "undeserializable" if f.deserialize_error else "invalid",
+                "type_name": f.type_name,
+                "qualified_name": f.qualified_name,
+                "error": (f.errors[0] if f.errors else "")[
+                    :ASSET_VALIDATION_MATRIX_ERROR_MAXLEN
+                ],
+                "file": f.file,
+                "line": f.line,
+            }
+        )
+    for o in report.orphans[:max_items]:
+        rows.append(
+            {
+                "kind": "orphan",
+                "type_name": o.missing_type_name,
+                "qualified_name": o.missing_qualified_name,
+                "relationship": o.relationship,
+                "reference_count": o.reference_count,
+                "file": o.file,
+                "line": o.line,
+            }
+        )
+    return orjson.dumps(rows).decode()
+
+
+def asset_validation_event_fields(
+    report: AssetValidationReport,
+    *,
+    app_name: str,
+    max_items: int = ASSET_VALIDATION_MAX_ITEMS_PER_AXIS,
+) -> dict[str, str | int]:
+    """Build ``ASSET_VALIDATION_EVENT``'s attribute map from an asset report.
+
+    The single mapping site from report to telemetry, so the emitter cannot drift
+    from the allowlist — every key returned here is in
+    ``logger_adaptor._KNOWN_EXTRA_KEYS``, and a key absent from that allowlist is
+    dropped by ``_build_extra_dict`` and silently never reaches OTLP.
+
+    **Every string here is a shipped contract.** The keys, the two ``outcome``
+    values and the matrix's own row keys are matched verbatim by dashboards and
+    alert rules, so this map is pinned against a golden payload in
+    ``tests/unit/validation/test_asset_event.py`` rather than merely exercised.
+
+    Two details are load-bearing and deliberately preserved from the pre-wrapper
+    emitter:
+
+    * ``assets_invalid`` is reported **disjointly** from
+      ``assets_undeserializable``. ``AssetValidationReport.failed`` counts the
+      undeserializable records too, so they are subtracted out — matching the
+      headline in ``format_report()``.
+    * ``outcome`` is ``clean``/``flagged`` and nothing else. The shared artifact
+      report has five outcomes, but this event shipped with two, and widening the
+      vocabulary of a field dashboards group by is a breaking change dressed as an
+      improvement. A scan that found nothing to read reports ``clean`` here and
+      ``absent`` on the shared report.
+
+    Args:
+        report: The scan's findings in the asset vocabulary — i.e.
+            :attr:`AssetArtifactReport.assets`.
+        app_name: Emitting app, carried as the already-allowlisted ``app_name``.
+        max_items: Row cap per axis for the matrix; shared with ``format_report``.
+
+    Returns:
+        Keyword arguments for the ``ASSET_VALIDATION_EVENT`` log call.
+    """
+    return {
+        "outcome": "clean" if report.ok else "flagged",
+        "app_name": app_name,
+        "assets_total": report.total,
+        "assets_passed": report.passed,
+        "assets_invalid": report.failed - report.undeserializable,
+        "assets_orphaned": len(report.orphans),
+        "assets_undeserializable": report.undeserializable,
+        ASSET_VALIDATION_MATRIX_KEY: asset_validation_matrix_json(
+            report, max_items=max_items
+        ),
+    }
