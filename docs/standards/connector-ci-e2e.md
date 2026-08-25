@@ -392,6 +392,65 @@ A timeout is never downgraded this way — an accepted-but-unreconciled deploy i
 nobody else's fault, and it is the silent wrong-version failure this whole
 mechanism exists to remove.
 
+### When the FAILED verdict is about pod churn the platform caused
+
+The verdict is also an **instant**, not just a namespace: any pod unhealthy at
+the moment LM looks reds the install, including a pod the platform itself just
+deleted on purpose. The first install onto a new tenant failed in 45s that way —
+KEDA scaled the server deployment to zero while the platform-injected
+`atlan-env-seeder` init container was still blocked on a Vault secret whose name
+encodes the namespace and had not synced yet, so the pod was SIGKILLed mid-init
+and left phase `Failed`. The workers recovered, the app was fine, and the two
+warm namespaces on the other clouds passed the same run.
+
+The pull-failure reading above cannot catch that — there was no pull failure
+(`Normal Pulled`) — so a second, narrower tolerance sits behind it. It needs
+**both** halves, and the failing container has to be named:
+
+- **Whose container broke.** The container under test is the one running the
+  image we published; every other container in the pod came from the platform's
+  pod template, so it can be neither broken nor fixed by the app. Decided by the
+  same repository-identity compare as above (an unreadable `Image:` counts as
+  ours), so there is no list of platform container names to keep current.
+- **Why, for our own container.** `CreateContainerConfigError` (the kubelet could
+  not *generate* the container's config — a missing Secret or ConfigMap — so the
+  image was never instantiated), a node eviction or
+  shutdown, or exit 137 where the events *name this pod's* deletion
+  (`KEDAScaleTargetDeactivated` **and** `Deleted pod: <name>`). `OOMKilled` exits
+  137 too and stays fatal. Anything unrecognised stays fatal — including plain
+  `CreateContainerError`, which the kubelet sets *after* config generation when
+  the CRI `CreateContainer` call fails (a bad security context, a volume the
+  chart asked for, an image that cannot be instantiated). Those are app faults
+  and are what this tolerance exists to keep fatal, so the reason list is not to
+  be widened without a fixture from a real `describe`.
+- **Then it must not happen again.** `--settle-seconds` (90 by default) later the
+  live events are re-read, and any unhealthy event still inside that window keeps
+  the verdict. A platform container that never recovers keeps warning, so it
+  still fails us. The re-read is of the **live events** and nothing else: LM's
+  `deployment_status` is a terminal record, and its failure snapshot is
+  *failure-triggered*, so it can only ever depict a failure — never a recovery.
+  The snapshot's `pod_events` must never reach the age comparison either: its
+  ages are relative to its own capture moment (8s behind the live read on the run
+  above, unbounded in general), so the same lines would read as young forever.
+  `--settle-seconds 0` disables the tolerance entirely.
+
+None of this proves the app is healthy, and nothing downstream should read it
+that way — a one-shot warning on a still-wedged pod ages out of the window and
+takes the window quiet with it. What the two conditions establish is that LM's
+verdict is not evidence **either way**, which hands the decision to the
+installed-version read-back: unconditional, direct, and the only positive
+evidence in the flow. Its failure message says when a verdict was downgraded, so
+a version mismatch is never read in isolation.
+
+Two platform-side fixes would remove the churn rather than tolerate it — KEDA
+`initialCooldownPeriod` on the server ScaledObject, and LM not counting a pod it
+deleted itself — but both live outside this repo.
+
+`pod_describe` is printed **per pod, unhealthy first**, for the same reason: under
+one shared budget it printed as "tail 200 of 542 lines" and the only pod that
+failed the install was in the dropped head, leaving two healthy workers as the
+entire visible evidence.
+
 Each entry may also carry `"deployment_name"` when that tenant's system apps
 (publish / quality / lineage) are not registered under `production`. It reaches
 the harness as `E2E_TENANT_DEPLOYMENT_NAME`, which

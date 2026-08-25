@@ -974,10 +974,11 @@ def test_job_timeout_stays_above_the_scripts_own_waits(jobs: dict) -> None:  # t
     """The runner's timeout must not be able to fire before the script's.
 
     The publish retries while the marketplace service is not answering, then the
-    install retries while LM's catalog snapshot catches up, then the deployment
-    is polled — all three bounded by the script's defaults, since the step
-    overrides none of them. They are sequential in the worst case, so the budget
-    is their sum. If the job budget is under it, a slow sync reports as a bare
+    install retries while LM's catalog snapshot catches up, the deployment is
+    polled, and a FAILED verdict that names only benign pod churn then settles —
+    all four bounded by the script's defaults, since the step overrides none of
+    them. They are sequential in the worst case, so the budget is their sum. If
+    the job budget is under it, a slow sync reports as a bare
     "job cancelled after Nm" and the actionable error the script was about to
     print is never written: the diagnosis-hostile failure this whole job exists to
     avoid. Derived from the script's constants, so raising one of those fails here
@@ -987,6 +988,7 @@ def test_job_timeout_stays_above_the_scripts_own_waits(jobs: dict) -> None:  # t
         app.DEFAULT_PUBLISH_RETRY_SECONDS
         + app.DEFAULT_INSTALL_RETRY_SECONDS
         + app.DEFAULT_DEPLOYMENT_TIMEOUT_SECONDS
+        + app.DEFAULT_SETTLE_SECONDS
     ) // 60
     required = round(waits / _MAX_WAIT_SHARE)
     actual = jobs["prepare-tenant"]["timeout-minutes"]
@@ -1005,6 +1007,7 @@ def test_job_timeout_stays_above_the_scripts_own_waits(jobs: dict) -> None:  # t
         "--publish-retry-seconds",
         "--install-retry-seconds",
         "--timeout-seconds",
+        "--settle-seconds",
     ):
         assert flag not in install["run"], (
             f"the step now passes {flag}, so the budget above is no longer the "
