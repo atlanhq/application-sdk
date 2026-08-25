@@ -15,9 +15,10 @@ loads a parquet reader.
 
 **Every hand-off resolves to exactly one outcome, negatives included.** There is no
 path through this function that returns nothing or raises: a missing declaration is
-``not_declared``, a cell that cannot check the declaration it was handed is
-``unsupported``, and an unreadable declaration or a validator that blew up is
-``absent`` plus a warning. The earlier upload-time hook returned early and emitted
+``not_declared``, a cell that cannot check the declaration it was handed —
+or a field map that names no fields, which would report as declared while asserting
+nothing — is ``unsupported``, and an unreadable declaration or a validator that blew
+up is ``absent`` plus a warning. The earlier upload-time hook returned early and emitted
 *nothing* when its path gate did not match, so an app could look adopted while
 validating zero records — a check that reports nothing is indistinguishable from a
 check that passed, and that ambiguity is itself the defect.
@@ -63,17 +64,23 @@ def builtin_format_validators() -> tuple[FormatValidator, ...]:
     module-level import here would drag it onto the import path of every JSON-only
     caller — exactly the cost coupling the two-seam design exists to prevent
     (``tests/unit/validation/test_artifact_dependency_floor.py`` enforces it).
+    Importing the parquet *module* is cheap: it defers ``pyarrow`` to the moment a
+    parquet artifact is actually validated, and degrades to skip-with-warning when
+    the extra is not installed.
 
-    NDJSON ships (FND-688); parquet lands in FND-689. Until it does, a declared
-    parquet artifact resolves to ``unsupported`` naming the format that had no
-    validator — which is the honest report, and is visible in the outcome events
+    Both formats ADR-0020 names now ship: NDJSON (FND-688) streams line by line,
+    parquet (FND-689) diffs a footer. A format neither claims still resolves to
+    ``unsupported`` naming it — the honest report, visible in the outcome events
     rather than looking like a pass.
     """
-    from application_sdk.validation.ndjson import (  # noqa: PLC0415 — deferred on purpose: FND-689's parquet validator imports pyarrow, an extra, and a module-level import here would put it on every JSON-only caller's path
+    from application_sdk.validation.ndjson import (  # noqa: PLC0415 — deferred on purpose: the parquet import below must stay inside this function, and both are resolved together
         NdjsonValidator,
     )
+    from application_sdk.validation.parquet import (  # noqa: PLC0415 — deferred: keeps the parquet reader off a JSON-only caller's import path
+        ParquetFooterValidator,
+    )
 
-    return (NdjsonValidator(),)
+    return (NdjsonValidator(), ParquetFooterValidator())
 
 
 def validate_artifact(
@@ -186,6 +193,31 @@ def validate_artifact(
 
     # Safe from here: a dataclass attribute on a type this module owns.
     artifact_format = declaration.artifact_format
+
+    if isinstance(declaration, FieldMapDeclaration) and not declaration.fields:
+        # A field map naming nothing reports as *declared* while asserting nothing —
+        # the exact "looks adopted, validates zero records" state this capability
+        # exists to remove. `ContractSource` cannot produce one (`_parse_schemas`
+        # refuses to load a zero-field schema, and the toolkit refuses to generate
+        # one), but a custom `SchemaSource` is a supported plug-in, and every format
+        # would otherwise have to remember to check this for itself: a scan over
+        # zero fields finds nothing, so it derives `clean`.
+        #
+        # `unsupported` rather than `not_declared`: the app *did* declare something.
+        # Blaming it for a missing declaration would be a different, wrong report.
+        # Guarded on `FieldMapDeclaration` specifically, never on `field_count`,
+        # because `ModelDeclaration.field_count` is always 0 — a model enumerates no
+        # fields at this layer and delegating to it is exactly what it is for.
+        return ArtifactValidationReport.unsupported(
+            artifact_format=artifact_format,
+            schema_source=source_kind,
+            reason=(
+                "the declaration names zero fields, so it would report as declared "
+                "while checking nothing"
+            ),
+            boundary=boundary,
+        )
+
     validator = _select_validator(
         artifact_format,
         builtin_format_validators() if validators is None else validators,

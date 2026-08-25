@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.28.3
-source-sha:    d9608448f11e6d6f4b39f4ae1f8b4061d751090e
-source-date:   2026-08-25T03:31:37+01:00
+source-sha:    1c1ad24d945c111fb27d8e1a7127a0657b60a710
+source-date:   2026-08-25T10:21:48+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -35,7 +35,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 97 |
-| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 45 |
+| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 46 |
 
 ## Subpackage Details
 
@@ -3858,6 +3858,14 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Signature:** `class NdjsonValidator()`
 - **Summary:** Streams an NDJSON artifact and checks every record against a field map.
 - **Defined in:** `application_sdk/validation/ndjson.py`
+
+#### `ParquetFooterValidator`
+
+- **Import:** `from application_sdk.validation import ParquetFooterValidator`
+- **Also importable from:** `application_sdk.validation.parquet`
+- **Signature:** `class ParquetFooterValidator()`
+- **Summary:** Diff a parquet artifact's footer schema against a field-map declaration.
+- **Defined in:** `application_sdk/validation/parquet.py`
 
 #### `ReferentialFailure`
 
