@@ -2,6 +2,17 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.24.0] - 2026-08-25
+
+### Features
+
+- K017 — a declared artifact schema its own writer contradicts (FND-693) (#3414) ([06b431d](https://github.com/atlanhq/application-sdk/commit/06b431d))
+- accept legacy Temporal workflow types as inbound-only aliases (#3132) ([bd90391](https://github.com/atlanhq/application-sdk/commit/bd90391))
+
+### Bug fixes
+
+- report Release Gate on merge-queue branches (FND-851) (#3418) ([2f8c97c](https://github.com/atlanhq/application-sdk/commit/2f8c97c))
+
 ## [0.23.0] - 2026-08-25
 
 ### Features
