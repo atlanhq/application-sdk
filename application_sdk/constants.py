@@ -124,6 +124,19 @@ TEMPORARY_PATH = os.getenv("ATLAN_TEMPORARY_PATH", "./local/tmp/")
 # application_sdk.execution._temporal.worker._resolve_gate_enforcement.
 PREFLIGHT_GATE_MODE_ENV = "ATLAN_PREFLIGHT_GATE_MODE"
 
+# Artifact-validation posture override (deploy-time ops lever). Read at worker
+# build; only the literal "hard" enforces, any other set value falls back to
+# soft. An empty or unset value is not an override - resolution falls through to
+# the declared App.artifact_validation_mode attribute. See
+# application_sdk.validation.interceptor.resolve_artifact_enforcement.
+#
+# Distinct from ATLAN_VALIDATE_ARTIFACTS, and deliberately so: that one is the
+# kill switch deciding whether the check runs at all, this one decides whether a
+# verdict blocks. Collapsing them would make "stop blocking" and "stop
+# reporting" the same lever, and the outcome events are exactly what FND-694's
+# graduation review reads.
+ARTIFACT_VALIDATION_MODE_ENV = "ATLAN_ARTIFACT_VALIDATION_MODE"
+
 # Directory where contract-toolkit generated files (configmaps, manifest, Python types) live.
 # Convention: app/generated/ inside the repo (importable as app.generated).
 # In Docker (WORKDIR=/app, app code at /app/app/) this resolves to /app/app/generated.

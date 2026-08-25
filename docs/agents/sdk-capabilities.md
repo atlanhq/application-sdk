@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.28.3
-source-sha:    1f5d397730bccbf41c1cde0a551f10178d004ed2
-source-date:   2026-08-25T13:34:01+01:00
+source-sha:    2c3451b251449c2b97fafad7256613b9f804e528
+source-date:   2026-08-25T16:54:01Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -29,13 +29,13 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
-| `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 27 |
+| `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 28 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 97 |
-| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 57 |
+| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
 
@@ -2600,6 +2600,13 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/observability/events.py`
 
+#### `ARTIFACT_VALIDATION_POSTURE_EVENT`
+
+- **Import:** `from application_sdk.observability.events import ARTIFACT_VALIDATION_POSTURE_EVENT`
+- **Signature:** `ARTIFACT_VALIDATION_POSTURE_EVENT: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/events.py`
+
 #### `ASSET_VALIDATION_EVENT`
 
 - **Import:** `from application_sdk.observability.events import ASSET_VALIDATION_EVENT`
@@ -3773,6 +3780,14 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** A declaration artifact exists but could not be turned into a declaration.
 - **Defined in:** `application_sdk/validation/sources.py`
 
+#### `ArtifactValidationBlockedError`
+
+- **Import:** `from application_sdk.validation import ArtifactValidationBlockedError`
+- **Also importable from:** `application_sdk.validation.interceptor`
+- **Signature:** `class ArtifactValidationBlockedError(*, ...)`
+- **Summary:** A hard-mode app's artifact validation failed a hand-off.
+- **Defined in:** `application_sdk/validation/interceptor.py`
+
 #### `ArtifactValidationFailure`
 
 - **Import:** `from application_sdk.validation import ArtifactValidationFailure`
@@ -3891,6 +3906,14 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 
 ### Functions
 
+#### `artifact_enforcement`
+
+- **Import:** `from application_sdk.validation import artifact_enforcement`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `artifact_enforcement(report: 'ArtifactValidationReport', *, enforce: bool)`
+- **Summary:** What the app's posture does with one report — the single decision site.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
 #### `artifact_schema_paths`
 
 - **Import:** `from application_sdk.validation import artifact_schema_paths`
@@ -3898,6 +3921,14 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Signature:** `artifact_schema_paths(*, entrypoint: str = '', generated_dir: Path | None = None)`
 - **Summary:** Where an entrypoint's declaration file is looked for, in order.
 - **Defined in:** `application_sdk/validation/sources.py`
+
+#### `artifact_validation_enforced`
+
+- **Import:** `from application_sdk.validation import artifact_validation_enforced`
+- **Also importable from:** `application_sdk.validation.interceptor`
+- **Signature:** `artifact_validation_enforced(app_name: str)`
+- **Summary:** :func:`resolve_artifact_enforcement` for a registered app name.
+- **Defined in:** `application_sdk/validation/interceptor.py`
 
 #### `artifact_validation_event_fields`
 
@@ -3913,6 +3944,14 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Also importable from:** `application_sdk.validation.artifacts`
 - **Signature:** `artifact_validation_matrix_json(report: ArtifactValidationReport, *, ...)`
 - **Summary:** Compact per-failure drill-down for the outcome event, as one JSON string.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `artifact_validation_mode`
+
+- **Import:** `from application_sdk.validation import artifact_validation_mode`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `artifact_validation_mode(*, enforce: bool, enabled: bool = True)`
+- **Summary:** Render the resolved posture for an app as its event value.
 - **Defined in:** `application_sdk/validation/artifacts.py`
 
 #### `asset_validation_event_fields`
@@ -3969,6 +4008,22 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** Yield ``(file, 1-based line number, raw bytes)`` for every non-blank line.
 - **Defined in:** `application_sdk/validation/ndjson.py`
 
+#### `log_artifact_validation_posture`
+
+- **Import:** `from application_sdk.validation import log_artifact_validation_posture`
+- **Also importable from:** `application_sdk.validation.interceptor`
+- **Signature:** `log_artifact_validation_posture(app_name: str, *, enforce: bool, enabled: bool)`
+- **Summary:** Emit the boot-time posture row for one app — **every** app, soft included.
+- **Defined in:** `application_sdk/validation/interceptor.py`
+
+#### `resolve_artifact_enforcement`
+
+- **Import:** `from application_sdk.validation import resolve_artifact_enforcement`
+- **Also importable from:** `application_sdk.validation.interceptor`
+- **Signature:** `resolve_artifact_enforcement(app_cls: type | None)`
+- **Summary:** Resolve one app's artifact-validation posture. ``True`` = hard.
+- **Defined in:** `application_sdk/validation/interceptor.py`
+
 #### `supports_asset_model`
 
 - **Import:** `from application_sdk.validation import supports_asset_model`
@@ -4014,6 +4069,22 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Defined in:** `application_sdk/validation/assets.py`
 
 ### Constants and Enums
+
+#### `ARTIFACT_CLASSIFICATIONS`
+
+- **Import:** `from application_sdk.validation import ARTIFACT_CLASSIFICATIONS`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `ARTIFACT_CLASSIFICATIONS: Final[frozenset[str]]`
+- **Summary:** Runtime membership test for :data:`ArtifactClassification`.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `ARTIFACT_ENFORCEMENTS`
+
+- **Import:** `from application_sdk.validation import ARTIFACT_ENFORCEMENTS`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `ARTIFACT_ENFORCEMENTS: Final[frozenset[str]]`
+- **Summary:** Runtime membership test for :data:`ArtifactEnforcement`.
+- **Defined in:** `application_sdk/validation/artifacts.py`
 
 #### `ARTIFACT_FIELD_TYPES`
 
@@ -4082,11 +4153,27 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/observability/events.py`
 
+#### `ARTIFACT_VALIDATION_MODES`
+
+- **Import:** `from application_sdk.validation import ARTIFACT_VALIDATION_MODES`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `ARTIFACT_VALIDATION_MODES: Final[frozenset[str]]`
+- **Summary:** Runtime membership test for :data:`ArtifactValidationMode`.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
 #### `ARTIFACT_VALIDATION_OUTCOMES`
 
 - **Import:** `from application_sdk.validation.artifacts import ARTIFACT_VALIDATION_OUTCOMES`
 - **Signature:** `ARTIFACT_VALIDATION_OUTCOMES: Final[frozenset[str]]`
 - **Summary:** Runtime membership test for :data:`ArtifactValidationOutcome`.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `ArtifactClassification`
+
+- **Import:** `from application_sdk.validation import ArtifactClassification`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `ArtifactClassification`
+- **Summary:** Why an outcome landed where it did — the second axis, orthogonal to the
 - **Defined in:** `application_sdk/validation/artifacts.py`
 
 #### `ArtifactDeclaration`
@@ -4095,6 +4182,14 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Also importable from:** `application_sdk.validation.artifacts`
 - **Signature:** `ArtifactDeclaration`
 - **Summary:** Tagged union of what a :class:`~application_sdk.validation.protocols.SchemaSource`
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `ArtifactEnforcement`
+
+- **Import:** `from application_sdk.validation import ArtifactEnforcement`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `ArtifactEnforcement`
+- **Summary:** What the posture actually did with this outcome.
 - **Defined in:** `application_sdk/validation/artifacts.py`
 
 #### `ArtifactFailureKind`
@@ -4129,12 +4224,68 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** Physical container format of a declared artifact. Each format has its own
 - **Defined in:** `application_sdk/validation/artifacts.py`
 
+#### `ArtifactValidationMode`
+
+- **Import:** `from application_sdk.validation import ArtifactValidationMode`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `ArtifactValidationMode`
+- **Summary:** An app's resolved artifact-validation posture.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
 #### `ArtifactValidationOutcome`
 
 - **Import:** `from application_sdk.validation import ArtifactValidationOutcome`
 - **Also importable from:** `application_sdk.validation.artifacts`
 - **Signature:** `ArtifactValidationOutcome`
 - **Summary:** Every artifact hand-off emits exactly one of these — the negatives included.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `CLASSIFICATION_ARTIFACT_UNVERIFIABLE`
+
+- **Import:** `from application_sdk.validation import CLASSIFICATION_ARTIFACT_UNVERIFIABLE`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `CLASSIFICATION_ARTIFACT_UNVERIFIABLE: Final`
+- **Summary:** Nothing on the SDK's side broke; there was simply nothing to check, or nothing
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `CLASSIFICATION_VALIDATOR_BROKEN`
+
+- **Import:** `from application_sdk.validation import CLASSIFICATION_VALIDATOR_BROKEN`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `CLASSIFICATION_VALIDATOR_BROKEN: Final`
+- **Summary:** The SDK's own plumbing failed — a plug-in raised, a declaration file could not
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `CLASSIFICATION_VERDICT`
+
+- **Import:** `from application_sdk.validation import CLASSIFICATION_VERDICT`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `CLASSIFICATION_VERDICT: Final`
+- **Summary:** A scan ran and returned a real answer about the artifact. Subject to mode.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `ENFORCEMENT_BLOCKED`
+
+- **Import:** `from application_sdk.validation import ENFORCEMENT_BLOCKED`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `ENFORCEMENT_BLOCKED: Final`
+- **Summary:** Hard mode, and this outcome failed the activity.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `ENFORCEMENT_NONE`
+
+- **Import:** `from application_sdk.validation import ENFORCEMENT_NONE`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `ENFORCEMENT_NONE: Final`
+- **Summary:** This outcome was never blockable — a clean scan, a validator that broke, or an
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `ENFORCEMENT_WOULD_BLOCK`
+
+- **Import:** `from application_sdk.validation import ENFORCEMENT_WOULD_BLOCK`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `ENFORCEMENT_WOULD_BLOCK: Final`
+- **Summary:** Soft mode, and this outcome *would* have failed the activity in hard mode.
 - **Defined in:** `application_sdk/validation/artifacts.py`
 
 #### `FORMAT_NDJSON`
@@ -4151,6 +4302,30 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Also importable from:** `application_sdk.validation.artifacts`
 - **Signature:** `FORMAT_PARQUET: Final`
 - **Summary:** Columnar. Checked by reading the file footer — no row is ever read.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `MODE_HARD`
+
+- **Import:** `from application_sdk.validation import MODE_HARD`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `MODE_HARD: Final`
+- **Summary:** A negative verdict fails the activity. Always a deliberate per-app opt-in.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `MODE_OFF`
+
+- **Import:** `from application_sdk.validation import MODE_OFF`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `MODE_OFF: Final`
+- **Summary:** The ``ATLAN_VALIDATE_ARTIFACTS`` kill switch is down — no check runs at all.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `MODE_SOFT`
+
+- **Import:** `from application_sdk.validation import MODE_SOFT`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `MODE_SOFT: Final`
+- **Summary:** A negative verdict is reported as ``would_block`` and the hand-off proceeds.
 - **Defined in:** `application_sdk/validation/artifacts.py`
 
 #### `OUTCOME_ABSENT`

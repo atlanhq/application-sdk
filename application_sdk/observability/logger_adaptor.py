@@ -119,6 +119,29 @@ ARTIFACT_SIDE_KEY = "artifact_side"
 # ``outcome``/``reason``/``checks`` keys this allowlist already carries.
 ARTIFACT_BOUNDARY_KEY = "boundary"
 
+# The posture axis (FND-692), mirroring the preflight gate's ``gate_mode`` /
+# ``gate_classification`` pair. All three are on **every** outcome row, so a row
+# is self-describing without a join back to the boot-time posture event.
+#
+# ``artifact_validation_mode`` is the app's resolved posture: "hard", "soft", or
+# "off" when the ATLAN_VALIDATE_ARTIFACTS kill switch is down. It is also the sole
+# payload of the posture event, which fires once per app at worker build so the
+# denominator exists for apps that never reach a hand-off.
+#
+# ``artifact_classification`` is the second axis, and it is what keeps hard mode
+# honest: "verdict" (a scan ran), "artifact_unverifiable" (nothing on our side
+# broke, there was simply nothing to check against) — both subject to mode — and
+# "validator_broken" (our own plumbing failed), which always fails open whatever
+# the posture, exactly as gate plumbing failures do.
+#
+# ``artifact_enforcement`` is what the posture actually did: "blocked",
+# "would_block", or "" when the outcome was never blockable. Written at one site
+# from (classification, outcome, mode) so the two enforcement values cannot come
+# to carry different attribute sets.
+ARTIFACT_MODE_KEY = "artifact_validation_mode"
+ARTIFACT_CLASSIFICATION_KEY = "artifact_classification"
+ARTIFACT_ENFORCEMENT_KEY = "artifact_enforcement"
+
 # SDK-side allowlist that gates which kwargs reach OTLP.  When a logger is called
 # with structured kwargs (e.g. ``_log().info("Downloaded", storage_path=key)``),
 # loguru places the kwargs on ``record["extra"]`` rather than in the message
@@ -196,6 +219,9 @@ _KNOWN_EXTRA_KEYS = frozenset(
         ARTIFACT_FIELDS_DECLARED_KEY,
         ARTIFACT_SIDE_KEY,
         ARTIFACT_BOUNDARY_KEY,
+        ARTIFACT_MODE_KEY,
+        ARTIFACT_CLASSIFICATION_KEY,
+        ARTIFACT_ENFORCEMENT_KEY,
         # ── Misc SDK ─────────────────────────────────────────────────────
         "log_type",
         "app_name",

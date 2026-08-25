@@ -248,16 +248,23 @@ def create_activity_from_task(
     input_type = task_metadata.input_type
     output_type = task_metadata.output_type
 
-    # ADR-0020 step 7. Both facts artifact validation needs about *this app* are
-    # constant for the worker's lifetime, so they are resolved once here and baked
-    # into the closure below — the same shape the preflight gate's posture uses —
-    # rather than costing a registry lookup on every artifact hand-off. Neither
-    # call raises: an app that is not registered yields empty values, and the hook
-    # then reports every hand-off as non-boundary against the flat generated
-    # declaration file.
+    # ADR-0020 steps 7-8. Every fact artifact validation needs about *this app* is
+    # constant for the worker's lifetime, so all three are resolved once here and
+    # baked into the closure below — the same shape the preflight gate's posture
+    # uses — rather than costing a registry lookup on every artifact hand-off.
+    # None of the three raises: an app that is not registered yields empty values
+    # and a soft posture, so the hook reports every hand-off as non-boundary
+    # against the flat generated declaration file and blocks nothing.
+    #
+    # The posture in particular is resolved here rather than per hand-off on
+    # purpose: a worker's blocking behaviour must not be able to change under a
+    # running activity because an env var was edited mid-run, and the posture row
+    # the worker emitted at boot has to describe the posture its activities
+    # actually run.
     from application_sdk.validation.interceptor import (  # noqa: PLC0415 — deferred to worker build: importing any `validation` submodule loads the package __init__, which pulls pyatlan_v9 in via `assets`. A module-scope import here would put that on the import path of every process that touches `execution` — the handler and server processes included, neither of which ever runs an activity.
         ARTIFACT_SIDE_HANDOFF,
         ARTIFACT_SIDE_INGEST,
+        artifact_validation_enforced,
         boundary_contract_types,
         entrypoint_index,
         validate_artifacts,
@@ -265,6 +272,7 @@ def create_activity_from_task(
 
     boundary_contracts = boundary_contract_types(task_metadata.app_name)
     entrypoint_by_workflow_type = entrypoint_index(task_metadata.app_name)
+    enforce_artifact_validation = artifact_validation_enforced(task_metadata.app_name)
 
     async def activity_fn(context: TaskContext, input_data: Input) -> Output:
         """Execute the task as a Temporal activity."""
@@ -511,6 +519,7 @@ def create_activity_from_task(
                     app_name=context.app_name,
                     entrypoint=entrypoint_name,
                     boundary_contracts=boundary_contracts,
+                    enforce=enforce_artifact_validation,
                 )
 
                 result = await task_method(input_data)
@@ -524,6 +533,7 @@ def create_activity_from_task(
                     app_name=context.app_name,
                     entrypoint=entrypoint_name,
                     boundary_contracts=boundary_contracts,
+                    enforce=enforce_artifact_validation,
                 )
 
                 # Persist any ephemeral FileReferences in the output after the task completes.

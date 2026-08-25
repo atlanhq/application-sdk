@@ -54,6 +54,13 @@ ASSET_VALIDATION_EVENT: Final = "Transformed-asset validation outcome"
 #: indistinguishable from a check that passed.
 ARTIFACT_VALIDATION_EVENT: Final = "Artifact validation outcome"
 
+#: The boot-time artifact-validation posture row (ADR-0020), emitted once per
+#: registered app at worker build — soft and disabled apps included, because that
+#: is the denominator the outcome events cannot supply. An app whose artifacts
+#: never reach a hand-off emits no outcome row at all, so posture drift and
+#: adoption are invisible from outcomes alone.
+ARTIFACT_VALIDATION_POSTURE_EVENT: Final = "Artifact validation posture"
+
 
 #: Every pinned event body, for tests and introspection. Membership here is the
 #: definition of "this string is a contract".
@@ -63,11 +70,13 @@ OUTCOME_EVENT_NAMES: Final[frozenset[str]] = frozenset(
         PREFLIGHT_POSTURE_EVENT,
         ASSET_VALIDATION_EVENT,
         ARTIFACT_VALIDATION_EVENT,
+        ARTIFACT_VALIDATION_POSTURE_EVENT,
     }
 )
 
 __all__ = [
     "ARTIFACT_VALIDATION_EVENT",
+    "ARTIFACT_VALIDATION_POSTURE_EVENT",
     "ASSET_VALIDATION_EVENT",
     "OUTCOME_EVENT_NAMES",
     "PREFLIGHT_OUTCOME_EVENT",
