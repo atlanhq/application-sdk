@@ -27,6 +27,14 @@ on:
   pull_request:
     types: [opened, synchronize, labeled, unlabeled, reopened]
     branches: [main]
+  # A merge queue evaluates required contexts against the `merge_group` event
+  # on the gh-readonly-queue/<base>/pr-N-<sha> ref, not against the pull
+  # request. Without this trigger no "Release Gate" check-run is ever created
+  # for the merge group, so the required context sits at "Expected — waiting
+  # for status to be reported" forever and the queue never drains (FND-851).
+  # Same shape as release-files-guard.yaml and sdk-gate.yaml in
+  # application-sdk, which are the two in-repo guards of this kind.
+  merge_group:
 
 permissions:
   contents: read
@@ -39,6 +47,13 @@ jobs:
     timeout-minutes: 2
     steps:
       - name: Verify release readiness
+        # `github.event.pull_request` does not exist on `merge_group`, so the
+        # label lookup can only run on the pull_request event. A skipped step
+        # still leaves the job successful, and that success is what reports
+        # the green context to the queue. Nothing is lost by passing here: a
+        # release PR missing `e2e` fails this gate on the PR itself and so
+        # never becomes eligible to enter the queue.
+        if: github.event_name == 'pull_request'
         env:
           LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
         run: |
