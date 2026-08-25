@@ -287,6 +287,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # marketplace publish, so neither rule applies to it (CONNECT release-pipeline).
     # K014: same release-readiness family — release_model selects how the app
     # reaches tenants, and only a consumer app has an atlan.yaml declaring it.
+    # K015: legacy_workflow_types agreement — the rule compares a consumer app's
+    # generated manifest against its App subclass; the SDK declares neither
+    # (CONNECT-1081).
     # K016: undeclared artifact on an entry-point boundary — artifactSchemas is
     # authored in an app's pkl contract and rendered into its app/generated/
     # tree; the SDK ships neither, and the hand-offs the rule protects are
@@ -368,6 +371,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "K012",
         "K013",
         "K014",
+        "K015",
         "K016",
         "P004",
         "P005",
@@ -689,9 +693,11 @@ def test_catalog_k_series_present() -> None:
     manifest-vs-contract field validation rule K006 (BLDX-1527), the toolkit
     hygiene rules K007–K010 (version floor, source provenance, unresolved
     placeholder, missing E2E scaffolding) (BLDX-1479), the release-readiness
-    guards K011/K012 (atlan.yaml app_id, generate poe task), and the DAG-node
+    guards K011/K012 (atlan.yaml app_id, generate poe task), the DAG-node
     log-identity guard K013 (toolkit-owned workflow filed under
-    ``automation-engine``) (CNCT-24)."""
+    ``automation-engine``) (CNCT-24), the release-model declaration guard K014,
+    and the legacy-alias agreement rule K015 (manifest legacy_workflow_types vs
+    the SDK App declaration) (CONNECT-1081)."""
     rules = load_catalog()
     k_ids = {r.id for r in rules if r.id.startswith("K")}
     expected = {
@@ -709,6 +715,7 @@ def test_catalog_k_series_present() -> None:
         "K012",
         "K013",
         "K014",
+        "K015",
         "K016",
     }
     missing = expected - k_ids

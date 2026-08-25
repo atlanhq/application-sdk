@@ -23,7 +23,10 @@ description: >
   explicitly -- and verified by the pkl-eval gate.  K014 (atlan.yaml declares no
   release_model, so the app inherits the publish-on-merge default) is fixed either
   in the contract or in a hand-owned atlan.yaml, decided by whether the contract
-  actually emits that file.  K009, K011, and K012 are
+  actually emits that file.  K015 (the manifest's legacy_workflow_types block and the
+  SDK App's legacy_workflow_types declaration disagree) is fixed on whichever side is
+  wrong -- in contract/app.pkl plus a regenerate, or in the App class attribute.
+  K009, K011, K012, and K015 are
   BLOCK-tier (they fail the gate in default mode); the rest of the K-series is WARN.
 ---
 
@@ -37,16 +40,17 @@ findings in the working tree, classified by disposition and remediability.
 The fingerprint-set of all unsuppressed FAILING/WARNING K-series results in the
 current working tree, as reported by `suite.runner --series K`.
 
-All K-series rules are WARN-tier **except K003, K009, K011, and K012 (BLOCK)**.
+All K-series rules are WARN-tier **except K003, K009, K011, K012, and K015 (BLOCK)**.
 So in **default** mode this facet is empty *unless* a K003 (pin/lock drift),
-K009 (unresolved scaffold placeholder), K011 (missing `app_id`), or K012
-(missing `generate` poe task) finding is present — those are FAILING results
+K009 (unresolved scaffold placeholder), K011 (missing `app_id`), K012
+(missing `generate` poe task), or K015 (legacy-alias contract/code drift)
+finding is present — those are FAILING results
 that fail the gate and must be remediated in default mode.  In **strict** mode
 the fingerprint-set also includes the unsuppressed WARNING results
 (K004/K005/K007/K008/K010/K014), which is where the rest of K-series
 remediation runs.
 
-The active scope decides which rules can appear: K001–K014 are all `scope=APP`,
+The active scope decides which rules can appear: K001–K015 are all `scope=APP`,
 so they surface only on consumer app repos.  The runner auto-detects scope, so
 the SDK repo sees 0 findings.
 
@@ -94,10 +98,11 @@ call detect-fix-recheck
 
 _Read by `remediate-finding` when `finding.area == "contract-toolkit"`._
 
-All K-series rules are **WARN-tier except K003, K009, K011, and K012 (BLOCK)** —
+All K-series rules are **WARN-tier except K003, K009, K011, K012, and K015 (BLOCK)** —
 the WARN rules surface only under `--strict` mode, while K003 (pin/lock drift),
-K009 (unresolved scaffold placeholder), K011 (missing `app_id`), and K012
-(missing `generate` poe task) are FAILING results that must be remediated even
+K009 (unresolved scaffold placeholder), K011 (missing `app_id`), K012
+(missing `generate` poe task), and K015 (legacy-alias contract/code drift) are
+FAILING results that must be remediated even
 in default mode.
 Before proposing any edit, read the actual lines around `finding.line` in
 `finding.file`.  **Never hand-edit `atlan.yaml`, `app/generated/`, or any other
@@ -109,9 +114,13 @@ K007–K011, K013, K016), the `pkl-eval` gate runs `pkl eval` to verify the cont
 and regenerated cleanly.  **K006 and K012 are the exceptions**: K006's fix is a
 plain Python edit and K012's is a `pyproject.toml` edit (both see below), neither
 involving `.pkl` or generated artifacts, so both are verified by the standard
-test-suite gate instead of `pkl-eval`.  **K014 is either**, decided per repo: the
-contract route regenerates and is verified by `pkl-eval`; the hand-owned-atlan.yaml
-route touches no `.pkl` and is verified by the test-suite gate.
+test-suite gate instead of `pkl-eval`.  **K014 and K015 are either**, decided per
+finding: K014's contract route regenerates and is verified by `pkl-eval`, while its
+hand-owned-atlan.yaml route touches no `.pkl` and is verified by the test-suite gate.
+K015 is the same shape — the contract-side fix edits `contract/**/*.pkl` and
+regenerates (`pkl-eval`), the code-side fix edits the `App` class attribute only
+(test-suite gate).  Its declared `orthogonal_gate` is `tests`, so use `pkl-eval`
+additionally whenever the applied fix touched a `.pkl` or a generated artifact.
 
 The freshness rules (K003/K004/K005) are remediated by running a pkl command
 (`pkl project resolve` and/or `pkl eval -m . contract/app.pkl`), so they are
@@ -569,6 +578,61 @@ prefer residue with the question unless the intent is already recorded in the re
 
 If `pkl` is unavailable, the emission test in step 2 cannot be run; route to
 residue rather than guessing which file to edit.
+
+---
+
+**K015 LegacyWorkflowTypeContractDrift** — the generated
+`app/generated/**/manifest.json` `legacy_workflow_types` block and the SDK `App`
+subclass's `legacy_workflow_types` class attribute do not declare the same
+`alias -> entry-point` pairs, or disagree on `removal_version`.  **BLOCK-tier**:
+remediate in default mode.
+
+An alias is inbound-only — the worker keeps answering a pre-migration Temporal
+workflow type that unmigrated callers still dispatch, while every SDK-initiated
+dispatch emits the canonical `{app}:{entry-point}` type.  Only the class attribute
+registers the alias with the worker; only the manifest block is read by P016 when
+it decides whether a bare DAG node routes an entry point.  **Which side is wrong
+is a judgement call, and getting it backwards is harmful**, so classify before
+editing:
+
+1. Read the finding message.  It names the direction and the offending pairs.
+2. **Manifest declares an alias the `App` does not** — the contract advertises a
+   type the worker rejects, so every unmigrated caller fails at dispatch.  Decide
+   with the owner whether the alias is still wanted:
+   - still wanted → add it to `legacy_workflow_types` on the `App` subclass;
+   - no longer wanted → remove it from `legacyWorkflowTypes` in the contract and
+     regenerate.
+   Do **not** default to deleting from the contract: the alias was added because
+   real callers needed it, and dropping it is the outage the alias prevents.
+   **Route to residue when the owner's intent is not evident from the diff or a
+   linked ticket.**
+3. **`App` declares an alias the manifest does not** — add it to
+   `legacyWorkflowTypes` in `contract/**/*.pkl` and regenerate.  This direction is
+   safe to apply: the class attribute is the site that already governs runtime, and
+   the manifest is catching up.
+4. **`removal_version` disagreement** — the expiry is app-level, not per-alias.
+   Align the manifest's `legacyWorkflowTypesRemovalVersion` to the class attribute's
+   `legacy_workflow_types_removal_version`, or the reverse if the owner is pushing
+   the deadline out.  The value must be dotted-numeric or empty; the toolkit
+   constrains it and the SDK parses it with `int()` per part.
+5. **Per-entrypoint manifests disagree with each other** — the block is app-level,
+   so a multi-entrypoint bundle declares the **same** block on every entry point's
+   contract.  Add the missing copy and regenerate.  A bundle root cannot carry it:
+   the toolkit refuses that at eval time.
+6. **Non-literal declaration** (`legacy_workflow_types = SOME_NAME`) — the scan
+   cannot read it, so neither agreement nor drift can be established.  Inline the
+   dict literal.  If the indirection is deliberate, route to residue.
+7. If a contract edit was made, regenerate with `pkl eval -m . contract/app.pkl`
+   (or `uv run poe generate`) and set `touched_files` the K003-step-4 way so a gate
+   rejection reverts every regenerated artifact.  **Never hand-edit the generated
+   `manifest.json`** — K004/K005 catch that staleness.
+8. Suppression: `# conformance: ignore[K015] <reason>` above the `App` subclass.
+   Rarely right, and it does not stop P016 routing off the manifest block, so the
+   two sites stay free to diverge.  Route to residue.
+
+A contract edit is verified by `pkl-eval`; a class-attribute-only edit by the
+test-suite gate.  An app with no `app/generated/` tree is out of scope — the class
+attribute is then the only declaration site.
 
 ---
 

@@ -12,8 +12,13 @@ seams — *where the declaration comes from* and *how a format is checked* — a
 :mod:`application_sdk.validation.protocols`; the shared outcome surface is
 :mod:`application_sdk.validation.artifacts`. The two schema sources that ship are
 :mod:`application_sdk.validation.sources` (``ContractSource``, ``ModelSource`` —
-there is no inline source), and the public entry point is ``validate_artifact``
-in :mod:`application_sdk.validation.wrapper`.
+there is no inline source), and both format validators ADR-0020 names now ship:
+:mod:`application_sdk.validation.ndjson` (``NdjsonValidator`` — a streaming,
+constant-memory, per-record check, plus ``iter_ndjson_lines``, the one NDJSON walk
+in the tree) and :mod:`application_sdk.validation.parquet`
+(``ParquetFooterValidator`` — a footer schema diff that reads **no rows**, and the
+check that would have caught the 73-day marker-freeze RCA). The public entry point
+is ``validate_artifact`` in :mod:`application_sdk.validation.wrapper`.
 
 **Asset validation** (BLDX-1555) is the concrete NDJSON x typed-model check that
 predates the wrapper, built on the per-asset ``.validate()`` backbone that
@@ -39,9 +44,13 @@ ADR-0020 folds asset validation into the wrapper as its NDJSON x ``ModelSource``
 cell, preserving its event name and attribute keys verbatim — a refactor behind a
 stable event surface, not a rename.
 
-**Standing dependency floor for this whole package**: no ``pyarrow``, ``pandas`` or
-``pandera`` import anywhere in it. A JSON-only caller must never pay for a parquet
-reader, and pandera stays test-only.
+**Standing dependency floor for this whole package**: nothing here imports
+``pyarrow``, ``pandas`` or ``pandera`` at module scope, and ``pandas``/``pandera``
+appear nowhere at all. The single exception is deliberate and narrow — the parquet
+validator imports ``pyarrow`` *inside* the function that reads a footer, so it is
+paid for only by a caller that actually validates a parquet artifact and degrades
+to skip-with-warning when the extra is absent. A JSON-only caller must never load a
+parquet reader, and pandera stays test-only.
 """
 
 from application_sdk.validation.artifacts import (
@@ -69,6 +78,8 @@ from application_sdk.validation.assets import (
     validate_asset,
     validate_transformed_dir,
 )
+from application_sdk.validation.ndjson import NdjsonValidator, iter_ndjson_lines
+from application_sdk.validation.parquet import ParquetFooterValidator
 from application_sdk.validation.protocols import FormatValidator, SchemaSource
 from application_sdk.validation.sources import (
     ArtifactDeclarationError,
@@ -102,12 +113,15 @@ __all__ = [
     "FormatValidator",
     "ModelDeclaration",
     "ModelSource",
+    "NdjsonValidator",
+    "ParquetFooterValidator",
     "SchemaSource",
     "artifact_schema_paths",
     "artifact_validation_event_fields",
     "artifact_validation_matrix_json",
     "builtin_format_validators",
     "declared_artifact_fields",
+    "iter_ndjson_lines",
     "validate_artifact",
     # Asset validation (BLDX-1555)
     "AssetValidationFailure",

@@ -1251,6 +1251,89 @@ class TestStartWorkflowRouting:
         finally:
             patcher.stop()
 
+    def test_body_workflow_type_alias_selects_but_dispatches_canonical(
+        self,
+    ) -> None:
+        """D2: a legacy alias in the deprecated body field reaches its entry
+        point, and the dispatch still emits the canonical type."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _AliasApp(App):
+            name = "routing-test"
+            legacy_workflow_types = {"LegacyRoutingWorkflow": "legacy"}
+
+            @entrypoint(name="legacy")
+            async def legacy(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint(name="target")
+            async def target(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        svc = create_app_handler_service(
+            _TestHandler(),
+            app_name="routing-test",
+            app_class=_AliasApp,
+            temporal_host="temporal:7233",
+        )
+        mock_handle = MagicMock(id="wf-123", result_run_id="run-abc")
+        mock_client = MagicMock()
+        mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+
+        with patch(
+            "application_sdk.handler.service._get_temporal_client",
+            new=AsyncMock(return_value=mock_client),
+        ):
+            client = TestClient(svc, raise_server_exceptions=False)
+            with pytest.warns(DeprecationWarning, match="workflow_type.*deprecated"):
+                response = client.post(
+                    "/workflows/v1/start",
+                    json={"workflow_type": "LegacyRoutingWorkflow", "name": "x"},
+                )
+
+        assert response.status_code == 200
+        assert mock_client.start_workflow.await_args.args[0] == "routing-test:legacy"
+
+    def test_entrypoint_query_dispatches_canonical_despite_alias(self) -> None:
+        """C1: declaring an alias never changes what /start dispatches."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _AliasedExtractApp(App):
+            name = "routing-test"
+            legacy_workflow_types = {"LegacyExtractWorkflow": "extract"}
+
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        svc = create_app_handler_service(
+            _TestHandler(),
+            app_name="routing-test",
+            app_class=_AliasedExtractApp,
+            temporal_host="temporal:7233",
+        )
+        mock_handle = MagicMock(id="wf-123", result_run_id="run-abc")
+        mock_client = MagicMock()
+        mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+
+        with patch(
+            "application_sdk.handler.service._get_temporal_client",
+            new=AsyncMock(return_value=mock_client),
+        ):
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.post(
+                "/workflows/v1/start?entrypoint=extract", json={"name": "x"}
+            )
+
+        assert response.status_code == 200
+        assert mock_client.start_workflow.await_args.args[0] == "routing-test:extract"
+
     def test_query_param_takes_precedence_over_body_workflow_type(self) -> None:
         """?entrypoint= wins over body 'workflow_type' when both are provided."""
         from unittest.mock import AsyncMock, MagicMock, patch
@@ -1307,6 +1390,70 @@ class TestStartWorkflowRouting:
             ), "Canonical ?entrypoint= path must not emit DeprecationWarning"
         finally:
             patcher.stop()
+
+    def test_entrypoint_query_param_rejects_an_alias(self) -> None:
+        """The canonical selector is names-only: an alias through ?entrypoint=
+        is a 400, keeping the alias namespace reachable only from raw Temporal
+        dispatch and the deprecated body field."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _QueryStrictApp(App):
+            name = "routing-test"
+            legacy_workflow_types = {"LegacyStrictWorkflow": "extract"}
+
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        svc = create_app_handler_service(
+            _TestHandler(),
+            app_name="routing-test",
+            app_class=_QueryStrictApp,
+            temporal_host="temporal:7233",
+        )
+        mock_client = MagicMock()
+        mock_client.start_workflow = AsyncMock()
+
+        with patch(
+            "application_sdk.handler.service._get_temporal_client",
+            new=AsyncMock(return_value=mock_client),
+        ):
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.post(
+                "/workflows/v1/start?entrypoint=LegacyStrictWorkflow",
+                json={"name": "x"},
+            )
+
+        assert response.status_code == 400
+        mock_client.start_workflow.assert_not_awaited()
+
+    def test_alias_equal_to_a_sibling_name_is_impossible(self) -> None:
+        """A11: the shape that made selector precedence ambiguous is rejected.
+
+        One string serving as both an entry-point name and a sibling's legacy
+        alias would make ``?entrypoint=`` and the deprecated body field resolve
+        differently. Registration refuses the shape, so no precedence rule is
+        needed — this pins that refusal.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import EntryPointContractError, entrypoint
+
+        with pytest.raises(EntryPointContractError, match="entry point name"):
+
+            class _CollisionApp(App):
+                name = "selector-collision"
+                legacy_workflow_types = {"keifu": "extract"}
+
+                @entrypoint(name="keifu")
+                async def keifu(self, input: _RoutingInput) -> _RoutingOutput:
+                    return _RoutingOutput()
+
+                @entrypoint(name="extract")
+                async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                    return _RoutingOutput()
 
     def test_unknown_entrypoint_query_param_returns_400(self) -> None:
         """Providing an unrecognised ?entrypoint= returns 400 without leaking names."""
@@ -5323,6 +5470,64 @@ class TestEventTriggerEndpoint:
             assert body["correlation_id"] == memo["correlation_id"]
             input_arg = kwargs["args"][0]
             assert input_arg.correlation_id == memo["correlation_id"]
+        finally:
+            self._teardown()
+
+    def test_event_dispatches_the_entry_points_registered_type(self) -> None:
+        """Event starts must use the entry point's registered workflow type.
+
+        The bare app name is registered only when the app derives its entry
+        point from run(); an @entrypoint app registers "{app}:{ep}", so the
+        start succeeded, no worker claimed it, and the run sat open until the
+        execution timeout.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+        from application_sdk.handler.contracts import EventTriggerConfig
+
+        try:
+            AppRegistry.reset()
+            TaskRegistry.reset()
+
+            class _EvEpApp(App):
+                name = "ev-ep"
+                legacy_workflow_types = {"LegacyEventWorkflow": "ingest"}
+
+                @entrypoint(default=True)
+                async def ingest(self, input: _RoutingInput) -> _RoutingOutput:
+                    return _RoutingOutput()
+
+            trigger = EventTriggerConfig(
+                event_id="t1", event_type="topic", event_name="ev"
+            )
+            app = create_app_handler_service(
+                _TestHandler(),
+                app_name="ev-ep",
+                app_class=_EvEpApp,
+                temporal_host="t:7233",
+                event_triggers=[trigger],
+            )
+            mock_handle = MagicMock()
+            mock_handle.id = "wf-1"
+            mock_handle.result_run_id = "run-1"
+            mock_client = MagicMock()
+            mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+            with patch(
+                "application_sdk.handler.service._get_temporal_client",
+                new=AsyncMock(return_value=mock_client),
+            ):
+                client = TestClient(app)
+                response = client.post(
+                    "/events/v1/event/t1", json={"data": {"name": "x"}}
+                )
+            assert response.status_code == 200
+            dispatched = mock_client.start_workflow.await_args.args[0]
+            assert dispatched == "ev-ep:ingest"
+            registered = set(AppRegistry.get_instance().get("ev-ep").workflow_types)
+            assert dispatched in registered
         finally:
             self._teardown()
 

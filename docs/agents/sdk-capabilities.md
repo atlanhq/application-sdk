@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.28.3
-source-sha:    816d6fd930c6524ddcf2bcba0f433b094ee46473
-source-date:   2026-08-25T02:45:24+01:00
+source-sha:    1c1ad24d945c111fb27d8e1a7127a0657b60a710
+source-date:   2026-08-25T10:21:48+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -18,7 +18,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 
 | Subpackage | Purpose | Exports |
 |---|---|---|
-| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 42 |
+| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 43 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 20 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 34 |
@@ -35,7 +35,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 97 |
-| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 43 |
+| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 46 |
 
 ## Subpackage Details
 
@@ -257,6 +257,13 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Summary:** Wrap @task methods on an instance to execute as Temporal activities.
 - **Defined in:** `application_sdk/app/base.py`
 
+#### `canonical_workflow_type`
+
+- **Import:** `from application_sdk.app import canonical_workflow_type`
+- **Signature:** `canonical_workflow_type(app_name: str, ep: EntryPointMetadata)`
+- **Summary:** The convention-derived Temporal workflow type for *ep*.
+- **Defined in:** `application_sdk/app/entrypoint.py`
+
 #### `entrypoint_module_segment`
 
 - **Import:** `from application_sdk.app import entrypoint_module_segment`
@@ -267,7 +274,7 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 #### `generate_workflow_class`
 
 - **Import:** `from application_sdk.app.base import generate_workflow_class`
-- **Signature:** `generate_workflow_class(app_cls: type[App], ep: EntryPointMetadata) -> type`
+- **Signature:** `generate_workflow_class(app_cls: type[App], ep: EntryPointMetadata, workflow_name: str | None = None) -> type`
 - **Summary:** Generate a Temporal workflow class for one entry point.
 - **Defined in:** `application_sdk/app/base.py`
 
@@ -3844,6 +3851,22 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** A declaration that *is* an executable typed model — e.g. pyatlan_v9's ``Asset``.
 - **Defined in:** `application_sdk/validation/sources.py`
 
+#### `NdjsonValidator`
+
+- **Import:** `from application_sdk.validation import NdjsonValidator`
+- **Also importable from:** `application_sdk.validation.ndjson`
+- **Signature:** `class NdjsonValidator()`
+- **Summary:** Streams an NDJSON artifact and checks every record against a field map.
+- **Defined in:** `application_sdk/validation/ndjson.py`
+
+#### `ParquetFooterValidator`
+
+- **Import:** `from application_sdk.validation import ParquetFooterValidator`
+- **Also importable from:** `application_sdk.validation.parquet`
+- **Signature:** `class ParquetFooterValidator()`
+- **Summary:** Diff a parquet artifact's footer schema against a field-map declaration.
+- **Defined in:** `application_sdk/validation/parquet.py`
+
 #### `ReferentialFailure`
 
 - **Import:** `from application_sdk.validation import ReferentialFailure`
@@ -3900,6 +3923,14 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Signature:** `declared_artifact_fields(*, entrypoint: str = '', generated_dir: Path | None = None)`
 - **Summary:** Every contract field name declared for one entrypoint.
 - **Defined in:** `application_sdk/validation/sources.py`
+
+#### `iter_ndjson_lines`
+
+- **Import:** `from application_sdk.validation import iter_ndjson_lines`
+- **Also importable from:** `application_sdk.validation.ndjson`
+- **Signature:** `iter_ndjson_lines(path: str | Path)`
+- **Summary:** Yield ``(file, 1-based line number, raw bytes)`` for every non-blank line.
+- **Defined in:** `application_sdk/validation/ndjson.py`
 
 #### `validate_artifact`
 
