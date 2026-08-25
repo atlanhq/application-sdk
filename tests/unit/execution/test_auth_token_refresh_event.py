@@ -732,3 +732,83 @@ class TestForceRefresh:
             await manager.force_refresh(client)
 
         mock_refresh.assert_awaited_once_with(client)
+
+
+class TestTokenRefreshEventPollStateGate:
+    """The poll-state gate on token_refresh events.
+
+    These events are what the fleet agent registry stamps as an agent's last
+    health update, so withholding them is how a parked worker stops looking
+    healthy. The gate is deliberately hard to trip.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clean_gate(self):
+        """Reset the process-wide gate around each test."""
+        from application_sdk.execution._temporal.poll_state import worker_poll_state
+
+        worker_poll_state.reset()
+        yield
+        worker_poll_state.reset()
+
+    @pytest.mark.asyncio
+    async def test_publishes_when_poll_state_is_healthy(self) -> None:
+        """Default posture is unchanged: the event goes out as before."""
+        manager = _make_manager()
+
+        with mock.patch(_PUBLISH_TARGET) as mock_publish:
+            mock_publish.return_value = None
+            await manager._emit_token_refresh_event(None)
+
+        mock_publish.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_suppressed_when_poll_loop_confirmed_dead(self) -> None:
+        """A confirmed-parked worker stops advertising itself as healthy."""
+        from application_sdk.execution._temporal.poll_state import worker_poll_state
+
+        worker_poll_state.configure(zero_readings_before_stale=1)
+        worker_poll_state.record("zero")
+
+        manager = _make_manager()
+
+        with mock.patch(_PUBLISH_TARGET) as mock_publish:
+            mock_publish.return_value = None
+            await manager._emit_token_refresh_event(None)
+
+        mock_publish.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_publishing_resumes_when_polling_returns(self) -> None:
+        """Recovery needs no restart and no human."""
+        from application_sdk.execution._temporal.poll_state import worker_poll_state
+
+        worker_poll_state.configure(zero_readings_before_stale=1)
+        worker_poll_state.record("zero")
+        worker_poll_state.record("polling")
+
+        manager = _make_manager()
+
+        with mock.patch(_PUBLISH_TARGET) as mock_publish:
+            mock_publish.return_value = None
+            await manager._emit_token_refresh_event(None)
+
+        mock_publish.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_gate_failure_fails_open(self) -> None:
+        """If the gate cannot be read at all, publish — never mute on doubt."""
+        manager = _make_manager()
+
+        with (
+            mock.patch(
+                "application_sdk.execution._temporal.poll_state.worker_poll_state."
+                "should_emit_health_event",
+                side_effect=RuntimeError("gate unavailable"),
+            ),
+            mock.patch(_PUBLISH_TARGET) as mock_publish,
+        ):
+            mock_publish.return_value = None
+            await manager._emit_token_refresh_event(None)
+
+        mock_publish.assert_called_once()

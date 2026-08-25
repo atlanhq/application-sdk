@@ -978,6 +978,14 @@ _WORKER_HEALTHY_RUN_SECONDS = _env_int("ATLAN_WORKER_HEALTHY_RUN_SECONDS", 300)
 _WORKER_POLL_DIAGNOSTIC_INTERVAL_SECONDS = _env_int(
     "ATLAN_WORKER_POLL_DIAGNOSTIC_INTERVAL_SECONDS", 60
 )
+# Consecutive definitive zero-poller readings before this worker stops emitting
+# token_refresh health events. At the default 60s observer interval that is ~3
+# minutes of confirmed-parked polling — long enough that a blip or a slow start
+# never trips it, short enough that a parked worker stops advertising itself as
+# healthy well inside a sync window.
+_WORKER_ZERO_POLLER_READINGS_BEFORE_STALE = _env_int(
+    "ATLAN_WORKER_ZERO_POLLER_READINGS_BEFORE_STALE", 3
+)
 
 
 async def _observe_worker_poll_state(
@@ -1024,8 +1032,15 @@ async def _observe_worker_poll_state(
         logger.debug("Worker poll-state diagnostics disabled (interval=%s)", interval)
         return
 
+    from application_sdk.execution._temporal.poll_state import (  # noqa: PLC0415 — cold path: diagnostics only
+        worker_poll_state,
+    )
     from application_sdk.execution._temporal.worker import (  # noqa: PLC0415 — cold path: diagnostics only
         read_core_poller_counts,
+    )
+
+    worker_poll_state.configure(
+        zero_readings_before_stale=_WORKER_ZERO_POLLER_READINGS_BEFORE_STALE
     )
 
     # Sentinel distinct from every real state, so the first reading always logs.
@@ -1076,9 +1091,15 @@ async def _observe_worker_poll_state(
             elif state != previous_state:
                 logger.info("Worker poll state: active pollers %s", counts)
 
+            # Gates token_refresh health events. Only a sustained, definitive
+            # "zero" withholds them; "polling" and "unknown" both fail open.
+            worker_poll_state.record(state)
+
             previous_state = state
         except Exception:
-            # An observer must never take the worker down with it.
+            # An observer must never take the worker down with it. A failed
+            # reading is not evidence that the worker is dead, so the gate is
+            # left open rather than counting it toward suppression.
             logger.warning("Worker poll-state observation failed", exc_info=True)
 
 
@@ -1135,6 +1156,14 @@ async def _run_worker_with_restart(
         observer.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await observer
+        # The supervised lifetime is over (shutdown, or the cap re-raising), so
+        # reopen the health-event gate. Nothing should stay muted once the
+        # observer that muted it has stopped reading.
+        from application_sdk.execution._temporal.poll_state import (  # noqa: PLC0415 — cold path: shutdown only
+            worker_poll_state,
+        )
+
+        worker_poll_state.reset()
 
 
 async def _supervise_worker(

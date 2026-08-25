@@ -2757,3 +2757,88 @@ class TestObserveWorkerPollState:
         readings_at_return = len(health.readings)
         await asyncio.sleep(0.05)
         assert len(health.readings) == readings_at_return
+
+
+class TestObserverFeedsHealthEventGate:
+    """The observer is what closes the gate on token_refresh health events."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_gate(self):
+        from application_sdk.execution._temporal.poll_state import worker_poll_state
+
+        worker_poll_state.reset()
+        yield
+        worker_poll_state.reset()
+
+    async def _run_observer(self, shutdown: asyncio.Event) -> None:
+        async def stop_soon() -> None:
+            await asyncio.sleep(0.06)
+            shutdown.set()
+
+        stopper = asyncio.create_task(stop_soon())
+        await asyncio.wait_for(
+            _observe_worker_poll_state(
+                shutdown_event=shutdown,
+                health_server=_RecordingHealthServer(),
+                interval=0.01,
+            ),
+            timeout=2.0,
+        )
+        await stopper
+
+    async def test_sustained_zero_closes_the_gate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A confirmed-parked worker stops advertising itself as healthy."""
+        from application_sdk.execution._temporal.poll_state import worker_poll_state
+
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_ZERO_POLLER_READINGS_BEFORE_STALE", 1
+        )
+        monkeypatch.setattr(
+            "application_sdk.execution._temporal.worker.read_core_poller_counts",
+            AsyncMock(return_value={"workflow_task": 0.0, "activity_task": 0.0}),
+        )
+
+        await self._run_observer(asyncio.Event())
+
+        assert worker_poll_state.should_emit_health_event() is False
+
+    async def test_unknown_readings_leave_the_gate_open(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unreadable gauge must never mute a worker that may be healthy."""
+        from application_sdk.execution._temporal.poll_state import worker_poll_state
+
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_ZERO_POLLER_READINGS_BEFORE_STALE", 1
+        )
+        monkeypatch.setattr(
+            "application_sdk.execution._temporal.worker.read_core_poller_counts",
+            AsyncMock(return_value=None),
+        )
+
+        await self._run_observer(asyncio.Event())
+
+        assert worker_poll_state.should_emit_health_event() is True
+
+    async def test_supervisor_reopens_the_gate_on_shutdown(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A worker must never be born muted by its predecessor's parked state."""
+        from application_sdk.execution._temporal.poll_state import worker_poll_state
+
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_POLL_DIAGNOSTIC_INTERVAL_SECONDS", 0
+        )
+        worker_poll_state.configure(zero_readings_before_stale=1)
+        worker_poll_state.record("zero")
+        assert worker_poll_state.should_emit_health_event() is False
+
+        shutdown = asyncio.Event()
+        await _run_worker_with_restart(
+            build_worker=lambda: _FakeWorker(fail=False, on_enter=shutdown.set),
+            shutdown_event=shutdown,
+        )
+
+        assert worker_poll_state.should_emit_health_event() is True
