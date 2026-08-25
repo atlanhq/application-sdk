@@ -190,7 +190,7 @@ wheels = [
 
 [[package]]
 name = "atlan-application-sdk"
-version = "3.28.3"
+version = "3.29.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -205,6 +205,7 @@ dependencies = [
     { name = "opentelemetry-exporter-prometheus" },
     { name = "opentelemetry-instrumentation-fastapi" },
     { name = "orjson" },
+    { name = "packaging" },
     { name = "prometheus-client" },
     { name = "pyatlan" },
     { name = "pydantic" },
@@ -213,9 +214,9 @@ dependencies = [
     { name = "temporalio" },
     { name = "uvloop", marker = "sys_platform != 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/44/cd/a8acd16f05442c40ba14b451ca7345b135a074c4840f9477e7e3dcdfaf9a/atlan_application_sdk-3.28.3.tar.gz", hash = "sha256:4dc85b3a4fac29acb324ae58d3708172a7f055d6e7794126aee56b94f5fedf1a", size = 6309164, upload-time = "2026-08-22T01:09:30.453Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/71/fd/42b4658ef275bea6531bdfb4ab6c275fb5787218b637349a7fcc25edf4c1/atlan_application_sdk-3.29.0.tar.gz", hash = "sha256:9b72fecedc3d3ef5ee920c1c7690a66a2195ca294bbefacf806c81a14b577d02", size = 6804613, upload-time = "2026-08-25T23:38:46.755Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/19/b4/ffc79fe3e8bbd37d1c1c7edd2490d68cd3130373d8c37a43d74409263c85/atlan_application_sdk-3.28.3-py3-none-any.whl", hash = "sha256:3969f4746b5322ada8a9796dc1163f2b3fb37b1bed574bf1ce098f11c7090e31", size = 1219759, upload-time = "2026-08-22T01:09:28.131Z" },
+    { url = "https://files.pythonhosted.org/packages/61/bf/98b754ece696c050004b133689902e776165f099df3d8cb74e7edc8bd79c/atlan_application_sdk-3.29.0-py3-none-any.whl", hash = "sha256:388e5b1315759377a05f4555e848846d54300b51697852b4eedffc507824c8af", size = 1327895, upload-time = "2026-08-25T23:38:44.464Z" },
 ]
 
 [package.optional-dependencies]
