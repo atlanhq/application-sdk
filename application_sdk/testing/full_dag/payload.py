@@ -132,7 +132,7 @@ def build_seed_dag(
     agent: AgentSpec | None = None,
     database: DatabaseSpec | None = None,
 ) -> dict[str, Any]:
-    """Deprecated (v4.0) — seed-version DAG; use ``testing.e2e.payload``.
+    """Deprecated (v4.0) — seed-version DAG; use ``application_sdk.testing.e2e.payload``.
 
     Build a seed-version DAG matching the connector's manifest.json shape.
 
@@ -355,7 +355,7 @@ def build_ae_payload(
     agent_json: dict[str, Any] | None = None,
     ae_workflow_slug: str = "",
 ) -> dict[str, Any]:
-    """Deprecated (v4.0) — AE submit body; use ``testing.e2e.payload``.
+    """Deprecated (v4.0) — AE submit body; use ``application_sdk.testing.e2e.payload``.
 
     Assemble the AE submit body.
 

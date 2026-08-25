@@ -36,7 +36,7 @@ from application_sdk.testing.full_dag.payload import AgentSpec, ConnectionSpec, 
 
 
 class SQLAppE2EFullTest(BaseFullDAGE2ETest):
-    """Deprecated (v4.0) — SQL full-DAG base; use ``testing.e2e.SQLAppE2ETest``.
+    """Deprecated (v4.0) — SQL full-DAG base; use ``application_sdk.testing.e2e.SQLAppE2ETest``.
 
     Full-DAG e2e harness pre-wired for SQL connectors.
 
