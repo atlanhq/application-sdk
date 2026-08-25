@@ -35,7 +35,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -51,21 +52,72 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-def _find_file_refs(data: Any) -> list[FileReference]:
-    """Recursively find all FileReference instances in a BaseModel/dataclass tree."""
+@dataclass(frozen=True)
+class NamedFileRef:
+    """One ``FileReference`` found in a contract tree, with where it was found.
+
+    The *where* is what artifact validation needs and the bare ref cannot
+    supply. Declarations are keyed by ``(entrypoint, contract field name)``, and
+    whether a hand-off sits on an app's public boundary is a fact about the class
+    that owns the field — neither is recoverable from a ``FileReference``, which
+    carries only paths.
+    """
+
+    ref: FileReference
+    """The reference itself."""
+
+    field: str = ""
+    """Name of the contract field it was reached through, or "" for a bare ref
+    handed in at the top level."""
+
+    owner: type | None = None
+    """The model class declaring :attr:`field`, or ``None`` for a bare ref.
+
+    For a ref inside a container (``list[FileReference]``,
+    ``dict[str, FileReference]``) this is the model declaring the *container*
+    field, so every element shares the one declaration keyed by that field name —
+    which is how the declaration is keyed.
+    """
+
+
+def iter_named_file_refs(
+    data: Any, *, field: str = "", owner: type | None = None
+) -> Iterator[NamedFileRef]:
+    """Walk a contract tree yielding every ``FileReference`` with its field name.
+
+    The same traversal :func:`_find_file_refs` does — that function is written in
+    terms of this one, so the two cannot drift into disagreeing about which refs
+    a tree contains. Containers pass the enclosing ``(owner, field)`` down
+    unchanged; a nested model re-keys to its own fields, so a ref on an inner
+    model reports that inner model as its owner and is therefore never counted as
+    a boundary hand-off.
+
+    Args:
+        data: Model, container or scalar to walk.
+        field: Field name the recursion arrived through — internal.
+        owner: Model class declaring ``field`` — internal.
+
+    Yields:
+        One :class:`NamedFileRef` per reference, in the tree's own field order.
+    """
     if isinstance(data, FileReference):
-        return [data]
-    refs: list[FileReference] = []
-    if isinstance(data, BaseModel):
+        yield NamedFileRef(ref=data, field=field, owner=owner)
+    elif isinstance(data, BaseModel):
         for name in type(data).model_fields:
-            refs.extend(_find_file_refs(getattr(data, name)))
+            yield from iter_named_file_refs(
+                getattr(data, name), field=name, owner=type(data)
+            )
     elif isinstance(data, (list, tuple)):
         for item in data:
-            refs.extend(_find_file_refs(item))
+            yield from iter_named_file_refs(item, field=field, owner=owner)
     elif isinstance(data, dict):
-        for v in data.values():
-            refs.extend(_find_file_refs(v))
-    return refs
+        for value in data.values():
+            yield from iter_named_file_refs(value, field=field, owner=owner)
+
+
+def _find_file_refs(data: Any) -> list[FileReference]:
+    """Recursively find all FileReference instances in a BaseModel/dataclass tree."""
+    return [named.ref for named in iter_named_file_refs(data)]
 
 
 def _local_sidecar_ok(local_path: str) -> bool:

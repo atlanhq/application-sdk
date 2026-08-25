@@ -16,7 +16,11 @@ there is no inline source), the format validator that ships is
 :mod:`application_sdk.validation.ndjson` (``NdjsonValidator`` — a streaming,
 constant-memory, per-record check, plus ``iter_ndjson_lines``, the one NDJSON walk
 in the tree), and the public entry point is ``validate_artifact`` in
-:mod:`application_sdk.validation.wrapper`.
+:mod:`application_sdk.validation.wrapper`. Both enforcement points — consumer-side
+at ingest and producer-side before persist — are wired to the activity
+interceptor's one ``FileReference`` seam by
+:mod:`application_sdk.validation.interceptor`, warn-only, with every artifact
+emitting an outcome.
 
 **Asset validation** (BLDX-1555) is the concrete NDJSON x typed-model check that
 predates the wrapper, built on the per-asset ``.validate()`` backbone that
@@ -72,6 +76,14 @@ from application_sdk.validation.assets import (
     validate_asset,
     validate_transformed_dir,
 )
+from application_sdk.validation.interceptor import (
+    ARTIFACT_SIDE_HANDOFF,
+    ARTIFACT_SIDE_INGEST,
+    ARTIFACT_SIDES,
+    boundary_contract_types,
+    entrypoint_index,
+    validate_artifacts,
+)
 from application_sdk.validation.ndjson import NdjsonValidator, iter_ndjson_lines
 from application_sdk.validation.protocols import FormatValidator, SchemaSource
 from application_sdk.validation.sources import (
@@ -89,6 +101,9 @@ from application_sdk.validation.wrapper import (
 __all__ = [
     # Artifact validation (ADR-0020)
     "ARTIFACT_FORMATS",
+    "ARTIFACT_SIDES",
+    "ARTIFACT_SIDE_HANDOFF",
+    "ARTIFACT_SIDE_INGEST",
     "FORMAT_NDJSON",
     "FORMAT_PARQUET",
     "ArtifactDeclaration",
@@ -111,10 +126,13 @@ __all__ = [
     "artifact_schema_paths",
     "artifact_validation_event_fields",
     "artifact_validation_matrix_json",
+    "boundary_contract_types",
     "builtin_format_validators",
     "declared_artifact_fields",
+    "entrypoint_index",
     "iter_ndjson_lines",
     "validate_artifact",
+    "validate_artifacts",
     # Asset validation (BLDX-1555)
     "AssetValidationFailure",
     "AssetValidationReport",

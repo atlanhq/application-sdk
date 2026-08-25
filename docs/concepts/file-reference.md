@@ -117,6 +117,11 @@ fills them in during persist and materialize.
 > contract. Omitting it warns at worker build today and is an error in v4.0. A `FileReference` on an
 > internal `@task` contract is exempt. See
 > [Apps — Declaring artifact schemas](apps.md#declaring-artifact-schemas).
+>
+> Declared or not, every `FileReference` the interceptor sees emits one warn-only
+> [artifact-validation outcome](monitoring.md#artifact-validation-outcome-event) on each side of the
+> task — at ingest after materialize and at hand-off before persist. A declared artifact is scanned
+> against its declaration; an undeclared one reports `not_declared` rather than nothing at all.
 
 ### Constructing a FileReference
 

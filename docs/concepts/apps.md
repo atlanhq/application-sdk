@@ -632,6 +632,19 @@ A *malformed* `artifact_schemas.json` is not treated as "declares nothing" — t
 skipped with a log line saying why, so one bad JSON blob cannot produce a warning on every boundary
 field.
 
+#### What a declaration buys you at runtime
+
+The activity interceptor validates every `FileReference` artifact against its declaration on both
+sides of every task — at ingest (right after the file is materialised, before your code reads it)
+and at hand-off (right after your task returns, while the bytes are still local so a flag blames the
+producer). It is warn-only: a mismatch is logged and counted, never blocked.
+
+Every artifact emits one `"Artifact validation outcome"` row either way, including the negatives —
+`not_declared`, `unsupported`, `absent` — because a check that reports nothing is indistinguishable
+from a check that passed. So a boundary field you never declared is visible in ClickHouse as
+`outcome=not_declared, boundary=true` rather than as an app that quietly validates zero records. See
+[Monitoring — Artifact-validation outcome event](monitoring.md#artifact-validation-outcome-event).
+
 See [FileReference & App.upload()](file-reference.md) for what a `FileReference` is and how it moves,
 and the contract toolkit's `examples/artifact-schemas/` for a full worked contract.
 
