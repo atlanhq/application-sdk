@@ -2265,6 +2265,84 @@ def test_a_config_error_on_our_own_container_is_excused() -> None:
     assert "createcontainerconfigerror" in reason.lower()
 
 
+def _config_error_describe(reason: str, image: str = _IMAGE) -> str:
+    return _describe_pod(
+        _FAILED_POD,
+        status="Failed",
+        containers=(
+            _Container(
+                name="openapi-server",
+                image=image,
+                state="Waiting",
+                reason=reason,
+                ready=False,
+            ),
+        ),
+    )
+
+
+def test_plain_create_container_error_on_our_image_stays_fatal() -> None:
+    """`CreateContainerError` is NOT `CreateContainerConfigError`.
+
+    The kubelet sets `…ConfigError` while *generating* the config — a missing
+    Secret or ConfigMap, the FND-831 shape — and plain `CreateContainerError`
+    afterwards, when the CRI `CreateContainer` call fails: a bad security
+    context, a volume or device the app's chart asked for, an image that cannot
+    be instantiated. Those are app faults.
+
+    Excusing it would reopen the hatch through the one gap the rest of it closes:
+    a one-shot reason ages out of the settle window, and the version read-back
+    confirms what was INSTALLED rather than that it runs (LM records the install,
+    and with scale-to-zero "no running pod" looks normal), so prepare-tenant
+    would go green on an app image that cannot start.
+    """
+    assert (
+        app.benign_pod_failure(_config_error_describe("CreateContainerError"), _IMAGE)
+        == ""
+    )
+    # The narrowing must not have cost us the reason it exists for.
+    assert app.benign_pod_failure(
+        _config_error_describe("CreateContainerConfigError"), _IMAGE
+    )
+
+
+def test_create_container_error_on_a_platform_container_is_still_excused() -> None:
+    """The narrowing is about OUR container only.
+
+    Rule (1) decides ownership before any reason is consulted, so a platform
+    container failing this way is excused for the same reason it always was — the
+    app can neither cause nor fix it. Over-correcting into "this reason is always
+    fatal" would red a leg on a platform fault.
+    """
+    assert app.benign_pod_failure(
+        _config_error_describe("CreateContainerError", image=_SEEDER_IMAGE), _IMAGE
+    )
+
+
+def test_an_unexcused_reason_stays_fatal_through_install(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End to end, because the unit answer is only half the guard.
+
+    `benign_pod_failure` returning "" has to reach a raise rather than a quiet
+    fall-through, and it must do so BEFORE the settle — an unrecognised reason
+    never gets a window to age out of.
+    """
+    transport = _wire(
+        monkeypatch,
+        _churn_routes(
+            describe=_config_error_describe("CreateContainerError"),
+            settled_events=_churn_events(age="4m"),
+        ),
+    )
+    with pytest.raises(app.DeploymentFailed):
+        app.install(_install_args())
+    assert sum("/events" in p for p in transport.paths("GET")) == 1, (
+        "an unrecognised reason must not reach the settle: it is fatal either "
+        "way, and a window it can age out of is a window it can pass through"
+    )
+
+
 def test_an_evicted_pod_is_excused() -> None:
     describe = _describe_pod(
         _FAILED_POD,

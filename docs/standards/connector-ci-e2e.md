@@ -413,10 +413,16 @@ The pull-failure reading above cannot catch that — there was no pull failure
   same repository-identity compare as above (an unreadable `Image:` counts as
   ours), so there is no list of platform container names to keep current.
 - **Why, for our own container.** `CreateContainerConfigError` (the kubelet could
-  not assemble the container, so the image never ran), a node eviction or
+  not *generate* the container's config — a missing Secret or ConfigMap — so the
+  image was never instantiated), a node eviction or
   shutdown, or exit 137 where the events *name this pod's* deletion
   (`KEDAScaleTargetDeactivated` **and** `Deleted pod: <name>`). `OOMKilled` exits
-  137 too and stays fatal. Anything unrecognised stays fatal.
+  137 too and stays fatal. Anything unrecognised stays fatal — including plain
+  `CreateContainerError`, which the kubelet sets *after* config generation when
+  the CRI `CreateContainer` call fails (a bad security context, a volume the
+  chart asked for, an image that cannot be instantiated). Those are app faults
+  and are what this tolerance exists to keep fatal, so the reason list is not to
+  be widened without a fixture from a real `describe`.
 - **Then it must not happen again.** `--settle-seconds` (90 by default) later the
   live events are re-read, and any unhealthy event still inside that window keeps
   the verdict. A platform container that never recovers keeps warning, so it

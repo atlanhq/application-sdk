@@ -361,11 +361,24 @@ _BENIGN_WAITING_REASONS = frozenset({"", "podinitializing", "containercreating"}
 _CLEAN_TERMINATION_REASONS = frozenset({"completed"})
 
 #: Container-state reasons that are never the app image's fault: the kubelet
-#: could not ASSEMBLE the container, so the image was never run. The observed one
-#: is a Vault secret whose name encodes the namespace and had not synced yet.
-_NON_APP_CONTAINER_REASONS = frozenset(
-    {"createcontainerconfigerror", "createcontainererror"}
-)
+#: could not BUILD THE CONFIG for the container, so the image was never
+#: instantiated. The observed one is a Vault secret whose name encodes the
+#: namespace and had not synced yet.
+#:
+#: Exactly one member, and ``CreateContainerError`` is deliberately NOT it. The
+#: two look interchangeable and are not: the kubelet sets ``…ConfigError`` while
+#: *generating* the config (a missing Secret/ConfigMap or key), and plain
+#: ``CreateContainerError`` afterwards, when the CRI ``CreateContainer`` call
+#: fails — a bad security context, a volume or device the app's chart asked for,
+#: an image that cannot be instantiated. Those are app faults, and they are
+#: precisely what this hatch exists to keep fatal.
+#:
+#: The rest of the hatch fails closed; widening this set on a guess is the one
+#: way to reopen it, because a one-shot reason ages out of the settle window and
+#: the version read-back confirms what was INSTALLED rather than that it runs.
+#: So: add a member only with a fixture taken from a real ``describe`` showing
+#: that reason on a container the app cannot have broken.
+_NON_APP_CONTAINER_REASONS = frozenset({"createcontainerconfigerror"})
 
 #: Pod-level ``Reason:`` values that mean the NODE took the pod away. All are
 #: written by the kubelet or the scheduler, never by anything the app controls.
