@@ -422,9 +422,33 @@ class LooseInput(Input):
     assert _run(tmp_path, {"app/main.py": src}) == []
 
 
-def test_single_mode_with_several_entrypoints_is_a_noop(tmp_path: Path) -> None:
-    """A route/card-split app's flat file has no derivable owning entrypoint."""
+def test_a_card_split_apps_entrypoints_check_against_the_one_flat_file(
+    tmp_path: Path,
+) -> None:
+    """One card, several routed ``@entrypoint``s, one shared declarations file.
+
+    Nothing is underdetermined here: the flat file is the whole app's
+    declaration set, so every entrypoint's boundary is checked against it. This
+    is also what the SDK's registration-time guard does, so an app is never
+    warned at worker build about something this rule stayed silent on.
+    """
     _write_manifest(tmp_path / "app" / "generated" / "manifest.json")
+
+    findings = _run(tmp_path, {"app/main.py": _BUNDLE_APP})
+
+    assert _fields(findings) == {"raw_queries", "mined_queries"}
+    assert all("app/generated/artifact_schemas.json" in f.message for f in findings), [
+        f.message for f in findings
+    ]
+
+
+def test_a_card_split_apps_flat_declaration_satisfies_every_entrypoint(
+    tmp_path: Path,
+) -> None:
+    """Declaring in the app's one artifactSchemas block clears every entrypoint."""
+    generated = tmp_path / "app" / "generated"
+    _write_manifest(generated / "manifest.json")
+    _write_schemas(generated / "artifact_schemas.json", "raw_queries", "mined_queries")
 
     assert _run(tmp_path, {"app/main.py": _BUNDLE_APP}) == []
 

@@ -83,12 +83,22 @@ def _target_entrypoints(
 ) -> list[EntrypointContract]:
     """Return the entrypoints whose declarations file this rule can locate.
 
-    ``single`` mode: unambiguous only when code declares exactly one entrypoint.
-    A route/card-split app (one marketplace card, several ``@entrypoint``\\ s the
-    DAG invokes by ``workflow_type``) emits one flat declarations file whose
-    owning entrypoint is not derivable, and guessing would check one
-    entrypoint's boundary against another's declarations.  Mirrors K006's
-    ``_target_entrypoint``.
+    ``single`` mode: **every** entrypoint, including a route/card-split app's
+    (one marketplace card, several ``@entrypoint``\\ s the DAG invokes by
+    ``workflow_type``).  There is exactly one flat declarations file and it is
+    the whole app's declaration set, so there is nothing to disambiguate: each
+    entrypoint's boundary is checked against it, and a missing key is fixed by
+    adding it to the app's one ``artifactSchemas`` block.
+
+    This is where K016 deliberately parts company with K006's
+    ``_target_entrypoint``, which no-ops on the same shape.  K006 must decide
+    *which entrypoint's* ``Output`` a given manifest node refers to — genuinely
+    underdetermined with one flat manifest and several entrypoints.  K016 asks a
+    different question, "is this field declared anywhere the app declares
+    things", and in single mode there is only one such place.  No-oping here
+    would also make the rule disagree with the SDK's registration-time guard,
+    which checks card-split entrypoints against that same flat file — a gap
+    where an app is warned at worker build about something review never raised.
 
     ``multi`` mode: an entrypoint is checkable when its wire name is one of the
     contract's own entrypoint names — i.e. a bundle subdirectory exists for it.
@@ -96,7 +106,7 @@ def _target_entrypoints(
     not this rule's.
     """
     if mode == "single":
-        return entrypoints if len(entrypoints) == 1 else []
+        return entrypoints
     return [ep for ep in entrypoints if ep.wire_name in contract_names]
 
 

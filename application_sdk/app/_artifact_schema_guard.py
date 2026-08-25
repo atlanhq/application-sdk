@@ -4,9 +4,12 @@ Data crosses app boundaries as files, and at every hand-off the producer's idea
 of the artifact's shape and the consumer's idea of it are independent beliefs
 that nothing checks (ADR-0020).  ``artifactSchemas`` in the app's pkl contract is
 where that shape is written down, keyed by the name of the ``FileReference``
-field it describes.  The toolkit renders it per entry point: a bundle emits
-``app/generated/<wire-name>/artifact_schemas.json`` for each, a
-single-entry-point app emits one flat ``app/generated/artifact_schemas.json``.
+field it describes.  The toolkit renders it per entry point, and *where* is
+decided by the generated tree rather than by the Python entry-point count: a
+bundle emits ``app/generated/<wire-name>/artifact_schemas.json`` for each entry
+point, while an app with one generated contract — including a route/card-split
+app with several ``@entrypoint``\\ s behind one card — emits one flat
+``app/generated/artifact_schemas.json``.
 See ``docs/concepts/apps.md`` ("Declaring artifact schemas").
 
 This module answers one question at App registration: *does every
@@ -46,7 +49,7 @@ from __future__ import annotations
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, get_args, get_origin
+from typing import TYPE_CHECKING, Annotated, Any, Literal, get_args, get_origin
 
 import orjson
 
@@ -71,6 +74,10 @@ ARTIFACT_SCHEMA_REMOVAL_VERSION = "4.0"
 
 _ARTIFACT_SCHEMAS_FILENAME = "artifact_schemas.json"
 
+#: Shape of the committed ``app/generated/`` tree — the authority on where an
+#: entry point's declarations live.  Mirrors conformance K016's contract scan.
+GeneratedLayout = Literal["multi", "single", "unknown"]
+
 
 @dataclass(frozen=True)
 class _Declarations:
@@ -80,9 +87,11 @@ class _Declarations:
     """Declared contract field names.  Empty when nothing is declared."""
 
     path: Path | None = None
-    """The file that answered, or — when none exists — the file where this entry
-    point's declarations belong, so a warning can name a location the author can
-    actually act on.  Render it with :meth:`display_path`, never with ``str()``."""
+    """The file that answered, or — when none exists — the file this app's
+    toolkit output will actually write, so a warning names a location the author
+    can act on.  ``None`` when the generated layout is ``unknown`` and naming one
+    would be a guess; the caller describes both shapes instead.  Render it with
+    :meth:`display_path`, never with ``str()``."""
 
     readable: bool = True
     """``False`` when a file exists but could not be understood.  The caller
@@ -104,19 +113,66 @@ class _Declarations:
         return self.path.as_posix() if self.path is not None else ""
 
 
+def _generated_layout() -> GeneratedLayout:
+    """Classify the committed ``app/generated/`` tree by the shape it actually has.
+
+    Mirrors the contract scan conformance K016 uses, deliberately: the two must
+    agree on where an entry point's declarations live, or the same app gets two
+    different answers about the same file.
+
+    ``multi``
+        One or more immediate subdirectories each holding a ``manifest.json``.
+        Each subdirectory name is an entry point's wire name.
+    ``single``
+        A ``manifest.json`` at the root of the generated dir and no per-entry-point
+        subdirectories.
+    ``unknown``
+        No generated tree, or one carrying no ``manifest.json`` anywhere (a repo
+        that has not generated yet).  Nothing can be inferred about the layout, and
+        the caller says so rather than guessing.
+
+    **Why the tree and not ``len(entry_points)``.**  The layout is a property of
+    what the toolkit emitted, not of how many ``@entrypoint`` methods Python
+    happens to see.  A **route/card-split** app (BLDX-1342) is exactly where those
+    two disagree: it has several ``@entrypoint``\\ s the DAG invokes by
+    ``workflow_type``, but one marketplace card and therefore one *flat*
+    generated tree.  Counting Python entry points calls it a bundle and sends its
+    author to ``app/generated/<wire-name>/artifact_schemas.json`` — a file the
+    toolkit will never write for that app, so following the warning cannot clear
+    it.
+    """
+    generated = Path(CONTRACT_GENERATED_DIR)
+    try:
+        children = list(generated.iterdir())
+    except OSError:
+        return "unknown"
+    if any((child / "manifest.json").is_file() for child in children if child.is_dir()):
+        return "multi"
+    if (generated / "manifest.json").is_file():
+        return "single"
+    return "unknown"
+
+
 def _declared_artifact_schema_keys(
-    entrypoint_name: str, *, is_bundle: bool
+    entrypoint_name: str, *, layout: GeneratedLayout
 ) -> _Declarations:
     """Return the contract field names declared in this entry point's schemas file.
 
-    Searches both generated layouts, nested first — mirroring how the handler
-    locates an entry point's form configmap
-    (``handler/service.py``): a multi-entrypoint (bundle) app nests each entry
-    point's file under ``app/generated/<wire-name>/``, while a
-    single-entrypoint app emits it flat at ``app/generated/``.  A bundle root
-    never emits a shared file (declaring ``artifactSchemas`` there is a
-    generation error), so the flat fallback cannot silently answer for the
-    wrong entry point.
+    Which files are searched follows the *generated layout*, not the Python
+    entry-point count (see :func:`_generated_layout`):
+
+    ``multi``
+        ``app/generated/<wire-name>/artifact_schemas.json``, then the flat file.
+        The flat fallback is safe by construction — declaring ``artifactSchemas``
+        on a bundle root is a toolkit generation error, so a root-level file can
+        only ever belong to a single-entry-point app.
+    ``single``
+        The flat file **only**.  Searching a nested path first would let a
+        leftover ``app/generated/<name>/artifact_schemas.json`` — from a bundle
+        this app used to be, or a stale directory — answer in place of the flat
+        file the toolkit actually maintains.
+    ``unknown``
+        Both, best-effort, and the caller is told not to name a specific file.
 
     **The fallback is between files, never between fields.**  The first file
     that exists is the final answer; unioning the two would let one entry
@@ -133,23 +189,19 @@ def _declared_artifact_schema_keys(
     Args:
         entrypoint_name: The entry point's kebab-case wire name, which is also
             its directory name in the generated tree.
-        is_bundle: Whether the app registers more than one entry point.  Only
-            affects which path is *reported* when no file exists — a bundle's
-            declarations belong in its own nested file, a single-entry-point
-            app's in the flat one.
+        layout: The generated tree's shape, from :func:`_generated_layout`.
 
     Returns:
         A :class:`_Declarations` whose ``path`` is the file that answered, or —
-        when nothing exists — the file where this entry point's declarations
-        belong, chosen by ``is_bundle`` rather than by search order.  ``keys``
-        is empty and ``readable`` is ``False`` when a file exists but could not
-        be understood.
+        when nothing exists — the file this app's toolkit output will actually
+        write, or ``None`` when the layout is ``unknown`` and naming one would
+        be a guess.  ``keys`` is empty and ``readable`` is ``False`` when a file
+        exists but could not be understood.
     """
     generated = Path(CONTRACT_GENERATED_DIR)
-    candidates = (
-        generated / entrypoint_name / _ARTIFACT_SCHEMAS_FILENAME,
-        generated / _ARTIFACT_SCHEMAS_FILENAME,
-    )
+    nested = generated / entrypoint_name / _ARTIFACT_SCHEMAS_FILENAME
+    flat = generated / _ARTIFACT_SCHEMAS_FILENAME
+    candidates = (flat,) if layout == "single" else (nested, flat)
     for candidate in candidates:
         try:
             raw = candidate.read_bytes()
@@ -178,12 +230,16 @@ def _declared_artifact_schema_keys(
         return _Declarations(
             keys=frozenset(str(key) for key in schemas), path=candidate
         )
-    # Nothing exists. Name where the declaration *would* land, which depends on
-    # the app's shape, not on the search order: a bundle emits one file per
-    # entry point under its wire name, a single-entry-point app emits one flat
-    # file. Naming the flat path to a bundle author sends them to a file the
-    # toolkit will never write — and that a bundle root cannot legally declare.
-    return _Declarations(path=candidates[0] if is_bundle else candidates[1])
+    # Nothing exists. Name only a path this app's toolkit output will actually
+    # write — a bundle emits one file per entry point under its wire name, a
+    # single-entry-point (or route/card-split) app emits one flat file. When the
+    # layout is unknown, name nothing: a cited path that the toolkit will never
+    # write is worse than none, because following it cannot clear the warning.
+    if layout == "multi":
+        return _Declarations(path=nested)
+    if layout == "single":
+        return _Declarations(path=flat)
+    return _Declarations()
 
 
 def _mentions_file_reference(annotation: Any) -> bool:
@@ -250,12 +306,27 @@ def warn_undeclared_artifact_schemas(
         app_name: The registered app name, for the message.
         entry_points: The app's built entry points, keyed by wire name.
     """
-    is_bundle = len(entry_points) > 1
     try:
+        # The committed generated tree decides the layout, not len(entry_points):
+        # a route/card-split app has several @entrypoints and one flat file.
+        layout = _generated_layout()
         for ep_name, ep in entry_points.items():
-            declarations = _declared_artifact_schema_keys(ep_name, is_bundle=is_bundle)
+            declarations = _declared_artifact_schema_keys(ep_name, layout=layout)
             if not declarations.readable:
                 continue  # Unreadable declarations — logged above; don't guess.
+            # Only ever cite a path this app's toolkit output will actually
+            # write. With an ungenerated tree there is nothing to infer from, so
+            # say where it lands for each shape instead of naming one and being
+            # wrong — a path the toolkit never writes cannot clear the warning.
+            destination = (
+                f", so it lands in {declarations.display_path}"
+                if declarations.display_path
+                else (
+                    ". It lands in app/generated/artifact_schemas.json for a "
+                    "single-entry-point app, or "
+                    "app/generated/<entry-point>/artifact_schemas.json for a bundle"
+                )
+            )
             for direction, contract in (
                 ("input", ep.input_type),
                 ("output", ep.output_type),
@@ -272,12 +343,11 @@ def warn_undeclared_artifact_schemas(
                         f"check it matches what was written. Declare it in the "
                         f"app's pkl contract as "
                         f'artifactSchemas {{ ["{field_name}"] = new ArtifactSchema '
-                        f"{{ ... }} }} and regenerate, so it lands in "
-                        f"{declarations.display_path}. See docs/concepts/apps.md "
-                        f"('Declaring artifact schemas'). Internal @task "
-                        f"contracts are exempt; entry-point contracts are not. "
-                        f"This is a warning today and will be an error in "
-                        f"v{ARTIFACT_SCHEMA_REMOVAL_VERSION}."
+                        f"{{ ... }} }} and regenerate{destination}. See "
+                        f"docs/concepts/apps.md ('Declaring artifact schemas'). "
+                        f"Internal @task contracts are exempt; entry-point "
+                        f"contracts are not. This is a warning today and will "
+                        f"be an error in v{ARTIFACT_SCHEMA_REMOVAL_VERSION}."
                     )
                     warnings.warn(message, DeprecationWarning, stacklevel=3)
                     _logger.warning("%s", message)

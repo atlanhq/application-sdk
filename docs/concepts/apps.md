@@ -587,13 +587,19 @@ debugging the hand-off that just failed, so `name` + `type` alone do not satisfy
 its input, and the producer references the consumer's published declaration rather than re-authoring
 the field list. Ownership stays with the consumer.
 
-**Where the generated file lands** depends on your app's shape, and the warning names the right one
-for you:
+**Where the generated file lands** is decided by your *contract*, not by how many `@entrypoint`
+methods you wrote. The warning reads the committed `app/generated/` tree and names the file your
+toolkit output actually writes:
 
-| App shape | Generated path |
+| Generated tree | Artifact-schema path |
 |---|---|
-| Single entry point (`run()`, or one `@entrypoint`) | `app/generated/artifact_schemas.json` |
-| Bundle (several `@entrypoint`s) | `app/generated/{entry-point}/artifact_schemas.json`, one per entry point |
+| One `manifest.json` at the root | `app/generated/artifact_schemas.json` |
+| A `manifest.json` per entry-point subdirectory (a bundle) | `app/generated/{entry-point}/artifact_schemas.json`, one per entry point |
+
+A **route/card-split** app — one marketplace card plus extra `@entrypoint`s the DAG invokes by
+`workflow_type` — has a flat tree, so all of its entry points share the one flat file. That is why
+the entry-point count is the wrong signal: counting it as a bundle would send you to a nested path
+the toolkit never writes for that app.
 
 `artifactSchemas` is a **per-entry-point** property, like `pipeline` and `uiConfig`. Declaring it on
 a **bundle root** is a generation error: the root has no contract model, so a key there could not
