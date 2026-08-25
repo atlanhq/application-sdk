@@ -2,6 +2,26 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.23.0] - 2026-08-25
+
+### Features
+
+- require an artifact schema on every entrypoint FileReference (FND-687) (#3389) ([e68790c](https://github.com/atlanhq/application-sdk/commit/e68790c))
+- add D011, a BLOCK rule for the conformance suite's own dependency contract (FND-419) (#3373) ([6df3953](https://github.com/atlanhq/application-sdk/commit/6df3953))
+- native --rule runner scoping + per-rule doc files (#3372) ([fc4b272](https://github.com/atlanhq/application-sdk/commit/fc4b272))
+- support multi-entrypoint apps across the e2e and integration tiers (#3286) ([3af3bba](https://github.com/atlanhq/application-sdk/commit/3af3bba))
+
+### Bug fixes
+
+- tell a stale bounded-lock refusal from a broken build (FND-782) (#3384) ([38f933f](https://github.com/atlanhq/application-sdk/commit/38f933f))
+- E010 no longer fires on enumerate/subscript-inspected gather results (#3364) ([7c57e9b](https://github.com/atlanhq/application-sdk/commit/7c57e9b))
+- update dependency ruff to v0.16.4 (#3365) ([d4caaa3](https://github.com/atlanhq/application-sdk/commit/d4caaa3))
+- remove obsolete P041 rule (#3367) ([ca58617](https://github.com/atlanhq/application-sdk/commit/ca58617))
+
+### Other changes
+
+- chore(contract-toolkit): release v0.22.1 (#3304) ([afad725](https://github.com/atlanhq/application-sdk/commit/afad725))
+
 ## [0.22.0] - 2026-08-21
 
 ### Features
