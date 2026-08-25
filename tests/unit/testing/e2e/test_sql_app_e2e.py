@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 
 from application_sdk.testing.e2e.base import FullDAGOutcome
@@ -271,6 +273,21 @@ class _ConcreteSQLTest(SQLAppE2ETest):
     @staticmethod
     def _resolve_admin_role_guid() -> str:
         return "role-guid-123"
+
+
+@pytest.fixture(autouse=True)
+def _restore_class_mode() -> Iterator[None]:
+    """Put ``_ConcreteSQLTest.mode`` back after a test rebinds the ClassVar.
+
+    ``_make_test`` sets the mode on the *class*, not the instance, so without
+    this every test leaks its mode into the shared class default and a later
+    reader of that default becomes order-dependent.
+    """
+    original = _ConcreteSQLTest.mode
+    try:
+        yield
+    finally:
+        _ConcreteSQLTest.mode = original
 
 
 class TestSQLAppE2ETestHooks:
