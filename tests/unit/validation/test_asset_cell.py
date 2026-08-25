@@ -7,8 +7,11 @@ rather than behaviours — the behaviour of the walk itself is ``test_assets.py`
 subject and is deliberately not re-asserted.
 
 * The wrapper path and the direct path produce an **identical event payload** for the
-  same input. That is the acceptance criterion "byte-identical event output, before
-  vs after" made executable: the direct path is the pre-fold-in path.
+  same input, which proves the wrapper *carries* the scan's own report rather than
+  re-deriving one. Note what this does and does not pin: both sides call the same
+  post-refactor projection, so it is wrapper == direct, not before == after. The
+  before/after guarantee is the frozen literal in ``test_asset_event.py`` — that is
+  where a reworded key or a changed value fails.
 * The shared report's derived counts agree with the asset report's own, so a generic
   consumer and a dashboard cannot disagree about the same batch.
 * Every outcome resolves through the wrapper — including the negatives — because a
@@ -95,13 +98,19 @@ def _through_the_wrapper(path: Path) -> AssetArtifactReport:
 
 
 @pytest.mark.parametrize("flawed", [False, True], ids=["clean", "flagged"])
-def test_the_wrapper_path_emits_the_identical_event_payload(
-    tmp_path: Path, flawed: bool
-) -> None:
-    """The acceptance criterion, executable: the direct path *is* the pre-fold-in
-    path, so an identical payload for the same input is what "byte-identical event
-    output, before vs after" means. Run over both outcomes, because the clean row is
-    the denominator and is emitted just as unconditionally as the flagged one."""
+def test_the_wrapper_path_matches_the_direct_path(tmp_path: Path, flawed: bool) -> None:
+    """Reaching the scan through the wrapper changes nothing about what is emitted.
+
+    This is the invariant that makes ``AssetArtifactReport`` carrying ``.assets``
+    worth the subclass: the wrapper hands the projection the scan's own report, so
+    the two call paths cannot drift. Run over both outcomes, because the clean row is
+    the denominator and is emitted just as unconditionally as the flagged one.
+
+    **What this does not prove.** Both sides call the same post-refactor
+    :func:`asset_validation_event_fields`, so a rename applied consistently would
+    keep them equal. Before-vs-after is pinned separately, by the frozen literal in
+    ``test_asset_event.py`` — the two tests are complements, not duplicates.
+    """
     _valid_hierarchy(tmp_path)
     if flawed:
         _write(tmp_path, "Extra", [_invalid_table()])

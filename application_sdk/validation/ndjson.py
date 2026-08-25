@@ -43,8 +43,12 @@ reached. :meth:`NdjsonValidator.validate` splits them.
   predates the wrapper and FND-690 folded it in behind this seam rather than
   reimplementing it, so the check, its isolation posture and its shipped outcome
   event are all unchanged — only the way it is reached is new. The delegation is a
-  deferred import: that module pulls ``pyatlan_v9``, which must stay off the import
-  path of a caller that only ever diffs a field map.
+  **deferred import, and only circularity requires it**: ``assets.py`` imports
+  :func:`iter_ndjson_lines` from this module at module scope, so a module-level
+  import back would cycle (measured: ``ImportError``, partially initialized
+  module). It buys no dependency-floor benefit — this package's ``__init__``
+  imports ``assets`` at module scope, so ``pyatlan_v9`` is already loaded by the
+  time anything can import this module.
 """
 
 from __future__ import annotations
@@ -426,7 +430,7 @@ class NdjsonValidator:
         if isinstance(declaration, FieldMapDeclaration):
             return True
         if isinstance(declaration, ModelDeclaration):
-            from application_sdk.validation.assets import (  # noqa: PLC0415 — deferred on purpose: assets.py imports pyatlan_v9, and a module-level import here would put it on the import path of every field-map caller (and would be circular — assets.py imports this module's walk)
+            from application_sdk.validation.assets import (  # noqa: PLC0415 — deferred because a module-level import would cycle: assets.py imports this module's iter_ndjson_lines at module scope
                 supports_asset_model,
             )
 
@@ -463,7 +467,7 @@ class NdjsonValidator:
             on the board.
         """
         if isinstance(declaration, ModelDeclaration):
-            from application_sdk.validation.assets import (  # noqa: PLC0415 — deferred for the same two reasons as in supports(): pyatlan_v9 stays off the field-map path, and a module-level import would be circular
+            from application_sdk.validation.assets import (  # noqa: PLC0415 — deferred for the same reason as in supports(): a module-level import would cycle
                 validate_assets_as_artifact,
             )
 

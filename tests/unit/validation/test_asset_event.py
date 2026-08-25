@@ -92,8 +92,13 @@ def test_the_full_attribute_map_is_byte_identical_for_a_known_batch() -> None:
     """The golden payload: every key, every value, and the matrix as an exact string.
 
     One invalid record, one undeserializable record, one orphan, over a batch of
-    four. The literal below is what the pre-wrapper emitter produced for this input,
-    so a diff here is a change to a shipped surface.
+    four. The literal below is frozen from what the **pre-wrapper** emitter produced
+    for this input, so a diff here is a change to a shipped surface.
+
+    This is the before-vs-after anchor for the whole fold-in. Its sibling in
+    ``test_asset_cell.py`` pins that the wrapper path equals the direct path, which
+    is a different property: that comparison runs both sides through this same
+    projection, so only a frozen literal can catch the projection itself changing.
     """
     report = AssetValidationReport(
         total=4,
