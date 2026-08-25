@@ -31,13 +31,20 @@ now imports it, because it was already format-generic — it yields
 blanks. A second walk would be a second set of decisions about blank lines, file
 ordering and directory recursion to keep in sync.
 
-**Which cell this is.** NDJSON x ``ContractSource`` — a per-record declared-key
-presence and JSON type check. The NDJSON x ``ModelSource`` cell (per-record decode
-plus the model's own ``.validate()``) is
-:func:`~application_sdk.validation.assets.validate_transformed_dir` today and is
-folded into this validator by FND-690; until then :meth:`NdjsonValidator.supports`
-answers ``False`` for a model declaration and the wrapper reports ``unsupported``,
-which is the honest interim state rather than silence.
+**Which cells this is.** Both NDJSON cells, because the wrapper dispatches on
+*format*: it picks the validator claiming ``ndjson`` and then asks it which kinds of
+declaration it can check, so a second ndjson-claiming validator would never be
+reached. :meth:`NdjsonValidator.validate` splits them.
+
+* NDJSON x ``ContractSource`` — a per-record declared-key presence and JSON type
+  check, the code in this module.
+* NDJSON x ``ModelSource`` — per-record decode plus the model's own ``.validate()``,
+  which is :func:`~application_sdk.validation.assets.validate_transformed_dir`. It
+  predates the wrapper and FND-690 folded it in behind this seam rather than
+  reimplementing it, so the check, its isolation posture and its shipped outcome
+  event are all unchanged — only the way it is reached is new. The delegation is a
+  deferred import: that module pulls ``pyatlan_v9``, which must stay off the import
+  path of a caller that only ever diffs a field map.
 """
 
 from __future__ import annotations
@@ -60,6 +67,7 @@ from application_sdk.validation.artifacts import (
     ArtifactValidationReport,
     DeclaredField,
     FieldMapDeclaration,
+    ModelDeclaration,
 )
 
 logger = get_logger(__name__)
@@ -400,28 +408,52 @@ class NdjsonValidator:
         return UNIT_RECORD
 
     def supports(self, declaration: ArtifactDeclaration) -> bool:
-        """True for a field-map declaration.
+        """True for a field-map declaration, and for a delegatable model.
 
-        A model declaration answers ``False`` **for now**: the NDJSON x
-        ``ModelSource`` cell is real and implemented — it is
-        :func:`~application_sdk.validation.assets.validate_transformed_dir` — but it
-        has not been folded in behind this seam yet (FND-690). Until it is, the
-        wrapper reports ``unsupported`` naming the cell, which is the honest interim
-        state; the alternative is a validator quietly returning ``clean`` for an
-        artifact it never looked at.
+        Both NDJSON cells live behind this one validator, because dispatch is by
+        *format*: the wrapper picks the validator whose ``artifact_format`` matches
+        and then asks it which kinds of declaration it can check. A second
+        ndjson-claiming validator would never be reached.
+
+        A model declaration answers True only when the model is one this cell can
+        actually decode into — see
+        :func:`~application_sdk.validation.assets.supports_asset_model`. A model that
+        merely *looks* delegatable to
+        :class:`~application_sdk.validation.sources.ModelSource` (any class with a
+        callable ``validate``) gets a reported ``unsupported``, not a scan that
+        reports every record as undecodable.
         """
-        return isinstance(declaration, FieldMapDeclaration)
+        if isinstance(declaration, FieldMapDeclaration):
+            return True
+        if isinstance(declaration, ModelDeclaration):
+            from application_sdk.validation.assets import (  # noqa: PLC0415 — deferred on purpose: assets.py imports pyatlan_v9, and a module-level import here would put it on the import path of every field-map caller (and would be circular — assets.py imports this module's walk)
+                supports_asset_model,
+            )
+
+            return supports_asset_model(declaration.model)
+        return False
 
     def validate(
         self, path: Path, declaration: ArtifactDeclaration
     ) -> ArtifactValidationReport:
         """Scan every record under ``path`` against ``declaration``.
 
+        Dispatches on which kind of declaration it was handed — the two NDJSON cells
+        are the same walk asking a different question of each record, so they share a
+        validator and split here:
+
+        * a field map is **diffed** — declared key presence plus JSON type, below;
+        * a model is **delegated to** — decode the record into the model and let it
+          validate itself, in
+          :func:`~application_sdk.validation.assets.validate_assets_as_artifact`.
+
         Args:
             path: A single NDJSON file, or a directory of ``*.json`` parts.
-            declaration: The field map to check against. Called only after
-                :meth:`supports` said yes, so this is a
-                :class:`~application_sdk.validation.artifacts.FieldMapDeclaration`.
+            declaration: What to check against. Called only after :meth:`supports`
+                said yes, so this is a
+                :class:`~application_sdk.validation.artifacts.FieldMapDeclaration` or
+                a delegatable
+                :class:`~application_sdk.validation.artifacts.ModelDeclaration`.
 
         Returns:
             A report whose scalar counts describe the whole artifact. ``absent``
@@ -430,14 +462,21 @@ class NdjsonValidator:
             this capability was built to remove: zero records checked, and a pass
             on the board.
         """
+        if isinstance(declaration, ModelDeclaration):
+            from application_sdk.validation.assets import (  # noqa: PLC0415 — deferred for the same two reasons as in supports(): pyatlan_v9 stays off the field-map path, and a module-level import would be circular
+                validate_assets_as_artifact,
+            )
+
+            return validate_assets_as_artifact(path, declaration)
+
         if not isinstance(declaration, FieldMapDeclaration):
             # Unreachable via the wrapper, which honours ``supports``. Guarded
             # anyway: an app may call a validator directly, and reading ``.fields``
-            # off a model declaration would raise into that caller.
+            # off something that is neither declaration would raise into that caller.
             return ArtifactValidationReport.absent(
                 reason=(
                     f"the ndjson validator was handed a "
-                    f"{type(declaration).__name__}, not a field map"
+                    f"{type(declaration).__name__}, not a field map or a model"
                 ),
             )
 

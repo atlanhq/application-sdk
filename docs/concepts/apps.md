@@ -528,6 +528,14 @@ or when the path is not a `transformed/` subtree (e.g. a raw upload), no outcome
 See [Monitoring](monitoring.md#asset-validation-outcome-event) for the attribute list as it reaches
 OTLP.
 
+> **One check, reached through the wrapper.** This check *is* the generic artifact wrapper's
+> NDJSON × `ModelSource` cell ([ADR-0020](../adr/0020-artifact-validation.md)) — the hook calls
+> `validate_artifact(target, ModelSource(model=Asset))`, and the model the declaration delegates to is
+> pyatlan_v9's `Asset`. Nothing about the check, its process isolation or its event changed in that
+> move: the event name and every attribute key above are a shipped contract that dashboards and alert
+> rules match verbatim. One hand-off emits one row, so this hook does **not** also emit the generic
+> `"Artifact validation outcome"`.
+
 > **On by default (CNCT-85).** The scan runs in an isolated child process
 > (process-isolation fix [#2769](https://github.com/atlanhq/application-sdk/pull/2769)), so a native
 > fault in the decode path is contained and downgraded to a best-effort skip rather than killing the

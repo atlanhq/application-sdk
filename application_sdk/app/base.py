@@ -29,7 +29,6 @@ from typing import (
 from uuid import UUID
 
 import obstore as obs
-import orjson
 from temporalio import activity, workflow
 from temporalio.exceptions import FailureError
 
@@ -97,15 +96,11 @@ from application_sdk.errors.leaves import InvalidInputError as _InvalidInputErro
 # the generic artifact-validation one; its value is **unchanged** by that move,
 # because shipped dashboards and alert rules key off the exact string.
 from application_sdk.observability.events import ASSET_VALIDATION_EVENT
-from application_sdk.observability.logger_adaptor import (
-    ASSET_VALIDATION_MATRIX_KEY,
-    get_logger,
-)
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.observability import AtlanObservability
 
 if TYPE_CHECKING:
     from application_sdk.execution.progress import ProgressWatchdogMode
-    from application_sdk.validation import AssetValidationReport
 
 _task_logger = get_logger(__name__)
 
@@ -114,60 +109,18 @@ try:
 except importlib.metadata.PackageNotFoundError:  # conformance: ignore[E009] package not installed (e.g. editable dev install); "unknown" sentinel is benign
     _FRAMEWORK_VERSION = "unknown"
 
-# Cap on how many failure/orphan rows the matrix carries, aliased from the single
-# source of truth in ``constants`` so the structured matrix and the human-readable
-# ``format_report()`` listing (which defaults to the same constant) can never
-# drift. The event's scalar counts always reflect the full batch; the matrix is a
-# bounded drill-down sample so a pathological batch can't produce an unbounded
-# LogAttributes value. Passed explicitly to ``format_report(max_items=...)`` below
-# to make the shared cap obvious at the call site.
+# Cap on how many failure/orphan rows the event's drill-down matrix carries, and how
+# many the human-readable ``format_report()`` lists, from the single source of truth
+# in ``constants`` so the two can never drift. The event's scalar counts always
+# reflect the full batch; the matrix is a bounded drill-down sample so a pathological
+# batch can't produce an unbounded LogAttributes value. Passed explicitly to
+# ``format_report(max_items=...)`` below to make the shared cap obvious at the call
+# site.
+#
+# The matrix builder itself, and the whole event attribute map, moved to
+# ``validation.assets`` with the fold-in (FND-690): the event and the check that
+# feeds it now live in one module. The emitted row is unchanged by that move.
 _VALIDATION_MATRIX_MAX_ROWS = ASSET_VALIDATION_MAX_ITEMS_PER_AXIS
-
-# Per-row error message cap (chars). pyatlan_v9 ``.validate()`` messages can be
-# long; truncate so a single row can't bloat the ClickHouse attribute.
-_VALIDATION_MATRIX_ERROR_MAXLEN = 300
-
-
-def _validation_matrix_json(report: "AssetValidationReport") -> str:
-    """Compact per-failure matrix for the outcome event, as one JSON string.
-
-    Lands as a single ``LogAttributes`` value in ClickHouse so connector-pulse can
-    ``JSONExtract`` the per-failure detail against workflow outcomes with no schema
-    change (mirrors the preflight gate's ``check_matrix``). Small fixed fields
-    only, bounded to :data:`_VALIDATION_MATRIX_MAX_ROWS` rows per axis — the
-    headline counts on the event carry the full totals, and the human-readable
-    ``format_report()`` still rides in the WARNING body for flagged runs. Not
-    internally guarded (``orjson.dumps`` can raise): the sole caller,
-    :func:`_warn_on_invalid_transformed_assets`, wraps the whole emit in
-    ``try/except``, so a raise here is caught there and never blocks the upload.
-    """
-    rows: list[dict[str, Any]] = []
-    for f in report.failures[:_VALIDATION_MATRIX_MAX_ROWS]:
-        rows.append(
-            {
-                "kind": "undeserializable" if f.deserialize_error else "invalid",
-                "type_name": f.type_name,
-                "qualified_name": f.qualified_name,
-                "error": (f.errors[0] if f.errors else "")[
-                    :_VALIDATION_MATRIX_ERROR_MAXLEN
-                ],
-                "file": f.file,
-                "line": f.line,
-            }
-        )
-    for o in report.orphans[:_VALIDATION_MATRIX_MAX_ROWS]:
-        rows.append(
-            {
-                "kind": "orphan",
-                "type_name": o.missing_type_name,
-                "qualified_name": o.missing_qualified_name,
-                "relationship": o.relationship,
-                "reference_count": o.reference_count,
-                "file": o.file,
-                "line": o.line,
-            }
-        )
-    return orjson.dumps(rows).decode()
 
 
 def _resolve_transformed_target(local_path: str) -> "Path | None":
@@ -209,6 +162,24 @@ async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) ->
     the scaffold must not break a real handoff — and it scans every record (no
     sampling) so the summary is accurate.
 
+    **The check is reached through the generic wrapper** (ADR-0020, FND-690):
+    ``validate_artifact(target, ModelSource(model=Asset))`` is the NDJSON x
+    ``ModelSource`` cell, and that cell *is*
+    :func:`~application_sdk.validation.assets.validate_transformed_dir` — same walk,
+    same decode, same referential pass. What the wrapper adds is a second, generic
+    outcome vocabulary over the same findings, and a guarantee this hook used to
+    provide itself: every path through it resolves to a report rather than an
+    exception.
+
+    ``ASSET_VALIDATION_EVENT`` is emitted exactly as before. Its name and every
+    attribute key are a shipped contract — dashboards, the
+    ``asset_validation_matrix`` attribute and alert rules key off those exact
+    strings — so the row is built by
+    :func:`~application_sdk.validation.assets.asset_validation_event_fields` from the
+    asset-vocabulary report the cell carries, i.e. from the same object this hook
+    emitted from before the fold-in. This hook does **not** additionally emit
+    ``ARTIFACT_VALIDATION_EVENT``: one hand-off, one row.
+
     The scan runs via
     :func:`application_sdk._runtime.offload.run_best_effort`, for two reasons.
     It keeps the event loop and the activity's auto-heartbeat free while a large
@@ -219,7 +190,8 @@ async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) ->
     CNCT-85). ``run_best_effort`` isolates the scan in a child process, so a
     crash kills only the child; it then logs the warning and the handoff
     proceeds. The timeout bounds the scan for the same reason — a hung
-    validation must not stall an upload forever.
+    validation must not stall an upload forever. The wrapper is synchronous by
+    design precisely so this caller owns that decision.
 
     Referential (orphan) integrity runs by default on this hook: extracts and
     transforms are full by design by default, so every referenced parent is
@@ -239,16 +211,24 @@ async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) ->
     if target is None:
         return
 
+    from pyatlan_v9.model.assets import (  # noqa: PLC0415 — deferred: pyatlan_v9 stays off the import path of an app that never uploads transformed assets
+        Asset,
+    )
+
     from application_sdk.validation import (  # noqa: PLC0415 — deferred: only load the validator on the upload path
-        validate_transformed_dir,
+        AssetArtifactReport,
+        ModelSource,
+        asset_validation_event_fields,
+        validate_artifact,
     )
 
     # Best-effort: run_best_effort isolates the scan in a child process and, on
     # any native crash / timeout / error, logs a warning and returns None — the
     # upload is never blocked, failed, or crashed by the validation scaffold.
     report = await run_best_effort(
-        validate_transformed_dir,
+        validate_artifact,
         str(target),
+        ModelSource(model=Asset),
         label="Transformed-asset validation",
         logger=_task_logger,
         timeout=VALIDATE_ASSETS_TIMEOUT_SECONDS,
@@ -261,30 +241,38 @@ async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) ->
         # None means the scan itself failed — no counts to emit.
         return
 
+    if not isinstance(report, AssetArtifactReport):
+        # The wrapper resolved to an outcome without running the cell — it never
+        # raises, so a broken plug-in or an unreadable artifact arrives as a plain
+        # report instead of an exception. There are no asset-vocabulary counts to
+        # project, and inventing zeros would put a fabricated denominator on the
+        # board. The wrapper has already logged the cause with a traceback; name the
+        # skip so the gap in the event stream is explicable.
+        _task_logger.warning(
+            "Transformed-asset validation produced no counts (%s: %s); "
+            "handoff continues",
+            report.outcome,
+            report.reason or "no reason recorded",
+        )
+        return
+
     # Emit the structured outcome on every validated upload (clean + flagged) so
     # the row is queryable and gives a denominator. Wrapped: a defect in the
     # emit path (e.g. matrix encoding) must never break a real handoff.
     try:
-        flagged = not report.ok
+        assets = report.assets
+        flagged = not assets.ok
         _task_logger.info(
             ASSET_VALIDATION_EVENT,
-            outcome="flagged" if flagged else "clean",
-            app_name=app_name,
-            assets_total=report.total,
-            assets_passed=report.passed,
-            # ``failed`` counts undeserializable records too; report "invalid"
-            # (per-asset .validate() failures) disjointly, matching the headline
-            # in format_report().
-            assets_invalid=report.failed - report.undeserializable,
-            assets_orphaned=len(report.orphans),
-            assets_undeserializable=report.undeserializable,
-            **{ASSET_VALIDATION_MATRIX_KEY: _validation_matrix_json(report)},
+            **asset_validation_event_fields(
+                assets, app_name=app_name, max_items=_VALIDATION_MATRIX_MAX_ROWS
+            ),
         )
         if flagged:
             _task_logger.warning(
                 "Transformed-asset validation flagged issues before upload "
                 "(handoff continues): %s",
-                report.format_report(max_items=_VALIDATION_MATRIX_MAX_ROWS),
+                assets.format_report(max_items=_VALIDATION_MATRIX_MAX_ROWS),
             )
     except Exception:  # noqa: BLE001 — defense-in-depth must never break the upload
         _task_logger.warning(

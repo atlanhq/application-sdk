@@ -102,23 +102,46 @@ def test_it_ships_as_a_builtin() -> None:
     assert builtin_format_validators() == (NdjsonValidator(),)
 
 
-def test_a_model_declaration_is_unsupported_not_silently_clean() -> None:
-    """NDJSON x ModelSource is real but not folded in yet (FND-690).
+def test_a_delegatable_model_declaration_is_claimed() -> None:
+    """Both NDJSON cells live behind this one validator (FND-690).
 
-    The failure mode being excluded is a validator that returns ``clean`` for an
-    artifact it never looked at. ``unsupported`` is the honest interim answer.
+    Dispatch is by *format*, so a second ndjson-claiming validator would never be
+    reached; the model cell is claimed here and split inside ``validate``.
+    """
+    from pyatlan_v9.model.assets import Asset
+
+    assert NdjsonValidator().supports(ModelDeclaration(model=Asset)) is True
+
+
+def test_an_undelegatable_model_is_unsupported_not_silently_clean() -> None:
+    """The failure mode excluded is a validator that returns ``clean`` — or a whole
+    artifact reported ``undecodable`` — for a model it cannot actually decode into.
+
+    ``ModelSource`` accepts any class exposing a callable ``validate``; this cell
+    decodes through pyatlan_v9's ``from_atlas_json``, so anything else gets a
+    reported ``unsupported`` naming the cell.
     """
     assert NdjsonValidator().supports(ModelDeclaration(model=dict)) is False
 
 
-def test_a_model_declaration_handed_here_directly_does_not_raise(
+def test_an_undelegatable_model_handed_here_directly_does_not_raise(
     tmp_path: Path,
 ) -> None:
     """The wrapper honours ``supports``; an app calling the validator may not."""
-    report = _validate(tmp_path, ModelDeclaration(model=dict))  # type: ignore[arg-type]
+    report = _validate(tmp_path, ModelDeclaration(model=dict))
 
     assert report.outcome == OUTCOME_ABSENT
-    assert "not a field map" in report.reason
+    assert "delegates to pyatlan_v9 assets" in report.reason
+
+
+def test_a_non_declaration_handed_here_directly_does_not_raise(
+    tmp_path: Path,
+) -> None:
+    """Neither a field map nor a model: still a report, never a raise."""
+    report = _validate(tmp_path, object())  # type: ignore[arg-type]
+
+    assert report.outcome == OUTCOME_ABSENT
+    assert "not a field map or a model" in report.reason
 
 
 # ---------------------------------------------------------------------------

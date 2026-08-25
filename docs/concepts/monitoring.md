@@ -426,6 +426,13 @@ Emitting `outcome="clean"` too gives a denominator, so a dashboard can rank conn
 flag-rate rather than only seeing failures. Uploads with nothing to validate (validation disabled, or
 a non-`transformed/` path) emit no event.
 
+Since [ADR-0020](../adr/0020-artifact-validation.md) this check is the artifact wrapper's
+NDJSON × `ModelSource` cell, reached as `validate_artifact(target, ModelSource(model=Asset))`. **The
+event above is unchanged by that** — name, keys, `outcome` vocabulary and matrix row keys are all a
+shipped contract, and the fold-in was a refactor behind it. One hand-off emits one row, so this
+upload does not additionally emit `"Artifact validation outcome"`; the two events are two
+vocabularies, not two checks.
+
 ### Artifact-validation outcome event
 
 The generic artifact-validation wrapper ([ADR-0020](../adr/0020-artifact-validation.md)) emits
@@ -436,10 +443,12 @@ schema source declared it.
 
     The attribute contract below ships ahead of its emitter. The wrapper's report, matrix and event
     fields exist, both schema sources (`ContractSource`, `ModelSource`) are callable, and
-    `validate_artifact(...)` really does check an NDJSON artifact against a contract declaration —
-    but a parquet declaration still resolves to `unsupported`, and nothing calls the wrapper
-    automatically until the `FileReference` interceptor wiring lands. The table is the reference for
-    what the allowlist admits, not a description of rows you will find in ClickHouse today.
+    `validate_artifact(...)` really does check an NDJSON artifact — against a contract declaration,
+    and against a model declaration via the asset cell the upload hook calls. But a parquet
+    declaration still resolves to `unsupported`, and nothing calls the wrapper automatically until
+    the `FileReference` interceptor wiring lands. The only rows in ClickHouse today are the asset
+    hook's, and those carry the *asset* event's attributes, not these. The table is the reference for
+    what the allowlist admits, not a description of rows you will find there.
 
 | Attribute | Meaning |
 |-----------|---------|
