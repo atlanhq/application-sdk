@@ -5,6 +5,8 @@ capturing the boilerplate every SQL connector needs:
 
 * SQL-specific class attrs (include/exclude filters, task queues, QI knobs).
 * :meth:`agent_spec` — derives a unique-per-run agent name.
+* :meth:`agent_json` — the one derivation of the agent-mode routing
+  block, feeding both the mustache blob and the flat AE routing rows.
 * :meth:`connection_spec` — resolves the tenant's ``$admin`` role GUID.
 * :meth:`_mustache_substitutions` — builds :class:`SQLMustacheSubstitutions`
   from ``database_spec()`` + ``agent_spec()``.
@@ -148,6 +150,22 @@ class SQLAppE2ETest(BaseE2ETest):
             )
         )
 
+    def agent_json(self) -> dict[str, Any] | None:
+        """Agent-mode routing block, derived once from the DB + agent specs.
+
+        Wiring this hook (rather than building the block inline in
+        :meth:`_mustache_substitutions`) is what lets ``build_ae_payload``
+        emit the flat ``agent-json.*`` / ``credential-guid.*`` routing rows.
+        Without it the base hook returns None, the agent branch never runs,
+        and every SQL connector has to override ``_build_ae_payload`` to
+        re-derive the same rows by hand — five copies of one derivation that
+        can drift from the blob. Returns None in DIRECT mode (no agent).
+        """
+        agent = self.agent_spec()
+        if agent is None:
+            return None
+        return build_agent_json(self.database_spec(), agent, self.connector_short_name)
+
     def connection_spec(self) -> ConnectionSpec:
         """Connection identity with ``$admin`` role on the admin ACL."""
         if not hasattr(self, "_admin_role_guid"):
@@ -187,20 +205,11 @@ class SQLAppE2ETest(BaseE2ETest):
         connection_ref = ConnectionRef.model_validate(
             {"typeName": "Connection", "attributes": spec.attributes()}
         )
-        agent = self.agent_spec()
-        database = self.database_spec()
-
-        agent_json: dict[str, Any] | None = (
-            build_agent_json(database, agent, self.connector_short_name)
-            if agent is not None
-            else None
-        )
-
         return self.substitutions_class.model_validate(
             {
                 "connection": connection_ref,
                 "extraction_method": self.mode.value,
-                "agent_json": agent_json,
+                "agent_json": self.agent_json(),
                 "include_filter": self.include_filter,
                 "exclude_filter": self.exclude_filter,
                 "exclude_table_regex": "",
