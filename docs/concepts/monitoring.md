@@ -443,13 +443,15 @@ through one seam, and both enforcement points come off the one declaration there
   persist_file_refs(...)          so a flag blames the producer, not whoever reads it three hops on
 ```
 
+Both formats ADR-0020 names are checked against a contract declaration — NDJSON record by record,
+parquet by diffing the file footer with no row read. The one cell that still answers `unsupported` is
+parquet x `ModelSource`: a model carries no column mapping, so a footer diff would have nothing to
+diff against, and it says so out loud rather than going quiet.
+
 Everything is **warn-only**: a flagged artifact is logged and counted, never blocked, and a defect in
 the validation scaffold itself can neither fail an activity nor skip a persist. Set
 `ATLAN_VALIDATE_ARTIFACTS=false` to turn the whole hook off for a deployment — note this stops the
 outcome events too, so an app then has no denominator at all.
-
-A declared **parquet** artifact still resolves to `unsupported` until the parquet validator ships;
-that is a row, not silence.
 
 | Attribute | Meaning |
 |-----------|---------|

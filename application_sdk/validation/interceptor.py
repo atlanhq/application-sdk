@@ -35,12 +35,14 @@ verdict may block is a separate axis (the app's artifact-validation posture,
 FND-692) that does not exist yet.
 
 **Off the event loop.** Validators are plain synchronous scans, so per ADR-0020 the
-interceptor — not each validator — owns the offload decision. A contract-sourced
-scan is pure Python plus ``orjson``, so it rides
-:func:`~application_sdk._runtime.offload.run_in_thread`; the model-sourced path,
-whose decode enters third-party C extensions, needs the isolated child process and
-is not reachable from here (the NDJSON validator answers ``supports() -> False`` for
-a model declaration until FND-690 folds it in).
+interceptor — not each validator — owns the offload decision. Everything reachable
+from here is contract-sourced: an NDJSON stream over ``orjson``, or a parquet footer
+read. Both ride :func:`~application_sdk._runtime.offload.run_in_thread`. The
+model-sourced path is the one that needs an isolated child process — its decode
+enters third-party C extensions, where a native fault would take the whole worker
+down rather than raise — and it is not reachable from here, because this module only
+ever builds a :class:`~application_sdk.validation.sources.ContractSource` (FND-690
+folds the model cell in behind the same seam).
 """
 
 from __future__ import annotations

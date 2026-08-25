@@ -265,12 +265,18 @@ class TestEveryArtifactEmits:
     async def test_an_unsupported_cell_says_so_rather_than_going_quiet(
         self, tmp_path: Path, generated_dir: Path
     ) -> None:
-        """A declared parquet artifact has no validator yet (FND-689)."""
+        """A format this SDK has no validator for names itself and is a row.
+
+        The loader deliberately does not police the format vocabulary, so a newer
+        contract toolkit can declare a format an older SDK cannot check. The honest
+        answer is ``unsupported`` naming the format — not ``absent``, which would
+        claim the declaration itself was unreadable, and not silence.
+        """
         _write_declarations(
             generated_dir,
             {
                 "queries": {
-                    "format": "parquet",
+                    "format": "avro",
                     "fields": [{"name": "QUERY_ID", "type": "string"}],
                 }
             },
@@ -278,7 +284,7 @@ class TestEveryArtifactEmits:
         local = _ndjson(tmp_path, "queries.json", [{"QUERY_ID": "q1"}])
         events = await _run(_BoundaryOut(queries=FileReference(local_path=local)))
         assert events[0]["outcome"] == "unsupported"
-        assert events[0]["artifact_format"] == "parquet"
+        assert events[0]["artifact_format"] == "avro"
 
     @pytest.mark.asyncio
     async def test_a_missing_artifact_reports_absent(

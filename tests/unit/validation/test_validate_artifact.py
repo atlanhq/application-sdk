@@ -24,6 +24,7 @@ from pathlib import Path
 import pytest
 
 from application_sdk.validation.artifacts import (
+    ARTIFACT_FORMATS,
     ARTIFACT_VALIDATION_OUTCOMES,
     FORMAT_NDJSON,
     FORMAT_PARQUET,
@@ -227,22 +228,55 @@ def test_no_validator_for_the_format_is_unsupported(tmp_path: Path) -> None:
     assert report.artifact_format == FORMAT_NDJSON
 
 
-def test_a_format_with_no_builtin_validator_says_so_out_loud(tmp_path: Path) -> None:
-    """NDJSON ships (FND-688); parquet lands in FND-689.
+def test_the_builtins_carry_every_format_the_adr_names() -> None:
+    """NDJSON (FND-688) and parquet (FND-689) both ship. Neither is silently absent.
 
-    The point of asserting the interim state is that it is *reported*, not silent —
-    an app that has adopted a parquet declaration can see in its outcome events that
-    nothing is checking it yet, rather than reading a pass.
+    Asserted as a set against the format vocabulary rather than as a hand-written
+    list, so adding a format to :data:`ARTIFACT_FORMATS` without registering its
+    validator fails here instead of resolving to ``unsupported`` in production.
     """
-    assert [v.artifact_format for v in builtin_format_validators()] == [FORMAT_NDJSON]
+    assert {v.artifact_format for v in builtin_format_validators()} == ARTIFACT_FORMATS
 
-    parquet = FieldMapDeclaration(
+
+def test_a_format_with_no_builtin_validator_says_so_out_loud(tmp_path: Path) -> None:
+    """The invariant outlives the gap it was first written for.
+
+    Both formats now ship, but the SDK deliberately does not police the format
+    vocabulary at load time: a newer toolkit can declare a format this SDK has no
+    validator for, and the honest answer is ``unsupported`` *naming the format* —
+    never ``absent`` (which would claim the declaration was unreadable) and never
+    silence (which would read as a pass).
+    """
+    from_a_newer_toolkit = FieldMapDeclaration(
         fields=(DeclaredField(path="QUERY_ID", type="string"),),
-        artifact_format=FORMAT_PARQUET,
+        artifact_format="avro",
     )
-    report = validate_artifact(tmp_path, _StubSource(parquet))
+    report = validate_artifact(tmp_path, _StubSource(from_a_newer_toolkit))
+
     _assert_emits(report, OUTCOME_UNSUPPORTED)
     assert "no validator registered" in report.reason
+    assert "avro" in report.reason
+
+
+def test_the_builtin_parquet_validator_is_wired_end_to_end(tmp_path: Path) -> None:
+    """The default validator set really dispatches, not just reports its members."""
+    pytest.importorskip("pyarrow")
+
+    report = validate_artifact(
+        tmp_path,
+        _StubSource(
+            FieldMapDeclaration(
+                fields=(DeclaredField(path="QUERY_ID", type="string"),),
+                artifact_format=FORMAT_PARQUET,
+            )
+        ),
+    )
+
+    # Empty directory: no part to read, so the honest answer is `absent` — reached
+    # through the builtin validator rather than through "no validator registered".
+    _assert_emits(report, OUTCOME_ABSENT)
+    assert report.artifact_format == FORMAT_PARQUET
+    assert "no parquet file" in report.reason
 
 
 def test_a_declaration_with_no_format_is_unsupported(tmp_path: Path) -> None:
@@ -254,6 +288,59 @@ def test_a_declaration_with_no_format_is_unsupported(tmp_path: Path) -> None:
 
     _assert_emits(report, OUTCOME_UNSUPPORTED)
     assert "names no format" in report.reason
+
+
+@pytest.mark.parametrize("artifact_format", [FORMAT_NDJSON, FORMAT_PARQUET])
+def test_a_field_map_naming_zero_fields_is_unsupported(
+    tmp_path: Path, artifact_format: str
+) -> None:
+    """A scan over zero fields finds nothing, so it would derive ``clean``.
+
+    That is the "looks adopted, validates zero records" state this whole capability
+    exists to remove, so it is rejected before dispatch rather than left for each
+    format to remember. ``ContractSource`` cannot produce one — the loader refuses a
+    zero-field schema and the toolkit refuses to generate one — but a custom
+    ``SchemaSource`` is a supported plug-in, and this is the seam it comes in
+    through. Asserted for both formats because the guard's whole point is that a
+    format inherits it rather than re-implementing it.
+    """
+    validator = _StubValidator(artifact_format=artifact_format)
+
+    report = validate_artifact(
+        tmp_path,
+        _StubSource(FieldMapDeclaration(fields=(), artifact_format=artifact_format)),
+        validators=[validator],
+    )
+
+    _assert_emits(report, OUTCOME_UNSUPPORTED)
+    assert "zero fields" in report.reason
+    assert report.artifact_format == artifact_format
+    # Rejected *before* dispatch: the validator was never handed the artifact, so no
+    # format can turn an empty declaration into a pass on its own.
+    assert validator.seen == []
+
+
+def test_a_model_declaration_is_not_mistaken_for_an_empty_field_map(
+    tmp_path: Path,
+) -> None:
+    """``ModelDeclaration.field_count`` is always 0 — that must stay dispatchable.
+
+    A model enumerates no fields at this layer; delegating to it is exactly what it
+    is for. Guarding the zero-field rejection on ``field_count`` instead of on the
+    declaration type would silently take the whole NDJSON x model cell — the 500-type
+    asset case — offline.
+    """
+    validator = _StubValidator()
+
+    report = validate_artifact(
+        tmp_path,
+        _StubSource(ModelDeclaration(model=_StubValidator)),
+        validators=[validator],
+    )
+
+    _assert_emits(report, OUTCOME_CLEAN)
+    assert report.fields_declared == 0
+    assert validator.seen == [tmp_path]
 
 
 def test_parquet_times_model_is_unsupported(tmp_path: Path) -> None:
