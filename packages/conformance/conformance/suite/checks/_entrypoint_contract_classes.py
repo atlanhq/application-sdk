@@ -1,22 +1,31 @@
-"""Collect a per-entrypoint ``(wire_name, Output contract class name)`` map.
+"""Collect a per-entrypoint ``(wire_name, Input/Output contract class name)`` map.
 
-Neither existing collector is quite what K006 needs:
+Neither older collector is quite what the K-series needs:
 
 * ``entrypoint_alignment._code_entrypoints`` (P016) derives wire names but not
-  the entrypoint's return-type (``Output``) contract.
+  the entrypoint's contract classes.
 * ``_entrypoint_contract_fields.collect_entrypoint_contract_names`` (shared,
   backs B005/B006) collects Input/Output class names but flattens them into a
   single ``frozenset`` with no association back to a wire name or entrypoint.
 
-K006 needs both together, so a manifest's ``$.extract.outputs.<field>``
-reference (see ``_manifest_refs.py``) can be resolved to the *specific*
-entrypoint's Output class in a multi-entrypoint (bundle) app.
+Two K-series rules need both together:
+
+* **K006** resolves a manifest's ``$.extract.outputs.<field>`` reference to the
+  *specific* entrypoint's Output class in a multi-entrypoint (bundle) app.
+* **K016** resolves an entrypoint's boundary contracts — Input *and* Output —
+  to the ``artifact_schemas.json`` that is supposed to describe their
+  ``FileReference`` fields, which in a bundle lives under that entrypoint's own
+  wire-named subdirectory.
+
+It lives at ``suite/checks/`` top level rather than inside one rule's package
+for the same reason ``_entrypoint_contract_fields`` does: it is a
+contract-discovery primitive owned by no single rule series.
 
 Wire-name derivation mirrors
 ``entrypoint_alignment._code_entrypoints._extract_ep_name`` exactly (bare
-``@entrypoint`` → kebab-cased method name; ``@entrypoint(name="literal")`` →
-the literal; non-literal ``name=`` → unresolved, skipped here since P016
-already reports it and K006 cannot map an unresolved name to a manifest
+``@entrypoint`` -> kebab-cased method name; ``@entrypoint(name="literal")`` ->
+the literal; non-literal ``name=`` -> unresolved, skipped here since P016
+already reports it and neither rule can map an unresolved name to a manifest
 subdir). It is duplicated locally rather than imported cross-series, matching
 the existing precedent of small AST literal-extraction helpers living next to
 their one caller.
@@ -38,6 +47,7 @@ from conformance.suite.checks.prescriptions._error_code_prefix import (
 )
 from conformance.suite.checks.prescriptions._typed_boundaries import (
     _annotation_terminal_name,
+    _get_non_self_params,
     _iter_class_body_methods,
 )
 
@@ -84,8 +94,8 @@ def _extract_wire_name(deco: ast.expr, method_name: str) -> tuple[str | None, bo
 
 
 @dataclass(frozen=True)
-class EntrypointOutput:
-    """One entrypoint's wire name and (if resolvable) its declared Output class."""
+class EntrypointContract:
+    """One entrypoint's wire name and (if resolvable) its boundary contract classes."""
 
     wire_name: str | None
     """Kebab-case wire name, or ``None`` for an implicit ``App.run()`` entrypoint
@@ -95,25 +105,33 @@ class EntrypointOutput:
     """De-aliased class name of the entrypoint's return-type annotation, or
     ``None`` when unannotated / not a simple class reference."""
 
-    filename: str
+    input_class_name: str | None = None
+    """De-aliased class name of the entrypoint's first non-``self`` parameter
+    annotation, or ``None`` when unannotated / not a simple class reference.
+
+    Both directions are boundary surfaces: for a cross-app hand-off the
+    *consumer* declares what it requires of its input, so an entrypoint's Input
+    carries artifact declarations exactly like its Output does."""
+
+    filename: str = ""
     """Repo-relative path of the file the entrypoint method is defined in."""
 
 
 @dataclass
-class CodeOutputScan:
-    """Accumulated per-entrypoint output-contract data across all scanned files."""
+class CodeContractScan:
+    """Accumulated per-entrypoint contract data across all scanned files."""
 
-    entrypoints: list[EntrypointOutput] = field(default_factory=list)
+    entrypoints: list[EntrypointContract] = field(default_factory=list)
 
 
-def scan_file_for_entrypoint_outputs(
+def scan_file_for_entrypoint_contracts(
     tree: ast.Module,
     filename: str,
     aliases: dict[str, str],
     prov: ImportProvenance,
     by_name: dict[str, ClassRecord],
     app_cache: dict[str, bool | None],
-    result: CodeOutputScan,
+    result: CodeContractScan,
 ) -> None:
     """Scan one parsed module, appending discovered entrypoints to *result*.
 
@@ -176,10 +194,18 @@ def scan_file_for_entrypoint_outputs(
                 if name:
                     output_name = aliases.get(name, name)
 
+            input_name: str | None = None
+            non_self = _get_non_self_params(func)
+            if non_self and non_self[0].annotation is not None:
+                name = _annotation_terminal_name(non_self[0].annotation)
+                if name:
+                    input_name = aliases.get(name, name)
+
             result.entrypoints.append(
-                EntrypointOutput(
+                EntrypointContract(
                     wire_name=wire_name,
                     output_class_name=output_name,
+                    input_class_name=input_name,
                     filename=filename,
                 )
             )

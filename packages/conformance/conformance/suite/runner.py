@@ -29,6 +29,7 @@ import conformance.suite.checks.sdr_test_checks as sdr_test_checks
 from conformance.suite.checks import (
     actions_pinning,
     app_name_alignment,
+    artifact_schema_declared,
     asyncio_loop_scope,
     bootstrap_drift,
     client_seam,
@@ -260,6 +261,12 @@ _CHECKS: list[CheckRegistration] = [
         discover=generated_freshness.discover,
         scan_path=generated_freshness.scan_path,
         scan_all=generated_freshness.scan_all,
+    ),
+    CheckRegistration(
+        series=artifact_schema_declared.SERIES,
+        discover=artifact_schema_declared.discover,
+        scan_path=artifact_schema_declared.scan_path,
+        scan_all=artifact_schema_declared.scan_all,
     ),
     CheckRegistration(
         series=manifest_contract.SERIES,
