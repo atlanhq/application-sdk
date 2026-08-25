@@ -271,8 +271,34 @@ class TemporalAuthManager:
 
         await self._emit_token_refresh_event(expires_at)
 
+    @staticmethod
+    def _should_emit_health_event() -> bool:
+        """True unless the poll-state observer has confirmed this worker parked.
+
+        Fail-open: any failure to read the gate publishes as normal, because a
+        missing reading is not evidence that the worker is dead.
+        """
+        try:
+            from application_sdk.execution._temporal.poll_state import (  # noqa: PLC0415 — deferred like this module's other intra-package imports
+                worker_poll_state,
+            )
+
+            return worker_poll_state.should_emit_health_event()
+        except Exception:
+            return True
+
     async def _emit_token_refresh_event(self, expires_at: datetime | None) -> None:
-        """Emit a token_refresh lifecycle event via the event binding (best-effort)."""
+        """Emit a token_refresh lifecycle event via the event binding (best-effort).
+
+        Withheld while the worker's poll loop is confirmed dead. The fleet agent
+        registry stamps these events as the agent's last health update, so a
+        parked worker that keeps emitting them stays indistinguishable from a
+        healthy idle one — which is exactly how a zombie survives unnoticed
+        (ARUN-1127). Token refresh itself is unaffected; only the advertisement
+        stops, and it resumes as soon as polling does.
+        """
+        if not self._should_emit_health_event():
+            return
 
         try:
             from application_sdk.contracts.events import (  # noqa: PLC0415 — circular: contracts.events imports execution.errors
