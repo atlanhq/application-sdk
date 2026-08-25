@@ -755,11 +755,11 @@ def test_custom_attributes_does_not_mask_a_real_decode_failure(raw):
         assets_module._deserialize(raw)
 
 
-def test_normalise_custom_attributes_leaves_other_keys_alone():
+def test_normalise_string_maps_leaves_other_keys_alone():
     """The fixup must not disturb the rest of the payload."""
     data = {"typeName": "Column", "attributes": {"name": "c"}, "customAttributes": None}
 
-    assets_module._normalise_custom_attributes(data)
+    assets_module._normalise_string_maps(data)
 
     assert data == {"typeName": "Column", "attributes": {"name": "c"}}
 
@@ -815,3 +815,93 @@ def test_sql_transformer_fixtures_actually_exercise_custom_attributes():
     )
 
     assert with_custom > 50, f"only {with_custom} fixture records carry the attribute"
+
+
+# ---------------------------------------------------------------------------
+# FND-802 (cont.) — upstreamColumns is the same bug on a nested, list-of-maps
+# field. pyatlan types it List[Dict[str, str]]; tableau emits a nested object
+# as a value, and 5.1M assets in one day were counted undeserializable for it.
+# ---------------------------------------------------------------------------
+
+
+def _tableau_field(upstream: object) -> bytes:
+    """A TableauDatasourceField whose nested ``upstreamColumns`` carries
+    ``upstream`` — the production shape, nested under ``attributes``."""
+    import json
+
+    return json.dumps(
+        {
+            "typeName": "TableauDatasourceField",
+            "status": "ACTIVE",
+            "attributes": {
+                "name": "f",
+                "qualifiedName": "default/tableau/1/site/proj/wb/ds/f",
+                "upstreamColumns": upstream,
+            },
+        }
+    ).encode()
+
+
+def test_upstream_columns_nested_object_decodes():
+    """The exact production failure: ``Expected `str`, got `object` -
+    at `$.upstreamColumns[0][...]` ``."""
+    asset = assets_module._deserialize(
+        _tableau_field([{"name": "c1", "id": {"nested": "obj"}}])
+    )
+
+    assert type(asset).__name__ == "TableauDatasourceField"
+    assert asset.upstream_columns == [{"name": "c1", "id": "{'nested': 'obj'}"}]
+
+
+@pytest.mark.parametrize(
+    "upstream,expected",
+    [
+        pytest.param([], [], id="empty-list"),
+        pytest.param([{"name": "c"}], [{"name": "c"}], id="already-str"),
+        pytest.param([{"ord": 3}], [{"ord": "3"}], id="int-value"),
+        pytest.param([{"a": None}], [{}], id="null-value-dropped"),
+        pytest.param(
+            [{"a": 1}, {"b": "x"}], [{"a": "1"}, {"b": "x"}], id="multiple-entries"
+        ),
+        # A ragged list would be rejected downstream anyway; drop the key.
+        pytest.param(["not-a-map"], msgspec.UNSET, id="non-map-element-drops-key"),
+        pytest.param(None, msgspec.UNSET, id="null-list"),
+    ],
+)
+def test_upstream_columns_shapes(upstream, expected):
+    # Decode is the whole point here: these minimal fixtures deliberately omit
+    # the parent hierarchy, so `.validate(for_creation=True)` would fail on
+    # grounds that have nothing to do with upstreamColumns. Per-asset
+    # validation has its own tests above.
+    asset = assets_module._deserialize(_tableau_field(upstream))
+
+    assert asset.upstream_columns == expected
+
+
+def test_string_map_walk_reaches_nested_maps():
+    """The walk must descend — these keys are not all top-level."""
+    data = {
+        "attributes": {"inner": {"customAttributes": {"a": 1, "b": None}}},
+        "customAttributes": {"top": 2},
+    }
+
+    assets_module._normalise_string_maps(data)
+
+    assert data["customAttributes"] == {"top": "2"}
+    assert data["attributes"]["inner"]["customAttributes"] == {"a": "1"}
+
+
+def test_string_map_walk_is_depth_bounded():
+    """A pathologically deep payload must not cost unbounded time. Below the
+    bound the fixup applies; past it the record simply decodes as it would
+    have before."""
+    deep: dict = {"customAttributes": {"x": 1}}
+    for _ in range(assets_module._MAX_WALK_DEPTH + 3):
+        deep = {"attributes": deep}
+
+    assets_module._normalise_string_maps(deep)  # must return, not recurse forever
+
+    node = deep
+    while "attributes" in node:
+        node = node["attributes"]
+    assert node["customAttributes"] == {"x": 1}, "beyond the bound, left untouched"

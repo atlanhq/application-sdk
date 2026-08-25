@@ -275,53 +275,94 @@ def _iter_relationship_refs(asset: Asset) -> Iterator[tuple[str, str, str]]:
 # ---------------------------------------------------------------------------
 
 
-_CUSTOM_ATTRIBUTES_KEY = "customAttributes"
+# pyatlan_v9 fields typed as string-valued maps that connector output does not
+# honour. Both were found in production (FND-802) counting good assets
+# ``undeserializable``:
+#
+#   customAttributes  Dict[str, str]        mysql (int), mssql (bool)
+#   upstreamColumns   List[Dict[str, str]]  tableau (nested object)
+#
+# Keyed by name rather than derived from the model because the payload is
+# walked before any type is resolved — there is no Struct to introspect yet.
+# Add a key here when a new one shows up in the undeserializable feed; the
+# error string names it directly (``at `$.<key>[...]` ``).
+_STRING_MAP_KEYS = frozenset({"customAttributes", "upstreamColumns"})
+
+# Depth guard for the walk below. Connector payloads nest a handful of levels
+# (asset -> attributes -> related asset -> its attributes); anything deeper is
+# not a shape we are trying to repair, and the bound keeps a pathological or
+# cyclic-looking payload from costing unbounded time.
+_MAX_WALK_DEPTH = 6
 
 
-def _normalise_custom_attributes(data: dict) -> None:
-    """Coerce ``data['customAttributes']`` into the ``Dict[str, str]`` the model
-    demands, in place. No-op when the key is absent.
+def _coerce_string_map(value: object) -> dict[str, str] | None:
+    """Coerce one map into ``Dict[str, str]``, or ``None`` to drop the key.
 
-    pyatlan_v9 declares ``custom_attributes: Union[Dict[str, str], UnsetType]``.
-    Connector transformed output does not honour that on three counts, all of
-    which are decode-fatal and none of which indicate anything wrong with the
-    asset:
+    Null values are dropped rather than stringified: a literal ``"None"`` is a
+    value the producer never wrote. A non-mapping payload is dropped whole —
+    there is no sane coercion, and inventing one would hide a genuine
+    producer-side format change.
 
-    * ``"customAttributes": null`` — an explicit null map.
-    * non-string scalar values, e.g. ``{"ordinal_position": 1}``.
-    * null values, e.g. ``{"numeric_precision": null}``.
-
-    Measured on this repo's own SQL transformed fixtures
-    (``tests/unit/transformers/query/resources/transformed/``), every record
-    carrying the attribute failed to decode and the single record without it was
-    the only one that succeeded. In production (FND-802) that surfaced as mysql
-    and mssql reporting ~90% of assets ``undeserializable`` with zero ``invalid``
-    and zero ``orphaned``, while Atlas accepted 100% of the same assets — the
-    records were always fine.
-
-    Normalising is safe because ``customAttributes`` feeds neither
-    ``.validate()`` nor the referential pass; it only has to survive the decode.
-    This is validation-side only and does not touch what is uploaded.
-
-    Null values are dropped rather than stringified: a literal ``"None"`` would
-    be a value the producer never wrote. A non-mapping, non-null payload is
-    dropped whole — there is no sane coercion, and inventing one would hide a
-    genuine producer-side format change.
+    Coercion is ``str()``, so a bool becomes ``"True"`` (Python repr, not JSON
+    ``"true"``) and a container becomes its repr. The exact string does not
+    matter: these fields feed neither ``.validate()`` nor the referential pass,
+    so the value only has to survive the decode.
     """
-    custom = data.get(_CUSTOM_ATTRIBUTES_KEY)
-    if custom is None:
-        # Covers both an explicit null and an absent key. Popping the explicit
-        # null is what leaves the field UNSET rather than failing the decode.
-        data.pop(_CUSTOM_ATTRIBUTES_KEY, None)
-        return
-    if not isinstance(custom, dict):
-        data.pop(_CUSTOM_ATTRIBUTES_KEY, None)
-        return
-    data[_CUSTOM_ATTRIBUTES_KEY] = {
+    if not isinstance(value, dict):
+        return None
+    return {
         str(k): v if isinstance(v, str) else str(v)
-        for k, v in custom.items()
+        for k, v in value.items()
         if v is not None
     }
+
+
+def _normalise_string_maps(node: object, _depth: int = 0) -> None:
+    """Walk ``node`` in place, coercing every :data:`_STRING_MAP_KEYS` value.
+
+    pyatlan_v9 types these fields as string-valued maps; connectors emit ints,
+    bools, nulls and nested objects in them. msgspec rejects the whole record
+    on any of those, so an asset that is otherwise perfectly good is counted
+    ``undeserializable`` — see :data:`_STRING_MAP_KEYS` for the measured cases.
+
+    The walk is recursive because these keys are not all top-level: tableau's
+    ``upstreamColumns`` rides inside a related-asset object nested under
+    ``attributes``. Both a bare map and a list of maps are handled, since the
+    two known fields are respectively ``Dict[str, str]`` and
+    ``List[Dict[str, str]]``.
+
+    Normalising is safe: neither field participates in ``.validate()`` or the
+    referential pass, so this only has to get the record past the decode. It is
+    validation-side only and does not touch what is uploaded.
+    """
+    if _depth > _MAX_WALK_DEPTH:
+        return
+    if isinstance(node, list):
+        for item in node:
+            if isinstance(item, (dict, list)):
+                _normalise_string_maps(item, _depth + 1)
+        return
+    if not isinstance(node, dict):
+        return
+    for key, value in list(node.items()):
+        if key in _STRING_MAP_KEYS:
+            if isinstance(value, list):
+                coerced = [_coerce_string_map(item) for item in value]
+                # Drop the key entirely if any element was uncoercible rather
+                # than emitting a ragged list the decoder would reject anyway.
+                if any(c is None for c in coerced):
+                    node.pop(key, None)
+                else:
+                    node[key] = coerced
+            else:
+                coerced_map = _coerce_string_map(value)
+                if coerced_map is None:
+                    node.pop(key, None)
+                else:
+                    node[key] = coerced_map
+            continue
+        if isinstance(value, (dict, list)):
+            _normalise_string_maps(value, _depth + 1)
 
 
 def _deserialize(raw: bytes) -> Asset:
@@ -351,10 +392,11 @@ def _deserialize(raw: bytes) -> Asset:
     is why the typeName probe this used to need is gone, and it measures ~6x
     faster than the per-class nested decoder (≈200k vs ≈31k records/sec).
 
-    **``customAttributes`` is normalised before the typed conversion.** The
-    model declares ``Dict[str, str]``; connector output does not honour that,
-    and every record carrying the attribute failed to decode — see
-    :func:`_normalise_custom_attributes` for the shapes and the evidence.
+    **String-valued maps are normalised before the typed conversion.** The
+    model declares ``Dict[str, str]`` for ``customAttributes`` and
+    ``upstreamColumns``; connector output does not honour that, and every
+    record carrying one failed to decode — see :func:`_normalise_string_maps`
+    for the shapes and the evidence.
     ``from_atlas_json`` is inlined here (decode to dict, unwrap ``entity``,
     convert) purely so the fixup lands between its two halves: it is the same
     single msgspec decode, not an extra parse, so the throughput above holds.
@@ -367,7 +409,7 @@ def _deserialize(raw: bytes) -> Asset:
     # from_atlas_json, which this function inlines.
     if "entity" in data:
         data = data["entity"]
-    _normalise_custom_attributes(data)
+    _normalise_string_maps(data)
     return from_atlas_format(data)
 
 
