@@ -6,6 +6,14 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.23.0] - 2026-08-25
+
+### Features
+
+- accept legacy Temporal workflow types as inbound-only aliases (#3132) ([bd90391](https://github.com/atlanhq/application-sdk/commit/bd90391))
+- declare artifact schemas for data hand-offs (FND-685) (#3386) ([14f9506](https://github.com/atlanhq/application-sdk/commit/14f9506))
+- support multi-entrypoint apps across the e2e and integration tiers (#3286) ([3af3bba](https://github.com/atlanhq/application-sdk/commit/3af3bba))
+
 ## [0.22.1] - 2026-08-20
 
 ### Bug fixes
