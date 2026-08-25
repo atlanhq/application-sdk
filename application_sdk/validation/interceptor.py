@@ -618,10 +618,23 @@ def _no_local_artifact(
     A lazy field the interceptor deliberately did not download, a durable reference
     that was never materialised, an output field left unset. There is nothing to
     read, but silence is the one answer that is not allowed, so the declaration is
-    resolved anyway to keep the two facts apart: "this artifact has no declaration"
-    is ``not_declared`` and is a finding only on a boundary, while "it is declared
-    and we could not read it" is ``absent``. Collapsing them would report an app
-    that declared its artifact correctly as having declared nothing.
+    resolved anyway to keep the three facts apart:
+
+    * "this artifact has no declaration" is ``not_declared``, a finding only on a
+      boundary. Collapsing it into ``absent`` would report an app that declared its
+      artifact correctly as having declared nothing.
+    * "it is declared and there was no local copy to read" is ``absent``, and under
+      a hard posture it blocks — the app asked for a check it could not be given.
+    * "it is declared and the SDK could not read the *declaration*" is ``absent``
+      too, but ``validator_broken``, so it never blocks.
+
+    That last split is this function's twin of the wrapper's own
+    ``ArtifactDeclarationError`` branch, and it has to agree with it: the same
+    unreadable ``artifact_schemas.json`` reaches whichever of the two the reference
+    happens to route through, and one of them failing a hard-mode activity for it
+    while the other proceeds would make blocking depend on whether the artifact had
+    been materialised. A malformed generated file is the SDK's read failing, not
+    evidence about the artifact.
     """
     try:
         declaration = source.resolve()
@@ -633,9 +646,13 @@ def _no_local_artifact(
             reason=f"declaration unreadable: {exc}",
             schema_source=source.kind,
             boundary=boundary,
+            validator_broken=True,
         )
     if declaration is None:
         return ArtifactValidationReport.not_declared(boundary=boundary)
+    # Not `validator_broken`: nothing on our side failed. The app declared this
+    # artifact and the hand-off could not be proved against it, which is exactly
+    # what a hard posture exists to catch.
     return ArtifactValidationReport.absent(
         reason="the reference carries no local artifact to check",
         artifact_format=declaration.artifact_format,

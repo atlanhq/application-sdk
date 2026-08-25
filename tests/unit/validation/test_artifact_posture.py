@@ -648,6 +648,70 @@ class TestBrokenValidatorAlwaysFailsOpen:
 
     @pytest.mark.parametrize("enforce", [True, False])
     @pytest.mark.asyncio
+    async def test_an_unreadable_declaration_never_fails_the_handoff(
+        self, enforce: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A malformed ``artifact_schemas.json`` is the SDK's read failing, not
+        evidence about the artifact — so it must not block, even in hard mode.
+
+        Routed through a *durable* reference on purpose: with no ``local_path``
+        there is nothing to scan, so the declaration is read by the interceptor's
+        own ``_no_local_artifact`` rather than by the wrapper. Both branches see
+        the same unreadable file, and if only one of them classified it
+        ``validator_broken`` then whether a hard-mode activity failed would depend
+        on whether the artifact happened to have been materialised.
+        """
+        generated = tmp_path / "generated"
+        generated.mkdir()
+        # An envelope version this loader does not understand: present and
+        # well-formed JSON, but a shape nobody promised — `_parse_schemas` raises
+        # ArtifactDeclarationError rather than best-effort parsing it.
+        (generated / "artifact_schemas.json").write_bytes(
+            orjson.dumps({"version": 999, "schemas": _DECLARED})
+        )
+        monkeypatch.setattr(
+            "application_sdk.validation.sources.CONTRACT_GENERATED_DIR", str(generated)
+        )
+        out = _PostureOut(
+            queries=FileReference(
+                storage_path="artifacts/queries.json", is_durable=True
+            )
+        )
+        rows = await _run(out, enforce=enforce)
+        assert len(rows) == 1
+        assert rows[0]["outcome"] == "absent"
+        assert rows[0][ARTIFACT_CLASSIFICATION_KEY] == CLASSIFICATION_VALIDATOR_BROKEN
+        assert rows[0][ARTIFACT_ENFORCEMENT_KEY] == ENFORCEMENT_NONE
+
+    def test_both_declaration_readers_classify_it_the_same_way(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The interceptor and the wrapper each read the declaration on their own
+        path. They must agree, or blocking becomes a function of materialisation."""
+        generated = tmp_path / "generated"
+        generated.mkdir()
+        (generated / "artifact_schemas.json").write_bytes(
+            orjson.dumps({"version": 999, "schemas": _DECLARED})
+        )
+        monkeypatch.setattr(
+            "application_sdk.validation.sources.CONTRACT_GENERATED_DIR", str(generated)
+        )
+        from application_sdk.validation.sources import ContractSource
+        from application_sdk.validation.wrapper import validate_artifact
+
+        source = ContractSource(field="queries", entrypoint="")
+        via_interceptor = interceptor_module._no_local_artifact(source, boundary=True)
+        via_wrapper = validate_artifact(tmp_path / "queries.json", source)
+
+        assert (
+            via_interceptor.classification
+            == via_wrapper.classification
+            == CLASSIFICATION_VALIDATOR_BROKEN
+        )
+        assert via_interceptor.enforceable is via_wrapper.enforceable is False
+
+    @pytest.mark.parametrize("enforce", [True, False])
+    @pytest.mark.asyncio
     async def test_a_broken_walk_never_fails_the_handoff(
         self, enforce: bool, tmp_path: Path, generated_dir: Path
     ) -> None:
@@ -657,6 +721,43 @@ class TestBrokenValidatorAlwaysFailsOpen:
         ):
             rows = await _run(out, enforce=enforce)
         assert rows == []
+
+
+class TestDeclaredButUnreadableStillBlocks:
+    """The other half of the ``_no_local_artifact`` split.
+
+    A declared artifact with no local copy is ``absent`` for a reason that is not
+    the SDK's fault, so a hard posture blocks on it — the app asked for a check it
+    could not be given. Only the *declaration* being unreadable fails open.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_durable_reference_with_a_readable_declaration_blocks(
+        self, tmp_path: Path, generated_dir: Path
+    ) -> None:
+        out = _PostureOut(
+            queries=FileReference(
+                storage_path="artifacts/queries.json", is_durable=True
+            )
+        )
+        with pytest.raises(ArtifactValidationBlockedError):
+            await _run(out, enforce=True)
+
+    @pytest.mark.asyncio
+    async def test_and_reports_would_block_under_soft(
+        self, tmp_path: Path, generated_dir: Path
+    ) -> None:
+        out = _PostureOut(
+            queries=FileReference(
+                storage_path="artifacts/queries.json", is_durable=True
+            )
+        )
+        rows = await _run(out, enforce=False)
+        assert rows[0]["outcome"] == "absent"
+        assert (
+            rows[0][ARTIFACT_CLASSIFICATION_KEY] == CLASSIFICATION_ARTIFACT_UNVERIFIABLE
+        )
+        assert rows[0][ARTIFACT_ENFORCEMENT_KEY] == ENFORCEMENT_WOULD_BLOCK
 
 
 class TestEveryReferenceEmitsBeforeAnyBlock:
