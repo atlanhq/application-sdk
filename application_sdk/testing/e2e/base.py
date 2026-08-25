@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -444,6 +445,15 @@ class BaseE2ETest:
     # so no ``_mustache_substitutions()`` override is needed just to add params.
     substitutions_class: ClassVar[type[MustacheSubstitutions]] = MustacheSubstitutions
 
+    # Teardown that fails is teardown that leaked: the ephemeral connection and
+    # its descendants stay on the tenant forever. Left False so this stays a
+    # behaviour a repo opts into — flipping the default would redden every
+    # connector whose tenant cannot currently purge, all at once, for a
+    # condition none of them introduced. Set True in a suite (or fleet-wide,
+    # once cleanup is healthy everywhere) to make a leak fail the leg instead of
+    # passing green with a warning nobody reads.
+    fail_on_cleanup_error: ClassVar[bool] = False
+
     ae_poll_interval_seconds: ClassVar[int] = 10
     ae_poll_timeout_seconds: ClassVar[int] = 600
     # Fail-fast stall guard (test-harness only — this module is never imported
@@ -783,8 +793,17 @@ class BaseE2ETest:
         ephemeral connections and their descendants don't accumulate on the
         tenant and degrade search performance over time.
 
-        Failures here are logged as warnings, not re-raised, so they never
-        mask the real test result.
+        Failures here are logged as warnings and, by default, not re-raised, so
+        they never mask the real test result. They are ALSO emitted as a GitHub
+        ``::error::`` annotation, because a warning inside a green leg is a
+        leak nobody sees: the run is green, the log line is thousands of lines
+        down, and the assets stay on the tenant. Set
+        :attr:`fail_on_cleanup_error` to turn a leak into a failed leg.
+
+        Raises:
+            AssertionError: If cleanup leaked and ``fail_on_cleanup_error`` is
+                set. Raised only AFTER both purge phases have run, so opting in
+                never reduces how much gets cleaned up.
         """
         conn_qn = getattr(self, "connection_qualified_name", None)
         if not conn_qn:
@@ -798,8 +817,27 @@ class BaseE2ETest:
         # single child-purge failure orphan the connection as well: the raise
         # jumped past the connection purge entirely, and the teardown warning
         # is post-verdict, so the leg still went green while leaking everything.
-        self._purge_child_assets(client, conn_qn)
-        self._purge_connection(client, conn_qn)
+        #
+        # Both run unconditionally and the verdict is taken afterwards, for the
+        # same reason: short-circuiting on the first leak would orphan whatever
+        # the second phase would have cleaned.
+        children_ok = self._purge_child_assets(client, conn_qn)
+        connection_ok = self._purge_connection(client, conn_qn)
+        if children_ok and connection_ok:
+            return
+
+        leaked = "child assets" if not children_ok else ""
+        if not connection_ok:
+            leaked = f"{leaked} and the connection" if leaked else "the connection"
+        detail = (
+            f"e2e cleanup leaked {leaked} under {conn_qn} — these stay on the "
+            "tenant until purged manually"
+        )
+        # Annotation, not just a log line: this surfaces in the run summary even
+        # when the leg is green, which is the whole point.
+        print(f"::error::{detail}", file=sys.stderr)  # noqa: T201
+        if self.fail_on_cleanup_error:
+            raise AssertionError(detail)
 
     @staticmethod
     def _teardown_client() -> Any | None:
@@ -829,7 +867,7 @@ class BaseE2ETest:
             return None
 
     @staticmethod
-    def _purge_child_assets(client: Any, conn_qn: str) -> None:
+    def _purge_child_assets(client: Any, conn_qn: str) -> bool:
         """Purge every descendant of ``conn_qn`` in bounded batches.
 
         Every GUID is collected *before* the first delete on purpose. pyatlan's
@@ -840,6 +878,10 @@ class BaseE2ETest:
         Args:
             client: Sync pyatlan client.
             conn_qn: Qualified name of the connection being torn down.
+
+        Returns:
+            ``True`` when every descendant was purged (including the vacuous
+            "there were none" case), ``False`` when anything leaked.
         """
         try:
             from pyatlan.model.assets import (  # noqa: PLC0415; type: ignore[import]
@@ -865,10 +907,10 @@ class BaseE2ETest:
                 conn_qn,
                 exc_info=True,
             )
-            return
+            return False
 
         if not child_guids:
-            return
+            return True
 
         # Batch failures are counted and reported once after the loop rather
         # than logged per batch: a large crawl is hundreds of batches, and a
@@ -906,20 +948,26 @@ class BaseE2ETest:
                 _PURGE_BATCH_SIZE,
                 exc_info=last_error,
             )
-        else:
-            logger.info(
-                "e2e cleanup: purged %d child assets under %s",
-                purged,
-                conn_qn,
-            )
+            return False
+
+        logger.info(
+            "e2e cleanup: purged %d child assets under %s",
+            purged,
+            conn_qn,
+        )
+        return True
 
     @staticmethod
-    def _purge_connection(client: Any, conn_qn: str) -> None:
+    def _purge_connection(client: Any, conn_qn: str) -> bool:
         """Purge the connection asset itself.
 
         Args:
             client: Sync pyatlan client.
             conn_qn: Qualified name of the connection being torn down.
+
+        Returns:
+            ``True`` when the connection was purged (or was already gone),
+            ``False`` when it leaked.
         """
         try:
             from pyatlan.model.assets import (  # noqa: PLC0415; type: ignore[import]
@@ -947,6 +995,8 @@ class BaseE2ETest:
                 conn_qn,
                 exc_info=True,
             )
+            return False
+        return True
 
     # ------------------------------------------------------------------
     # Pre-run seeding

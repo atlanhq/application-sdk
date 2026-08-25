@@ -1748,3 +1748,80 @@ class TestTeardownPurgeBatching:
         harness = _ConcreteE2ETest()
         harness.connection_qualified_name = "default/openapi/1787587123106596"
         harness.teardown_method(method=None)  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# teardown_method — cleanup leak reporting
+# ---------------------------------------------------------------------------
+
+
+class _StrictCleanupTest(_ConcreteE2ETest):
+    """Opts in to failing the leg when teardown leaks."""
+
+    fail_on_cleanup_error = True
+
+
+class TestTeardownLeakReporting:
+    """A leak must be visible, and opt-in fatal, without ever cleaning less.
+
+    The regression these pin: a tenant that denies the purge (e.g. Atlas
+    ATLAS-403-00-001 on ``delete entity``) left the connection and every
+    descendant on the tenant while the leg still reported green, because the
+    only signal was a ``logger.warning`` thousands of lines into a passing job.
+    """
+
+    def _run_teardown(self, cls, monkeypatch, *, children_ok, connection_ok):
+        test = cls()
+        test.connection_qualified_name = "default/openapi/test-123"
+        monkeypatch.setattr(cls, "_teardown_client", staticmethod(lambda: object()))
+        calls = []
+
+        def _children(client, conn_qn):
+            calls.append("children")
+            return children_ok
+
+        def _connection(client, conn_qn):
+            calls.append("connection")
+            return connection_ok
+
+        monkeypatch.setattr(cls, "_purge_child_assets", staticmethod(_children))
+        monkeypatch.setattr(cls, "_purge_connection", staticmethod(_connection))
+        return test, calls
+
+    def test_clean_teardown_is_silent(self, monkeypatch, capsys):
+        test, calls = self._run_teardown(
+            _ConcreteE2ETest, monkeypatch, children_ok=True, connection_ok=True
+        )
+        test.teardown_method(None)
+        assert calls == ["children", "connection"]
+        assert "::error::" not in capsys.readouterr().err
+
+    def test_leak_emits_annotation_but_does_not_raise_by_default(
+        self, monkeypatch, capsys
+    ):
+        test, _ = self._run_teardown(
+            _ConcreteE2ETest, monkeypatch, children_ok=False, connection_ok=True
+        )
+        test.teardown_method(None)
+        err = capsys.readouterr().err
+        assert "::error::" in err
+        assert "child assets" in err
+
+    def test_leak_raises_when_opted_in(self, monkeypatch):
+        test, _ = self._run_teardown(
+            _StrictCleanupTest, monkeypatch, children_ok=False, connection_ok=True
+        )
+        with pytest.raises(AssertionError, match="child assets"):
+            test.teardown_method(None)
+
+    def test_both_phases_run_before_the_verdict(self, monkeypatch):
+        """Opting in must not short-circuit and orphan MORE than the default."""
+        test, calls = self._run_teardown(
+            _StrictCleanupTest, monkeypatch, children_ok=False, connection_ok=False
+        )
+        with pytest.raises(AssertionError, match="connection"):
+            test.teardown_method(None)
+        assert calls == ["children", "connection"]
+
+    def test_default_is_opt_in(self):
+        assert BaseE2ETest.fail_on_cleanup_error is False
