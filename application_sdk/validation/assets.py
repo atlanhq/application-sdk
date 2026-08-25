@@ -44,7 +44,7 @@ from typing import Iterator
 import msgspec
 from pyatlan_v9.model.assets import Asset
 from pyatlan_v9.model.assets.referenceable import RelatedReferenceable
-from pyatlan_v9.model.transform import from_atlas_json
+from pyatlan_v9.model.transform import from_atlas_format
 
 from application_sdk.common.spillable_dict import SpillableDict
 from application_sdk.constants import ASSET_VALIDATION_MAX_ITEMS_PER_AXIS
@@ -275,6 +275,55 @@ def _iter_relationship_refs(asset: Asset) -> Iterator[tuple[str, str, str]]:
 # ---------------------------------------------------------------------------
 
 
+_CUSTOM_ATTRIBUTES_KEY = "customAttributes"
+
+
+def _normalise_custom_attributes(data: dict) -> None:
+    """Coerce ``data['customAttributes']`` into the ``Dict[str, str]`` the model
+    demands, in place. No-op when the key is absent.
+
+    pyatlan_v9 declares ``custom_attributes: Union[Dict[str, str], UnsetType]``.
+    Connector transformed output does not honour that on three counts, all of
+    which are decode-fatal and none of which indicate anything wrong with the
+    asset:
+
+    * ``"customAttributes": null`` — an explicit null map.
+    * non-string scalar values, e.g. ``{"ordinal_position": 1}``.
+    * null values, e.g. ``{"numeric_precision": null}``.
+
+    Measured on this repo's own SQL transformed fixtures
+    (``tests/unit/transformers/query/resources/transformed/``), every record
+    carrying the attribute failed to decode and the single record without it was
+    the only one that succeeded. In production (FND-802) that surfaced as mysql
+    and mssql reporting ~90% of assets ``undeserializable`` with zero ``invalid``
+    and zero ``orphaned``, while Atlas accepted 100% of the same assets — the
+    records were always fine.
+
+    Normalising is safe because ``customAttributes`` feeds neither
+    ``.validate()`` nor the referential pass; it only has to survive the decode.
+    This is validation-side only and does not touch what is uploaded.
+
+    Null values are dropped rather than stringified: a literal ``"None"`` would
+    be a value the producer never wrote. A non-mapping, non-null payload is
+    dropped whole — there is no sane coercion, and inventing one would hide a
+    genuine producer-side format change.
+    """
+    custom = data.get(_CUSTOM_ATTRIBUTES_KEY)
+    if custom is None:
+        # Covers both an explicit null and an absent key. Popping the explicit
+        # null is what leaves the field UNSET rather than failing the decode.
+        data.pop(_CUSTOM_ATTRIBUTES_KEY, None)
+        return
+    if not isinstance(custom, dict):
+        data.pop(_CUSTOM_ATTRIBUTES_KEY, None)
+        return
+    data[_CUSTOM_ATTRIBUTES_KEY] = {
+        str(k): v if isinstance(v, str) else str(v)
+        for k, v in custom.items()
+        if v is not None
+    }
+
+
 def _deserialize(raw: bytes) -> Asset:
     """Decode one NDJSON line into its concrete pyatlan_v9 asset Struct.
 
@@ -302,10 +351,24 @@ def _deserialize(raw: bytes) -> Asset:
     is why the typeName probe this used to need is gone, and it measures ~6x
     faster than the per-class nested decoder (≈200k vs ≈31k records/sec).
 
+    **``customAttributes`` is normalised before the typed conversion.** The
+    model declares ``Dict[str, str]``; connector output does not honour that,
+    and every record carrying the attribute failed to decode — see
+    :func:`_normalise_custom_attributes` for the shapes and the evidence.
+    ``from_atlas_json`` is inlined here (decode to dict, unwrap ``entity``,
+    convert) purely so the fixup lands between its two halves: it is the same
+    single msgspec decode, not an extra parse, so the throughput above holds.
+
     Raises whatever msgspec/pyatlan raise on malformed input — callers convert
     that into an ``undeserializable`` count rather than letting it abort a batch.
     """
-    return from_atlas_json(raw)
+    data = msgspec.json.decode(raw, type=dict)
+    # Atlas API responses wrap the asset; transformed NDJSON does not. Mirrors
+    # from_atlas_json, which this function inlines.
+    if "entity" in data:
+        data = data["entity"]
+    _normalise_custom_attributes(data)
+    return from_atlas_format(data)
 
 
 # ---------------------------------------------------------------------------

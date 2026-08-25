@@ -660,3 +660,158 @@ def test_scalar_gaps_are_not_claimed_to_be_fixed():
     # ...but the missing scalars are still correctly reported.
     assert any("schema_name is required" in e for e in errors), errors
     assert any("database_name is required" in e for e in errors), errors
+
+
+# ---------------------------------------------------------------------------
+# FND-802 — customAttributes must not make an otherwise-good asset undecodable
+#
+# pyatlan_v9 declares ``custom_attributes: Union[Dict[str, str], UnsetType]``.
+# Connector output does not honour that, and every record carrying the
+# attribute failed to decode — counted ``undeserializable`` even though Atlas
+# accepted 100% of the same assets. Same class of bug as the
+# relationships-in-``attributes`` incident above, on the decode axis.
+# ---------------------------------------------------------------------------
+
+
+def _column_with_custom(custom: object, *, omit: bool = False) -> bytes:
+    """A valid Column in the production wire shape, with ``customAttributes``
+    set to ``custom`` (or omitted entirely)."""
+    import json
+
+    _, connector = _hive_column_pair()
+    if omit:
+        connector.pop("customAttributes", None)
+    else:
+        connector["customAttributes"] = custom
+    return json.dumps(connector).encode()
+
+
+@pytest.mark.parametrize(
+    "custom,expected",
+    [
+        pytest.param(None, msgspec.UNSET, id="explicit-null-map"),
+        pytest.param({}, {}, id="empty-map"),
+        pytest.param({"type_name": "int4"}, {"type_name": "int4"}, id="already-str"),
+        pytest.param({"ordinal_position": 1}, {"ordinal_position": "1"}, id="int"),
+        pytest.param(
+            {"character_octet_length": -1.0},
+            {"character_octet_length": "-1.0"},
+            id="float",
+        ),
+        # Python repr, not JSON ("True" not "true"). The exact string is not
+        # meaningful: customAttributes feeds neither .validate() nor the
+        # referential pass, so coercion only has to survive the decode. A
+        # container value would likewise become its repr.
+        pytest.param({"flag": True}, {"flag": "True"}, id="bool"),
+        # Dropped, not stringified — "None" is a value the producer never wrote.
+        pytest.param({"numeric_precision": None}, {}, id="null-value-dropped"),
+        pytest.param(
+            {"a": 1, "b": None, "c": "x"},
+            {"a": "1", "c": "x"},
+            id="mixed",
+        ),
+        # No sane coercion exists; dropping beats inventing one.
+        pytest.param("not-a-map", msgspec.UNSET, id="non-mapping-dropped"),
+        pytest.param([1, 2], msgspec.UNSET, id="list-dropped"),
+    ],
+)
+def test_custom_attributes_shapes_decode(custom, expected):
+    """Every shape the fleet emits must decode, and land as ``Dict[str, str]``."""
+    asset = assets_module._deserialize(_column_with_custom(custom))
+
+    assert asset.custom_attributes == expected
+    # Decoding is only half of it — the asset must still be judged valid.
+    assert validate_asset(asset) == []
+
+
+def test_custom_attributes_absent_still_decodes():
+    """The pre-existing happy path is untouched."""
+    asset = assets_module._deserialize(_column_with_custom(None, omit=True))
+
+    assert asset.custom_attributes is msgspec.UNSET
+    assert validate_asset(asset) == []
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        pytest.param(b"{not json", id="malformed-json"),
+        pytest.param(b"[1,2,3]", id="not-an-object"),
+        # A wrong-typed *modelled* field is a real producer defect and must
+        # still be reported, unlike the customAttributes widening.
+        pytest.param(
+            b'{"typeName":"Column","attributes":{"name":123}}', id="name-wrong-type"
+        ),
+        pytest.param(
+            b'{"typeName":"Column","attributes":'
+            b'{"name":"c","columnDistinctValuesCount":"abc"}}',
+            id="scalar-wrong-type",
+        ),
+    ],
+)
+def test_custom_attributes_does_not_mask_a_real_decode_failure(raw):
+    """Normalisation is surgical: genuinely broken records still fail."""
+    with pytest.raises(Exception):
+        assets_module._deserialize(raw)
+
+
+def test_normalise_custom_attributes_leaves_other_keys_alone():
+    """The fixup must not disturb the rest of the payload."""
+    data = {"typeName": "Column", "attributes": {"name": "c"}, "customAttributes": None}
+
+    assets_module._normalise_custom_attributes(data)
+
+    assert data == {"typeName": "Column", "attributes": {"name": "c"}}
+
+
+# ---------------------------------------------------------------------------
+# Producer/consumer contract: the SQL transformer's own output must survive
+# this repo's own validator. These two live in the same repo and, before
+# FND-802, were never tested against each other — which is how a 100%
+# decode-failure rate on every SQL connector went unnoticed.
+# ---------------------------------------------------------------------------
+
+_SQL_TRANSFORMED_DIR = (
+    Path(__file__).resolve().parents[2]
+    / "unit"
+    / "transformers"
+    / "query"
+    / "resources"
+    / "transformed"
+)
+
+
+def test_sql_transformer_fixtures_are_all_valid():
+    """Every record the SQL transformer emits decodes AND validates.
+
+    Referential integrity is off: these fixtures are per-type slices, so a
+    Column's parent Table legitimately is not in the same batch. Orphan
+    behaviour has its own tests above.
+    """
+    assert _SQL_TRANSFORMED_DIR.is_dir(), f"missing fixtures: {_SQL_TRANSFORMED_DIR}"
+
+    report = validate_transformed_dir(
+        _SQL_TRANSFORMED_DIR, check_referential_integrity=False
+    )
+
+    assert report.total > 100, "fixture set shrank — this test would stop proving much"
+    assert report.undeserializable == 0, [
+        f.errors[0] for f in report.failures if f.deserialize_error
+    ][:3]
+    assert report.failed == 0, [f.errors[0] for f in report.failures][:3]
+    assert report.passed == report.total
+
+
+def test_sql_transformer_fixtures_actually_exercise_custom_attributes():
+    """Guard the guard: if the fixtures lose ``customAttributes``, the test
+    above silently stops covering FND-802."""
+    import json
+
+    with_custom = sum(
+        1
+        for f in sorted(_SQL_TRANSFORMED_DIR.glob("*.json"))
+        for line in f.read_text().splitlines()
+        if line.strip() and "customAttributes" in json.loads(line)
+    )
+
+    assert with_custom > 50, f"only {with_custom} fixture records carry the attribute"
