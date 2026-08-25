@@ -26,6 +26,10 @@ description: >
   actually emits that file.  K015 (the manifest's legacy_workflow_types block and the
   SDK App's legacy_workflow_types declaration disagree) is fixed on whichever side is
   wrong -- in contract/app.pkl plus a regenerate, or in the App class attribute.
+  K016 (a public hand-off with no artifact schema) and K017 (a declared artifact
+  schema its own writer contradicts) are the artifact-schema pair: K016 is fixed by
+  declaring the shape in contract/app.pkl and regenerating; K017 is fixed on
+  whichever side is wrong -- the declaration or the writer.
   K009, K011, K012, and K015 are
   BLOCK-tier (they fail the gate in default mode); the rest of the K-series is WARN.
 ---
@@ -47,10 +51,10 @@ K009 (unresolved scaffold placeholder), K011 (missing `app_id`), K012
 finding is present — those are FAILING results
 that fail the gate and must be remediated in default mode.  In **strict** mode
 the fingerprint-set also includes the unsuppressed WARNING results
-(K004/K005/K007/K008/K010/K014), which is where the rest of K-series
+(K004/K005/K007/K008/K010/K014/K016/K017), which is where the rest of K-series
 remediation runs.
 
-The active scope decides which rules can appear: K001–K015 are all `scope=APP`,
+The active scope decides which rules can appear: K001–K017 are all `scope=APP`,
 so they surface only on consumer app repos.  The runner auto-detects scope, so
 the SDK repo sees 0 findings.
 
@@ -110,7 +114,7 @@ generated artifact directly** — those are outputs of `pkl eval`, and K004/K005
 catch the staleness that hand-editing causes.  The *only* sanctioned way to
 change a generated artifact is to regenerate it from the contract.  After every
 edit to `contract/**/*.pkl`, `contract/PklProject`, or the Pkl lock (K001–K005,
-K007–K011, K013, K016), the `pkl-eval` gate runs `pkl eval` to verify the contract compiled
+K007–K011, K013, K016, K017), the `pkl-eval` gate runs `pkl eval` to verify the contract compiled
 and regenerated cleanly.  **K006 and K012 are the exceptions**: K006's fix is a
 plain Python edit and K012's is a `pyproject.toml` edit (both see below), neither
 involving `.pkl` or generated artifacts, so both are verified by the standard
@@ -121,6 +125,9 @@ K015 is the same shape — the contract-side fix edits `contract/**/*.pkl` and
 regenerates (`pkl-eval`), the code-side fix edits the `App` class attribute only
 (test-suite gate).  Its declared `orthogonal_gate` is `tests`, so use `pkl-eval`
 additionally whenever the applied fix touched a `.pkl` or a generated artifact.
+**K017 is either too**: its declared `orthogonal_gate` is `pkl-eval` because the
+contract edit is the usual fix, but the writer-side fix is plain Python — use the
+test-suite gate additionally whenever the applied fix touched only `.py`.
 
 The freshness rules (K003/K004/K005) are remediated by running a pkl command
 (`pkl project resolve` and/or `pkl eval -m . contract/app.pkl`), so they are
@@ -700,11 +707,59 @@ hand-editing the generated file.
 
 ---
 
+**K017 ArtifactSchemaWriterMismatch** — a declared artifact schema and the Python
+that writes the artifact disagree: the writer's file extension cannot be the
+declared `format`, or the record class it serialises carries a field the
+declaration omits.  **WARN-tier** (strict mode only).
+`classification = "judgment"` — the finding states *that* the two sides disagree;
+which side is wrong is domain knowledge about the hand-off.
+
+**Decide which side is wrong before editing either.**  The declaration is what a
+consuming app reads, so "make the finding go away" has two opposite fixes and
+picking the convenient one can silently redefine another app's input.  A format
+mismatch usually means the writer changed and the declaration did not; a field the
+writer emits and the declaration omits usually means the field is new and nobody
+declared it.  Neither is a rule.
+
+*Procedure:*
+
+1. **Read both sides.**  The finding names the declaration file, the contract
+   field, and either the extension the writer produces or the record class and
+   field involved.  Follow the `FileReference` at `finding.line` to the writer,
+   and read the declaration entry it is keyed under.
+2. **If the declaration is right**, fix the writer — write the file under an
+   extension the declared `format` can be (`.parquet`; or `.ndjson` / `.jsonl` /
+   `.json`), or drop the undeclared field from the record class.  A plain Python
+   edit, verified by the **test-suite** gate.
+3. **If the writer is right**, correct the declaration in the pkl contract and
+   regenerate with `pkl eval -m . contract/app.pkl` (or `uv run poe generate`),
+   setting `touched_files` the K003-step-4 way so a gate rejection reverts every
+   regenerated artifact.  **Never hand-edit `artifact_schemas.json`.**
+   **requires `pkl`.**  Verified by the `pkl-eval` gate.  A newly declared field
+   needs a real `description` — see the K016 procedure; never invent one to
+   silence the finding.
+4. **Suppression** (strict mode): `# conformance: ignore[K017] <reason>` on the
+   `FileReference` construction the finding anchors on.  Legitimate only when the
+   two sides are *knowingly* allowed to differ, which leaves the consuming side
+   reading an assertion the producer does not honour.  Route every suppression to
+   residue.
+
+The rule is deliberately quiet on anything it cannot resolve — a path assembled
+across functions, an ambiguous path variable, a record produced by a mapper, a
+class that renames fields on the wire.  A finding here therefore means the two
+sides were both read and they disagreed; it is not a heuristic to argue with.
+
+If `pkl` is unavailable and the correct fix is the contract side, route to residue
+with the proposed change in the note rather than hand-editing the generated file.
+
+---
+
 **Suppress outcome (strict mode only, WARNING-tier findings)**: the model may
 propose an inline suppression comment — `// conformance: ignore[Kxxx]
 <8–40 word justification>` for the `.pkl`-source / `PklProject`-anchored rules
 (K001–K005, K007, K008, K010; `//` comments) or `# conformance: ignore[Kxxx]
-<8–40 word justification>` for the artifact/Python-anchored rules (K006 and K016 Python,
+<8–40 word justification>` for the artifact/Python-anchored rules (K006, K016 and
+K017 Python,
 K009 text artifact, K014 `atlan.yaml`; `#` comments) — on the violating line or
 the comment-only
 line directly above it when a legitimate exception exists (e.g. a K001 finding on

@@ -1249,4 +1249,109 @@ RULES: tuple[RuleDefinition, ...] = (
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k016"
         ),
     ),
+    RuleDefinition(
+        id="K017",
+        scope=RuleScope.APP,
+        name="ArtifactSchemaWriterMismatch",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="contract-toolkit",
+        autofixable=False,
+        since="0.23.0",
+        orthogonal_gate="pkl-eval",
+        rationale=(
+            "K016 requires a declaration where a hand-off is public. This rule "
+            "is the next failure along: the declaration exists, and the app's "
+            "own Python contradicts it. That is worse than no declaration at "
+            "all -- an absent one is visibly absent, while a stale one reads as "
+            "a true statement about the file, so a consuming app trusts it and "
+            "builds on it. The same production RCA that motivated ADR-0020 "
+            "traced 73 days of frozen lineage to a column whose real type had "
+            "drifted from what the reader expected; every workflow in the chain "
+            "reported success throughout, because each did exactly what its own "
+            "code said and no layer compared the two beliefs. A writer moving "
+            "on without its declaration is exactly how that gap opens. The SDK "
+            "finds the same disagreement at runtime, but only once a run has "
+            "produced the artifact and only in the environment that ran it; "
+            "this rule finds it in review, before merge, where it costs "
+            "nothing.\n"
+            "\n"
+            "It warns rather than blocks because it is inference about code "
+            "rather than a structural fact about two committed files: the check "
+            "resolves the writer's path and record type through local "
+            "assignments, and although every unresolvable shape is dropped "
+            "rather than guessed at, a WARN tier is the honest disposition for "
+            "a rule whose evidence is a read of Python rather than a diff of "
+            "two artifacts. Nothing in the fleet declares artifact schemas yet, "
+            "so adopting it blocks no app either way."
+        ),
+        short_description=(
+            "A declared artifact schema disagrees with the Python that writes "
+            "the artifact"
+        ),
+        full_description=(
+            "An ``artifactSchemas`` entry in the committed "
+            "``artifact_schemas.json`` contradicts the app's own writer for the "
+            "same ``FileReference`` contract field.\n"
+            "\n"
+            "Two disagreements are reported:\n"
+            "\n"
+            "* **Format.** The writer builds the field's ``FileReference`` from "
+            "a path whose extension the declared ``format`` cannot be -- a "
+            "``.parquet`` path declared ``ndjson``, or a ``.jsonl``/``.ndjson``/"
+            "``.json`` path declared ``parquet``. Any other extension, and a "
+            "reference to a directory, is skipped: a partitioned-parquet "
+            "directory has no extension to disagree with.\n"
+            "* **Fields.** The record class the writer serialises into the "
+            "artifact declares a field -- directly or inherited -- that the "
+            "declaration does not describe. Declared nested paths "
+            "(``attributes.columns[].name``) are compared at their top-level "
+            "segment, since that is the level a record class exposes.\n"
+            "\n"
+            "**What the rule will not do.** Resolution is module-scoped and "
+            "deliberately narrow. A path variable is followed only within the "
+            "file it is assigned in; a name assigned two different extensions, "
+            "a handle opened from two different paths, and a write whose "
+            "argument names more than one candidate record class are each "
+            "recorded as unknown rather than resolved by choosing. Only classes "
+            "defined in the scanned repo count as record types, so a writer "
+            "that serialises through a mapper or a library model is invisible "
+            "to the field half of the rule. A record class that renames fields "
+            "on the wire (``rename=``, ``Field(alias=...)``, "
+            "``alias_generator=``) is skipped entirely, because its attribute "
+            "names are not the artifact's field names. Every one of those is a "
+            "deliberate false negative.\n"
+            "\n"
+            "**Fix -- change whichever side is wrong.** If the declaration is "
+            "right, correct the writer. If the writer is right, edit the pkl "
+            "contract and regenerate:\n"
+            "\n"
+            "    artifactSchemas {\n"
+            '      ["transformed_entities"] = new ArtifactSchema {\n'
+            '        format = "ndjson"\n'
+            "        fields {\n"
+            "          new ArtifactField {\n"
+            '            name = "typeName"\n'
+            '            type = "string"\n'
+            '            description = "Atlan type this record instantiates."\n'
+            "          }\n"
+            "        }\n"
+            "      }\n"
+            "    }\n"
+            "\n"
+            "Then ``pkl eval -m . contract/app.pkl``. Never hand-edit the "
+            "generated ``artifact_schemas.json``: it is a pkl eval output and "
+            "the next toolkit run reverts the edit.\n"
+            "\n"
+            "**Suppress** with ``# conformance: ignore[K017] <reason>`` on the "
+            "``FileReference`` construction. Suppressing states that the "
+            "declaration and the writer are allowed to disagree, which leaves "
+            "the consuming side reading an assertion the producer does not "
+            "honour.\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k017"
+        ),
+    ),
 )
