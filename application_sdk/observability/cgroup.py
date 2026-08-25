@@ -235,6 +235,7 @@ def _parse_kv(raw: str) -> dict[str, float]:
             continue
         try:
             out[parts[0]] = float(parts[1])
+        # conformance: ignore[E014] cpu.stat gains keys across kernel versions and some carry non-numeric values; skipping one malformed line must not lose the rest of the file, and there is nothing to report — the caller sees the key as absent
         except ValueError:
             continue
     return out
