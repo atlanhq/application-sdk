@@ -72,29 +72,18 @@ class InterceptorSettings:
     """Enable structured output collection interceptor (metrics/artifacts)."""
 
     enable_sizing_telemetry: bool = False
-    """Collect per-activity peak memory and CPU throttling for tier sizing.
-
-    Off by default, so a version bump alone changes nothing. A master switch
-    independent of the allow-list, so collection can be stopped without editing
-    per-tenant lists. Measures only; never routes.
+    """Collect per-activity peak memory and CPU throttling. Off by default, and
+    independent of the allow-list so collection can be stopped in one place.
     """
 
     sizing_telemetry_activities: frozenset[str] = frozenset()
-    """Activity names to measure. **Empty collects nothing.**
-
-    Opt-in by name: only activities whose resource use varies with their data are
-    worth measuring, and rows from fixed-cost ones add no information to the
-    dataset the tier table is fitted from. Empty is also fail-closed, so a
-    half-finished config change collects nothing rather than everything.
-
-    ``"*"`` measures all of them — a discovery pass on a test tenant.
+    """Activity names to measure; empty collects nothing, so a half-finished config
+    change is fail-closed. ``"*"`` measures all of them.
     """
 
     sizing_telemetry_poll_seconds: float = 1.0
-    """Peak-memory poll interval when the kernel watermark is not resettable.
-
-    Two file reads per tick, no RPC. ``0`` disables polling, which collects no peak
-    at all on kernels before 6.8 (where ``memory.peak`` is read-only).
+    """Poll interval when the kernel watermark is unusable. Two file reads a tick,
+    no RPC; ``0`` disables polling and collects no peak on kernels before 6.8.
     """
 
     enable_cleanup_interceptor: bool = False

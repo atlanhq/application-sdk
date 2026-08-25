@@ -1,22 +1,5 @@
-"""Durable sink for activity sizing observations.
-
-The OTel histograms in ``sizing`` answer "is this tier wrong". Fitting a rule that
-predicts a tier needs the rows themselves — a histogram bucket cannot give you
-``peak_per_input_byte`` per execution — so each observation is also buffered and
-uploaded as a record.
-
-**Rides the existing observability pipeline rather than adding one.**
-``AtlanObservability`` already does batching, hive partitioning by
-year/month/day/hour, gzipped NDJSON, upload to the deployment store *and* the
-upstream Atlan store when ``ENABLE_ATLAN_UPLOAD`` is set, and retention cleanup.
-That upstream leg is also what makes cross-tenant collection work: records from
-every tenant land under one prefix, already partitioned, with no new transport to
-build or secure.
-
-Every record carries ``schema_version``. The fields here will change — a driver
-variable will be added, a basis renamed — and an analysis reading a mixed pile of
-rows has to be able to tell which contract each one was written against rather
-than inferring it from which keys happen to be present.
+"""Durable rows for tier fitting, on the existing ``AtlanObservability`` pipeline.
+A histogram bucket cannot give you ``peak_per_input_byte`` per execution.
 """
 
 from __future__ import annotations
@@ -45,15 +28,8 @@ logger = get_logger(__name__)
 
 
 class SizingObservabilitySink(AtlanObservability[Any]):
-    """Buffers sizing observations and uploads them as gzipped NDJSON.
-
-    Starts the base class's periodic flush, which is NOT optional. ``add_record``
-    only evaluates its flush condition when a record arrives, so on this workload —
-    ``maxConcurrentActivities: 1``, a merge every 15-30 minutes, KEDA scaling pods to
-    zero in between — a pod typically sees ONE record in its whole life and neither
-    trigger ever fires. The buffer then dies with the process. Every other adaptor
-    (traces, logs, metrics) starts this task; omitting it here silently wrote nothing
-    for a full day of collection.
+    """Buffers observations and uploads them as gzipped NDJSON. The periodic flush
+    is NOT optional: ``add_record`` only checks its trigger when a record arrives.
     """
 
     _flush_task_started: ClassVar[bool] = False
@@ -67,9 +43,8 @@ class SizingObservabilitySink(AtlanObservability[Any]):
         if SizingObservabilitySink._flush_task_started:
             return
         try:
-            # Same loop-or-daemon-thread shape the traces adaptor uses: the sink is
-            # built lazily from inside an activity, so a loop is usually running,
-            # but it must also work when constructed off one.
+            # Loop-or-thread, as the traces adaptor does: built lazily inside an
+            # activity, but must also work when constructed off a loop.
             try:
                 asyncio.get_running_loop().create_task(self._periodic_flush())
             except RuntimeError:
@@ -88,23 +63,15 @@ class SizingObservabilitySink(AtlanObservability[Any]):
             logger.warning("sizing flush loop stopped", exc_info=True)
 
     def process_record(self, record: Any) -> dict[str, Any]:
-        """Flatten one observation into the row that gets written.
-
-        ``app`` and ``deployment`` are stamped here rather than left to the
-        partition path: once records from many tenants sit under one upstream
-        prefix, a row that cannot say which tenant it came from cannot be used to
-        fit that tenant's tiers — and cross-tenant rows must not be pooled blindly,
-        since a tenant's data volume is the very thing being measured.
+        """Flatten one observation into a row. ``app``/``deployment`` are stamped
+        here so a row under a shared prefix still says where it came from.
         """
         row: dict[str, Any] = {
             "schema_version": SIZING_SCHEMA_VERSION,
             "app": APPLICATION_NAME,
             "deployment": DEPLOYMENT_NAME,
-            # REQUIRED by the base class: _flush_records partitions on it
-            # (datetime.fromtimestamp(record["timestamp"])) and raises KeyError
-            # without it — swallowed as best-effort telemetry, so the only symptom
-            # would be an empty prefix. The execution's start, not the flush time,
-            # so a row lands in the hour the activity actually ran.
+            # REQUIRED: the base partitions on it and KeyErrors without it. The
+            # execution's start, so a row lands in the hour the activity ran.
             "timestamp": record.started_at if record.started_at else time(),
         }
         row.update(asdict(record))
@@ -113,45 +80,28 @@ class SizingObservabilitySink(AtlanObservability[Any]):
         row["peak_per_input_byte"] = record.peak_per_input_byte
         row["peak_delta_bytes"] = record.peak_delta_bytes
         row["delta_per_input_byte"] = record.delta_per_input_byte
-        # Written out rather than left for the reader to derive from
-        # concurrency_max: it is the flag that decides which model a row feeds,
-        # and a consumer that forgets to apply it pools two different quantities.
+        # Written out, not derived: it decides which model a row feeds, and a
+        # consumer that forgets it pools two different quantities.
         row["is_attributable"] = record.is_attributable
         return row
 
     async def _flush_records(self, records: list[dict[str, Any]]) -> None:
-        """Flush, and say so at INFO.
-
-        The base logs its success at DEBUG, which is filtered in every deployment —
-        so "is the sink writing?" was unanswerable from logs and had to be settled by
-        exec'ing into a pod and forcing a flush by hand. For the one signal whose
-        whole purpose is to be collected, that is worth a line.
+        """Flush, and say so at INFO — the base logs at DEBUG, which every
+        deployment filters, leaving "is the sink writing?" unanswerable.
         """
         await super()._flush_records(records)
         if records:
             logger.info("sizing: flushed %d observation(s)", len(records))
 
     def _store_sink_enabled(self) -> bool:
-        """Always on: this sink only exists when sizing collection is enabled.
-
-        ``ATLAN_ENABLE_OBSERVABILITY_STORE_SINK`` gates logs, metrics and traces
-        together, and an app that turns it off to stop shipping those would
-        otherwise lose the sizing dataset too — silently, since the only symptom is
-        an empty prefix. AE is exactly that app: it sets the DAPR-sink fallback to
-        false, which resolves this to false.
-
-        Not a loosening of that switch. Collection is already gated twice, by
-        APPLICATION_SDK_ENABLE_SIZING_TELEMETRY and by the per-activity allow-list,
-        so nothing is written unless an operator asked for it by name.
+        """Always on: the shared store-sink flag gates logs/metrics/traces, and an
+        app disabling those would silently lose this dataset. Already gated twice.
         """
         return True
 
     def export_record(self, record: Any) -> None:
-        """No-op: the OTel histograms are emitted by ``sizing.record_observation``.
-
-        Kept separate on purpose. Metrics are for watching, these rows are for
-        fitting, and emitting the histograms from here would tie a live dashboard's
-        correctness to a batching sink's flush schedule.
+        """No-op — histograms come from ``sizing.record_observation``, so a live
+        dashboard does not depend on this sink's flush schedule.
         """
 
 
@@ -160,10 +110,8 @@ _sink_lock = threading.Lock()
 
 
 def get_sink() -> SizingObservabilitySink | None:
-    """The process-wide sink, created on first use, or ``None`` if unavailable.
-
-    Lazy because constructing it touches the filesystem and registers a flush
-    task; a worker with collection disabled should pay neither.
+    """Process-wide sink, built on first use — a worker with collection off should
+    not pay for the filesystem touch or the flush task.
     """
     global _sink
     if _sink is not None:
@@ -187,10 +135,8 @@ def get_sink() -> SizingObservabilitySink | None:
 
 
 def persist(observation: Any) -> None:
-    """Buffer one observation for upload. Never raises.
-
-    Called from an activity's ``finally``, so a sink failure has to cost the record
-    rather than the activity's real outcome.
+    """Buffer one observation. Never raises: called from an activity's ``finally``,
+    so a sink failure must cost the record, not the activity's outcome.
     """
     try:
         sink = get_sink()
@@ -202,12 +148,8 @@ def persist(observation: Any) -> None:
 
 
 async def drain() -> None:
-    """Flush whatever is buffered. Call on worker shutdown.
-
-    The periodic task closes the gap between records; this closes the gap between
-    the last record and the process ending. KEDA scales these pods to zero, so
-    without it the final batch of every pod's life is lost — and on this workload
-    that can be most of the data.
+    """Flush the buffer on worker shutdown. These pools scale to zero, so without
+    it the last batch of every pod's life is lost.
     """
     sink = _sink
     if sink is None:

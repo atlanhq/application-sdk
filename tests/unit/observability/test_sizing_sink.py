@@ -74,11 +74,7 @@ class TestSignalRouting:
         assert OBSERVABILITY_S3_PREFIX_MAP["sizing"].endswith("/sizing")
 
     def test_local_and_remote_maps_agree(self):
-        """Two separate maps drive the local dir and the remote key.
-
-        A signal in only one of them writes to ``other/`` on disk while uploading to
-        ``sizing/`` — consistent enough to work, confusing enough to lose.
-        """
+        """Two separate maps drive the local dir and the remote key."""
         assert LOCAL_OBS_SUBDIR_MAP["sizing"].endswith("/sizing")
         assert set(LOCAL_OBS_SUBDIR_MAP) == set(OBSERVABILITY_S3_PREFIX_MAP)
 
@@ -91,13 +87,7 @@ class TestStoreSinkGate:
     """The sizing sink must not be switched off by an unrelated signal's flag."""
 
     def test_sizing_ignores_the_shared_store_sink_flag(self, sink):
-        """AE resolves ENABLE_OBSERVABILITY_STORE_SINK to False.
-
-        It sets ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK=false to stop shipping logs and
-        metrics, and the store-sink flag falls back to it. Without this override the
-        sizing dataset would be empty on AE with no error anywhere — the exact
-        deployment we built this for.
-        """
+        """AE resolves ENABLE_OBSERVABILITY_STORE_SINK to False."""
         assert sink._store_sink_enabled() is True
 
     def test_other_signals_still_respect_it(self, tmp_path):
@@ -128,12 +118,7 @@ class TestStoreSinkGate:
 
     @pytest.mark.asyncio
     async def test_a_flush_uploads_with_the_shared_flag_off(self, sink, tmp_path):
-        """End to end: the flush must reach the object store, flag or no flag.
-
-        Asserts on the upload rather than a leftover local file — the base uploads
-        and then deletes the staged file, so a passing local-file check would only
-        prove the flush crashed before cleanup.
-        """
+        """End to end: the flush must reach the object store, flag or no flag."""
         uploads: list[tuple[str, str]] = []
 
         async def fake_upload(remote_key, local_path, **kwargs):
@@ -168,11 +153,7 @@ class TestProcessRecord:
         assert row["schema_version"] == SIZING_SCHEMA_VERSION
 
     def test_stamps_app_and_deployment(self, sink):
-        """Cross-tenant rows sit under one prefix; a row must name its origin.
-
-        Pooling tenants blindly would be wrong anyway — a tenant's data volume is
-        the very thing being measured.
-        """
+        """Cross-tenant rows sit under one prefix; a row must name its origin."""
         row = sink.process_record(_observation())
         assert "app" in row
         assert "deployment" in row
@@ -196,11 +177,7 @@ class TestProcessRecord:
         assert row["mean_cpu_cores"] is None
 
     def test_carries_the_baseline_and_the_unbiased_ratio(self, sink):
-        """The delta columns are what a multiplier gets fitted on.
-
-        Without them a reader can only fall back to rows that ran first in their
-        pod, which on a busy tenant throws away most of the dataset.
-        """
+        """The delta columns are what a multiplier gets fitted on."""
         row = sink.process_record(_observation())
         assert row["start_memory_bytes"] == 1024**3
         assert row["peak_delta_bytes"] == 5 * 1024**3
@@ -315,12 +292,7 @@ class TestRecordObservationPersists:
 
 class TestTheFlushActuallyHappens:
     """The bug this class exists for: a full day of collection wrote nothing.
-
-    ``add_record`` only evaluates its flush condition when a record ARRIVES. On this
-    workload — maxConcurrentActivities 1, a merge every 15-30 min, KEDA scaling pods
-    to zero between them — a pod usually sees ONE record and neither the 500-row
-    batch nor the 60s interval is ever re-checked. The buffer died with the process.
-    Every sibling adaptor starts ``_periodic_flush``; this sink did not.
+    ``add_record`` only evaluates its flush condition when a record ARRIVES.
     """
 
     @pytest.mark.asyncio
@@ -382,7 +354,6 @@ class TestTheFlushActuallyHappens:
     @pytest.mark.asyncio
     async def test_flush_logs_at_info(self, sink, tmp_path):
         """'Is it writing?' must be answerable from logs, not by exec-ing into a pod.
-
         The base class logs its success at DEBUG, which every deployment filters.
         """
 

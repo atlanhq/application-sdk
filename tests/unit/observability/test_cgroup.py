@@ -1,8 +1,5 @@
-"""Unit tests for container-level (cgroup) sizing telemetry.
-
-Builds a fake cgroup hierarchy on disk rather than mocking ``open``: the quirks
-that matter are file-shaped (v2's literal ``max``, v1's 2**63 sentinel, a
-read-only ``memory.peak``, a missing ``cpuacct`` mount).
+"""Tests for cgroup sizing telemetry. Builds a real fake hierarchy on disk, not an
+``open`` mock: the quirks that matter are file-shaped.
 """
 
 import asyncio
@@ -113,9 +110,8 @@ class TestResetMemoryPeak:
     def test_unprovable_when_watermark_equals_current_usage(
         self, tmp_path, monkeypatch
     ):
-        """No headroom to observe a drop means the reset cannot be proven.
-
-        Guessing True would report the pod's lifetime watermark as this peak.
+        """No headroom to observe a drop means the reset cannot be proven. Guessing
+        True would report the pod's lifetime watermark as this peak.
         """
         monkeypatch.setattr(
             cgroup, "_MEMORY_PEAK_PATHS", (_write(tmp_path, "memory.peak", "1000"),)
@@ -148,11 +144,8 @@ class TestResetMemoryPeak:
 
 class TestPrepareMemoryWatermark:
     def test_usable_without_a_write_when_nothing_is_stale(self, tmp_path, monkeypatch):
-        """Watermark already at current usage: no earlier peak to clear.
-
-        This is the case that made the watermark path unreachable in practice. On a
-        pool KEDA scales to zero, a pod's first activity sees peak == current, and
-        rejecting it sent every measurement to the 1s poller.
+        """Watermark already at current usage: no earlier peak to clear. This is the
+        case that made the watermark path unreachable in practice.
         """
         peak = tmp_path / "memory.peak"
         peak.write_text("1000")
@@ -217,11 +210,7 @@ class TestPeakDelta:
         assert trace.peak_delta_bytes == 0
 
     def test_two_pods_with_different_history_agree_on_the_delta(self):
-        """The point of the field.
-
-        A cold pod and a warm one running the identical workload report absolute
-        peaks a gigabyte apart, and the delta is what makes them comparable.
-        """
+        """The point of the field."""
         cold = cgroup.ContainerTrace(peak_memory_bytes=2_500, start_memory_bytes=400)
         warm = cgroup.ContainerTrace(peak_memory_bytes=3_600, start_memory_bytes=1_500)
         assert cold.peak_memory_bytes != warm.peak_memory_bytes
@@ -345,9 +334,8 @@ class TestTrackContainerUsage:
     async def test_watermark_mode_catches_a_spike_that_ended(
         self, tmp_path, monkeypatch
     ):
-        """A spike already freed by the time the block exits.
-
-        An endpoint-only sampler would read 1000 and size the tier 10x too small.
+        """A spike already freed by the time the block exits. An endpoint-only sampler
+        would read 1000 and size the tier 10x too small.
         """
         peak = tmp_path / "memory.peak"
         peak.write_text("5000")
@@ -376,12 +364,7 @@ class TestTrackContainerUsage:
     async def test_watermark_mode_on_a_pod_with_no_earlier_peak(
         self, tmp_path, monkeypatch
     ):
-        """peak == current at entry: the shape of a pod's first activity.
-
-        Every row collected on the dev tenants landed here and fell back to
-        polling, so a spike shorter than the poll interval went unrecorded on a
-        kernel whose watermark was available the whole time.
-        """
+        """peak == current at entry: the shape of a pod's first activity."""
         peak = tmp_path / "memory.peak"
         peak.write_text("1000")
         monkeypatch.setattr(cgroup, "_MEMORY_PEAK_PATHS", (str(peak),))

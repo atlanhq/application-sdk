@@ -89,12 +89,8 @@ def _make_mock_client() -> mock.MagicMock:
 
 
 def _WorkerWrapperForDrain():
-    """A real ``AppWorker`` with its Temporal worker and pusher stubbed.
-
-    Built via ``object.__new__`` rather than a hand-rolled fake so the test drives
-    the production ``__aexit__`` and ``_drain_sizing`` — a fake would pass while
-    the shipped shutdown path stayed broken, which is exactly the failure being
-    guarded against here.
+    """A real ``AppWorker`` with its worker and pusher stubbed, so the test drives
+    the production ``__aexit__`` — a fake would pass while shutdown stayed broken.
     """
     from application_sdk.execution._temporal.worker import AppWorker
 
@@ -469,13 +465,8 @@ class TestCreateWorker:
 
     @pytest.mark.asyncio
     async def test_shutdown_drains_buffered_sizing_rows(self, monkeypatch) -> None:
-        """The last batch of a pod's life must not die with the process.
-
-        These pools scale to zero, so a pod often handles a handful of activities
-        and exits. The sink's periodic flush closes the gap *between* records;
-        only this closes the gap between the last record and shutdown. Without it
-        the collector silently loses the tail of every pod — which on a low-rate
-        workload is most of the data.
+        """The last batch of a pod's life must not die with the process: these pools
+        scale to zero, so the tail of every pod would be lost.
         """
         monkeypatch.setenv("APPLICATION_SDK_ENABLE_SIZING_TELEMETRY", "true")
         monkeypatch.setenv("APPLICATION_SDK_SIZING_TELEMETRY_ACTIVITIES", "merge")

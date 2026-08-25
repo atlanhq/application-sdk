@@ -91,12 +91,8 @@ def find_local_files_by_extension(
 
 
 def _report_sizing_inputs(paths: list[str]) -> None:
-    """Report these files' bytes for tier-sizing telemetry.
-
-    Sits on the one path every SDK reader goes through, so an app using
-    ``ParquetFileReader`` / ``JsonFileReader`` contributes the driver variable
-    without writing any code. Inert unless sizing collection is enabled, and it
-    never raises.
+    """Report these files' bytes for sizing. On the path every SDK reader takes, so
+    apps contribute the driver variable without writing code. Inert when off.
     """
     from application_sdk.observability.sizing_inputs import (  # noqa: PLC0415 — circular: observability.sizing_inputs reads storage contracts
         report_local_paths,

@@ -69,11 +69,7 @@ class TestFileReferenceSizing:
         assert got.file_count == 4
 
     def test_unmaterialised_ref_is_skipped(self):
-        """``auto_materialize=False`` leaves no local path.
-
-        Sizing it would cost an object-store call per activity; the app that opted
-        out reports its own bytes instead.
-        """
+        """``auto_materialize=False`` leaves no local path."""
         model = _Model(
             ref=FileReference(storage_path="s3://bucket/key", is_durable=True)
         )
@@ -244,13 +240,7 @@ class TestPeakPerInputByte:
 
 
 class TestReaderChokepoint:
-    """The path that makes AE's merge work without AE writing any code.
-
-    ``_download_files`` is the one function every SDK Parquet/JSON read goes
-    through, so instrumenting it there covers merge's Parquet inputs — merge takes
-    raw ``input_prefixes``, has no FileReference, and would otherwise report
-    nothing at all.
-    """
+    """The path that makes AE's merge work without AE writing any code."""
 
     async def test_locally_present_files_are_reported(self, tmp_path):
         from application_sdk.storage.formats.utils import _download_files

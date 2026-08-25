@@ -1,18 +1,5 @@
-"""Activity resource-sizing telemetry, collected at the interceptor.
-
-An interceptor, not a decorator: ``create_worker`` already attaches SDK
-interceptors to every activity in every v3 app, whereas a decorator would be
-skipped by exactly the teams whose data is most needed. It also reads nothing from
-the activity's signature, so it works for tasks the SDK has never seen.
-
-A *sibling* of ``MetricsInterceptor``, not an extension — this one is gated, and
-the App Vitals path should not gain a background task as a side effect.
-
-Cost: ~4 file reads per activity plus 2 per poll tick, and no RPC. Unlike AE's
-``report_memory_pressure``, whose per-tick heartbeat is a network call, this only
-has to reach the local process — which is what makes a 1s default affordable.
-
-Ships off, and measures only the activities named in the allow-list.
+"""Sizing telemetry at the interceptor, not a decorator: a decorator is skipped by
+exactly the teams whose data is needed. Ships off; allow-list only.
 """
 
 from __future__ import annotations
@@ -42,10 +29,8 @@ logger = get_logger(__name__)
 
 
 def _pod_name() -> str | None:
-    """Which pod this row came from — the join key for overlapping executions.
-
-    Same source the OTel resource attributes use, so a sizing row and a metric from
-    the same pod agree on its name.
+    """Pod name — the join key for overlapping executions. Same source as the OTel
+    resource attributes, so rows and metrics agree.
     """
     return os.environ.get("K8S_POD_NAME") or os.environ.get("HOSTNAME") or None
 
@@ -66,12 +51,8 @@ class _SizingActivityInboundInterceptor(ActivityInboundInterceptor):
         self._activities = activities
 
     def _selected(self, activity_type: str) -> bool:
-        """Whether this activity is on the allow-list.
-
-        Matches the bare task name as well as the qualified one. A v3 activity
-        registers as ``"{app}:{task}"``, but an author reading ``@task async def
-        merge`` writes ``merge`` — and requiring the qualified form would silently
-        collect nothing while the config looked correct.
+        """Whether this activity is allow-listed. Matches the bare task name as
+        well as ``"{app}:{task}"``, or config that looks right collects nothing.
         """
         if WILDCARD in self._activities:
             return True
@@ -81,12 +62,8 @@ class _SizingActivityInboundInterceptor(ActivityInboundInterceptor):
 
     async def execute_activity(self, input: ExecuteActivityInput) -> Any:
         info = activity.info()
-        # EVERY activity is counted, selected or not. What invalidates attribution
-        # is whether anything else was using the pod's memory — not whether we
-        # happened to be measuring it. Counting only the allow-list would let a
-        # measured merge sharing a pod with eight unmeasured activities report
-        # concurrency_max=1, which is the exact silent lie this field exists to
-        # prevent. Cost is a lock and a dict insert; no cgroup reads.
+        # EVERY activity counts, selected or not: what invalidates attribution is
+        # other work using the pod, not whether we were measuring it.
         token, concurrency_now = CENSUS.enter()
         try:
             if not self._selected(info.activity_type or ""):
@@ -107,9 +84,8 @@ class _SizingActivityInboundInterceptor(ActivityInboundInterceptor):
         # compared across executions, and comparing windows is the whole point.
         started_at = time.time()
         outcome = "OK"
-        # Created here so the activity's reads accumulate into it. Reporting is a
-        # no-op for any activity that never got a collector, which is what keeps
-        # report_input_bytes() free to call from a hot read path.
+        # Created here so reads accumulate into it; without one, reporting is a
+        # no-op, which keeps report_input_bytes() free to call from a hot path.
         begin_collection()
         concurrency_max = concurrency_now
         # Bound first so the outer ``finally`` cannot NameError if the tracker
@@ -118,10 +94,8 @@ class _SizingActivityInboundInterceptor(ActivityInboundInterceptor):
         try:
             async with track_container_usage(
                 poll_interval_seconds=self._poll_interval_seconds,
-                # Only the sole occupant may reset the shared kernel counter.
-                # Concurrency can still rise afterwards, which inflates this peak
-                # rather than corrupting it — and concurrency_max records that it
-                # happened, so the analysis is not misled either way.
+                # Only the sole occupant may reset the shared counter. Later
+                # arrivals inflate this peak rather than corrupting it.
                 allow_watermark_reset=concurrency_now <= 1,
             ) as trace:
                 return await self.next.execute_activity(input)
@@ -131,17 +105,15 @@ class _SizingActivityInboundInterceptor(ActivityInboundInterceptor):
             outcome = "ERROR"
             raise
         finally:
-            # peak(), not leave(): this activity still holds its slot until the
-            # outer wrapper releases it, and leaving early would undercount
-            # concurrency for everything else still running.
+            # peak(), not leave(): the slot is still held, and leaving early
+            # would undercount concurrency for everything else running.
             concurrency_max = CENSUS.peak(token)
             # After the ``async with`` exits: the tracker fills the peak and CPU
             # deltas in its own ``finally``, so reading inside would record nothing.
             if trace is not None:
                 duration_s = (time.monotonic_ns() - start_ns) / 1_000_000_000
-                # Read after the activity: by now the readers have reported what
-                # they pulled, and any FileReference the interceptor materialised is
-                # on local disk. args[1] is the Input (args[0] is TaskContext).
+                # Read after the activity, once readers have reported. args[1] is
+                # the Input (args[0] is TaskContext).
                 input_size = describe_inputs(
                     input.args[1] if len(input.args) > 1 else None
                 )
@@ -164,18 +136,8 @@ class _SizingActivityInboundInterceptor(ActivityInboundInterceptor):
 
 
 class SizingTelemetryInterceptor(Interceptor):
-    """Measures what each activity execution consumed.
-
-    Per execution: ``activity.sizing.peak_memory_mib``, ``peak_memory_fraction``,
-    ``cpu_throttled_fraction`` and ``mean_cpu_cores``, plus one structured
-    ``activity_sizing_observation`` log line for offline tier fitting.
-
-    ``activities`` is an opt-in allow-list; empty measures nothing, so being
-    attached is never on its own enough to make this do work.
-
-    Not exported and not accepted via ``create_worker(interceptors=...)``, which
-    makes double-registration — two pollers per activity — impossible by
-    construction rather than by a guard list.
+    """Measures what each execution consumed. Opt-in allow-list, and not accepted
+    via ``create_worker(interceptors=...)`` — no double-registration by design.
     """
 
     def __init__(

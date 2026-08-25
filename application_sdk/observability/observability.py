@@ -39,9 +39,8 @@ LOCAL_OBS_SUBDIR_MAP = {
     "logs": f"{_OBS_MODE}/logs",
     "metrics": f"{_OBS_MODE}/metrics",
     "traces": f"{_OBS_MODE}/traces",
-    # Must be added alongside the S3 prefix below, not just there: the local dir and
-    # the remote key are derived from two different maps, and a signal present in
-    # only one writes to ``other/`` locally while uploading to ``sizing/``.
+    # Must be added alongside the S3 prefix below: a signal in only one map writes
+    # to ``other/`` locally while uploading to ``sizing/``.
     "sizing": f"{_OBS_MODE}/sizing",
 }
 
@@ -50,9 +49,8 @@ OBSERVABILITY_S3_PREFIX_MAP = {
     "logs": f"artifacts/apps/observability/{_OBS_MODE}/logs",
     "metrics": f"artifacts/apps/observability/{_OBS_MODE}/metrics",
     "traces": f"artifacts/apps/observability/{_OBS_MODE}/traces",
-    # Its own prefix rather than the "other" fallback: this is the dataset tier
-    # envelopes get fitted from, and it has to be selectable across tenants without
-    # first filtering out whatever else lands in "other".
+    # Its own prefix, not the "other" fallback: this dataset has to be selectable
+    # across tenants without filtering out everything else in "other".
     "sizing": f"artifacts/apps/observability/{_OBS_MODE}/sizing",
 }
 
@@ -205,15 +203,8 @@ class AtlanObservability(Generic[T], ABC):
         return "other"
 
     def _store_sink_enabled(self) -> bool:
-        """Whether this signal writes to the object store at all.
-
-        Overridable because ``ATLAN_ENABLE_OBSERVABILITY_STORE_SINK`` is one switch
-        over three very different signals. An app that turns it off to stop shipping
-        logs and metrics — AE does, via the ``ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK``
-        fallback — would also silently lose a signal it explicitly opted into, with
-        no error and an empty dataset as the only symptom.
-
-        A subclass may return ``True`` when it is already gated by its own switch.
+        """Whether this signal writes to the object store. Overridable because the
+        shared switch covers three signals, so disabling it can silently drop one.
         """
         return ENABLE_OBSERVABILITY_STORE_SINK
 

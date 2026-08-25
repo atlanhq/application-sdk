@@ -45,11 +45,7 @@ class MockExecuteActivityInput:
 
 
 def _tracker(trace: ContainerTrace, *, fill_on_exit: ContainerTrace | None = None):
-    """A stand-in for ``track_container_usage``.
-
-    ``fill_on_exit`` reproduces the real contract — the tracker fills the trace in
-    *its* ``finally`` — so a double that pre-filled it would hide the ordering bug.
-    """
+    """A stand-in for ``track_container_usage``."""
     import contextlib
 
     calls: list[dict] = []
@@ -350,11 +346,7 @@ class TestSizingInterceptor:
 
 
 class TestAgainstTheRealTracker:
-    """The doubles above pin the contract; this pins the wiring.
-
-    Everything in ``TestSizingInterceptor`` patches the tracker, so all of it would
-    pass if tracker and interceptor disagreed on when the trace is complete.
-    """
+    """The doubles above pin the contract; this pins the wiring."""
 
     async def test_a_peak_reaches_the_observation(self, tmp_path, monkeypatch):
         from application_sdk.observability import cgroup
@@ -516,11 +508,7 @@ class TestConcurrencyAttribution:
         assert obs.is_attributable is True
 
     async def test_concurrent_forbids_the_watermark_reset(self, mock_next):
-        """Two activities resetting one kernel counter is cross-talk, not noise.
-
-        Each would read a peak measured from the other's reset — wrong in an
-        unpredictable direction, where a pod-wide poll is merely coarse.
-        """
+        """Two activities resetting one kernel counter is cross-talk, not noise."""
         import asyncio
 
         started = asyncio.Event()
@@ -650,13 +638,7 @@ class TestConcurrencyAttribution:
     async def test_an_unmeasured_activity_still_invalidates_attribution(
         self, mock_next
     ):
-        """The census counts every activity, not just the allow-listed ones.
-
-        What breaks attribution is another activity using the pod's memory —
-        not whether we happened to be measuring it. Counting only the allow-list
-        would let a measured merge sharing a pod with unmeasured work report
-        concurrency_max=1, which is precisely the silent lie this field prevents.
-        """
+        """The census counts every activity, not just the allow-listed ones."""
         import asyncio
 
         started = asyncio.Event()

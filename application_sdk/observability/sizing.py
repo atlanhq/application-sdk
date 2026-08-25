@@ -1,10 +1,5 @@
-"""What one activity execution consumed — the evidence tier sizing is fitted from.
-
-Collection only: nothing here reads or decides a tier, because a measurement that
-depended on the routing would make the calibration circular.
-
-Labels are bounded on purpose — ``workflow_id`` is a UUID and would blow up every
-histogram it touched.
+"""What one activity execution consumed. Collection only — a measurement that
+read the routing would make the calibration circular. Labels stay bounded.
 """
 
 from __future__ import annotations
@@ -26,26 +21,15 @@ _INSTRUMENTS: dict[str, Any] = {}
 
 _MIB = 1024 * 1024
 
-#: Bump on any change to the record's fields or their meaning. Rows are read
-#: months after they were written, mixed across SDK versions.
-#: 2 — added started_at / pod / concurrency_max / is_attributable. A v1 row cannot
-#: say whether its peak was pod-wide, so v1 and v2 must not be pooled.
-#: 3 — added start_memory_bytes / peak_delta_bytes / delta_per_input_byte, and made
-#: peak_source reach "watermark". A v2 row's peak silently includes memory left
-#: pooled by earlier activities in the same pod, which biases it upward by roughly
-#: a gigabyte with no way to recover the baseline after the fact. So v2 peaks are
-#: usable only for rows that ran first in their pod, and v2 and v3 must not be
-#: pooled when fitting a multiplier.
+#: Bump on any field or meaning change; rows outlive the version that wrote them.
+#: v2 added attribution fields; v3 added the entry baseline. Do not pool versions.
 SIZING_SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True)
 class SizingObservation:
-    """One activity execution's measured resource envelope.
-
-    ``peak_source`` and ``attempt`` travel with the numbers so analysis can segment
-    on them: watermark and polled peaks have different blind spots, and a retry on
-    a warm page cache is not an independent sample.
+    """One execution's measured envelope. ``peak_source`` and ``attempt`` travel
+    with it: peaks have different blind spots, and a retry is not independent.
     """
 
     activity_type: str
@@ -70,20 +54,16 @@ class SizingObservation:
     input_file_count: int | None = None
     input_basis: str | None = None
 
-    # Attribution context. These three make the row self-describing: with
-    # ``pod`` + ``started_at`` + ``duration_seconds`` the analysis can join rows that
-    # overlapped and recover the in-flight set and its combined input itself, so no
-    # in-process bookkeeping of who-ran-with-whom is needed.
+    # Attribution context: pod + started_at + duration let analysis rebuild the
+    # overlap set afterwards, so nothing tracks who-ran-with-whom in-process.
     started_at: float | None = None
     pod: str | None = None
     concurrency_max: int = 1
 
     @property
     def mean_cpu_cores(self) -> float | None:
-        """CPU consumed per wall-clock second.
-
-        Read next to ``cpu_throttled_fraction``: an activity pinned at its quota
-        reports a flattering mean precisely *because* it was starved.
+        """CPU per wall-clock second. Read with ``cpu_throttled_fraction``: a
+        quota-pinned activity reports a flattering mean *because* it was starved.
         """
         if self.cpu_seconds is None or self.duration_seconds <= 0:
             return None
@@ -91,18 +71,14 @@ class SizingObservation:
 
     @property
     def is_attributable(self) -> bool:
-        """Whether the peak belongs to this activity alone.
-
-        False means the reading is pod-wide — still useful, but for fitting a pod
-        envelope, not an activity's.
+        """Whether the peak is this activity's alone. False means pod-wide — still
+        useful, but for a pod envelope rather than an activity's.
         """
         return self.concurrency_max <= 1
 
     @property
     def peak_delta_bytes(self) -> int | None:
-        """Peak above the memory already resident at entry.
-
-        See :attr:`ContainerTrace.peak_delta_bytes`. Fit on this; provision on
+        """Peak above the entry baseline. Fit on this; provision on
         :attr:`peak_memory_bytes`, which is what the OOM killer compares.
         """
         if self.peak_memory_bytes is None or self.start_memory_bytes is None:
@@ -111,13 +87,8 @@ class SizingObservation:
 
     @property
     def peak_per_input_byte(self) -> float | None:
-        """Peak memory per input byte — the ratio a memory tier is fitted from.
-
-        ``None`` without an input size: a peak with no driver variable can size one
-        envelope but cannot key a rule.
-
-        Carries the pod's allocation history, so it is comparable only within one
-        pod. Use :attr:`delta_per_input_byte` to compare across pods.
+        """Peak per input byte. Carries the pod's history, so comparable only
+        within one pod — use :attr:`delta_per_input_byte` across pods.
         """
         if not self.input_bytes or self.peak_memory_bytes is None:
             return None
@@ -125,12 +96,8 @@ class SizingObservation:
 
     @property
     def delta_per_input_byte(self) -> float | None:
-        """The same ratio with the entry baseline removed — comparable across pods.
-
-        This is the multiplier a tier rule should be keyed on. Measured on merge,
-        the two differ by enough to matter: pooling absolute peaks made two tenants
-        look like they needed different coefficients when the difference was
-        entirely how many activities their pods had already served.
+        """The same ratio without the entry baseline — the multiplier to key a rule
+        on. Pooling absolute peaks made two tenants look like they disagreed.
         """
         delta = self.peak_delta_bytes
         if not self.input_bytes or delta is None:
@@ -178,10 +145,8 @@ class SizingObservation:
         )
 
     def has_data(self) -> bool:
-        """Whether anything was measured. A non-cgroup host produces nothing.
-
-        Emitting an all-null row would put it in the dataset the tier table is
-        fitted from, where a null read as a zero picks the smallest tier.
+        """Whether anything was measured. An all-null row in the fitting dataset
+        reads as a zero, which picks the smallest tier.
         """
         return self.peak_memory_bytes is not None or self.cpu_seconds is not None
 
@@ -271,13 +236,8 @@ def _mean_cpu_cores():
 
 
 def record_observation(observation: SizingObservation) -> None:
-    """Emit one observation as OTel histograms plus a structured log line.
-
-    Never raises — called from an activity's ``finally``, where an exception would
-    replace the activity's real outcome with a telemetry bug.
-
-    The log line is the sink that works on every tenant today; a columnar sink is a
-    separate change, hidden behind this function.
+    """Emit one observation as histograms plus a JSON log line. Never raises —
+    called from an activity's ``finally``, where it would mask the real outcome.
     """
     if not observation.has_data():
         return
@@ -317,11 +277,8 @@ def record_observation(observation: SizingObservation) -> None:
         payload["delta_per_input_byte"] = observation.delta_per_input_byte
         payload["peak_per_input_byte"] = observation.peak_per_input_byte
         payload["is_attributable"] = observation.is_attributable
-        # ``schema_version`` matters most HERE, not in the sink. The log line is
-        # what reaches the central log store, so it is the copy most analysis
-        # actually reads — and without the version a reader cannot tell a v2 row
-        # (no baseline, peak biased upward by pooled memory) from a v3 one, which
-        # is exactly the distinction that must not be pooled when fitting.
+        # Versioned here too, not just in the sink: this line reaches the central
+        # log store, so it is the copy most analysis reads.
         payload["schema_version"] = SIZING_SCHEMA_VERSION
         # One JSON object per line, so a log pipeline lifts the dataset with one grep.
         _logger.info(
@@ -329,9 +286,8 @@ def record_observation(observation: SizingObservation) -> None:
             orjson.dumps(payload, default=str).decode(),
         )
 
-        # Durable copy for offline tier fitting. Separate from the log line on
-        # purpose: the log is grep-able on one tenant today, this is what reaches
-        # the upstream store and survives log retention.
+        # Durable copy for fitting: this survives log retention, the line above
+        # is what is queryable today.
         from application_sdk.observability.sizing_sink import (  # noqa: PLC0415 — circular: the sink imports this module's record type
             persist,
         )

@@ -1,21 +1,5 @@
-"""How much data an activity was given — the driver variable for tier sizing.
-
-Peak memory alone says a tier is wrong; it cannot say what to key the tier *on*.
-That needs the input size, so a rule can be fitted and evaluated before the
-activity runs.
-
-Two sources, in order:
-
-1. **Reported bytes** — what the activity actually read, via
-   :func:`report_input_bytes`. The SDK's own file readers call it, so any app going
-   through them is covered without writing code; an app fetching data its own way
-   calls it directly.
-2. **``FileReference`` fields on the Input** — a fallback disk walk, for inputs the
-   interceptor materialised rather than a reader pulling them.
-
-Reported wins: it is what the activity read, where a ref only says what it was
-handed. ``None`` means unknown, never 0 — a zero would fit a rule to inputs nobody
-sized.
+"""Input size — the driver variable a tier rule is keyed on. Reported bytes win
+over a ``FileReference`` walk; ``None`` means unknown, never 0.
 """
 
 from __future__ import annotations
@@ -29,20 +13,15 @@ from application_sdk.observability.logger_adaptor import get_logger
 
 _logger = get_logger(__name__)
 
-# A stat per file, so a pathological ref would walk a whole tree at activity end.
-# Bounded here rather than trusted: the number is telemetry, and a partial count
-# labelled ``truncated`` is more useful than an activity slowed down measuring
-# itself.
+# One stat per file, so bound the walk: a partial count beats an activity slowed
+# down measuring itself.
 _MAX_FILES_WALKED = 10_000
 
 
 @dataclass(frozen=True)
 class InputSize:
-    """Bytes an activity read, and where the number came from.
-
-    ``basis`` segments the data: ``reported`` is what the activity read,
-    ``file_reference`` is what it was handed. Mixing them silently would fit one
-    rule to two different definitions of "input".
+    """Bytes read, plus the ``basis`` they came from — mixing "what it read" with
+    "what it was handed" would fit one rule to two definitions of input.
     """
 
     bytes: int
@@ -52,12 +31,8 @@ class InputSize:
 
 
 class InputCollector:
-    """Accumulates bytes read during one activity execution.
-
-    Created by the sizing interceptor and mutated in place, following
-    ``OutputInterceptor``'s collector pattern. Mutation rather than reassignment is
-    deliberate: a ContextVar *set* inside the activity may not be visible to the
-    interceptor across a thread or context boundary, whereas a shared object is.
+    """Accumulates bytes read during one execution. Mutated in place, not
+    reassigned: a ContextVar set inside the activity may not cross a boundary.
     """
 
     __slots__ = ("bytes", "file_count")
@@ -92,14 +67,8 @@ def end_collection() -> None:
 
 
 def report_input_bytes(num_bytes: int, file_count: int = 1) -> None:
-    """Report bytes this activity read, for tier-sizing telemetry.
-
-    A no-op unless sizing collection is enabled, so it is safe to call
-    unconditionally from a read path. Never raises.
-
-    The SDK's own file readers call this, so most apps need not. Call it directly
-    when an app fetches data the SDK cannot see — a driver query, a vendor client,
-    or object-store reads it issues itself.
+    """Report bytes read. A no-op unless collection is on, so it is safe to call
+    unconditionally; the SDK's readers already do, so most apps need not.
     """
     try:
         collector = _current_inputs.get()
@@ -128,9 +97,8 @@ def report_local_paths(paths: list[str]) -> None:
 
 
 def describe_inputs(input_data: Any) -> InputSize | None:
-    """Size an activity's input, or ``None`` if it cannot be determined.
-
-    Never raises: this runs beside a real activity and must not affect it.
+    """Size an activity's input, or ``None``. Never raises — it runs beside a real
+    activity and must not affect it.
     """
     try:
         collector = _current_inputs.get()
@@ -162,9 +130,8 @@ def _size_from_file_refs(input_data: Any) -> InputSize | None:
     truncated = False
     for ref in refs:
         if not ref.local_path:
-            # Durable but not materialised (``auto_materialize=False``). Sizing it
-            # would cost an object-store call per activity, so the app that opted
-            # out reports its own bytes instead.
+            # Not materialised, so sizing it would cost an object-store call per
+            # activity; the app that opted out reports its own bytes.
             continue
         size, count, hit_cap = _walk(ref.local_path)
         total += size

@@ -30,11 +30,7 @@ class TestCensus:
         assert CENSUS.leave(a) == 2
 
     def test_reports_the_high_water_mark_not_the_entry_count(self):
-        """An activity that started alone and was joined has a pod-wide peak.
-
-        Reading the count at entry would call that reading clean, which is the
-        whole failure this field exists to prevent.
-        """
+        """An activity that started alone and was joined has a pod-wide peak."""
         a, now_a = CENSUS.enter()
         assert now_a == 1  # A genuinely was alone at entry
         b, _ = CENSUS.enter()

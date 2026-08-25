@@ -350,16 +350,8 @@ class AppWorker:
                 self._pusher = None
 
     async def _drain_sizing(self) -> None:
-        """Flush buffered sizing observations before the process ends.
-
-        The sink's periodic task closes the gap *between* records; this closes the
-        gap between the last record and shutdown. It matters more than it sounds:
-        these pools scale to zero, so a pod often handles a handful of activities
-        and then exits, and without this the final batch of every pod's life is
-        lost — on a low-rate workload that can be most of the data.
-
-        Best-effort, like the metrics push: a telemetry flush must never hold up
-        or fail a shutdown.
+        """Flush buffered sizing rows before the process ends — these pools scale to
+        zero, so the last batch would otherwise be lost. Best-effort.
         """
         if not load_interceptor_settings().enable_sizing_telemetry:
             return
@@ -759,13 +751,11 @@ def create_worker(
 
         all_interceptors.append(LivenessInterceptor(on_activity))
 
-    # Before the user-supplied interceptors, so the measured window covers them —
-    # what they hold on the way in is memory this pod had to carry.
+    # Before user interceptors, so what they hold is inside the measured window.
     if interceptor_settings.enable_sizing_telemetry:
         _sizing_activities = interceptor_settings.sizing_telemetry_activities
         if not _sizing_activities:
-            # Fail-closed is silent, so say so rather than leave someone wondering
-            # why no rows arrived.
+            # Fail-closed is silent, so say so.
             logger.warning(
                 "APPLICATION_SDK_ENABLE_SIZING_TELEMETRY is on but "
                 "APPLICATION_SDK_SIZING_TELEMETRY_ACTIVITIES is empty, so nothing "
