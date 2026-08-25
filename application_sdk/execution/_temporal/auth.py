@@ -18,9 +18,10 @@ import asyncio
 import contextlib
 import os
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from application_sdk.constants import APPLICATION_NAME
 from application_sdk.observability.logger_adaptor import get_logger
@@ -119,6 +120,9 @@ class TemporalAuthManager:
     def start_background_refresh(self, client: Client) -> None:
         """Start the background token refresh task.
 
+        Safe to call again after ``shutdown``: a new shutdown event is created
+        so the previous stop does not make the new loop exit immediately.
+
         Args:
             client: The Temporal client whose api_key to update on refresh.
         """
@@ -128,11 +132,23 @@ class TemporalAuthManager:
             )
             return
 
+        # shutdown() leaves the event set. A new generation needs a fresh one
+        # or _refresh_loop sees the leftover and exits without refreshing.
+        self._shutdown_event = asyncio.Event()
         self._refresh_task = asyncio.create_task(
             self._refresh_loop(client),
             name="temporal-auth-refresh",
         )
         logger.info("Background token refresh task started")
+
+    async def restart_background_refresh(self, client: Client) -> None:
+        """Stop the current refresh generation and start one on ``client``.
+
+        Used after a successful Temporal reconnect. Distinct from process
+        teardown: ``shutdown`` only stops; this starts the next generation.
+        """
+        await self.shutdown()
+        self.start_background_refresh(client)
 
     async def shutdown(self) -> None:
         """Shut down the background refresh task."""
@@ -318,3 +334,40 @@ class TemporalAuthManager:
             float(_MIN_REFRESH_INTERVAL_SECONDS),
             min(sleep, float(_MAX_REFRESH_INTERVAL_SECONDS)),
         )
+
+
+async def reconnect_temporal_client(
+    *,
+    connect: Callable[[str | None], Awaitable[Any]],
+    api_key: str | None,
+    auth_manager: TemporalAuthManager | None = None,
+    health_server: Any | None = None,
+) -> tuple[Any, str | None]:
+    """Connect a replacement Temporal client, then switch auth + health onto it.
+
+    The existing refresh loop stays running until the new client is up, so a
+    failed connect does not disable token refresh. On success the old loop is
+    stopped and a new one is pointed at the replacement client.
+
+    Args:
+        connect: Builds a Temporal client from an optional API key.
+        api_key: Token used when no auth manager is configured.
+        auth_manager: Optional manager whose refresh loop is restarted.
+        health_server: Optional health server to re-point at the new client.
+
+    Returns:
+        ``(new_client, key_used)``.
+
+    Raises:
+        Exception: Propagated from token acquire or ``connect``. The existing
+            refresh loop and health client are left unchanged.
+    """
+    key = api_key
+    if auth_manager is not None:
+        key = await auth_manager.acquire_initial_token()
+    client = await connect(key)
+    if auth_manager is not None:
+        await auth_manager.restart_background_refresh(client)
+    if health_server is not None:
+        health_server.set_temporal_client(client)
+    return client, key

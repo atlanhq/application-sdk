@@ -22,6 +22,7 @@ from application_sdk.execution._temporal._activity_errors import (
 from application_sdk.execution._temporal.auth import (
     TemporalAuthConfig,
     TemporalAuthManager,
+    reconnect_temporal_client,
 )
 
 # The method imports _publish_event_via_binding locally, so we mock at its
@@ -508,6 +509,131 @@ class TestStartAndShutdown:
             await manager.shutdown()
 
         assert manager._refresh_task is None
+
+    @pytest.mark.asyncio
+    async def test_start_after_shutdown_starts_a_new_generation(self) -> None:
+        """shutdown() must not permanently disable start_background_refresh.
+
+        The worker supervisor reconnects on the same manager instance. If the
+        leftover shutdown event stays set, the new loop exits immediately and
+        token refresh is gone after the first restart.
+        """
+        manager = _make_manager()
+        seen: list[object] = []
+
+        async def _record_loop(client) -> None:
+            seen.append(client)
+            await manager._shutdown_event.wait()
+
+        client_one = mock.MagicMock(name="ClientOne")
+        client_two = mock.MagicMock(name="ClientTwo")
+        with mock.patch.object(manager, "_refresh_loop", side_effect=_record_loop):
+            manager.start_background_refresh(client_one)
+            await manager.shutdown()
+            assert manager._shutdown_event.is_set()
+
+            manager.start_background_refresh(client_two)
+            assert manager._refresh_task is not None
+            assert not manager._shutdown_event.is_set()
+            await asyncio.sleep(0)
+            assert seen == [client_one, client_two]
+            await manager.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_restart_background_refresh_points_loop_at_new_client(self) -> None:
+        manager = _make_manager()
+        seen: list[object] = []
+
+        async def _record_loop(client) -> None:
+            seen.append(client)
+            await manager._shutdown_event.wait()
+
+        first = mock.MagicMock(name="First")
+        second = mock.MagicMock(name="Second")
+        with mock.patch.object(manager, "_refresh_loop", side_effect=_record_loop):
+            manager.start_background_refresh(first)
+            await manager.restart_background_refresh(second)
+            await asyncio.sleep(0)
+            assert seen == [first, second]
+            await manager.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# reconnect_temporal_client
+# ---------------------------------------------------------------------------
+
+
+class TestReconnectTemporalClient:
+    @pytest.mark.asyncio
+    async def test_connects_then_restarts_refresh_and_rebinds_health(self) -> None:
+        """Success path: connect first, then switch auth + health onto the new client."""
+        auth = mock.MagicMock()
+        auth.acquire_initial_token = mock.AsyncMock(return_value="new-token")
+        auth.restart_background_refresh = mock.AsyncMock()
+        auth.shutdown = mock.AsyncMock()
+        health = mock.MagicMock()
+        new_client = object()
+
+        async def connect(key: str | None) -> object:
+            assert key == "new-token"
+            return new_client
+
+        client, key = await reconnect_temporal_client(
+            connect=connect,
+            api_key="old-token",
+            auth_manager=auth,
+            health_server=health,
+        )
+
+        assert client is new_client
+        assert key == "new-token"
+        auth.acquire_initial_token.assert_awaited_once()
+        auth.restart_background_refresh.assert_awaited_once_with(new_client)
+        health.set_temporal_client.assert_called_once_with(new_client)
+        # Must not stop the old loop before the replacement is up.
+        auth.shutdown.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_failed_connect_leaves_refresh_running(self) -> None:
+        auth = mock.MagicMock()
+        auth.acquire_initial_token = mock.AsyncMock(return_value="new-token")
+        auth.restart_background_refresh = mock.AsyncMock()
+        auth.shutdown = mock.AsyncMock()
+        health = mock.MagicMock()
+
+        async def connect(_key: str | None) -> object:
+            raise RuntimeError("temporal unreachable")
+
+        with pytest.raises(RuntimeError, match="temporal unreachable"):
+            await reconnect_temporal_client(
+                connect=connect,
+                api_key="old-token",
+                auth_manager=auth,
+                health_server=health,
+            )
+
+        auth.restart_background_refresh.assert_not_awaited()
+        auth.shutdown.assert_not_awaited()
+        health.set_temporal_client.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_without_auth_still_rebinds_health(self) -> None:
+        health = mock.MagicMock()
+        new_client = object()
+
+        async def connect(key: str | None) -> object:
+            assert key == "existing-key"
+            return new_client
+
+        client, key = await reconnect_temporal_client(
+            connect=connect,
+            api_key="existing-key",
+            health_server=health,
+        )
+
+        assert client is new_client
+        assert key == "existing-key"
+        health.set_temporal_client.assert_called_once_with(new_client)
 
 
 # ---------------------------------------------------------------------------
