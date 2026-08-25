@@ -44,6 +44,12 @@ class UndeclaredOutput(Output, allow_unbounded_fields=True):
     row_count: int = 0
 
 
+class PlainInput(Input, allow_unbounded_fields=True):
+    """Boundary input with no artifact at all."""
+
+    row_count: int = 0
+
+
 class PlainOutput(Output, allow_unbounded_fields=True):
     """Boundary output with no artifact at all."""
 
@@ -252,6 +258,79 @@ class TestGeneratedLayouts:
         assert "entry point 'mine-queries'" in messages[0]
 
 
+class TestTheWarningNamesAnActionablePath:
+    """The cited path must be one the toolkit will actually write.
+
+    A bundle emits one file per entry point under its wire name and its root
+    may not legally declare ``artifactSchemas`` at all, so citing the flat path
+    to a bundle author sends them somewhere the toolkit never writes.
+    """
+
+    def test_a_single_entrypoint_app_is_pointed_at_the_flat_file(
+        self, tmp_path: Path
+    ) -> None:
+        with warnings.catch_warnings(record=True) as recorded:
+            warnings.simplefilter("always")
+
+            class FlatApp(App):
+                name = "flat-app"
+
+                async def run(self, input: DeclaredInput) -> PlainOutput:
+                    return PlainOutput()
+
+        messages = _boundary_warnings(recorded)
+        assert len(messages) == 1, messages
+        assert "app/generated/artifact_schemas.json" in messages[0]
+        assert "app/generated/run/" not in messages[0]
+
+    def test_a_bundle_entrypoint_is_pointed_at_its_own_nested_file(
+        self, tmp_path: Path
+    ) -> None:
+        with warnings.catch_warnings(record=True) as recorded:
+            warnings.simplefilter("always")
+
+            class NestedApp(App):
+                name = "nested-app"
+
+                @entrypoint
+                async def extract_metadata(self, input: DeclaredInput) -> PlainOutput:
+                    return PlainOutput()
+
+                @entrypoint
+                async def mine_queries(self, input: PlainInput) -> PlainOutput:
+                    return PlainOutput()
+
+        messages = _boundary_warnings(recorded)
+        assert len(messages) == 1, messages
+        assert (
+            "app/generated/extract-metadata/artifact_schemas.json" in messages[0]
+        ), messages[0]
+
+    def test_the_path_cited_is_the_one_that_answered(self, tmp_path: Path) -> None:
+        """When a file exists, name *that* file, not where one would belong."""
+        _write_declarations(
+            tmp_path / "app" / "generated" / "extract-metadata", "unrelated"
+        )
+
+        with warnings.catch_warnings(record=True) as recorded:
+            warnings.simplefilter("always")
+
+            class AnsweredApp(App):
+                name = "answered-app"
+
+                @entrypoint
+                async def extract_metadata(self, input: DeclaredInput) -> PlainOutput:
+                    return PlainOutput()
+
+                @entrypoint
+                async def mine_queries(self, input: PlainInput) -> PlainOutput:
+                    return PlainOutput()
+
+        messages = _boundary_warnings(recorded)
+        assert len(messages) == 1, messages
+        assert "app/generated/extract-metadata/artifact_schemas.json" in messages[0]
+
+
 class TestDegradesRatherThanRaises:
     """Absent and unreadable are different answers, and neither ever raises."""
 
@@ -274,7 +353,9 @@ class TestDegradesRatherThanRaises:
         generated.mkdir(parents=True)
         (generated / "artifact_schemas.json").write_text(body, encoding="utf-8")
 
-        assert _declared_artifact_schema_keys("run") is None, case
+        assert (
+            _declared_artifact_schema_keys("run", is_bundle=False).readable is False
+        ), case
 
     def test_unreadable_declarations_suppress_the_whole_boundary_warning(
         self, tmp_path: Path
@@ -298,14 +379,20 @@ class TestDegradesRatherThanRaises:
         assert _boundary_warnings(recorded) == []
 
     def test_absent_generated_tree_reports_nothing_declared(self) -> None:
-        assert _declared_artifact_schema_keys("run") == frozenset()
+        result = _declared_artifact_schema_keys("run", is_bundle=False)
+
+        assert result.readable is True
+        assert result.keys == frozenset()
 
     def test_a_directory_in_place_of_the_file_reports_nothing_declared(
         self, tmp_path: Path
     ) -> None:
         (tmp_path / "app" / "generated" / "artifact_schemas.json").mkdir(parents=True)
 
-        assert _declared_artifact_schema_keys("run") == frozenset()
+        result = _declared_artifact_schema_keys("run", is_bundle=False)
+
+        assert result.readable is True
+        assert result.keys == frozenset()
 
 
 class TestFileReferenceDetection:

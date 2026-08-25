@@ -3,9 +3,11 @@
 Data crosses app boundaries as files, and at every hand-off the producer's idea
 of the artifact's shape and the consumer's idea of it are independent beliefs
 that nothing checks (ADR-0020).  ``artifactSchemas`` in the app's pkl contract is
-where that shape is written down; the toolkit renders it to
-``app/generated/artifact_schemas.json``, keyed by the name of the
-``FileReference`` field it describes.
+where that shape is written down, keyed by the name of the ``FileReference``
+field it describes.  The toolkit renders it per entry point: a bundle emits
+``app/generated/<wire-name>/artifact_schemas.json`` for each, a
+single-entry-point app emits one flat ``app/generated/artifact_schemas.json``.
+See ``docs/concepts/apps.md`` ("Declaring artifact schemas").
 
 This module answers one question at App registration: *does every
 ``FileReference`` on an entry point's public boundary have a declaration?*
@@ -42,6 +44,7 @@ window rather than the graduation gate the content checks need.
 from __future__ import annotations
 
 import warnings
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, get_args, get_origin
 
@@ -69,7 +72,27 @@ ARTIFACT_SCHEMA_REMOVAL_VERSION = "4.0"
 _ARTIFACT_SCHEMAS_FILENAME = "artifact_schemas.json"
 
 
-def _declared_artifact_schema_keys(entrypoint_name: str) -> frozenset[str] | None:
+@dataclass(frozen=True)
+class _Declarations:
+    """What the generated tree says about one entry point's artifact schemas."""
+
+    keys: frozenset[str] = frozenset()
+    """Declared contract field names.  Empty when nothing is declared."""
+
+    path: Path | None = None
+    """The file that answered, or — when none exists — the file where this entry
+    point's declarations belong, so a warning can name a location the author can
+    actually act on."""
+
+    readable: bool = True
+    """``False`` when a file exists but could not be understood.  The caller
+    skips the entry point entirely rather than reporting every field as
+    undeclared off one bad JSON blob."""
+
+
+def _declared_artifact_schema_keys(
+    entrypoint_name: str, *, is_bundle: bool
+) -> _Declarations:
     """Return the contract field names declared in this entry point's schemas file.
 
     Searches both generated layouts, nested first — mirroring how the handler
@@ -96,16 +119,24 @@ def _declared_artifact_schema_keys(entrypoint_name: str) -> frozenset[str] | Non
     Args:
         entrypoint_name: The entry point's kebab-case wire name, which is also
             its directory name in the generated tree.
+        is_bundle: Whether the app registers more than one entry point.  Only
+            affects which path is *reported* when no file exists — a bundle's
+            declarations belong in its own nested file, a single-entry-point
+            app's in the flat one.
 
     Returns:
-        The declared contract field names — empty when no file exists — or
-        ``None`` when a file exists but could not be understood.
+        A :class:`_Declarations` whose ``path`` is the file that answered, or —
+        when nothing exists — the file where this entry point's declarations
+        belong, chosen by ``is_bundle`` rather than by search order.  ``keys``
+        is empty and ``readable`` is ``False`` when a file exists but could not
+        be understood.
     """
     generated = Path(CONTRACT_GENERATED_DIR)
-    for candidate in (
+    candidates = (
         generated / entrypoint_name / _ARTIFACT_SCHEMAS_FILENAME,
         generated / _ARTIFACT_SCHEMAS_FILENAME,
-    ):
+    )
+    for candidate in candidates:
         try:
             raw = candidate.read_bytes()
         except OSError:
@@ -120,7 +151,7 @@ def _declared_artifact_schema_keys(entrypoint_name: str) -> frozenset[str] | Non
                 candidate,
                 exc_info=True,
             )
-            return None
+            return _Declarations(readable=False, path=candidate)
         schemas = envelope.get("schemas") if isinstance(envelope, dict) else None
         if not isinstance(schemas, dict):
             _logger.warning(
@@ -129,9 +160,16 @@ def _declared_artifact_schema_keys(entrypoint_name: str) -> frozenset[str] | Non
                 "than reporting every field as undeclared.",
                 candidate,
             )
-            return None
-        return frozenset(str(key) for key in schemas)
-    return frozenset()
+            return _Declarations(readable=False, path=candidate)
+        return _Declarations(
+            keys=frozenset(str(key) for key in schemas), path=candidate
+        )
+    # Nothing exists. Name where the declaration *would* land, which depends on
+    # the app's shape, not on the search order: a bundle emits one file per
+    # entry point under its wire name, a single-entry-point app emits one flat
+    # file. Naming the flat path to a bundle author sends them to a file the
+    # toolkit will never write — and that a bundle root cannot legally declare.
+    return _Declarations(path=candidates[0] if is_bundle else candidates[1])
 
 
 def _mentions_file_reference(annotation: Any) -> bool:
@@ -198,17 +236,18 @@ def warn_undeclared_artifact_schemas(
         app_name: The registered app name, for the message.
         entry_points: The app's built entry points, keyed by wire name.
     """
+    is_bundle = len(entry_points) > 1
     try:
         for ep_name, ep in entry_points.items():
-            declared = _declared_artifact_schema_keys(ep_name)
-            if declared is None:
+            declarations = _declared_artifact_schema_keys(ep_name, is_bundle=is_bundle)
+            if not declarations.readable:
                 continue  # Unreadable declarations — logged above; don't guess.
             for direction, contract in (
                 ("input", ep.input_type),
                 ("output", ep.output_type),
             ):
                 for field_name in _boundary_artifact_fields(contract):
-                    if field_name in declared:
+                    if field_name in declarations.keys:
                         continue
                     message = (
                         f"App '{app_name}' entry point '{ep_name}': "
@@ -220,10 +259,11 @@ def warn_undeclared_artifact_schemas(
                         f"app's pkl contract as "
                         f'artifactSchemas {{ ["{field_name}"] = new ArtifactSchema '
                         f"{{ ... }} }} and regenerate, so it lands in "
-                        f"{CONTRACT_GENERATED_DIR}/{_ARTIFACT_SCHEMAS_FILENAME}. "
-                        f"Internal @task contracts are exempt; entry-point "
-                        f"contracts are not. This is a warning today and will "
-                        f"be an error in v{ARTIFACT_SCHEMA_REMOVAL_VERSION}."
+                        f"{declarations.path}. See docs/concepts/apps.md "
+                        f"('Declaring artifact schemas'). Internal @task "
+                        f"contracts are exempt; entry-point contracts are not. "
+                        f"This is a warning today and will be an error in "
+                        f"v{ARTIFACT_SCHEMA_REMOVAL_VERSION}."
                     )
                     warnings.warn(message, DeprecationWarning, stacklevel=3)
                     _logger.warning("%s", message)
