@@ -142,6 +142,10 @@ def _install_args(**overrides: object) -> argparse.Namespace:
         "publish_retry_seconds": 0,
         "install_retry_seconds": 0,
         "timeout_seconds": 600,
+        # The real default, not 0: `time.sleep` is stubbed above, so the settle
+        # costs nothing here, and 0 would disable the pod-churn tolerance
+        # altogether — every test of it would then be testing the wrong branch.
+        "settle_seconds": app.DEFAULT_SETTLE_SECONDS,
     }
     values.update(overrides)
     return argparse.Namespace(**values)
@@ -1815,6 +1819,822 @@ def test_a_timeout_is_never_downgraded(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_deployment_failed_is_a_tenant_app_error() -> None:
     # Callers catching TenantAppError (main(), the workflows) must keep working.
     assert issubclass(app.DeploymentFailed, app.TenantAppError)
+
+
+# ── Benign pod churn is not an install failure (FND-831) ─────────────────────
+# LM's health check is namespace-scoped AND its verdict is an instant: any pod
+# unhealthy at that moment reds the install, including one the platform itself
+# deleted on purpose. The first install onto a fresh GCP tenant failed in 45s
+# exactly that way — KEDA scaled the server deployment to zero while the
+# platform's `atlan-env-seeder` init container was still blocked on a Vault
+# secret whose name encodes the namespace and had not synced yet, so the pod was
+# SIGKILLed mid-init and left phase Failed. The workers recovered; the app was
+# fine.
+#
+# `foreign_failure` could not catch it: it reads pull-failure lines only, and
+# this run had none (`Normal Pulled`). So the tolerance below is by container
+# ownership and reason, and every clause has to name something positively — LM's
+# verdict stays authoritative by default in both directions that matter.
+
+
+@dataclass(frozen=True)
+class _Container:
+    """One container block of `kubectl describe pod`, rendered at real indents.
+
+    The indentation IS the schema the parser reads — container names at two
+    spaces, fields at four, sub-fields at six — so the fixtures render it rather
+    than hand the parser a shape kubectl never emits.
+    """
+
+    name: str
+    image: str
+    state: str = "Running"
+    reason: str = ""
+    exit_code: str = ""
+    last_state: str = ""
+    last_reason: str = ""
+    last_exit_code: str = ""
+    ready: bool = True
+
+    def render(self) -> str:
+        lines = [
+            f"  {self.name}:",
+            "    Container ID:   containerd://c0ffee",
+            f"    Image:          {self.image}",
+            # Present in real output and a trap: `Image ID:` must not be read as
+            # `Image:`, or every container looks digest-pinned.
+            f"    Image ID:       {self.image}@sha256:{'ab' * 32}",
+            f"    State:          {self.state}",
+        ]
+        if self.reason:
+            lines.append(f"      Reason:       {self.reason}")
+        if self.exit_code:
+            lines.append(f"      Exit Code:    {self.exit_code}")
+        if self.last_state:
+            lines.append(f"    Last State:     {self.last_state}")
+            if self.last_reason:
+                lines.append(f"      Reason:       {self.last_reason}")
+            if self.last_exit_code:
+                lines.append(f"      Exit Code:    {self.last_exit_code}")
+        lines.append(f"    Ready:          {self.ready}")
+        lines.append("    Restart Count:  0")
+        return "\n".join(lines)
+
+
+def _describe_pod(
+    name: str,
+    *,
+    status: str = "Running",
+    reason: str = "",
+    init: tuple[_Container, ...] = (),
+    containers: tuple[_Container, ...] = (),
+    padding: int = 0,
+) -> str:
+    """One `kubectl describe pod` block, optionally padded with tail detail.
+
+    `padding` stands in for the volumes/tolerations/events bulk a real block ends
+    with — the reason a budget shared across pods drops whichever pod comes
+    first.
+    """
+    lines = [
+        f"Name:             {name}",
+        "Namespace:        openapi-app",
+        f"Status:           {status}",
+    ]
+    if reason:
+        lines.append(f"Reason:           {reason}")
+    if init:
+        lines.append("Init Containers:")
+        lines.extend(c.render() for c in init)
+    if containers:
+        lines.append("Containers:")
+        lines.extend(c.render() for c in containers)
+    lines.extend(["Conditions:", "  Type           Status", "  Initialized    False"])
+    lines.extend(f"  volume detail {i}" for i in range(padding))
+    lines.extend(["Events:", "  <none>"])
+    return "\n".join(lines) + "\n"
+
+
+#: The platform's own init container. Its image is not ours, which is the whole
+#: discriminator — no allowlist of platform container names to keep current.
+_SEEDER_IMAGE = "ghcr.io/atlanhq/atlan-env-seeder:1.4.2"
+_FAILED_POD = "openapi-server-6b9f7d4c8-x7d2k"
+_HEALTHY_POD = "openapi-worker-7d5c9-aaaaa"
+
+_KILLED_SEEDER = _Container(
+    name="atlan-env-seeder",
+    image=_SEEDER_IMAGE,
+    state="Terminated",
+    reason="Error",
+    exit_code="137",
+    ready=False,
+)
+_DONE_SEEDER = _Container(
+    name="atlan-env-seeder",
+    image=_SEEDER_IMAGE,
+    state="Terminated",
+    reason="Completed",
+    exit_code="0",
+)
+_INITIALISING_APP = _Container(
+    name="openapi-server",
+    image=_IMAGE,
+    state="Waiting",
+    reason="PodInitializing",
+    ready=False,
+)
+_RUNNING_APP = _Container(name="openapi-worker", image=_IMAGE)
+
+#: The incident: a server pod SIGKILLed mid-init beside a worker that recovered.
+_CHURN_DESCRIBE = _describe_pod(
+    _FAILED_POD,
+    status="Failed",
+    init=(_KILLED_SEEDER,),
+    containers=(_INITIALISING_APP,),
+) + _describe_pod(_HEALTHY_POD, init=(_DONE_SEEDER,), containers=(_RUNNING_APP,))
+
+
+def _churn_events(age: str = "21s", deleted: str = _FAILED_POD) -> str:
+    """The events behind the incident, at a settable age.
+
+    `age` is what the settle turns on: the same lines read again after the wait
+    carry a bigger age, and anything still inside the window fired during it.
+    """
+    return (
+        "LAST SEEN   TYPE      REASON     OBJECT   MESSAGE\n"
+        f"{age}   Warning   Failed   pod/{_FAILED_POD}   "
+        'Error: secret "vault-app-creds-x" not found\n'
+        f"{age}   Normal    KEDAScaleTargetDeactivated   "
+        "scaledobject/openapi-server-scale   Deactivated apps/v1.Deployment "
+        "openapi-app/openapi-server\n"
+        f"{age}   Normal    SuccessfulDelete   "
+        f"replicaset/openapi-server-6b9f7d4c8   Deleted pod: {deleted}\n"
+    )
+
+
+# ── Reading `kubectl describe pod` ───────────────────────────────────────────
+
+
+def test_describe_is_parsed_into_pods_and_containers() -> None:
+    pods = app.parse_pod_describe(_CHURN_DESCRIBE)
+    assert [p.name for p in pods] == [_FAILED_POD, _HEALTHY_POD]
+
+    failed, healthy = pods
+    assert failed.phase == "Failed"
+    assert [(c.name, c.init) for c in failed.containers] == [
+        ("atlan-env-seeder", True),
+        ("openapi-server", False),
+    ]
+    seeder, server = failed.containers
+    # The whole point of parsing: which container, running which image.
+    assert seeder.image == _SEEDER_IMAGE
+    assert (seeder.state, seeder.reason, seeder.exit_code) == (
+        "Terminated",
+        "Error",
+        "137",
+    )
+    assert server.image == _IMAGE, (
+        "`Image ID:` must not be read as `Image:` — every container would look "
+        "digest-pinned and the ownership compare would stop discriminating"
+    )
+    assert app._pod_is_unhealthy(failed) and not app._pod_is_unhealthy(healthy)
+
+
+def test_a_pod_level_reason_is_not_read_as_a_containers() -> None:
+    """`Reason: Evicted` sits at column 0; a container's sits at six spaces."""
+    pods = app.parse_pod_describe(
+        _describe_pod(
+            _FAILED_POD,
+            status="Failed",
+            reason="Evicted",
+            containers=(
+                _Container(
+                    name="openapi-server",
+                    image=_IMAGE,
+                    state="Terminated",
+                    reason="Error",
+                    exit_code="1",
+                    ready=False,
+                ),
+            ),
+        )
+    )
+    assert pods[0].reason == "Evicted"
+    assert pods[0].containers[0].reason == "Error"
+
+
+def test_last_state_subfields_are_not_attributed_to_the_current_state() -> None:
+    """A restarted container carries two reasons and two exit codes.
+
+    Merging them loses the OOM guard: a container Waiting in CrashLoopBackOff
+    whose LAST state was OOMKilled must keep its 137 fatal.
+    """
+    container = _Container(
+        name="openapi-server",
+        image=_IMAGE,
+        state="Waiting",
+        reason="CrashLoopBackOff",
+        last_state="Terminated",
+        last_reason="OOMKilled",
+        last_exit_code="137",
+        ready=False,
+    )
+    parsed = app.parse_pod_describe(
+        _describe_pod(_FAILED_POD, status="Failed", containers=(container,))
+    )[0].containers[0]
+    assert (parsed.state, parsed.reason, parsed.exit_code) == (
+        "Waiting",
+        "CrashLoopBackOff",
+        "",
+    )
+    assert (parsed.last_state, parsed.last_reason, parsed.last_exit_code) == (
+        "Terminated",
+        "OOMKilled",
+        "137",
+    )
+
+
+def test_text_before_the_first_pod_is_kept_not_dropped() -> None:
+    """The renderer prints what it parses, so nothing may be lost in parsing."""
+    pods = app.parse_pod_describe(
+        "kubectl: warning about something\n" + _CHURN_DESCRIBE
+    )
+    assert [p.name for p in pods] == ["", _FAILED_POD, _HEALTHY_POD]
+    assert "kubectl: warning" in "\n".join(pods[0].lines)
+    assert not app._pod_is_unhealthy(pods[0])
+
+
+def test_events_text_yields_no_containers() -> None:
+    """The classifier is handed the WHOLE diagnostics blob, most of it events.
+
+    Kept as an unnamed block rather than dropped — a section that vanishes from
+    the dump is the failure mode this parser also exists to fix — but it must
+    contribute no containers, or event text would start excusing things.
+    """
+    pods = app.parse_pod_describe(_churn_events())
+    assert [p.name for p in pods] == [""]
+    assert pods[0].containers == []
+
+
+@pytest.mark.parametrize(
+    "container,unhealthy",
+    [
+        (_RUNNING_APP, False),
+        (_DONE_SEEDER, False),
+        (_INITIALISING_APP, False),
+        (_KILLED_SEEDER, True),
+        (
+            _Container(
+                name="c",
+                image=_IMAGE,
+                state="Waiting",
+                reason="ContainerCreating",
+                ready=False,
+            ),
+            False,
+        ),
+        (
+            _Container(
+                name="c",
+                image=_IMAGE,
+                state="Waiting",
+                reason="CreateContainerConfigError",
+                ready=False,
+            ),
+            True,
+        ),
+        (
+            _Container(
+                name="c",
+                image=_IMAGE,
+                state="Terminated",
+                reason="Completed",
+                exit_code="1",
+                ready=False,
+            ),
+            True,
+        ),
+        # Not-ready on its own is not a failure: with KEDA scale-to-zero an app's
+        # steady state is no pods at all, and a finished init container is
+        # terminated. A Ready assertion would be wrong at least as often as it
+        # helped, which is why it is not the test.
+        (_Container(name="c", image=_IMAGE, state="Running", ready=False), False),
+    ],
+)
+def test_container_health(container: _Container, unhealthy: bool) -> None:
+    parsed = app.parse_pod_describe(_describe_pod("p", containers=(container,)))[
+        0
+    ].containers[0]
+    assert app._container_is_unhealthy(parsed) is unhealthy
+
+
+# ── (1) Container ownership ──────────────────────────────────────────────────
+
+
+def test_a_platform_injected_container_is_not_evidence_about_the_app() -> None:
+    """The incident. The failing container is not running the image under test.
+
+    Inverted rather than an allowlist of platform container names: the container
+    under test is the one running the image we published, and every other
+    container in the pod came from the platform's pod template. Nothing to keep
+    current when the platform renames or adds one.
+    """
+    reason = app.benign_pod_failure(_CHURN_DESCRIBE + _churn_events(), _IMAGE)
+    assert "atlan-env-seeder" in reason
+    assert _SEEDER_IMAGE in reason
+    assert app.foreign_failure(_CHURN_DESCRIBE + _churn_events(), _IMAGE) == [], (
+        "no pull failure here (`Normal Pulled`), which is why the existing "
+        "escape hatch could not catch this and this one had to exist"
+    )
+
+
+def test_an_unreadable_container_image_is_not_excused() -> None:
+    """The misread that must never happen: "not ours, so ignore it".
+
+    An absent `Image:` is not evidence the container belongs to the platform, so
+    it falls through to the reason classifier instead of being waved past.
+    """
+    describe = _describe_pod(
+        _FAILED_POD,
+        status="Failed",
+        containers=(
+            _Container(
+                name="openapi-server",
+                image="",
+                state="Terminated",
+                reason="Error",
+                exit_code="1",
+                ready=False,
+            ),
+        ),
+    )
+    assert app.parse_pod_describe(describe)[0].containers[0].image == ""
+    assert app.benign_pod_failure(describe, _IMAGE) == ""
+
+
+def test_our_own_container_failing_is_never_benign() -> None:
+    """A crash-looping app container is exactly what this check exists to catch."""
+    describe = _describe_pod(
+        _FAILED_POD,
+        status="Failed",
+        init=(_DONE_SEEDER,),
+        containers=(
+            _Container(
+                name="openapi-server",
+                image=_IMAGE,
+                state="Waiting",
+                reason="CrashLoopBackOff",
+                last_state="Terminated",
+                last_reason="Error",
+                last_exit_code="1",
+                ready=False,
+            ),
+        ),
+    )
+    assert app.benign_pod_failure(describe + _churn_events(), _IMAGE) == ""
+
+
+def test_one_unexcused_container_makes_the_whole_verdict_fatal() -> None:
+    """A real breakage usually sits ALONGSIDE benign churn, not instead of it."""
+    broken = _describe_pod(
+        "openapi-worker-broken",
+        status="Failed",
+        containers=(
+            _Container(
+                name="openapi-worker",
+                image=_IMAGE,
+                state="Waiting",
+                reason="CrashLoopBackOff",
+                ready=False,
+            ),
+        ),
+    )
+    assert (
+        app.benign_pod_failure(_CHURN_DESCRIBE + broken + _churn_events(), _IMAGE) == ""
+    )
+
+
+def test_a_digest_pinned_app_container_is_still_ours() -> None:
+    """The pod spec can name the image at a different resolution than --image.
+
+    Reading that as a platform container would excuse a genuinely broken app —
+    so the ownership test reuses the deliberately ours-biased image compare.
+    """
+    digest = f"{_IMAGE.rpartition(':')[0]}@sha256:{'a1' * 32}"
+    describe = _describe_pod(
+        _FAILED_POD,
+        status="Failed",
+        containers=(
+            _Container(
+                name="openapi-server",
+                image=digest,
+                state="Waiting",
+                reason="CrashLoopBackOff",
+                ready=False,
+            ),
+        ),
+    )
+    assert app._is_our_image(digest, _IMAGE)
+    assert app.benign_pod_failure(describe, _IMAGE) == ""
+
+
+# ── (3) The reason classifier ────────────────────────────────────────────────
+
+
+def test_a_config_error_on_our_own_container_is_excused() -> None:
+    """The kubelet could not assemble the container, so the image never ran.
+
+    Same slow secret sync as the incident, landing on the app's own container
+    rather than the platform's init container — the shape the window reopens in
+    on the first install of each new app to a tenant.
+    """
+    describe = _describe_pod(
+        _FAILED_POD,
+        status="Failed",
+        containers=(
+            _Container(
+                name="openapi-server",
+                image=_IMAGE,
+                state="Waiting",
+                reason="CreateContainerConfigError",
+                ready=False,
+            ),
+        ),
+    )
+    reason = app.benign_pod_failure(describe, _IMAGE)
+    assert "createcontainerconfigerror" in reason.lower()
+
+
+def test_an_evicted_pod_is_excused() -> None:
+    describe = _describe_pod(
+        _FAILED_POD,
+        status="Failed",
+        reason="Evicted",
+        containers=(
+            _Container(
+                name="openapi-server",
+                image=_IMAGE,
+                state="Terminated",
+                reason="Error",
+                exit_code="1",
+                ready=False,
+            ),
+        ),
+    )
+    assert "Evicted" in app.benign_pod_failure(describe, _IMAGE)
+
+
+def test_a_scale_down_kill_of_our_own_container_needs_the_events_to_name_it() -> None:
+    """Exit 137 is ambiguous, so the excuse rests on named causal evidence.
+
+    Both halves required: KEDA deactivating the ScaledObject, AND a delete event
+    naming THIS pod. The second is what makes it causal rather than a timestamp
+    correlation with whatever else the namespace was doing.
+    """
+    describe = _describe_pod(
+        _FAILED_POD,
+        status="Failed",
+        containers=(
+            _Container(
+                name="openapi-server",
+                image=_IMAGE,
+                state="Terminated",
+                reason="Error",
+                exit_code="137",
+                ready=False,
+            ),
+        ),
+    )
+    assert "SIGKILL" in app.benign_pod_failure(describe + _churn_events(), _IMAGE)
+    # The delete names a DIFFERENT pod: no evidence about this one.
+    assert (
+        app.benign_pod_failure(
+            describe + _churn_events(deleted="openapi-server-older-zzzzz"), _IMAGE
+        )
+        == ""
+    )
+    # KEDA never deactivated anything: a 137 with no scale-down behind it.
+    assert app.benign_pod_failure(describe, _IMAGE) == ""
+
+
+def test_an_oom_kill_stays_fatal_even_with_a_scale_down_in_the_events() -> None:
+    """A genuine OOM exits 137 too, and says so.
+
+    Excusing it would hide the one app-image failure this exit code is most
+    likely to mean.
+    """
+    describe = _describe_pod(
+        _FAILED_POD,
+        status="Failed",
+        containers=(
+            _Container(
+                name="openapi-server",
+                image=_IMAGE,
+                state="Waiting",
+                reason="CrashLoopBackOff",
+                last_state="Terminated",
+                last_reason="OOMKilled",
+                last_exit_code="137",
+                ready=False,
+            ),
+        ),
+    )
+    assert app.benign_pod_failure(describe + _churn_events(), _IMAGE) == ""
+
+
+def test_unreadable_diagnostics_are_never_benign() -> None:
+    """No parsed unhealthy container is NOT evidence of health.
+
+    The dangerous inversion: a 404 on the snapshot leaves the classifier with
+    nothing to read, and "nothing unhealthy found" would then make every FAILED
+    verdict tolerable.
+    """
+    for text in ("", "deployment failed", "Pods failed in namespace openapi-app"):
+        assert app.benign_pod_failure(text, _IMAGE) == ""
+    # A healthy-looking describe with no unhealthy container is the same case:
+    # LM saw something we cannot, so its verdict stands.
+    assert (
+        app.benign_pod_failure(
+            _describe_pod(
+                _HEALTHY_POD, init=(_DONE_SEEDER,), containers=(_RUNNING_APP,)
+            ),
+            _IMAGE,
+        )
+        == ""
+    )
+
+
+# ── (2) Settling before honouring the verdict ────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "token,seconds",
+    [
+        ("9s", 9),
+        ("2m", 120),
+        ("5m1s", 301),
+        ("3h59m", 14340),
+        ("2d", 172800),
+        ("LAST", None),
+        ("<unknown>", None),
+        ("", None),
+        ("pod/openapi-0", None),
+    ],
+)
+def test_event_age_parsing(token: str, seconds: int | None) -> None:
+    assert app._event_age_seconds(token) == seconds
+
+
+def test_the_settle_window_is_what_tells_churn_from_a_stuck_platform() -> None:
+    """The same lines, read twice: young means still failing, old means settled."""
+    assert app.ongoing_failures(_churn_events(age="21s"), 90) != []
+    assert app.ongoing_failures(_churn_events(age="2m21s"), 90) == []
+    # The header row carries no age and must never read as young.
+    assert (
+        app.ongoing_failures("LAST SEEN   TYPE      REASON   OBJECT   MESSAGE\n", 90)
+        == []
+    )
+    # A Normal event inside the window is not a failure.
+    assert (
+        app.ongoing_failures(
+            "3s   Normal   Pulled   pod/openapi-0   Successfully pulled image\n", 90
+        )
+        == []
+    )
+
+
+def test_a_repeating_warning_keeps_the_verdict(monkeypatch: pytest.MonkeyPatch) -> None:
+    """What makes the tolerance safe: a platform container that never recovers.
+
+    Its `LAST SEEN` stays young because the event keeps re-firing, so the settle
+    sees it and the verdict stands.
+    """
+    transport = _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/events", _ok({"events": _churn_events(age="4s")}))
+            ]
+        ),
+    )
+    still = app._settle(TenantClient(base_url=_TENANT, bearer="t"), _APP_ID, 90)
+    assert still and "vault-app-creds" in still[0]
+    assert transport.paths("GET") == [app.APP_EVENTS_PATH.format(app_id=_APP_ID)], (
+        "the settle must re-read the EVENTS: LM's deployment_status is a terminal "
+        "record and its failure snapshot is frozen, so neither can say the "
+        "namespace is well now"
+    )
+
+
+def test_an_unreadable_settle_read_honours_the_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A read that failed is not a namespace that recovered."""
+    _wire(
+        monkeypatch,
+        StubTransport(routes=[StubRoute("GET", "/events", Response(503, {}))]),
+    )
+    still = app._settle(TenantClient(base_url=_TENANT, bearer="t"), _APP_ID, 90)
+    assert still and "could not be confirmed" in still[0]
+
+
+# ── End to end through install() ─────────────────────────────────────────────
+
+
+def _churn_routes(
+    *,
+    settled_events: str,
+    installed: str = _VERSION,
+    describe: str = _CHURN_DESCRIBE,
+) -> StubTransport:
+    return StubTransport(
+        routes=[
+            StubRoute("GET", "/info", Response(404, {})),
+            StubRoute("POST", "/marketplace/publish", _ok({"version_id": "v1"})),
+            StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+            StubRoute(
+                "GET",
+                "/deployments/",
+                _ok(
+                    {
+                        "deployment_status": "FAILED",
+                        "message": (
+                            f"Pods failed in namespace openapi-app: {_FAILED_POD}"
+                        ),
+                    }
+                ),
+            ),
+            StubRoute(
+                "GET",
+                "/failure",
+                _snapshot_response(
+                    failure_reason="HelmRelease not ready",
+                    pod_events=_churn_events(),
+                    pod_describe=describe,
+                ),
+            ),
+            # The live read inside _dump_failure, then the settle's re-read.
+            StubRoute("GET", "/events", _ok({"events": _churn_events()})),
+            StubRoute("GET", "/events", _ok({"events": settled_events})),
+            StubRoute("GET", "/info", _ok({"version": installed})),
+        ],
+        sticky=[StubRoute("GET", "/releases/", Response(404, {}))],
+    )
+
+
+def test_benign_churn_passes_once_the_namespace_settles(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The FND-831 run, end to end: 45s red becomes a warning and a green leg."""
+    _wire(monkeypatch, _churn_routes(settled_events=_churn_events(age="4m")))
+    outcome = app.install(_install_args())
+    assert outcome.installed_version == _VERSION
+    out = capsys.readouterr().out
+    # On the ::warning:: line itself: `atlan-env-seeder` also appears in the
+    # echoed describe, so a whole-output check would pass on a silent downgrade.
+    assert any(
+        "::warning::" in line and "atlan-env-seeder" in line
+        for line in out.splitlines()
+    )
+    assert "settled" in out
+
+
+def test_churn_that_never_settles_still_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The platform container that genuinely never recovers.
+
+    Same diagnostics, same excuse — and the verdict stands anyway, because the
+    namespace is still warning after the wait. This is what makes rule (1) safe
+    rather than a blanket "ignore init containers".
+    """
+    _wire(monkeypatch, _churn_routes(settled_events=_churn_events(age="6s")))
+    with pytest.raises(app.DeploymentFailed, match="still failing"):
+        app.install(_install_args())
+
+
+def test_settling_does_not_replace_the_version_readback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Downgrading the verdict moves the decision to direct evidence, not past it."""
+    _wire(
+        monkeypatch,
+        _churn_routes(settled_events=_churn_events(age="4m"), installed="older"),
+    )
+    with pytest.raises(app.TenantAppError, match="cannot be confirmed") as caught:
+        app.install(_install_args())
+    assert "benign pod churn" in str(caught.value), (
+        "the read-back failure has to say the verdict was downgraded, or the "
+        "reader chases a version mismatch with no idea a pod also died"
+    )
+
+
+def test_settle_seconds_zero_honours_every_verdict(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The off switch is safe by construction: no settle, no tolerance."""
+    _wire(monkeypatch, _churn_routes(settled_events=_churn_events(age="4m")))
+    with pytest.raises(app.DeploymentFailed):
+        app.install(_install_args(settle_seconds=0))
+    assert "--settle-seconds is 0" in capsys.readouterr().out
+
+
+def test_the_orphan_path_is_unchanged_by_the_churn_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pull failure on a foreign image must not be routed through the settle.
+
+    `foreign_failure` has positive evidence already and costs no wait, so it
+    keeps precedence — and the churn path must not consume the settle's stubbed
+    events read, which is what a wrong ordering would show up as.
+    """
+    transport = _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", Response(404, {})),
+                StubRoute("POST", "/marketplace/publish", _ok({"version_id": "v1"})),
+                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+                StubRoute("GET", "/deployments/", _ok({"deployment_status": "FAILED"})),
+                StubRoute("GET", "/failure", Response(404, {})),
+                StubRoute("GET", "/events", _ok({"events": _ORPHAN_EVENTS})),
+                StubRoute("GET", "/info", _ok({"version": _VERSION})),
+            ],
+            sticky=[StubRoute("GET", "/releases/", Response(404, {}))],
+        ),
+    )
+    assert app.install(_install_args()).installed_version == _VERSION
+    assert (
+        sum("/events" in p for p in transport.paths("GET")) == 1
+    ), "the orphan path must not settle: it has its own positive evidence"
+
+
+# ── The failing pod has to survive the print budget ──────────────────────────
+
+
+def test_the_failing_pod_survives_a_healthy_pods_bulk(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """What made FND-831's own item (1) unverifiable from its CI log.
+
+    `pod_describe` printed as "tail 200 of 542 lines" and the only pod that
+    failed the install was in the dropped head, so the visible evidence was two
+    healthy workers. A budget per pod cannot let one pod crowd out another, and
+    unhealthy-first spends the pod budget on the pods that failed.
+    """
+    describe = _describe_pod(
+        _FAILED_POD,
+        status="Failed",
+        init=(_KILLED_SEEDER,),
+        containers=(_INITIALISING_APP,),
+    ) + _describe_pod(
+        _HEALTHY_POD, init=(_DONE_SEEDER,), containers=(_RUNNING_APP,), padding=400
+    )
+    _dump(
+        monkeypatch,
+        StubRoute("GET", "/failure", _snapshot_response(pod_describe=describe)),
+        StubRoute("GET", "/events", _ok({"events": ""})),
+    )
+    out = capsys.readouterr().out
+    assert f"pod_describe: {_FAILED_POD} — UNHEALTHY" in out
+    assert "Exit Code:    137" in out, (
+        "the failing container's own state is the evidence rule (1) turns on; "
+        "printing 400 lines of a healthy pod instead is how it got lost"
+    )
+    assert out.index(_FAILED_POD) < out.index(
+        _HEALTHY_POD
+    ), "unhealthy pods first, or the pod budget spends itself on healthy ones"
+
+
+def test_an_unparseable_describe_is_still_printed_whole(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Never silently drop a section the parser did not recognise."""
+    _dump(
+        monkeypatch,
+        StubRoute(
+            "GET", "/failure", _snapshot_response(pod_describe="something unexpected")
+        ),
+        StubRoute("GET", "/events", _ok({"events": ""})),
+    )
+    out = capsys.readouterr().out
+    assert "--- pod_describe" in out and "something unexpected" in out
+
+
+def test_only_so_many_pods_are_printed_and_the_rest_are_named(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A budget that drops pods silently reads as "that was all of them"."""
+    describe = "".join(
+        _describe_pod(f"openapi-worker-{i}", containers=(_RUNNING_APP,))
+        for i in range(app._DESCRIBE_MAX_PODS + 2)
+    )
+    _dump(
+        monkeypatch,
+        StubRoute("GET", "/failure", _snapshot_response(pod_describe=describe)),
+        StubRoute("GET", "/events", _ok({"events": ""})),
+    )
+    out = capsys.readouterr().out
+    assert "2 further pod(s) not printed" in out
+    assert "openapi-worker-7" in out
 
 
 # ── "unknown" is not a version ───────────────────────────────────────────────
