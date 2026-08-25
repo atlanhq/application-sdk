@@ -737,6 +737,22 @@ class TestTheValidatorSeam:
             ModelDeclaration(model=object, artifact_format=FORMAT_PARQUET)
         )
 
+    def test_a_zero_column_declaration_is_unsupported_not_a_silent_pass(
+        self, tmp_path: Path
+    ) -> None:
+        """A readable footer plus an empty field map must not derive ``clean``.
+
+        The wrapper rejects this before dispatch; this asserts the direct caller —
+        the path a custom source or an app-side call takes — gets the same answer
+        rather than a scan over nothing that finds nothing.
+        """
+        artifact = _write_parquet(tmp_path / "part.parquet", _HEALTHY, rows=10)
+
+        report = _validate(artifact, _declare())
+
+        assert report.outcome == OUTCOME_UNSUPPORTED
+        assert "zero columns" in report.reason
+
     def test_validating_a_model_directly_reports_unsupported_rather_than_raising(
         self, tmp_path: Path
     ) -> None:

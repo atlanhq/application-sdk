@@ -275,6 +275,59 @@ def test_a_declaration_with_no_format_is_unsupported(tmp_path: Path) -> None:
     assert "names no format" in report.reason
 
 
+@pytest.mark.parametrize("artifact_format", [FORMAT_NDJSON, FORMAT_PARQUET])
+def test_a_field_map_naming_zero_fields_is_unsupported(
+    tmp_path: Path, artifact_format: str
+) -> None:
+    """A scan over zero fields finds nothing, so it would derive ``clean``.
+
+    That is the "looks adopted, validates zero records" state this whole capability
+    exists to remove, so it is rejected before dispatch rather than left for each
+    format to remember. ``ContractSource`` cannot produce one — the loader refuses a
+    zero-field schema and the toolkit refuses to generate one — but a custom
+    ``SchemaSource`` is a supported plug-in, and this is the seam it comes in
+    through. Asserted for both formats because the guard's whole point is that a
+    format inherits it rather than re-implementing it.
+    """
+    validator = _StubValidator(artifact_format=artifact_format)
+
+    report = validate_artifact(
+        tmp_path,
+        _StubSource(FieldMapDeclaration(fields=(), artifact_format=artifact_format)),
+        validators=[validator],
+    )
+
+    _assert_emits(report, OUTCOME_UNSUPPORTED)
+    assert "zero fields" in report.reason
+    assert report.artifact_format == artifact_format
+    # Rejected *before* dispatch: the validator was never handed the artifact, so no
+    # format can turn an empty declaration into a pass on its own.
+    assert validator.seen == []
+
+
+def test_a_model_declaration_is_not_mistaken_for_an_empty_field_map(
+    tmp_path: Path,
+) -> None:
+    """``ModelDeclaration.field_count`` is always 0 — that must stay dispatchable.
+
+    A model enumerates no fields at this layer; delegating to it is exactly what it
+    is for. Guarding the zero-field rejection on ``field_count`` instead of on the
+    declaration type would silently take the whole NDJSON x model cell — the 500-type
+    asset case — offline.
+    """
+    validator = _StubValidator()
+
+    report = validate_artifact(
+        tmp_path,
+        _StubSource(ModelDeclaration(model=_StubValidator)),
+        validators=[validator],
+    )
+
+    _assert_emits(report, OUTCOME_CLEAN)
+    assert report.fields_declared == 0
+    assert validator.seen == [tmp_path]
+
+
 def test_parquet_times_model_is_unsupported(tmp_path: Path) -> None:
     """The one cell that genuinely cannot be checked says so rather than guessing.
 

@@ -173,6 +173,21 @@ class ParquetFooterValidator:
                 ),
             )
 
+        if not declaration.fields:
+            # The wrapper rejects this before dispatch, so this arm exists for the
+            # direct caller that bypasses it. Without it a readable footer plus a
+            # zero-field map is a scan over nothing, which finds nothing, which
+            # derives `clean` — a silent pass reporting as declared. Everything
+            # below may therefore assume at least one declared column.
+            return ArtifactValidationReport.unsupported(
+                artifact_format=FORMAT_PARQUET,
+                schema_source="",
+                reason=(
+                    "the declaration names zero columns, so a footer diff would "
+                    "report as declared while checking nothing"
+                ),
+            )
+
         loaded = _load_pyarrow()
         if loaded is None:
             # pyarrow is extra-only, so its absence is benign and expected on a
@@ -209,7 +224,7 @@ class ParquetFooterValidator:
                 # so this is per-file: each declared column in it is a unit that
                 # could not be judged, not a unit that passed.
                 first_read_error = first_read_error or f"{type(exc).__name__}: {exc}"
-                report.total += len(declaration.fields) or 1
+                report.total += len(declaration.fields)
                 report.failures.extend(
                     _undecodable_failures(declaration.fields, file=file, detail=exc)
                 )
@@ -263,9 +278,10 @@ def _load_pyarrow() -> tuple[Callable[..., object], object] | None:
     try:
         import pyarrow.parquet  # noqa: PLC0415 — optional dep: pyarrow
         from pyarrow import types  # noqa: PLC0415 — optional dep: pyarrow
-    except (
-        ImportError
-    ):  # conformance: ignore[E008] optional dep pyarrow not installed; the caller warns
+    # NB: keep the directive short enough that ruff-format leaves this on one line —
+    # E008 anchors on the `except` line, and a wrapped `except (\n ImportError\n):`
+    # moves the anchor off the comment and silently un-suppresses the finding.
+    except ImportError:  # conformance: ignore[E008] pyarrow is an optional extra
         # Benign: pyarrow is extra-only, so this is an expected install shape and
         # not an error. The warning belongs to the caller, which knows *which*
         # artifact is being skipped and emits it outside any except block so the
@@ -307,15 +323,12 @@ def _undecodable_failures(
 
     Per-column rather than per-part so ``total - passed`` stays equal to
     ``len(failures)``: every declared column in that part genuinely went unchecked.
-    A declaration naming no fields still yields one failure, so a corrupt part can
-    never round down to a clean report.
+
+    ``fields`` is never empty — a zero-field declaration is rejected as
+    ``unsupported`` before any part is opened — so a corrupt part always yields at
+    least one failure and can never round down to a clean report.
     """
     message = f"{type(detail).__name__}: {detail}"
-    if not fields:
-        yield ArtifactValidationFailure(
-            kind="undecodable", file=str(file), errors=[message]
-        )
-        return
     for field in fields:
         yield ArtifactValidationFailure(
             kind="undecodable",
@@ -428,7 +441,10 @@ def _child(container: object, name: str) -> object | None:
     walked a type it did not expect" into a column silently reported missing, and
     the wrapper already fails the whole call open.
     """
-    for field in container:  # type: ignore[attr-defined]
+    # `container` is typed `object` because the arrow types are only imported inside
+    # `_load_pyarrow`, so there is no annotation to narrow it to. Both `pa.Schema`
+    # and `pa.StructType` iterate their fields at runtime.
+    for field in container:  # type: ignore[attr-defined]  # Schema/StructType are iterable
         if getattr(field, "name", None) == name:
             return field
     return None
