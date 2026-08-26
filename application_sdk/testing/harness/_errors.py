@@ -10,9 +10,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
-from application_sdk.errors.leaves import PreconditionError, UnimplementedError
+from application_sdk.errors.leaves import (
+    InvalidInputError,
+    PreconditionError,
+    UnimplementedError,
+)
 
-__all__ = ["HarnessNotBuiltError", "SyncBridgeInAsyncContextError"]
+__all__ = [
+    "HarnessNotBuiltError",
+    "MissingTenantEnvError",
+    "SyncBridgeInAsyncContextError",
+]
 
 
 @dataclass(kw_only=True)
@@ -51,3 +59,21 @@ class HarnessNotBuiltError(UnimplementedError, NotImplementedError):
     code: ClassVar[str] = "UNIMPLEMENTED_HARNESS_NOT_BUILT"
     issue: str | None = None
     component: str | None = "test_harness"
+
+
+@dataclass(kw_only=True)
+class MissingTenantEnvError(InvalidInputError):
+    """The environment carries no tenant for the harness to run against.
+
+    Named for the tenant rather than for the harness because that is what is
+    missing: ``application_sdk.testing.e2e._errors.MissingHarnessEnvError`` is
+    the pre-harness leaf covering the same gap, and it stays until child H
+    re-expresses ``testing/e2e`` over this package. Two leaves with one name and
+    two codes is the confusion this avoids.
+
+    Attributes:
+        field: The variable names that were absent, comma-separated.
+    """
+
+    code: ClassVar[str] = "INVALID_INPUT_HARNESS_TENANT_ENV"
+    field: str | None = "ATLAN_BASE_URL,ATLAN_API_KEY"

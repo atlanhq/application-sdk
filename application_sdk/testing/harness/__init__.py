@@ -52,8 +52,12 @@ Module map:
 ``teardown``
     Purge mechanics, including the batching that is a correctness bound.
 
-Most of it is typed stubs at this point: this package is the scaffold from
-FND-238, and each module names the child issue that fills it in.
+``bridge``, ``outcome``'s vocabulary, ``spec``, ``budgets``, ``expectations`` and
+``identity`` are real; the rest are typed stubs, each naming the child issue that
+fills it in. Nothing outside this package consumes any of it yet — ``testing/e2e``
+is re-expressed over it in child H, and until then the extracted modules are
+pinned against the code they were lifted from by their unit tests rather than by
+being called from it.
 
 The optional ``harness`` extra carries the typed Kubernetes backend for
 ``cluster`` (``pip install 'atlan-application-sdk[harness]'``). It is
@@ -63,10 +67,18 @@ should not pull a Kubernetes client.
 
 from application_sdk.testing.harness._errors import (
     HarnessNotBuiltError,
+    MissingTenantEnvError,
     SyncBridgeInAsyncContextError,
 )
 from application_sdk.testing.harness.bridge import close_loop, run_sync
-from application_sdk.testing.harness.budgets import Budget, BudgetProfile
+from application_sdk.testing.harness.budgets import (
+    CONNECTOR_CI,
+    Budget,
+    BudgetProfile,
+    Call,
+    RequestBudget,
+    Wait,
+)
 from application_sdk.testing.harness.outcome import (
     Expired,
     Indeterminate,
@@ -85,6 +97,8 @@ __all__ = [
     # Raised by every not-yet-implemented scaffold function; also a
     # NotImplementedError, so `except NotImplementedError` still catches it.
     "HarnessNotBuiltError",
+    # No tenant in the ambient environment to run against
+    "MissingTenantEnvError",
     "close_loop",
     "run_sync",
     # Bounded waits
@@ -100,8 +114,12 @@ __all__ = [
     "Stalled",
     "assert_settled",
     # Budgets
+    "CONNECTOR_CI",
     "Budget",
     "BudgetProfile",
+    "Call",
+    "RequestBudget",
+    "Wait",
     # App under test
     "AppUnderTest",
 ]
