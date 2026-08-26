@@ -683,7 +683,7 @@ Attached as a Temporal `ActivityInboundInterceptor`, so an app is covered withou
 
 One row per activity execution, emitted two ways: six OTel histograms under `activity.sizing.*` for dashboards, and a `sizing` prefix in the object store (see [Observability Store Sink](#observability-store-sink)) plus one `activity_sizing_observation` JSON log line for offline fitting.
 
-Three fields decide how a row may be used:
+Four fields decide how a row may be used:
 
 | field | why it matters |
 |---|---|
@@ -692,7 +692,13 @@ Three fields decide how a row may be used:
 | `is_attributable` | `False` means the peak is pod-wide rather than this activity's, because other activities shared the process (`concurrency_max > 1`). Still useful — for fitting a *pod* envelope, not an activity's. Written out rather than left to be derived, since a consumer that forgets it pools two different quantities. |
 | `peak_source` | `watermark` (kernel high-water mark, catches a spike of any duration), `poll` (background sampling, blind to sub-interval spikes), or `unavailable` (no cgroup). A tier fitted to a silent mix of the first two is fitted to an unknown error profile. |
 
-`input_bytes` is the driver variable: peak memory alone says a tier is wrong, but not what to key it on. The SDK's own file readers report it automatically; an app fetching data another way calls `report_input_bytes()` directly.
+`input_bytes` is the driver variable: peak memory alone says a tier is wrong, but not what to key it on. The SDK's own file readers report it automatically; an app fetching data another way calls `report_input_bytes()` directly:
+
+```python
+from application_sdk.observability.sizing_inputs import report_input_bytes
+
+report_input_bytes(len(payload))
+```
 
 Every reader returns `None` rather than a guessed `0` — a missing reading has to stay distinguishable from a real zero, or sizing picks the smallest tier. Nothing is emitted at all unless a cgroup reading was obtained, so on a host without one (local macOS/Windows, or a pod with no memory controller) no rows are produced.
 
