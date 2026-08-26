@@ -36,6 +36,7 @@ from application_sdk.testing.harness.cluster import (
     PodPhase,
     PodState,
     ResourceRef,
+    ServiceTarget,
 )
 from application_sdk.testing.harness.temporal import (
     TemporalReader,
@@ -288,6 +289,7 @@ def test_assert_settled_is_an_unimplemented_stub() -> None:
 
 async def test_every_remaining_stub_names_its_child_issue() -> None:
     from application_sdk.testing.harness import atlas, automation_engine, starters
+    from application_sdk.testing.harness.cluster import HttpRequest, HttpResponse
     from application_sdk.testing.harness.evidence import EvidenceBundle, redact
     from application_sdk.testing.harness.expectations import (
         AssetExpectations,
@@ -299,6 +301,21 @@ async def test_every_remaining_stub_names_its_child_issue() -> None:
 
     expectations = AssetExpectations()
     minter = Minter(clock=lambda: 0, randbelow=lambda _n: 0)
+
+    class _Reader:
+        """Shaped like a ClusterReader so the call is typed, not bypassed."""
+
+        async def deployments(self, namespace: str, selector: str):
+            return ()
+
+        async def pods(self, namespace: str, selector: str):
+            return ()
+
+        def logs(self, namespace: str, selector: str, *, since=None):
+            raise AssertionError("the stub must raise before reading logs")
+
+        async def http(self, target, request: HttpRequest) -> HttpResponse:
+            raise AssertionError("the stub must raise before calling out")
 
     for call in (
         lambda: evaluate_counts({}, expectations),
@@ -320,6 +337,17 @@ async def test_every_remaining_stub_names_its_child_issue() -> None:
         starters.start_via_automation_engine({}),
         starters.start_on_task_queue(
             starters.QueueWorkflowSpec(workflow_type="w", task_queue="q")
+        ),
+        starters.start_via_app_handler(
+            starters.HttpWorkflowSpec(
+                target=ServiceTarget(namespace="ns", service="svc", port=8000),
+                workflow_name="metadata_extraction",
+            ),
+            reader=_Reader(),
+        ),
+        automation_engine.poll_native_status(
+            automation_engine.AERunHandle(workflow_slug="w", run_id="1"),
+            budget=_budget(),
         ),
     ):
         with pytest.raises(HarnessNotBuiltError) as caught:
