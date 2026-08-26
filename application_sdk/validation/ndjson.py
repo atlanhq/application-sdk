@@ -56,7 +56,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, time
-from glob import glob
 from pathlib import Path
 from typing import Callable, Final, Iterator, Mapping
 
@@ -86,7 +85,7 @@ __all__ = ["NdjsonValidator", "iter_ndjson_lines"]
 
 #: Filename suffixes the walk treats as NDJSON record parts, lower-cased.
 #:
-#: **One tuple, both branches.** The directory glob and the single-file check
+#: **One tuple, both branches.** The directory walk and the single-file check
 #: read it from here precisely so they cannot drift apart again — that drift is
 #: the defect this constant exists to prevent (see :func:`iter_ndjson_lines`).
 #:
@@ -125,20 +124,27 @@ def iter_ndjson_lines(path: str | Path) -> Iterator[tuple[str, int, bytes]]:
     which is the honest answer for a path that holds no record parts — strictly
     better than inventing a failure.
 
-    The directory branch globs every suffix in :data:`NDJSON_SUFFIXES` and sorts
-    the union, so ordering stays stable and independent of which extensions a
-    given app happens to write. Both branches read the same tuple, which is what
-    keeps them from diverging again.
+    The directory branch walks once and keeps files whose case-folded suffix is
+    in :data:`NDJSON_SUFFIXES`, sorting the result so ordering stays stable and
+    independent of which extensions a given app happens to write. Both branches
+    read the same tuple through the same case-folded test, which is what keeps
+    them from diverging again — including on case, where a per-suffix glob would
+    be case-sensitive on POSIX and would accept ``PART-0.JSON`` only when the
+    caller named the file rather than its parent directory.
     """
     root = Path(path)
     if root.is_dir():
-        # Union across suffixes, then one sort — sorting per-suffix and
-        # concatenating would order by extension first, which is not stable
-        # against an app adding a second extension later.
-        matched: list[str] = []
-        for suffix in NDJSON_SUFFIXES:
-            matched.extend(glob(str(root / "**" / f"*{suffix}"), recursive=True))
-        files = sorted(set(matched))
+        # One walk, filtered by the same case-folded suffix test the file
+        # branch uses — a glob per suffix would be POSIX case-sensitive, so
+        # PART-0.JSON would be read when named directly and skipped when the
+        # caller named its parent directory. Sorted once at the end so
+        # ordering is stable and independent of which extensions an app
+        # happens to write.
+        files = sorted(
+            str(candidate)
+            for candidate in root.rglob("*")
+            if candidate.is_file() and candidate.suffix.lower() in NDJSON_SUFFIXES
+        )
     elif root.is_file():
         if root.suffix.lower() not in NDJSON_SUFFIXES:
             # Debug, not warning: a sidecar next to the parts is normal, and the

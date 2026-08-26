@@ -798,6 +798,17 @@ def test_the_suffix_check_is_case_insensitive(tmp_path: Path) -> None:
     assert list(iter_ndjson_lines(part)) == [(str(part), 1, b'{"a": 1}')]
 
 
+def test_the_directory_branch_is_case_insensitive_too(tmp_path: Path) -> None:
+    """The case fold has to live on both sides. A per-suffix glob is
+    case-sensitive on POSIX, so an uppercase part would be read when the caller
+    named the file and skipped when it named the parent directory — the same
+    branch asymmetry this change exists to remove."""
+    part = tmp_path / "PART-0.JSON"
+    part.write_bytes(b'{"a": 1}\n')
+
+    assert list(iter_ndjson_lines(tmp_path)) == [(str(part), 1, b'{"a": 1}')]
+
+
 @pytest.mark.parametrize("suffix", [".json", ".jsonl", ".ndjson"])
 def test_every_declared_suffix_is_read_by_the_file_branch(
     tmp_path: Path, suffix: str
@@ -841,17 +852,38 @@ def test_mixed_suffixes_in_one_directory_are_all_read_and_globally_sorted(
 
 
 def test_a_file_is_not_yielded_twice_when_suffixes_overlap(tmp_path: Path) -> None:
-    """`*.json` also matches nothing else here, but the union is de-duplicated so
-    a future overlapping pattern cannot double-count a record."""
+    """One walk filtered by a membership test, so a file matching the rule is
+    visited exactly once however many suffixes are declared — a record can never
+    be double-counted."""
     (tmp_path / "part-0.json").write_bytes(b'{"a": 1}\n')
 
     assert len(list(iter_ndjson_lines(tmp_path))) == 1
 
 
-def test_the_suffix_tuple_is_the_single_source_for_both_branches() -> None:
-    """Guards the drift this whole change exists to prevent: if someone adds a
-    suffix to the glob without adding it here (or vice versa), the branches
-    disagree again. Both read NDJSON_SUFFIXES, so assert it is what gates."""
+def test_the_suffix_tuple_is_the_single_source_for_both_branches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Guards the drift this whole change exists to prevent. Asserting the
+    tuple's literals would pass even if both branches hard-coded the same
+    literals and ignored it, so swap in a suffix no branch could have
+    hard-coded and assert both walks follow it — in *and* out."""
+    from application_sdk.validation import ndjson as ndjson_module
+
+    sentinel = tmp_path / "part-0.sentinelnd"
+    sentinel.write_bytes(b'{"a": 1}\n')
+    declared = tmp_path / "part-0.json"
+    declared.write_bytes(b'{"a": 2}\n')
+
+    monkeypatch.setattr(ndjson_module, "NDJSON_SUFFIXES", (".sentinelnd",))
+
+    assert list(iter_ndjson_lines(sentinel)) == [(str(sentinel), 1, b'{"a": 1}')]
+    assert list(iter_ndjson_lines(tmp_path)) == [(str(sentinel), 1, b'{"a": 1}')]
+    assert list(iter_ndjson_lines(declared)) == []
+
+
+def test_the_declared_suffixes_are_lower_cased_extensions() -> None:
+    """The tuple is compared against ``Path.suffix.lower()``, so an entry that
+    is not a lower-cased, dot-prefixed extension would silently never match."""
     from application_sdk.validation.ndjson import NDJSON_SUFFIXES
 
     assert NDJSON_SUFFIXES == (".json", ".jsonl", ".ndjson")
