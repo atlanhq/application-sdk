@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.29.0
-source-sha:    61913873f10221724cab19322cf060b6b50c3c8b
-source-date:   2026-08-26T02:59:49+01:00
+source-sha:    4d71641e9416d228dceda7a5335da0c36a0b4a46
+source-date:   2026-08-26T08:20:57+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -3106,7 +3106,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Import:** `from application_sdk.testing.e2e import AppConfig`
 - **Also importable from:** `application_sdk.testing.e2e.config`
-- **Signature:** `class AppConfig(app_name: str, ...)`
+- **Signature:** `class AppConfig(app_name: str = '', ...)`
 - **Summary:** Deprecated (removed in v4.0) — use :class:`AppUnderTest`.
 - **Defined in:** `application_sdk/testing/e2e/config.py`
 

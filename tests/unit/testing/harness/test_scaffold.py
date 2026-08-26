@@ -156,7 +156,7 @@ def test_app_under_test_keeps_only_the_fields_anything_reads() -> None:
 
 
 def test_deprecated_app_config_still_accepts_the_dropped_fields() -> None:
-    """An existing AppConfig(...) call site keeps working."""
+    """An existing keyword AppConfig(...) call site keeps working."""
     from application_sdk.testing.e2e import AppConfig
 
     with pytest.warns(DeprecationWarning, match="AppUnderTest"):
@@ -168,8 +168,74 @@ def test_deprecated_app_config_still_accepts_the_dropped_fields() -> None:
             timeout=600,
         )
     assert config.app_name == "my-app"
+    assert config.namespace == "default"
     assert config.handler_port == 8000
+    assert config.app_module == "my_app.main:App"
+    assert config.timeout == 600
     assert isinstance(config, AppUnderTest)
+
+
+def test_deprecated_app_config_preserves_the_original_positional_order() -> None:
+    """The whole reason AppConfig declares an explicit __init__.
+
+    AppUnderTest's field order is (app_name, namespace, handler_port), so a
+    dataclass-generated subclass __init__ would bind these four positionals as
+    namespace="my_app.main:App" and handler_port="default" — accepted silently,
+    wrong at every read. A shim that mis-binds is a silent break.
+    """
+    from application_sdk.testing.e2e import AppConfig
+
+    with pytest.warns(DeprecationWarning):
+        config = AppConfig(
+            "my-app",
+            "my_app.main:App",
+            "default",
+            "ghcr.io/org/my-app:latest",
+        )
+    assert config.app_name == "my-app"
+    assert config.app_module == "my_app.main:App"
+    assert config.namespace == "default"
+    assert config.image == "ghcr.io/org/my-app:latest"
+    assert config.handler_port == 8000
+
+
+def test_deprecated_app_config_accepts_all_seven_positionally() -> None:
+    from application_sdk.testing.e2e import AppConfig
+
+    with pytest.warns(DeprecationWarning):
+        config = AppConfig("a", "m", "ns", "img", 9000, 9001, 600)
+    assert (config.app_name, config.namespace, config.handler_port) == ("a", "ns", 9000)
+    assert (config.worker_health_port, config.timeout) == (9001, 600)
+
+
+def test_deprecated_app_config_stays_mutable() -> None:
+    """AppUnderTest is frozen; the original AppConfig was not. Freezing the shim
+    would be a second silent break in the same class."""
+    from application_sdk.testing.e2e import AppConfig
+
+    with pytest.warns(DeprecationWarning):
+        config = AppConfig(app_name="a", namespace="b")
+    config.timeout = 600
+    config.namespace = "c"
+    assert config.timeout == 600
+    assert config.namespace == "c"
+
+
+def test_app_under_test_stays_frozen() -> None:
+    """The shim's mutability must not leak onto the replacement."""
+    app = AppUnderTest(app_name="a", namespace="b")
+    with pytest.raises((AttributeError, TypeError)):
+        app.namespace = "c"  # type: ignore[misc]
+
+
+def test_deprecated_app_config_carries_no_instance_dict() -> None:
+    """Both classes declare __slots__, so a typo'd field is a failure rather
+    than a silently-ignored attribute."""
+    from application_sdk.testing.e2e import AppConfig
+
+    with pytest.warns(DeprecationWarning):
+        config = AppConfig(app_name="a", namespace="b")
+    assert not hasattr(config, "__dict__")
 
 
 def test_deprecation_names_a_removal_version() -> None:
