@@ -8,15 +8,14 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 import orjson
-from opentelemetry import metrics as _otel_metrics
 
 from application_sdk.observability.cgroup import ContainerTrace
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.metrics import create_histogram
 from application_sdk.observability.sizing_inputs import InputSize
 
 _logger = get_logger(__name__)
 
-_METER_NAME = "application_sdk.sizing"
 _INSTRUMENTS: dict[str, Any] = {}
 
 _MIB = 1024 * 1024
@@ -153,7 +152,7 @@ class SizingObservation:
 
 def _input_mib():
     if "input_mib" not in _INSTRUMENTS:
-        _INSTRUMENTS["input_mib"] = _meter().create_histogram(
+        _INSTRUMENTS["input_mib"] = create_histogram(
             "activity.sizing.input_mib",
             unit="MiBy",
             description=(
@@ -165,13 +164,9 @@ def _input_mib():
     return _INSTRUMENTS["input_mib"]
 
 
-def _meter():
-    return _otel_metrics.get_meter(_METER_NAME)
-
-
 def _peak_memory_mib():
     if "peak_mem" not in _INSTRUMENTS:
-        _INSTRUMENTS["peak_mem"] = _meter().create_histogram(
+        _INSTRUMENTS["peak_mem"] = create_histogram(
             "activity.sizing.peak_memory_mib",
             unit="MiBy",
             description=(
@@ -184,7 +179,7 @@ def _peak_memory_mib():
 
 def _peak_delta_mib():
     if "peak_delta" not in _INSTRUMENTS:
-        _INSTRUMENTS["peak_delta"] = _meter().create_histogram(
+        _INSTRUMENTS["peak_delta"] = create_histogram(
             "activity.sizing.peak_delta_mib",
             unit="MiBy",
             description=(
@@ -198,7 +193,7 @@ def _peak_delta_mib():
 
 def _peak_memory_fraction():
     if "peak_frac" not in _INSTRUMENTS:
-        _INSTRUMENTS["peak_frac"] = _meter().create_histogram(
+        _INSTRUMENTS["peak_frac"] = create_histogram(
             "activity.sizing.peak_memory_fraction",
             unit="1",
             description=(
@@ -211,7 +206,7 @@ def _peak_memory_fraction():
 
 def _cpu_throttled_fraction():
     if "throttle" not in _INSTRUMENTS:
-        _INSTRUMENTS["throttle"] = _meter().create_histogram(
+        _INSTRUMENTS["throttle"] = create_histogram(
             "activity.sizing.cpu_throttled_fraction",
             unit="1",
             description=(
@@ -224,7 +219,7 @@ def _cpu_throttled_fraction():
 
 def _mean_cpu_cores():
     if "cpu_cores" not in _INSTRUMENTS:
-        _INSTRUMENTS["cpu_cores"] = _meter().create_histogram(
+        _INSTRUMENTS["cpu_cores"] = create_histogram(
             "activity.sizing.mean_cpu_cores",
             unit="1",
             description=(

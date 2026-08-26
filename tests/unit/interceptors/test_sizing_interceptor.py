@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -24,7 +24,7 @@ _TRACKER_TARGET = (
 _RECORD_TARGET = (
     "application_sdk.execution._temporal.interceptors.sizing.record_observation"
 )
-_METER_TARGET = "application_sdk.observability.sizing._otel_metrics.get_meter"
+_HISTOGRAM_TARGET = "application_sdk.observability.sizing.create_histogram"
 
 
 @dataclass
@@ -179,11 +179,11 @@ class TestSizingObservation:
 
 class TestRecordObservation:
     @pytest.fixture
-    def mock_meter(self):
+    def mock_histogram(self):
+        """Yields the patched instrument factory; ``.return_value`` is the instrument."""
         sizing_module._INSTRUMENTS.clear()
-        m = MagicMock()
-        with patch(_METER_TARGET, return_value=m):
-            yield m
+        with patch(_HISTOGRAM_TARGET) as factory:
+            yield factory
         sizing_module._INSTRUMENTS.clear()
 
     def _obs(self, **overrides):
@@ -205,16 +205,16 @@ class TestRecordObservation:
         base.update(overrides)
         return SizingObservation(**base)
 
-    def test_records_peak_in_mib(self, mock_meter):
+    def test_records_peak_in_mib(self, mock_histogram):
         sizing_module.record_observation(self._obs())
-        hist = mock_meter.create_histogram.return_value
+        hist = mock_histogram.return_value
         recorded = [c[0][0] for c in hist.record.call_args_list]
         assert 2048.0 in recorded
 
-    def test_labels_are_bounded(self, mock_meter):
+    def test_labels_are_bounded(self, mock_histogram):
         """No workflow_id — a UUID would blow up every histogram."""
         sizing_module.record_observation(self._obs())
-        hist = mock_meter.create_histogram.return_value
+        hist = mock_histogram.return_value
         attrs = hist.record.call_args_list[0][0][1]
         assert set(attrs) == {
             "activity.type",
@@ -224,7 +224,7 @@ class TestRecordObservation:
             "attributable",
         }
 
-    def test_emits_nothing_when_there_is_no_data(self, mock_meter):
+    def test_emits_nothing_when_there_is_no_data(self, mock_histogram):
         sizing_module.record_observation(
             self._obs(
                 peak_memory_bytes=None,
@@ -233,14 +233,14 @@ class TestRecordObservation:
                 cpu_throttled_fraction=None,
             )
         )
-        mock_meter.create_histogram.return_value.record.assert_not_called()
+        mock_histogram.return_value.record.assert_not_called()
 
-    def test_never_raises_when_the_meter_is_broken(self, mock_meter):
+    def test_never_raises_when_the_meter_is_broken(self, mock_histogram):
         """Called from an activity's finally; raising would replace its outcome."""
-        mock_meter.create_histogram.side_effect = RuntimeError("otel down")
+        mock_histogram.side_effect = RuntimeError("otel down")
         sizing_module.record_observation(self._obs())  # must not raise
 
-    def test_logs_one_json_line_with_the_marker(self, mock_meter):
+    def test_logs_one_json_line_with_the_marker(self, mock_histogram):
         with patch.object(sizing_module, "_logger") as mock_log:
             sizing_module.record_observation(self._obs())
         msg, payload = mock_log.info.call_args[0]
@@ -423,13 +423,13 @@ class TestAgainstTheRealTracker:
         with (
             patch(_ACTIVITY_TARGET) as mock_act,
             patch.object(sizing_module, "_logger") as mock_log,
-            patch(_METER_TARGET) as mock_meter,
+            patch(_HISTOGRAM_TARGET) as mock_histogram,
         ):
             mock_act.info.return_value = MockActivityInfo()
             await interceptor.execute_activity(MockExecuteActivityInput())
 
         mock_log.info.assert_not_called()
-        mock_meter.assert_not_called()
+        mock_histogram.assert_not_called()
 
 
 class TestInputSizeReachesTheRecord:

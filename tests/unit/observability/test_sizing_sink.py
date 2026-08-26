@@ -273,7 +273,7 @@ class TestRecordObservationPersists:
         with (
             patch("application_sdk.observability.sizing_sink.persist") as mock_persist,
             patch(
-                "application_sdk.observability.sizing._otel_metrics.get_meter",
+                "application_sdk.observability.sizing.create_histogram",
                 return_value=MagicMock(),
             ),
         ):
