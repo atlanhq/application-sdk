@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.28.3
-source-sha:    816d6fd930c6524ddcf2bcba0f433b094ee46473
-source-date:   2026-08-25T02:45:24+01:00
+source-sha:    552d36d15f0be66f01885adcc7b51c20e9406128
+source-date:   2026-08-25T22:34:28+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -18,7 +18,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 
 | Subpackage | Purpose | Exports |
 |---|---|---|
-| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 42 |
+| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 43 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 20 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 34 |
@@ -29,13 +29,13 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
-| `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 27 |
+| `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 28 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 97 |
-| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 43 |
+| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
 
@@ -257,6 +257,13 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Summary:** Wrap @task methods on an instance to execute as Temporal activities.
 - **Defined in:** `application_sdk/app/base.py`
 
+#### `canonical_workflow_type`
+
+- **Import:** `from application_sdk.app import canonical_workflow_type`
+- **Signature:** `canonical_workflow_type(app_name: str, ep: EntryPointMetadata)`
+- **Summary:** The convention-derived Temporal workflow type for *ep*.
+- **Defined in:** `application_sdk/app/entrypoint.py`
+
 #### `entrypoint_module_segment`
 
 - **Import:** `from application_sdk.app import entrypoint_module_segment`
@@ -267,7 +274,7 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 #### `generate_workflow_class`
 
 - **Import:** `from application_sdk.app.base import generate_workflow_class`
-- **Signature:** `generate_workflow_class(app_cls: type[App], ep: EntryPointMetadata) -> type`
+- **Signature:** `generate_workflow_class(app_cls: type[App], ep: EntryPointMetadata, workflow_name: str | None = None) -> type`
 - **Summary:** Generate a Temporal workflow class for one entry point.
 - **Defined in:** `application_sdk/app/base.py`
 
@@ -2593,6 +2600,13 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/observability/events.py`
 
+#### `ARTIFACT_VALIDATION_POSTURE_EVENT`
+
+- **Import:** `from application_sdk.observability.events import ARTIFACT_VALIDATION_POSTURE_EVENT`
+- **Signature:** `ARTIFACT_VALIDATION_POSTURE_EVENT: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/events.py`
+
 #### `ASSET_VALIDATION_EVENT`
 
 - **Import:** `from application_sdk.observability.events import ASSET_VALIDATION_EVENT`
@@ -3121,7 +3135,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Import:** `from application_sdk.testing.full_dag import BaseFullDAGE2ETest`
 - **Signature:** `class BaseFullDAGE2ETest`
-- **Summary:** Pytest base — subclass per connector, set class attrs.
+- **Summary:** Deprecated (v4.0) — pytest base; use ``application_sdk.testing.e2e.BaseE2ETest``.
 - **Defined in:** `application_sdk/testing/full_dag/base.py`
 
 #### `BaseIntegrationTest`
@@ -3299,7 +3313,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Import:** `from application_sdk.testing.full_dag import SQLAppE2EFullTest`
 - **Signature:** `class SQLAppE2EFullTest`
-- **Summary:** Full-DAG e2e harness pre-wired for SQL connectors.
+- **Summary:** Deprecated (v4.0) — SQL full-DAG base; use ``application_sdk.testing.e2e.SQLAppE2ETest``.
 - **Defined in:** `application_sdk/testing/full_dag/sql_app.py`
 
 #### `SQLAppE2ETest`
@@ -3343,14 +3357,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Import:** `from application_sdk.testing.full_dag import build_ae_payload`
 - **Signature:** `build_ae_payload(*, *, ...)`
-- **Summary:** Assemble the AE submit body.
+- **Summary:** Deprecated (v4.0) — AE submit body; use ``application_sdk.testing.e2e.payload``.
 - **Defined in:** `application_sdk/testing/full_dag/payload.py`
 
 #### `build_seed_dag`
 
 - **Import:** `from application_sdk.testing.full_dag import build_seed_dag`
 - **Signature:** `build_seed_dag(*, *, ...)`
-- **Summary:** Build a seed-version DAG matching the connector's manifest.json shape.
+- **Summary:** Deprecated (v4.0) — seed-version DAG; use ``application_sdk.testing.e2e.payload``.
 - **Defined in:** `application_sdk/testing/full_dag/payload.py`
 
 #### `clean_app_registry`
@@ -3766,6 +3780,14 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** A declaration artifact exists but could not be turned into a declaration.
 - **Defined in:** `application_sdk/validation/sources.py`
 
+#### `ArtifactValidationBlockedError`
+
+- **Import:** `from application_sdk.validation import ArtifactValidationBlockedError`
+- **Also importable from:** `application_sdk.validation.interceptor`
+- **Signature:** `class ArtifactValidationBlockedError(*, ...)`
+- **Summary:** A hard-mode app's artifact validation failed a hand-off.
+- **Defined in:** `application_sdk/validation/interceptor.py`
+
 #### `ArtifactValidationFailure`
 
 - **Import:** `from application_sdk.validation import ArtifactValidationFailure`
@@ -3781,6 +3803,13 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Signature:** `class ArtifactValidationReport(artifact_format: str = '', ...)`
 - **Summary:** Aggregate outcome of validating one artifact against one declaration.
 - **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `AssetArtifactReport`
+
+- **Import:** `from application_sdk.validation import AssetArtifactReport`
+- **Signature:** `class AssetArtifactReport(artifact_format: str = '', ...)`
+- **Summary:** The NDJSON x ``ModelSource`` cell's report: the shared shape plus asset detail.
+- **Defined in:** `application_sdk/validation/assets.py`
 
 #### `AssetValidationFailure`
 
@@ -3844,6 +3873,22 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** A declaration that *is* an executable typed model — e.g. pyatlan_v9's ``Asset``.
 - **Defined in:** `application_sdk/validation/sources.py`
 
+#### `NdjsonValidator`
+
+- **Import:** `from application_sdk.validation import NdjsonValidator`
+- **Also importable from:** `application_sdk.validation.ndjson`
+- **Signature:** `class NdjsonValidator()`
+- **Summary:** Streams an NDJSON artifact and checks every record against a field map.
+- **Defined in:** `application_sdk/validation/ndjson.py`
+
+#### `ParquetFooterValidator`
+
+- **Import:** `from application_sdk.validation import ParquetFooterValidator`
+- **Also importable from:** `application_sdk.validation.parquet`
+- **Signature:** `class ParquetFooterValidator()`
+- **Summary:** Diff a parquet artifact's footer schema against a field-map declaration.
+- **Defined in:** `application_sdk/validation/parquet.py`
+
 #### `ReferentialFailure`
 
 - **Import:** `from application_sdk.validation import ReferentialFailure`
@@ -3861,6 +3906,14 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 
 ### Functions
 
+#### `artifact_enforcement`
+
+- **Import:** `from application_sdk.validation import artifact_enforcement`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `artifact_enforcement(report: 'ArtifactValidationReport', *, enforce: bool)`
+- **Summary:** What the app's posture does with one report — the single decision site.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
 #### `artifact_schema_paths`
 
 - **Import:** `from application_sdk.validation import artifact_schema_paths`
@@ -3868,6 +3921,14 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Signature:** `artifact_schema_paths(*, entrypoint: str = '', generated_dir: Path | None = None)`
 - **Summary:** Where an entrypoint's declaration file is looked for, in order.
 - **Defined in:** `application_sdk/validation/sources.py`
+
+#### `artifact_validation_enforced`
+
+- **Import:** `from application_sdk.validation import artifact_validation_enforced`
+- **Also importable from:** `application_sdk.validation.interceptor`
+- **Signature:** `artifact_validation_enforced(app_name: str)`
+- **Summary:** :func:`resolve_artifact_enforcement` for a registered app name.
+- **Defined in:** `application_sdk/validation/interceptor.py`
 
 #### `artifact_validation_event_fields`
 
@@ -3885,6 +3946,36 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** Compact per-failure drill-down for the outcome event, as one JSON string.
 - **Defined in:** `application_sdk/validation/artifacts.py`
 
+#### `artifact_validation_mode`
+
+- **Import:** `from application_sdk.validation import artifact_validation_mode`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `artifact_validation_mode(*, enforce: bool, enabled: bool = True)`
+- **Summary:** Render the resolved posture for an app as its event value.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `asset_validation_event_fields`
+
+- **Import:** `from application_sdk.validation import asset_validation_event_fields`
+- **Signature:** `asset_validation_event_fields(report: AssetValidationReport, *, ...)`
+- **Summary:** Build ``ASSET_VALIDATION_EVENT``'s attribute map from an asset report.
+- **Defined in:** `application_sdk/validation/assets.py`
+
+#### `asset_validation_matrix_json`
+
+- **Import:** `from application_sdk.validation import asset_validation_matrix_json`
+- **Signature:** `asset_validation_matrix_json(report: AssetValidationReport, *, max_items: int = ASSET_VALIDATION_MAX_ITEMS_PER_AXIS)`
+- **Summary:** Compact per-failure matrix for the outcome event, as one JSON string.
+- **Defined in:** `application_sdk/validation/assets.py`
+
+#### `boundary_contract_types`
+
+- **Import:** `from application_sdk.validation import boundary_contract_types`
+- **Also importable from:** `application_sdk.validation.interceptor`
+- **Signature:** `boundary_contract_types(app_name: str)`
+- **Summary:** Every contract class that sits on one of ``app_name``'s public boundaries.
+- **Defined in:** `application_sdk/validation/interceptor.py`
+
 #### `builtin_format_validators`
 
 - **Import:** `from application_sdk.validation import builtin_format_validators`
@@ -3901,6 +3992,45 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** Every contract field name declared for one entrypoint.
 - **Defined in:** `application_sdk/validation/sources.py`
 
+#### `entrypoint_index`
+
+- **Import:** `from application_sdk.validation import entrypoint_index`
+- **Also importable from:** `application_sdk.validation.interceptor`
+- **Signature:** `entrypoint_index(app_name: str)`
+- **Summary:** Map every Temporal workflow type ``app_name`` registers to its entry point.
+- **Defined in:** `application_sdk/validation/interceptor.py`
+
+#### `iter_ndjson_lines`
+
+- **Import:** `from application_sdk.validation import iter_ndjson_lines`
+- **Also importable from:** `application_sdk.validation.ndjson`
+- **Signature:** `iter_ndjson_lines(path: str | Path)`
+- **Summary:** Yield ``(file, 1-based line number, raw bytes)`` for every non-blank line.
+- **Defined in:** `application_sdk/validation/ndjson.py`
+
+#### `log_artifact_validation_posture`
+
+- **Import:** `from application_sdk.validation import log_artifact_validation_posture`
+- **Also importable from:** `application_sdk.validation.interceptor`
+- **Signature:** `log_artifact_validation_posture(app_name: str, *, enforce: bool, enabled: bool)`
+- **Summary:** Emit the boot-time posture row for one app — **every** app, soft included.
+- **Defined in:** `application_sdk/validation/interceptor.py`
+
+#### `resolve_artifact_enforcement`
+
+- **Import:** `from application_sdk.validation import resolve_artifact_enforcement`
+- **Also importable from:** `application_sdk.validation.interceptor`
+- **Signature:** `resolve_artifact_enforcement(app_cls: type | None)`
+- **Summary:** Resolve one app's artifact-validation posture. ``True`` = hard.
+- **Defined in:** `application_sdk/validation/interceptor.py`
+
+#### `supports_asset_model`
+
+- **Import:** `from application_sdk.validation import supports_asset_model`
+- **Signature:** `supports_asset_model(model: object)`
+- **Summary:** True when ``model`` is a class this cell can decode NDJSON records into.
+- **Defined in:** `application_sdk/validation/assets.py`
+
 #### `validate_artifact`
 
 - **Import:** `from application_sdk.validation import validate_artifact`
@@ -3909,11 +4039,26 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** Validate one artifact against the declaration its source resolves to.
 - **Defined in:** `application_sdk/validation/wrapper.py`
 
+#### `validate_artifacts`
+
+- **Import:** `from application_sdk.validation import validate_artifacts`
+- **Also importable from:** `application_sdk.validation.interceptor`
+- **Signature:** `validate_artifacts(data: Any, *, ...)`
+- **Summary:** Validate every ``FileReference`` in ``data`` and emit one outcome each.
+- **Defined in:** `application_sdk/validation/interceptor.py`
+
 #### `validate_asset`
 
 - **Import:** `from application_sdk.validation import validate_asset`
 - **Signature:** `validate_asset(asset: Asset, *, for_creation: bool = True)`
 - **Summary:** Run pyatlan_v9's ``.validate()`` and return its error messages.
+- **Defined in:** `application_sdk/validation/assets.py`
+
+#### `validate_assets_as_artifact`
+
+- **Import:** `from application_sdk.validation import validate_assets_as_artifact`
+- **Signature:** `validate_assets_as_artifact(path: str | Path, *, ...)`
+- **Summary:** The NDJSON x ``ModelSource`` cell: :func:`validate_transformed_dir`, reported
 - **Defined in:** `application_sdk/validation/assets.py`
 
 #### `validate_transformed_dir`
@@ -3924,6 +4069,22 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Defined in:** `application_sdk/validation/assets.py`
 
 ### Constants and Enums
+
+#### `ARTIFACT_CLASSIFICATIONS`
+
+- **Import:** `from application_sdk.validation import ARTIFACT_CLASSIFICATIONS`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `ARTIFACT_CLASSIFICATIONS: Final[frozenset[str]]`
+- **Summary:** Runtime membership test for :data:`ArtifactClassification`.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `ARTIFACT_ENFORCEMENTS`
+
+- **Import:** `from application_sdk.validation import ARTIFACT_ENFORCEMENTS`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `ARTIFACT_ENFORCEMENTS: Final[frozenset[str]]`
+- **Summary:** Runtime membership test for :data:`ArtifactEnforcement`.
+- **Defined in:** `application_sdk/validation/artifacts.py`
 
 #### `ARTIFACT_FIELD_TYPES`
 
@@ -3961,12 +4122,44 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** Name of the generated declaration artifact, as the contract toolkit emits it.
 - **Defined in:** `application_sdk/validation/sources.py`
 
+#### `ARTIFACT_SIDE_HANDOFF`
+
+- **Import:** `from application_sdk.validation import ARTIFACT_SIDE_HANDOFF`
+- **Also importable from:** `application_sdk.validation.interceptor`
+- **Signature:** `ARTIFACT_SIDE_HANDOFF: Final`
+- **Summary:** Producer side: the task has returned and the bytes are still local.
+- **Defined in:** `application_sdk/validation/interceptor.py`
+
+#### `ARTIFACT_SIDE_INGEST`
+
+- **Import:** `from application_sdk.validation import ARTIFACT_SIDE_INGEST`
+- **Also importable from:** `application_sdk.validation.interceptor`
+- **Signature:** `ARTIFACT_SIDE_INGEST: Final`
+- **Summary:** Consumer side: the artifact was just materialised and is about to be read.
+- **Defined in:** `application_sdk/validation/interceptor.py`
+
+#### `ARTIFACT_SIDES`
+
+- **Import:** `from application_sdk.validation import ARTIFACT_SIDES`
+- **Also importable from:** `application_sdk.validation.interceptor`
+- **Signature:** `ARTIFACT_SIDES: Final[frozenset[str]]`
+- **Summary:** Runtime membership test for the two enforcement points.
+- **Defined in:** `application_sdk/validation/interceptor.py`
+
 #### `ARTIFACT_VALIDATION_EVENT`
 
 - **Import:** `from application_sdk.validation.artifacts import ARTIFACT_VALIDATION_EVENT`
 - **Signature:** `ARTIFACT_VALIDATION_EVENT: Final`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/observability/events.py`
+
+#### `ARTIFACT_VALIDATION_MODES`
+
+- **Import:** `from application_sdk.validation import ARTIFACT_VALIDATION_MODES`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `ARTIFACT_VALIDATION_MODES: Final[frozenset[str]]`
+- **Summary:** Runtime membership test for :data:`ArtifactValidationMode`.
+- **Defined in:** `application_sdk/validation/artifacts.py`
 
 #### `ARTIFACT_VALIDATION_OUTCOMES`
 
@@ -3975,12 +4168,28 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** Runtime membership test for :data:`ArtifactValidationOutcome`.
 - **Defined in:** `application_sdk/validation/artifacts.py`
 
+#### `ArtifactClassification`
+
+- **Import:** `from application_sdk.validation import ArtifactClassification`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `ArtifactClassification`
+- **Summary:** Why an outcome landed where it did — the second axis, orthogonal to the
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
 #### `ArtifactDeclaration`
 
 - **Import:** `from application_sdk.validation import ArtifactDeclaration`
 - **Also importable from:** `application_sdk.validation.artifacts`
 - **Signature:** `ArtifactDeclaration`
 - **Summary:** Tagged union of what a :class:`~application_sdk.validation.protocols.SchemaSource`
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `ArtifactEnforcement`
+
+- **Import:** `from application_sdk.validation import ArtifactEnforcement`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `ArtifactEnforcement`
+- **Summary:** What the posture actually did with this outcome.
 - **Defined in:** `application_sdk/validation/artifacts.py`
 
 #### `ArtifactFailureKind`
@@ -4015,12 +4224,68 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** Physical container format of a declared artifact. Each format has its own
 - **Defined in:** `application_sdk/validation/artifacts.py`
 
+#### `ArtifactValidationMode`
+
+- **Import:** `from application_sdk.validation import ArtifactValidationMode`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `ArtifactValidationMode`
+- **Summary:** An app's resolved artifact-validation posture.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
 #### `ArtifactValidationOutcome`
 
 - **Import:** `from application_sdk.validation import ArtifactValidationOutcome`
 - **Also importable from:** `application_sdk.validation.artifacts`
 - **Signature:** `ArtifactValidationOutcome`
 - **Summary:** Every artifact hand-off emits exactly one of these — the negatives included.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `CLASSIFICATION_ARTIFACT_UNVERIFIABLE`
+
+- **Import:** `from application_sdk.validation import CLASSIFICATION_ARTIFACT_UNVERIFIABLE`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `CLASSIFICATION_ARTIFACT_UNVERIFIABLE: Final`
+- **Summary:** Nothing on the SDK's side broke; there was simply nothing to check, or nothing
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `CLASSIFICATION_VALIDATOR_BROKEN`
+
+- **Import:** `from application_sdk.validation import CLASSIFICATION_VALIDATOR_BROKEN`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `CLASSIFICATION_VALIDATOR_BROKEN: Final`
+- **Summary:** The SDK's own plumbing failed — a plug-in raised, a declaration file could not
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `CLASSIFICATION_VERDICT`
+
+- **Import:** `from application_sdk.validation import CLASSIFICATION_VERDICT`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `CLASSIFICATION_VERDICT: Final`
+- **Summary:** A scan ran and returned a real answer about the artifact. Subject to mode.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `ENFORCEMENT_BLOCKED`
+
+- **Import:** `from application_sdk.validation import ENFORCEMENT_BLOCKED`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `ENFORCEMENT_BLOCKED: Final`
+- **Summary:** Hard mode, and this outcome failed the activity.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `ENFORCEMENT_NONE`
+
+- **Import:** `from application_sdk.validation import ENFORCEMENT_NONE`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `ENFORCEMENT_NONE: Final`
+- **Summary:** This outcome was never blockable — a clean scan, a validator that broke, or an
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `ENFORCEMENT_WOULD_BLOCK`
+
+- **Import:** `from application_sdk.validation import ENFORCEMENT_WOULD_BLOCK`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `ENFORCEMENT_WOULD_BLOCK: Final`
+- **Summary:** Soft mode, and this outcome *would* have failed the activity in hard mode.
 - **Defined in:** `application_sdk/validation/artifacts.py`
 
 #### `FORMAT_NDJSON`
@@ -4037,6 +4302,30 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Also importable from:** `application_sdk.validation.artifacts`
 - **Signature:** `FORMAT_PARQUET: Final`
 - **Summary:** Columnar. Checked by reading the file footer — no row is ever read.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `MODE_HARD`
+
+- **Import:** `from application_sdk.validation import MODE_HARD`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `MODE_HARD: Final`
+- **Summary:** A negative verdict fails the activity. Always a deliberate per-app opt-in.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `MODE_OFF`
+
+- **Import:** `from application_sdk.validation import MODE_OFF`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `MODE_OFF: Final`
+- **Summary:** The ``ATLAN_VALIDATE_ARTIFACTS`` kill switch is down — no check runs at all.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `MODE_SOFT`
+
+- **Import:** `from application_sdk.validation import MODE_SOFT`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `MODE_SOFT: Final`
+- **Summary:** A negative verdict is reported as ``would_block`` and the hand-off proceeds.
 - **Defined in:** `application_sdk/validation/artifacts.py`
 
 #### `OUTCOME_ABSENT`

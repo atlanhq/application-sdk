@@ -5,7 +5,7 @@
 
 # Contract-Toolkit Conformance Rules (K-series)
 
-**15 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts)
+**17 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006/K015, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts and the SDK ``App``'s ``legacy_workflow_types`` declaration)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -29,7 +29,9 @@ Suppress a finding on the violating line or the line directly above it:
 | [K012](#k012) | `GeneratePoeTaskMissing` | `block` | `app` | `contract-toolkit` | — | 0.14.0 |
 | [K013](#k013) | `ManifestNodeAppNameMisattributed` | `warn` | `app` | `contract-toolkit` | — | 0.18.0 |
 | [K014](#k014) | `ReleaseModelUndeclared` | `warn` | `app` | `contract-toolkit` | — | 0.18.0 |
+| [K015](#k015) | `LegacyWorkflowTypeContractDrift` | `block` | `app` | `contract-toolkit` | — | 0.23.0 |
 | [K016](#k016) | `EntrypointArtifactSchemaMissing` | `warn` | `app` | `contract-toolkit` | — | 0.23.0 |
+| [K017](#k017) | `ArtifactSchemaWriterMismatch` | `warn` | `app` | `contract-toolkit` | — | 0.23.0 |
 
 ---
 
@@ -661,6 +663,88 @@ declaring the value is one line and is the entire point of the rule.
 
 ---
 
+## K015 — `LegacyWorkflowTypeContractDrift` {#k015}
+
+**Tier:** `block` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.23.0
+
+> the manifest's legacy_workflow_types block and the SDK App's legacy_workflow_types declaration do not agree
+
+**Rationale:** An inbound-only workflow type alias keeps a worker answering a pre-migration Temporal
+type that external callers have not stopped dispatching. Once an app carries a contract
+tree the alias is declared twice: in the generated manifest's legacy_workflow_types
+block, which is the contracted declaration site, and in the SDK's
+App.legacy_workflow_types class attribute, which is what actually registers with the
+worker. Neither site validates the other, and a disagreement is silent in both
+directions. An alias only in the manifest is one the contract advertises and the worker
+rejects: the unmigrated caller keeps dispatching and keeps failing, which is the exact
+outage the alias existed to prevent. An alias only in code is one P016 no longer
+credits, so a genuinely routed entry point reads as drift and the app is blocked on a
+false finding. Nothing else notices either shape -- the app builds, the contract
+generates, and the mismatch only surfaces as a dispatch failure in production.  Customer
+impact: an alias exists because unmigrated callers are still dispatching a pre-migration
+workflow type. When the manifest advertises an alias the worker never registered, every
+one of those callers keeps failing at dispatch -- the crawl simply never starts, and the
+contract says it should. That is the precise outage the alias was added to prevent,
+reintroduced silently.  This blocks rather than warns because P016 -- itself a blocking
+rule -- now routes off the manifest block. A drifted block does not merely go unnoticed;
+it changes what another blocking rule concludes, so the two must be held together at the
+same strength. The surface is new and no app declares aliases yet, so nothing in the
+fleet is blocked by adopting it at this tier.
+
+The generated `app/generated/**/manifest.json` `legacy_workflow_types` block and the SDK
+`App` subclass's `legacy_workflow_types` class attribute must declare the same `alias ->
+entry-point` pairs and the same expiry.
+
+The rule fires on four shapes:
+
+* an alias declared in code that the manifest does not carry; * an alias declared in the
+manifest that the `App` does not; * a `removal_version` that differs between the two
+sites; * per-entry-point manifests that disagree with each other (the block is
+app-level, so every copy must be identical).
+
+A `legacy_workflow_types` assignment the scan cannot read statically -- a variable, a
+comprehension -- is reported too: the comparison cannot be made at all, so neither
+agreement nor drift can be established.
+
+Only the class attribute registers the alias with the worker. Only the manifest block is
+read by P016 when it decides whether a bare DAG node routes an entry point. That split
+is why drift is invisible: each site is individually well-formed.
+
+**Fix -- declare the same thing twice, on purpose.** In the contract:
+
+```pkl
+legacyWorkflowTypes {
+  new LegacyWorkflowTypeSpec {
+    alias = "LegacyCrawlerWorkflow"
+    entrypoint = "crawler"
+  }
+}
+legacyWorkflowTypesRemovalVersion = "4.2.0"
+```
+
+then regenerate, and in the app:
+
+```python
+class MyApp(App):
+    legacy_workflow_types = {
+        "LegacyCrawlerWorkflow": "crawler",
+    }
+    legacy_workflow_types_removal_version = "4.2.0"
+```
+
+The block is app-level, so for a multi-entrypoint bundle the **same** block goes on
+every entry point's contract and every generated manifest carries an identical copy. The
+bundle root renders no manifest and refuses the declaration at eval time.
+
+An app with no `app/generated/` tree is out of scope: the class attribute is then the
+only declaration site and there is nothing to compare.
+
+**Suppress** with `# conformance: ignore[K015] <reason>` above the `App` subclass.
+Suppressing leaves the two sites free to diverge, and P016 keeps routing off the
+manifest either way.
+
+---
+
 ## K016 — `EntrypointArtifactSchemaMissing` {#k016}
 
 **Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.23.0
@@ -721,5 +805,72 @@ next toolkit run reverts the edit.
 the contract class definition for a field inherited from a base. Suppressing states that
 this hand-off is deliberately unchecked -- which is a defensible call for an artifact no
 other app reads, and the wrong call for one that crosses an app boundary.
+
+---
+
+## K017 — `ArtifactSchemaWriterMismatch` {#k017}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.23.0
+
+> A declared artifact schema disagrees with the Python that writes the artifact
+
+**Rationale:** K016 requires a declaration where a hand-off is public. This rule is the next failure
+along: the declaration exists, and the app's own Python contradicts it. That is worse
+than no declaration at all -- an absent one is visibly absent, while a stale one reads
+as a true statement about the file, so a consuming app trusts it and builds on it. The
+same production RCA that motivated ADR-0020 traced 73 days of frozen lineage to a column
+whose real type had drifted from what the reader expected; every workflow in the chain
+reported success throughout, because each did exactly what its own code said and no
+layer compared the two beliefs. A writer moving on without its declaration is exactly
+how that gap opens. The SDK finds the same disagreement at runtime, but only once a run
+has produced the artifact and only in the environment that ran it; this rule finds it in
+review, before merge, where it costs nothing.  It warns rather than blocks because it is
+inference about code rather than a structural fact about two committed files: the check
+resolves the writer's path and record type through local assignments, and although every
+unresolvable shape is dropped rather than guessed at, a WARN tier is the honest
+disposition for a rule whose evidence is a read of Python rather than a diff of two
+artifacts. Nothing in the fleet declares artifact schemas yet, so adopting it blocks no
+app either way.
+
+An `artifactSchemas` entry in the committed `artifact_schemas.json` contradicts the
+app's own writer for the same `FileReference` contract field.
+
+Two disagreements are reported:
+
+* **Format.** The writer builds the field's `FileReference` from a path whose extension
+the declared `format` cannot be -- a `.parquet` path declared `ndjson`, or a
+`.jsonl`/`.ndjson`/`.json` path declared `parquet`. Any other extension, and a reference
+to a directory, is skipped: a partitioned-parquet directory has no extension to disagree
+with. * **Fields.** The record class the writer serialises into the artifact declares a
+field -- directly or inherited -- that the declaration does not describe. Declared
+nested paths (`attributes.columns[].name`) are compared at their top-level segment,
+since that is the level a record class exposes.
+
+**What the rule will not do.** Resolution is module-scoped and deliberately narrow. A
+path variable is followed only within the file it is assigned in; a name assigned two
+different extensions, a handle opened from two different paths, and a write whose
+argument names more than one candidate record class are each recorded as unknown rather
+than resolved by choosing. Only classes defined in the scanned repo count as record
+types, so a writer that serialises through a mapper or a library model is invisible to
+the field half of the rule. A record class that renames fields on the wire (`rename=`,
+`Field(alias=...)`, `alias_generator=`) is skipped entirely, because its attribute names
+are not the artifact's field names. Every one of those is a deliberate false negative.
+
+**Fix -- change whichever side is wrong.** If the declaration is right, correct the
+writer. If the writer is right, edit the pkl contract and regenerate:
+
+    artifactSchemas {       ["transformed_entities"] = new ArtifactSchema {
+format = "ndjson"         fields {           new ArtifactField {             name =
+"typeName"             type = "string"             description = "Atlan type this record
+instantiates."           }         }       }     }
+
+Then `pkl eval -m . contract/app.pkl`. Never hand-edit the generated
+`artifact_schemas.json`: it is a pkl eval output and the next toolkit run reverts the
+edit.
+
+**Suppress** with `# conformance: ignore[K017] <reason>` on the `FileReference`
+construction. Suppressing states that the declaration and the writer are allowed to
+disagree, which leaves the consuming side reading an assertion the producer does not
+honour.
 
 ---

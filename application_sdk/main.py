@@ -33,7 +33,7 @@ import random
 import signal
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
@@ -978,6 +978,14 @@ _WORKER_HEALTHY_RUN_SECONDS = _env_int("ATLAN_WORKER_HEALTHY_RUN_SECONDS", 300)
 _WORKER_POLL_DIAGNOSTIC_INTERVAL_SECONDS = _env_int(
     "ATLAN_WORKER_POLL_DIAGNOSTIC_INTERVAL_SECONDS", 60
 )
+# Consecutive definitive zero-poller readings before this worker stops emitting
+# token_refresh health events. At the default 60s observer interval that is ~3
+# minutes of confirmed-parked polling — long enough that a blip or a slow start
+# never trips it, short enough that a parked worker stops advertising itself as
+# healthy well inside a sync window.
+_WORKER_ZERO_POLLER_READINGS_BEFORE_STALE = _env_int(
+    "ATLAN_WORKER_ZERO_POLLER_READINGS_BEFORE_STALE", 3
+)
 
 
 async def _observe_worker_poll_state(
@@ -1024,8 +1032,15 @@ async def _observe_worker_poll_state(
         logger.debug("Worker poll-state diagnostics disabled (interval=%s)", interval)
         return
 
+    from application_sdk.execution._temporal.poll_state import (  # noqa: PLC0415 — cold path: diagnostics only
+        worker_poll_state,
+    )
     from application_sdk.execution._temporal.worker import (  # noqa: PLC0415 — cold path: diagnostics only
         read_core_poller_counts,
+    )
+
+    worker_poll_state.configure(
+        zero_readings_before_stale=_WORKER_ZERO_POLLER_READINGS_BEFORE_STALE
     )
 
     # Sentinel distinct from every real state, so the first reading always logs.
@@ -1076,10 +1091,17 @@ async def _observe_worker_poll_state(
             elif state != previous_state:
                 logger.info("Worker poll state: active pollers %s", counts)
 
+            # Gates token_refresh health events. Only a sustained, definitive
+            # "zero" withholds them; "polling" and "unknown" both fail open.
+            worker_poll_state.record(state)
+
             previous_state = state
         except Exception:
-            # An observer must never take the worker down with it.
+            # An observer must never take the worker down with it. A failed
+            # reading is not evidence that the worker is dead, so reopen the
+            # gate rather than leaving a prior suppression in place.
             logger.warning("Worker poll-state observation failed", exc_info=True)
+            worker_poll_state.record("unknown")
 
 
 async def _run_worker_with_restart(
@@ -1089,6 +1111,7 @@ async def _run_worker_with_restart(
     auth_manager: Any = None,
     client: Any = None,
     health_server: Any = None,
+    reconnect: Callable[[], Awaitable[None]] | None = None,
 ) -> None:
     """Run a Temporal worker under a bounded restart supervisor.
 
@@ -1112,6 +1135,8 @@ async def _run_worker_with_restart(
         client: The Temporal client passed to ``auth_manager.force_refresh``.
         health_server: Optional ``WorkerHealthServer``; receives the poll-state
             observer's readings so they are also reachable over the probes.
+        reconnect: Optional; rebuilds the Temporal client before each restart.
+            Preferred over ``force_refresh`` — see ``_supervise_worker``.
     """
     # Runs for the whole supervised lifetime, across worker rebuilds, so a
     # rebuilt worker that comes back without pollers is still observed. Purely
@@ -1130,11 +1155,20 @@ async def _run_worker_with_restart(
             shutdown_event=shutdown_event,
             auth_manager=auth_manager,
             client=client,
+            reconnect=reconnect,
         )
     finally:
         observer.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await observer
+        # The supervised lifetime is over (shutdown, or the cap re-raising), so
+        # reopen the health-event gate. Nothing should stay muted once the
+        # observer that muted it has stopped reading.
+        from application_sdk.execution._temporal.poll_state import (  # noqa: PLC0415 — cold path: shutdown only
+            worker_poll_state,
+        )
+
+        worker_poll_state.reset()
 
 
 async def _supervise_worker(
@@ -1143,6 +1177,7 @@ async def _supervise_worker(
     shutdown_event: asyncio.Event,
     auth_manager: Any = None,
     client: Any = None,
+    reconnect: Callable[[], Awaitable[None]] | None = None,
 ) -> None:
     """The restart loop itself; see ``_run_worker_with_restart`` for the contract."""
     consecutive_failures = 0
@@ -1186,16 +1221,27 @@ async def _supervise_worker(
                 )
                 raise
 
-            # Force a fresh token before restarting — recovers stale/expired
-            # token cases; harmless for a transient frontend key-cache skew
-            # (the backoff itself gives the frontend time to refresh its JWKS).
-            if auth_manager is not None:
+            # Rebuild the client before restarting, when the caller wired a
+            # reconnect. A fresh token on the same channel is not enough: the
+            # rebuilt worker registers and emits worker_start but never resumes
+            # polling, and since run() then neither returns nor raises, this
+            # loop never sees a second failure — the process stays alive with
+            # green probes and a refreshing token, doing nothing. Reconnecting
+            # is what a pod restart does, and a pod restart is what recovers it.
+            if reconnect is not None:
+                try:
+                    await reconnect()
+                except Exception:
+                    logger.warning(
+                        "Reconnect before worker restart failed; restarting anyway",
+                        exc_info=True,
+                    )
+            elif auth_manager is not None:
                 try:
                     await auth_manager.force_refresh(client)
                 except Exception:
                     logger.warning(
-                        "Token refresh before worker restart failed; "
-                        "restarting anyway",
+                        "Token refresh before worker restart failed; restarting anyway",
                         exc_info=True,
                     )
 
@@ -1302,19 +1348,23 @@ async def run_worker_mode(config: AppConfig) -> None:
         logger.info("Acquired initial auth token")
 
     logger.info("Connecting to Temporal %s", config.temporal_host)
-    client = await create_temporal_client(
-        config.temporal_host,
-        config.temporal_namespace,
-        data_converter=data_converter,
-        api_key=api_key,
-        tls_enabled=config.tls_enabled,
-        tls_server_root_ca_cert_path=config.tls_server_root_ca_cert_path,
-        tls_client_cert_path=config.tls_client_cert_path,
-        tls_client_private_key_path=config.tls_client_private_key_path,
-        tls_domain=config.tls_domain,
-        enable_prometheus=config.enable_temporal_core_metrics,
-        prometheus_bind_address=config.prometheus_bind_address,
-    )
+
+    async def _connect_temporal(key: str | None) -> Any:
+        return await create_temporal_client(
+            config.temporal_host,
+            config.temporal_namespace,
+            data_converter=data_converter,
+            api_key=key,
+            tls_enabled=config.tls_enabled,
+            tls_server_root_ca_cert_path=config.tls_server_root_ca_cert_path,
+            tls_client_cert_path=config.tls_client_cert_path,
+            tls_client_private_key_path=config.tls_client_private_key_path,
+            tls_domain=config.tls_domain,
+            enable_prometheus=config.enable_temporal_core_metrics,
+            prometheus_bind_address=config.prometheus_bind_address,
+        )
+
+    client = await _connect_temporal(api_key)
 
     if auth_manager is not None:
         auth_manager.start_background_refresh(client)
@@ -1342,6 +1392,28 @@ async def run_worker_mode(config: AppConfig) -> None:
     )
 
     health_server = build_worker_health_server(port=config.health_port, client=client)
+
+    async def _reconnect() -> None:
+        """Rebuild the Temporal client, mirroring what a pod restart does.
+
+        ``_build_worker`` closes over ``client``, so rebinding it here is what
+        makes the next rebuild poll on a fresh channel instead of the poisoned
+        one. Re-points the auth refresh loop and health probes at the new
+        client too. Connect first so a failed reconnect leaves the existing
+        refresh loop running.
+        """
+        from application_sdk.execution._temporal.auth import (  # noqa: PLC0415 — cold path: only on supervised restart
+            reconnect_temporal_client,
+        )
+
+        nonlocal client, api_key
+        client, api_key = await reconnect_temporal_client(
+            connect=_connect_temporal,
+            api_key=api_key,
+            auth_manager=auth_manager,
+            health_server=health_server,
+        )
+        logger.info("Reconnected to Temporal before worker restart")
 
     # Worker-only mode pushes metrics to a Pushgateway since the process has
     # no /metrics endpoint to scrape. Combined mode (run_combined_mode below)
@@ -1395,6 +1467,7 @@ async def run_worker_mode(config: AppConfig) -> None:
             auth_manager=auth_manager,
             client=client,
             health_server=health_server,
+            reconnect=_reconnect,
         )
 
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
@@ -1589,19 +1662,23 @@ async def run_combined_mode(config: AppConfig) -> None:
         logger.info("Acquired initial auth token")
 
     logger.info("Connecting to Temporal %s", config.temporal_host)
-    client = await create_temporal_client(
-        config.temporal_host,
-        config.temporal_namespace,
-        data_converter=data_converter,
-        api_key=api_key,
-        tls_enabled=config.tls_enabled,
-        tls_server_root_ca_cert_path=config.tls_server_root_ca_cert_path,
-        tls_client_cert_path=config.tls_client_cert_path,
-        tls_client_private_key_path=config.tls_client_private_key_path,
-        tls_domain=config.tls_domain,
-        enable_prometheus=config.enable_temporal_core_metrics,
-        prometheus_bind_address=config.prometheus_bind_address,
-    )
+
+    async def _connect_temporal(key: str | None) -> Any:
+        return await create_temporal_client(
+            config.temporal_host,
+            config.temporal_namespace,
+            data_converter=data_converter,
+            api_key=key,
+            tls_enabled=config.tls_enabled,
+            tls_server_root_ca_cert_path=config.tls_server_root_ca_cert_path,
+            tls_client_cert_path=config.tls_client_cert_path,
+            tls_client_private_key_path=config.tls_client_private_key_path,
+            tls_domain=config.tls_domain,
+            enable_prometheus=config.enable_temporal_core_metrics,
+            prometheus_bind_address=config.prometheus_bind_address,
+        )
+
+    client = await _connect_temporal(api_key)
 
     if auth_manager is not None:
         auth_manager.start_background_refresh(client)
@@ -1630,6 +1707,28 @@ async def run_combined_mode(config: AppConfig) -> None:
     )
 
     health_server = build_worker_health_server(port=config.health_port, client=client)
+
+    async def _reconnect() -> None:
+        """Rebuild the Temporal client, mirroring what a pod restart does.
+
+        ``_build_worker`` closes over ``client``, so rebinding it here is what
+        makes the next rebuild poll on a fresh channel instead of the poisoned
+        one. Re-points the auth refresh loop and health probes at the new
+        client too. Connect first so a failed reconnect leaves the existing
+        refresh loop running.
+        """
+        from application_sdk.execution._temporal.auth import (  # noqa: PLC0415 — cold path: only on supervised restart
+            reconnect_temporal_client,
+        )
+
+        nonlocal client, api_key
+        client, api_key = await reconnect_temporal_client(
+            connect=_connect_temporal,
+            api_key=api_key,
+            auth_manager=auth_manager,
+            health_server=health_server,
+        )
+        logger.info("Reconnected to Temporal before worker restart")
 
     def _build_worker() -> Any:
         # Rebuilt on each supervisor restart — Worker instances are single-use.
@@ -1723,6 +1822,7 @@ async def run_combined_mode(config: AppConfig) -> None:
                 auth_manager=auth_manager,
                 client=client,
                 health_server=health_server,
+                reconnect=_reconnect,
             ),
         )
 

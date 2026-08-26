@@ -37,6 +37,7 @@ import secrets
 import time
 import urllib.error
 import urllib.request
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -89,6 +90,12 @@ from application_sdk.testing.e2e.payload import (
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
 
 logger = get_logger(__name__)
+
+# Version that drops the deprecated ``DatabaseSpec.connector_config_name``
+# fallback in :meth:`BaseE2ETest.resolved_connector_config_name`. Every
+# deprecation in this SDK names its removal version; this is the one for that
+# field.
+DATABASE_SPEC_CREDENTIAL_TYPE_REMOVAL_VERSION = "4.0"
 
 # Node statuses that are a genuine failure and are never tolerated by the
 # skip-tolerant DAG gate (see BaseE2ETest._core_dag_ok). Pending/Scheduled are
@@ -433,8 +440,14 @@ class BaseE2ETest:
     tenant_deployment_name: ClassVar[str] = "production"
     extract_workflow_type: ClassVar[str] = ""
     # Credential-config name for the ``credential-guid.credential-type`` routing
-    # row + the credential body's ``connectorConfigName`` backfill. Empty =>
-    # build_ae_payload defaults it to ``f"atlan-connectors-{connector_short_name}"``.
+    # row + the credential body's ``connectorConfigName`` backfill. THE place to
+    # declare it — it is what the contract toolkit emits into a bundle's
+    # generated ``_e2e_base.py``, so a value set here is the generated identity.
+    # Read via :meth:`resolved_connector_config_name`, never directly: that
+    # method is the single resolution point, and it also honours (with a
+    # deprecation warning) the legacy ``DatabaseSpec.connector_config_name``
+    # field for suites that set only that one. Both empty =>
+    # build_ae_payload defaults to ``f"atlan-connectors-{connector_short_name}"``.
     connector_config_name: ClassVar[str] = ""
     # Typed substitutions model the harness instantiates for the seed DAG's
     # ``{{...}}`` fills. A connector that declares extra manifest mustache keys
@@ -1320,6 +1333,118 @@ class BaseE2ETest:
                 return parts[0]
         return ""
 
+    def _database_spec_connector_config_name(self) -> str:
+        """The legacy ``DatabaseSpec.connector_config_name``, or ``""``.
+
+        Duck-typed on purpose. ``database_spec()`` is a
+        :class:`~application_sdk.testing.e2e.sql_app.SQLAppE2ETest` hook, but
+        non-SQL suites define it ad hoc on a plain :class:`BaseE2ETest`
+        subclass — and those are exactly the suites that set the deprecated
+        field, so a ``SQLAppE2ETest``-only lookup would miss them.
+
+        Returns ``""`` for a suite with no hook at all and for a
+        ``SQLAppE2ETest`` subclass that has not overridden the default (which
+        raises :class:`HarnessMethodNotImplementedError`); any other exception
+        from the hook propagates, because the caller decides whether this
+        lookup was load-bearing.
+        """
+        hook = getattr(self, "database_spec", None)
+        if not callable(hook):
+            return ""
+        try:
+            spec = hook()
+        except HarnessMethodNotImplementedError:
+            return ""
+        return getattr(spec, "connector_config_name", "") or ""
+
+    def _warn_legacy_connector_config_name(self, disposition: str) -> None:
+        """Emit the ``DatabaseSpec.connector_config_name`` deprecation notice.
+
+        Paired ``DeprecationWarning`` + ``warning`` log line, the same shape
+        every other 4.0 deprecation in this SDK uses: the warning so ``-W
+        error`` and ``filterwarnings`` can make it fatal ahead of the removal,
+        the log line so it is visible in a CI job's captured output where
+        nobody is reading Python's warning filter.
+        """
+        message = (
+            f"{type(self).__name__}: DatabaseSpec.connector_config_name is "
+            f"deprecated and is removed in "
+            f"v{DATABASE_SPEC_CREDENTIAL_TYPE_REMOVAL_VERSION}. {disposition} "
+            f"Declare the credential-config name once, on the "
+            f"`connector_config_name` ClassVar of the test class (a bundle "
+            f"gets it generated into app/generated/<entrypoint>/_e2e_base.py), "
+            f"and drop it from database_spec()."
+        )
+        warnings.warn(message, DeprecationWarning, stacklevel=3)
+        logger.warning("%s", message)
+
+    def resolved_connector_config_name(self) -> str:
+        """The connector's credential-config name — the one resolution point.
+
+        Precedence:
+
+        1. The :attr:`connector_config_name` ClassVar. The supported place to
+           declare it, and what the contract toolkit generates into a bundle's
+           ``_e2e_base.py``.
+        2. ``DatabaseSpec.connector_config_name``, honoured only when the
+           ClassVar is empty.
+
+           .. deprecated:: 3.30.0
+              Removed in v4.0 — set the ClassVar instead.
+        3. ``""``, leaving :func:`~application_sdk.testing.e2e.payload.build_ae_payload`
+           to derive ``f"atlan-connectors-{connector_short_name}"``.
+
+        The deprecated field never outranks the ClassVar: it is hand-written
+        per suite while the ClassVar can be generated, so letting the
+        hand-written copy win would silently override a generated identity —
+        the same trap this precedence exists to close, only mirrored.
+
+        Setting the field warns either way, naming what actually happened to
+        the value: honoured (the ClassVar was empty), ignored (the ClassVar
+        disagreed), or redundant (both agreed). A suite that declares it is
+        told which, instead of having to guess whether it is wired.
+        """
+        declared = self.connector_config_name
+        if declared:
+            # The ClassVar already answered; this lookup only decides which
+            # deprecation notice to emit, so a hook that cannot be built must
+            # not take the payload down with it. A suite that genuinely needs
+            # database_spec() calls it again in _credential_body() /
+            # _mustache_substitutions(), where the failure carries its own cause.
+            try:
+                legacy = self._database_spec_connector_config_name()
+            except Exception:
+                logger.warning(
+                    "%s: could not read database_spec() while checking for a "
+                    "deprecated connector_config_name; using the "
+                    "connector_config_name ClassVar (%s).",
+                    type(self).__name__,
+                    declared,
+                    exc_info=True,
+                )
+                return declared
+            if legacy and legacy != declared:
+                self._warn_legacy_connector_config_name(
+                    f"It is set to {legacy!r} and was IGNORED — the "
+                    f"`connector_config_name` ClassVar ({declared!r}) is "
+                    f"authoritative and is what this run submits."
+                )
+            elif legacy:
+                self._warn_legacy_connector_config_name(
+                    f"It restates the `connector_config_name` ClassVar "
+                    f"({declared!r}) and has no effect."
+                )
+            return declared
+
+        legacy = self._database_spec_connector_config_name()
+        if legacy:
+            self._warn_legacy_connector_config_name(
+                f"It is set to {legacy!r} and the `connector_config_name` "
+                f"ClassVar is empty, so this run is submitting the field's "
+                f"value."
+            )
+        return legacy
+
     def _build_ae_payload(self, slug: str) -> dict[str, Any]:
         """Compose the AE submit payload from typed hook results.
 
@@ -1339,7 +1464,7 @@ class BaseE2ETest:
             ae_workflow_slug=slug,
             entrypoint=self._resolved_entrypoint(),
             agent_json=self.agent_json(),
-            credential_type=self.connector_config_name,
+            credential_type=self.resolved_connector_config_name(),
         )
 
     def _build_legacy_seed_dag(self, extract_queue: str) -> dict[str, Any]:

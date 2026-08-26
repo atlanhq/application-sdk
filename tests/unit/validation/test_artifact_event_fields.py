@@ -70,6 +70,11 @@ _REPORTS: dict[str, ArtifactValidationReport] = {
         reason="a model carries no column mapping",
     ),
     "absent": ArtifactValidationReport.absent(reason="artifact not found"),
+    # Shares its outcome with the row above and must not share its posture answer
+    # — the whole reason the classification axis exists (FND-692).
+    "validator_broken": ArtifactValidationReport.absent(
+        reason="validator raised: RuntimeError", validator_broken=True
+    ),
 }
 
 
@@ -130,6 +135,35 @@ def test_fields_project_the_report_faithfully() -> None:
     assert fields["artifact_undecodable"] == 0
     assert fields["artifact_fields_declared"] == 4
     assert fields["boundary"] is True
+
+
+def test_the_posture_axes_are_projected() -> None:
+    """The three FND-692 keys ride the same single mapping site as the rest, so a
+    row is self-describing without a join back to the boot-time posture event."""
+    fields = artifact_validation_event_fields(
+        _flagged(), artifact_field="query_history", mode="hard", enforcement="blocked"
+    )
+    assert fields["artifact_classification"] == "verdict"
+    assert fields["artifact_validation_mode"] == "hard"
+    assert fields["artifact_enforcement"] == "blocked"
+
+
+def test_a_broken_validator_is_distinguishable_from_a_missing_artifact() -> None:
+    """Both are ``absent``; only the classification separates them, and only one
+    of them is allowed to block."""
+    broken = artifact_validation_event_fields(_REPORTS["validator_broken"])
+    missing = artifact_validation_event_fields(_REPORTS["absent"])
+    assert broken["outcome"] == missing["outcome"] == "absent"
+    assert broken["artifact_classification"] == "validator_broken"
+    assert missing["artifact_classification"] == "artifact_unverifiable"
+
+
+def test_the_posture_axes_default_to_empty_for_a_caller_with_no_posture() -> None:
+    """ "" rather than "soft": a caller outside the interceptor has no posture, and
+    reporting one nobody declared would inflate the soft denominator."""
+    fields = artifact_validation_event_fields(_REPORTS["clean"])
+    assert fields["artifact_validation_mode"] == ""
+    assert fields["artifact_enforcement"] == ""
 
 
 def test_boundary_is_reported_on_every_outcome_not_just_not_declared() -> None:

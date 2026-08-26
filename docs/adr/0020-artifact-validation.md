@@ -325,6 +325,8 @@ validating nothing. **Rejected**; the interceptor is the convergence point every
 ## References
 
 * `application_sdk/validation/assets.py` — the NDJSON asset validator this absorbs.
+* `application_sdk/validation/parquet.py` — the parquet footer validator: the logical↔arrow mapping
+  table above, implemented as a metadata-only diff with a lazy `pyarrow` import.
 * `application_sdk/storage/integrity.py` — byte-level attestation, and its explicit statement of what
   it does not prove.
 * `application_sdk/execution/_temporal/activities.py` — the interceptor seam.

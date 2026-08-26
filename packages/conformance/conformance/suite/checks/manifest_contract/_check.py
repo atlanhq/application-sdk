@@ -40,19 +40,9 @@ from conformance.suite.checks.prescriptions._error_code_prefix import (
 )
 from conformance.suite.schema.findings import Finding
 
-from ._manifest_refs import ManifestDag, read_manifest
+from ._manifest_refs import ManifestDag, manifest_paths_for_contract, read_manifest
 
 _RULE_ID = "K006"
-
-
-def _manifest_paths_for_contract(root: Path, contract) -> list[Path]:  # noqa: ANN001
-    """Return the ``manifest.json`` paths implied by the P016 contract-scan mode."""
-    generated = root / "app" / "generated"
-    if contract.mode == "single":
-        return [generated / "manifest.json"]
-    if contract.mode == "multi":
-        return [generated / name / "manifest.json" for name in sorted(contract.names)]
-    return []
 
 
 def _target_entrypoint(
@@ -96,7 +86,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     if contract.mode == "absent":
         return []
 
-    manifest_paths = _manifest_paths_for_contract(root, contract)
+    manifest_paths = manifest_paths_for_contract(root, contract)
     manifests = [
         m for m in (read_manifest(p, root) for p in manifest_paths) if m is not None
     ]

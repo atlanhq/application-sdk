@@ -124,6 +124,19 @@ TEMPORARY_PATH = os.getenv("ATLAN_TEMPORARY_PATH", "./local/tmp/")
 # application_sdk.execution._temporal.worker._resolve_gate_enforcement.
 PREFLIGHT_GATE_MODE_ENV = "ATLAN_PREFLIGHT_GATE_MODE"
 
+# Artifact-validation posture override (deploy-time ops lever). Read at worker
+# build; only the literal "hard" enforces, any other set value falls back to
+# soft. An empty or unset value is not an override - resolution falls through to
+# the declared App.artifact_validation_mode attribute. See
+# application_sdk.validation.interceptor.resolve_artifact_enforcement.
+#
+# Distinct from ATLAN_VALIDATE_ARTIFACTS, and deliberately so: that one is the
+# kill switch deciding whether the check runs at all, this one decides whether a
+# verdict blocks. Collapsing them would make "stop blocking" and "stop
+# reporting" the same lever, and the outcome events are exactly what FND-694's
+# graduation review reads.
+ARTIFACT_VALIDATION_MODE_ENV = "ATLAN_ARTIFACT_VALIDATION_MODE"
+
 # Directory where contract-toolkit generated files (configmaps, manifest, Python types) live.
 # Convention: app/generated/ inside the repo (importable as app.generated).
 # In Docker (WORKDIR=/app, app code at /app/app/) this resolves to /app/app/generated.
@@ -569,6 +582,19 @@ VALIDATE_ASSETS_ON_UPLOAD: bool = (
 #: stall a handoff any more than it may crash one.
 VALIDATE_ASSETS_TIMEOUT_SECONDS: float = float(
     os.getenv("ATLAN_VALIDATE_ASSETS_TIMEOUT_SECONDS", "600")
+)
+#: ADR-0020 step 7: when True, the activity interceptor validates every
+#: ``FileReference`` artifact against its declared artifact schema on both sides
+#: of a task — at ingest (after materialise) and at hand-off (before persist).
+#: Warn-only: an outcome event is emitted for every artifact, including the
+#: negative outcomes, and nothing is ever blocked or raised.
+#:
+#: Defaulted ON. This is a deployment-level kill switch, not a posture knob —
+#: whether a verdict blocks is the app's artifact-validation posture (FND-692),
+#: and turning this off stops the outcome events too, which is exactly why it is
+#: a switch an operator flips deliberately rather than a per-app default.
+VALIDATE_ARTIFACTS: bool = (
+    os.getenv("ATLAN_VALIDATE_ARTIFACTS", "true").lower() == "true"
 )
 #: The single "rows per axis" cap for every validation drill-down surface —
 #: one number, so the human-readable ``format_report(max_items=...)`` listing and

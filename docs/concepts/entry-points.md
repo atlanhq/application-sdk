@@ -172,6 +172,58 @@ class SnowflakeApp(App):
 
 Method names are converted to kebab-case automatically. Override with `@entrypoint(name="custom-name")`.
 
+#### Accepting an established legacy workflow type
+
+A single-`run()` app gets a bare workflow type for free. A multi-entry-point app cannot — every entry point is prefixed. That is a problem only when external callers already dispatch a bare type and cannot be changed in step with the app: `StartWorkflowExecution` does not validate registration, so a caller on an unregistered name gets a successful start, no worker claims the task, and the run sits open until the execution timeout.
+
+`App.legacy_workflow_types` declares such types as **inbound-only aliases**:
+
+```python
+class QueryIntelligenceApp(App):
+    name = "query-intelligence"
+    legacy_workflow_types = {
+        "QueryIntelligenceWorkflow": "query-intelligence",
+        "KeifuWorkflow": "keifu",
+    }
+
+    @entrypoint(default=True)
+    async def query_intelligence(self, input: QIInput) -> QIOutput: ...
+
+    @entrypoint(name="keifu")
+    async def keifu(self, input: KeifuInput) -> KeifuOutput: ...
+```
+
+| Registered Temporal type | Reaches |
+|---|---|
+| `query-intelligence:query-intelligence` | `query_intelligence` (canonical — the SDK dispatches this) |
+| `QueryIntelligenceWorkflow` | `query_intelligence` (legacy alias, accepted only) |
+| `query-intelligence:keifu` | `keifu` (canonical) |
+| `KeifuWorkflow` | `keifu` (legacy alias, accepted only) |
+
+An alias is **accepted, never produced**. Every SDK-initiated dispatch — the executor, `POST /workflows/v1/start`, the event route — emits the canonical type. Because `workflow.info().workflow_type` reflects the name the *caller* used, the `temporal.workflow.type` telemetry dimension counts exactly the callers still on the legacy name, and each such run logs a warning naming the alias and its canonical type. Watch the count drain to zero, then delete the alias — and not before: removal also needs the alias's open workflows drained or pinned to the previous worker build with Temporal worker versioning, since an open workflow replays against whichever worker still registers its type.
+
+What does **not** move: `?entrypoint=` still selects by entry-point name, task activity names keep their `{app-name}:{task-name}` prefix, and `App.name` is untouched — so state and storage namespaces stay put. The canonical type cannot be changed; an alias is a migration surface, not a naming lever.
+
+Registration fails loudly on a declaration mistake. At class definition: an alias that restates a canonical type, targets an unknown entry point, equals an entry-point name, or collapses to another type's generated class name (`-` and `:` both become `_`) — and, independent of aliases, an entry-point name that equals a sibling's canonical type (only reachable as an explicit entry point named exactly like the app while an implicit `run()` claims the bare app name). At worker startup: an alias that claims an SDK-reserved `sdr:*` handler type or duplicates a type another app on the same worker registers.
+
+> **The workflow-type namespace is global across workers.** An alias may be colon-qualified (for example `teradata-app:crawler`) — that is the shape a migrating app preserves, and it does not make the type canonical. Two apps on *different* workers that register the same type are not caught at startup (collision checks are per-worker); raw Temporal dispatch by type name then lands on whichever worker registered it. Treat aliases as globally unique: coordinate them across apps the same way you coordinate any shared Temporal type.
+
+> **Declaration site.** The class attribute is what registers the alias — the class **body** specifically: the declaration is read once at class definition, and worker startup refuses to boot if a post-definition assignment or mutation diverged from what registration recorded. A contract-carrying app declares the same aliases a second time in the app contract manifest, via the toolkit's `legacyWorkflowTypes` block, which is the contracted declaration site; conformance `K015` fails the app when the two disagree, and `P016` routes off the manifest copy. An app with no contract tree declares them in the class attribute alone.
+>
+> ```pkl
+> legacyWorkflowTypes {
+>   new LegacyWorkflowTypeSpec {
+>     alias = "KeifuWorkflow"
+>     entrypoint = "keifu"
+>   }
+> }
+> legacyWorkflowTypesRemovalVersion = "4.2.0"
+> ```
+>
+> The block is app-level, matching the class attribute: for a multi-entrypoint bundle the **same** block goes on every entry point's contract, so each generated manifest carries an identical copy. The bundle root renders no manifest and refuses the declaration at eval time.
+
+> **Expiry.** `legacy_workflow_types_removal_version = "4.2.0"` is an opt-in deadline: once the installed SDK reaches it, registration fails while aliases remain declared — keeping them becomes a loud decision rather than drift. Leave it unset for aliases with a wide external caller set; removal then gates on the `temporal.workflow.type` legacy-caller count reaching zero. The expiry is app-level, not per-alias, and a contract-carrying app declares the same value in `legacyWorkflowTypesRemovalVersion`.
+
 ### HTTP dispatch
 
 Trigger a specific entry point via the `?entrypoint=` query parameter on `POST /workflows/v1/start`:
@@ -191,6 +243,11 @@ curl -X POST 'http://localhost:8000/workflows/v1/start?entrypoint=mine-queries' 
 When `?entrypoint=` is omitted the SDK resolves the default entry point automatically — see [Default entrypoint resolution](#default-entrypoint-resolution) below. Pass `?entrypoint=<name>` to target a specific entry point explicitly.
 
 > **Transitional fallback:** The body field `workflow_type` is accepted for backward compatibility with legacy Heracles callers. Query param takes precedence if both are provided. The body field will be removed in a future release.
+
+The two selectors resolve different namespaces, on purpose:
+
+- **`?entrypoint=` (canonical)** resolves entry-point **names only**, on every route. An alias or a raw workflow type through it is a 400 — the alias namespace never becomes a second permanent name on the SDK's own HTTP surface, and `/start` and `/input-contract` accept exactly the same selector strings.
+- **body `workflow_type` (deprecated)** resolves a name first, then the app's registered Temporal workflow types (canonical and legacy aliases) — that field exists for a legacy caller who genuinely holds a workflow type. The order can never matter: registration keeps names and types disjoint (an alias may not equal an entry-point name, and an entry-point name may not equal a sibling's canonical type).
 
 ### Default entrypoint resolution
 

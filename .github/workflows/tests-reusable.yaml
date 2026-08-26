@@ -1626,15 +1626,20 @@ jobs:
     runs-on: ubuntu-latest
     # Twice the script's own waits, not a shade over them: the publish retries for
     # up to ~240s while the marketplace service is not answering, the install
-    # retries for up to ~600s while LM's catalog snapshot catches up, then the
-    # deployment is polled for up to ~600s. Set too tight, the runner's timeout
+    # retries for up to ~600s while LM's catalog snapshot catches up, the
+    # deployment is polled for up to ~600s, and a FAILED verdict that names only
+    # benign pod churn then settles for ~90s. Set too tight, the runner's timeout
     # fires first on a slow sync and a bare "job cancelled after Nm" replaces the
     # actionable error the script was about to print — the diagnosis-hostile
     # failure this job exists to avoid. This is a ceiling, not a spend: the job
     # finishes in a handful of minutes whenever the tenants are healthy.
     # test_job_timeout_stays_above_the_scripts_own_waits derives the floor from
     # the script's constants, so this cannot drift below them unnoticed.
-    timeout-minutes: 48
+    #
+    # 48 → 50 for the FND-831 settle. The lease TTL still clears the hold this
+    # is half of (1.5 × (50 + 120) min < 16200s), so it needs no change; at 60
+    # it would.
+    timeout-minutes: 50
     concurrency:
       # Run-unique, i.e. deliberately NOT a serialising group. Tenant exclusion
       # is the lease's job now (lease-tenant above), and the lease is strictly
@@ -2171,7 +2176,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.5"
+          version: "0.12.6"
           enable-cache: true
 
       - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main
@@ -2570,7 +2575,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.5"
+          version: "0.12.6"
           enable-cache: true
 
       # The SDK's arg builder and the discovery driver. `ref: job.workflow_sha`

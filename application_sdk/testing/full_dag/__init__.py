@@ -1,4 +1,19 @@
-"""Shared harness for tier-4 / tier-5 full-DAG end-to-end tests.
+""".. deprecated:: 3.24
+    Use :mod:`application_sdk.testing.e2e`. This module is removed in v4.0.
+
+    ``application_sdk.testing.e2e`` is the harness every scaffolded app gets:
+    :class:`~application_sdk.testing.e2e.BaseE2ETest` is what the codegen'd
+    ``app/generated/_e2e_base.py`` subclasses, SQL connectors get
+    :class:`~application_sdk.testing.e2e.SQLAppE2ETest` on top of it, and
+    :mod:`application_sdk.testing.e2e.client` / ``._errors`` are already the
+    canonical implementations this package re-exports.
+
+    ``BaseE2ETest`` is connector-agnostic — it is in production use on non-SQL
+    connectors (BI, API and object-store apps alike), so "my connector is not
+    SQL" is not a reason to stay here. The SQL-shaped parameter rows come from
+    ``SQLAppE2ETest``, not from the base.
+
+Shared harness for tier-4 / tier-5 full-DAG end-to-end tests.
 
 Tier 4 (e2e-sdr-full) and tier 5 (e2e-full) both validate connectors
 end-to-end against the *tenant's* system apps (publish, query-intelligence,

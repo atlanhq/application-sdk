@@ -1042,6 +1042,116 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
     ),
     RuleDefinition(
+        id="K015",
+        scope=RuleScope.APP,
+        name="LegacyWorkflowTypeContractDrift",
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.STATIC,
+        category="contract-toolkit",
+        autofixable=False,
+        since="0.23.0",
+        orthogonal_gate="tests",
+        rationale=(
+            "An inbound-only workflow type alias keeps a worker answering a "
+            "pre-migration Temporal type that external callers have not stopped "
+            "dispatching. Once an app carries a contract tree the alias is "
+            "declared twice: in the generated manifest's legacy_workflow_types "
+            "block, which is the contracted declaration site, and in the SDK's "
+            "App.legacy_workflow_types class attribute, which is what actually "
+            "registers with the worker. Neither site validates the other, and a "
+            "disagreement is silent in both directions. An alias only in the "
+            "manifest is one the contract advertises and the worker rejects: the "
+            "unmigrated caller keeps dispatching and keeps failing, which is the "
+            "exact outage the alias existed to prevent. An alias only in code is "
+            "one P016 no longer credits, so a genuinely routed entry point reads "
+            "as drift and the app is blocked on a false finding. Nothing else "
+            "notices either shape -- the app builds, the contract generates, and "
+            "the mismatch only surfaces as a dispatch failure in production.\n"
+            "\n"
+            "Customer impact: an alias exists because unmigrated callers are "
+            "still dispatching a pre-migration workflow type. When the manifest "
+            "advertises an alias the worker never registered, every one of those "
+            "callers keeps failing at dispatch -- the crawl simply never starts, "
+            "and the contract says it should. That is the precise outage the "
+            "alias was added to prevent, reintroduced silently.\n"
+            "\n"
+            "This blocks rather than warns because P016 -- itself a blocking "
+            "rule -- now routes off the manifest block. A drifted block does not "
+            "merely go unnoticed; it changes what another blocking rule "
+            "concludes, so the two must be held together at the same strength. "
+            "The surface is new and no app declares aliases yet, so nothing in "
+            "the fleet is blocked by adopting it at this tier."
+        ),
+        short_description=(
+            "the manifest's legacy_workflow_types block and the SDK App's "
+            "legacy_workflow_types declaration do not agree"
+        ),
+        full_description=(
+            "The generated ``app/generated/**/manifest.json`` "
+            "``legacy_workflow_types`` block and the SDK ``App`` subclass's "
+            "``legacy_workflow_types`` class attribute must declare the same "
+            "``alias -> entry-point`` pairs and the same expiry.\n"
+            "\n"
+            "The rule fires on four shapes:\n"
+            "\n"
+            "* an alias declared in code that the manifest does not carry;\n"
+            "* an alias declared in the manifest that the ``App`` does not;\n"
+            "* a ``removal_version`` that differs between the two sites;\n"
+            "* per-entry-point manifests that disagree with each other (the "
+            "block is app-level, so every copy must be identical).\n"
+            "\n"
+            "A ``legacy_workflow_types`` assignment the scan cannot read "
+            "statically -- a variable, a comprehension -- is reported too: the "
+            "comparison cannot be made at all, so neither agreement nor drift "
+            "can be established.\n"
+            "\n"
+            "Only the class attribute registers the alias with the worker. Only "
+            "the manifest block is read by P016 when it decides whether a bare "
+            "DAG node routes an entry point. That split is why drift is "
+            "invisible: each site is individually well-formed.\n"
+            "\n"
+            "**Fix -- declare the same thing twice, on purpose.** In the "
+            "contract:\n"
+            "\n"
+            ".. code-block:: pkl\n"
+            "\n"
+            "    legacyWorkflowTypes {\n"
+            "      new LegacyWorkflowTypeSpec {\n"
+            '        alias = "LegacyCrawlerWorkflow"\n'
+            '        entrypoint = "crawler"\n'
+            "      }\n"
+            "    }\n"
+            '    legacyWorkflowTypesRemovalVersion = "4.2.0"\n'
+            "\n"
+            "then regenerate, and in the app:\n"
+            "\n"
+            ".. code-block:: python\n"
+            "\n"
+            "    class MyApp(App):\n"
+            "        legacy_workflow_types = {\n"
+            '            "LegacyCrawlerWorkflow": "crawler",\n'
+            "        }\n"
+            '        legacy_workflow_types_removal_version = "4.2.0"\n'
+            "\n"
+            "The block is app-level, so for a multi-entrypoint bundle the **same** "
+            "block goes on every entry point's contract and every generated "
+            "manifest carries an identical copy. The bundle root renders no "
+            "manifest and refuses the declaration at eval time.\n"
+            "\n"
+            "An app with no ``app/generated/`` tree is out of scope: the class "
+            "attribute is then the only declaration site and there is nothing to "
+            "compare.\n"
+            "\n"
+            "**Suppress** with ``# conformance: ignore[K015] <reason>`` above the "
+            "``App`` subclass. Suppressing leaves the two sites free to diverge, "
+            "and P016 keeps routing off the manifest either way.\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k015"
+        ),
+    ),
+    RuleDefinition(
         id="K016",
         scope=RuleScope.APP,
         name="EntrypointArtifactSchemaMissing",
@@ -1137,6 +1247,111 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k016"
+        ),
+    ),
+    RuleDefinition(
+        id="K017",
+        scope=RuleScope.APP,
+        name="ArtifactSchemaWriterMismatch",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="contract-toolkit",
+        autofixable=False,
+        since="0.23.0",
+        orthogonal_gate="pkl-eval",
+        rationale=(
+            "K016 requires a declaration where a hand-off is public. This rule "
+            "is the next failure along: the declaration exists, and the app's "
+            "own Python contradicts it. That is worse than no declaration at "
+            "all -- an absent one is visibly absent, while a stale one reads as "
+            "a true statement about the file, so a consuming app trusts it and "
+            "builds on it. The same production RCA that motivated ADR-0020 "
+            "traced 73 days of frozen lineage to a column whose real type had "
+            "drifted from what the reader expected; every workflow in the chain "
+            "reported success throughout, because each did exactly what its own "
+            "code said and no layer compared the two beliefs. A writer moving "
+            "on without its declaration is exactly how that gap opens. The SDK "
+            "finds the same disagreement at runtime, but only once a run has "
+            "produced the artifact and only in the environment that ran it; "
+            "this rule finds it in review, before merge, where it costs "
+            "nothing.\n"
+            "\n"
+            "It warns rather than blocks because it is inference about code "
+            "rather than a structural fact about two committed files: the check "
+            "resolves the writer's path and record type through local "
+            "assignments, and although every unresolvable shape is dropped "
+            "rather than guessed at, a WARN tier is the honest disposition for "
+            "a rule whose evidence is a read of Python rather than a diff of "
+            "two artifacts. Nothing in the fleet declares artifact schemas yet, "
+            "so adopting it blocks no app either way."
+        ),
+        short_description=(
+            "A declared artifact schema disagrees with the Python that writes "
+            "the artifact"
+        ),
+        full_description=(
+            "An ``artifactSchemas`` entry in the committed "
+            "``artifact_schemas.json`` contradicts the app's own writer for the "
+            "same ``FileReference`` contract field.\n"
+            "\n"
+            "Two disagreements are reported:\n"
+            "\n"
+            "* **Format.** The writer builds the field's ``FileReference`` from "
+            "a path whose extension the declared ``format`` cannot be -- a "
+            "``.parquet`` path declared ``ndjson``, or a ``.jsonl``/``.ndjson``/"
+            "``.json`` path declared ``parquet``. Any other extension, and a "
+            "reference to a directory, is skipped: a partitioned-parquet "
+            "directory has no extension to disagree with.\n"
+            "* **Fields.** The record class the writer serialises into the "
+            "artifact declares a field -- directly or inherited -- that the "
+            "declaration does not describe. Declared nested paths "
+            "(``attributes.columns[].name``) are compared at their top-level "
+            "segment, since that is the level a record class exposes.\n"
+            "\n"
+            "**What the rule will not do.** Resolution is module-scoped and "
+            "deliberately narrow. A path variable is followed only within the "
+            "file it is assigned in; a name assigned two different extensions, "
+            "a handle opened from two different paths, and a write whose "
+            "argument names more than one candidate record class are each "
+            "recorded as unknown rather than resolved by choosing. Only classes "
+            "defined in the scanned repo count as record types, so a writer "
+            "that serialises through a mapper or a library model is invisible "
+            "to the field half of the rule. A record class that renames fields "
+            "on the wire (``rename=``, ``Field(alias=...)``, "
+            "``alias_generator=``) is skipped entirely, because its attribute "
+            "names are not the artifact's field names. Every one of those is a "
+            "deliberate false negative.\n"
+            "\n"
+            "**Fix -- change whichever side is wrong.** If the declaration is "
+            "right, correct the writer. If the writer is right, edit the pkl "
+            "contract and regenerate:\n"
+            "\n"
+            "    artifactSchemas {\n"
+            '      ["transformed_entities"] = new ArtifactSchema {\n'
+            '        format = "ndjson"\n'
+            "        fields {\n"
+            "          new ArtifactField {\n"
+            '            name = "typeName"\n'
+            '            type = "string"\n'
+            '            description = "Atlan type this record instantiates."\n'
+            "          }\n"
+            "        }\n"
+            "      }\n"
+            "    }\n"
+            "\n"
+            "Then ``pkl eval -m . contract/app.pkl``. Never hand-edit the "
+            "generated ``artifact_schemas.json``: it is a pkl eval output and "
+            "the next toolkit run reverts the edit.\n"
+            "\n"
+            "**Suppress** with ``# conformance: ignore[K017] <reason>`` on the "
+            "``FileReference`` construction. Suppressing states that the "
+            "declaration and the writer are allowed to disagree, which leaves "
+            "the consuming side reading an assertion the producer does not "
+            "honour.\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k017"
         ),
     ),
 )

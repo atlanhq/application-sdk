@@ -1413,6 +1413,7 @@ class TestRunWorkerMode:
         auth_mgr = MagicMock()
         auth_mgr.acquire_initial_token = AsyncMock(return_value="api-key-xyz")
         auth_mgr.start_background_refresh = MagicMock()
+        auth_mgr.restart_background_refresh = AsyncMock()
         auth_mgr.shutdown = AsyncMock()
         return auth_mgr
 
@@ -1505,6 +1506,119 @@ class TestRunWorkerMode:
             worker_patches["health"].call_args.kwargs["max_idle_seconds"]
             == WORKER_LIVENESS_MAX_IDLE_SECONDS
         )
+
+    async def test_reconnect_closure_rebinds_client_and_health(
+        self, worker_patches, auth_manager
+    ) -> None:
+        """The wired reconnect runs the production helper, not a test stub.
+
+        After a successful reconnect the next worker must be built on the new
+        client and /ready must follow that client. shutdown() must not run
+        before the replacement connect succeeds.
+        """
+        old_client = object()
+        new_client = object()
+        worker_patches["create_client"].side_effect = [old_client, new_client]
+        auth_manager.acquire_initial_token.side_effect = ["api-key-xyz", "api-key-new"]
+        health_cm = _make_async_cm()
+        worker_patches["health"].return_value = health_cm
+
+        captured_clients: list[object] = []
+        calls = {"n": 0}
+        reconnect_holder: dict[str, Any] = {}
+
+        def _capture_create_worker(client, *args, **kwargs):
+            captured_clients.append(client)
+            return _make_async_cm()
+
+        async def _capture_supervise(**kwargs: Any) -> None:
+            reconnect_holder["fn"] = kwargs["reconnect"]
+            build = kwargs["build_worker"]
+            calls["n"] += 1
+            build()
+            await kwargs["reconnect"]()
+            calls["n"] += 1
+            build()
+
+        cfg = AppConfig(
+            mode="worker",
+            app_module="pkg:FakeApp",
+            auth_enabled=True,
+            auth_client_id="cid",
+            auth_client_secret="csec",
+            auth_token_url="https://example.com/token",
+            auth_base_url="https://example.com",
+        )
+        with (
+            patch(
+                "application_sdk.execution._temporal.auth.TemporalAuthManager",
+                return_value=auth_manager,
+            ),
+            patch("application_sdk.execution._temporal.auth.TemporalAuthConfig"),
+            patch(
+                "application_sdk.execution._temporal.worker.create_worker",
+                side_effect=_capture_create_worker,
+            ),
+            patch(
+                "application_sdk.main._supervise_worker",
+                side_effect=_capture_supervise,
+            ),
+        ):
+            await run_worker_mode(cfg)
+            # Drive the production closure a second time after the mode returns
+            # so we also cover a later restart generation.
+            assert reconnect_holder["fn"] is not None
+
+        assert captured_clients == [old_client, new_client]
+        assert auth_manager.acquire_initial_token.await_count == 2
+        auth_manager.start_background_refresh.assert_called_once_with(old_client)
+        auth_manager.restart_background_refresh.assert_awaited_once_with(new_client)
+        health_cm.set_temporal_client.assert_any_call(new_client)
+        # Process teardown still shuts the manager down once at the end.
+        assert auth_manager.shutdown.await_count == 1
+
+    async def test_reconnect_connect_failure_does_not_stop_refresh(
+        self, worker_patches, auth_manager
+    ) -> None:
+        """A failed replacement connect must leave the existing refresh loop up."""
+        old_client = object()
+        worker_patches["create_client"].side_effect = [
+            old_client,
+            RuntimeError("temporal unreachable"),
+        ]
+        auth_manager.acquire_initial_token.side_effect = ["api-key-xyz", "api-key-new"]
+
+        async def _fail_on_reconnect(**kwargs: Any) -> None:
+            with pytest.raises(RuntimeError, match="temporal unreachable"):
+                await kwargs["reconnect"]()
+
+        cfg = AppConfig(
+            mode="worker",
+            app_module="pkg:FakeApp",
+            auth_enabled=True,
+            auth_client_id="cid",
+            auth_client_secret="csec",
+            auth_token_url="https://example.com/token",
+            auth_base_url="https://example.com",
+        )
+        with (
+            patch(
+                "application_sdk.execution._temporal.auth.TemporalAuthManager",
+                return_value=auth_manager,
+            ),
+            patch("application_sdk.execution._temporal.auth.TemporalAuthConfig"),
+            patch(
+                "application_sdk.main._supervise_worker",
+                side_effect=_fail_on_reconnect,
+            ),
+        ):
+            await run_worker_mode(cfg)
+
+        # Initial start only — reconnect must not have stopped the loop.
+        auth_manager.start_background_refresh.assert_called_once()
+        # shutdown is process teardown at the end of run_worker_mode, not the
+        # failed reconnect (which must leave the loop running until then).
+        assert auth_manager.shutdown.await_count == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -2290,6 +2404,111 @@ class TestRunCombinedAuth:
         auth_mgr.start_background_refresh.assert_called_once()
         auth_mgr.shutdown.assert_awaited_once()
 
+    async def test_reconnect_closure_rebinds_client_and_health(self) -> None:
+        """Combined-mode reconnect uses the same production helper as worker mode."""
+        infra = MagicMock()
+        infra.secret_store = MagicMock()
+        infra.storage = MagicMock()
+
+        uvicorn_server = MagicMock()
+        uvicorn_server.serve = AsyncMock(return_value=None)
+
+        auth_mgr = MagicMock()
+        auth_mgr.acquire_initial_token = AsyncMock(
+            side_effect=["api-key", "api-key-new"]
+        )
+        auth_mgr.start_background_refresh = MagicMock()
+        auth_mgr.restart_background_refresh = AsyncMock()
+        auth_mgr.shutdown = AsyncMock()
+
+        old_client = object()
+        new_client = object()
+        health_cm = _make_async_cm()
+        captured_clients: list[object] = []
+
+        def _capture_create_worker(client, *args, **kwargs):
+            captured_clients.append(client)
+            return _make_async_cm()
+
+        async def _capture_supervise(**kwargs: Any) -> None:
+            build = kwargs["build_worker"]
+            build()
+            await kwargs["reconnect"]()
+            build()
+
+        cfg = AppConfig(
+            mode="combined",
+            app_module="pkg:FakeApp",
+            auth_enabled=True,
+            auth_client_id="cid",
+            auth_client_secret="csec",
+            auth_token_url="https://x/token",
+            auth_base_url="https://x",
+        )
+
+        with (
+            patch(
+                "application_sdk.main._create_infrastructure",
+                new_callable=AsyncMock,
+                return_value=infra,
+            ),
+            patch(
+                "application_sdk.main.load_app_class",
+                return_value=_fake_app_class(),
+            ),
+            patch("application_sdk.main.validate_app_class"),
+            patch("application_sdk.main.load_handler_class", return_value=None),
+            patch(
+                "application_sdk.execution._temporal.backend.create_temporal_client",
+                new_callable=AsyncMock,
+                side_effect=[old_client, new_client],
+            ),
+            patch(
+                "application_sdk.execution._temporal.converter.create_data_converter_for_app"
+            ),
+            patch(
+                "application_sdk.execution._temporal.worker.create_worker",
+                side_effect=_capture_create_worker,
+            ),
+            patch(
+                "application_sdk.execution._temporal.auth.TemporalAuthManager",
+                return_value=auth_mgr,
+            ),
+            patch("application_sdk.execution._temporal.auth.TemporalAuthConfig"),
+            patch("application_sdk.handler.DefaultHandler"),
+            patch("application_sdk.handler.create_app_handler_service"),
+            patch("application_sdk.infrastructure.context.set_infrastructure"),
+            patch(
+                "application_sdk.infrastructure.context.get_infrastructure",
+                return_value=None,
+            ),
+            patch(
+                "application_sdk.infrastructure.context.close_infrastructure",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "application_sdk.server.health.WorkerHealthServer",
+                return_value=health_cm,
+            ),
+            patch(
+                "application_sdk.main._flush_observability",
+                new_callable=AsyncMock,
+            ),
+            patch("application_sdk.main._install_graceful_signal_handlers"),
+            patch("uvicorn.Server", return_value=uvicorn_server),
+            patch("uvicorn.Config"),
+            patch(
+                "application_sdk.main._supervise_worker",
+                side_effect=_capture_supervise,
+            ),
+        ):
+            await run_combined_mode(cfg)
+
+        assert captured_clients == [old_client, new_client]
+        auth_mgr.restart_background_refresh.assert_awaited_once_with(new_client)
+        health_cm.set_temporal_client.assert_any_call(new_client)
+        assert auth_mgr.shutdown.await_count == 1
+
 
 # ---------------------------------------------------------------------------
 # _log_process_memory_baseline
@@ -2451,6 +2670,78 @@ class TestRunWorkerWithRestart:
 
         assert calls["n"] == 2
         auth.force_refresh.assert_awaited_once()
+
+    async def test_reconnect_runs_before_rebuild_and_replaces_force_refresh(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A wired reconnect rebuilds the client before the worker is rebuilt.
+
+        Ordering is the whole point: the replacement worker has to be built
+        against the fresh client. Built against the poisoned one it comes up,
+        registers, and then never polls — and because it neither returns nor
+        raises, the supervisor never gets a second chance to notice.
+        """
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_RESTART_BACKOFF_CAP_SECONDS", 0
+        )
+        shutdown = asyncio.Event()
+        auth = AsyncMock()
+        order: list[str] = []
+        calls = {"n": 0}
+
+        async def reconnect() -> None:
+            order.append("reconnect")
+
+        def build() -> _FakeWorker:
+            calls["n"] += 1
+            order.append(f"build{calls['n']}")
+            if calls["n"] == 1:
+                return _FakeWorker(fail=True)
+            return _FakeWorker(fail=False, on_enter=shutdown.set)
+
+        await _run_worker_with_restart(
+            build_worker=build,
+            shutdown_event=shutdown,
+            auth_manager=auth,
+            client=object(),
+            reconnect=reconnect,
+        )
+
+        assert order == ["build1", "reconnect", "build2"]
+        # Reconnect mints its own token, so the token-only path is skipped.
+        auth.force_refresh.assert_not_awaited()
+
+    async def test_restart_proceeds_when_reconnect_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failing reconnect must not strand the worker.
+
+        If Temporal is unreachable at that moment, restarting on the old client
+        is still better than not restarting at all — the next fatal brings us
+        back here after another backoff.
+        """
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_RESTART_BACKOFF_CAP_SECONDS", 0
+        )
+        shutdown = asyncio.Event()
+        calls = {"n": 0}
+
+        async def reconnect() -> None:
+            raise RuntimeError("temporal unreachable")
+
+        def build() -> _FakeWorker:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return _FakeWorker(fail=True)
+            return _FakeWorker(fail=False, on_enter=shutdown.set)
+
+        await _run_worker_with_restart(
+            build_worker=build,
+            shutdown_event=shutdown,
+            reconnect=reconnect,
+        )
+
+        assert calls["n"] == 2
 
     async def test_restarts_on_cancellation_seam_without_propagating_cancel(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2757,3 +3048,143 @@ class TestObserveWorkerPollState:
         readings_at_return = len(health.readings)
         await asyncio.sleep(0.05)
         assert len(health.readings) == readings_at_return
+
+
+class TestObserverFeedsHealthEventGate:
+    """The observer is what closes the gate on token_refresh health events."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_gate(self):
+        from application_sdk.execution._temporal.poll_state import worker_poll_state
+
+        worker_poll_state.reset()
+        yield
+        worker_poll_state.reset()
+
+    async def _run_observer(self, shutdown: asyncio.Event) -> None:
+        async def stop_soon() -> None:
+            await asyncio.sleep(0.06)
+            shutdown.set()
+
+        stopper = asyncio.create_task(stop_soon())
+        await asyncio.wait_for(
+            _observe_worker_poll_state(
+                shutdown_event=shutdown,
+                health_server=_RecordingHealthServer(),
+                interval=0.01,
+            ),
+            timeout=2.0,
+        )
+        await stopper
+
+    async def test_sustained_zero_closes_the_gate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A confirmed-parked worker stops advertising itself as healthy."""
+        from application_sdk.execution._temporal.poll_state import worker_poll_state
+
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_ZERO_POLLER_READINGS_BEFORE_STALE", 1
+        )
+        monkeypatch.setattr(
+            "application_sdk.execution._temporal.worker.read_core_poller_counts",
+            AsyncMock(return_value={"workflow_task": 0.0, "activity_task": 0.0}),
+        )
+
+        await self._run_observer(asyncio.Event())
+
+        assert worker_poll_state.should_emit_health_event() is False
+
+    async def test_unknown_readings_leave_the_gate_open(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unreadable gauge must never mute a worker that may be healthy."""
+        from application_sdk.execution._temporal.poll_state import worker_poll_state
+
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_ZERO_POLLER_READINGS_BEFORE_STALE", 1
+        )
+        monkeypatch.setattr(
+            "application_sdk.execution._temporal.worker.read_core_poller_counts",
+            AsyncMock(return_value=None),
+        )
+
+        await self._run_observer(asyncio.Event())
+
+        assert worker_poll_state.should_emit_health_event() is True
+
+    async def test_observation_exception_reopens_a_closed_gate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed reading after suppression must fail open, not stay muted.
+
+        The observer except path used to log-and-continue without recording
+        ``unknown``, so a parked worker that then hit a transient metrics-read
+        failure stayed suppressed for the rest of the process lifetime.
+        """
+        from application_sdk.execution._temporal.poll_state import worker_poll_state
+
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_ZERO_POLLER_READINGS_BEFORE_STALE", 1
+        )
+
+        calls = 0
+
+        async def _zero_then_raise():
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return {"workflow_task": 0.0, "activity_task": 0.0}
+            raise RuntimeError("metrics unavailable")
+
+        monkeypatch.setattr(
+            "application_sdk.execution._temporal.worker.read_core_poller_counts",
+            AsyncMock(side_effect=_zero_then_raise),
+        )
+
+        shutdown = asyncio.Event()
+        reader_calls_at_stop = {"n": 0}
+
+        async def stop_after_exception() -> None:
+            # Wait until the raising path has run at least once, then stop.
+            for _ in range(50):
+                if calls >= 2:
+                    break
+                await asyncio.sleep(0.02)
+            reader_calls_at_stop["n"] = calls
+            shutdown.set()
+
+        stopper = asyncio.create_task(stop_after_exception())
+        await asyncio.wait_for(
+            _observe_worker_poll_state(
+                shutdown_event=shutdown,
+                health_server=_RecordingHealthServer(),
+                interval=0.01,
+            ),
+            timeout=2.0,
+        )
+        await stopper
+
+        assert reader_calls_at_stop["n"] >= 2
+        assert worker_poll_state.should_emit_health_event() is True
+
+    async def test_supervisor_reopens_the_gate_on_shutdown(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A worker must never be born muted by its predecessor's parked state."""
+        from application_sdk.execution._temporal.poll_state import worker_poll_state
+
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_POLL_DIAGNOSTIC_INTERVAL_SECONDS", 0
+        )
+        worker_poll_state.configure(zero_readings_before_stale=1)
+        worker_poll_state.record("zero")
+        assert worker_poll_state.should_emit_health_event() is False
+
+        shutdown = asyncio.Event()
+        await _run_worker_with_restart(
+            build_worker=lambda: _FakeWorker(fail=False, on_enter=shutdown.set),
+            shutdown_event=shutdown,
+        )
+
+        assert worker_poll_state.should_emit_health_event() is True

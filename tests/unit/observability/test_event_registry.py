@@ -22,9 +22,10 @@ def test_existing_names_moved_unchanged() -> None:
     assert events.ASSET_VALIDATION_EVENT == "Transformed-asset validation outcome"
 
 
-def test_the_new_name_is_the_fourth() -> None:
+def test_the_new_names_are_the_fourth_and_fifth() -> None:
     assert events.ARTIFACT_VALIDATION_EVENT == "Artifact validation outcome"
-    assert len(events.OUTCOME_EVENT_NAMES) == 4
+    assert events.ARTIFACT_VALIDATION_POSTURE_EVENT == "Artifact validation posture"
+    assert len(events.OUTCOME_EVENT_NAMES) == 5
 
 
 def test_names_are_distinct() -> None:
@@ -34,6 +35,7 @@ def test_names_are_distinct() -> None:
         events.PREFLIGHT_POSTURE_EVENT,
         events.ASSET_VALIDATION_EVENT,
         events.ARTIFACT_VALIDATION_EVENT,
+        events.ARTIFACT_VALIDATION_POSTURE_EVENT,
     ]
     assert len(set(names)) == len(names)
     assert all(name.strip() for name in names)
@@ -45,6 +47,7 @@ def test_registry_is_the_full_set() -> None:
         events.PREFLIGHT_POSTURE_EVENT,
         events.ASSET_VALIDATION_EVENT,
         events.ARTIFACT_VALIDATION_EVENT,
+        events.ARTIFACT_VALIDATION_POSTURE_EVENT,
     }
 
 

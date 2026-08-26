@@ -37,6 +37,21 @@ tags = new Listing {
 credentialConnectorType = "jdbc"
 notifications = true
 
+// Inbound-only aliases for the pre-migration workflow types callers still dispatch.
+// The SDK App must declare the same pairs in `legacy_workflow_types`; conformance K015
+// fails the app on any disagreement.
+legacyWorkflowTypes {
+  new LegacyWorkflowTypeSpec {
+    alias = "FullFeaturedWorkflow"
+    entrypoint = "full-featured"
+  }
+  new LegacyWorkflowTypeSpec {
+    alias = "legacy-app:full-featured"
+    entrypoint = "full-featured"
+  }
+}
+legacyWorkflowTypesRemovalVersion = "4.2.0"
+
 pipeline {
   extract {
     // Override the default "Extract" label for apps whose first step is

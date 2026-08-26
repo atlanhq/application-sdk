@@ -14,7 +14,21 @@ This doc covers what the SDK ships — the composite action, the reusable workfl
 | `e2e-full-reusable.yaml` reusable workflow | `.github/workflows/e2e-full-reusable.yaml` | Boilerplate (120-min timeout, concurrency group, env wiring, agent-name resolution) for the full-DAG pipeline. Connector repos `uses:` it as a 5-line wrapper. |
 | `e2e-apps` cross-repo dispatcher | `.github/actions/e2e-apps/action.yaml` | Fires `workflow_dispatch` on the connector repo with the apps-sdk PR's head SHA. Polls for completion, surfaces a sticky status comment on the SDK PR. |
 | `BaseSDRIntegrationTest` | `application_sdk/testing/sdr/` | pytest base for the SDR pipeline. Connector test class declares `Scenario(...)` instances. |
-| `SQLAppE2EFullTest` / `BaseFullDAGE2ETest` | `application_sdk/testing/full_dag/` | pytest base for the full-DAG pipeline. Connector subclasses with `include_filter`, `expected_min_asset_counts`, `database_spec()`, etc. |
+| `BaseE2ETest` / `SQLAppE2ETest` | `application_sdk/testing/e2e/` | pytest base for the full-DAG pipeline. `BaseE2ETest` is connector-agnostic and is what the codegen'd `app/generated/_e2e_base.py` subclasses; SQL connectors use `SQLAppE2ETest` on top of it, subclassing with `include_filter`, `expected_min_asset_counts`, `database_spec()`, etc. |
+| ~~`SQLAppE2EFullTest` / `BaseFullDAGE2ETest`~~ | `application_sdk/testing/full_dag/` | **Deprecated, removed in v4.0.** The predecessor of the row above; it emits a `DeprecationWarning` on import and its client / error types are already re-exports of the `testing/e2e` ones. Do not start a new suite here — see [Which harness](#which-harness). |
+
+## Which harness
+
+New suites use `application_sdk.testing.e2e`. Nothing new should be written against `application_sdk.testing.full_dag`.
+
+| Your connector | Subclass |
+|---|---|
+| SQL | `application_sdk.testing.e2e.SQLAppE2ETest` |
+| Anything else (BI, API, object-store, agent apps) | the generated `app/generated/_e2e_base.py`, which subclasses `application_sdk.testing.e2e.BaseE2ETest` |
+
+`BaseE2ETest` is connector-agnostic and is already the base for every scaffolded app. The SQL-shaped parameter rows (`include-filter` / `exclude-filter`) come from `SQLAppE2ETest`, not from the base — so "my connector is not SQL, so I need the old harness" does not follow. If a non-SQL connector genuinely cannot express its manifest tokens through `BaseE2ETest`, that is an SDK gap worth filing, not a reason to start a `full_dag` suite.
+
+`application_sdk.testing.full_dag` is deprecated and removed in v4.0. It emits a `DeprecationWarning` on import, and its `client` / `_errors` modules are already thin re-exports of the `testing/e2e` ones. Suites still on it (domo, looker, saperp at time of writing) are pinned to released SDKs where it still works; they need migrating before a v4 repin, not preserving as a second supported path.
 
 ## The two pipelines
 
@@ -391,6 +405,65 @@ verdict:
 A timeout is never downgraded this way — an accepted-but-unreconciled deploy is
 nobody else's fault, and it is the silent wrong-version failure this whole
 mechanism exists to remove.
+
+### When the FAILED verdict is about pod churn the platform caused
+
+The verdict is also an **instant**, not just a namespace: any pod unhealthy at
+the moment LM looks reds the install, including a pod the platform itself just
+deleted on purpose. The first install onto a new tenant failed in 45s that way —
+KEDA scaled the server deployment to zero while the platform-injected
+`atlan-env-seeder` init container was still blocked on a Vault secret whose name
+encodes the namespace and had not synced yet, so the pod was SIGKILLed mid-init
+and left phase `Failed`. The workers recovered, the app was fine, and the two
+warm namespaces on the other clouds passed the same run.
+
+The pull-failure reading above cannot catch that — there was no pull failure
+(`Normal Pulled`) — so a second, narrower tolerance sits behind it. It needs
+**both** halves, and the failing container has to be named:
+
+- **Whose container broke.** The container under test is the one running the
+  image we published; every other container in the pod came from the platform's
+  pod template, so it can be neither broken nor fixed by the app. Decided by the
+  same repository-identity compare as above (an unreadable `Image:` counts as
+  ours), so there is no list of platform container names to keep current.
+- **Why, for our own container.** `CreateContainerConfigError` (the kubelet could
+  not *generate* the container's config — a missing Secret or ConfigMap — so the
+  image was never instantiated), a node eviction or
+  shutdown, or exit 137 where the events *name this pod's* deletion
+  (`KEDAScaleTargetDeactivated` **and** `Deleted pod: <name>`). `OOMKilled` exits
+  137 too and stays fatal. Anything unrecognised stays fatal — including plain
+  `CreateContainerError`, which the kubelet sets *after* config generation when
+  the CRI `CreateContainer` call fails (a bad security context, a volume the
+  chart asked for, an image that cannot be instantiated). Those are app faults
+  and are what this tolerance exists to keep fatal, so the reason list is not to
+  be widened without a fixture from a real `describe`.
+- **Then it must not happen again.** `--settle-seconds` (90 by default) later the
+  live events are re-read, and any unhealthy event still inside that window keeps
+  the verdict. A platform container that never recovers keeps warning, so it
+  still fails us. The re-read is of the **live events** and nothing else: LM's
+  `deployment_status` is a terminal record, and its failure snapshot is
+  *failure-triggered*, so it can only ever depict a failure — never a recovery.
+  The snapshot's `pod_events` must never reach the age comparison either: its
+  ages are relative to its own capture moment (8s behind the live read on the run
+  above, unbounded in general), so the same lines would read as young forever.
+  `--settle-seconds 0` disables the tolerance entirely.
+
+None of this proves the app is healthy, and nothing downstream should read it
+that way — a one-shot warning on a still-wedged pod ages out of the window and
+takes the window quiet with it. What the two conditions establish is that LM's
+verdict is not evidence **either way**, which hands the decision to the
+installed-version read-back: unconditional, direct, and the only positive
+evidence in the flow. Its failure message says when a verdict was downgraded, so
+a version mismatch is never read in isolation.
+
+Two platform-side fixes would remove the churn rather than tolerate it — KEDA
+`initialCooldownPeriod` on the server ScaledObject, and LM not counting a pod it
+deleted itself — but both live outside this repo.
+
+`pod_describe` is printed **per pod, unhealthy first**, for the same reason: under
+one shared budget it printed as "tail 200 of 542 lines" and the only pod that
+failed the install was in the dropped head, leaving two healthy workers as the
+entire visible evidence.
 
 Each entry may also carry `"deployment_name"` when that tenant's system apps
 (publish / quality / lineage) are not registered under `production`. It reaches
@@ -942,7 +1015,7 @@ run that should have failed.
 1. **Action manifest**: `app.yaml` at repo root (3 lines).
 2. **Unified workflow**: copy `.github/workflows/tests.yaml` from mysql-app; swap connector references. This single file covers unit + integration tests (always) and full-DAG e2e (on the `e2e` label or `run_e2e=true` dispatch input).
 3. **Config dir**: create `.github/sdr-e2e/` (new) or `.github/e2e/` (legacy). Files: `docker-compose.ci.yml`, `e2e-full-docker-compose.yaml`, `e2e-full-components/`, `seed.sql`, `make-secrets.py`, `make-secrets-e2e-full.py`.
-4. **Tests**: unit + integration tests under `tests/unit/` and `tests/integration/`; full-DAG e2e under `tests/e2e/` (`SQLAppE2EFullTest` subclass). On a bundle app, one `tests/e2e/test_*.py` **per entrypoint** — see [Multi-entrypoint (bundle) apps](#multi-entrypoint-bundle-apps-one-suite-per-entrypoint).
+4. **Tests**: unit + integration tests under `tests/unit/` and `tests/integration/`; full-DAG e2e under `tests/e2e/` (`SQLAppE2ETest` subclass for SQL connectors, otherwise the generated `BaseE2ETest` subclass — see [Which harness](#which-harness)). On a bundle app, one `tests/e2e/test_*.py` **per entrypoint** — see [Multi-entrypoint (bundle) apps](#multi-entrypoint-bundle-apps-one-suite-per-entrypoint).
 5. **Repo secrets**: set the 7 entries from the table above.
 6. **SDK matrix**: add `<connector>-app` to the `DEFAULT_MATRIX` in apps-sdk's `matrix-builder` job (`pull_request.yaml`) so `connector-tests` fans out to your connector automatically.
 7. **Required check**: make `tests / Tests Gate` a required, unbypassable status check on the default branch, and remove any stale required checks left over from older workflows (`unit-tests`, `tests-passed`, …). Do this as soon as step 2 is merged — see below.
@@ -991,7 +1064,7 @@ pass/fail already blocks publish while the 85% threshold only annotates.
 - SDR composite action: [`.github/actions/sdr-e2e/action.yaml`](../../.github/actions/sdr-e2e/action.yaml)
 - Full-DAG reusable workflow: [`.github/workflows/e2e-full-reusable.yaml`](../../.github/workflows/e2e-full-reusable.yaml)
 - Cross-repo dispatcher action: [`.github/actions/e2e-apps/action.yaml`](../../.github/actions/e2e-apps/action.yaml)
-- Test harness: [`application_sdk/testing/full_dag/`](../../application_sdk/testing/full_dag/)
+- Test harness: [`application_sdk/testing/e2e/`](../../application_sdk/testing/e2e/) (the deprecated predecessor, [`application_sdk/testing/full_dag/`](../../application_sdk/testing/full_dag/), is removed in v4.0)
 - Series of merged PRs that built this:
   - [#1669](https://github.com/atlanhq/application-sdk/pull/1669) — SDR composite + pytest base
   - [#1710](https://github.com/atlanhq/application-sdk/pull/1710) — Cross-repo dispatch + full-DAG harness + sticky comments

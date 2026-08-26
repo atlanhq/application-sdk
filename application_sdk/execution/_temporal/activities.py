@@ -248,6 +248,32 @@ def create_activity_from_task(
     input_type = task_metadata.input_type
     output_type = task_metadata.output_type
 
+    # ADR-0020 steps 7-8. Every fact artifact validation needs about *this app* is
+    # constant for the worker's lifetime, so all three are resolved once here and
+    # baked into the closure below — the same shape the preflight gate's posture
+    # uses — rather than costing a registry lookup on every artifact hand-off.
+    # None of the three raises: an app that is not registered yields empty values
+    # and a soft posture, so the hook reports every hand-off as non-boundary
+    # against the flat generated declaration file and blocks nothing.
+    #
+    # The posture in particular is resolved here rather than per hand-off on
+    # purpose: a worker's blocking behaviour must not be able to change under a
+    # running activity because an env var was edited mid-run, and the posture row
+    # the worker emitted at boot has to describe the posture its activities
+    # actually run.
+    from application_sdk.validation.interceptor import (  # noqa: PLC0415 — deferred to worker build: importing any `validation` submodule loads the package __init__, which pulls pyatlan_v9 in via `assets`. A module-scope import here would put that on the import path of every process that touches `execution` — the handler and server processes included, neither of which ever runs an activity.
+        ARTIFACT_SIDE_HANDOFF,
+        ARTIFACT_SIDE_INGEST,
+        artifact_validation_enforced,
+        boundary_contract_types,
+        entrypoint_index,
+        validate_artifacts,
+    )
+
+    boundary_contracts = boundary_contract_types(task_metadata.app_name)
+    entrypoint_by_workflow_type = entrypoint_index(task_metadata.app_name)
+    enforce_artifact_validation = artifact_validation_enforced(task_metadata.app_name)
+
     async def activity_fn(context: TaskContext, input_data: Input) -> Output:
         """Execute the task as a Temporal activity."""
         from application_sdk.app.context import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
@@ -466,11 +492,49 @@ def create_activity_from_task(
                 # Resolve the store once for both FileReference hooks.
                 store = infra.storage if infra is not None else None
 
+                # ADR-0020 step 7: both artifact-validation enforcement points ride
+                # this seam, and both sit *outside* the `store is not None` guards
+                # below — a hand-off that moves no bytes still hands an artifact
+                # over, and a check that goes quiet on some paths is
+                # indistinguishable from one that passed (FND-401).
+                #
+                # Declarations are keyed by (entrypoint, contract field name). The
+                # field name comes off the walk; the entry point comes off the run's
+                # own workflow type, through the index baked in at worker build.
+                entrypoint_name = entrypoint_by_workflow_type.get(
+                    _current_workflow_type(), ""
+                )
+
                 # Materialise any durable FileReferences in the input before the task runs.
                 if store is not None and has_refs_to_materialize(input_data):
                     input_data = await materialize_file_refs(store, input_data)
 
+                # Consumer side, after materialise: the bytes this task is about to
+                # read are on local disk now, so re-validate them on read. This is
+                # the point that stays on permanently — it is the only cover for
+                # producers that are not our code and for artifacts already written.
+                await validate_artifacts(
+                    input_data,
+                    side=ARTIFACT_SIDE_INGEST,
+                    app_name=context.app_name,
+                    entrypoint=entrypoint_name,
+                    boundary_contracts=boundary_contracts,
+                    enforce=enforce_artifact_validation,
+                )
+
                 result = await task_method(input_data)
+
+                # Producer side, BEFORE persist: the bytes are still local and the
+                # producing activity is still on the stack, so a flag blames whoever
+                # wrote the artifact rather than whoever reads it three hops later.
+                await validate_artifacts(
+                    result,
+                    side=ARTIFACT_SIDE_HANDOFF,
+                    app_name=context.app_name,
+                    entrypoint=entrypoint_name,
+                    boundary_contracts=boundary_contracts,
+                    enforce=enforce_artifact_validation,
+                )
 
                 # Persist any ephemeral FileReferences in the output after the task completes.
                 if store is not None and has_refs_to_persist(result):

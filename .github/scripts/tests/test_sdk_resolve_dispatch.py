@@ -57,6 +57,23 @@ def test_payload_shape():
     assert p["metadata"]["requester"] == "requester-login"
 
 
+def test_payload_declares_attributed_gateway_key():
+    # Without this, mothership's sandbox API has neither a request-level
+    # ai_gateway_key_name nor a snapshot-declared alias to bill against, and
+    # fails closed: "No attributed AI Gateway key for this run ... Refusing
+    # to fall back to a shared, un-attributed key."
+    p = sr.build_payload(
+        "1234",
+        "http://run",
+        8,
+        "2026-07-08",
+        "reviewer-one,reviewer-two",
+        "requester-login",
+        model=sr.MAIN_MODEL,
+    )
+    assert p["ai_gateway_key_name"] == "sdk_review"
+
+
 def test_payload_pins_all_three_model_lanes():
     # All three lanes must be pinned: leaving any unset silently falls back to
     # mothership's Claude defaults (main -> claude-opus-5, sub-agent ->

@@ -640,9 +640,48 @@ def create_worker(
         )
 
     name_to_app_cls = {m.name: m.app_cls for m in sdr_registered_apps}
+
+    # ADR-0020 step 8. Deferred for the same reason activities.py defers it:
+    # importing any `validation` submodule loads the package __init__, which pulls
+    # pyatlan_v9 in via `assets`, and only a worker process ever needs it.
+    from application_sdk.constants import (  # noqa: PLC0415 — read here, not at module scope, so a test can flip the kill switch and see the posture row follow it
+        VALIDATE_ARTIFACTS,
+    )
+    from application_sdk.validation.interceptor import (  # noqa: PLC0415 — see above
+        log_artifact_validation_posture,
+        resolve_artifact_enforcement,
+    )
+
     gate_activities = []
     for name in gate_app_names:
         app_cls = name_to_app_cls.get(name)
+
+        # Artifact validation rides the activity interceptor rather than a
+        # registered activity of its own, so this loop's only job for it is the
+        # boot-time posture row — emitted for every app, soft and switched-off
+        # included, because an app whose tasks hand off no artifacts emits no
+        # outcome row at all and would otherwise be indistinguishable from one
+        # that is not registered. The posture itself is resolved a second time in
+        # `create_activity_from_task`, through the same one function, so the row
+        # here and the behaviour there cannot disagree.
+        artifact_enforce = resolve_artifact_enforcement(app_cls)
+        log_artifact_validation_posture(
+            name, enforce=artifact_enforce, enabled=VALIDATE_ARTIFACTS
+        )
+        if artifact_enforce and VALIDATE_ARTIFACTS:
+            # conformance: ignore[L006] not a per-item log: the loop is over registered apps (single digits) and this fires once per hard-mode one at boot. Demoting the one notice that a worker will start failing hand-offs to DEBUG would hide it in exactly the deployment that needs it.
+            logger.info(
+                "Artifact validation is HARD for app %r — a FileReference that "
+                "disagrees with the artifact schema the app declared for its "
+                "contract field WILL fail the activity, on both sides of a task "
+                "(at ingest after materialise, and at hand-off before persist). "
+                "An undeclared artifact blocks only on an entrypoint's public "
+                "boundary, and a failure of the SDK's own validator always fails "
+                "open. This is the per-app opt-in; the default posture is soft "
+                "(report only, never block).",
+                name,
+            )
+
         enforce = _resolve_gate_enforcement(app_cls)
         budget_seconds = resolve_gate_budget_seconds(
             getattr(app_cls, "preflight_gate_timeout_seconds", None)
@@ -655,6 +694,7 @@ def create_worker(
         # row carrying gate_mode, so it is invisible from outcomes alone).
         log_gate_posture(name, enforce=enforce, budget_seconds=budget_seconds)
         if enforce:
+            # conformance: ignore[L006] same as the artifact-validation notice above: once per hard-mode app at boot, over a single-digit loop, and it is the one line saying a worker will start aborting runs.
             logger.info(
                 "Preflight gate is HARD for app %r — the run WILL abort before "
                 "extraction on a NOT_READY verdict, and on any outcome the gate "

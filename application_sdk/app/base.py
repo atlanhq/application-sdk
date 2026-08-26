@@ -8,9 +8,10 @@ import re
 import shutil
 import sys
 import threading
+import types
 import warnings
 from abc import ABC
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -28,7 +29,6 @@ from typing import (
 from uuid import UUID
 
 import obstore as obs
-import orjson
 from temporalio import activity, workflow
 from temporalio.exceptions import FailureError
 
@@ -50,7 +50,12 @@ from application_sdk.app.context import (
     TaskExecutionContext,
     _is_atlan_logger,
 )
-from application_sdk.app.entrypoint import EntryPointMetadata
+from application_sdk.app.entrypoint import (
+    EntryPointContractError,
+    EntryPointMetadata,
+    canonical_workflow_type,
+    workflow_type_class_segment,
+)
 from application_sdk.app.registry import AppMetadata, resolve_pool_queue
 from application_sdk.app.task import get_task_metadata, is_task, task
 from application_sdk.constants import (
@@ -91,15 +96,11 @@ from application_sdk.errors.leaves import InvalidInputError as _InvalidInputErro
 # the generic artifact-validation one; its value is **unchanged** by that move,
 # because shipped dashboards and alert rules key off the exact string.
 from application_sdk.observability.events import ASSET_VALIDATION_EVENT
-from application_sdk.observability.logger_adaptor import (
-    ASSET_VALIDATION_MATRIX_KEY,
-    get_logger,
-)
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.observability import AtlanObservability
 
 if TYPE_CHECKING:
     from application_sdk.execution.progress import ProgressWatchdogMode
-    from application_sdk.validation import AssetValidationReport
 
 _task_logger = get_logger(__name__)
 
@@ -108,60 +109,18 @@ try:
 except importlib.metadata.PackageNotFoundError:  # conformance: ignore[E009] package not installed (e.g. editable dev install); "unknown" sentinel is benign
     _FRAMEWORK_VERSION = "unknown"
 
-# Cap on how many failure/orphan rows the matrix carries, aliased from the single
-# source of truth in ``constants`` so the structured matrix and the human-readable
-# ``format_report()`` listing (which defaults to the same constant) can never
-# drift. The event's scalar counts always reflect the full batch; the matrix is a
-# bounded drill-down sample so a pathological batch can't produce an unbounded
-# LogAttributes value. Passed explicitly to ``format_report(max_items=...)`` below
-# to make the shared cap obvious at the call site.
+# Cap on how many failure/orphan rows the event's drill-down matrix carries, and how
+# many the human-readable ``format_report()`` lists, from the single source of truth
+# in ``constants`` so the two can never drift. The event's scalar counts always
+# reflect the full batch; the matrix is a bounded drill-down sample so a pathological
+# batch can't produce an unbounded LogAttributes value. Passed explicitly to
+# ``format_report(max_items=...)`` below to make the shared cap obvious at the call
+# site.
+#
+# The matrix builder itself, and the whole event attribute map, moved to
+# ``validation.assets`` with the fold-in (FND-690): the event and the check that
+# feeds it now live in one module. The emitted row is unchanged by that move.
 _VALIDATION_MATRIX_MAX_ROWS = ASSET_VALIDATION_MAX_ITEMS_PER_AXIS
-
-# Per-row error message cap (chars). pyatlan_v9 ``.validate()`` messages can be
-# long; truncate so a single row can't bloat the ClickHouse attribute.
-_VALIDATION_MATRIX_ERROR_MAXLEN = 300
-
-
-def _validation_matrix_json(report: "AssetValidationReport") -> str:
-    """Compact per-failure matrix for the outcome event, as one JSON string.
-
-    Lands as a single ``LogAttributes`` value in ClickHouse so connector-pulse can
-    ``JSONExtract`` the per-failure detail against workflow outcomes with no schema
-    change (mirrors the preflight gate's ``check_matrix``). Small fixed fields
-    only, bounded to :data:`_VALIDATION_MATRIX_MAX_ROWS` rows per axis — the
-    headline counts on the event carry the full totals, and the human-readable
-    ``format_report()`` still rides in the WARNING body for flagged runs. Not
-    internally guarded (``orjson.dumps`` can raise): the sole caller,
-    :func:`_warn_on_invalid_transformed_assets`, wraps the whole emit in
-    ``try/except``, so a raise here is caught there and never blocks the upload.
-    """
-    rows: list[dict[str, Any]] = []
-    for f in report.failures[:_VALIDATION_MATRIX_MAX_ROWS]:
-        rows.append(
-            {
-                "kind": "undeserializable" if f.deserialize_error else "invalid",
-                "type_name": f.type_name,
-                "qualified_name": f.qualified_name,
-                "error": (f.errors[0] if f.errors else "")[
-                    :_VALIDATION_MATRIX_ERROR_MAXLEN
-                ],
-                "file": f.file,
-                "line": f.line,
-            }
-        )
-    for o in report.orphans[:_VALIDATION_MATRIX_MAX_ROWS]:
-        rows.append(
-            {
-                "kind": "orphan",
-                "type_name": o.missing_type_name,
-                "qualified_name": o.missing_qualified_name,
-                "relationship": o.relationship,
-                "reference_count": o.reference_count,
-                "file": o.file,
-                "line": o.line,
-            }
-        )
-    return orjson.dumps(rows).decode()
 
 
 def _resolve_transformed_target(local_path: str) -> "Path | None":
@@ -203,6 +162,24 @@ async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) ->
     the scaffold must not break a real handoff — and it scans every record (no
     sampling) so the summary is accurate.
 
+    **The check is reached through the generic wrapper** (ADR-0020, FND-690):
+    ``validate_artifact(target, ModelSource(model=Asset))`` is the NDJSON x
+    ``ModelSource`` cell, and that cell *is*
+    :func:`~application_sdk.validation.assets.validate_transformed_dir` — same walk,
+    same decode, same referential pass. What the wrapper adds is a second, generic
+    outcome vocabulary over the same findings, and a guarantee this hook used to
+    provide itself: every path through it resolves to a report rather than an
+    exception.
+
+    ``ASSET_VALIDATION_EVENT`` is emitted exactly as before. Its name and every
+    attribute key are a shipped contract — dashboards, the
+    ``asset_validation_matrix`` attribute and alert rules key off those exact
+    strings — so the row is built by
+    :func:`~application_sdk.validation.assets.asset_validation_event_fields` from the
+    asset-vocabulary report the cell carries, i.e. from the same object this hook
+    emitted from before the fold-in. This hook does **not** additionally emit
+    ``ARTIFACT_VALIDATION_EVENT``: one hand-off, one row.
+
     The scan runs via
     :func:`application_sdk._runtime.offload.run_best_effort`, for two reasons.
     It keeps the event loop and the activity's auto-heartbeat free while a large
@@ -213,7 +190,8 @@ async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) ->
     CNCT-85). ``run_best_effort`` isolates the scan in a child process, so a
     crash kills only the child; it then logs the warning and the handoff
     proceeds. The timeout bounds the scan for the same reason — a hung
-    validation must not stall an upload forever.
+    validation must not stall an upload forever. The wrapper is synchronous by
+    design precisely so this caller owns that decision.
 
     Referential (orphan) integrity runs by default on this hook: extracts and
     transforms are full by design by default, so every referenced parent is
@@ -233,16 +211,24 @@ async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) ->
     if target is None:
         return
 
+    from pyatlan_v9.model.assets import (  # noqa: PLC0415 — deferred: pyatlan_v9 stays off the import path of an app that never uploads transformed assets
+        Asset,
+    )
+
     from application_sdk.validation import (  # noqa: PLC0415 — deferred: only load the validator on the upload path
-        validate_transformed_dir,
+        AssetArtifactReport,
+        ModelSource,
+        asset_validation_event_fields,
+        validate_artifact,
     )
 
     # Best-effort: run_best_effort isolates the scan in a child process and, on
     # any native crash / timeout / error, logs a warning and returns None — the
     # upload is never blocked, failed, or crashed by the validation scaffold.
     report = await run_best_effort(
-        validate_transformed_dir,
+        validate_artifact,
         str(target),
+        ModelSource(model=Asset),
         label="Transformed-asset validation",
         logger=_task_logger,
         timeout=VALIDATE_ASSETS_TIMEOUT_SECONDS,
@@ -255,30 +241,38 @@ async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) ->
         # None means the scan itself failed — no counts to emit.
         return
 
+    if not isinstance(report, AssetArtifactReport):
+        # The wrapper resolved to an outcome without running the cell — it never
+        # raises, so a broken plug-in or an unreadable artifact arrives as a plain
+        # report instead of an exception. There are no asset-vocabulary counts to
+        # project, and inventing zeros would put a fabricated denominator on the
+        # board. The wrapper has already logged the cause with a traceback; name the
+        # skip so the gap in the event stream is explicable.
+        _task_logger.warning(
+            "Transformed-asset validation produced no counts (%s: %s); "
+            "handoff continues",
+            report.outcome,
+            report.reason or "no reason recorded",
+        )
+        return
+
     # Emit the structured outcome on every validated upload (clean + flagged) so
     # the row is queryable and gives a denominator. Wrapped: a defect in the
     # emit path (e.g. matrix encoding) must never break a real handoff.
     try:
-        flagged = not report.ok
+        assets = report.assets
+        flagged = not assets.ok
         _task_logger.info(
             ASSET_VALIDATION_EVENT,
-            outcome="flagged" if flagged else "clean",
-            app_name=app_name,
-            assets_total=report.total,
-            assets_passed=report.passed,
-            # ``failed`` counts undeserializable records too; report "invalid"
-            # (per-asset .validate() failures) disjointly, matching the headline
-            # in format_report().
-            assets_invalid=report.failed - report.undeserializable,
-            assets_orphaned=len(report.orphans),
-            assets_undeserializable=report.undeserializable,
-            **{ASSET_VALIDATION_MATRIX_KEY: _validation_matrix_json(report)},
+            **asset_validation_event_fields(
+                assets, app_name=app_name, max_items=_VALIDATION_MATRIX_MAX_ROWS
+            ),
         )
         if flagged:
             _task_logger.warning(
                 "Transformed-asset validation flagged issues before upload "
                 "(handoff continues): %s",
-                report.format_report(max_items=_VALIDATION_MATRIX_MAX_ROWS),
+                assets.format_report(max_items=_VALIDATION_MATRIX_MAX_ROWS),
             )
     except Exception:  # noqa: BLE001 — defense-in-depth must never break the upload
         _task_logger.warning(
@@ -665,6 +659,39 @@ class PersistentStateAccessor:
 # =============================================================================
 
 
+def _require_aliases_not_expired(cls: type, app_name: str) -> None:
+    """Enforce the opt-in ``legacy_workflow_types_removal_version`` expiry.
+
+    Own-class reads, like the alias map itself: the expiry names one app's
+    migration deadline and must not propagate through the MRO.
+    """
+    removal = cls.__dict__.get("legacy_workflow_types_removal_version") or ""
+    aliases = cls.__dict__.get("legacy_workflow_types") or {}
+    if not removal or not aliases:
+        return
+    from application_sdk.version import (  # noqa: PLC0415 — cheap, avoids import-time cycle
+        __version__,
+    )
+
+    if not all(part.isdigit() for part in removal.split(".")):
+        raise EntryPointContractError(
+            f"App '{app_name}': legacy_workflow_types_removal_version must "
+            f"be a dotted numeric version, got {removal!r}."
+        )
+    from packaging.version import (  # noqa: PLC0415 — cheap, lazy like __version__
+        Version,
+    )
+
+    if Version(__version__) >= Version(removal):
+        raise EntryPointContractError(
+            f"App '{app_name}': legacy_workflow_types declared with removal "
+            f"version {removal}, and the installed SDK is {__version__}. The "
+            f"aliases have expired — delete the drained "
+            f"legacy_workflow_types entries, or push "
+            f"legacy_workflow_types_removal_version out if callers remain."
+        )
+
+
 class App(ABC):
     """Base class for all Apps.
 
@@ -714,6 +741,46 @@ class App(ABC):
     tags: ClassVar[dict[str, str] | None] = None
     passthrough_modules: ClassVar[set[str] | None] = None
 
+    legacy_workflow_types: ClassVar[Mapping[str, str]] = types.MappingProxyType({})
+    """Inbound-only Temporal workflow type aliases: ``{alias: entry-point name}``.
+
+    Declare a legacy type that external callers still dispatch (e.g. a bare
+    pre-migration name like ``"KeifuWorkflow"``) so the worker keeps accepting
+    it. The alias is accepted, never produced: every SDK-initiated dispatch
+    emits the canonical ``{app-name}:{entry-point-name}`` type, so the
+    ``temporal.workflow.type`` telemetry dimension counts exactly the callers
+    that have not migrated. Delete an alias only when that count reaches zero.
+
+    Not inherited: registration reads each subclass's own declaration, so an
+    App subclassing an aliased App starts with no aliases — the alias names a
+    wire contract of one specific app, and silently re-registering it under a
+    second app's name would fail worker startup with a cross-app collision.
+
+    This is a temporary compatibility surface for migrations, not a naming
+    lever — the canonical type cannot be changed.
+
+    Declare it twice, on purpose. For an app with a contract tree the contracted
+    declaration site is the generated manifest's ``legacy_workflow_types`` block
+    (the toolkit's ``legacyWorkflowTypes``), which conformance K015 holds in
+    agreement with this attribute. Only this attribute registers the alias with
+    the worker; only the manifest block is read by P016 when it decides whether
+    a bare DAG node routes an entry point. An app with no contract tree declares
+    it here alone.
+    """
+
+    legacy_workflow_types_removal_version: ClassVar[str] = ""
+    """Opt-in expiry for the aliases: an SDK version string (``"4.2.0"``).
+
+    Once the installed SDK reaches this version, registration fails while any
+    ``legacy_workflow_types`` remain declared — keeping the aliases becomes a
+    loud decision (push the version out, or delete the drained aliases) rather
+    than drift. Empty (the default) declares no expiry; removal then gates on
+    the ``temporal.workflow.type`` legacy-caller count reaching zero, which is
+    the right posture for aliases with a wide external caller set.
+
+    The expiry is app-level, not per-alias. A contract-carrying app declares the
+    same value as the manifest block's ``removal_version``; K015 compares them."""
+
     preflight_gate_mode: ClassVar[Literal["hard", "soft"]] = "soft"
     """Preflight gate posture. ``"soft"`` (default) never blocks — a
     ``NOT_READY`` verdict lets the run proceed and is emitted as
@@ -759,6 +826,39 @@ class App(ABC):
     time-to-verdict and the worker time held. So an app declaring a large
     :attr:`preflight_gate_timeout_seconds` usually wants ``1`` here — at the 300s
     ceiling, two attempts reserve a ~10 minute ``schedule_to_close``."""
+
+    artifact_validation_mode: ClassVar[Literal["hard", "soft"]] = "soft"
+    """Artifact-validation posture (ADR-0020). ``"soft"`` (default) never blocks.
+
+    Every ``FileReference`` crossing a ``@task`` boundary is checked against the
+    artifact schema the app declared for that contract field, on both sides — at
+    ingest (after materialise) and at hand-off (before persist). This attribute
+    decides only what happens to a *negative* verdict:
+
+    * ``"soft"`` — the outcome event carries ``artifact_enforcement="would_block"``
+      and the hand-off proceeds. This is where every app starts.
+    * ``"hard"`` — the same outcome fails the activity with a typed
+      :class:`~application_sdk.validation.interceptor.ArtifactValidationBlockedError`.
+      Blast radius is one workflow, and the blame lands on the task that was
+      handed, or that produced, the artifact.
+
+    ``ATLAN_ARTIFACT_VALIDATION_MODE`` overrides this at deploy time; any set value
+    other than ``"hard"`` resolves to soft, and an empty or unset value is not an
+    override. Only the literal ``"hard"`` enforces, so blocking is always a
+    deliberate opt-in and a typo falls back to reporting.
+
+    Two things are never subject to this posture. **A validator that breaks always
+    fails open** — a defect in the SDK's own check may not fail a healthy run, in
+    either posture — and it says so on the event as
+    ``artifact_classification="validator_broken"``. And an *undeclared* artifact on
+    an app-internal ``@task`` contract never blocks, because ADR-0020 makes
+    declaration optional there on purpose; on an entrypoint's public boundary it is
+    a finding like any other.
+
+    Do not set ``"hard"`` before the app's false-positive rate has been measured
+    from the outcome events (FND-694). ``ATLAN_VALIDATE_ARTIFACTS=false`` is the
+    separate deployment kill switch that stops the check running at all — this
+    attribute never turns reporting off."""
 
     # Marker to track if class has been registered
     _app_registered: ClassVar[bool] = False
@@ -823,6 +923,7 @@ class App(ABC):
             (ep for ep in entry_points.values() if ep.default),
             next(iter(entry_points.values())),
         )
+        _require_aliases_not_expired(cls, app_name)
         _apply_app_registration(
             cls=cls,
             name=app_name,
@@ -833,6 +934,9 @@ class App(ABC):
             input_type=default_ep.input_type,
             output_type=default_ep.output_type,
             entry_points=entry_points,
+            # Own-class read on purpose: aliases name one specific app's wire
+            # contract and must not propagate to subclasses through the MRO.
+            legacy_workflow_types=cls.__dict__.get("legacy_workflow_types", {}),
         )
 
     @property
@@ -1674,10 +1778,11 @@ class App(ABC):
 # module from _ep_registration and re-exported via __all__ for backward compat.
 
 
-# Cache generated workflow classes keyed by (app_cls, entry_point_name) so
-# generate_workflow_class() is idempotent across repeated calls (e.g. tests
-# or worker re-creation) and never registers the same Temporal workflow twice.
-_workflow_class_cache: dict[tuple[type, str], type] = {}
+# Cache generated workflow classes keyed by (app_cls, entry_point_name,
+# workflow_type) so generate_workflow_class() is idempotent across repeated
+# calls (e.g. tests or worker re-creation) and never registers the same Temporal
+# workflow twice.
+_workflow_class_cache: dict[tuple[type, str, str], type] = {}
 
 
 def _validate_interaction_signature(
@@ -2083,7 +2188,11 @@ def _validate_workflow_input(raw_input: Any, input_type: type[Input]) -> Input:
         ) from e
 
 
-def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> type:
+def generate_workflow_class(
+    app_cls: "type[App]",
+    ep: "EntryPointMetadata",
+    workflow_name: str | None = None,
+) -> type:
     """Generate a Temporal workflow class for one entry point.
 
     Creates a @workflow.defn-decorated class whose run() sets up App context,
@@ -2092,17 +2201,21 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
     Args:
         app_cls: The App subclass.
         ep: The entry point to generate a workflow class for.
+        workflow_name: The Temporal workflow type to register this class under.
+            An entry point carrying ``legacy_workflow_types`` aliases registers
+            under more than one name, so the caller picks; defaults to the
+            canonical type.
 
     Returns:
         A Temporal workflow class decorated with @workflow.defn.
     """
-    cache_key = (app_cls, ep.name)
+    if workflow_name is None:
+        workflow_name = canonical_workflow_type(app_cls._app_name, ep)
+
+    cache_key = (app_cls, ep.name, workflow_name)
     if cache_key in _workflow_class_cache:
         return _workflow_class_cache[cache_key]
 
-    workflow_name = (
-        app_cls._app_name if ep.implicit else f"{app_cls._app_name}:{ep.name}"
-    )
     entry_method_name = ep.method_name
     entrypoint_name = ep.name
     input_type = ep.input_type
@@ -2114,7 +2227,9 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
         input_type_supports_gate,
     )
 
-    if not input_type_supports_gate(input_type):
+    canonical_type = canonical_workflow_type(app_name, ep)
+    alias_of_canonical = None if workflow_name == canonical_type else canonical_type
+    if alias_of_canonical is None and not input_type_supports_gate(input_type):
         _task_logger.warning(
             "Preflight gate will not run for entrypoint '%s' (%s): input type %s does "
             "not declare the credential-routing fields (extraction_method, "
@@ -2136,6 +2251,17 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
         # deferred imports: inside Temporal sandbox (workflow.unsafe.imports_passed_through context)
         # BLDX-878: inter-app calls deactivated pending review.
         # from application_sdk.app.client import WorkflowAppClient
+
+        if alias_of_canonical:
+            _safe_log(
+                "warning",
+                f"Workflow started on legacy type '{workflow_name}'; the "
+                f"canonical type is '{alias_of_canonical}'. This alias is a "
+                f"temporary migration surface — move the caller to the "
+                f"canonical type.",
+                legacy_workflow_type=workflow_name,
+                canonical_workflow_type=alias_of_canonical,
+            )
 
         # Fail fast on a malformed / wrong-typed payload, before any setup runs.
         # Enforces the entry point's typed contract at the workflow boundary.
@@ -2333,8 +2459,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             # BLDX-878: inter-app calls deactivated pending review.
             # app_instance._client = None
 
-    safe_name = workflow_name.replace("-", "_").replace(":", "_")
-    cls_name = f"_Workflow_{safe_name}"
+    cls_name = f"_Workflow_{workflow_type_class_segment(workflow_name)}"
 
     # Temporal's _is_unbound_method_on_cls checks:
     #   fn.__qualname__.rsplit(".", 1)[0] == cls.__name__

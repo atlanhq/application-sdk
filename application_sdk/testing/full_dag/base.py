@@ -118,7 +118,9 @@ class FullDAGOutcome:
 
 
 class BaseFullDAGE2ETest:
-    """Pytest base — subclass per connector, set class attrs.
+    """Deprecated (v4.0) — pytest base; use ``application_sdk.testing.e2e.BaseE2ETest``.
+
+    Pytest base — subclass per connector, set class attrs.
 
     Class attrs subclasses MUST set:
 

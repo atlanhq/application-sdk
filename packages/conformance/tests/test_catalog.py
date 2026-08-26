@@ -287,10 +287,16 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # marketplace publish, so neither rule applies to it (CONNECT release-pipeline).
     # K014: same release-readiness family — release_model selects how the app
     # reaches tenants, and only a consumer app has an atlan.yaml declaring it.
+    # K015: legacy_workflow_types agreement — the rule compares a consumer app's
+    # generated manifest against its App subclass; the SDK declares neither
+    # (CONNECT-1081).
     # K016: undeclared artifact on an entry-point boundary — artifactSchemas is
     # authored in an app's pkl contract and rendered into its app/generated/
     # tree; the SDK ships neither, and the hand-offs the rule protects are
     # between apps, not inside the framework (ADR-0020).
+    # K017: a declared artifact schema contradicted by the app's own writer —
+    # same generated-tree + app-Python pairing as K016, neither of which the SDK
+    # has (ADR-0020).
     # E020: HTTP-failure-to-empty-return — the harm (publishing a partial crawl as
     # complete) is a connector extract/publish concern; the SDK's matching sites are
     # legitimate best-effort infra (health/metric scrapes), not crawlers (BLDX-1503).
@@ -368,7 +374,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "K012",
         "K013",
         "K014",
+        "K015",
         "K016",
+        "K017",
         "P004",
         "P005",
         "P008",
@@ -689,9 +697,13 @@ def test_catalog_k_series_present() -> None:
     manifest-vs-contract field validation rule K006 (BLDX-1527), the toolkit
     hygiene rules K007–K010 (version floor, source provenance, unresolved
     placeholder, missing E2E scaffolding) (BLDX-1479), the release-readiness
-    guards K011/K012 (atlan.yaml app_id, generate poe task), and the DAG-node
+    guards K011/K012 (atlan.yaml app_id, generate poe task), the DAG-node
     log-identity guard K013 (toolkit-owned workflow filed under
-    ``automation-engine``) (CNCT-24)."""
+    ``automation-engine``) (CNCT-24), the release-model declaration guard K014,
+    and the legacy-alias agreement rule K015 (manifest legacy_workflow_types vs
+    the SDK App declaration) (CONNECT-1081), plus the artifact-schema pair K016
+    (a public hand-off with no declaration) and K017 (a declaration its own
+    writer contradicts) (ADR-0020)."""
     rules = load_catalog()
     k_ids = {r.id for r in rules if r.id.startswith("K")}
     expected = {
@@ -709,7 +721,9 @@ def test_catalog_k_series_present() -> None:
         "K012",
         "K013",
         "K014",
+        "K015",
         "K016",
+        "K017",
     }
     missing = expected - k_ids
     assert not missing, f"Missing K-series rules: {missing}"

@@ -15,12 +15,23 @@ loads a parquet reader.
 
 **Every hand-off resolves to exactly one outcome, negatives included.** There is no
 path through this function that returns nothing or raises: a missing declaration is
-``not_declared``, a cell that cannot check the declaration it was handed is
-``unsupported``, and an unreadable declaration or a validator that blew up is
-``absent`` plus a warning. The earlier upload-time hook returned early and emitted
+``not_declared``, a cell that cannot check the declaration it was handed —
+or a field map that names no fields, which would report as declared while asserting
+nothing — is ``unsupported``, and an unreadable declaration or a validator that blew
+up is ``absent`` plus a warning. The earlier upload-time hook returned early and emitted
 *nothing* when its path gate did not match, so an app could look adopted while
 validating zero records — a check that reports nothing is indistinguishable from a
 check that passed, and that ambiguity is itself the defect.
+
+**Two axes, not one.** Every plumbing failure in this module degrades to
+``absent``, which it shares with the honest "the artifact was not there" — so the
+outcome alone cannot tell them apart, and an app that opted into blocking would be
+failed by a defect in the SDK's own check. ``ArtifactValidationReport``'s second
+axis carries the difference: everything built through ``_plugin_broken`` is
+classified ``validator_broken`` and always fails open, whatever the app's posture
+(ADR-0020, FND-692). Nothing outside this module's guard rails ever sets it — a
+validator reporting on whether *it* broke is the one report that has to come from
+outside it.
 
 **It never raises into the caller.** The validation scaffold is defense in depth; a
 check that breaks the hand-off it was added to protect is worse than no check at
@@ -63,13 +74,29 @@ def builtin_format_validators() -> tuple[FormatValidator, ...]:
     module-level import here would drag it onto the import path of every JSON-only
     caller — exactly the cost coupling the two-seam design exists to prevent
     (``tests/unit/validation/test_artifact_dependency_floor.py`` enforces it).
+    Importing the parquet *module* is cheap: it defers ``pyarrow`` to the moment a
+    parquet artifact is actually validated, and degrades to skip-with-warning when
+    the extra is not installed.
 
-    Empty until the per-format validators land (FND-688 NDJSON, FND-689 parquet).
-    Until then every declared artifact resolves to ``unsupported`` naming the format
-    that had no validator — which is the honest report, and is visible in the
-    outcome events rather than looking like a pass.
+    Both formats ADR-0020 names now ship: NDJSON (FND-688) streams line by line,
+    parquet (FND-689) diffs a footer. A format neither claims still resolves to
+    ``unsupported`` naming it — the honest report, visible in the outcome events
+    rather than looking like a pass.
+
+    Two validators, three cells. NDJSON claims **both** of its — the field-map diff
+    and the model delegation folded in from the asset validator (FND-690) — because
+    dispatch is by format, so one validator claims ``ndjson`` and then decides per
+    declaration kind. Parquet x model stays genuinely ``unsupported``: a model
+    carries no column mapping, so a footer diff has nothing to diff against.
     """
-    return ()
+    from application_sdk.validation.ndjson import (  # noqa: PLC0415 — deferred on purpose: the parquet import below must stay inside this function, and both are resolved together
+        NdjsonValidator,
+    )
+    from application_sdk.validation.parquet import (  # noqa: PLC0415 — deferred: keeps the parquet reader off a JSON-only caller's import path
+        ParquetFooterValidator,
+    )
+
+    return (NdjsonValidator(), ParquetFooterValidator())
 
 
 def validate_artifact(
@@ -145,6 +172,7 @@ def validate_artifact(
             reason=f"declaration unreadable: {exc}",
             schema_source=source_kind,
             boundary=boundary,
+            validator_broken=True,
         )
     except Exception as exc:  # noqa: BLE001 - a plug-in seam; nothing may escape
         logger.warning(
@@ -157,6 +185,7 @@ def validate_artifact(
             reason=f"schema source raised: {type(exc).__name__}",
             schema_source=source_kind,
             boundary=boundary,
+            validator_broken=True,
         )
 
     if declaration is None:
@@ -182,6 +211,31 @@ def validate_artifact(
 
     # Safe from here: a dataclass attribute on a type this module owns.
     artifact_format = declaration.artifact_format
+
+    if isinstance(declaration, FieldMapDeclaration) and not declaration.fields:
+        # A field map naming nothing reports as *declared* while asserting nothing —
+        # the exact "looks adopted, validates zero records" state this capability
+        # exists to remove. `ContractSource` cannot produce one (`_parse_schemas`
+        # refuses to load a zero-field schema, and the toolkit refuses to generate
+        # one), but a custom `SchemaSource` is a supported plug-in, and every format
+        # would otherwise have to remember to check this for itself: a scan over
+        # zero fields finds nothing, so it derives `clean`.
+        #
+        # `unsupported` rather than `not_declared`: the app *did* declare something.
+        # Blaming it for a missing declaration would be a different, wrong report.
+        # Guarded on `FieldMapDeclaration` specifically, never on `field_count`,
+        # because `ModelDeclaration.field_count` is always 0 — a model enumerates no
+        # fields at this layer and delegating to it is exactly what it is for.
+        return ArtifactValidationReport.unsupported(
+            artifact_format=artifact_format,
+            schema_source=source_kind,
+            reason=(
+                "the declaration names zero fields, so it would report as declared "
+                "while checking nothing"
+            ),
+            boundary=boundary,
+        )
+
     validator = _select_validator(
         artifact_format,
         builtin_format_validators() if validators is None else validators,
@@ -395,12 +449,20 @@ def _plugin_broken(
     schema_source: str = "",
     boundary: bool,
 ) -> ArtifactValidationReport:
-    """An ``absent`` report for "our own plug-in broke", never for a bad artifact."""
+    """An ``absent`` report for "our own plug-in broke", never for a bad artifact.
+
+    ``validator_broken=True`` is what carries that distinction past this function:
+    every plumbing failure degrades to ``absent``, so the outcome alone cannot
+    tell "we could not read the artifact" from "we fell over trying". The second
+    axis can, and it is what keeps a hard-mode app from being failed by a defect
+    in the SDK's own check (FND-692) — this classification always fails open.
+    """
     return ArtifactValidationReport.absent(
         reason=reason,
         artifact_format=artifact_format,
         schema_source=schema_source,
         boundary=boundary,
+        validator_broken=True,
     )
 
 

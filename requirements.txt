@@ -244,6 +244,7 @@ orjson==3.12.0
     # via atlan-application-sdk
 packaging==26.3
     # via
+    #   atlan-application-sdk
     #   atlan-application-sdk-conformance
     #   lazy-loader
     #   opentelemetry-instrumentation
@@ -380,7 +381,7 @@ typer==0.27.1
     # via
     #   fastapi-cli
     #   fastapi-cloud-cli
-types-protobuf==7.35.1.20260822
+types-protobuf==7.35.1.20260823
     # via temporalio
 types-s3transfer==0.16.0
     # via boto3-stubs

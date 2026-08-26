@@ -86,6 +86,22 @@ Only the last of those survived, because ``_poll_deployment`` is the one caller
 that already retried a bad read. So ``--publish-retry-seconds`` (default 240)
 gives ``_publish`` the same tolerance: see :func:`_publish` for which half of
 the failure space is retried and why the other half must stay fatal.
+
+A FAILED verdict is not always about the app
+--------------------------------------------
+LM's deployment health check is namespace-scoped AND its verdict is an instant:
+any pod unhealthy at the moment it looks reds the install, including a pod the
+platform itself just deleted on purpose. Two tolerances handle that, both
+narrow, both falling through to the installed-version read-back rather than
+passing on their own:
+
+* :func:`foreign_failure` — every image failing to PULL belongs to a different
+  version, so the verdict is about an orphan from an earlier install (FND-31).
+* :func:`benign_pod_failure` plus :func:`_settle` — the unhealthy container is
+  not the one running the image under test, or its failure is one the app image
+  cannot cause, AND the namespace stops failing while we watch (FND-831).
+
+Anything else stays fatal. The default is not to second-guess LM.
 """
 
 from __future__ import annotations
@@ -97,7 +113,7 @@ import random
 import re
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from e2e_tenant_api import (
@@ -159,6 +175,28 @@ _PUBLISH_RETRY_JITTER_SECONDS = 10
 DEFAULT_PUBLISH_RETRY_SECONDS = 240
 DEFAULT_INSTALL_RETRY_SECONDS = 600
 DEFAULT_DEPLOYMENT_TIMEOUT_SECONDS = 600
+
+#: How long to let the namespace settle before honouring a FAILED verdict whose
+#: diagnostics name only benign pod churn (FND-831). 90s because the observed
+#: window was ~14s of secret-sync lag plus a scale-down: everything that recovers
+#: on its own has recovered well inside it, and anything still warning after it is
+#: not churn.
+#:
+#: 90 also sits 30s clear of a formatting cliff that is kubectl's, not ours:
+#: ``duration.HumanDuration`` branches on ``seconds < 60*2``, so ``LAST SEEN``
+#: stays in the seconds form (``91s``) all the way to 120s and only then becomes
+#: ``XmYs``. Raising this past 120 makes the minutes form the common case rather
+#: than an edge case — :func:`ongoing_failures` parses both and its fixtures
+#: cover both, so nothing breaks, but the resolution the window compares at
+#: coarsens to whole seconds-within-minutes. Worth knowing before raising it,
+#: rather than rediscovering it.
+#:
+#: Included in the job-budget sum asserted by
+#: ``test_job_timeout_stays_above_the_scripts_own_waits``, so raising it forces
+#: prepare-tenant's ceiling up rather than silently making a runner timeout
+#: reachable. 0 disables the tolerance entirely: without a settle there is no
+#: evidence the churn stopped, so every FAILED verdict is honoured.
+DEFAULT_SETTLE_SECONDS = 90
 
 #: Keys an install/info response may carry the installed version under. LM has
 #: not committed to one name across versions, so check the plausible set rather
@@ -273,6 +311,134 @@ _QUOTED_IMAGE_RE = re.compile(r'"([^"\s]+/[^"\s]+)"')
 #: A pinned image reference is the same reference with ``@sha256:…`` in place of
 #: the tag: `repo:tag@sha256:…`. Kubelet can report a pull failure in that form.
 _PINNED_IMAGE_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
+
+# ── Reading `kubectl describe pod` (FND-831) ─────────────────────────────────
+#
+# LM's ``pod_describe`` is concatenated `kubectl describe pod` output, one block
+# per pod. Its indentation is the schema: the pod's own fields sit at column 0,
+# ``Init Containers:`` / ``Containers:`` head a section, each container is a
+# 2-space-indented header, its fields sit at 4 and their sub-fields at 6::
+#
+#     Name:    metabase-server-6b9f7d4c8-x7d2k
+#     Status:  Failed
+#     Reason:  Evicted
+#     Init Containers:
+#       atlan-env-seeder:
+#         Image:       ghcr.io/atlanhq/atlan-env-seeder:1.2.3
+#         State:       Terminated
+#           Reason:    Error
+#           Exit Code: 137
+#         Ready:       False
+#
+# This is parsed rather than substring-matched because the whole point is WHICH
+# container failed: the reason lines alone cannot tell a platform-injected init
+# container apart from the app image under test.
+
+#: A pod block opens on a column-0 ``Name:``.
+_DESCRIBE_NAME_RE = re.compile(r"^Name:\s+(\S+)")
+#: The pod-level ``Reason:`` — ``Evicted`` and friends live here, not on a
+#: container. Column 0, so it cannot collide with a container's own reason.
+_DESCRIBE_POD_REASON_RE = re.compile(r"^Reason:\s+(\S+)")
+#: Section headers. ``Ephemeral Containers`` counts as an init-like section only
+#: in that it is never the app: debug containers are attached by a human.
+_DESCRIBE_SECTION_RE = re.compile(
+    r"^(Init Containers|Containers|Ephemeral Containers):\s*$"
+)
+#: A container header: exactly two spaces, then a name, then a bare colon.
+_DESCRIBE_CONTAINER_RE = re.compile(r"^ {2}(\S[^:]*):\s*$")
+#: A container field (4 spaces) and its sub-field (6 spaces). ``Image:`` must not
+#: also match ``Image ID:`` — hence the colon immediately after the key.
+_DESCRIBE_FIELD_RE = re.compile(r"^ {4}(\S[^:]*):\s*(.*)$")
+_DESCRIBE_SUBFIELD_RE = re.compile(r"^ {6}(\S[^:]*):\s*(.*)$")
+
+#: ``State: Waiting`` reasons that mean "not started YET", which is not a
+#: failure. Reading these as unhealthy would put the app container of every
+#: init-blocked pod into the unhealthy set, and rule (1) below only holds when
+#: the unhealthy set is the container that actually broke.
+_BENIGN_WAITING_REASONS = frozenset({"", "podinitializing", "containercreating"})
+
+#: A terminated container that exited cleanly.
+_CLEAN_TERMINATION_REASONS = frozenset({"completed"})
+
+#: Container-state reasons that are never the app image's fault: the kubelet
+#: could not BUILD THE CONFIG for the container, so the image was never
+#: instantiated. The observed one is a Vault secret whose name encodes the
+#: namespace and had not synced yet.
+#:
+#: Exactly one member, and ``CreateContainerError`` is deliberately NOT it. The
+#: two look interchangeable and are not: the kubelet sets ``…ConfigError`` while
+#: *generating* the config (a missing Secret/ConfigMap or key), and plain
+#: ``CreateContainerError`` afterwards, when the CRI ``CreateContainer`` call
+#: fails — a bad security context, a volume or device the app's chart asked for,
+#: an image that cannot be instantiated. Those are app faults, and they are
+#: precisely what this hatch exists to keep fatal.
+#:
+#: The rest of the hatch fails closed; widening this set on a guess is the one
+#: way to reopen it, because a one-shot reason ages out of the settle window and
+#: the version read-back confirms what was INSTALLED rather than that it runs.
+#: So: add a member only with a fixture taken from a real ``describe`` showing
+#: that reason on a container the app cannot have broken.
+_NON_APP_CONTAINER_REASONS = frozenset({"createcontainerconfigerror"})
+
+#: Pod-level ``Reason:`` values that mean the NODE took the pod away. All are
+#: written by the kubelet or the scheduler, never by anything the app controls.
+_NODE_PRESSURE_POD_REASONS = frozenset(
+    {
+        "evicted",
+        "shutdown",
+        "nodeshutdown",
+        "terminationbykubelet",
+        "preempting",
+        "disruptiontarget",
+    }
+)
+
+#: SIGKILL. Ambiguous on its own — a scale-down and an OOM kill both land here —
+#: which is why the classifier demands positive evidence naming the deletion, and
+#: why ``OOMKilled`` in the (last) state keeps it fatal.
+_SIGKILL_EXIT_CODE = "137"
+_OOM_REASON = "oomkilled"
+
+#: KEDA's own event for "this ScaledObject just scaled its target to zero".
+_KEDA_DEACTIVATED_MARKER = "kedascaletargetdeactivated"
+#: Events that name a pod's deletion explicitly — the ReplicaSet's
+#: ``Deleted pod: <name>`` and the kubelet's ``Killing``. Matched against the
+#: pod's own name, so this is causal evidence rather than a timestamp
+#: correlation with whatever else the namespace was doing.
+_POD_DELETED_MARKERS = ("successfuldelete", "killing")
+
+#: Event-line markers that mean "something in this namespace is still not well".
+#: ``warning`` is the TYPE column, so any Warning event counts: the settle errs
+#: toward honouring LM's verdict, which is the safe direction — a namespace that
+#: is still warning has not settled.
+_UNHEALTHY_EVENT_MARKERS = (
+    "warning",
+    "failed",
+    "backoff",
+    "unhealthy",
+    "evicted",
+    "crashloop",
+    "oomkill",
+)
+
+#: kubectl's relative ``LAST SEEN`` column: ``9s``, ``2m``, ``5m1s``, ``3h59m``,
+#: ``2d``. Both regimes have to parse, because kubectl switches units at two
+#: minutes — seconds below it (``95s``), minutes and seconds above (``2m13s``) —
+#: and the settle window sits near that flip.
+#:
+#: ``<unknown>`` matches nothing, and so does ``LAST``: the header's first column
+#: is the TWO words ``LAST SEEN``, so its leading token is a word, not an age.
+#: That is what tells an unaged line apart from a young one.
+_EVENT_AGE_RE = re.compile(r"(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?")
+
+#: Per-pod budget for the ``pod_describe`` render, and how many pods to print.
+#: One budget across the whole concatenation is what hid the failing pod in
+#: FND-831: it printed as "tail 200 of 542 lines" and the only pod that failed
+#: the install was in the dropped head, leaving two healthy workers as the
+#: entire visible evidence. ``head`` per pod because a describe block opens with
+#: the pod's status and its container states and ends in volumes and tolerations.
+_DESCRIBE_POD_MAX_LINES = 120
+_DESCRIBE_MAX_PODS = 6
 
 
 class TenantAppError(RuntimeError):
@@ -1256,6 +1422,23 @@ def _image_tag(reference: str) -> str:
     return tag if sep and head else ""
 
 
+def _is_our_image(reference: str, ours: str) -> bool:
+    """Is *reference* the image under test, as far as can be proven?
+
+    Deliberately biased toward YES. Kubelet and the pod spec can each name the
+    same image in a different resolution — ``repo:tag``, ``repo@sha256:…``,
+    ``repo:tag@sha256:…`` — and every caller of this uses "not ours" to excuse
+    something. So a reference counts as ours whenever it shares our repository
+    and its tag is ours, a digest, or absent; only a different repository, or a
+    resolvably different tag of ours, is somebody else's.
+    """
+    if _image_repository(reference) != _image_repository(ours):
+        return False
+    reference_tag = _image_tag(reference)
+    ours_tag = _image_tag(ours)
+    return not reference_tag or not ours_tag or reference_tag == ours_tag
+
+
 def foreign_failure(diagnostics: str, image: str) -> list[str]:
     """Return failing images that are NOT *image*, or [] if ours is among them.
 
@@ -1276,15 +1459,400 @@ def foreign_failure(diagnostics: str, image: str) -> list[str]:
     if not failing:
         return []
     ours = image.strip()
-    ours_repo = _image_repository(ours)
-    ours_tag = _image_tag(ours)
-    for ref in failing:
-        if _image_repository(ref) != ours_repo:
-            continue  # a different repository: provably somebody else's pod
-        ref_tag = _image_tag(ref)
-        if not ref_tag or not ours_tag or ref_tag == ours_tag:
-            return []  # same repository and tag, digest-pinned, or untagged
+    if any(_is_our_image(ref, ours) for ref in failing):
+        return []  # same repository and tag, digest-pinned, or untagged
     return failing
+
+
+@dataclass
+class PodContainer:
+    """One container's state, as ``kubectl describe pod`` reports it."""
+
+    name: str
+    init: bool
+    image: str = ""
+    state: str = ""
+    reason: str = ""
+    exit_code: str = ""
+    last_state: str = ""
+    last_reason: str = ""
+    last_exit_code: str = ""
+    ready: bool = False
+
+
+@dataclass
+class PodStatus:
+    """One pod block from ``pod_describe``.
+
+    ``lines`` is the block's own text, kept so the diagnostics can be re-rendered
+    per pod instead of under one budget shared across every pod in the namespace.
+    """
+
+    name: str
+    reason: str = ""
+    phase: str = ""
+    containers: list[PodContainer] = field(default_factory=list)
+    lines: list[str] = field(default_factory=list)
+
+
+def parse_pod_describe(text: str) -> list[PodStatus]:
+    """Split ``pod_describe`` into pods and their containers.
+
+    Tolerant by construction: it is handed the whole diagnostics blob, most of
+    which is events and logs, so anything that does not match the indentation
+    schema is simply not a container. Lines before the first pod block are
+    returned as a nameless leading ``PodStatus`` rather than dropped — the
+    renderer prints everything it is given or the truncation this replaces is
+    just moved somewhere else.
+    """
+    pods: list[PodStatus] = []
+    pod: PodStatus | None = None
+    init_section: bool | None = None
+    container: PodContainer | None = None
+    # Which of ``State:`` / ``Last State:`` the 6-space sub-fields belong to.
+    in_last_state = False
+
+    for line in text.splitlines():
+        name = _DESCRIBE_NAME_RE.match(line)
+        if name:
+            pod = PodStatus(name=name.group(1))
+            pods.append(pod)
+            init_section, container, in_last_state = None, None, False
+            pod.lines.append(line)
+            continue
+
+        if pod is None:
+            # A preamble. Keep it under a nameless pod so nothing is lost.
+            pod = PodStatus(name="")
+            pods.append(pod)
+        pod.lines.append(line)
+
+        section = _DESCRIBE_SECTION_RE.match(line)
+        if section:
+            init_section = section.group(1) != "Containers"
+            container, in_last_state = None, False
+            continue
+
+        if line[:1].strip():  # column 0: a pod-level field closes any container
+            pod_reason = _DESCRIBE_POD_REASON_RE.match(line)
+            if pod_reason:
+                pod.reason = pod_reason.group(1)
+            elif line.startswith("Status:"):
+                pod.phase = line.partition(":")[2].strip()
+            init_section, container, in_last_state = None, None, False
+            continue
+
+        if init_section is not None:
+            header = _DESCRIBE_CONTAINER_RE.match(line)
+            if header:
+                container = PodContainer(name=header.group(1), init=init_section)
+                pod.containers.append(container)
+                in_last_state = False
+                continue
+
+        if container is None:
+            continue
+
+        field_match = _DESCRIBE_FIELD_RE.match(line)
+        if field_match:
+            key, value = field_match.group(1), field_match.group(2).strip()
+            if key == "Image":
+                container.image = value
+            elif key == "State":
+                container.state, in_last_state = value, False
+            elif key == "Last State":
+                container.last_state, in_last_state = value, True
+            elif key == "Ready":
+                container.ready = value == "True"
+            continue
+
+        sub = _DESCRIBE_SUBFIELD_RE.match(line)
+        if sub:
+            key, value = sub.group(1), sub.group(2).strip()
+            if key == "Reason":
+                if in_last_state:
+                    container.last_reason = value
+                else:
+                    container.reason = value
+            elif key == "Exit Code":
+                if in_last_state:
+                    container.last_exit_code = value
+                else:
+                    container.exit_code = value
+
+    return [p for p in pods if p.name or p.containers or any(p.lines)]
+
+
+def _container_is_unhealthy(container: PodContainer) -> bool:
+    """Is this container broken, as opposed to merely not started yet?
+
+    ``Ready: False`` is deliberately not the test. With KEDA scale-to-zero an
+    app's steady state is no pods at all, and an init container that has done its
+    job is terminated — both read as not-ready while nothing is wrong.
+    """
+    state = container.state.lower()
+    if state == "terminated":
+        return (
+            container.reason.lower() not in _CLEAN_TERMINATION_REASONS
+            or container.exit_code not in ("", "0")
+        )
+    if state == "waiting":
+        return container.reason.lower() not in _BENIGN_WAITING_REASONS
+    # Running, or no state parsed at all: nothing here is evidence of a failure.
+    return False
+
+
+def _pod_is_unhealthy(pod: PodStatus) -> bool:
+    return any(_container_is_unhealthy(c) for c in pod.containers)
+
+
+def _deletion_is_named(diagnostics: str, pod: str) -> bool:
+    """Do the events positively tie *pod*'s deletion to a KEDA scale-down?
+
+    Both halves are required, and the second must name the pod. A
+    ``KEDAScaleTargetDeactivated`` event on its own is only a timestamp
+    correlation with whatever else the namespace was doing; the ReplicaSet's
+    ``Deleted pod: <name>`` is what makes it causal.
+    """
+    if not pod:
+        return False
+    if _KEDA_DEACTIVATED_MARKER not in diagnostics.lower():
+        return False
+    needle = pod.lower()
+    return any(
+        marker in lowered and needle in lowered
+        for lowered in (line.lower() for line in diagnostics.splitlines())
+        for marker in _POD_DELETED_MARKERS
+    )
+
+
+def _excuse_for(
+    pod: PodStatus, container: PodContainer, diagnostics: str, image: str
+) -> str:
+    """Why this unhealthy container is not evidence about the app under test.
+
+    Returns "" when it IS evidence, or when nothing recognisable excuses it —
+    which keeps LM's verdict authoritative by default. Every clause below has to
+    name something positively; "it does not look that bad" is not a clause.
+    """
+    # (1) Container ownership, the primary rule. The container under test is the
+    # one running the image we published; every other container in the pod was
+    # injected by the platform's pod template, so it can be neither broken by the
+    # app nor fixed by it. Inverted rather than an allowlist of platform names, so
+    # the platform can rename or add init containers without this going stale.
+    # An UNREADABLE image falls through instead of being excused: the direction a
+    # misread must never take is "not ours, so ignore it".
+    if container.image and not _is_our_image(container.image, image.strip()):
+        kind = "init" if container.init else "sidecar"
+        return (
+            f"the failing container is the platform-injected {kind} container "
+            f"{container.name!r} running {container.image}, not the image under "
+            "test"
+        )
+
+    # (3) Reason classifier, for the app's own container. Each of these is a
+    # failure the app image cannot cause.
+    reasons = {container.reason.lower(), container.last_reason.lower()}
+    config = reasons & _NON_APP_CONTAINER_REASONS
+    if config:
+        return (
+            f"{container.name} never started: {sorted(config)[0]} means the "
+            "kubelet could not assemble the container from its secret/config, so "
+            "the image was never run"
+        )
+
+    if pod.reason.lower() in _NODE_PRESSURE_POD_REASONS:
+        return (
+            f"the node took the pod away ({pod.reason}), which is a scheduling "
+            "and capacity outcome, not an app fault"
+        )
+
+    if _SIGKILL_EXIT_CODE in {container.exit_code, container.last_exit_code}:
+        if _OOM_REASON in reasons:
+            # A genuine OOM exits 137 too, and says so. Stays fatal.
+            return ""
+        if _deletion_is_named(diagnostics, pod.name):
+            return (
+                f"{container.name} was SIGKILLed (exit "
+                f"{_SIGKILL_EXIT_CODE}) because the events name this pod's own "
+                "deletion after a KEDA scale-down — the platform deleted a pod "
+                "that was still initialising"
+            )
+
+    return ""
+
+
+def benign_pod_failure(diagnostics: str, image: str) -> str:
+    """Explain why a FAILED verdict is not about the app, or return "".
+
+    LM's health check is namespace-scoped and its verdict is a snapshot: any pod
+    in the namespace that is unhealthy at that instant reds the install, including
+    pods the platform itself deleted on purpose. ``foreign_failure`` already
+    handles one shape of that (an orphan stuck pulling a different version); this
+    handles the rest, by asking whose container broke and why.
+
+    Fatal by default in both directions that matter. An empty string is returned
+    when nothing unhealthy could be PARSED — unreadable diagnostics are not
+    evidence of health — and as soon as one unhealthy container has no recognised
+    excuse, because a real broken app usually sits alongside benign churn rather
+    than instead of it.
+    """
+    unhealthy = [
+        (pod, container)
+        for pod in parse_pod_describe(diagnostics)
+        for container in pod.containers
+        if _container_is_unhealthy(container)
+    ]
+    if not unhealthy:
+        return ""
+
+    excuses: list[str] = []
+    for pod, container in unhealthy:
+        excuse = _excuse_for(pod, container, diagnostics, image)
+        if not excuse:
+            return ""
+        excuses.append(f"{pod.name or '<unnamed pod>'}: {excuse}")
+    # dict.fromkeys rather than a set: the order is the order the pods appear in,
+    # which is the order a reader will find them in the dump above.
+    return "; ".join(dict.fromkeys(excuses))
+
+
+def _event_age_seconds(token: str) -> int | None:
+    """Seconds behind ``token``, kubectl's relative ``LAST SEEN`` column.
+
+    ``None`` for anything that is not an age — the header row's ``LAST``, an
+    ``<unknown>``, a message that happens to start a line. A None is never read
+    as young: an unaged line cannot say the namespace is still failing.
+    """
+    match = _EVENT_AGE_RE.fullmatch(token.strip())
+    if not match or not any(match.groups()):
+        return None
+    days, hours, minutes, seconds = (int(g or 0) for g in match.groups())
+    return days * 86400 + hours * 3600 + minutes * 60 + seconds
+
+
+def ongoing_failures(events: str, window_seconds: int) -> list[str]:
+    """Event lines showing something failed again inside the last *window_seconds*.
+
+    The age column is what buys "again": the events behind the original verdict
+    age past the window while we wait, so anything left inside it fired during
+    the settle. A repeating warning keeps its ``LAST SEEN`` young, which is
+    exactly the case that must stay fatal — a platform container that never
+    recovers.
+
+    Read the empty list precisely. It means "nothing failed again recently",
+    NOT "the namespace is healthy": a ONE-SHOT warning on a still-wedged pod
+    ages out of the window and takes the window quiet with it, and the incident's
+    own ``secret not found`` lines fired once per pod. That gap is why nothing
+    downstream may treat this as proof of health — the installed-version
+    read-back is the authority, it is unconditional, and a wrongly quiet window
+    only reaches it sooner.
+
+    The boundary is exclusive: an age of exactly ``window_seconds`` counts as
+    outside. kubectl also switches from seconds to minutes at two minutes, so
+    around a 90s window the same instant can arrive as ``95s`` or ``2m1s``;
+    both parse, and erring outside is the direction the read-back covers.
+    """
+    lines: list[str] = []
+    for line in events.splitlines():
+        head = line.split(maxsplit=1)
+        if not head:
+            continue
+        age = _event_age_seconds(head[0])
+        if age is None or age >= window_seconds:
+            continue
+        lowered = line.lower()
+        if any(marker in lowered for marker in _UNHEALTHY_EVENT_MARKERS):
+            lines.append(line.strip())
+    return lines
+
+
+def _print_pod_describe(text: str) -> None:
+    """Render ``pod_describe`` per pod, unhealthy pods first.
+
+    One budget across the whole concatenation is what made FND-831's own item (1)
+    unverifiable from its CI log: ``pod_describe`` printed as "tail 200 of 542
+    lines" and the only pod that failed the install was in the dropped head, so
+    the visible evidence was two healthy workers. A per-pod budget cannot let one
+    pod crowd out another, and unhealthy-first means the budget on the number of
+    pods spends itself on the ones that failed.
+    """
+    pods = parse_pod_describe(text)
+    if not any(pod.name for pod in pods):
+        # Nothing recognisable as a pod block: print it as it came rather than
+        # under a per-pod title that would misdescribe it.
+        _print_block("pod_describe", text, _DESCRIBE_POD_MAX_LINES * 2, "tail")
+        return
+    # Stable, so pods keep their original order within each group.
+    ordered = sorted(pods, key=lambda pod: not _pod_is_unhealthy(pod))
+    for pod in ordered[:_DESCRIBE_MAX_PODS]:
+        state = " — UNHEALTHY" if _pod_is_unhealthy(pod) else ""
+        title = f"pod_describe: {pod.name or 'before the first pod'}{state}"
+        _print_block(title, "\n".join(pod.lines), _DESCRIBE_POD_MAX_LINES, "head")
+    dropped = ordered[_DESCRIBE_MAX_PODS:]
+    if dropped:
+        print(
+            f"--- pod_describe: {len(dropped)} further pod(s) not printed: "
+            f"{', '.join(pod.name or '<unnamed>' for pod in dropped)} ---"
+        )
+
+
+def _live_events(client: TenantClient, app_id: str, title: str) -> str | None:
+    """Print and return live ``kubectl get events`` for the app's namespace.
+
+    ``None`` — distinct from ``""`` — when the read did not succeed. A caller that
+    is asking "has the namespace settled?" must not read an unreadable answer as
+    a healthy one.
+    """
+    try:
+        response = client.get(APP_EVENTS_PATH.format(app_id=path_segment(app_id)))
+    except TenantApiError as exc:
+        print(f"::warning::could not fetch live events: {exc}")
+        return None
+    if not response.ok:
+        print(f"::warning::live events read returned HTTP {response.status}")
+        return None
+    body = response.body if isinstance(response.body, dict) else {}
+    text = str(body.get("events") or "")
+    _print_block(title, text, _EVENTS_MAX_LINES)
+    return text
+
+
+def _settle(client: TenantClient, app_id: str, seconds: int) -> list[str]:
+    """Wait, re-read the live events, and report what failed again while we did.
+
+    What makes the tolerance above safe: a platform container that genuinely
+    never recovers keeps warning, and those warnings are what this returns.
+
+    The re-read is of the LIVE EVENTS, and of nothing else. LM's
+    ``deployment_status`` is a terminal record — it never flips back to
+    SUCCEEDED. Its failure snapshot cannot help either, and the reason is
+    stronger than "it does not change": the snapshot is **failure-triggered**, so
+    it can only ever depict a failure. Even a snapshot overwritten by a later
+    flap would depict that flap, never a recovery.
+
+    The snapshot's ``pod_events`` must also never reach :func:`ongoing_failures`.
+    Its ages are relative to its own capture moment, not to now — measured 8s
+    behind the live read on the FND-831 run, and unbounded in general — so the
+    same lines would read as young forever. The two sections have identical
+    shape, which makes that a one-line mistake; hence one function that reads
+    live events and one caller.
+    """
+    print(
+        f"::notice::the FAILED verdict names only benign pod churn. Waiting "
+        f"{seconds}s and re-reading the live events before honouring it: churn "
+        "has stopped by then, and anything still warning after it is not churn."
+    )
+    time.sleep(seconds)
+    events = _live_events(
+        client, app_id, title=f"live namespace events after settling {seconds}s"
+    )
+    if events is None:
+        return [
+            "the live-events read failed, so nothing could be established either "
+            "way — honouring LM's verdict rather than guessing"
+        ]
+    return ongoing_failures(events, seconds)
 
 
 def _dump_failure(client: TenantClient, app_id: str) -> str:
@@ -1331,10 +1899,15 @@ def _dump_failure(client: TenantClient, app_id: str) -> str:
                 f"(HTTP {response.status}); falling back to live events"
             )
 
-    for field, max_lines, keep in _FAILURE_SECTIONS:
-        text = str(snapshot.pop(field, "") or "")
+    for name, max_lines, keep in _FAILURE_SECTIONS:
+        text = str(snapshot.pop(name, "") or "")
         diagnostics.append(text)
-        _print_block(field, text, max_lines, keep)
+        if name == "pod_describe":
+            # Per pod, unhealthy first: see _print_pod_describe for why one
+            # shared budget is not good enough here.
+            _print_pod_describe(text)
+        else:
+            _print_block(name, text, max_lines, keep)
 
     # Whatever is left, so a new snapshot field is visible the day it ships
     # instead of being silently dropped by the list above.
@@ -1350,24 +1923,68 @@ def _dump_failure(client: TenantClient, app_id: str) -> str:
     # Live events. Fetched even when the snapshot had its own copy: the snapshot
     # is from the moment of failure and these are from now, and on the timeout
     # path they are the only events there are.
-    try:
-        events = client.get(APP_EVENTS_PATH.format(app_id=path_segment(app_id)))
-    except TenantApiError as exc:
-        print(f"::warning::could not fetch live events: {exc}")
-    else:
-        if events.ok:
-            body = events.body if isinstance(events.body, dict) else {}
-            text = str(body.get("events") or "")
-            diagnostics.append(text)
-            _print_block("live namespace events", text, _EVENTS_MAX_LINES)
-        else:
-            print(f"::warning::live events read returned HTTP {events.status}")
+    events = _live_events(client, app_id, title="live namespace events")
+    if events is not None:
+        diagnostics.append(events)
 
     collected = "\n".join(diagnostics)
     _hint_platform_mismatch(collected)
     # Returned so the caller can work out WHOSE pod failed without a second
     # round of API calls: everything needed is already in this text.
     return collected
+
+
+def _tolerate_pod_churn(
+    client: TenantClient,
+    app_id: str,
+    failure: DeploymentFailed,
+    diagnostics: str,
+    image: str,
+    settle_seconds: int,
+) -> str:
+    """Downgrade a FAILED verdict caused by benign pod churn, or re-raise it.
+
+    Two conditions, both required (FND-831). The diagnostics have to NAME why the
+    unhealthy container is not the app under test, and nothing may then be seen
+    to fail again while we wait. Naming alone is not enough — a platform
+    container that never recovers names the same reason forever — and a quiet
+    window alone is not enough either, since an app that crash-loops slower than
+    the window, or fails once and stays wedged, would look calm.
+
+    Neither condition proves the app is healthy, and this function does not
+    claim it. It only establishes that LM's verdict is not evidence EITHER way,
+    which hands the decision to the installed-version read-back — unconditional,
+    direct, and the only positive evidence in the flow.
+
+    Returns the reason, for the log lines and for the read-back's failure message.
+    Never returns "": everything that is not tolerated leaves by ``raise``.
+    """
+    reason = benign_pod_failure(diagnostics, image)
+    if not reason:
+        raise failure
+    if settle_seconds <= 0:
+        print(
+            f"::warning::the diagnostics name only benign pod churn ({reason}), "
+            "but --settle-seconds is 0, so the verdict stands: without a settle "
+            "there is nothing to say the churn stopped."
+        )
+        raise failure
+    ongoing = _settle(client, app_id, settle_seconds)
+    if ongoing:
+        raise DeploymentFailed(
+            f"{failure} The diagnostics named benign pod churn ({reason}), but "
+            f"something failed again within {settle_seconds}s, so the verdict "
+            "stands: " + " | ".join(ongoing[:5])
+        ) from failure
+    print(
+        f"::warning::{failure} — but {reason}, and nothing in the namespace "
+        f"failed again in the {settle_seconds}s after. LM's health check is "
+        "namespace-scoped and its verdict is an instant, so pod churn the "
+        "platform caused reds an install that is fine. That is not a clean bill "
+        "of health, only the absence of a repeat: falling through to the "
+        "installed-version read-back, which decides."
+    )
+    return reason
 
 
 def install(args: argparse.Namespace) -> InstallOutcome:
@@ -1479,6 +2096,7 @@ def install(args: argparse.Namespace) -> InstallOutcome:
     # below is then the only thing that decides success — which is the right
     # authority anyway.
     foreign: list[str] = []
+    churn = ""
     if deployment_id:
         print(f"install accepted, deployment_id={deployment_id}")
         try:
@@ -1486,24 +2104,37 @@ def install(args: argparse.Namespace) -> InstallOutcome:
         except DeploymentFailed as exc:
             diagnostics = _dump_failure(read_client, app_id)
             foreign = foreign_failure(diagnostics, args.image)
-            if not foreign:
-                raise
-            # LM's health check is namespace-scoped, so its FAILED verdict can be
-            # about a pod this install never touched — an orphan from an earlier
-            # version, which fails every subsequent install to that tenant until
-            # someone deletes it. Every failing image here belongs to a different
-            # version, so the verdict is not evidence about ours.
-            #
-            # NOT a pass on its own: the read-back below has to confirm the tenant
-            # actually serves the version we installed. Downgrading the verdict
-            # only moves the decision to direct evidence — it does not skip it.
-            print(
-                f"::warning::{exc} — but the failing pod(s) want "
-                f"{', '.join(foreign)}, not {args.image}. LM's health check is "
-                "namespace-scoped, so an orphaned pod from an earlier version "
-                "fails this check for every later install. Falling through to the "
-                "installed-version read-back, which decides."
-            )
+            if foreign:
+                # LM's health check is namespace-scoped, so its FAILED verdict can
+                # be about a pod this install never touched — an orphan from an
+                # earlier version, which fails every subsequent install to that
+                # tenant until someone deletes it. Every failing image here belongs
+                # to a different version, so the verdict is not evidence about
+                # ours.
+                #
+                # NOT a pass on its own: the read-back below has to confirm the
+                # tenant actually serves the version we installed. Downgrading the
+                # verdict only moves the decision to direct evidence — it does not
+                # skip it.
+                print(
+                    f"::warning::{exc} — but the failing pod(s) want "
+                    f"{', '.join(foreign)}, not {args.image}. LM's health check is "
+                    "namespace-scoped, so an orphaned pod from an earlier version "
+                    "fails this check for every later install. Falling through to "
+                    "the installed-version read-back, which decides."
+                )
+            else:
+                # The same namespace-scoping, one layer out: not an orphan pulling
+                # a different version, but pod churn the platform itself caused.
+                # Raises unless it can name the reason AND watch it stop.
+                churn = _tolerate_pod_churn(
+                    read_client,
+                    app_id,
+                    exc,
+                    diagnostics,
+                    args.image,
+                    args.settle_seconds,
+                )
         except TenantAppError:
             # Timeout, or an unrelated failure. Nobody else's fault; fatal.
             _dump_failure(read_client, app_id)
@@ -1528,6 +2159,13 @@ def install(args: argparse.Namespace) -> InstallOutcome:
             if foreign
             else ""
         )
+        tolerated = (
+            f" The FAILED verdict was tolerated as benign pod churn ({churn}); "
+            "with the read-back disagreeing, treat that as one thing that went "
+            "wrong rather than the whole story."
+            if churn
+            else ""
+        )
         unverifiable = (
             " The tenant reported no usable version: see the info dump above. "
             "That is not the same as running the wrong one — LM's version_text "
@@ -1541,7 +2179,15 @@ def install(args: argparse.Namespace) -> InstallOutcome:
             f"{args.version}, so this install cannot be confirmed. Heracles "
             "fetches the DAG from the deployed pod at AE submit, so letting the "
             "legs run now would test an unverified version."
-            f"{unverifiable}{orphans}"
+            f"{unverifiable}{orphans}{tolerated}"
+        )
+    if churn:
+        print(
+            f"::notice::tenant serves {installed}; the FAILED verdict was benign "
+            f"pod churn ({churn}) that did not repeat. Nothing to clean up "
+            "on the tenant, but the churn itself is worth removing at the "
+            "platform: KEDA's initialCooldownPeriod would stop a scale-down "
+            "racing a still-initialising pod."
         )
     if foreign:
         print(
@@ -1684,6 +2330,19 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         default=DEFAULT_DEPLOYMENT_TIMEOUT_SECONDS,
         help="Budget for the deployment to reconcile. A timeout fails.",
+    )
+    p_install.add_argument(
+        "--settle-seconds",
+        type=int,
+        default=DEFAULT_SETTLE_SECONDS,
+        help=(
+            "How long to let the namespace settle before honouring a FAILED "
+            "verdict whose diagnostics name only benign pod churn — a "
+            "platform-injected init container, a config/secret that had not "
+            "synced, a node eviction, or a pod KEDA deleted mid-init. 0 disables "
+            "the tolerance: without a settle there is no evidence the churn "
+            "stopped, so every FAILED verdict is honoured."
+        ),
     )
 
     p_verify = sub.add_parser("verify", help="assert the installed version")

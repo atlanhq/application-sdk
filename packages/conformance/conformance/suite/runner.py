@@ -30,6 +30,7 @@ from conformance.suite.checks import (
     actions_pinning,
     app_name_alignment,
     artifact_schema_declared,
+    artifact_schema_writer,
     asyncio_loop_scope,
     bootstrap_drift,
     client_seam,
@@ -267,6 +268,12 @@ _CHECKS: list[CheckRegistration] = [
         discover=artifact_schema_declared.discover,
         scan_path=artifact_schema_declared.scan_path,
         scan_all=artifact_schema_declared.scan_all,
+    ),
+    CheckRegistration(
+        series=artifact_schema_writer.SERIES,
+        discover=artifact_schema_writer.discover,
+        scan_path=artifact_schema_writer.scan_path,
+        scan_all=artifact_schema_writer.scan_all,
     ),
     CheckRegistration(
         series=manifest_contract.SERIES,

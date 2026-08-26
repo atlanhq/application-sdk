@@ -66,6 +66,7 @@ from application_sdk.app.base import App, AppError, NonRetryableError, Retryable
 from application_sdk.app.context import AppContext
 from application_sdk.app.entrypoint import (
     EntryPointMetadata,
+    canonical_workflow_type,
     entrypoint,
     entrypoint_module_segment,
 )
@@ -267,6 +268,7 @@ __all__ = [
     "RetryableError",
     "TaskMetadata",
     "TaskRegistry",
+    "canonical_workflow_type",
     "entrypoint",
     "entrypoint_module_segment",
     "mcp_tool",
