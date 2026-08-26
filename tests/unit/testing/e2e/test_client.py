@@ -23,7 +23,6 @@ from application_sdk.testing.e2e._errors import (
     NoWorkerOnTaskQueueError,
     RequestDelivery,
 )
-from application_sdk.testing.e2e._poll import fake_clock
 from application_sdk.testing.e2e.client import (
     _MAX_RETRY_AFTER_SECONDS,
     _RECONCILE_CLOCK_SKEW_SECONDS,
@@ -47,6 +46,7 @@ from application_sdk.testing.e2e.client import (
     _safe_node_status,
     _safe_run_status,
 )
+from application_sdk.testing.harness._poll import fake_clock
 
 _RUN_ID = "test-run-123"
 

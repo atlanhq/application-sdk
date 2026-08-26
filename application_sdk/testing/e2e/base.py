@@ -71,7 +71,6 @@ from application_sdk.testing.e2e._manifest_identity import (
     compare_node_identities,
     node_identities,
 )
-from application_sdk.testing.e2e._poll import until_deadline
 from application_sdk.testing.e2e.client import (
     AEWorkflowClient,
     DAGNodeResult,
@@ -88,6 +87,7 @@ from application_sdk.testing.e2e.payload import (
     build_ae_payload,
 )
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
+from application_sdk.testing.harness._poll import until_deadline
 
 logger = get_logger(__name__)
 

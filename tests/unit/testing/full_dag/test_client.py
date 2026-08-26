@@ -10,7 +10,6 @@ from typing import Any
 
 import pytest
 
-from application_sdk.testing.e2e._poll import fake_clock
 from application_sdk.testing.full_dag._errors import (
     AtlanApiHttpError,
     AtlanApiResponseInvariantError,
@@ -20,6 +19,7 @@ from application_sdk.testing.full_dag.client import (
     DAGNodeStatus,
     DAGRunStatus,
 )
+from application_sdk.testing.harness._poll import fake_clock
 
 
 def _make_client(monkeypatch: pytest.MonkeyPatch, responses: list[tuple[int, Any]]):

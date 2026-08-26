@@ -6,7 +6,7 @@ import json
 import orjson
 
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.testing.e2e._poll import until_deadline_async
+from application_sdk.testing.harness._poll import until_deadline_async
 
 logger = get_logger(__name__)
 
