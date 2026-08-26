@@ -2351,6 +2351,42 @@ class EventSource {
 class EventTriggerConfig {
   maxRetries: Int(this >= 0) = 3
   ackPaths: Listing<String> = new Listing {}
+
+  /// Opt this trigger into AE's streaming dispatch shell: instead of firing a fresh
+  /// top-level run per batch, AE signals each matching event into a persistent,
+  /// signal-driven shard (one per workflow slug) that runs the DAG inline. Reserved
+  /// for genuinely continuous, high-volume, seconds-level-latency workloads — not a
+  /// general speed setting.
+  ///
+  /// The streaming path does NOT read the workflow's Iceberg events table and does
+  /// NOT write acks, so `ackPaths` is inert when this is on. A streaming DAG reads
+  /// its events inline from `$.event.batch` (a list of `{id, topic, data}`).
+  streamingEnabled: Boolean = false
+
+  /// Max events per DAG run on the streaming shard. `1` (the default) is real-time:
+  /// one event, one full DAG walk, lowest latency. `>1` accumulates up to this many
+  /// events — or `streamingBatchWaitSeconds`, whichever comes first — into a single
+  /// run, amortising one node-walk's activity round-trips across many events.
+  /// Only meaningful when `streamingEnabled`.
+  streamingBatchSize: Int(this >= 1) = 1
+
+  /// Max time the shard waits for a batch to fill before running the DAG with
+  /// whatever accumulated (always at least one event). `0` (the default) means take
+  /// whatever is already queued without waiting for stragglers. A latency ceiling
+  /// for the batch, not a guarantee every batch reaches full size.
+  /// Only meaningful when `streamingBatchSize` > 1.
+  streamingBatchWaitSeconds: Number(this >= 0) = 0
+
+  /// Batch knobs are silently inert unless streaming is on — that failure mode is a
+  /// trigger that looks tuned and behaves default, which is invisible until someone
+  /// reads a latency graph. Fail at eval time instead. Lazy (hidden), so the
+  /// renderer must reference it for the throw to fire.
+  hidden _streamingShapeCheck: Any =
+    if (!streamingEnabled && (streamingBatchSize > 1 || streamingBatchWaitSeconds > 0))
+      throw("EventTriggerConfig: streamingBatchSize/streamingBatchWaitSeconds require streamingEnabled = true; without it AE ignores both.")
+    else if (streamingBatchSize == 1 && streamingBatchWaitSeconds > 0)
+      throw("EventTriggerConfig: streamingBatchWaitSeconds is meaningless at streamingBatchSize = 1 (the shard never waits); raise the batch size or drop the wait.")
+    else null
 }
 
 /// One ingest-time filter rule. Mirrors AE's `FilterRule`: AE applies these when the
@@ -2473,13 +2509,24 @@ local manifestData: Mapping<String, Any> = new Mapping {
               when (e.filterRules.length > 0) {
                 ["filter_rules"] = e.filterRules.toList().map((r) -> renderFilterRule(r))
               }
-              ["trigger_config"] = new Mapping {
-                ["max_retries"] = e.triggerConfig.maxRetries
-                // AE rejects an empty ack_paths; render the fire-and-forget [""] when
-                // none is declared, never [].
-                ["ack_paths"] = if (e.triggerConfig.ackPaths.isEmpty) new Listing { "" }
-                                else e.triggerConfig.ackPaths
-              }
+              ["trigger_config"] =
+                // Hidden properties are lazy — reference the validator so its `throw`
+                // fires at eval time rather than silently rendering an inert config.
+                let (_streamCheck = e.triggerConfig._streamingShapeCheck)
+                new Mapping {
+                  ["max_retries"] = e.triggerConfig.maxRetries
+                  // AE rejects an empty ack_paths; render the fire-and-forget [""] when
+                  // none is declared, never [].
+                  ["ack_paths"] = if (e.triggerConfig.ackPaths.isEmpty) new Listing { "" }
+                                  else e.triggerConfig.ackPaths
+                  // Emitted only when streaming is on, so every existing (non-streaming)
+                  // manifest stays byte-identical and AE keeps applying its own defaults.
+                  when (e.triggerConfig.streamingEnabled) {
+                    ["streaming_enabled"] = true
+                    ["streaming_batch_size"] = e.triggerConfig.streamingBatchSize
+                    ["streaming_batch_wait_seconds"] = e.triggerConfig.streamingBatchWaitSeconds
+                  }
+                }
               ["status"] = e.status
             }
           }

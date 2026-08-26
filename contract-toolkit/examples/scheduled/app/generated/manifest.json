@@ -72,6 +72,40 @@
           ]
         },
         "status": "PAUSED"
+      },
+      {
+        "name": "cdc-user-streaming",
+        "source": {
+          "name": "atlan-kafka",
+          "topic": "example.cdc.user_realtime"
+        },
+        "trigger_config": {
+          "max_retries": 3,
+          "ack_paths": [
+            ""
+          ],
+          "streaming_enabled": true,
+          "streaming_batch_size": 1,
+          "streaming_batch_wait_seconds": 0
+        },
+        "status": "ACTIVE"
+      },
+      {
+        "name": "cdc-audit-streaming-batched",
+        "source": {
+          "name": "atlan-kafka",
+          "topic": "example.cdc.audit"
+        },
+        "trigger_config": {
+          "max_retries": 3,
+          "ack_paths": [
+            ""
+          ],
+          "streaming_enabled": true,
+          "streaming_batch_size": 200,
+          "streaming_batch_wait_seconds": 2
+        },
+        "status": "ACTIVE"
       }
     ]
   }

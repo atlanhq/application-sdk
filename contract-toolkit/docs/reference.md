@@ -164,6 +164,85 @@ entrypoint renders its own manifest.
 See [`examples/scheduled/`](../examples/scheduled/) for a full worked example.
 (Same field/behaviour exists on the legacy `NativeApp.pkl`.)
 
+### Streaming Dispatch on Event Triggers
+
+By default an event trigger fires a **fresh top-level workflow run** per ingest batch,
+and that run reads its events back out of the workflow's Iceberg events table. For a
+genuinely continuous, high-volume, seconds-level-latency workload that round trip is the
+cost — so AE offers a second dispatch shell: signal each matching event into a
+**persistent shard** (one Temporal execution per workflow slug) that already holds the
+DAG and runs it inline.
+
+Opt in per trigger via `EventTriggerConfig`:
+
+**`EventTriggerConfig`:**
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `maxRetries` | `Int` (≥ 0) | `3` | Redelivery bound for the batch path. |
+| `ackPaths` | `Listing<String>` | `new Listing {}` | JSONPaths to the ack parquet. Empty renders AE's fire-and-forget `[""]`, never `[]`. **Inert when `streamingEnabled`** — the streaming path writes no acks. |
+| `streamingEnabled` | `Boolean` | `false` | Route this trigger to the streaming shard instead of a per-batch top-level run. |
+| `streamingBatchSize` | `Int` (≥ 1) | `1` | Events per DAG run on the shard. `1` is real-time. |
+| `streamingBatchWaitSeconds` | `Number` (≥ 0) | `0` | Max wait for a batch to fill before running with whatever accumulated. |
+
+```pkl
+events {
+  // Real-time: one event, one DAG walk.
+  new EventTriggerSpec {
+    name = "cdc-user-realtime"
+    source = new EventSource { name = "atlan-kafka"; topic = "example.cdc.user_realtime" }
+    triggerConfig = new EventTriggerConfig {
+      streamingEnabled = true
+    }
+  }
+  // Batched: up to 200 events, or 2s, whichever comes first.
+  new EventTriggerSpec {
+    name = "cdc-audit-batched"
+    source = new EventSource { name = "atlan-kafka"; topic = "example.cdc.audit" }
+    triggerConfig = new EventTriggerConfig {
+      streamingEnabled = true
+      streamingBatchSize = 200
+      streamingBatchWaitSeconds = 2
+    }
+  }
+}
+```
+
+Renders into each trigger's `trigger_config`:
+
+```json
+{
+  "max_retries": 3,
+  "ack_paths": [""],
+  "streaming_enabled": true,
+  "streaming_batch_size": 200,
+  "streaming_batch_wait_seconds": 2
+}
+```
+
+**Writing the DAG.** A streaming DAG does not read the Iceberg events table — it reads
+its events inline from the `$.event.*` jsonpath namespace:
+
+| Path | Shape |
+|---|---|
+| `$.event.batch` | Always a list of `{id, topic, data}` envelopes, whatever the batch size. |
+| `$.event.event_ids` | The batch's event ids. |
+| `$.event.data` | Convenience alias for the single event's payload — set only when the batch holds exactly one event. |
+
+**Caveats.**
+
+- The three streaming keys are emitted **only** when `streamingEnabled` is true, so a
+  trigger that does not opt in renders byte-identically to before this feature existed.
+- Batch knobs without `streamingEnabled`, or a wait at `streamingBatchSize = 1`, are
+  silent no-ops in AE — so the toolkit refuses both at eval time rather than generating a
+  contract that reads as tuned and behaves as default.
+- Sharding is **one shard per workflow slug**, so every trigger on the same entrypoint
+  shares one shard and is processed sequentially. Several high-volume topics on one
+  entrypoint therefore queue behind each other.
+- There is no watchdog backstop on this path. A dropped signal is not retried.
+
+(Same field/behaviour exists on the legacy `NativeApp.pkl`.)
+
 ### Legacy Workflow Type Aliases
 
 A migration renames an app's Temporal workflow type, but external callers keep

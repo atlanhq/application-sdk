@@ -761,6 +761,78 @@ if ! echo "$ERR_MSG" | grep -q "isDistinct"; then
 fi
 
 # --------------------------------------------------------------------------
+# 12. Streaming batch knobs are inert unless streamingEnabled is on, and the wait
+#     is inert at batch size 1 (the shard never waits for a batch of one). Both
+#     are silent no-ops in AE, which is the worst failure mode for a latency knob:
+#     the contract reads as tuned and behaves as default, discoverable only from a
+#     latency graph. The hidden _streamingShapeCheck must fire at eval time.
+#     Asserted here rather than in pkl test because facts cannot express "eval fails".
+# --------------------------------------------------------------------------
+echo ":: Checking streaming batch-config invariants..."
+
+check_streaming_throw() {
+  # $1 = human label, $2 = triggerConfig body, $3 = expected substring
+  local label="$1" cfg_body="$2" expect="$3"
+  local BAD_CONTRACT OUT_DIR ERR_MSG
+  BAD_CONTRACT="$(mktemp "$REPO_ROOT/test-stream-XXXXXX.pkl")"
+  OUT_DIR="$(mktemp -d "$REPO_ROOT/test-stream-out-XXXXXX")"
+  cat > "$BAD_CONTRACT" << PKLEOF
+amends "src/App.pkl"
+
+name = "stream-cfg-app"
+displayName = "Stream Cfg App"
+icon = "https://example.com/icon.svg"
+hasCredentialConfig = false
+pipeline { publish = null }
+
+// A uiConfig makes the toolkit emit manifest.json, whose triggers.events render
+// references the hidden validator — pkl is lazy, so the throw only fires once the
+// trigger_config is actually rendered (which every real app does).
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs { ["target"] = new TextInput { title = "Target"; placeholderText = "x" } }
+    }
+  }
+}
+
+events {
+  new EventTriggerSpec {
+    name = "cdc-user-entity"
+    source = new EventSource { name = "atlan-kafka"; topic = "app.cdc.user_entity" }
+    triggerConfig = new EventTriggerConfig {
+${cfg_body}
+    }
+  }
+}
+PKLEOF
+  ERR_MSG="$(pkl eval -m "$OUT_DIR" "$BAD_CONTRACT" 2>&1 || true)"
+  rm -f "$BAD_CONTRACT"
+  rm -rf "$OUT_DIR"
+  if ! echo "$ERR_MSG" | grep -q "$expect"; then
+    echo "FAIL: $label"
+    echo "  Got: $ERR_MSG"
+    fail=1
+  fi
+}
+
+check_streaming_throw \
+  "streamingBatchSize without streamingEnabled should throw" \
+  "      streamingBatchSize = 200" \
+  "require streamingEnabled"
+
+check_streaming_throw \
+  "streamingBatchWaitSeconds without streamingEnabled should throw" \
+  "      streamingBatchWaitSeconds = 2.5" \
+  "require streamingEnabled"
+
+check_streaming_throw \
+  "streamingBatchWaitSeconds at batch size 1 should throw" \
+  "      streamingEnabled = true
+      streamingBatchWaitSeconds = 2.5" \
+  "meaningless at streamingBatchSize = 1"
+
+# --------------------------------------------------------------------------
 # Done
 # --------------------------------------------------------------------------
 if [ "$fail" -ne 0 ]; then
