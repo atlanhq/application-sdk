@@ -35,6 +35,7 @@ rewrite:
 
 from __future__ import annotations
 
+import warnings
 from contextlib import AbstractAsyncContextManager
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -82,6 +83,56 @@ T = TypeVar("T")
 #: Default types the per-type count and lineage reads cover, kept on this
 #: module's signatures as the tuple they have always been.
 _DEFAULT_TYPE_NAMES: tuple[str, ...] = atlas.DEFAULT_TYPE_NAMES
+
+
+#: Release that drops ``poll_atlas_for_connection``'s ``max_forbidden_attempts``.
+#: Named rather than left as prose: a deprecation without a removal version is a
+#: warning nobody has to act on.
+#:
+#: The notice below spells "v4.0" literally rather than interpolating this,
+#: for the reason ``AppConfig``'s does: conformance rule B002 reads the notice as
+#: written in the source, so an f-string placeholder makes a compliant
+#: deprecation look like one that never named its removal version.
+#: ``test_the_vestigial_knob_names_its_removal_version`` pins the two together.
+_FORBIDDEN_ATTEMPTS_REMOVAL_VERSION = "4.0"
+
+
+#: The log twin of the notice below, with the value the caller actually passed.
+#: %-style rather than an f-string so the value stays a log field.
+_FORBIDDEN_ATTEMPTS_LOG = (
+    "poll_atlas_for_connection(max_forbidden_attempts=%s) is deprecated, has no "
+    "effect, and will be removed in v4.0; use max_not_found_attempts instead. "
+    "This poll reads the search index, whose ACL is permissive, so a 403 never "
+    "surfaces and there is no 403 budget to bound."
+)
+
+
+def _warn_vestigial_forbidden_attempts(value: int) -> None:
+    """Say that ``max_forbidden_attempts`` does nothing, once per call that passes it.
+
+    Paired ``DeprecationWarning`` + ``warning`` log line, the same shape every
+    other 4.0 deprecation in this SDK uses: the warning so ``-W error`` and
+    ``filterwarnings`` can make it fatal ahead of the removal, the log line so it
+    is visible in a CI job's captured output where nobody is reading Python's
+    warning filter.
+
+    The notice is written **inline** rather than built into a local and passed by
+    name, which is not a style choice: conformance rule ``B002`` reads
+    ``warnings.warn``'s first argument statically, so a variable there reads as an
+    empty notice and a compliant deprecation is reported as one that named
+    neither a replacement nor a removal version. The log twin carries the value
+    the caller passed, which the notice does not need — the caller knows what
+    they wrote.
+    """
+    warnings.warn(
+        "poll_atlas_for_connection's max_forbidden_attempts is deprecated, has "
+        "no effect, and will be removed in v4.0; use max_not_found_attempts "
+        "instead. This poll reads the search index, whose ACL is permissive, so "
+        "a 403 never surfaces and there is no 403 budget to bound.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+    logger.warning(_FORBIDDEN_ATTEMPTS_LOG, value)
 
 
 def _settled_or_fail_open(outcome: Outcome[T], fallback: T) -> T:
@@ -345,7 +396,7 @@ class AEWorkflowClient:
         *,
         interval_seconds: int = 30,
         timeout_seconds: int = 1500,
-        max_forbidden_attempts: int = 5,
+        max_forbidden_attempts: int | None = None,
         max_not_found_attempts: int = 10,
         max_not_found_attempts_override: int | None = None,
     ) -> bool:
@@ -371,9 +422,15 @@ class AEWorkflowClient:
                 publish runs after the AE DAG completes and can take a while to
                 flush large connections. Callers with smaller datasets can
                 tighten this.
-            max_forbidden_attempts: Vestigial and unread. The poll goes through
-                the search index, whose ACL is permissive, so a 403 never
-                surfaces here. Kept on the signature for back-compat.
+            max_forbidden_attempts: **Deprecated, unread, and removed in
+                v4.0.** The poll goes through the
+                search index, whose ACL is permissive, so a 403 never surfaces
+                here and there is nothing for a 403 budget to bound. It was
+                ``del``'d unread rather than removed, which is the shape that
+                lets a caller keep passing a number and believe it does
+                something — so FND-240 makes it say so instead. Passing it warns;
+                omitting it is silent, which is why the default is now ``None``
+                rather than ``5``.
             max_not_found_attempts: Consecutive unproductive probes to tolerate.
             max_not_found_attempts_override: When set, replaces
                 ``max_not_found_attempts``.
@@ -384,7 +441,8 @@ class AEWorkflowClient:
         """
         if max_not_found_attempts_override is not None:
             max_not_found_attempts = max_not_found_attempts_override
-        del max_forbidden_attempts
+        if max_forbidden_attempts is not None:
+            _warn_vestigial_forbidden_attempts(max_forbidden_attempts)
         budget = Budget(
             timeout=timedelta(seconds=timeout_seconds),
             poll_interval=timedelta(seconds=interval_seconds),

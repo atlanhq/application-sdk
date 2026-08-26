@@ -249,6 +249,64 @@ class TestPublishVersion:
             await client.publish_version("slug", 1, retries=2)
 
 
+class TestRetriesMeansRetries:
+    """All four AE writes spend the same budget for the same ``retries=N``.
+
+    ``create_version`` and ``publish_version`` used to pass
+    ``total_attempts=retries``, so ``retries=5`` bought four while
+    ``create_workflow``'s and ``submit_workflow``'s identically-named parameter
+    bought five. FND-240 normalised them onto ``retries + 1``, the convention
+    ``_post_with_retry`` documents and the only one the parameter's name is true
+    under.
+
+    Asserted as a *cross-endpoint* equality rather than four separate counts:
+    the defect was never any single number, it was that two of them disagreed.
+    """
+
+    @pytest.mark.parametrize("retries", [0, 1, 3])
+    async def test_the_two_versions_endpoints_match_create_workflow(
+        self, retries: int
+    ) -> None:
+        counts: dict[str, int] = {}
+
+        async def _count(name: str, response: tuple[int, Any]) -> None:
+            client = _client()
+            with (
+                patch.object(client, "_request", return_value=response) as request,
+                patch(_SLEEP),
+                pytest.raises(AtlanApiHttpError),
+            ):
+                if name == "create_workflow":
+                    await client.create_workflow("n", retries=retries)
+                elif name == "create_version":
+                    await client.create_version("slug", {}, retries=retries)
+                else:
+                    await client.publish_version("slug", 1, retries=retries)
+            counts[name] = request.call_count
+
+        # Each endpoint gets a response its own ``retryable`` predicate keeps
+        # retrying, so the count is the budget rather than an early accept.
+        await _count("create_workflow", (503, {}))
+        await _count("create_version", (404, {}))
+        await _count("publish_version", (200, {"status": "queued"}))
+
+        assert counts["create_version"] == counts["create_workflow"]
+        assert counts["publish_version"] == counts["create_workflow"]
+        assert counts["create_workflow"] == retries + 1
+
+    async def test_the_publish_failure_names_the_attempts_it_made(self) -> None:
+        """The message said ``after {retries} attempts`` while making
+        ``retries + 1``, which is the kind of off-by-one that reads as broken
+        retry logic in a CI log."""
+        client = _client()
+        with (
+            patch.object(client, "_request", return_value=(200, {"status": "queued"})),
+            patch(_SLEEP),
+            pytest.raises(AtlanApiHttpError, match=r"after 3 attempt\(s\)"),
+        ):
+            await client.publish_version("slug", 1, retries=2)
+
+
 class TestGetNativeStatus:
     async def test_a_non_2xx_raises_with_the_origins_backoff(self) -> None:
         """The poll loop reads ``retry_after_seconds`` off this leaf to size its

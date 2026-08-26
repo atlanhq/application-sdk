@@ -873,6 +873,16 @@ class AEClient:
         Retries on HTTP 404 (indexing lag — slug not yet queryable after
         create_workflow), HTTP 5xx (AE under load), and timeout.
 
+        ``retries`` means retries: this used to pass ``total_attempts=retries``,
+        so ``retries=5`` bought four of them while ``create_workflow``'s and
+        ``submit_workflow``'s identically-named parameter bought five. FND-240
+        normalised the four onto ``retries + 1``, the convention
+        :meth:`_post_with_retry` documents and the only one the parameter's name
+        is true under. The direction is deliberate: the other pair could have
+        been changed to match instead, but that shortens
+        ``cold_start_submit_kwargs``' budget, which divides a timeout by an
+        interval and needs the attempt count it asked for.
+
         Returns:
             The version number assigned by AE (typically a Unix
             timestamp, but treat as opaque int).
@@ -880,7 +890,7 @@ class AEClient:
         status, body = await self._post_with_retry(
             f"/automation/api/v1/workflows/{slug}/versions",
             body=version_payload,
-            total_attempts=retries,
+            total_attempts=retries + 1,
             sleep_seconds=retry_sleep_seconds,
             retryable=lambda s, b: s == 404 or s >= 500,
             op_name="create_version",
@@ -909,10 +919,13 @@ class AEClient:
         AE can lag a few seconds between version-create and version-
         publish — early calls return 404 (AE-WF-404-02 "version not
         found"). Retries on any non-success response and timeout.
+
+        ``retries`` means retries — see :meth:`create_version` for why the four
+        AE writes were normalised onto ``retries + 1`` (FND-240).
         """
         status, body = await self._post_with_retry(
             f"/automation/api/v1/workflows/{slug}/versions/{version}/publish",
-            total_attempts=retries,
+            total_attempts=retries + 1,
             sleep_seconds=retry_sleep_seconds,
             retryable=lambda s, b: (
                 s >= 300 or not (isinstance(b, dict) and b.get("status") == "success")
@@ -922,7 +935,9 @@ class AEClient:
         if status < 300 and isinstance(body, dict) and body.get("status") == "success":
             return
         raise AtlanApiHttpError(
-            message=f"publish_version failed after {retries} attempts: {body!r}",
+            message=(
+                f"publish_version failed after {retries + 1} attempt(s): {body!r}"
+            ),
             target="POST /automation/api/v1/workflows/.../versions/.../publish",
             retry_after_seconds=requested_retry_after(body),
         )
