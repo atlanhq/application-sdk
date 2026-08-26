@@ -56,6 +56,7 @@ def test_budget_defaults_leave_every_guard_off_except_the_heartbeat() -> None:
     assert budget.stall_timeout is None
     assert budget.max_transient_failures == 0
     assert budget.retry_after_budget is None
+    assert budget.max_retry_after is None
     assert budget.heartbeat == timedelta(seconds=30)
 
 
@@ -232,3 +233,13 @@ def test_the_waits_that_honour_origin_backoff_carry_the_same_ceiling(
     a slow origin cannot stretch either past what that constant allows."""
     budget = CONNECTOR_CI.budgets[wait]
     assert _seconds(budget.retry_after_budget) == _RETRY_AFTER_BUDGET_SECONDS
+
+
+def test_the_ae_run_carries_the_per_wait_ceiling_its_loop_already_applies() -> None:
+    """``_retry_gap`` clamps every single honoured wait inside ``poll_native_status``
+    at ``_MAX_RETRY_AFTER_SECONDS``. That bound had no home on ``Budget`` until
+    child C needed to honour origin backoff from inside the primitive, so it is
+    the one number in this profile that arrived after the original lift — read
+    back off the same constant as the rest."""
+    budget = CONNECTOR_CI.budgets[Wait.AE_RUN]
+    assert _seconds(budget.max_retry_after) == _MAX_RETRY_AFTER_SECONDS

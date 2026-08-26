@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from application_sdk.errors.leaves import (
+    AppTimeoutError,
+    DependencyUnavailableError,
     InvalidInputError,
     PreconditionError,
     UnimplementedError,
@@ -20,6 +22,10 @@ __all__ = [
     "HarnessNotBuiltError",
     "MissingTenantEnvError",
     "SyncBridgeInAsyncContextError",
+    "WaitExpiredError",
+    "WaitIndeterminateError",
+    "WaitNeverStartedError",
+    "WaitStalledError",
 ]
 
 
@@ -77,3 +83,130 @@ class MissingTenantEnvError(InvalidInputError):
 
     code: ClassVar[str] = "INVALID_INPUT_HARNESS_TENANT_ENV"
     field: str | None = "ATLAN_BASE_URL,ATLAN_API_KEY"
+
+
+# ---------------------------------------------------------------------------
+# The four failing verdicts, as the leaves ``assert_settled`` raises
+# ---------------------------------------------------------------------------
+#
+# One leaf per non-settled :mod:`application_sdk.testing.harness.outcome`
+# variant, carrying that variant's fields rather than stringifying them into a
+# message: the whole reason the primitive returns a structured verdict is that a
+# report can group and count without re-parsing prose, and an adapter that
+# raises must not throw that away on the way out.
+#
+# These are the *generic* leaves. ``testing/e2e``'s own
+# ``NoWorkerOnTaskQueueError`` / ``AutomationEngineNotDispatchingError`` /
+# ``DAGProgressStalledError`` stay exactly as they are, because their value is
+# the connector remediation advice in their messages — which queue to check,
+# which agent name resolves to it — and that advice is precisely what could not
+# come along into a shared primitive. A caller that wants it matches on the
+# outcome variant and raises its own leaf; a caller that just wants the wait to
+# fail calls
+# :func:`~application_sdk.testing.harness.outcome.assert_settled` and gets these.
+
+
+@dataclass(kw_only=True)
+class WaitNeverStartedError(PreconditionError):
+    """A bounded wait's start-grace window closed with nothing having started.
+
+    ``PreconditionError`` rather than a timeout, matching the two e2e leaves
+    that guard the same moment: the budget did not run out, the state that had
+    to exist before the work could begin never did (no poller on the task queue,
+    a queue-name mismatch, a worker scaled to zero). Retrying the same call
+    without changing that state is not expected to help, which is the
+    category's own litmus test.
+
+    Attributes:
+        label: What was being waited on, verbatim from the outcome.
+        grace_seconds: The start-grace window that closed without a start.
+        attempts: How many times the probe ran.
+        elapsed_seconds: Wall-clock time the wait consumed.
+    """
+
+    code: ClassVar[str] = "PRECONDITION_WAIT_NEVER_STARTED"
+    component: str | None = "harness_waiting"
+    label: str | None = None
+    grace_seconds: float | None = None
+    attempts: int | None = None
+    elapsed_seconds: float | None = None
+
+
+@dataclass(kw_only=True)
+class WaitStalledError(AppTimeoutError):
+    """Work started, then stopped making observable progress.
+
+    A ``TIMEOUT``-category leaf, following :class:`TaskStalledError`'s reasoning
+    (ADR-0018): a stall *is* a bounded wait that elapsed, just a wait for the
+    next change rather than for the end. ``testing/e2e``'s
+    ``DAGProgressStalledError`` calls the same condition a ``PRECONDITION``; it
+    predates the ADR and keeps its category so no existing consumer sees a
+    reclassification. Normalising the pair is listed on FND-240.
+
+    Attributes:
+        label: What was being waited on, verbatim from the outcome.
+        fingerprint: The progress fingerprint that stopped changing — the single
+            most useful field, because it says *what* froze.
+        stall_window_seconds: How long the fingerprint went unchanged before the
+            watchdog fired.
+        attempts: How many times the probe ran.
+    """
+
+    code: ClassVar[str] = "TIMEOUT_WAIT_STALLED"
+    component: str | None = "harness_waiting"
+    label: str | None = None
+    fingerprint: str | None = None
+    stall_window_seconds: float | None = None
+    attempts: int | None = None
+
+
+@dataclass(kw_only=True)
+class WaitExpiredError(AppTimeoutError):
+    """A bounded wait spent its whole budget while work was still progressing.
+
+    The plain timeout, and the only one of the four that says nothing about
+    *why*: the work was moving, it was simply not finished. ``timeout_seconds``
+    and ``elapsed_seconds`` come from :class:`AppTimeoutError`.
+
+    Attributes:
+        label: What was being waited on, verbatim from the outcome.
+        attempts: How many times the probe ran.
+    """
+
+    code: ClassVar[str] = "TIMEOUT_WAIT_EXPIRED"
+    component: str | None = "harness_waiting"
+    label: str | None = None
+    attempts: int | None = None
+
+
+@dataclass(kw_only=True)
+class WaitIndeterminateError(DependencyUnavailableError):
+    """The wait reached no verdict, because the probe itself could not be read.
+
+    ``DEPENDENCY_UNAVAILABLE`` is the load-bearing choice here, not a category
+    of convenience: an expired vcluster token, a dropped tunnel or a 503 from
+    Atlas is neither a pass nor a regression in the thing under test, and this
+    is the category whose own definition is "the same call would work once the
+    dependency recovers". A caller grading a suite can therefore separate
+    "could not tell" from "told, and it was bad" on the category alone. See
+    :mod:`application_sdk.testing.harness.outcome` for why the verdict exists
+    at all.
+
+    The cause is preserved as ``__cause__`` (``raise ... from``) as well as
+    summarised in the message, so a caller can still classify which backend and
+    which transport failed.
+
+    Attributes:
+        label: What was being waited on, verbatim from the outcome.
+        attempts: How many times the probe ran.
+        elapsed_seconds: Wall-clock time the wait consumed.
+        transient_failures: How many probe errors were absorbed before the wait
+            gave up.
+    """
+
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_WAIT_INDETERMINATE"
+    component: str | None = "harness_waiting"
+    label: str | None = None
+    attempts: int | None = None
+    elapsed_seconds: float | None = None
+    transient_failures: int | None = None

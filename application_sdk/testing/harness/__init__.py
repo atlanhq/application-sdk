@@ -25,10 +25,15 @@ Module map:
 
 ``bridge``
     The one sync/async bridge. One reused event loop per thread.
+``_poll``
+    The deadline arithmetic both bounded-wait shapes and ``testing/e2e``'s
+    twelve loops run on. Private; moved here from ``testing/e2e`` in child C.
 ``waiting``
     ``poll_until`` and ``hold_stable`` — the only two bounded-wait shapes.
 ``outcome``
-    What a wait returns: settled, never-started, stalled, expired, indeterminate.
+    What a wait returns: settled, never-started, stalled, expired, indeterminate
+    — plus ``grade``, the precondition gate that reduces a scenario's whole pile
+    of outcomes and findings to one verdict.
 ``budgets``
     One typed ``Budget`` per wait, and named per-tier profiles.
 ``identity``
@@ -52,12 +57,13 @@ Module map:
 ``teardown``
     Purge mechanics, including the batching that is a correctness bound.
 
-``bridge``, ``outcome``'s vocabulary, ``spec``, ``budgets``, ``expectations`` and
-``identity`` are real; the rest are typed stubs, each naming the child issue that
-fills it in. Nothing outside this package consumes any of it yet — ``testing/e2e``
-is re-expressed over it in child H, and until then the extracted modules are
-pinned against the code they were lifted from by their unit tests rather than by
-being called from it.
+``bridge``, ``waiting``, ``outcome``, ``spec``, ``budgets``, ``expectations``
+and ``identity`` are real; the rest are typed stubs, each naming the child issue
+that fills it in. Nothing outside this package consumes any of it yet —
+``testing/e2e`` is re-expressed over it in child H, and until then the extracted
+modules are pinned against the code they were lifted from by their unit tests
+rather than by being called from it. For ``waiting`` that pin is a differential
+test against ``poll_native_status`` itself, on identical scripted readings.
 
 The optional ``harness`` extra carries the typed Kubernetes backend for
 ``cluster`` (``pip install 'atlan-application-sdk[harness]'``). It is
@@ -69,6 +75,10 @@ from application_sdk.testing.harness._errors import (
     HarnessNotBuiltError,
     MissingTenantEnvError,
     SyncBridgeInAsyncContextError,
+    WaitExpiredError,
+    WaitIndeterminateError,
+    WaitNeverStartedError,
+    WaitStalledError,
 )
 from application_sdk.testing.harness.bridge import close_loop, run_sync
 from application_sdk.testing.harness.budgets import (
@@ -86,10 +96,17 @@ from application_sdk.testing.harness.outcome import (
     Outcome,
     Settled,
     Stalled,
+    Verdict,
     assert_settled,
+    grade,
 )
 from application_sdk.testing.harness.spec import AppUnderTest
-from application_sdk.testing.harness.waiting import Probe, hold_stable, poll_until
+from application_sdk.testing.harness.waiting import (
+    Classifier,
+    Probe,
+    hold_stable,
+    poll_until,
+)
 
 __all__ = [
     # The sync bridge — test-harness only
@@ -102,17 +119,24 @@ __all__ = [
     "close_loop",
     "run_sync",
     # Bounded waits
+    "Classifier",
     "Probe",
     "hold_stable",
     "poll_until",
-    # Outcomes
+    # Outcomes, and the leaves assert_settled raises for the failing four
     "Expired",
     "Indeterminate",
     "NeverStarted",
     "Outcome",
     "Settled",
     "Stalled",
+    "Verdict",
+    "WaitExpiredError",
+    "WaitIndeterminateError",
+    "WaitNeverStartedError",
+    "WaitStalledError",
     "assert_settled",
+    "grade",
     # Budgets
     "CONNECTOR_CI",
     "Budget",
