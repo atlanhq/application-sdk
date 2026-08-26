@@ -1,8 +1,8 @@
-"""One bounded-poll primitive for the e2e harness's deadline loops.
+"""The deadline arithmetic every bounded loop in the harness runs on.
 
-Every "probe until it's ready or the budget runs out" loop in this package
-routes through :func:`until_deadline` (sync) or :func:`until_deadline_async`
-(async). Before this module each of them hand-rolled the same three lines::
+Every "probe until it's ready or the budget runs out" loop routes through
+:func:`until_deadline` (sync) or :func:`until_deadline_async` (async). Before
+this module each of them hand-rolled the same three lines::
 
     deadline = time.monotonic() + timeout
     while True:
@@ -36,6 +36,15 @@ Testing: pass ``clock``/``sleep`` explicitly, or wrap the code under test in
 :func:`fake_clock`. Neither touches :func:`time.monotonic` itself — the asyncio
 event loop reads that for its own timers, and fast-forwarding it globally makes
 async tests flake.
+
+Private, and it lives here rather than in ``testing/e2e/`` because the harness
+cannot import from the package it is about to be the foundation of: child H
+re-expresses ``testing/e2e`` *over*
+:mod:`application_sdk.testing.harness.waiting`, and a
+``harness -> e2e -> harness`` cycle is what keeping the deadline loop on the e2e
+side would have produced. Both sides read it from here today; the five
+``testing/e2e`` call sites keep their behaviour byte for byte and only their
+import line moved (child C on FND-224).
 """
 
 from __future__ import annotations

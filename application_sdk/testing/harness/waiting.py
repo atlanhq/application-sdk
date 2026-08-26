@@ -11,11 +11,26 @@ error streak with a retry-after budget.* Only the fingerprint and the predicates
 are instance-specific, and they are passed in — which is why no fixed shared
 verb is needed and why ``ClusterReader`` never has to grow everyone's states.
 
-The clock, the sleeping and the off-by-one already live in
-:mod:`application_sdk.testing.e2e._poll` (``until_deadline`` /
+The clock, the sleeping and the off-by-one live in
+:mod:`application_sdk.testing.harness._poll` (``until_deadline`` /
 ``until_deadline_async``, monotonic, with the gap re-clamped against the clock
 read *after* the probe). :func:`poll_until` is built on that rather than on a
-second deadline implementation; the private module moves here as part of child C.
+second deadline implementation; that private module moved here from
+``testing/e2e/`` as part of child C, because the harness cannot import from the
+package child H is about to re-express over it.
+
+**Nothing in ``testing/e2e`` calls this yet.** Re-expressing its twelve bounded
+loops is child D (FND-240), and the client those loops live on is synchronous
+until child F converts it — routing a sync method through an async primitive on
+the loop bridge in the meantime would be a workaround built to be deleted. What
+stands in for that proof today is
+``tests/unit/testing/harness/test_waiting_equivalence.py``: it drives
+:func:`poll_until` with the AE-shaped probe, predicates, fingerprint and
+retry-after classifier over the *same* scripted readings ``poll_native_status``
+sees, and asserts both produce the same verdict, the same attempt count and the
+same sleep sequence. A differential test against the live loop is stronger
+evidence than "the 58 existing tests still pass", and it costs the connector
+path no diff at all.
 
 :func:`hold_stable` is **new**. All twelve bounded loops in ``testing/e2e/``
 today are "wait until"; not one is "assert stays". The negative assertion is
@@ -24,7 +39,11 @@ what the runtime scaling scenarios turn on — "a busy pod is never scaled away"
 steady-state group — because most scaling bugs are wrong *actions* rather than
 wrong states.
 
-Implementation is FND-227 (child C).
+**Neither primitive raises on a failed wait.** Both return an
+:mod:`~application_sdk.testing.harness.outcome` variant; see that module for
+why, and :func:`~application_sdk.testing.harness.outcome.assert_settled` for the
+raise-on-failure adapter the connector suites keep. The one exception is an
+*unclassified* probe exception, which propagates — see ``transient`` below.
 """
 
 from __future__ import annotations
@@ -33,17 +52,99 @@ from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import TypeAlias, TypeVar
 
-from application_sdk.testing.harness._errors import HarnessNotBuiltError
+from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.testing.harness._poll import until_deadline_async
 from application_sdk.testing.harness.budgets import Budget
-from application_sdk.testing.harness.outcome import Outcome
+from application_sdk.testing.harness.outcome import (
+    Expired,
+    Indeterminate,
+    NeverStarted,
+    Outcome,
+    Settled,
+    Stalled,
+)
 
-__all__ = ["Probe", "hold_stable", "poll_until"]
+logger = get_logger(__name__)
+
+__all__ = ["Classifier", "Probe", "hold_stable", "poll_until"]
 
 T = TypeVar("T")
 
 #: One reading of whatever is being waited on. Async by construction (decision
 #: D1): there is no synchronous probe anywhere in the harness.
 Probe: TypeAlias = Callable[[], Awaitable[T]]
+
+#: Turns a probe exception into the backoff to honour before retrying, or
+#: ``None`` for "not transient — this one is terminal". Per backend, never
+#: fixed at the primitive: a kubectl read over a tunnel and an in-process HTTP
+#: call have different normal failure rates.
+Classifier: TypeAlias = Callable[[BaseException], "timedelta | None"]
+
+#: Cap on the rendered reading a :func:`hold_stable` violation carries as its
+#: fingerprint. A violating pod list is a report line, not a payload dump.
+_RENDER_LIMIT = 120
+
+
+def _seconds(value: timedelta | None) -> float | None:
+    """Return *value* in seconds, or ``None``."""
+    return None if value is None else value.total_seconds()
+
+
+def _render(value: object) -> str:
+    """Summarise a reading for a report line, bounded so it stays one line."""
+    text = repr(value)
+    if len(text) <= _RENDER_LIMIT:
+        return text
+    return f"{text[: _RENDER_LIMIT - 1]}…"
+
+
+def _honoured_gap(
+    requested: timedelta,
+    *,
+    floor: float,
+    cap: float | None,
+    budget_left: float,
+) -> float:
+    """Pick the gap before the next probe, honouring the origin's request.
+
+    Mirrors ``testing/e2e/client.py``'s ``_retry_gap``, with the two bounds that
+    were module constants there now read off the :class:`Budget`:
+
+    * ``cap`` (:attr:`Budget.max_retry_after`) bounds any *single* wait, so one
+      pathological ``Retry-After`` cannot hang a CI leg inside its own backoff;
+    * ``budget_left`` (what is left of :attr:`Budget.retry_after_budget`) bounds
+      the *total* above-the-floor waiting across the whole wait.
+
+    Never returns less than ``floor``: honouring a hint may lengthen the gap the
+    loop already guaranteed, never shorten it. A wait with no
+    :attr:`Budget.retry_after_budget` therefore degrades cleanly to the fixed
+    interval, which is exactly what "honour no origin backoff" should do — one
+    rule, not a second branch.
+
+    Unlike ``_retry_gap`` this does **not** round the request up to a whole
+    second. There the input was an HTTP ``Retry-After`` header, integer seconds
+    by definition; here it is a ``timedelta`` the classifier chose, and
+    quantising someone else's duration is not the primitive's call. A classifier
+    reading that header rounds on the way in.
+
+    Args:
+        requested: What the origin asked for. Non-positive means "nothing
+            usable", and the floor stands.
+        floor: The loop's own fixed gap.
+        cap: Ceiling on this single wait, or ``None`` for no ceiling.
+        budget_left: Above-the-floor seconds still permitted in this wait.
+
+    Returns:
+        The gap to take, before :meth:`Attempt.sleep_next` clamps it again
+        against the residual deadline.
+    """
+    wanted = requested.total_seconds()
+    if wanted <= 0:
+        return floor
+    allowed = min(wanted, max(budget_left, 0.0))
+    if cap is not None:
+        allowed = min(allowed, cap)
+    return max(floor, allowed)
 
 
 async def poll_until(
@@ -52,7 +153,7 @@ async def poll_until(
     settled: Callable[[T], bool],
     started: Callable[[T], bool] | None = None,
     fingerprint: Callable[[T], str] | None = None,
-    transient: Callable[[BaseException], timedelta | None] | None = None,
+    transient: Classifier | None = None,
     budget: Budget,
     label: str,
 ) -> Outcome[T]:
@@ -67,17 +168,24 @@ async def poll_until(
             :class:`~application_sdk.testing.harness.outcome.NeverStarted`
             rather than a generic timeout — dispatch failures and slow work are
             different diagnoses. ``None`` means "started on the first reading".
+            A latch, not a level: work that starts and finishes between two
+            polls still counts as started.
         fingerprint: Reduces a reading to a comparable progress string. When it
             stops changing for ``budget.stall_timeout`` the wait returns
             :class:`~application_sdk.testing.harness.outcome.Stalled` carrying
             the frozen fingerprint. ``None`` disables the watchdog regardless of
             the budget, because there is nothing to compare.
         transient: Classifies a probe exception. Returns a backoff to honour
-            (bounded by ``budget.retry_after_budget``) to absorb it as
-            transient, or ``None`` to treat it as terminal. An unclassified
-            exception propagates: a deterministic bug in the probe itself — a
-            wrong call signature, a bad config value — raises the same exception
-            on every attempt, so waiting out the budget only delays the failure.
+            (bounded by ``budget.max_retry_after`` and
+            ``budget.retry_after_budget``) to absorb it as transient, or
+            ``None`` to treat it as terminal. An unclassified exception
+            propagates: a deterministic bug in the probe itself — a wrong call
+            signature, a bad config value — raises the same exception on every
+            attempt, so waiting out the budget only delays the failure. Passing
+            no classifier at all therefore means "every probe error is a bug in
+            the probe", which is right for an in-process read and wrong for a
+            kubectl read over a tunnel — hence per backend, not fixed at the
+            primitive (FND-227's 2026-08-17 amendment).
         budget: The wait's whole allowance. See
             :class:`~application_sdk.testing.harness.budgets.Budget`.
         label: Noun phrase naming the concrete target, for the report and the
@@ -89,15 +197,162 @@ async def poll_until(
         :func:`~application_sdk.testing.harness.outcome.assert_settled` for the
         raise-on-failure adapter.
 
+        A budget that expires without one successful reading returns
+        :class:`~application_sdk.testing.harness.outcome.Indeterminate`, not
+        :class:`~application_sdk.testing.harness.outcome.Expired`: "it did not
+        finish in time" is a claim about the thing under test, and a wait that
+        never read it is not entitled to make one.
+
     Raises:
-        HarnessNotBuiltError: Always — implementation is FND-227 (child C).
+        BaseException: Whatever ``probe`` raised, when ``transient`` does not
+            classify it as worth absorbing.
     """
-    raise HarnessNotBuiltError(
-        message="poll_until is not implemented yet",
-        operation="poll_until",
-        reason="child C on FND-224 (= FND-227)",
-        issue="FND-227",
-        component="harness_waiting",
+    interval_seconds = budget.poll_interval.total_seconds()
+    grace_seconds = _seconds(budget.start_grace)
+    # A watchdog with nothing to compare is not a watchdog. The fingerprint
+    # decides whether the budget's window is armed, not the other way round.
+    stall_seconds = _seconds(budget.stall_timeout) if fingerprint else None
+    retry_after_left = (budget.retry_after_budget or timedelta(0)).total_seconds()
+    max_retry_after = _seconds(budget.max_retry_after)
+
+    # ``started=None`` is "started on the first reading", which is the same
+    # latch already closed — so the grace window can never fire, and there is no
+    # separate no-predicate branch below.
+    has_started = started is None
+    streak = 0
+    attempts = 0
+    elapsed = 0.0
+    last_value: T | None = None
+    last_error: BaseException | None = None
+    last_fingerprint: str | None = None
+    last_progress = 0.0
+
+    async for attempt in until_deadline_async(
+        budget.timeout.total_seconds(),
+        interval_seconds,
+        label=label,
+        heartbeat_seconds=(budget.heartbeat or timedelta(0)).total_seconds(),
+    ):
+        attempts = attempt.number
+        elapsed = attempt.elapsed
+        try:
+            value = await probe()
+        # Exception, not BaseException: a cancelled test is not a failed read,
+        # and asyncio.CancelledError must reach the task that sent it.
+        except Exception as error:
+            backoff = transient(error) if transient is not None else None
+            if backoff is None:
+                raise
+            last_error = error
+            streak += 1
+            if streak >= budget.max_transient_failures:
+                # WARNING, not ERROR: an unreadable dependency is explicitly not
+                # a verdict on the thing under test, and the caller is handed
+                # the cause to grade. Reporting it as an error here would red a
+                # dashboard for something this function declines to call a
+                # failure.
+                logger.warning(
+                    "giving up on %s after %d consecutive probe error(s) in "
+                    "%.0fs — no verdict, the read itself failed",
+                    label,
+                    streak,
+                    elapsed,
+                    exc_info=True,
+                )
+                return Indeterminate(
+                    label=label,
+                    attempts=attempts,
+                    elapsed=timedelta(seconds=elapsed),
+                    cause=error,
+                    transient_failures=streak,
+                    last=last_value,
+                )
+            # Back off for as long as the origin asked when it said so, rather
+            # than for the poll cadence: an overloaded origin answering
+            # "retry_after: 120" would otherwise burn the whole streak inside
+            # its own wait window. ``sleep_next`` clamps to the residual budget
+            # and reports the gap actually taken.
+            gap = _honoured_gap(
+                backoff,
+                floor=interval_seconds,
+                cap=max_retry_after,
+                budget_left=retry_after_left,
+            )
+            retry_after_left -= gap - interval_seconds
+            slept = attempt.sleep_next(gap)
+            # conformance: ignore[L006] fires only on an absorbed probe error, not per iteration; a streak that ends in a returned Indeterminate leaves no other record of how long the origin was asked to be waited for
+            logger.warning(
+                "transient error probing %s (streak %d/%d) — sleeping %.0fs "
+                "and retrying",
+                label,
+                streak,
+                budget.max_transient_failures,
+                slept,
+                exc_info=True,
+            )
+            continue
+
+        streak = 0
+        last_value = value
+        if not has_started and started is not None and started(value):
+            has_started = True
+        if fingerprint is not None:
+            mark = fingerprint(value)
+            if mark != last_fingerprint:
+                last_fingerprint = mark
+                last_progress = elapsed
+        if settled(value):
+            return Settled(
+                label=label,
+                attempts=attempts,
+                elapsed=timedelta(seconds=elapsed),
+                value=value,
+            )
+        # Fail fast when nothing has started inside the grace window. Checked
+        # only after a reading that succeeded: a probe that could not be read
+        # has not shown that nothing started, it has shown nothing at all.
+        if not has_started and grace_seconds is not None and elapsed >= grace_seconds:
+            return NeverStarted(
+                label=label,
+                attempts=attempts,
+                elapsed=timedelta(seconds=elapsed),
+                grace=timedelta(seconds=grace_seconds),
+                last=value,
+            )
+        # Progress watchdog: something started, then the fingerprint froze for
+        # the whole window. Turns an indefinite hang into a self-terminating
+        # failure that names what stopped moving.
+        if (
+            has_started
+            and stall_seconds is not None
+            and (elapsed - last_progress) >= stall_seconds
+        ):
+            return Stalled(
+                label=label,
+                attempts=attempts,
+                elapsed=timedelta(seconds=elapsed),
+                # The observed quiet gap, not the configured window: they differ
+                # whenever a probe overran its own interval, and the observed one
+                # is the number that answers "how long has it been frozen?".
+                stall_window=timedelta(seconds=elapsed - last_progress),
+                fingerprint=last_fingerprint or "",
+                last=value,
+            )
+
+    if last_value is None and last_error is not None:
+        return Indeterminate(
+            label=label,
+            attempts=attempts,
+            elapsed=timedelta(seconds=elapsed),
+            cause=last_error,
+            transient_failures=streak,
+        )
+    return Expired(
+        label=label,
+        attempts=attempts,
+        elapsed=timedelta(seconds=elapsed),
+        budget=budget.timeout,
+        last=last_value,
     )
 
 
@@ -105,6 +360,7 @@ async def hold_stable(
     probe: Probe[T],
     *,
     invariant: Callable[[T], bool],
+    transient: Classifier | None = None,
     budget: Budget,
     label: str,
 ) -> Outcome[T]:
@@ -118,6 +374,14 @@ async def hold_stable(
         probe: Takes one reading. Called once per poll.
         invariant: True while the reading is still acceptable. The first False
             ends the hold.
+        transient: Classifies a probe exception, exactly as in
+            :func:`poll_until`. Not on the signature the scaffold sketched, and
+            added because the scenarios this exists for run out-of-cluster over
+            a VPN plus a vcluster tunnel, where a reset connection mid-hold is
+            routine: with no classifier the first blip ends a twenty-minute hold
+            as :class:`~application_sdk.testing.harness.outcome.Indeterminate`.
+            ``budget.max_transient_failures`` bounds the streak, as it does
+            there.
         budget: The hold's allowance. ``start_grace`` and ``stall_timeout`` are
             not consulted: there is no start to wait for and no progress to
             watch.
@@ -131,15 +395,97 @@ async def hold_stable(
         "stopped being what it should be" shape — carrying the violating
         reading when it did not; or
         :class:`~application_sdk.testing.harness.outcome.Indeterminate` when the
-        probe itself could not be read.
+        probe itself could not be read. A hold cannot pass over a window it
+        never observed: "nothing went wrong" and "I did not look" are the same
+        silence, which is the whole reason that third verdict exists.
 
     Raises:
-        HarnessNotBuiltError: Always — implementation is FND-227 (child C).
+        BaseException: Whatever ``probe`` raised, when ``transient`` does not
+            classify it as worth absorbing.
     """
-    raise HarnessNotBuiltError(
-        message="hold_stable is not implemented yet",
-        operation="hold_stable",
-        reason="child C on FND-224 (= FND-227); new work, not an extraction",
-        issue="FND-227",
-        component="harness_waiting",
+    interval_seconds = budget.poll_interval.total_seconds()
+    retry_after_left = (budget.retry_after_budget or timedelta(0)).total_seconds()
+    max_retry_after = _seconds(budget.max_retry_after)
+
+    streak = 0
+    attempts = 0
+    elapsed = 0.0
+    last_value: T | None = None
+    last_error: BaseException | None = None
+
+    async for attempt in until_deadline_async(
+        budget.timeout.total_seconds(),
+        interval_seconds,
+        label=label,
+        heartbeat_seconds=(budget.heartbeat or timedelta(0)).total_seconds(),
+    ):
+        attempts = attempt.number
+        elapsed = attempt.elapsed
+        try:
+            value = await probe()
+        except Exception as error:
+            backoff = transient(error) if transient is not None else None
+            if backoff is None:
+                raise
+            last_error = error
+            streak += 1
+            if streak >= budget.max_transient_failures:
+                logger.warning(
+                    "giving up on the %s hold after %d consecutive probe "
+                    "error(s) in %.0fs — the window went unobserved, so the "
+                    "invariant is unproven rather than held",
+                    label,
+                    streak,
+                    elapsed,
+                    exc_info=True,
+                )
+                return Indeterminate(
+                    label=label,
+                    attempts=attempts,
+                    elapsed=timedelta(seconds=elapsed),
+                    cause=error,
+                    transient_failures=streak,
+                    last=last_value,
+                )
+            gap = _honoured_gap(
+                backoff,
+                floor=interval_seconds,
+                cap=max_retry_after,
+                budget_left=retry_after_left,
+            )
+            retry_after_left -= gap - interval_seconds
+            attempt.sleep_next(gap)
+            continue
+
+        streak = 0
+        last_value = value
+        if not invariant(value):
+            return Stalled(
+                label=label,
+                attempts=attempts,
+                elapsed=timedelta(seconds=elapsed),
+                # How long it held before it broke — the other half of the
+                # report line, and the reason a flap at 2s and a flap at 19m do
+                # not read the same.
+                stall_window=timedelta(seconds=elapsed),
+                fingerprint=_render(value),
+                last=value,
+            )
+
+    if last_value is None:
+        # Never read once across the whole hold. There is no reading to call
+        # settled, and calling the invariant held would be a claim about a
+        # window nothing observed.
+        return Indeterminate(
+            label=label,
+            attempts=attempts,
+            elapsed=timedelta(seconds=elapsed),
+            cause=last_error or RuntimeError(f"the {label} hold took no reading"),
+            transient_failures=streak,
+        )
+    return Settled(
+        label=label,
+        attempts=attempts,
+        elapsed=timedelta(seconds=elapsed),
+        value=last_value,
     )

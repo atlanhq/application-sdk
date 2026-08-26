@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.29.0
-source-sha:    4d71641e9416d228dceda7a5335da0c36a0b4a46
-source-date:   2026-08-26T08:20:57+01:00
+source-sha:    6b28bcd7e212e310946b9615acc5793d97030ebd
+source-date:   2026-08-26T11:03:24+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 163 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 170 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3600,6 +3600,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** A reading that could not be taken.
 - **Defined in:** `application_sdk/testing/harness/expectations.py`
 
+#### `Verdict`
+
+- **Import:** `from application_sdk.testing.harness import Verdict`
+- **Also importable from:** `application_sdk.testing.harness.outcome`
+- **Signature:** `class Verdict`
+- **Summary:** How a whole scenario graded, once everything it observed is in.
+- **Defined in:** `application_sdk/testing/harness/outcome.py`
+
 #### `Wait`
 
 - **Import:** `from application_sdk.testing.harness import Wait`
@@ -3607,6 +3615,34 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class Wait`
 - **Summary:** The bounded waits a connector run performs, as profile keys.
 - **Defined in:** `application_sdk/testing/harness/budgets.py`
+
+#### `WaitExpiredError`
+
+- **Import:** `from application_sdk.testing.harness import WaitExpiredError`
+- **Signature:** `class WaitExpiredError(*, ...)`
+- **Summary:** A bounded wait spent its whole budget while work was still progressing.
+- **Defined in:** `application_sdk/testing/harness/_errors.py`
+
+#### `WaitIndeterminateError`
+
+- **Import:** `from application_sdk.testing.harness import WaitIndeterminateError`
+- **Signature:** `class WaitIndeterminateError(*, ...)`
+- **Summary:** The wait reached no verdict, because the probe itself could not be read.
+- **Defined in:** `application_sdk/testing/harness/_errors.py`
+
+#### `WaitNeverStartedError`
+
+- **Import:** `from application_sdk.testing.harness import WaitNeverStartedError`
+- **Signature:** `class WaitNeverStartedError(*, ...)`
+- **Summary:** A bounded wait's start-grace window closed with nothing having started.
+- **Defined in:** `application_sdk/testing/harness/_errors.py`
+
+#### `WaitStalledError`
+
+- **Import:** `from application_sdk.testing.harness import WaitStalledError`
+- **Signature:** `class WaitStalledError(*, ...)`
+- **Summary:** Work started, then stopped making observable progress.
+- **Defined in:** `application_sdk/testing/harness/_errors.py`
 
 #### `WorkflowExecutionStatus`
 
@@ -3836,6 +3872,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Find all pandera YAML schema files in the given directory.
 - **Defined in:** `application_sdk/testing/integration/validation.py`
 
+#### `grade`
+
+- **Import:** `from application_sdk.testing.harness import grade`
+- **Also importable from:** `application_sdk.testing.harness.outcome`
+- **Signature:** `grade(*, outcomes: Iterable[Outcome[Any]] = (), findings: Iterable[Finding] = ())`
+- **Summary:** Reduce everything a scenario accumulated to its one verdict.
+- **Defined in:** `application_sdk/testing/harness/outcome.py`
+
 #### `greater_than`
 
 - **Import:** `from application_sdk.testing.integration import greater_than`
@@ -3861,7 +3905,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Import:** `from application_sdk.testing.harness import hold_stable`
 - **Also importable from:** `application_sdk.testing.harness.waiting`
-- **Signature:** `hold_stable(probe: Probe[T], *, invariant: Callable[[T], bool], budget: Budget, label: str)`
+- **Signature:** `hold_stable(probe: Probe[T], *, ...)`
 - **Summary:** Assert *invariant* holds for every reading across the whole budget.
 - **Defined in:** `application_sdk/testing/harness/waiting.py`
 
@@ -4197,6 +4241,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Defined in:** `application_sdk/testing/e2e/workflows.py`
 
 ### Constants and Enums
+
+#### `Classifier`
+
+- **Import:** `from application_sdk.testing.harness import Classifier`
+- **Also importable from:** `application_sdk.testing.harness.waiting`
+- **Signature:** `Classifier: TypeAlias`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/waiting.py`
 
 #### `CONNECTOR_CI`
 

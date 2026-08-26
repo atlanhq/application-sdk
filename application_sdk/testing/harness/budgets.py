@@ -36,7 +36,7 @@ mode preserving the ``elapsed += interval_seconds`` accumulator — a bug that
 never charged HTTP round-trip time to the budget, so ``ae_poll_timeout_seconds
 = 600`` bounded 600s of *sleeps* plus N round trips at up to 60s each. That
 accumulator no longer exists: every deadline loop in ``testing/e2e/`` now runs
-through :mod:`application_sdk.testing.e2e._poll`, which is monotonic and
+through :mod:`application_sdk.testing.harness._poll`, which is monotonic and
 re-clamps each gap against the clock read *after* the probe. So there is no
 current behaviour to preserve, and no ``clock`` field here — shipping one would
 be reintroducing the bug as a supported mode. See the D3 note on FND-224.
@@ -111,13 +111,34 @@ class Budget:
             work *has* started, after which the wait returns
             :class:`~application_sdk.testing.harness.outcome.Stalled`. ``None``
             disables the watchdog.
-        max_transient_failures: How many probe errors to absorb before giving up
-            with :class:`~application_sdk.testing.harness.outcome.Indeterminate`.
-            ``0`` means the first probe error ends the wait.
+        max_transient_failures: Length of the *consecutive* probe-error streak
+            that ends the wait with
+            :class:`~application_sdk.testing.harness.outcome.Indeterminate`. The
+            Nth consecutive error is the one that gives up, so ``5`` absorbs
+            four and stops on the fifth — the boundary
+            ``poll_native_status`` has today, pinned by
+            ``test_gives_up_at_max_transient_failures``, and preserved here
+            rather than corrected because a drift would change every connector's
+            tolerance the moment child D rewires the loop. ``0`` and ``1`` are
+            therefore the same instruction: end on the first error. Normalising
+            that degenerate pair is listed on FND-240.
+
+            A streak, not a total: any successful probe resets it, so a wait
+            spanning a twenty-minute VPN tunnel is not bounded by the *sum* of
+            the blips it survived. Set per backend — a kubectl read over a
+            tunnel and an in-process HTTP call have different normal failure
+            rates (FND-227's 2026-08-17 amendment).
         retry_after_budget: Ceiling on the *extra* waiting an origin may request
             via ``Retry-After`` across the whole wait, on top of the fixed gaps.
             Without it a slow origin can stretch the real wall-clock bound well
             past :attr:`timeout`. ``None`` means honour no origin backoff.
+        max_retry_after: Ceiling on any *single* origin-requested wait, so one
+            pathological value cannot hang a CI leg inside its own backoff.
+            Same field, same meaning, as
+            :attr:`RequestBudget.max_retry_after`: a wait that honours origin
+            backoff needs both bounds, and only one of them was here.
+            ``None`` honours whatever the origin asks for, up to
+            :attr:`retry_after_budget`.
         heartbeat: Cadence of the "still waiting" progress line. ``None``
             silences it, which is right when the call site logs its own richer
             per-poll progress and a second line would be duplicate noise.
@@ -129,6 +150,7 @@ class Budget:
     stall_timeout: timedelta | None = None
     max_transient_failures: int = 0
     retry_after_budget: timedelta | None = None
+    max_retry_after: timedelta | None = None
     heartbeat: timedelta | None = timedelta(seconds=30)
 
 
@@ -239,6 +261,10 @@ CONNECTOR_CI = BudgetProfile(
             stall_timeout=timedelta(seconds=300),
             max_transient_failures=5,
             retry_after_budget=timedelta(seconds=300),
+            # The same per-single-wait cap _retry_gap already applies inside
+            # this loop; it had no home on Budget until child C needed to
+            # honour origin backoff from inside the primitive.
+            max_retry_after=timedelta(seconds=120),
             # poll_native_status throttles its own richer progress line to the
             # heartbeat cadence and disables the generic one.
             heartbeat=None,

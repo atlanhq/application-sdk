@@ -29,6 +29,7 @@ from application_sdk.testing.harness import (
     hold_stable,
     poll_until,
 )
+from application_sdk.testing.harness._poll import fake_clock
 from application_sdk.testing.harness.cluster import (
     ClusterReader,
     CustomResourceReader,
@@ -263,28 +264,23 @@ def test_the_stub_leaf_is_also_a_notimplementederror() -> None:
     assert error.issue == "FND-224"
 
 
-async def test_poll_until_is_an_unimplemented_stub() -> None:
+async def test_the_three_child_c_stubs_are_gone() -> None:
+    """``poll_until`` / ``hold_stable`` / ``assert_settled`` were the scaffold's
+    FND-227 stubs. They are implemented now, and their own tests live in
+    ``test_waiting.py`` / ``test_outcome.py``; what belongs *here* is the proof
+    that the scaffold no longer holds a stub under those names, so a revert
+    cannot quietly restore one."""
+
     async def _probe() -> int:
         return 1
 
-    with pytest.raises(HarnessNotBuiltError) as caught:
-        await poll_until(_probe, settled=bool, budget=_budget(), label="x")
-    assert caught.value.issue == "FND-227"
-
-
-async def test_hold_stable_is_an_unimplemented_stub() -> None:
-    async def _probe() -> int:
-        return 1
-
-    with pytest.raises(HarnessNotBuiltError) as caught:
-        await hold_stable(_probe, invariant=bool, budget=_budget(), label="x")
-    assert caught.value.issue == "FND-227"
-
-
-def test_assert_settled_is_an_unimplemented_stub() -> None:
-    with pytest.raises(HarnessNotBuiltError) as caught:
-        assert_settled(Settled(label="x", attempts=1, elapsed=timedelta(0), value=1))
-    assert caught.value.issue == "FND-227"
+    with fake_clock():
+        settled = await poll_until(_probe, settled=bool, budget=_budget(), label="x")
+        # A hold always spends its whole budget on the happy path, so it needs
+        # the fake clock even here: the real one would sleep the full minute.
+        held = await hold_stable(_probe, invariant=bool, budget=_budget(), label="x")
+    assert assert_settled(settled) == 1
+    assert isinstance(held, Settled)
 
 
 async def test_every_remaining_stub_names_its_child_issue() -> None:

@@ -14,8 +14,8 @@ from unittest.mock import patch
 
 import pytest
 
-from application_sdk.testing.e2e import _poll
-from application_sdk.testing.e2e._poll import (
+from application_sdk.testing.harness import _poll
+from application_sdk.testing.harness._poll import (
     Attempt,
     FakeClock,
     fake_clock,

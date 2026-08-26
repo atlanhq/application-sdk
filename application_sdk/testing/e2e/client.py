@@ -65,7 +65,7 @@ from application_sdk.testing.e2e._errors import (
     NoWorkerOnTaskQueueError,
     RequestDelivery,
 )
-from application_sdk.testing.e2e._poll import _HEARTBEAT_SECONDS, until_deadline
+from application_sdk.testing.harness._poll import _HEARTBEAT_SECONDS, until_deadline
 
 logger = get_logger(__name__)
 
