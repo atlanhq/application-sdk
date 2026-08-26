@@ -219,6 +219,15 @@
     {
       "kind": "class",
       "marker_via": "warn",
+      "message": "application_sdk.testing.e2e.AppConfig is deprecated and will be removed in v4.0; use application_sdk.testing.harness.AppUnderTest instead. It collides by name with application_sdk.main.AppConfig, the runtime config object. app_module, image, worker_health_port and timeout are not carried over \u2014 nothing ever read them.",
+      "migration_target": true,
+      "module": "application_sdk.testing.e2e.config",
+      "removal_version": "4.0",
+      "symbol": "AppConfig"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
       "message": "application_sdk.testing.sdr.BaseSDRIntegrationTest is deprecated; use application_sdk.testing.e2e.BaseE2ETest with RunMode.AGENT \u2014 will be removed in v4.0",
       "migration_target": true,
       "module": "application_sdk.testing.sdr.base",
