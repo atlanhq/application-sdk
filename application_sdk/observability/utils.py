@@ -100,6 +100,41 @@ def get_metric_labels() -> dict[str, str]:
     }
 
 
+def in_temporal_workflow() -> bool:
+    """Return True when the caller is executing inside a Temporal workflow.
+
+    Single predicate for every observability guard that must not perform
+    work Temporal's deterministic workflow loop cannot support — blocking
+    file I/O, thread offloads, and cross-event-loop bridges
+    (``asyncio.wrap_future``, whose done-callback calls ``is_closed()`` on the
+    destination loop; Temporal's workflow loop raises ``NotImplementedError``
+    there, so the awaited future never resolves — SYSAPPS-328).
+
+    Deliberately ``temporalio.workflow.in_workflow()`` rather than either of
+    the two alternatives previously used in this package:
+
+    - ``workflow.unsafe.in_sandbox()`` answers "is the sandbox active", which
+      is False for a passed-through module or an unsandboxed worker even
+      though workflow rules still apply.
+    - The ``ExecutionContext`` ContextVar (see :func:`get_workflow_context`)
+      is only populated after ``ExecutionContextInterceptor`` has run, so it
+      reads False in workflow code that executes before or outside it.
+
+    ``in_workflow()`` reads Temporal's own ContextVar, so it is correct in
+    both cases and returns False outside Temporal entirely.
+
+    Returns:
+        bool: True inside workflow code; False in activities, the API server,
+        worker process shutdown, tests and CLI tools.
+    """
+    # conformance: ignore[P006] safety guard, not orchestration. Relocating this behind execution/_temporal/ would invert the dependency (observability would import execution, which already imports observability). The ExecutionContext ContextVar alternative is a derived signal that reads False for any worker not built by create_worker, failing the guard open; temporalio's own in_workflow() is ground truth.
+    from temporalio import (  # noqa: PLC0415 — cold path: consulted only on flush/shutdown paths
+        workflow,
+    )
+
+    return workflow.in_workflow()
+
+
 def get_workflow_context() -> dict[str, str]:
     """Get the workflow context as a plain dict.
 

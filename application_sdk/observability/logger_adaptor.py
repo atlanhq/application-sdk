@@ -53,6 +53,7 @@ from application_sdk.observability.utils import (
     build_otel_resource,
     get_observability_dir,
     get_workflow_context,
+    in_temporal_workflow,
 )
 from application_sdk.version import __version__ as _SDK_VERSION
 
@@ -1445,7 +1446,17 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         - Sync context (no running loop): creates a temporary loop to flush.
         - Thread context (loop running in another thread, e.g. Temporal
           activity in ThreadPoolExecutor): skips, periodic flush handles it.
+
+        No-op inside a Temporal workflow. ``get_running_loop()`` there returns
+        Temporal's deterministic workflow loop, so the async branch would spawn
+        an un-awaited workflow task; the store sink it targets is itself guarded
+        (see ``AtlanObservability._flush_records``), making that task inert. The
+        OTLP path is unaffected — records are emitted per-call by
+        ``_send_to_otel``, not by this flush.
         """
+        if in_temporal_workflow():
+            return
+
         try:
             try:
                 loop = asyncio.get_running_loop()

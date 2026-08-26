@@ -793,7 +793,7 @@ class TestFlush:
         client._queue = asyncio.Queue()
 
         with (
-            mock.patch.object(sc_module.workflow, "in_workflow", return_value=True),
+            mock.patch.object(sc_module, "in_temporal_workflow", return_value=True),
             mock.patch.object(sc_module.asyncio, "run_coroutine_threadsafe") as mrun,
         ):
             await client.flush()

@@ -385,17 +385,19 @@ class AtlanObservability(Generic[T], ABC):
         if not ENABLE_OBSERVABILITY_STORE_SINK or not records:
             return
 
-        # File I/O is restricted inside Temporal's workflow sandbox — skip the
-        # store sink there; records are still exported via OTLP/console.
-        try:
-            from temporalio.workflow import (  # noqa: PLC0415 — defensive: try/except detects temporal sandbox / non-temporal context
-                unsafe as _wf_unsafe,
-            )
+        # Blocking file I/O, the object-store upload and the retention sweep's
+        # thread offload below are all illegal on Temporal's deterministic
+        # workflow loop — skip the store sink there; records are still exported
+        # via OTLP/console. Shares one predicate with SegmentClient.flush() so
+        # both guards answer "am I in a workflow" the same way; the previous
+        # ``workflow.unsafe.in_sandbox()`` check missed passed-through modules
+        # and unsandboxed workers. See utils.in_temporal_workflow.
+        from application_sdk.observability.utils import (  # noqa: PLC0415 — circular: utils imports observability.context, which this module is imported alongside
+            in_temporal_workflow,
+        )
 
-            if _wf_unsafe.in_sandbox():
-                return
-        except ImportError:  # conformance: ignore[E002,E008] Temporal sandbox check unavailable outside a worker; normal flush
-            pass
+        if in_temporal_workflow():
+            return
 
         # ``current_writer`` is non-None iff a gzip partition file is currently open.
         # The _PartitionWriter dataclass bundles all four related state fields so they
