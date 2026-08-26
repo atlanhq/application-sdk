@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 151 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 163 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3187,8 +3187,16 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Import:** `from application_sdk.testing.harness import BudgetProfile`
 - **Also importable from:** `application_sdk.testing.harness.budgets`
-- **Signature:** `class BudgetProfile(*, name: str, budgets: dict[str, Budget])`
+- **Signature:** `class BudgetProfile(*, name: str, budgets: Mapping[str, Budget], requests: Mapping[str, RequestBudget] = dict())`
 - **Summary:** A named set of budgets for one execution tier.
+- **Defined in:** `application_sdk/testing/harness/budgets.py`
+
+#### `Call`
+
+- **Import:** `from application_sdk.testing.harness import Call`
+- **Also importable from:** `application_sdk.testing.harness.budgets`
+- **Signature:** `class Call`
+- **Summary:** The outbound call shapes a run makes, as profile keys.
 - **Defined in:** `application_sdk/testing/harness/budgets.py`
 
 #### `CategoryResult`
@@ -3204,6 +3212,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class ClusterReader`
 - **Summary:** Read built-in Kubernetes state. No mutation, by decision.
 - **Defined in:** `application_sdk/testing/harness/cluster/__init__.py`
+
+#### `ConnectionIdentity`
+
+- **Import:** `from application_sdk.testing.harness.identity import ConnectionIdentity`
+- **Signature:** `class ConnectionIdentity(qualified_name: str, display_name: str) -> None`
+- **Summary:** The ephemeral connection one harness run creates and then purges.
+- **Defined in:** `application_sdk/testing/harness/identity.py`
 
 #### `CustomResourceReader`
 
@@ -3377,6 +3392,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Mints the per-run identifiers a harness run needs.
 - **Defined in:** `application_sdk/testing/harness/identity.py`
 
+#### `MissingTenantEnvError`
+
+- **Import:** `from application_sdk.testing.harness import MissingTenantEnvError`
+- **Signature:** `class MissingTenantEnvError(*, ...)`
+- **Summary:** The environment carries no tenant for the harness to run against.
+- **Defined in:** `application_sdk/testing/harness/_errors.py`
+
 #### `MockBinding`
 
 - **Import:** `from application_sdk.testing import MockBinding`
@@ -3476,6 +3498,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** A relationship reference whose target asset is absent from the batch.
 - **Defined in:** `application_sdk/validation/assets.py`
 
+#### `RequestBudget`
+
+- **Import:** `from application_sdk.testing.harness import RequestBudget`
+- **Also importable from:** `application_sdk.testing.harness.budgets`
+- **Signature:** `class RequestBudget(*, ...)`
+- **Summary:** Everything one outbound call, including its retries, is allowed to spend.
+- **Defined in:** `application_sdk/testing/harness/budgets.py`
+
 #### `ResourceRef`
 
 - **Import:** `from application_sdk.testing.harness.cluster import ResourceRef`
@@ -3555,6 +3585,28 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class TemporalReader`
 - **Summary:** Read Temporal state. No mutation, by decision.
 - **Defined in:** `application_sdk/testing/harness/temporal/__init__.py`
+
+#### `TenantAuth`
+
+- **Import:** `from application_sdk.testing.harness.identity import TenantAuth`
+- **Signature:** `class TenantAuth(base_url: str, ...)`
+- **Summary:** How a run authenticates against the tenant under test.
+- **Defined in:** `application_sdk/testing/harness/identity.py`
+
+#### `Unreadable`
+
+- **Import:** `from application_sdk.testing.harness.expectations import Unreadable`
+- **Signature:** `class Unreadable(*, cause: BaseException) -> None`
+- **Summary:** A reading that could not be taken.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `Wait`
+
+- **Import:** `from application_sdk.testing.harness import Wait`
+- **Also importable from:** `application_sdk.testing.harness.budgets`
+- **Signature:** `class Wait`
+- **Summary:** The bounded waits a connector run performs, as profile keys.
+- **Defined in:** `application_sdk/testing/harness/budgets.py`
 
 #### `WorkflowExecutionStatus`
 
@@ -3731,7 +3783,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `evaluate_locations`
 
 - **Import:** `from application_sdk.testing.harness.expectations import evaluate_locations`
-- **Signature:** `evaluate_locations(samples: Mapping[str, Sequence[str]], expectations: AssetExpectations) -> Sequence[Finding]`
+- **Signature:** `evaluate_locations(samples: Mapping[str, SampleRead], expectations: AssetExpectations) -> Sequence[Finding]`
 - **Summary:** Evaluate sampled qualified names against the declared hierarchy depths.
 - **Defined in:** `application_sdk/testing/harness/expectations.py`
 
@@ -4038,6 +4090,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Delete every asset under *connection_qualified_name*, then the connection.
 - **Defined in:** `application_sdk/testing/harness/teardown.py`
 
+#### `read_tenant_auth`
+
+- **Import:** `from application_sdk.testing.harness.identity import read_tenant_auth`
+- **Signature:** `read_tenant_auth(environ: Mapping[str, str]) -> TenantAuth`
+- **Summary:** Read and validate the tenant credentials a run needs from the environment.
+- **Defined in:** `application_sdk/testing/harness/identity.py`
+
 #### `redact`
 
 - **Import:** `from application_sdk.testing.harness.evidence import redact`
@@ -4139,6 +4198,21 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 ### Constants and Enums
 
+#### `CONNECTOR_CI`
+
+- **Import:** `from application_sdk.testing.harness import CONNECTOR_CI`
+- **Also importable from:** `application_sdk.testing.harness.budgets`
+- **Signature:** `CONNECTOR_CI`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/budgets.py`
+
+#### `CountRead`
+
+- **Import:** `from application_sdk.testing.harness.expectations import CountRead`
+- **Signature:** `CountRead: TypeAlias`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
 #### `Outcome`
 
 - **Import:** `from application_sdk.testing.harness import Outcome`
@@ -4161,6 +4235,20 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `PURGE_BATCH_SIZE`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/teardown.py`
+
+#### `SampleRead`
+
+- **Import:** `from application_sdk.testing.harness.expectations import SampleRead`
+- **Signature:** `SampleRead: TypeAlias`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `UNREADABLE`
+
+- **Import:** `from application_sdk.testing.harness.expectations import UNREADABLE`
+- **Signature:** `UNREADABLE`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 ## `application_sdk.validation`
 
