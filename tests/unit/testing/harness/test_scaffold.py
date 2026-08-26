@@ -432,6 +432,50 @@ def _unused():  # pragma: no cover — the factory is never called by these asse
     raise AssertionError("the protocol checks are structural, not behavioural")
 
 
+async def test_the_temporal_readers_are_real() -> None:
+    """FND-247 filled the ``temporal`` stub: the Protocol had no backend at all,
+    and ``NoWorkerOnTaskQueueError`` was inferred from three minutes of silence
+    rather than read.
+
+    Asserted here for the reason child E's deletion is: what belongs in the
+    scaffold's own test file is the proof that the package no longer holds a stub
+    under these names, so a revert cannot quietly restore one.
+    """
+    from application_sdk.testing.harness import temporal
+
+    assert isinstance(
+        temporal.TemporalServiceReader(connect=_unused), temporal.TemporalReader
+    )
+    for name in ("frontend_connection", "port_forwarded_connection"):
+        assert callable(getattr(temporal, name))
+
+    # The nullable twin is deliberately *not* on the Protocol: a caller waiting
+    # for an AE-dispatched execution to appear needs absence as a value, and a
+    # caller that already has an id wants the raise.
+    assert not hasattr(temporal.TemporalReader, "find_workflow_status")
+    assert callable(temporal.TemporalServiceReader.find_workflow_status)
+
+
+def test_the_temporal_readers_need_no_extra() -> None:
+    """FND-247's amendment expected ``temporalio`` behind the ``[workflows]``
+    extra, with the readers import-guarded. It is a *core* dependency since v3.1
+    and ``[workflows]`` is an alias resolving to it — so unlike ``cluster``'s
+    ``harness`` extra there is nothing to guard, and this pins the correction
+    rather than leaving it in a PR description."""
+    import tomllib
+    from pathlib import Path
+
+    pyproject = Path(__file__).resolve().parents[4] / "pyproject.toml"
+    with pyproject.open("rb") as handle:
+        project = tomllib.load(handle)["project"]
+
+    assert any(dep.startswith("temporalio") for dep in project["dependencies"])
+    assert any(
+        dep.startswith("temporalio")
+        for dep in project["optional-dependencies"]["workflows"]
+    )
+
+
 async def test_every_remaining_stub_names_its_child_issue() -> None:
     from application_sdk.testing.harness import starters
     from application_sdk.testing.harness.cluster import HttpRequest, HttpResponse
