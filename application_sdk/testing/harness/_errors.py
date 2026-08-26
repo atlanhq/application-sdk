@@ -10,9 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
-from application_sdk.errors.leaves import PreconditionError
+from application_sdk.errors.leaves import PreconditionError, UnimplementedError
 
-__all__ = ["SyncBridgeInAsyncContextError"]
+__all__ = ["HarnessNotBuiltError", "SyncBridgeInAsyncContextError"]
 
 
 @dataclass(kw_only=True)
@@ -27,3 +27,27 @@ class SyncBridgeInAsyncContextError(PreconditionError):
 
     code: ClassVar[str] = "PRECONDITION_SYNC_BRIDGE_IN_ASYNC_CONTEXT"
     component: str | None = "harness_sync_bridge"
+
+
+@dataclass(kw_only=True)
+class HarnessNotBuiltError(UnimplementedError, NotImplementedError):
+    """A scaffolded harness function whose implementation has not landed yet.
+
+    Inherits :class:`NotImplementedError` alongside the SDK's
+    :class:`~application_sdk.errors.leaves.UnimplementedError` leaf so both hold:
+    it is a typed leaf carrying a category and an audience, *and* it is still
+    what Python's convention — and any reader's ``except`` — expects from a
+    function that has not been written.
+
+    :attr:`issue` names the child issue that fills the function in, as a field
+    rather than as a substring of the message, so an audit of what is left in the
+    scaffold can enumerate it instead of grepping prose.
+
+    Attributes:
+        issue: Identifier of the issue that lands the implementation.
+        component: Which part of the harness the gap is in.
+    """
+
+    code: ClassVar[str] = "UNIMPLEMENTED_HARNESS_NOT_BUILT"
+    issue: str | None = None
+    component: str | None = "test_harness"

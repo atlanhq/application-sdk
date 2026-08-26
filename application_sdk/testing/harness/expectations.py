@@ -32,6 +32,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
+from application_sdk.testing.harness._errors import HarnessNotBuiltError
+
 __all__ = ["AssetExpectations", "Finding", "evaluate_counts", "evaluate_locations"]
 
 
@@ -104,9 +106,15 @@ def evaluate_counts(
         One :class:`Finding` per unmet expectation; empty when all were met.
 
     Raises:
-        NotImplementedError: Always — implementation is child B on FND-224.
+        HarnessNotBuiltError: Always — implementation is child B on FND-224.
     """
-    raise NotImplementedError("evaluate_counts is child B on FND-224")
+    raise HarnessNotBuiltError(
+        message="evaluate_counts is not implemented yet",
+        operation="evaluate_counts",
+        reason="child B on FND-224",
+        issue="FND-224",
+        component="harness_expectations",
+    )
 
 
 def evaluate_locations(
@@ -128,6 +136,12 @@ def evaluate_locations(
         connection, or is nested at the wrong depth; empty when all were fine.
 
     Raises:
-        NotImplementedError: Always — implementation is child B on FND-224.
+        HarnessNotBuiltError: Always — implementation is child B on FND-224.
     """
-    raise NotImplementedError("evaluate_locations is child B on FND-224")
+    raise HarnessNotBuiltError(
+        message="evaluate_locations is not implemented yet",
+        operation="evaluate_locations",
+        reason="child B on FND-224",
+        issue="FND-224",
+        component="harness_expectations",
+    )

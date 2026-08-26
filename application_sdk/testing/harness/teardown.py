@@ -28,6 +28,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
+from application_sdk.testing.harness._errors import HarnessNotBuiltError
+
 __all__ = ["PURGE_BATCH_SIZE", "PurgeReport", "purge_connection"]
 
 #: Assets per DELETE. See the module docstring for why this is a correctness
@@ -65,6 +67,12 @@ async def purge_connection(connection_qualified_name: str) -> PurgeReport:
         module docstring.
 
     Raises:
-        NotImplementedError: Always — implementation is child G on FND-224.
+        HarnessNotBuiltError: Always — implementation is child G on FND-224.
     """
-    raise NotImplementedError("purge_connection is child G on FND-224")
+    raise HarnessNotBuiltError(
+        message="purge_connection is not implemented yet",
+        operation="purge_connection",
+        reason="child G on FND-224",
+        issue="FND-224",
+        component="harness_teardown",
+    )

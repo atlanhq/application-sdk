@@ -33,6 +33,8 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Generic, TypeAlias, TypeVar, Union
 
+from application_sdk.testing.harness._errors import HarnessNotBuiltError
+
 __all__ = [
     "Expired",
     "Indeterminate",
@@ -165,9 +167,13 @@ def assert_settled(outcome: Outcome[T]) -> T:
         :attr:`Settled.value`.
 
     Raises:
-        NotImplementedError: Always — the leaf mapping lands with
+        HarnessNotBuiltError: Always — the leaf mapping lands with
             :mod:`application_sdk.testing.harness.waiting` in FND-227 (child C).
     """
-    raise NotImplementedError(
-        "assert_settled lands with waiting.poll_until in FND-227 (child C)"
+    raise HarnessNotBuiltError(
+        message="assert_settled is not implemented yet",
+        operation="assert_settled",
+        reason="lands with waiting.poll_until, child C on FND-224 (= FND-227)",
+        issue="FND-227",
+        component="harness_outcome",
     )

@@ -24,6 +24,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from application_sdk.testing.harness._errors import HarnessNotBuiltError
 from application_sdk.testing.harness.budgets import Budget
 from application_sdk.testing.harness.outcome import Outcome
 
@@ -76,9 +77,15 @@ async def submit_run(
         handle, or a verdict describing why no run was started.
 
     Raises:
-        NotImplementedError: Always — implementation is child F on FND-224.
+        HarnessNotBuiltError: Always — implementation is child F on FND-224.
     """
-    raise NotImplementedError("submit_run is child F on FND-224")
+    raise HarnessNotBuiltError(
+        message="submit_run is not implemented yet",
+        operation="submit_run",
+        reason="child F on FND-224",
+        issue="FND-224",
+        component="harness_automation_engine",
+    )
 
 
 async def poll_native_status(
@@ -98,6 +105,12 @@ async def poll_native_status(
         The verdict, carrying the last :class:`NativeStatus` read.
 
     Raises:
-        NotImplementedError: Always — implementation is child F on FND-224.
+        HarnessNotBuiltError: Always — implementation is child F on FND-224.
     """
-    raise NotImplementedError("poll_native_status is child F on FND-224")
+    raise HarnessNotBuiltError(
+        message="poll_native_status is not implemented yet",
+        operation="poll_native_status",
+        reason="child F on FND-224",
+        issue="FND-224",
+        component="harness_automation_engine",
+    )

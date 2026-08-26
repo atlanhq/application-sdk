@@ -33,6 +33,7 @@ from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import TypeAlias, TypeVar
 
+from application_sdk.testing.harness._errors import HarnessNotBuiltError
 from application_sdk.testing.harness.budgets import Budget
 from application_sdk.testing.harness.outcome import Outcome
 
@@ -89,9 +90,15 @@ async def poll_until(
         raise-on-failure adapter.
 
     Raises:
-        NotImplementedError: Always — implementation is FND-227 (child C).
+        HarnessNotBuiltError: Always — implementation is FND-227 (child C).
     """
-    raise NotImplementedError("poll_until is FND-227 (child C)")
+    raise HarnessNotBuiltError(
+        message="poll_until is not implemented yet",
+        operation="poll_until",
+        reason="child C on FND-224 (= FND-227)",
+        issue="FND-227",
+        component="harness_waiting",
+    )
 
 
 async def hold_stable(
@@ -127,6 +134,12 @@ async def hold_stable(
         probe itself could not be read.
 
     Raises:
-        NotImplementedError: Always — implementation is FND-227 (child C).
+        HarnessNotBuiltError: Always — implementation is FND-227 (child C).
     """
-    raise NotImplementedError("hold_stable is FND-227 (child C)")
+    raise HarnessNotBuiltError(
+        message="hold_stable is not implemented yet",
+        operation="hold_stable",
+        reason="child C on FND-224 (= FND-227); new work, not an extraction",
+        issue="FND-227",
+        component="harness_waiting",
+    )

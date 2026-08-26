@@ -82,6 +82,21 @@ def _loop_for_this_thread() -> asyncio.AbstractEventLoop:
     return loop
 
 
+def _loop_is_running() -> bool:
+    """Whether this thread already has a running event loop.
+
+    :func:`asyncio.get_running_loop` is the only way to ask, and it answers "no"
+    by raising, so the ``except`` here is the negative answer rather than a
+    swallowed failure — there is nothing to log and nothing to recover from.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        # conformance: ignore[E007] the RuntimeError IS the answer "no loop is running" — asyncio offers no non-raising query, so there is no error here to log
+        return False
+    return True
+
+
 def run_sync(coro: Coroutine[Any, Any, T]) -> T:
     """Run *coro* to completion on this thread's bridge loop and return its result.
 
@@ -106,11 +121,7 @@ def run_sync(coro: Coroutine[Any, Any, T]) -> T:
             def run_full_dag(self) -> FullDAGOutcome:                   # one line
                 return run_sync(self.run_full_dag_async())
     """
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        pass  # no running loop — the expected case, carry on
-    else:
+    if _loop_is_running():
         # Close the coroutine explicitly: a never-awaited coroutine that is
         # merely garbage-collected emits a "coroutine was never awaited"
         # RuntimeWarning, which lands in the traceback next to the real error

@@ -61,7 +61,10 @@ deliberately *not* folded into ``[tests]``: a connector installing test extras
 should not pull a Kubernetes client.
 """
 
-from application_sdk.testing.harness._errors import SyncBridgeInAsyncContextError
+from application_sdk.testing.harness._errors import (
+    HarnessNotBuiltError,
+    SyncBridgeInAsyncContextError,
+)
 from application_sdk.testing.harness.bridge import close_loop, run_sync
 from application_sdk.testing.harness.budgets import Budget, BudgetProfile
 from application_sdk.testing.harness.outcome import (
@@ -79,6 +82,9 @@ from application_sdk.testing.harness.waiting import Probe, hold_stable, poll_unt
 __all__ = [
     # The sync bridge — test-harness only
     "SyncBridgeInAsyncContextError",
+    # Raised by every not-yet-implemented scaffold function; also a
+    # NotImplementedError, so `except NotImplementedError` still catches it.
+    "HarnessNotBuiltError",
     "close_loop",
     "run_sync",
     # Bounded waits

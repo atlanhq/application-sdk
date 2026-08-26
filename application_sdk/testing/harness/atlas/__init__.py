@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
+from application_sdk.testing.harness._errors import HarnessNotBuiltError
 from application_sdk.testing.harness.outcome import Outcome
 
 __all__ = ["count_assets", "sample_qualified_names"]
@@ -53,9 +54,15 @@ async def count_assets(
         result; it is never the same value as an unreadable search.
 
     Raises:
-        NotImplementedError: Always — implementation is child F on FND-224.
+        HarnessNotBuiltError: Always — implementation is child F on FND-224.
     """
-    raise NotImplementedError("count_assets is child F on FND-224")
+    raise HarnessNotBuiltError(
+        message="count_assets is not implemented yet",
+        operation="count_assets",
+        reason="child F on FND-224",
+        issue="FND-224",
+        component="harness_atlas",
+    )
 
 
 async def sample_qualified_names(
@@ -78,6 +85,12 @@ async def sample_qualified_names(
         search could not be read.
 
     Raises:
-        NotImplementedError: Always — implementation is child F on FND-224.
+        HarnessNotBuiltError: Always — implementation is child F on FND-224.
     """
-    raise NotImplementedError("sample_qualified_names is child F on FND-224")
+    raise HarnessNotBuiltError(
+        message="sample_qualified_names is not implemented yet",
+        operation="sample_qualified_names",
+        reason="child F on FND-224",
+        issue="FND-224",
+        component="harness_atlas",
+    )

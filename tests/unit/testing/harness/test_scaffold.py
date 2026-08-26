@@ -20,6 +20,7 @@ from application_sdk.testing.harness import (
     Budget,
     BudgetProfile,
     Expired,
+    HarnessNotBuiltError,
     Indeterminate,
     NeverStarted,
     Settled,
@@ -252,25 +253,37 @@ def test_workflow_status_vocabulary_mirrors_temporal() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_the_stub_leaf_is_also_a_notimplementederror() -> None:
+    """It is a typed SDK leaf with a category and an audience, and it is still
+    what Python's convention — and any reader's `except` — expects."""
+    error = HarnessNotBuiltError(message="x", issue="FND-224")
+    assert isinstance(error, NotImplementedError)
+    assert error.code == "UNIMPLEMENTED_HARNESS_NOT_BUILT"
+    assert error.issue == "FND-224"
+
+
 async def test_poll_until_is_an_unimplemented_stub() -> None:
     async def _probe() -> int:
         return 1
 
-    with pytest.raises(NotImplementedError, match="FND-227"):
+    with pytest.raises(HarnessNotBuiltError) as caught:
         await poll_until(_probe, settled=bool, budget=_budget(), label="x")
+    assert caught.value.issue == "FND-227"
 
 
 async def test_hold_stable_is_an_unimplemented_stub() -> None:
     async def _probe() -> int:
         return 1
 
-    with pytest.raises(NotImplementedError, match="FND-227"):
+    with pytest.raises(HarnessNotBuiltError) as caught:
         await hold_stable(_probe, invariant=bool, budget=_budget(), label="x")
+    assert caught.value.issue == "FND-227"
 
 
 def test_assert_settled_is_an_unimplemented_stub() -> None:
-    with pytest.raises(NotImplementedError, match="FND-227"):
+    with pytest.raises(HarnessNotBuiltError) as caught:
         assert_settled(Settled(label="x", attempts=1, elapsed=timedelta(0), value=1))
+    assert caught.value.issue == "FND-227"
 
 
 async def test_every_remaining_stub_names_its_child_issue() -> None:
@@ -294,8 +307,10 @@ async def test_every_remaining_stub_names_its_child_issue() -> None:
         minter.unique_suffix,
         lambda: redact(EvidenceBundle(label="x")),
     ):
-        with pytest.raises(NotImplementedError, match="FND-224"):
+        with pytest.raises(HarnessNotBuiltError) as caught:
             call()
+        assert caught.value.issue == "FND-224"
+        assert caught.value.operation
 
     for coro in (
         atlas.count_assets("default/x/1", ["Table"]),
@@ -307,8 +322,10 @@ async def test_every_remaining_stub_names_its_child_issue() -> None:
             starters.QueueWorkflowSpec(workflow_type="w", task_queue="q")
         ),
     ):
-        with pytest.raises(NotImplementedError, match="FND-224"):
+        with pytest.raises(HarnessNotBuiltError) as caught:
             await coro
+        assert caught.value.issue == "FND-224"
+        assert caught.value.operation
 
 
 # ---------------------------------------------------------------------------

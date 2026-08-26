@@ -21,6 +21,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
+from application_sdk.testing.harness._errors import HarnessNotBuiltError
 from application_sdk.testing.harness.expectations import Finding
 
 __all__ = ["EvidenceBundle", "redact"]
@@ -61,6 +62,12 @@ def redact(bundle: EvidenceBundle) -> EvidenceBundle:
         the local copy useless.
 
     Raises:
-        NotImplementedError: Always — implementation is child G on FND-224.
+        HarnessNotBuiltError: Always — implementation is child G on FND-224.
     """
-    raise NotImplementedError("redact is child G on FND-224")
+    raise HarnessNotBuiltError(
+        message="redact is not implemented yet",
+        operation="redact",
+        reason="child G on FND-224",
+        issue="FND-224",
+        component="harness_evidence",
+    )

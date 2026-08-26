@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from application_sdk.testing.harness._errors import HarnessNotBuiltError
+
 __all__ = ["Minter"]
 
 
@@ -55,9 +57,15 @@ class Minter:
             clock reading.
 
         Raises:
-            NotImplementedError: Always — implementation is child B on FND-224.
+            HarnessNotBuiltError: Always — implementation is child B on FND-224.
         """
-        raise NotImplementedError("Minter.run_id is child B on FND-224")
+        raise HarnessNotBuiltError(
+            message="Minter.run_id is not implemented yet",
+            operation="Minter.run_id",
+            reason="child B on FND-224",
+            issue="FND-224",
+            component="harness_identity",
+        )
 
     def unique_suffix(self) -> str:
         """Return a suffix that makes a name unique within a tenant.
@@ -68,6 +76,12 @@ class Minter:
             collision means one run purges the other's assets.
 
         Raises:
-            NotImplementedError: Always — implementation is child B on FND-224.
+            HarnessNotBuiltError: Always — implementation is child B on FND-224.
         """
-        raise NotImplementedError("Minter.unique_suffix is child B on FND-224")
+        raise HarnessNotBuiltError(
+            message="Minter.unique_suffix is not implemented yet",
+            operation="Minter.unique_suffix",
+            reason="child B on FND-224",
+            issue="FND-224",
+            component="harness_identity",
+        )

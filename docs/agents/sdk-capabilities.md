@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.29.0
-source-sha:    9f5b89e6251980fca5a1ecb6f500823ac351fe51
-source-date:   2026-08-26T01:19:46Z
+source-sha:    61913873f10221724cab19322cf060b6b50c3c8b
+source-date:   2026-08-26T02:59:49+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 150 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 151 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3298,6 +3298,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class GapReport(diffs: list[AssetDiff] = list(), summary: dict[str, int] = dict(), expected_file: str | None = None)`
 - **Summary:** Summary of all differences between expected and actual metadata.
 - **Defined in:** `application_sdk/testing/integration/comparison.py`
+
+#### `HarnessNotBuiltError`
+
+- **Import:** `from application_sdk.testing.harness import HarnessNotBuiltError`
+- **Signature:** `class HarnessNotBuiltError(*, ...)`
+- **Summary:** A scaffolded harness function whose implementation has not landed yet.
+- **Defined in:** `application_sdk/testing/harness/_errors.py`
 
 #### `HttpRequest`
 

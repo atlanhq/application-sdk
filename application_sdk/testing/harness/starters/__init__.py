@@ -26,6 +26,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
+from application_sdk.testing.harness._errors import HarnessNotBuiltError
 from application_sdk.testing.harness.automation_engine import AERunHandle
 from application_sdk.testing.harness.cluster import ClusterReader, ServiceTarget
 
@@ -115,9 +116,15 @@ async def start_via_automation_engine(spec: Mapping[str, object]) -> AERunHandle
         The AE run handle.
 
     Raises:
-        NotImplementedError: Always — implementation is child G on FND-224.
+        HarnessNotBuiltError: Always — implementation is child G on FND-224.
     """
-    raise NotImplementedError("start_via_automation_engine is child G on FND-224")
+    raise HarnessNotBuiltError(
+        message="start_via_automation_engine is not implemented yet",
+        operation="start_via_automation_engine",
+        reason="child G on FND-224",
+        issue="FND-224",
+        component="harness_starters",
+    )
 
 
 async def start_on_task_queue(spec: QueueWorkflowSpec) -> WorkflowRunHandle:
@@ -130,12 +137,16 @@ async def start_on_task_queue(spec: QueueWorkflowSpec) -> WorkflowRunHandle:
         The run handle.
 
     Raises:
-        NotImplementedError: Always — new work, tracked as a separate issue
+        HarnessNotBuiltError: Always — new work, tracked as a separate issue
             outside FND-224. Nothing in the SDK or the runtime suite starts a
             workflow this way today.
     """
-    raise NotImplementedError(
-        "start_on_task_queue is new work, tracked outside FND-224"
+    raise HarnessNotBuiltError(
+        message="start_on_task_queue is not implemented yet",
+        operation="start_on_task_queue",
+        reason="new work on both sides, tracked as a separate issue outside FND-224",
+        issue="FND-224",
+        component="harness_starters",
     )
 
 
@@ -154,8 +165,14 @@ async def start_via_app_handler(
         The run handle.
 
     Raises:
-        NotImplementedError: Always — this lifts from
+        HarnessNotBuiltError: Always — this lifts from
             ``application_sdk.testing.e2e.workflows.run_workflow`` with the
             cluster reader in child E on FND-224.
     """
-    raise NotImplementedError("start_via_app_handler is child E on FND-224")
+    raise HarnessNotBuiltError(
+        message="start_via_app_handler is not implemented yet",
+        operation="start_via_app_handler",
+        reason="child E on FND-224, with the cluster reader",
+        issue="FND-224",
+        component="harness_starters",
+    )
