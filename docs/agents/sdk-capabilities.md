@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.29.0
-source-sha:    0c1f800b6c39b1a5b97846756bf3697740fc2558
-source-date:   2026-08-26T11:08:10+01:00
+source-sha:    fa907ab2a6a3a7e89213e4de7d56003507f033f9
+source-date:   2026-08-26T12:40:11+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 186 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 187 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3114,7 +3114,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Import:** `from application_sdk.testing.e2e import AppConfig`
 - **Also importable from:** `application_sdk.testing.e2e.config`
-- **Signature:** `class AppConfig(app_name: str, ...)`
+- **Signature:** `class AppConfig(app_name: str = '', ...)`
 - **Summary:** Deprecated (removed in v4.0) — use :class:`AppUnderTest`.
 - **Defined in:** `application_sdk/testing/e2e/config.py`
 
@@ -3861,7 +3861,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `connection_exists`
 
 - **Import:** `from application_sdk.testing.harness.atlas import connection_exists`
-- **Signature:** `connection_exists(client: AsyncAtlanClient, qualified_name: str) -> Outcome[bool]`
+- **Signature:** `connection_exists(client: AsyncAtlanClient, qualified_name: str) -> Reading[bool]`
 - **Summary:** Search-based Connection probe — works around the direct-fetch ACL.
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
@@ -3889,7 +3889,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `count_total_assets`
 
 - **Import:** `from application_sdk.testing.harness.atlas import count_total_assets`
-- **Signature:** `count_total_assets(client: AsyncAtlanClient, connection_qualified_name: str) -> Outcome[int]`
+- **Signature:** `count_total_assets(client: AsyncAtlanClient, connection_qualified_name: str) -> Reading[int]`
 - **Summary:** Count every descendant asset under the connection prefix, ALL types.
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
@@ -4406,6 +4406,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `PURGE_BATCH_SIZE`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/teardown.py`
+
+#### `Reading`
+
+- **Import:** `from application_sdk.testing.harness.atlas import Reading`
+- **Signature:** `Reading: TypeAlias`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
 #### `SampleRead`
 

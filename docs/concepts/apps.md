@@ -852,6 +852,10 @@ See [ADR-0016](../adr/0016-multi-pool-worker-routing.md) for the full design inc
 
 ---
 
+### Choosing a pool from measurements
+
+Picking a pool means guessing a resource profile unless you have measured one. Activity sizing telemetry records peak container memory, CPU throttling and input bytes per execution, which is what turns "this feels memory-intensive" into a number you can size against. It is off by default and opt-in per activity — see [Monitoring → Activity Sizing Telemetry](monitoring.md#activity-sizing-telemetry).
+
 ## Retry Policies
 
 Pass a `RetryPolicy` to `@task` via `retry_policy` to override the default (3 attempts, exponential backoff: initial 1s, coefficient 2.0, capped at 5 minutes):

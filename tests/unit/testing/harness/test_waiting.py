@@ -94,6 +94,31 @@ class Script:
         return item
 
 
+@dataclass
+class NoneScript:
+    """A ``Probe[None]``: its *successful* reading is ``None``.
+
+    ``Probe[T]`` puts no bound on ``T``, so this is an ordinary probe, not a
+    pathological one — a cluster read answering "no such deployment", a status
+    field that is legitimately null. It exists here because it is the only shape
+    that can tell "I read a value" apart from "I never read one": under a
+    ``last_value is None`` test the two are identical.
+
+    Attributes:
+        readings: How many successful ``None`` readings before it starts failing.
+        calls: How many times the probe was called.
+    """
+
+    readings: int
+    calls: int = field(default=0)
+
+    async def __call__(self) -> None:
+        self.calls += 1
+        if self.calls > self.readings:
+            raise Blip()
+        return None
+
+
 def _budget(**overrides: object) -> Budget:
     """A 60s/5s budget — twelve polls — with the named fields overridden."""
     fields: dict[str, object] = {
@@ -440,6 +465,43 @@ async def test_a_budget_spent_without_one_reading_is_indeterminate() -> None:
     assert isinstance(outcome.cause, Blip)
 
 
+async def test_a_read_none_is_not_the_same_as_never_having_read() -> None:
+    """One successful ``None`` reading, then absorbed blips to the ceiling.
+
+    The wait *did* read its target, so the budget running out is ``Expired`` —
+    a claim about the thing under test that the wait has earned. Deciding on
+    ``last_value is None`` would report ``Indeterminate`` instead, disowning a
+    reading it actually took, because a legitimate ``None`` is spelled exactly
+    like "nothing was ever observed".
+    """
+    script = NoneScript(readings=1)
+    with fake_clock():
+        outcome = await poll_until(
+            script,
+            settled=lambda _reading: False,
+            transient=_absorb_all,
+            budget=_budget(max_transient_failures=999),
+            label="the run",
+        )
+    assert isinstance(outcome, Expired)
+    assert script.calls > 1, "the blips after the reading are what trip the bug"
+
+
+async def test_a_probe_that_never_read_is_still_indeterminate() -> None:
+    """The other half of the pair: zero readings keeps the verdict honest, so the
+    fix above cannot have been "always report Expired"."""
+    script = NoneScript(readings=0)
+    with fake_clock():
+        outcome = await poll_until(
+            script,
+            settled=lambda _reading: False,
+            transient=_absorb_all,
+            budget=_budget(max_transient_failures=999),
+            label="the run",
+        )
+    assert isinstance(outcome, Indeterminate)
+
+
 async def test_an_indeterminate_still_carries_the_last_good_reading() -> None:
     script = Script([Reading("running"), Blip()])
     with fake_clock():
@@ -715,6 +777,43 @@ async def test_a_hold_nobody_could_observe_is_not_a_hold_that_passed() -> None:
         )
     assert isinstance(outcome, Indeterminate)
     assert outcome.transient_failures == 3
+
+
+async def test_a_hold_over_none_readings_holds() -> None:
+    """Every reading is a legitimate ``None`` and the invariant accepts it.
+
+    So the hold held, for the whole budget, and the verdict is ``Settled`` with
+    ``None`` as its value. Deciding observation on ``last_value is None`` would
+    call this window unobservable and attach a synthetic ``RuntimeError`` to a
+    hold in which every single probe succeeded.
+    """
+    script = NoneScript(readings=1_000)
+    with fake_clock():
+        outcome = await hold_stable(
+            script,
+            invariant=lambda reading: reading is None,
+            budget=_budget(),
+            label="no deployment while the app is uninstalled",
+        )
+    assert isinstance(outcome, Settled)
+    assert outcome.value is None
+    assert outcome.attempts == 12, "it spent the whole budget rather than bailing"
+
+
+async def test_a_hold_over_none_readings_still_catches_a_violation() -> None:
+    """The pair to the above: an invariant that rejects ``None`` still stalls, so
+    the fix cannot have been "treat a None reading as always acceptable"."""
+    script = NoneScript(readings=1_000)
+    with fake_clock():
+        outcome = await hold_stable(
+            script,
+            invariant=lambda reading: reading is not None,
+            budget=_budget(),
+            label="a deployment exists",
+        )
+    assert isinstance(outcome, Stalled)
+    assert outcome.last is None
+    assert outcome.fingerprint == "None"
 
 
 async def test_a_hold_whose_every_probe_blipped_never_reports_settled() -> None:

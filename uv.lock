@@ -395,7 +395,7 @@ requires-dist = [
     { name = "pyarrow", marker = "extra == 'incremental'", specifier = ">=23.0.1,<24.0.0" },
     { name = "pyarrow", marker = "extra == 'pandas'", specifier = ">=23.0.1,<24.0.0" },
     { name = "pyarrow", marker = "extra == 'sql'", specifier = ">=23.0.1,<24.0.0" },
-    { name = "pyatlan", specifier = ">=10,<11" },
+    { name = "pyatlan", specifier = ">=11,<12" },
     { name = "pydantic", specifier = ">=2.10.6,<3.0.0" },
     { name = "pytest-order", marker = "extra == 'tests'", specifier = ">=1.3.0,<2.0.0" },
     { name = "python-dotenv", specifier = ">=1.1.0,<2.0.0" },
@@ -1610,11 +1610,11 @@ server = [
 
 [[package]]
 name = "filelock"
-version = "3.32.3"
+version = "3.32.4"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/7d/64/a02e6765de08964ed371eca577870593245afc9dfac16d037de7c10d18e6/filelock-3.32.3.tar.gz", hash = "sha256:0ffa185a3540854c95caa7fa76b76cb219d907415e2c5dc9af25fd970563487f", size = 218135, upload-time = "2026-08-13T16:00:05.577Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6d/30/03b03951873a1a0ffc7e8ca0e10c15597b59e8d0e39260704cd2ea087bc4/filelock-3.32.4.tar.gz", hash = "sha256:2bde2e4cf732e0153406d8a7bc80620ecf5e621fe0d25e41143c4e3b4733ff30", size = 222126, upload-time = "2026-08-23T17:37:55.363Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a7/8e/50f46a9c0ce8d2861a394c1347caae037ea0431d2f67d7feb151cbc4649a/filelock-3.32.3-py3-none-any.whl", hash = "sha256:7f0ca4bcc0e181c60dbbd8aa9ab5b120ebb99e4e064e83636340056f833a1f09", size = 98901, upload-time = "2026-08-13T16:00:03.974Z" },
+    { url = "https://files.pythonhosted.org/packages/01/a4/9b63d595d748e3aff8812b65eacc1a2c4bd90b7c2012e08e72373b4835eb/filelock-3.32.4-py3-none-any.whl", hash = "sha256:22e58ca3b1ae3b98993b762d7338367ae64fe50252bf78d59da3bfebcdf1cedd", size = 99864, upload-time = "2026-08-23T17:37:53.913Z" },
 ]
 
 [[package]]
@@ -4036,7 +4036,7 @@ wheels = [
 
 [[package]]
 name = "pyatlan"
-version = "10.0.0"
+version = "11.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "authlib" },
@@ -4052,9 +4052,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "tenacity" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9c/7f/c7811fb72b055e1985554af74b508893eab083b4294182ac0edb179445ab/pyatlan-10.0.0.tar.gz", hash = "sha256:7be5e6d50ef4c035308c163e13b4bfea27651e16c4723055cde5fd4b3dae4252", size = 3631403, upload-time = "2026-08-13T09:46:01.638Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a2/90/bc45d9613ae3d1e3b664dfed0ba147bb390bd2ffb06f415772dc8e8ebb2f/pyatlan-11.0.0.tar.gz", hash = "sha256:9ed63098bb151d7259f43442fe68c85d67f240df5e333edeeac598d713b79a39", size = 3718843, upload-time = "2026-08-26T05:54:14.233Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/26/ef/58d2539179b1824cbe32dfb5dc219752af0154ccae5a63e7715dff0bd769/pyatlan-10.0.0-py3-none-any.whl", hash = "sha256:63ec10f7f2eb95108562122e5e2dc1833585b21a03959df2b4d802b843b46ce0", size = 5567733, upload-time = "2026-08-13T09:45:59.68Z" },
+    { url = "https://files.pythonhosted.org/packages/a9/5d/67ebdebd440c6223d674fd4be3f7a6d4dbd504076015b23616f573a50dfa/pyatlan-11.0.0-py3-none-any.whl", hash = "sha256:7560a8bb97ad6ccdedd69d09d5ea9cff5ce63b07371df8a6bb1e4330aef79b6f", size = 5619259, upload-time = "2026-08-26T05:54:12.359Z" },
 ]
 
 [[package]]
@@ -5266,11 +5266,11 @@ wheels = [
 
 [[package]]
 name = "types-protobuf"
-version = "7.35.1.20260822"
+version = "7.35.1.20260823"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/ae/73/83a53029c6acf3c1d041c14864e9c4256b687787719f9f04b0ece7487bf8/types_protobuf-7.35.1.20260822.tar.gz", hash = "sha256:734db0a9620a032eea789eabfd2848a875e17aedc3fb0dcb57ef530c0badda00", size = 69612, upload-time = "2026-08-22T02:43:48.607Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4d/5e/c32831c44aa8f96f7f81967a480a3191cf67c2dce3f3484bbdf715f8758f/types_protobuf-7.35.1.20260823.tar.gz", hash = "sha256:62da1827744fa074e6c3ce2210f4c9ef833e4cf7354c4a8c49239472a2dc5d14", size = 69639, upload-time = "2026-08-23T02:52:29.538Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0c/ba/eb30d4110b7c426555b5bffd79cdd1e920290983a5744858dd3e2682c8db/types_protobuf-7.35.1.20260822-py3-none-any.whl", hash = "sha256:0a6621dd28ec85876bbd0e2e80fba4998bfb63bbd4cff2c15eb469e73915fa05", size = 86411, upload-time = "2026-08-22T02:43:47.529Z" },
+    { url = "https://files.pythonhosted.org/packages/ff/72/fed5d0fcdfb447e404e1099ade9f48649023376cf99971a2f8d687dfb4ef/types_protobuf-7.35.1.20260823-py3-none-any.whl", hash = "sha256:67f732dc78d7cb379ae1bd60891d053aee3c963ecae56c3d16a343c4665c3c04", size = 86412, upload-time = "2026-08-23T02:52:28.543Z" },
 ]
 
 [[package]]

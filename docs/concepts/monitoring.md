@@ -663,6 +663,63 @@ See [Configuration](../configuration.md#logging) for all observability variables
 
 ---
 
+## Activity Sizing Telemetry
+
+Records what one activity execution actually consumed — peak container memory, CPU time and throttling, input bytes, duration, outcome — so pod sizing can be derived from measurements instead of guesswork. Collection only: nothing in this path reads or changes how an activity is routed.
+
+**Off by default.** A version bump alone changes nothing, and being enabled is not on its own enough — the allow-list must name the activities to measure:
+
+```bash
+APPLICATION_SDK_ENABLE_SIZING_TELEMETRY=true          # master switch (default: false)
+APPLICATION_SDK_SIZING_TELEMETRY_ACTIVITIES=merge     # comma-separated; "*" for all
+APPLICATION_SDK_SIZING_TELEMETRY_POLL_SECONDS=1.0     # peak-memory poll interval
+```
+
+The allow-list is **fail-closed**: with the switch on and the list empty, nothing is collected and the worker logs a warning at startup saying so. Names match either the bare task name (`merge`) or the qualified form (`my-app:merge`).
+
+Attached as a Temporal `ActivityInboundInterceptor`, so an app is covered without changing any code — but only for the activities it names. Measure the ones whose resource use varies with their data; rows from fixed-cost activities add nothing to the dataset a tier table is fitted from.
+
+### What a row contains
+
+One row per activity execution, emitted two ways: six OTel histograms under `activity.sizing.*` for dashboards, and a `sizing` prefix in the object store (see [Observability Store Sink](#observability-store-sink)) plus one `activity_sizing_observation` JSON log line for offline fitting.
+
+Four fields decide how a row may be used:
+
+| field | why it matters |
+|---|---|
+| `peak_delta_bytes` | Peak **above** the memory already resident when the activity started. Fit multipliers on this. `memory.current` is pod-wide and cumulative, and allocators do not return freed pages promptly, so the Nth activity in a pod starts from whatever the (N−1)th left pooled — pooling absolute peaks across pods with different histories fits the slope to that carryover as much as to the workload. |
+| `peak_memory_bytes` | The absolute peak. **Provision on this**, because it is the number the OOM killer compares. Both travel together for that reason. |
+| `is_attributable` | `False` means the peak is pod-wide rather than this activity's, because other activities shared the process (`concurrency_max > 1`). Still useful — for fitting a *pod* envelope, not an activity's. Written out rather than left to be derived, since a consumer that forgets it pools two different quantities. |
+| `peak_source` | `watermark` (kernel high-water mark, catches a spike of any duration), `poll` (background sampling, blind to sub-interval spikes), or `unavailable` (no cgroup). A tier fitted to a silent mix of the first two is fitted to an unknown error profile. |
+
+`input_bytes` is the driver variable: peak memory alone says a tier is wrong, but not what to key it on. The SDK's own file readers report it automatically; an app fetching data another way calls `report_input_bytes()` directly:
+
+```python
+from application_sdk.observability.sizing_inputs import report_input_bytes
+
+report_input_bytes(len(payload))
+```
+
+Every reader returns `None` rather than a guessed `0` — a missing reading has to stay distinguishable from a real zero, or sizing picks the smallest tier. Nothing is emitted at all unless a cgroup reading was obtained, so on a host without one (local macOS/Windows, or a pod with no memory controller) no rows are produced.
+
+### Batching and shutdown
+
+Rows are buffered and flushed on a timer as well as on batch size, because these workers commonly handle a handful of activities and then scale to zero — a size-only trigger would leave a pod's whole buffer unflushed. **Worker shutdown flushes the last batch**, which on a low-rate workload is otherwise most of the data.
+
+```bash
+ATLAN_SIZING_BATCH_SIZE=500
+ATLAN_SIZING_FLUSH_INTERVAL_SECONDS=60
+ATLAN_SIZING_RETENTION_DAYS=90
+```
+
+This signal writes to the object store even when `ATLAN_ENABLE_OBSERVABILITY_STORE_SINK` is off. That switch covers logs, metrics and traces together, and an app disabling it to stop shipping those would otherwise silently lose a dataset it explicitly opted into — with an empty prefix as the only symptom. Collection is already gated twice, by the switch and the allow-list, so nothing is written unless an operator asked for it by name.
+
+### Cost
+
+About four file reads per activity plus two per poll tick, and no RPC — all local `/sys/fs/cgroup` reads. Telemetry never fails the activity it measures: every failure path costs the observation, not the activity's real outcome, and a failed shutdown flush does not block shutdown.
+
+---
+
 ## Forwarding daprd Sidecar Logs
 
 The `daprd` sidecar's own logs go straight to the container's stdout/stderr and don't enter the SDK observability pipeline on their own.

@@ -2111,6 +2111,12 @@ jobs:
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
           mothership-url: https://api.dataforge.atlan.dev
+          # This is a MATRIX job, so the action's default identity (run id +
+          # GITHUB_JOB + attempt) is the same string for every leg and the legs
+          # evict each other's VPN sessions — last connect wins, the rest fail
+          # the crawl on an unreachable source. matrix.name is the per-leg
+          # discriminator (suite x cloud), so each leg is its own "computer".
+          client-suffix: ${{ matrix.name }}
 
       # Dataforge-sourced connector credentials. The fetch's stdout is
       # captured into a shell variable — values never reach the log — and

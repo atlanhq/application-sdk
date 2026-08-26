@@ -296,4 +296,6 @@ def test_findings_are_immutable_and_carry_a_machine_readable_expectation() -> No
     assert (finding.subject, finding.expectation) == ("Table", "floor")
     assert finding.detail
     with pytest.raises((AttributeError, TypeError)):
+        # misc: the write is the assertion — Finding is frozen, and the point is
+        # that the type checker and the runtime agree about that.
         finding.subject = "Schema"  # type: ignore[misc]

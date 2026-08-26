@@ -292,10 +292,20 @@ jobs:
   # package's source OR its pyproject.toml / uv.lock (e.g. a Renovate dep bump)
   # re-runs its tests — closing the gap where these were only exercised on
   # merge/publish, never on PRs.
+  #
+  # ALSO gated on `sdk`, which looks like an unrelated area but is not: this
+  # package's tests include the deprecations-manifest drift guard
+  # (packages/conformance/tests/test_deprecations_manifest.py), whose *input* is
+  # a whole-tree scan of application_sdk/. Gating it on packages/conformance/**
+  # alone inverted the dependency — the guard only fired once you had already
+  # remembered to regenerate the manifest, so a PR that adds a @deprecated and
+  # forgets skipped it entirely on `pull_request` and was evicted from the merge
+  # queue instead (FND-921). The job is ~30s and runs parallel to the ~10min
+  # Windows unit-test legs, so covering every SDK PR costs no wall-clock.
   conformance-suite-tests:
     name: Conformance Suite Tests
     needs: changes
-    if: needs.changes.outputs.conformance_pkg == 'true' || needs.changes.outputs.force_conformance == 'true'
+    if: needs.changes.outputs.conformance_pkg == 'true' || needs.changes.outputs.sdk == 'true' || needs.changes.outputs.force_conformance == 'true'
     uses: ./.github/workflows/conformance-suite-tests-reusable.yaml
     secrets: inherit
 

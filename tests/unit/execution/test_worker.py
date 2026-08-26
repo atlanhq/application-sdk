@@ -88,6 +88,24 @@ def _make_mock_client() -> mock.MagicMock:
     return client
 
 
+def _WorkerWrapperForDrain():
+    """A real ``AppWorker`` with its worker and pusher stubbed, so the test drives
+    the production ``__aexit__`` — a fake would pass while shutdown stayed broken.
+    """
+    from application_sdk.execution._temporal.worker import AppWorker
+
+    w = object.__new__(AppWorker)
+
+    class _NullWorker:
+        async def __aexit__(self, *a: object) -> None:
+            return None
+
+    w._worker = _NullWorker()
+    w._pusher = None
+    w._start_event_params = {}
+    return w
+
+
 class TestCreateWorker:
     """Tests for create_worker()."""
 
@@ -379,6 +397,135 @@ class TestCreateWorker:
         client = _make_mock_client()
         with pytest.raises(WorkerInterceptorDuplicateError):
             create_worker(client, interceptors=[TraceInterceptor()])
+
+    # ── sizing telemetry wiring ───────────────────────────────────────────
+
+    def _interceptors_for(self, monkeypatch, **env) -> list:
+        """Return the interceptor list ``create_worker`` hands to Temporal."""
+
+        class _SizingApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        for key in (
+            "APPLICATION_SDK_ENABLE_SIZING_TELEMETRY",
+            "APPLICATION_SDK_SIZING_TELEMETRY_ACTIVITIES",
+        ):
+            monkeypatch.delenv(key, raising=False)
+        for key, value in env.items():
+            monkeypatch.setenv(key, value)
+
+        client = _make_mock_client()
+        captured: dict = {}
+
+        def capture_worker(*args, **kwargs):
+            captured.update(kwargs)
+            return mock.MagicMock()
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.Worker",
+            side_effect=capture_worker,
+        ):
+            create_worker(client)
+        return list(captured.get("interceptors") or [])
+
+    def _has_sizing(self, interceptors: list) -> bool:
+        return any(
+            type(i).__name__ == "SizingTelemetryInterceptor" for i in interceptors
+        )
+
+    def test_sizing_interceptor_absent_by_default(self, monkeypatch) -> None:
+        """A version bump alone must not start measuring anything."""
+        assert self._has_sizing(self._interceptors_for(monkeypatch)) is False
+
+    def test_sizing_interceptor_absent_when_enabled_with_no_allow_list(
+        self, monkeypatch
+    ) -> None:
+        """Enabled but unnamed collects nothing — and is not even attached."""
+        interceptors = self._interceptors_for(
+            monkeypatch, APPLICATION_SDK_ENABLE_SIZING_TELEMETRY="true"
+        )
+        assert self._has_sizing(interceptors) is False
+
+    def test_sizing_interceptor_attached_for_named_activities(
+        self, monkeypatch
+    ) -> None:
+        interceptors = self._interceptors_for(
+            monkeypatch,
+            APPLICATION_SDK_ENABLE_SIZING_TELEMETRY="true",
+            APPLICATION_SDK_SIZING_TELEMETRY_ACTIVITIES="merge,fetch_entities",
+        )
+        sizing = [
+            i for i in interceptors if type(i).__name__ == "SizingTelemetryInterceptor"
+        ]
+        assert len(sizing) == 1
+        assert sizing[0]._activities == frozenset({"merge", "fetch_entities"})
+
+    # ── sizing drain on shutdown ──────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_shutdown_drains_buffered_sizing_rows(self, monkeypatch) -> None:
+        """The last batch of a pod's life must not die with the process: these pools
+        scale to zero, so the tail of every pod would be lost.
+        """
+        monkeypatch.setenv("APPLICATION_SDK_ENABLE_SIZING_TELEMETRY", "true")
+        monkeypatch.setenv("APPLICATION_SDK_SIZING_TELEMETRY_ACTIVITIES", "merge")
+
+        drained = []
+
+        async def fake_drain() -> None:
+            drained.append(True)
+
+        monkeypatch.setattr(
+            "application_sdk.observability.sizing_sink.drain", fake_drain
+        )
+
+        wrapper = _WorkerWrapperForDrain()
+        await wrapper.__aexit__(None)
+        assert drained == [True], "shutdown did not drain the sizing sink"
+
+    @pytest.mark.asyncio
+    async def test_shutdown_skips_drain_when_collection_is_off(
+        self, monkeypatch
+    ) -> None:
+        """The default path must not import or touch the sink at all."""
+        monkeypatch.delenv("APPLICATION_SDK_ENABLE_SIZING_TELEMETRY", raising=False)
+
+        drained = []
+
+        async def fake_drain() -> None:
+            drained.append(True)
+
+        monkeypatch.setattr(
+            "application_sdk.observability.sizing_sink.drain", fake_drain
+        )
+
+        wrapper = _WorkerWrapperForDrain()
+        await wrapper.__aexit__(None)
+        assert drained == []
+
+    @pytest.mark.asyncio
+    async def test_a_failing_drain_does_not_break_shutdown(self, monkeypatch) -> None:
+        """Telemetry must never hold up or fail a shutdown."""
+        monkeypatch.setenv("APPLICATION_SDK_ENABLE_SIZING_TELEMETRY", "true")
+        monkeypatch.setenv("APPLICATION_SDK_SIZING_TELEMETRY_ACTIVITIES", "merge")
+
+        async def boom() -> None:
+            raise RuntimeError("object store unreachable")
+
+        monkeypatch.setattr("application_sdk.observability.sizing_sink.drain", boom)
+
+        wrapper = _WorkerWrapperForDrain()
+        await wrapper.__aexit__(None)  # must not raise
+
+    def test_sizing_interceptor_absent_when_list_set_but_switch_off(
+        self, monkeypatch
+    ) -> None:
+        """The master switch wins, so collection stops without editing lists."""
+        interceptors = self._interceptors_for(
+            monkeypatch, APPLICATION_SDK_SIZING_TELEMETRY_ACTIVITIES="merge"
+        )
+        assert self._has_sizing(interceptors) is False
 
     # ── max_concurrent_workflow_tasks (BLDX-1282) ─────────────────────────
 

@@ -349,6 +349,22 @@ class AppWorker:
             finally:
                 self._pusher = None
 
+    async def _drain_sizing(self) -> None:
+        """Flush buffered sizing rows before the process ends — these pools scale to
+        zero, so the last batch would otherwise be lost. Best-effort.
+        """
+        if not load_interceptor_settings().enable_sizing_telemetry:
+            return
+        try:
+            from application_sdk.observability.sizing_sink import (  # noqa: PLC0415 — cold path: shutdown only, and only when collection is enabled
+                drain,
+            )
+
+            await drain()
+        # conformance: ignore[E004] shutdown-path telemetry; a failed flush must not block or fail shutdown
+        except Exception:
+            logger.warning("sizing drain failed; buffered rows lost", exc_info=True)
+
     async def __aenter__(self) -> Worker:
         await _emit_worker_start_event(**self._start_event_params)
         # Metrics is best-effort: never block the worker on a metrics failure.
@@ -373,6 +389,7 @@ class AppWorker:
             await asyncio.sleep(SHUTDOWN_DRAIN_DELAY_SECONDS)
             await self._worker.__aexit__(exc_type, *args)
         finally:
+            await self._drain_sizing()
             await self._stop_metrics_push()
 
     async def run(self) -> None:
@@ -389,6 +406,7 @@ class AppWorker:
         try:
             await self._worker.run()
         finally:
+            await self._drain_sizing()
             await self._stop_metrics_push()
 
 
@@ -772,6 +790,35 @@ def create_worker(
         )
 
         all_interceptors.append(LivenessInterceptor(on_activity))
+
+    # Before user interceptors, so what they hold is inside the measured window.
+    if interceptor_settings.enable_sizing_telemetry:
+        _sizing_activities = interceptor_settings.sizing_telemetry_activities
+        if not _sizing_activities:
+            # Fail-closed is silent, so say so.
+            logger.warning(
+                "APPLICATION_SDK_ENABLE_SIZING_TELEMETRY is on but "
+                "APPLICATION_SDK_SIZING_TELEMETRY_ACTIVITIES is empty, so nothing "
+                "will be collected. Name the activities to measure, or set '*' to "
+                "measure all of them."
+            )
+        else:
+            from application_sdk.execution._temporal.interceptors.sizing import (  # noqa: PLC0415 — cold path: only when sizing collection is enabled
+                SizingTelemetryInterceptor,
+            )
+
+            all_interceptors.append(
+                SizingTelemetryInterceptor(
+                    poll_interval_seconds=interceptor_settings.sizing_telemetry_poll_seconds,
+                    activities=_sizing_activities,
+                )
+            )
+            logger.info(
+                "Activity sizing telemetry enabled for %s (poll interval %ss). "
+                "Measurement only — no routing decisions are made from it.",
+                sorted(_sizing_activities),
+                interceptor_settings.sizing_telemetry_poll_seconds,
+            )
 
     all_interceptors.extend(interceptors or [])
 

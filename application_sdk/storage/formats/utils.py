@@ -90,6 +90,17 @@ def find_local_files_by_extension(
     return []
 
 
+def _report_sizing_inputs(paths: list[str]) -> None:
+    """Report these files' bytes for sizing. On the path every SDK reader takes, so
+    apps contribute the driver variable without writing code. Inert when off.
+    """
+    from application_sdk.observability.sizing_inputs import (  # noqa: PLC0415 — circular: observability.sizing_inputs reads storage contracts
+        report_local_paths,
+    )
+
+    report_local_paths(paths)
+
+
 async def _download_files(
     path: str,
     file_extension: str,
@@ -124,6 +135,7 @@ async def _download_files(
             file_extension,
             path,
         )
+        _report_sizing_inputs(local_files)
         return local_files
 
     # Step 2: Download from object store with SHA-256 integrity checking
@@ -179,6 +191,7 @@ async def _download_files(
                 len(downloaded_paths),
                 file_extension,
             )
+            _report_sizing_inputs(downloaded_paths)
             return downloaded_paths
 
         raise ObjectStoreReadError(

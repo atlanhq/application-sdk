@@ -23,6 +23,7 @@ from application_sdk.constants import (
     ENABLE_OBSERVABILITY_STORE_SINK,
     LOG_FILE_NAME,
     METRICS_FILE_NAME,
+    SIZING_FILE_NAME,
     TRACES_FILE_NAME,
     UPSTREAM_OBJECT_STORE_NAME,
 )
@@ -38,6 +39,9 @@ LOCAL_OBS_SUBDIR_MAP = {
     "logs": f"{_OBS_MODE}/logs",
     "metrics": f"{_OBS_MODE}/metrics",
     "traces": f"{_OBS_MODE}/traces",
+    # Must be added alongside the S3 prefix below: a signal in only one map writes
+    # to ``other/`` locally while uploading to ``sizing/``.
+    "sizing": f"{_OBS_MODE}/sizing",
 }
 
 # Map of signal type → S3 remote key prefix
@@ -45,6 +49,9 @@ OBSERVABILITY_S3_PREFIX_MAP = {
     "logs": f"artifacts/apps/observability/{_OBS_MODE}/logs",
     "metrics": f"artifacts/apps/observability/{_OBS_MODE}/metrics",
     "traces": f"artifacts/apps/observability/{_OBS_MODE}/traces",
+    # Its own prefix, not the "other" fallback: this dataset has to be selectable
+    # across tenants without filtering out everything else in "other".
+    "sizing": f"artifacts/apps/observability/{_OBS_MODE}/sizing",
 }
 
 
@@ -180,7 +187,7 @@ class AtlanObservability(Generic[T], ABC):
         cls._upstream_store = None
 
     def _get_signal_type(self) -> str:
-        """Map file_name to signal type (logs, metrics, traces).
+        """Map file_name to signal type (logs, metrics, traces, sizing).
 
         Returns:
             str: The signal type based on self.file_name
@@ -191,7 +198,15 @@ class AtlanObservability(Generic[T], ABC):
             return "metrics"
         elif self.file_name == TRACES_FILE_NAME:
             return "traces"
+        elif self.file_name == SIZING_FILE_NAME:
+            return "sizing"
         return "other"
+
+    def _store_sink_enabled(self) -> bool:
+        """Whether this signal writes to the object store. Overridable because the
+        shared switch covers three signals, so disabling it can silently drop one.
+        """
+        return ENABLE_OBSERVABILITY_STORE_SINK
 
     def _get_partition_path(self, timestamp: datetime) -> str:
         """Generate local partition path based on timestamp.
@@ -382,7 +397,7 @@ class AtlanObservability(Generic[T], ABC):
         - Uploads to customer bucket (DEPLOYMENT_OBJECT_STORE) always
         - Uploads to Atlan bucket (UPSTREAM_OBJECT_STORE) when ``ENABLE_ATLAN_UPLOAD=true``
         """
-        if not ENABLE_OBSERVABILITY_STORE_SINK or not records:
+        if not self._store_sink_enabled() or not records:
             return
 
         # File I/O is restricted inside Temporal's workflow sandbox — skip the
