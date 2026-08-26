@@ -1763,6 +1763,15 @@ class App(ABC):
 
             await asyncio.gather(_local_cleanup(), _storage_cleanup())
 
+        # Inert when this runs inside the generated Temporal workflow (the
+        # normal case — on_complete() is called from _run()'s finally). Both
+        # legs self-guard on ``utils.in_temporal_workflow``: the object-store
+        # sink in ``AtlanObservability._flush_records`` and the Segment drain in
+        # ``SegmentClient.flush()``. Neither is a loss — OTLP export is per-call,
+        # and queued Segment events go out on the worker's batch timer, with
+        # ``close()`` draining the remainder at process exit. The call is kept
+        # for the non-workflow callers of on_complete() (direct invocation,
+        # tests, and any subclass that calls super() outside a workflow).
         try:
             await AtlanObservability.flush_all()
         # conformance: ignore[E004] logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
