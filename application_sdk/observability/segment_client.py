@@ -7,6 +7,7 @@ from typing import Any
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
+from temporalio import workflow
 
 from application_sdk.constants import (
     SEGMENT_API_URL,
@@ -234,6 +235,10 @@ class SegmentClient:
             return
         if not self._loop.is_running():
             return
+
+        if workflow.in_workflow():
+            return
+
         future = asyncio.run_coroutine_threadsafe(self._flush_queue(), self._loop)
         try:
             await asyncio.wait_for(asyncio.wrap_future(future), timeout=10.0)
