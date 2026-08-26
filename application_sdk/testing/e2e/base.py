@@ -1697,7 +1697,14 @@ class BaseE2ETest:
             description=f"Full-DAG e2e harness — {self.connector_short_name}",
         )
         logger.info("Created (or reused) AE workflow: name=%s slug=%s", name, slug)
-        time.sleep(3)
+        # AE has a brief indexing window before a fresh slug is queryable by
+        # /versions. This used to be an unconditional ``time.sleep(3)``, which is
+        # wrong in both directions — it charged every run three seconds it
+        # usually did not need, and was no help at all on the run where indexing
+        # took four. Now a real readiness read, advisory rather than a gate:
+        # ``create_version`` retries on 404 for exactly this reason, and that
+        # retry is what makes the sequence safe either way.
+        self.client.wait_for_slug(slug)
 
         extract_queue = self._extract_task_queue()
 

@@ -196,6 +196,16 @@ class AEWorkflowClient:
             )
         )
 
+    def wait_for_slug(self, slug: str) -> bool:
+        """Wait until AE resolves *slug*; see :meth:`AEClient.wait_for_slug`.
+
+        Advisory: the returned bool is for the caller's log, and an unresolved
+        slug is not an error — ``create_version``'s own 404 retry is what makes
+        the sequence safe. Replaces the unconditional ``time.sleep(3)`` both
+        full-DAG harnesses ran here (FND-240).
+        """
+        return run_sync(self._ae.wait_for_slug(slug))
+
     def create_version(
         self,
         slug: str,

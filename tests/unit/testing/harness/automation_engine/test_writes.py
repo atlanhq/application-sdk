@@ -17,12 +17,14 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import patch
 
+import httpx
 import pytest
 
 from application_sdk.testing.harness._poll import fake_clock
 from application_sdk.testing.harness.automation_engine._errors import (
     AtlanApiHttpError,
     AtlanApiResponseInvariantError,
+    AtlanApiTimeoutError,
 )
 from application_sdk.testing.harness.automation_engine.client import AEClient
 from application_sdk.testing.harness.automation_engine.retry import (
@@ -101,6 +103,129 @@ class TestCreateVersion:
         ):
             assert await client.create_version("slug", {}) == 3
         assert request.call_count == 2
+
+
+class TestSlugResolves:
+    """The readiness read that replaced an unconditional ``time.sleep(3)``.
+
+    The narrowing is the whole content: a 2xx and a 404 are the two answers AE
+    actually gives about a slug, and everything else is *not* an answer. Reading
+    an overloaded AE as "not indexed" would poll out a budget over a fact the
+    read never learned.
+    """
+
+    async def test_a_2xx_means_ae_resolved_the_slug(self) -> None:
+        client = _client()
+        with patch.object(client, "_request", return_value=(200, {"data": []})):
+            assert await client.slug_resolves("s") is True
+
+    async def test_a_404_is_ae_saying_not_yet(self) -> None:
+        client = _client()
+        with patch.object(client, "_request", return_value=(404, {"error": "no"})):
+            assert await client.slug_resolves("s") is False
+
+    @pytest.mark.parametrize("status", [401, 403, 500, 503])
+    async def test_every_other_status_settles_nothing(self, status: int) -> None:
+        client = _client()
+        with patch.object(client, "_request", return_value=(status, {})):
+            assert await client.slug_resolves("s") is None
+
+    async def test_a_redirect_loop_is_not_absorbed(self) -> None:
+        """The hole the docstring names, pinned so the claim cannot go stale.
+
+        ``httpx.TooManyRedirects`` is a ``RequestError`` but not a
+        ``TransportError``, so ``_request``'s ``except (httpx.TransportError,
+        OSError)`` misses it — and the transport sets ``follow_redirects=True``,
+        which makes it reachable rather than theoretical. If someone later widens
+        that narrowing, this test fails and tells them the docstring's stated
+        residue is now wrong too.
+        """
+        client = _client()
+        with (
+            patch.object(
+                client, "_request", side_effect=httpx.TooManyRedirects("loop")
+            ),
+            pytest.raises(httpx.TooManyRedirects),
+        ):
+            await client.slug_resolves("s")
+
+    async def test_an_unreachable_ae_settles_nothing(self) -> None:
+        client = _client()
+        with patch.object(
+            client, "_request", side_effect=AtlanApiTimeoutError(message="down")
+        ):
+            assert await client.slug_resolves("s") is None
+
+    async def test_the_slug_is_url_quoted(self) -> None:
+        """A slug is AE-assigned, but it lands in a path segment, and a `/` in one
+        would silently address a different route."""
+        client = _client()
+        with patch.object(client, "_request", return_value=(200, {})) as request:
+            await client.slug_resolves("a/b c")
+        assert "a%2Fb%20c/versions" in request.call_args.args[1]
+
+
+class TestWaitForSlug:
+    async def test_an_already_indexed_slug_costs_one_call_and_no_sleep(self) -> None:
+        """The direction the fixed sleep was wrong in most often: it charged every
+        run three seconds, and the usual answer is already yes at t=0."""
+        client = _client()
+        with (
+            patch.object(client, "slug_resolves", return_value=True) as read,
+            fake_clock() as clock,
+        ):
+            assert await client.wait_for_slug("s") is True
+        assert read.await_count == 1
+        assert clock.slept == []
+
+    async def test_a_slow_index_is_polled_through(self) -> None:
+        """The other direction: a fixed 3s sleep is no help at all on the run
+        where indexing takes four."""
+        client = _client()
+        answers = [False, False, False, False, True]
+        with (
+            patch.object(client, "slug_resolves", side_effect=answers),
+            fake_clock() as clock,
+        ):
+            assert await client.wait_for_slug("s") is True
+        assert clock.slept == [1, 1, 1, 1]
+
+    async def test_an_unreadable_probe_does_not_end_the_wait(self) -> None:
+        """``None`` is not ``False``. A read that settled nothing must not be
+        taken as AE having answered — in either direction.
+
+        **The call count is the assertion, not the return value.** Returning
+        ``True`` does not distinguish a correct predicate from a broken one: with
+        ``settled=lambda r: r is not False`` the wait settles on the *first*
+        ``None`` and still returns ``True``, so an assertion on the result alone
+        passes either way. Confirmed mechanically — that mutation left all 37
+        tests in this file green. Three probes is what only the correct predicate
+        produces.
+        """
+        client = _client()
+        with (
+            patch.object(
+                client, "slug_resolves", side_effect=[None, None, True]
+            ) as read,
+            fake_clock(),
+        ):
+            assert await client.wait_for_slug("s") is True
+        assert read.await_count == 3, "an unreadable probe must not settle the wait"
+
+    async def test_an_unresolved_slug_is_reported_not_raised(self) -> None:
+        """Advisory, never a gate.
+
+        ``create_version`` retries on 404 for exactly this reason and is what
+        actually makes the sequence safe, so a readiness read that replaces a
+        guess must not be stricter than the guess it replaced. A wait that ends
+        unresolved hands over to that retry.
+        """
+        client = _client()
+        with (
+            patch.object(client, "slug_resolves", return_value=False),
+            fake_clock(),
+        ):
+            assert await client.wait_for_slug("s", timeout_seconds=5) is False
 
 
 class TestPublishVersion:

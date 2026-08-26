@@ -173,6 +173,17 @@ _RECONCILE_PAGE_SIZE = 20
 # as it did before. The machinery below is complete and tested either way.
 _RESUBMIT_WHEN_AE_REPORTS_NO_RUN = False
 
+# Waiting for AE to index a freshly created workflow slug. Replaces an
+# unconditional ``time.sleep(3)`` both full-DAG harnesses ran here (FND-240).
+#
+# The timeout is generous relative to the 3s it replaces because it costs nothing
+# when the answer is already yes: the first probe is at t=0, so an
+# already-indexed slug pays one HTTP call and no sleep at all, where the fixed
+# sleep charged every run three seconds. And unlike the sleep, the budget is what
+# a slower-than-usual index actually gets to use.
+_SLUG_INDEX_TIMEOUT_SECONDS = 30
+_SLUG_INDEX_INTERVAL_SECONDS = 1
+
 # ``_HEARTBEAT_SECONDS`` (imported from ``_poll``) is the cadence for "still
 # polling" heartbeat log lines in ``poll_native_status`` — lineage stages take
 # 2-5 min on small datasets and the status string doesn't change during that
@@ -708,6 +719,141 @@ class AEClient:
             target=f"POST /automation/api/v1/workflows HTTP {status}",
             retry_after_seconds=requested_retry_after(body),
         )
+
+    async def slug_resolves(self, slug: str) -> bool | None:
+        """Does AE resolve *slug* yet? ``None`` when the read did not settle it.
+
+        ``GET /automation/api/v1/workflows/<slug>/versions?page=0&page_size=1``.
+        The route family is the one :meth:`get_published_version` already reads,
+        so it exists and this client already authenticates against it; dropping
+        the ``is_published`` filter is what makes it answerable for a workflow
+        that has no published version yet, which is every workflow at this point
+        in a run.
+
+        The claim is narrow on purpose: a 2xx means AE resolved the slug, and a
+        404 is the same "Workflow with slug 'X' not found" that
+        :meth:`create_version` retries on. Nothing else is interpreted —
+        a 5xx, a transport failure or a 403 all answer ``None``, because none of
+        them says anything about whether the slug is indexed and treating an
+        overloaded AE as "not indexed" would poll out a budget over a fact it
+        never learned.
+
+        Absorbs every failure :meth:`_request` classifies — a transport error,
+        a timeout, any status — and answers ``None`` for it. It does **not**
+        absorb what ``_request`` itself lets through, and that set is not empty:
+        ``httpx.TooManyRedirects`` and ``httpx.DecodingError`` are
+        ``RequestError`` but *not* ``TransportError``, so ``_request``'s
+        ``except (httpx.TransportError, OSError)`` misses them, and the
+        transport is built with ``follow_redirects=True`` — which makes a
+        redirect loop on a misconfigured tenant proxy a real way for this to
+        raise. Stated rather than written as "never raises": the two sibling
+        reads on this route family say that, inherit the same hole, and a caller
+        who believes it writes no ``except`` at all. Widening ``_request``'s
+        narrowing is the actual fix and belongs with whoever owns it, not in a
+        bounded-wait change.
+
+        Returns:
+            ``True`` if AE resolved the slug, ``False`` if it answered that it
+            does not exist, ``None`` if the read settled nothing.
+        """
+        path = (
+            f"/automation/api/v1/workflows/{quote(slug, safe='')}"
+            "/versions?page=0&page_size=1"
+        )
+        try:
+            status, body = await self._request("GET", path)
+        except AppError:
+            logger.warning(
+                "slug-resolution read for %s did not get through; whether AE "
+                "has indexed it stays unknown",
+                slug,
+                exc_info=True,
+            )
+            return None
+        if status < 300:
+            return True
+        if status == 404:
+            return False
+        logger.warning(
+            "slug-resolution read for %s returned HTTP %d, which says nothing "
+            "about indexing\nresponse=%r",
+            slug,
+            status,
+            body,
+        )
+        return None
+
+    async def wait_for_slug(
+        self,
+        slug: str,
+        *,
+        timeout_seconds: int = _SLUG_INDEX_TIMEOUT_SECONDS,
+        interval_seconds: int = _SLUG_INDEX_INTERVAL_SECONDS,
+    ) -> bool:
+        """Wait until AE resolves *slug*, so the version create is not a guess.
+
+        **Replaces an unconditional ``time.sleep(3)``** (FND-240), which both
+        full-DAG harnesses ran between :meth:`create_workflow` and
+        :meth:`create_version` because AE has a brief indexing window before a
+        fresh slug is queryable. A fixed sleep is wrong in both directions: it
+        charges every run three seconds it usually does not need, and it is no
+        help at all on the run where indexing takes four.
+
+        **Advisory, never a gate.** :meth:`create_version` retries on 404 for
+        exactly this reason, and that retry is what actually makes the sequence
+        safe. So this returns a bool for the log rather than raising, and a wait
+        that ends unresolved is *not* a failure — it hands over to the same
+        retry that carried the whole sequence before this method existed. The
+        rule that keeps it honest: a readiness read that replaces a guess must
+        not be stricter than the guess it replaced.
+
+        Args:
+            slug: The workflow slug :meth:`create_workflow` returned.
+            timeout_seconds: Total budget. Generous relative to the 3s it
+                replaces, because it costs nothing when the answer is already
+                yes — which is the usual case, and the first probe is at t=0.
+            interval_seconds: Gap between probes.
+
+        Returns:
+            ``True`` once AE resolved the slug. ``False`` if the budget ran out
+            with AE still answering 404, or if no read ever settled it — two
+            different things, distinguished in the log rather than in the return
+            type, because the caller does the same thing either way.
+        """
+
+        async def probe() -> bool | None:
+            return await self.slug_resolves(slug)
+
+        outcome = await poll_until(
+            probe,
+            # ``None`` is not ``False``: an unreadable probe must not end the
+            # wait as though AE had answered.
+            settled=lambda resolved: resolved is True,
+            budget=Budget(
+                timeout=timedelta(seconds=timeout_seconds),
+                poll_interval=timedelta(seconds=interval_seconds),
+                heartbeat=None,
+            ),
+            label=f"AE resolving workflow slug '{slug}'",
+        )
+        if isinstance(outcome, Settled):
+            logger.info(
+                "AE resolved slug %s after %d probe(s) in %.1fs",
+                slug,
+                outcome.attempts,
+                outcome.elapsed.total_seconds(),
+            )
+            return True
+        logger.warning(
+            "AE had not resolved slug %s after %d probe(s) in %.0fs (last read: "
+            "%r) — continuing to the version create, whose own 404 retry is what "
+            "makes this sequence safe either way",
+            slug,
+            outcome.attempts,
+            outcome.elapsed.total_seconds(),
+            getattr(outcome, "last", None),
+        )
+        return False
 
     async def create_version(
         self,
