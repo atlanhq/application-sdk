@@ -71,6 +71,32 @@ class InterceptorSettings:
     enable_output_interceptor: bool = True
     """Enable structured output collection interceptor (metrics/artifacts)."""
 
+    enable_sizing_telemetry: bool = False
+    """Collect per-activity peak memory and CPU throttling for tier sizing.
+
+    Off by default, so a version bump alone changes nothing. A master switch
+    independent of the allow-list, so collection can be stopped without editing
+    per-tenant lists. Measures only; never routes.
+    """
+
+    sizing_telemetry_activities: frozenset[str] = frozenset()
+    """Activity names to measure. **Empty collects nothing.**
+
+    Opt-in by name: only activities whose resource use varies with their data are
+    worth measuring, and rows from fixed-cost ones add no information to the
+    dataset the tier table is fitted from. Empty is also fail-closed, so a
+    half-finished config change collects nothing rather than everything.
+
+    ``"*"`` measures all of them — a discovery pass on a test tenant.
+    """
+
+    sizing_telemetry_poll_seconds: float = 1.0
+    """Peak-memory poll interval when the kernel watermark is not resettable.
+
+    Two file reads per tick, no RPC. ``0`` disables polling, which collects no peak
+    at all on kernels before 6.8 (where ``memory.peak`` is read-only).
+    """
+
     enable_cleanup_interceptor: bool = False
     """Enable temp-directory cleanup interceptor.
 
@@ -131,8 +157,40 @@ def load_interceptor_settings() -> InterceptorSettings:
             return True
         return default
 
+    def _float(env_var: str, default: float) -> float:
+        raw = os.environ.get(env_var, "").strip()
+        if not raw:
+            return default
+        try:
+            value = float(raw)
+        except ValueError:
+            logger.warning(
+                "%s=%r is not a number; using %s",
+                env_var,
+                raw,
+                default,
+                exc_info=True,
+            )
+            return default
+        # Clamp rather than raise: a bad value must not stop workers starting.
+        return max(0.0, value)
+
+    def _name_set(env_var: str) -> frozenset[str]:
+        """Parse a comma-separated allow-list, tolerating Helm-file whitespace."""
+        raw = os.environ.get(env_var, "")
+        return frozenset(name.strip() for name in raw.split(",") if name.strip())
+
     return InterceptorSettings(
         enable_event_interceptor=_bool("APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR"),
         enable_output_interceptor=_bool("APPLICATION_SDK_ENABLE_OUTPUT_INTERCEPTOR"),
+        enable_sizing_telemetry=_bool(
+            "APPLICATION_SDK_ENABLE_SIZING_TELEMETRY", default=False
+        ),
+        sizing_telemetry_activities=_name_set(
+            "APPLICATION_SDK_SIZING_TELEMETRY_ACTIVITIES"
+        ),
+        sizing_telemetry_poll_seconds=_float(
+            "APPLICATION_SDK_SIZING_TELEMETRY_POLL_SECONDS", 1.0
+        ),
         enable_cleanup_interceptor=_bool("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR"),
     )
