@@ -110,7 +110,22 @@ class DatabaseSpec:
     password: str
     auth_type: str = "basic"
     extra: dict[str, Any] = field(default_factory=dict)
-    connector_config_name: str = ""  # e.g. atlan-connectors-mysql
+    # e.g. atlan-connectors-mysql.
+    #
+    # .. deprecated:: 3.30.0
+    #    Set the ``connector_config_name`` ClassVar on the test class instead
+    #    (:attr:`application_sdk.testing.e2e.base.BaseE2ETest.connector_config_name`)
+    #    — that is the one the toolkit generates into a bundle's
+    #    ``_e2e_base.py``. This field is removed in v4.0.
+    #
+    # Until then it is a *fallback*, resolved by
+    # :meth:`~application_sdk.testing.e2e.base.BaseE2ETest.resolved_connector_config_name`:
+    # honoured when the ClassVar is empty, ignored (with a warning) when the
+    # ClassVar is set. It is never silently inert, and it never outranks the
+    # ClassVar. Note the separate, NOT-deprecated ``connector_config_name``
+    # field on the codegen'd ``<Connector>AgentCredentialBody`` — that one is a
+    # wire field on the credential body and is unrelated to this.
+    connector_config_name: str = ""
 
 
 @dataclass(frozen=True)

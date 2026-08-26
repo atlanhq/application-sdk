@@ -20,6 +20,7 @@ import pytest
 from application_sdk.contracts.types import ConnectionRef
 from application_sdk.testing.e2e._errors import (
     DAGProgressStalledError,
+    HarnessMethodNotImplementedError,
     ManifestDagMissingError,
     ManifestFileNotFoundError,
     MissingHarnessClassAttrError,
@@ -39,7 +40,8 @@ from application_sdk.testing.e2e.client import (
     DAGRunResult,
     DAGRunStatus,
 )
-from application_sdk.testing.e2e.payload import AgentSpec, RunMode
+from application_sdk.testing.e2e.credential import CredentialBody
+from application_sdk.testing.e2e.payload import AgentSpec, DatabaseSpec, RunMode
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
 
 
@@ -1748,3 +1750,153 @@ class TestTeardownPurgeBatching:
         harness = _ConcreteE2ETest()
         harness.connection_qualified_name = "default/openapi/1787587123106596"
         harness.teardown_method(method=None)  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# resolved_connector_config_name — FND-857
+# ---------------------------------------------------------------------------
+
+
+class _NoDatabaseSpecTest(_ConcreteE2ETest):
+    """A suite with no ``database_spec()`` hook at all (the common non-SQL shape)."""
+
+
+class _LegacyFieldOnlyTest(_ConcreteE2ETest):
+    """Declares the credential-config name only on the deprecated spec field.
+
+    This is the metabase shape: a plain ``BaseE2ETest`` subclass that defines
+    ``database_spec()`` ad hoc (there is no such hook on the base) and sets
+    ``connector_config_name`` on the returned :class:`DatabaseSpec`.
+    """
+
+    def database_spec(self) -> DatabaseSpec:
+        return DatabaseSpec(
+            host="metabase",
+            port=3000,
+            username="u",
+            password="p",
+            connector_config_name="atlan-connectors-legacy",
+        )
+
+
+class _BothAgreeTest(_LegacyFieldOnlyTest):
+    """The mysql shape: ClassVar pinned, spec field restating it."""
+
+    connector_config_name = "atlan-connectors-legacy"
+
+
+class _BothDisagreeTest(_LegacyFieldOnlyTest):
+    """ClassVar and spec field give different answers — the field loses."""
+
+    connector_config_name = "atlan-connectors-classvar"
+
+
+class _BrokenSpecWithClassVarTest(_ConcreteE2ETest):
+    """ClassVar answers; ``database_spec()`` blows up on an unrelated cause."""
+
+    connector_config_name = "atlan-connectors-classvar"
+
+    def database_spec(self) -> DatabaseSpec:
+        raise RuntimeError("credentials env not set")
+
+
+class TestResolvedConnectorConfigName:
+    def test_classvar_is_used_when_set(self) -> None:
+        class _T(_ConcreteE2ETest):
+            connector_config_name = "atlan-connectors-classvar"
+
+        assert _T().resolved_connector_config_name() == "atlan-connectors-classvar"
+
+    def test_empty_when_nothing_declared(self) -> None:
+        """Both empty leaves build_ae_payload to derive the conventional name."""
+        assert _NoDatabaseSpecTest().resolved_connector_config_name() == ""
+
+    def test_sql_default_hook_is_not_an_error(self) -> None:
+        """An unoverridden ``SQLAppE2ETest.database_spec()`` raises; that is a
+        "no legacy value here", not a harness failure."""
+
+        class _T(_ConcreteE2ETest):
+            def database_spec(self) -> DatabaseSpec:
+                raise HarnessMethodNotImplementedError(
+                    message="subclass must override database_spec()",
+                    operation="database_spec",
+                )
+
+        assert _T().resolved_connector_config_name() == ""
+
+    def test_legacy_field_is_honoured_when_classvar_empty(self) -> None:
+        """The point of the ticket: the field consumers populate is not inert."""
+        harness = _LegacyFieldOnlyTest()
+        with pytest.warns(DeprecationWarning, match="DatabaseSpec"):
+            assert harness.resolved_connector_config_name() == "atlan-connectors-legacy"
+
+    def test_honoured_warning_says_the_value_is_being_submitted(self) -> None:
+        with pytest.warns(DeprecationWarning) as record:
+            _LegacyFieldOnlyTest().resolved_connector_config_name()
+        message = str(record[0].message)
+        assert "atlan-connectors-legacy" in message
+        assert "submitting" in message
+        assert "removed in v4.0" in message
+        assert "connector_config_name` ClassVar" in message
+
+    def test_classvar_wins_over_a_disagreeing_legacy_field(self) -> None:
+        """Never let the hand-written copy override a generated identity."""
+        harness = _BothDisagreeTest()
+        with pytest.warns(DeprecationWarning, match="IGNORED"):
+            assert (
+                harness.resolved_connector_config_name() == "atlan-connectors-classvar"
+            )
+
+    def test_ignored_warning_names_both_values(self) -> None:
+        with pytest.warns(DeprecationWarning) as record:
+            _BothDisagreeTest().resolved_connector_config_name()
+        message = str(record[0].message)
+        assert "atlan-connectors-legacy" in message
+        assert "atlan-connectors-classvar" in message
+
+    def test_agreeing_legacy_field_still_warns_as_redundant(self) -> None:
+        """Agreement today is luck, not wiring — the line still has to go."""
+        harness = _BothAgreeTest()
+        with pytest.warns(DeprecationWarning, match="no effect"):
+            assert harness.resolved_connector_config_name() == "atlan-connectors-legacy"
+
+    def test_broken_database_spec_does_not_break_a_declared_classvar(self) -> None:
+        """The lookup is advisory once the ClassVar has answered, so a hook that
+        cannot be built must not take the payload down with it."""
+        harness = _BrokenSpecWithClassVarTest()
+        assert harness.resolved_connector_config_name() == "atlan-connectors-classvar"
+
+    def test_broken_database_spec_propagates_when_it_is_load_bearing(self) -> None:
+        """With no ClassVar the hook is the only source, so swallowing here
+        would silently fall back to the conventional name — the original trap."""
+
+        class _T(_ConcreteE2ETest):
+            def database_spec(self) -> DatabaseSpec:
+                raise RuntimeError("credentials env not set")
+
+        with pytest.raises(RuntimeError, match="credentials env not set"):
+            _T().resolved_connector_config_name()
+
+    def test_build_ae_payload_submits_the_legacy_value(self) -> None:
+        """End to end: the field reaches the wire, not just the resolver.
+
+        ``connectorConfigName`` is backfilled onto the credential body from the
+        resolved credential type, so a body that does not set one is what shows
+        whether the resolution reached the submit.
+        """
+
+        class _T(_LegacyFieldOnlyTest):
+            def _credential_body(self) -> CredentialBody:
+                return CredentialBody()
+
+        harness = _T()
+        harness.run_id = 1
+        harness.connection_qualified_name = "default/openapi/1"
+        harness.connection_display_name = "openapi-1"
+        harness._admin_role_guid = "role-guid-123"
+
+        with pytest.warns(DeprecationWarning):
+            payload = harness._build_ae_payload("openapi-slug")
+
+        body = payload["payload"][0]["body"]
+        assert body["connectorConfigName"] == "atlan-connectors-legacy"

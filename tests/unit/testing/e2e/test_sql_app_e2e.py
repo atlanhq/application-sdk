@@ -36,7 +36,6 @@ _DATABASE = DatabaseSpec(
     port=3306,
     username="user",
     password="pass",
-    connector_config_name="atlan-connectors-mysql",
 )
 
 _AGENT = AgentSpec(agent_name="mysql-e2e-ci-1")
@@ -263,6 +262,7 @@ class _ConcreteSQLTest(SQLAppE2ETest):
     argo_template_name = "atlan-mysql"
     mode = RunMode.AGENT
     app_service_url = "http://mysql.svc"
+    connector_config_name = "atlan-connectors-mysql"
 
     def database_spec(self) -> DatabaseSpec:
         return _DATABASE
