@@ -136,9 +136,13 @@ class TestStoreSinkGate:
 
         assert uploads, "sizing flush uploaded nothing"
         remote_key, body = uploads[0]
-        assert "/sizing/" in remote_key
+        # Normalise separators: the partition path comes from os.path.join, so on
+        # Windows these are backslashes. The assertion is about the signal landing
+        # under its own prefix, not about which separator the host uses.
+        key = remote_key.replace("\\", "/")
+        assert "/sizing/" in key
         # Hive-partitioned on the execution's start, not the flush time.
-        assert "year=" in remote_key and "hour=" in remote_key
+        assert "year=" in key and "hour=" in key
         row = orjson.loads(body.splitlines()[0])
         assert row["activity_type"] == "automation-engine:merge"
         assert row["schema_version"] == SIZING_SCHEMA_VERSION
