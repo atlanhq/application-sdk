@@ -130,6 +130,26 @@ class TestSizingObservation:
         )
         assert obs.has_data() is True
 
+    def test_has_data_is_false_with_input_but_no_resource_reading(self):
+        """Input alone is not enough: with no peak there is nothing to fit it against.
+
+        Pinned because the behaviour is otherwise indistinguishable from an
+        oversight. Only reachable where no cgroup exists (local macOS/Windows, or a
+        pod without the memory controller), never on a Linux worker.
+        """
+        obs = SizingObservation(
+            activity_type="merge",
+            task_queue="q",
+            workflow_type="W",
+            attempt=1,
+            outcome="OK",
+            duration_seconds=1.0,
+            input_bytes=500 * 1024**2,
+            input_basis="reported",
+        )
+        assert obs.input_bytes is not None
+        assert obs.has_data() is False
+
     def test_from_trace_carries_peak_source_and_throttling(self):
         trace = ContainerTrace(
             peak_memory_bytes=6 * 1024**3,

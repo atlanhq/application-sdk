@@ -145,8 +145,8 @@ class SizingObservation:
         )
 
     def has_data(self) -> bool:
-        """Whether anything was measured. An all-null row in the fitting dataset
-        reads as a zero, which picks the smallest tier.
+        """Whether a *resource* reading was obtained. ``input_bytes`` alone does not
+        count: with no peak there is no response variable, so the row cannot be fit.
         """
         return self.peak_memory_bytes is not None or self.cpu_seconds is not None
 
