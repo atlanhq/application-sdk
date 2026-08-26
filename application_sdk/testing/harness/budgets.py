@@ -119,9 +119,18 @@ class Budget:
             ``poll_native_status`` has today, pinned by
             ``test_gives_up_at_max_transient_failures``, and preserved here
             rather than corrected because a drift would change every connector's
-            tolerance the moment child D rewires the loop. ``0`` and ``1`` are
-            therefore the same instruction: end on the first error. Normalising
-            that degenerate pair is listed on FND-240.
+            tolerance the moment child D rewired the loop — which it has now
+            done, on this budget, with the same boundary.
+
+            ``0`` and ``1`` are therefore the same instruction: end on the first
+            error. FND-240 normalised that degenerate pair by *pinning* it rather
+            than by making them differ — ``0`` reads naturally as "no tolerance"
+            and already means exactly that, and the alternative (shifting the
+            boundary so ``N`` absorbs ``N``) would change every connector's
+            tolerance to buy a tidier arithmetic. Every reader of the field
+            handles the pair the same way, and
+            ``test_the_degenerate_pair_both_give_up_on_the_first_error`` is what
+            stops one of them quietly disagreeing.
 
             A streak, not a total: any successful probe resets it, so a wait
             spanning a twenty-minute VPN tunnel is not bounded by the *sum* of

@@ -42,9 +42,17 @@ cannot import from the package it is about to be the foundation of: child H
 re-expresses ``testing/e2e`` *over*
 :mod:`application_sdk.testing.harness.waiting`, and a
 ``harness -> e2e -> harness`` cycle is what keeping the deadline loop on the e2e
-side would have produced. Both sides read it from here today; the five
-``testing/e2e`` call sites keep their behaviour byte for byte and only their
-import line moved (child C on FND-224).
+side would have produced. Both sides read it from here today: child C moved it
+and rewired five ``testing/e2e`` call sites byte for byte, and child D (FND-240)
+brought the rest across — after which **no bounded loop in the harness owns a
+deadline**, and there is one clock rather than the monotonic-deadline /
+elapsed-accumulator / ``time.time()`` three that coexisted before.
+
+The remaining direct callers are the ones whose probe is *synchronous* — a
+connector-supplied write, a local test client — and so cannot reach
+:func:`~application_sdk.testing.harness.waiting.poll_until` without blocking the
+bridge's loop inside someone else's code. Everything async goes through the
+primitive instead, and gets the guards and the verdict vocabulary with it.
 """
 
 from __future__ import annotations
