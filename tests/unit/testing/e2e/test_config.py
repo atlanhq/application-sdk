@@ -29,6 +29,8 @@ def _config(**overrides: object) -> AppConfig:
     fields.update(overrides)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
+        # arg-type: the overrides are typed `object` so a caller can pass any
+        # field; AppConfig's parameters are str/int.
         return AppConfig(**fields)  # type: ignore[arg-type]
 
 
