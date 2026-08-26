@@ -84,13 +84,28 @@ __all__ = ["NdjsonValidator", "iter_ndjson_lines"]
 # ---------------------------------------------------------------------------
 
 
+#: Filename suffixes the walk treats as NDJSON record parts, lower-cased.
+#:
+#: **One tuple, both branches.** The directory glob and the single-file check
+#: read it from here precisely so they cannot drift apart again — that drift is
+#: the defect this constant exists to prevent (see :func:`iter_ndjson_lines`).
+#:
+#: ``.json`` is what the transform stage writes today. ``.jsonl`` and
+#: ``.ndjson`` are the two conventional names for the same
+#: one-record-per-line format, accepted so an app that follows either
+#: convention is validated rather than silently skipped. All three are
+#: read identically — the suffix selects files, it does not change parsing.
+NDJSON_SUFFIXES: Final[tuple[str, ...]] = (".json", ".jsonl", ".ndjson")
+
+
 def iter_ndjson_lines(path: str | Path) -> Iterator[tuple[str, int, bytes]]:
     """Yield ``(file, 1-based line number, raw bytes)`` for every non-blank line.
 
-    Accepts a directory (walked recursively for ``*.json``, sorted for stable
-    ordering) or a single ``.json`` file. A missing path yields nothing.
+    Accepts a directory (walked recursively, sorted for stable ordering) or a
+    single file. Either way only files whose suffix is in
+    :data:`NDJSON_SUFFIXES` are read. A missing path yields nothing.
 
-    **Both branches require the** ``.json`` **suffix, and that symmetry is
+    **Both branches apply the same suffix rule, and that symmetry is
     load-bearing.** The single-file branch used to accept any file, while the
     directory branch globbed ``*.json`` — so the same subtree validated
     differently depending on whether the caller named the directory or one file
@@ -105,22 +120,33 @@ def iter_ndjson_lines(path: str | Path) -> Iterator[tuple[str, int, bytes]]:
     ``undeserializable`` — on every run, for a file that is not an asset part at
     all and that the directory walk had always correctly ignored.
 
-    A non-``.json`` file is therefore skipped rather than parsed. The caller sees
-    "nothing to validate" (the wrapper's ``absent`` outcome), which is the honest
-    answer for a path that holds no asset parts — strictly better than inventing
-    a failure. ``.json`` is the convention the transform stage writes and what
-    the directory glob has always enforced; this makes the two agree.
+    A file with an unrecognised suffix is therefore skipped rather than parsed.
+    The caller sees "nothing to validate" (the wrapper's ``absent`` outcome),
+    which is the honest answer for a path that holds no record parts — strictly
+    better than inventing a failure.
+
+    The directory branch globs every suffix in :data:`NDJSON_SUFFIXES` and sorts
+    the union, so ordering stays stable and independent of which extensions a
+    given app happens to write. Both branches read the same tuple, which is what
+    keeps them from diverging again.
     """
     root = Path(path)
     if root.is_dir():
-        files = sorted(glob(str(root / "**" / "*.json"), recursive=True))
+        # Union across suffixes, then one sort — sorting per-suffix and
+        # concatenating would order by extension first, which is not stable
+        # against an app adding a second extension later.
+        matched: list[str] = []
+        for suffix in NDJSON_SUFFIXES:
+            matched.extend(glob(str(root / "**" / f"*{suffix}"), recursive=True))
+        files = sorted(set(matched))
     elif root.is_file():
-        if root.suffix.lower() != ".json":
+        if root.suffix.lower() not in NDJSON_SUFFIXES:
             # Debug, not warning: a sidecar next to the parts is normal, and the
             # upload path can legitimately point here. It must not read as a
             # fault on every run.
             logger.debug(
-                "Skipping non-.json file in NDJSON walk (not an asset part): %s",
+                "Skipping file with non-record suffix in NDJSON walk "
+                "(not a record part): %s",
                 root,
             )
             files = []

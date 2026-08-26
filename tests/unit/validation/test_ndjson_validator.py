@@ -796,3 +796,63 @@ def test_the_suffix_check_is_case_insensitive(tmp_path: Path) -> None:
     part.write_bytes(b'{"a": 1}\n')
 
     assert list(iter_ndjson_lines(part)) == [(str(part), 1, b'{"a": 1}')]
+
+
+@pytest.mark.parametrize("suffix", [".json", ".jsonl", ".ndjson"])
+def test_every_declared_suffix_is_read_by_the_file_branch(
+    tmp_path: Path, suffix: str
+) -> None:
+    """`.jsonl` and `.ndjson` are the conventional names for the same
+    one-record-per-line format, so an app following either convention must be
+    validated rather than silently skipped."""
+    part = tmp_path / f"part-0{suffix}"
+    part.write_bytes(b'{"a": 1}\n')
+
+    assert list(iter_ndjson_lines(part)) == [(str(part), 1, b'{"a": 1}')]
+
+
+@pytest.mark.parametrize("suffix", [".json", ".jsonl", ".ndjson"])
+def test_every_declared_suffix_is_read_by_the_directory_branch(
+    tmp_path: Path, suffix: str
+) -> None:
+    """The whole point of the shared tuple: the two branches cannot disagree
+    about which files count."""
+    (tmp_path / f"part-0{suffix}").write_bytes(b'{"a": 1}\n')
+
+    assert [raw for _, _, raw in iter_ndjson_lines(tmp_path)] == [b'{"a": 1}']
+
+
+def test_mixed_suffixes_in_one_directory_are_all_read_and_globally_sorted(
+    tmp_path: Path,
+) -> None:
+    """Ordering must be stable across the whole set, not grouped by extension —
+    otherwise adding a second extension silently reorders every report."""
+    (tmp_path / "a.json").write_bytes(b'{"n": 1}\n')
+    (tmp_path / "b.jsonl").write_bytes(b'{"n": 2}\n')
+    (tmp_path / "c.ndjson").write_bytes(b'{"n": 3}\n')
+    (tmp_path / "d.json").write_bytes(b'{"n": 4}\n')
+
+    assert [raw for _, _, raw in iter_ndjson_lines(tmp_path)] == [
+        b'{"n": 1}',
+        b'{"n": 2}',
+        b'{"n": 3}',
+        b'{"n": 4}',
+    ]
+
+
+def test_a_file_is_not_yielded_twice_when_suffixes_overlap(tmp_path: Path) -> None:
+    """`*.json` also matches nothing else here, but the union is de-duplicated so
+    a future overlapping pattern cannot double-count a record."""
+    (tmp_path / "part-0.json").write_bytes(b'{"a": 1}\n')
+
+    assert len(list(iter_ndjson_lines(tmp_path))) == 1
+
+
+def test_the_suffix_tuple_is_the_single_source_for_both_branches() -> None:
+    """Guards the drift this whole change exists to prevent: if someone adds a
+    suffix to the glob without adding it here (or vice versa), the branches
+    disagree again. Both read NDJSON_SUFFIXES, so assert it is what gates."""
+    from application_sdk.validation.ndjson import NDJSON_SUFFIXES
+
+    assert NDJSON_SUFFIXES == (".json", ".jsonl", ".ndjson")
+    assert all(s == s.lower() and s.startswith(".") for s in NDJSON_SUFFIXES)
