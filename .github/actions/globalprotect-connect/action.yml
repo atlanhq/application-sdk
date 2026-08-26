@@ -21,6 +21,16 @@ inputs:
     description: "Maximum number of connection attempts"
     required: false
     default: "3"
+  client-suffix:
+    description: >
+      Extra discriminator folded into --local-hostname. The default identity is
+      run id + GITHUB_JOB + attempt, which is unique ACROSS workflows but NOT
+      across the legs of a matrix job: GITHUB_JOB is the job id from the
+      workflow file, identical for every matrix instance. Concurrent legs then
+      present the same "computer" to GlobalProtect and evict each other's
+      sessions. Any matrix caller must pass a per-leg value (e.g. matrix.name).
+    required: false
+    default: ""
 
 outputs:
   vpn-connected:
@@ -33,6 +43,10 @@ runs:
     - name: Connect via OpenConnect
       uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60 # v4
       id: openconnect-connection
+      # Passed as env rather than interpolated into `command:` — the value is
+      # caller-supplied and must not be able to reach the shell as source text.
+      env:
+        GP_CLIENT_SUFFIX: ${{ inputs.client-suffix }}
       with:
         max_attempts: ${{ fromJSON(inputs.max-attempts) }}
         # Per-attempt budget. With --max-time 60 on the curl test below, a
@@ -89,7 +103,24 @@ runs:
           # --local-hostname two concurrent VPN jobs sharing these GLOBALPROTECT_*
           # creds (this reviewer plus any other workflow) silently displace each
           # other's tunnels. Derive it from the run id / job / attempt.
-          LOCAL_HOSTNAME="gha-${GITHUB_RUN_ID:-0}-${GITHUB_JOB:-job}-${GITHUB_RUN_ATTEMPT:-1}"
+          #
+          # run id + job + attempt separates WORKFLOWS but not the legs of one
+          # MATRIX job: GITHUB_JOB is the job id from the workflow file, so every
+          # matrix instance reports the same value and the three of them collapse
+          # onto one identity. Observed on atlan-teradata-app run 32928987368,
+          # where the aws/gcp/azure e2e legs connected at 04:12:44, 04:13:22 and
+          # 04:14:47 and only the last one still had a tunnel at crawl time — the
+          # other two failed the crawl with a 10s TCP connect timeout to the
+          # source, surfaced as "Preflight failed: Could not authenticate".
+          # GP_CLIENT_SUFFIX is how a matrix caller keeps its legs distinct.
+          # Keep the suffix's TAIL, not its head. The 63-char cap below cuts
+          # from the end, which is exactly where the discriminating part of a
+          # leg name lives ("...-e2e-aws" vs "...-e2e-gcp") — a long suite name
+          # would truncate the cloud off and silently recreate the collision
+          # this input exists to prevent. Budget 40 chars so the fixed prefix
+          # (gha- + a 11-digit run id + job + attempt) always fits alongside it.
+          GP_CLIENT_SUFFIX=$(printf '%s' "${GP_CLIENT_SUFFIX:-}" | tr -cd 'a-zA-Z0-9-' | rev | cut -c1-40 | rev)
+          LOCAL_HOSTNAME="gha-${GITHUB_RUN_ID:-0}-${GITHUB_JOB:-job}-${GITHUB_RUN_ATTEMPT:-1}${GP_CLIENT_SUFFIX:+-${GP_CLIENT_SUFFIX}}"
           LOCAL_HOSTNAME=$(echo "$LOCAL_HOSTNAME" | tr -cd 'a-zA-Z0-9-' | cut -c1-63)
           echo "Using --local-hostname: ${LOCAL_HOSTNAME}"
 
