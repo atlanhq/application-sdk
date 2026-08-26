@@ -283,8 +283,41 @@ async def test_the_three_child_c_stubs_are_gone() -> None:
     assert isinstance(held, Settled)
 
 
+async def test_the_child_f_stubs_are_gone() -> None:
+    """``atlas`` and ``automation_engine`` were typed stubs; child F filled both.
+
+    Their own tests live in ``harness/atlas/`` and
+    ``harness/automation_engine/``; what belongs *here* is the proof the
+    scaffold no longer holds a stub under those names.
+
+    The two sketched types the move deliberately did **not** build —
+    ``AERunHandle`` and ``NativeStatus`` — are asserted absent rather than
+    quietly forgotten: FND-242 assigns the existing wire vocabulary to this
+    half, and a second one reappearing is the regression worth catching.
+    """
+    from application_sdk.testing.harness import atlas, automation_engine
+
+    assert not hasattr(automation_engine, "AERunHandle")
+    assert not hasattr(automation_engine, "NativeStatus")
+    # The fingerprint the sketch wanted, on the reading the move kept.
+    assert "fingerprint" in dir(automation_engine.DAGRunResult)
+
+    for module, names in (
+        (atlas, ("count_assets", "sample_qualified_names")),
+        (automation_engine, ("AEClient",)),
+    ):
+        for name in names:
+            assert not isinstance(
+                getattr(module, name, None), type(None)
+            ), f"{module.__name__}.{name} is gone, not implemented"
+
+    # A stub raised on call; these do not.
+    assert callable(atlas.count_assets)
+    assert callable(automation_engine.AEClient)
+
+
 async def test_every_remaining_stub_names_its_child_issue() -> None:
-    from application_sdk.testing.harness import atlas, automation_engine, starters
+    from application_sdk.testing.harness import starters
     from application_sdk.testing.harness.cluster import HttpRequest, HttpResponse
     from application_sdk.testing.harness.evidence import EvidenceBundle, redact
     from application_sdk.testing.harness.teardown import purge_connection
@@ -311,9 +344,6 @@ async def test_every_remaining_stub_names_its_child_issue() -> None:
         assert caught.value.operation
 
     for coro in (
-        atlas.count_assets("default/x/1", ["Table"]),
-        atlas.sample_qualified_names("default/x/1", ["Table"], per_type=3),
-        automation_engine.submit_run({}, budget=_budget()),
         purge_connection("default/x/1"),
         starters.start_via_automation_engine({}),
         starters.start_on_task_queue(
@@ -325,10 +355,6 @@ async def test_every_remaining_stub_names_its_child_issue() -> None:
                 workflow_name="metadata_extraction",
             ),
             reader=_Reader(),
-        ),
-        automation_engine.poll_native_status(
-            automation_engine.AERunHandle(workflow_slug="w", run_id="1"),
-            budget=_budget(),
         ),
     ):
         with pytest.raises(HarnessNotBuiltError) as caught:

@@ -273,6 +273,14 @@ CONNECTOR_CI = BudgetProfile(
             timeout=timedelta(seconds=1500),
             poll_interval=timedelta(seconds=30),
             start_grace=timedelta(seconds=270),
+            # The other half of the same ``max_not_found_attempts = 10``. The
+            # cap it replaced bounded ten consecutive *non-positive* probes,
+            # and a search that errored was one of them — which is how an Atlas
+            # outage came to be reported as "the connection never materialised".
+            # Splitting the one number in two keeps the total tolerance
+            # identical and separates the two diagnoses: ten empty reads is
+            # NeverStarted, ten unreadable ones is Indeterminate.
+            max_transient_failures=10,
             heartbeat=None,
         ),
         Wait.ATLAS_ASSET_COUNTS: Budget(

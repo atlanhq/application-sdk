@@ -1,7 +1,8 @@
 """Unit tests for :mod:`application_sdk.testing.full_dag.client`.
 
-Network is monkeypatched out at ``_request``; we just verify the parse
-+ poll-loop logic.
+Network is monkeypatched out at the async reader's ``_request``; we just verify
+the parse + poll-loop logic through the deprecated package's re-export of the
+sync ``AEWorkflowClient`` facade.
 """
 
 from __future__ import annotations
@@ -20,19 +21,25 @@ from application_sdk.testing.full_dag.client import (
     DAGRunStatus,
 )
 from application_sdk.testing.harness._poll import fake_clock
+from tests.unit.testing._atlas_fakes import FakeSearchResult, fake_atlas
 
 
 def _make_client(monkeypatch: pytest.MonkeyPatch, responses: list[tuple[int, Any]]):
-    """Build a client whose ``_request`` returns the queued responses in order."""
+    """Build a client whose AE ``_request`` returns the queued responses in order.
+
+    Patched on ``client._ae`` — the async
+    :class:`~application_sdk.testing.harness.automation_engine.client.AEClient`
+    the facade delegates to since child F, where ``_request`` lives now.
+    """
     client = AEWorkflowClient("https://tenant.example.com/", "fake-token")
     queue = list(responses)
 
-    def fake_request(method, path, *, body=None, timeout=30, **_kwargs):
+    async def fake_request(method, path, *, body=None, timeout=30, **_kwargs):
         if not queue:
             raise AssertionError("More HTTP calls than queued responses")
         return queue.pop(0)
 
-    monkeypatch.setattr(client, "_request", fake_request)
+    monkeypatch.setattr(client._ae, "_request", fake_request)
     return client, queue
 
 
@@ -177,15 +184,16 @@ def test_poll_atlas_for_connection_succeeds_when_search_finds_it(
     earlier polls)."""
     client, _ = _make_client(monkeypatch, [])
 
-    # Stub the search-based existence check directly — first two polls
-    # return False (indexer lag), third returns True (Connection found).
+    # Stub the Atlas search itself — first two polls find nothing (indexer lag),
+    # the third finds the Connection. The real reader and the real poll loop run.
     calls = {"n": 0}
 
-    def fake_search(_qn: str) -> bool:
+    def behavior(_request: Any) -> FakeSearchResult:
         calls["n"] += 1
-        return calls["n"] >= 3
+        return FakeSearchResult(count=1 if calls["n"] >= 3 else 0)
 
-    monkeypatch.setattr(client, "connection_exists_in_atlas_via_search", fake_search)
+    atlas = fake_atlas(behavior)
+    monkeypatch.setattr(client, "_atlas", lambda: atlas)
     with fake_clock():
         assert (
             client.poll_atlas_for_connection(
@@ -194,6 +202,9 @@ def test_poll_atlas_for_connection_succeeds_when_search_finds_it(
             is True
         )
     assert calls["n"] == 3
+    # The point of the split: one client and one TLS handshake for the whole
+    # poll, where the asyncio.run bridge stood up a fresh one per probe.
+    assert atlas.opens == 1
 
 
 def test_poll_atlas_for_connection_bails_after_not_found_streak(
@@ -202,7 +213,7 @@ def test_poll_atlas_for_connection_bails_after_not_found_streak(
     """``max_not_found_attempts`` consecutive empty searches → False fast."""
     client, _ = _make_client(monkeypatch, [])
     monkeypatch.setattr(
-        client, "connection_exists_in_atlas_via_search", lambda _: False
+        client, "_atlas", lambda: fake_atlas(lambda _request: FakeSearchResult(count=0))
     )
     with fake_clock():
         assert (

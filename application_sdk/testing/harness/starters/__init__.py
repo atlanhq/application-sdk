@@ -27,10 +27,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from application_sdk.testing.harness._errors import HarnessNotBuiltError
-from application_sdk.testing.harness.automation_engine import AERunHandle
 from application_sdk.testing.harness.cluster import ClusterReader, ServiceTarget
 
 __all__ = [
+    "AERunHandle",
     "HttpRunHandle",
     "HttpWorkflowSpec",
     "QueueWorkflowSpec",
@@ -39,6 +39,28 @@ __all__ = [
     "start_via_app_handler",
     "start_via_automation_engine",
 ]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AERunHandle:
+    """A run started through the Automation Engine.
+
+    Lives here with the other two run handles rather than in
+    :mod:`application_sdk.testing.harness.automation_engine`, where it was first
+    sketched. Child F moved the AE reader over and found no use for it: the
+    submit returns AE's run id, the slug is the caller's own, and giving that
+    pair a name inside the reader would have been a fourth vocabulary for the
+    same reading. It *is* a starter handle, and the module whose whole subject
+    is "three ways to start work, three unrelated handles" is where the third
+    one belongs.
+
+    Attributes:
+        workflow_slug: AE's slug for the workflow the run belongs to.
+        run_id: AE's identifier for this run.
+    """
+
+    workflow_slug: str
+    run_id: str
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
