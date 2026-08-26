@@ -93,7 +93,7 @@ fastar==0.12.0
     # via
     #   fastapi
     #   fastapi-cloud-cli
-filelock==3.32.3
+filelock==3.32.4
     # via
     #   python-discovery
     #   virtualenv
