@@ -121,6 +121,25 @@ class Attempt:
         return gap
 
 
+def monotonic() -> float:
+    """Read the clock the bounded-wait loops run on.
+
+    For code that keeps its own elapsed-time ledger *alongside* a loop rather
+    than inside one — a probe wrapper that logs progress, or one that has to
+    report how long a reading has been unchanged. Such a wrapper is called by
+    :func:`~application_sdk.testing.harness.waiting.poll_until`, which does not
+    hand it the :class:`Attempt`, so the only way for the two to agree on
+    "elapsed" is to read the same clock.
+
+    Reading it through this function rather than calling :func:`time.monotonic`
+    directly is what puts the wrapper under :func:`fake_clock` with the loop it
+    accompanies. A wrapper on the real clock inside a fake-clock test reports
+    zero elapsed for a wait the loop believes ran for ten minutes, which is
+    exactly the sort of disagreement a progress ledger exists to rule out.
+    """
+    return _monotonic()
+
+
 async def sleep_async(seconds: float) -> None:
     """Await *seconds* through this module's swappable sleep.
 
