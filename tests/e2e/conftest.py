@@ -6,12 +6,10 @@ a specific app. Utility fixtures provide log collection and HTTP helpers.
 Example downstream conftest::
 
     @pytest.fixture(scope="session")
-    def app_config() -> AppConfig:
-        return AppConfig(
+    def app_config() -> AppUnderTest:
+        return AppUnderTest(
             app_name="my-app",
-            app_module="my_app.main:App",
             namespace="app-my-app",
-            image="ghcr.io/my-org/my-app:latest",
         )
 """
 
@@ -21,27 +19,25 @@ from typing import Any
 
 import pytest
 
-from application_sdk.testing.e2e import AppConfig, kube_http_call
+from application_sdk.testing.e2e import kube_http_call
+from application_sdk.testing.harness import AppUnderTest
 
 
 @pytest.fixture(scope="session")
-def app_config() -> AppConfig:
-    """Return AppConfig for the app under test.
+def app_config() -> AppUnderTest:
+    """Return the app under test.
 
     Override this fixture in your repo's conftest.py. By default, reads
     from environment variables so CI can inject values without code changes.
     """
-    return AppConfig(
+    return AppUnderTest(
         app_name=os.environ["E2E_APP_NAME"],
-        app_module=os.environ["E2E_APP_MODULE"],
         namespace=os.environ.get("E2E_NAMESPACE", f"app-{os.environ['E2E_APP_NAME']}"),
-        image=os.environ["E2E_IMAGE"],
-        timeout=int(os.environ.get("E2E_TIMEOUT", "300")),
     )
 
 
 @pytest.fixture
-def handler_call(app_config: AppConfig) -> Callable[..., Any]:
+def handler_call(app_config: AppUnderTest) -> Callable[..., Any]:
     """Return an async callable that routes requests to the handler via port-forward."""
 
     async def _call(

@@ -4,8 +4,8 @@ Two sub-surfaces live here:
 
 K8s utilities (existing)::
 
+    from application_sdk.testing.harness import AppUnderTest
     from application_sdk.testing.e2e import (
-        AppConfig,
         LogCollector,
         kube_http_call,
         run_workflow,
@@ -30,6 +30,8 @@ from application_sdk.testing.e2e.workflows import run_workflow, wait_for_workflo
 
 __all__ = [
     # K8s utilities
+    # Deprecated (removed in v4.0) — use
+    # application_sdk.testing.harness.AppUnderTest
     "AppConfig",
     "LogCollector",
     "kube_http_call",

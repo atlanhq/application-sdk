@@ -132,6 +132,21 @@ tests = [
     "pandera[io]>=0.32.0,<0.33.0",
     "httpx>=0.27.0,<0.29.0",
 ]
+# Typed Kubernetes backend for application_sdk.testing.harness.cluster — the
+# in-process client that replaces the `kubectl`-shelling reads in
+# testing/e2e/{pods,logs}.py (FND-241).
+#
+# Deliberately NOT folded into [tests]: a connector installing test extras
+# should not pull a Kubernetes client. Verified safe to keep separate —
+# connectors pin atlan-application-sdk[iam-auth,sql,workflows,pandas] and carry
+# their own `test` extra, so no connector's production closure changes either
+# way. Keeping it apart is what keeps the reason legible.
+#
+# Only the harness imports this, and only under the e2e/scenario markers, so it
+# is never on a production code path.
+harness = [
+    "kubernetes>=36.0.3,<37.0.0",
+]
 scale_data_generator = [
     "faker>=40.37.0,<40.38.0",
     "numpy>=1.23.5,<3.0.0",
@@ -320,6 +335,13 @@ markers = [
 # under unit tests. Including them in unit coverage drags the percentage down
 # without representing product-code quality. Keep `mocks.py` and `fixtures.py`
 # in scope since downstream apps consume them as a public testing API.
+#
+# `application_sdk/testing/harness/**` is deliberately ABSENT from this list.
+# It is new code with a tenant-free unit surface — bounded waits, outcome
+# vocabulary, budgets, pure evaluators, the sync bridge — so it counts toward
+# the 85% gate like any other module. The `testing/e2e/**` exemption below is
+# about code that only runs against a live tenant; inheriting it here by
+# proximity would exempt the one part of this surface that is unit-testable.
 omit = [
     "tests/**",
     "application_sdk/test_utils/**",
@@ -340,6 +362,10 @@ exclude_lines = [
     "if __name__ == .__main__.:",
     "pass",
     "raise ImportError",
+    # An ellipsis-only body is a Protocol method or a typing stub: a signature
+    # declaration, never a statement that runs. Anchored to a line that is
+    # nothing but `...` so it cannot swallow a real statement.
+    "^\\s*\\.\\.\\.$",
 ]
 fail_under = 85
 show_missing = true
