@@ -63,6 +63,8 @@ class SQLAppE2ETest(BaseE2ETest):
             argo_template_name = "atlan-mysql"
             mode = RunMode.AGENT
             app_service_url = "http://mysql.mysql-app.svc.cluster.local"
+            # The credential-config name lives here, not on DatabaseSpec.
+            connector_config_name = "atlan-connectors-mysql"
 
             include_filter = r"^def\\.e2e_main$"
             qi_input_prefix_field = "transformed_data_prefix"
@@ -74,7 +76,6 @@ class SQLAppE2ETest(BaseE2ETest):
                 return DatabaseSpec(
                     host="mysql", port=3306,
                     username="e2e_user", password="e2e_pass",
-                    connector_config_name="atlan-connectors-mysql",
                 )
 
             def _credential_body(self):
