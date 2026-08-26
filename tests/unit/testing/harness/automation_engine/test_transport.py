@@ -138,13 +138,34 @@ class TestSyncBoundary:
         A reintroduced ``asyncio.run`` is a fresh event loop per call, and on
         the Atlas poll that was ~50 of them — plus ~50 TLS handshakes — for one
         boolean.
+
+        The scan root is found by walking up to ``pyproject.toml`` rather than
+        by counting ``parents[N]``. A count is coupled to this file's depth, and
+        this file sits one level deeper than its neighbours: ``parents[4]``
+        resolved to ``tests/``, making the root ``tests/application_sdk/testing``,
+        which does not exist. ``rglob`` over a missing directory yields nothing,
+        so the guard passed by scanning zero files.
+
+        Hence the file count below. "Found no offenders" and "looked at nothing"
+        are the same empty list, and only one of them is a pass — the same
+        distinction :class:`~application_sdk.testing.harness.outcome.Indeterminate`
+        exists for, applied to the test that guards it.
         """
         from pathlib import Path
 
-        root = Path(__file__).resolve().parents[4] / "application_sdk" / "testing"
+        here = Path(__file__).resolve()
+        repo_root = next(
+            parent for parent in here.parents if (parent / "pyproject.toml").is_file()
+        )
+        root = repo_root / "application_sdk" / "testing"
+        scanned = sorted(root.rglob("*.py"))
+        assert len(scanned) > 50, (
+            f"scanned only {len(scanned)} file(s) under {root} — the guard is "
+            "looking in the wrong place, not finding a clean tree"
+        )
         offenders = [
             path.relative_to(root).as_posix()
-            for path in root.rglob("*.py")
+            for path in scanned
             if "asyncio.run(" in path.read_text(encoding="utf-8")
         ]
         assert offenders == []
