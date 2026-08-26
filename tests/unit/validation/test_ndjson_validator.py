@@ -729,3 +729,70 @@ def test_the_lifted_walk_still_yields_file_line_and_bytes(tmp_path: Path) -> Non
         (str(path), 3, b'{"a": 2}'),
     ]
     assert list(iter_ndjson_lines(tmp_path / "nope")) == []
+
+
+# ---------------------------------------------------------------------------
+# Both walk branches require .json (FND-802 cause 4)
+# ---------------------------------------------------------------------------
+#
+# The single-file branch used to accept ANY file while the directory branch
+# globbed `*.json`, so the same subtree validated differently depending on
+# whether the caller named the directory or one file inside it.
+#
+# In production that asymmetry manufactured findings. `_resolve_transformed_target`
+# returns any single file whose path contains `transformed`, so a connector
+# calling `upload(".../transformed/transformed-count.txt")` handed the walk a
+# sidecar holding a bare record count. It was read as NDJSON, the integer failed
+# to decode as an asset, and the run reported one phantom `undeserializable`
+# every single run — for a file the directory walk had always ignored.
+
+
+def test_single_file_branch_skips_a_non_json_file(tmp_path: Path) -> None:
+    sidecar = tmp_path / "transformed-count.txt"
+    sidecar.write_bytes(b"194045")
+
+    assert list(iter_ndjson_lines(sidecar)) == []
+
+
+def test_the_count_sidecar_yields_nothing_rather_than_a_phantom_record(
+    tmp_path: Path,
+) -> None:
+    """The exact production shape. A bare integer must not become a record —
+    "nothing to validate" is the honest answer for a path holding no asset
+    parts, and strictly better than inventing a failure."""
+    transformed = tmp_path / "transformed"
+    transformed.mkdir()
+    (transformed / "transformed-count.txt").write_bytes(b"194045")
+
+    assert list(iter_ndjson_lines(transformed / "transformed-count.txt")) == []
+
+
+def test_the_two_branches_agree_on_the_same_subtree(tmp_path: Path) -> None:
+    """The invariant the fix restores: naming the directory and naming the part
+    inside it must see the same records, and neither must see the sidecar."""
+    transformed = tmp_path / "transformed"
+    transformed.mkdir()
+    part = transformed / "entities.json"
+    part.write_bytes(b'{"a": 1}\n{"a": 2}\n')
+    (transformed / "transformed-count.txt").write_bytes(b"2")
+
+    via_dir = [(line, raw) for _, line, raw in iter_ndjson_lines(transformed)]
+    via_file = [(line, raw) for _, line, raw in iter_ndjson_lines(part)]
+
+    assert via_dir == via_file == [(1, b'{"a": 1}'), (2, b'{"a": 2}')]
+
+
+def test_a_json_file_is_still_scanned_by_the_file_branch(tmp_path: Path) -> None:
+    """The fix must not shut the legitimate single-file path — the upload hook
+    relies on it."""
+    part = tmp_path / "part-0.json"
+    part.write_bytes(b'{"a": 1}\n')
+
+    assert list(iter_ndjson_lines(part)) == [(str(part), 1, b'{"a": 1}')]
+
+
+def test_the_suffix_check_is_case_insensitive(tmp_path: Path) -> None:
+    part = tmp_path / "PART-0.JSON"
+    part.write_bytes(b'{"a": 1}\n')
+
+    assert list(iter_ndjson_lines(part)) == [(str(part), 1, b'{"a": 1}')]

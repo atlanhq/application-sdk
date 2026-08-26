@@ -88,13 +88,44 @@ def iter_ndjson_lines(path: str | Path) -> Iterator[tuple[str, int, bytes]]:
     """Yield ``(file, 1-based line number, raw bytes)`` for every non-blank line.
 
     Accepts a directory (walked recursively for ``*.json``, sorted for stable
-    ordering) or a single file. A missing path yields nothing.
+    ordering) or a single ``.json`` file. A missing path yields nothing.
+
+    **Both branches require the** ``.json`` **suffix, and that symmetry is
+    load-bearing.** The single-file branch used to accept any file, while the
+    directory branch globbed ``*.json`` — so the same subtree validated
+    differently depending on whether the caller named the directory or one file
+    inside it.
+
+    That asymmetry produced false validation findings in production. The upload
+    hook's ``_resolve_transformed_target`` returns any single file whose path
+    contains ``transformed``, so a connector calling
+    ``upload(".../transformed/transformed-count.txt")`` handed this walk a
+    sidecar containing a bare record count. It was read as NDJSON, the integer
+    failed to decode as an asset, and the run reported one phantom
+    ``undeserializable`` — on every run, for a file that is not an asset part at
+    all and that the directory walk had always correctly ignored.
+
+    A non-``.json`` file is therefore skipped rather than parsed. The caller sees
+    "nothing to validate" (the wrapper's ``absent`` outcome), which is the honest
+    answer for a path that holds no asset parts — strictly better than inventing
+    a failure. ``.json`` is the convention the transform stage writes and what
+    the directory glob has always enforced; this makes the two agree.
     """
     root = Path(path)
     if root.is_dir():
         files = sorted(glob(str(root / "**" / "*.json"), recursive=True))
     elif root.is_file():
-        files = [str(root)]
+        if root.suffix.lower() != ".json":
+            # Debug, not warning: a sidecar next to the parts is normal, and the
+            # upload path can legitimately point here. It must not read as a
+            # fault on every run.
+            logger.debug(
+                "Skipping non-.json file in NDJSON walk (not an asset part): %s",
+                root,
+            )
+            files = []
+        else:
+            files = [str(root)]
     else:
         files = []
     for file_path in files:
