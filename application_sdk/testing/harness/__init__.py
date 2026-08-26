@@ -45,7 +45,10 @@ Module map:
 ``spec``
     ``AppUnderTest`` — where to find the app under test in a cluster.
 ``cluster``
-    Read-only Kubernetes Protocols and the states they return.
+    Read-only Kubernetes Protocols, the states they return, and the typed
+    ``kubeconfig`` backend behind them — which retired ``testing/e2e/pods.py``
+    rather than wrapping it. ``kubectl`` survives there only as transport, for
+    the port-forward that reaches an app handler Service.
 ``temporal``
     Read-only Temporal Protocol — pollers and workflow status.
 ``atlas``
@@ -60,8 +63,8 @@ Module map:
     Purge mechanics, including the batching that is a correctness bound.
 
 ``bridge``, ``waiting``, ``outcome``, ``spec``, ``budgets``, ``expectations``,
-``identity``, ``atlas`` and ``automation_engine`` are real; the rest are typed
-stubs, each naming the child issue that fills it in.
+``identity``, ``atlas``, ``automation_engine`` and ``cluster`` are real; the rest
+are typed stubs, each naming the child issue that fills it in.
 
 ``atlas`` and ``automation_engine`` are the first two that ``testing/e2e``
 actually calls: since child F, ``AEWorkflowClient`` is a set of one-line
@@ -74,7 +77,10 @@ itself, on identical scripted readings.
 The optional ``harness`` extra carries the typed Kubernetes backend for
 ``cluster`` (``pip install 'atlan-application-sdk[harness]'``). It is
 deliberately *not* folded into ``[tests]``: a connector installing test extras
-should not pull a Kubernetes client.
+should not pull a Kubernetes client. Importing ``harness.cluster`` without the
+extra is free — the client is imported when a reader is *built*, and the miss
+raises :class:`KubernetesExtraMissingError` naming the extra rather than an
+``ImportError`` naming a module nobody asked for.
 """
 
 from application_sdk.testing.harness._errors import (

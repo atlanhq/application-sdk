@@ -3,8 +3,8 @@
 from typing import Any
 
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.testing.e2e.portforward import kube_http_call
 from application_sdk.testing.harness._poll import until_deadline_async
+from application_sdk.testing.harness.cluster import kube_http_call, port_forward
 
 logger = get_logger(__name__)
 
@@ -55,6 +55,15 @@ async def wait_for_workflow(
 ) -> dict[str, Any]:
     """Poll GET /api/v1/workflows/{id} until the workflow reaches a terminal state.
 
+    One ``kubectl port-forward`` tunnel serves the whole poll. It used to open and
+    tear one down per probe — up to 60 ``kubectl`` processes, handshakes and
+    readiness waits inside a single 300-second wait, to read one status string.
+    The per-call teardown's stated reason was idle TCP timeouts on a long-lived
+    forward, which a 5-second cadence never reaches; the case it was really
+    buying, a tunnel that has already died, is handled by
+    :meth:`~application_sdk.testing.harness.cluster.PortForward.request`
+    rebuilding once on a transport error.
+
     Args:
         namespace: K8s namespace where the handler service lives.
         service: Handler service name.
@@ -69,28 +78,23 @@ async def wait_for_workflow(
     Raises:
         TimeoutError: If the workflow does not complete within ``timeout``.
     """
-    async for attempt in until_deadline_async(
-        timeout, poll_interval, label=f"workflow {workflow_id}"
-    ):
-        response = await kube_http_call(
-            namespace=namespace,
-            service=service,
-            port=port,
-            method="GET",
-            path=f"/api/v1/workflows/{workflow_id}",
-        )
-        response.raise_for_status()
-        data: dict[str, Any] = response.json()
-        status = data.get("status", "").lower()
-        logger.debug("Workflow %s status: %s", workflow_id, status)
-        if status in _TERMINAL_STATES:
-            return data
-        if attempt.is_last:
-            raise TimeoutError(
-                f"Workflow {workflow_id} did not reach a terminal state within "
-                f"{timeout}s ({attempt.number} attempts, {attempt.elapsed:.0f}s "
-                f"elapsed; last status={status or 'unknown'})"
-            )
+    async with port_forward(namespace, service, port) as session:
+        async for attempt in until_deadline_async(
+            timeout, poll_interval, label=f"workflow {workflow_id}"
+        ):
+            response = await session.request("GET", f"/api/v1/workflows/{workflow_id}")
+            response.raise_for_status()
+            data: dict[str, Any] = response.json()
+            status = data.get("status", "").lower()
+            logger.debug("Workflow %s status: %s", workflow_id, status)
+            if status in _TERMINAL_STATES:
+                return data
+            if attempt.is_last:
+                raise TimeoutError(
+                    f"Workflow {workflow_id} did not reach a terminal state within "
+                    f"{timeout}s ({attempt.number} attempts, {attempt.elapsed:.0f}s "
+                    f"elapsed; last status={status or 'unknown'})"
+                )
 
     raise AssertionError(  # pragma: no cover — the is_last branch always fires first
         f"poll loop for workflow {workflow_id} ended without a final attempt"

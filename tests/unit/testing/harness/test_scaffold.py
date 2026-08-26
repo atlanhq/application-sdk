@@ -382,6 +382,51 @@ async def test_the_child_f_stubs_are_gone() -> None:
     assert callable(automation_engine.AEClient)
 
 
+async def test_the_child_e_kubectl_reads_are_gone() -> None:
+    """Child E retired the ``kubectl``-shelling reads rather than wrapping them.
+
+    Asserted rather than eyeballed for the same reason the sibling child asserts
+    that no ``asyncio.run`` is left under ``testing/``: a reintroduced
+    ``kubectl get pods`` is a subprocess, a JSON parse and a ``return []`` on
+    failure, and that last part is the fail-open shape the typed reader exists to
+    remove. A revert would restore all three silently.
+    """
+    import importlib
+    from pathlib import Path
+
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("application_sdk.testing.e2e.pods")
+
+    from application_sdk.testing.harness.cluster import KubernetesReader
+
+    assert isinstance(KubernetesReader(apis=lambda: _unused()), ClusterReader)
+    assert isinstance(KubernetesReader(apis=lambda: _unused()), CustomResourceReader)
+
+    # The harness's only `kubectl` *invocation* is the port-forward transport,
+    # which is not a read: `kubernetes.stream`'s equivalent is a socket API, not
+    # a drop-in. Matched on the quoted argv literal, so the prose that explains
+    # all of this does not count as a call.
+    import application_sdk.testing.e2e as e2e_pkg
+    import application_sdk.testing.harness as harness_pkg
+
+    def _shells_out(package: object) -> list[str]:
+        root = Path(str(getattr(package, "__file__"))).parent
+        return sorted(
+            path.relative_to(root).as_posix()
+            for path in root.rglob("*.py")
+            if '"kubectl"' in path.read_text()
+        )
+
+    assert _shells_out(harness_pkg) == ["cluster/_portforward.py"]
+    # In `testing/e2e` only the evidence dump is left: `describe`, `get pods -o
+    # wide` and `get events` are human-readable renderings with no endpoint.
+    assert _shells_out(e2e_pkg) == ["logs.py"]
+
+
+def _unused():  # pragma: no cover — the factory is never called by these asserts
+    raise AssertionError("the protocol checks are structural, not behavioural")
+
+
 async def test_every_remaining_stub_names_its_child_issue() -> None:
     from application_sdk.testing.harness import starters
     from application_sdk.testing.harness.cluster import HttpRequest, HttpResponse

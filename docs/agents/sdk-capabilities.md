@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.29.0
-source-sha:    39d4a36db4fa466c67b470800708ca1c6cfe0961
-source-date:   2026-08-27T00:14:54+01:00
+source-sha:    f65743fee924c0839b254a68c538ef7de1ee2064
+source-date:   2026-08-27T00:27:47+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 187 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 199 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3125,6 +3125,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** The tenant-installed app pod did not accept connections before AE submit.
 - **Defined in:** `application_sdk/testing/harness/automation_engine/_errors.py`
 
+#### `AppsReads`
+
+- **Import:** `from application_sdk.testing.harness.cluster.kube import AppsReads`
+- **Signature:** `class AppsReads`
+- **Summary:** The read verbs this backend uses from ``AppsV1Api``.
+- **Defined in:** `application_sdk/testing/harness/cluster/kube.py`
+
 #### `AppUnderTest`
 
 - **Import:** `from application_sdk.testing.harness import AppUnderTest`
@@ -3261,7 +3268,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Import:** `from application_sdk.testing.harness.cluster import ClusterReader`
 - **Signature:** `class ClusterReader`
 - **Summary:** Read built-in Kubernetes state. No mutation, by decision.
-- **Defined in:** `application_sdk/testing/harness/cluster/__init__.py`
+- **Defined in:** `application_sdk/testing/harness/cluster/_protocols.py`
+
+#### `ClusterReadFailedError`
+
+- **Import:** `from application_sdk.testing.harness.cluster import ClusterReadFailedError`
+- **Signature:** `class ClusterReadFailedError(*, ...)`
+- **Summary:** A cluster read reached the API server and did not come back with data.
+- **Defined in:** `application_sdk/testing/harness/cluster/_errors.py`
 
 #### `ConnectionIdentity`
 
@@ -3270,12 +3284,33 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** The ephemeral connection one harness run creates and then purges.
 - **Defined in:** `application_sdk/testing/harness/identity.py`
 
+#### `CoreReads`
+
+- **Import:** `from application_sdk.testing.harness.cluster.kube import CoreReads`
+- **Signature:** `class CoreReads`
+- **Summary:** The read verbs this backend uses from ``CoreV1Api``.
+- **Defined in:** `application_sdk/testing/harness/cluster/kube.py`
+
+#### `CustomObjectReads`
+
+- **Import:** `from application_sdk.testing.harness.cluster.kube import CustomObjectReads`
+- **Signature:** `class CustomObjectReads`
+- **Summary:** The read verbs this backend uses from ``CustomObjectsApi``.
+- **Defined in:** `application_sdk/testing/harness/cluster/kube.py`
+
+#### `CustomResourceDefinitionReads`
+
+- **Import:** `from application_sdk.testing.harness.cluster.kube import CustomResourceDefinitionReads`
+- **Signature:** `class CustomResourceDefinitionReads`
+- **Summary:** The read verb this backend uses from ``ApiextensionsV1Api``.
+- **Defined in:** `application_sdk/testing/harness/cluster/kube.py`
+
 #### `CustomResourceReader`
 
 - **Import:** `from application_sdk.testing.harness.cluster import CustomResourceReader`
 - **Signature:** `class CustomResourceReader`
 - **Summary:** Read custom resources, parameterised by :class:`ResourceRef`.
-- **Defined in:** `application_sdk/testing/harness/cluster/__init__.py`
+- **Defined in:** `application_sdk/testing/harness/cluster/_protocols.py`
 
 #### `DAGNodeResult`
 
@@ -3326,9 +3361,9 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `DeploymentState`
 
 - **Import:** `from application_sdk.testing.harness.cluster import DeploymentState`
-- **Signature:** `class DeploymentState(*, ...)`
+- **Signature:** `class DeploymentState(*, name: str, namespace: str, desired_replicas: int, ready_replicas: int, updated_replicas: int)`
 - **Summary:** One Deployment's replica counts.
-- **Defined in:** `application_sdk/testing/harness/cluster/__init__.py`
+- **Defined in:** `application_sdk/testing/harness/cluster/_states.py`
 
 #### `EvidenceBundle`
 
@@ -3385,14 +3420,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Import:** `from application_sdk.testing.harness.cluster import HttpRequest`
 - **Signature:** `class HttpRequest(*, ...)`
 - **Summary:** An HTTP call to make against a :class:`ServiceTarget`.
-- **Defined in:** `application_sdk/testing/harness/cluster/__init__.py`
+- **Defined in:** `application_sdk/testing/harness/cluster/_states.py`
 
 #### `HttpResponse`
 
 - **Import:** `from application_sdk.testing.harness.cluster import HttpResponse`
-- **Signature:** `class HttpResponse(*, status: int, body: Any | None = None, text: str = '') -> None`
+- **Signature:** `class HttpResponse(*, status: int, body: Any | None = None, text: str = '')`
 - **Summary:** What came back.
-- **Defined in:** `application_sdk/testing/harness/cluster/__init__.py`
+- **Defined in:** `application_sdk/testing/harness/cluster/_states.py`
 
 #### `HttpRunHandle`
 
@@ -3423,6 +3458,36 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Client for integration testing of the Core 3 APIs.
 - **Defined in:** `application_sdk/testing/integration/client.py`
 
+#### `KubeconfigUnavailableError`
+
+- **Import:** `from application_sdk.testing.harness.cluster import KubeconfigUnavailableError`
+- **Signature:** `class KubeconfigUnavailableError(*, ...)`
+- **Summary:** No usable kubeconfig, or the named context is not in it.
+- **Defined in:** `application_sdk/testing/harness/cluster/_errors.py`
+
+#### `KubernetesApis`
+
+- **Import:** `from application_sdk.testing.harness.cluster import KubernetesApis`
+- **Also importable from:** `application_sdk.testing.harness.cluster.kube`
+- **Signature:** `class KubernetesApis(*, ...)`
+- **Summary:** One thread's API objects, plus the model-to-dict conversion they share.
+- **Defined in:** `application_sdk/testing/harness/cluster/kube.py`
+
+#### `KubernetesExtraMissingError`
+
+- **Import:** `from application_sdk.testing.harness.cluster import KubernetesExtraMissingError`
+- **Signature:** `class KubernetesExtraMissingError(*, ...)`
+- **Summary:** The typed Kubernetes client is not installed in this environment.
+- **Defined in:** `application_sdk/testing/harness/cluster/_errors.py`
+
+#### `KubernetesReader`
+
+- **Import:** `from application_sdk.testing.harness.cluster import KubernetesReader`
+- **Also importable from:** `application_sdk.testing.harness.cluster.kube`
+- **Signature:** `class KubernetesReader(*, ...)`
+- **Summary:** Read cluster state through the in-process typed client.
+- **Defined in:** `application_sdk/testing/harness/cluster/kube.py`
+
 #### `Lazy`
 
 - **Import:** `from application_sdk.testing.integration import Lazy`
@@ -3433,16 +3498,16 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `LogCollector`
 
 - **Import:** `from application_sdk.testing.e2e import LogCollector`
-- **Signature:** `class LogCollector(namespace: str, output_dir: Path)`
-- **Summary:** Collect kubectl logs, pod descriptions, and events from a namespace.
+- **Signature:** `class LogCollector(namespace: str, output_dir: Path, *, reader: KubernetesReader | None = None)`
+- **Summary:** Collect container logs, pod descriptions, and events from a namespace.
 - **Defined in:** `application_sdk/testing/e2e/logs.py`
 
 #### `LogLine`
 
 - **Import:** `from application_sdk.testing.harness.cluster import LogLine`
-- **Signature:** `class LogLine(*, pod: str, container: str, message: str, timestamp: datetime | None = None) -> None`
+- **Signature:** `class LogLine(*, pod: str, container: str, message: str, timestamp: datetime | None = None)`
 - **Summary:** One line of container output.
-- **Defined in:** `application_sdk/testing/harness/cluster/__init__.py`
+- **Defined in:** `application_sdk/testing/harness/cluster/_states.py`
 
 #### `Minter`
 
@@ -3520,14 +3585,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Import:** `from application_sdk.testing.harness.cluster import PodPhase`
 - **Signature:** `class PodPhase`
 - **Summary:** Kubernetes pod phase, as the API server reports it.
-- **Defined in:** `application_sdk/testing/harness/cluster/__init__.py`
+- **Defined in:** `application_sdk/testing/harness/cluster/_states.py`
 
 #### `PodState`
 
 - **Import:** `from application_sdk.testing.harness.cluster import PodState`
 - **Signature:** `class PodState(*, ...)`
 - **Summary:** One pod, reduced to what a harness assertion reads.
-- **Defined in:** `application_sdk/testing/harness/cluster/__init__.py`
+- **Defined in:** `application_sdk/testing/harness/cluster/_states.py`
 
 #### `PollerInfo`
 
@@ -3535,6 +3600,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class PollerInfo(*, identity: str, last_access: datetime, build_id: str | None = None) -> None`
 - **Summary:** One worker seen polling a task queue.
 - **Defined in:** `application_sdk/testing/harness/temporal/__init__.py`
+
+#### `PortForward`
+
+- **Import:** `from application_sdk.testing.e2e.portforward import PortForward`
+- **Also importable from:** `application_sdk.testing.harness.cluster`
+- **Signature:** `class PortForward(namespace: str, service: str, port: int, *, timeout: float = 30.0)`
+- **Summary:** One ``kubectl port-forward`` tunnel to a Service, and calls over it.
+- **Defined in:** `application_sdk/testing/harness/cluster/_portforward.py`
 
 #### `PublishedVersion`
 
@@ -3583,9 +3656,9 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `ResourceRef`
 
 - **Import:** `from application_sdk.testing.harness.cluster import ResourceRef`
-- **Signature:** `class ResourceRef(*, group: str, version: str, plural: str) -> None`
+- **Signature:** `class ResourceRef(group: str, version: str, plural: str)`
 - **Summary:** Identifies a custom-resource kind by its API coordinates.
-- **Defined in:** `application_sdk/testing/harness/cluster/__init__.py`
+- **Defined in:** `application_sdk/testing/harness/cluster/_states.py`
 
 #### `RunLookup`
 
@@ -3620,9 +3693,9 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `ServiceTarget`
 
 - **Import:** `from application_sdk.testing.harness.cluster import ServiceTarget`
-- **Signature:** `class ServiceTarget(*, namespace: str, service: str, port: int) -> None`
+- **Signature:** `class ServiceTarget(*, namespace: str, service: str, port: int)`
 - **Summary:** A Service and port to reach, however the backend chooses to reach it.
-- **Defined in:** `application_sdk/testing/harness/cluster/__init__.py`
+- **Defined in:** `application_sdk/testing/harness/cluster/_states.py`
 
 #### `Settled`
 
@@ -4101,9 +4174,18 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `kube_http_call`
 
 - **Import:** `from application_sdk.testing.e2e import kube_http_call`
+- **Also importable from:** `application_sdk.testing.e2e.portforward`, `application_sdk.testing.harness.cluster`
 - **Signature:** `kube_http_call(namespace: str, ...)`
-- **Summary:** Make an HTTP call to a K8s service via an ephemeral port-forward.
-- **Defined in:** `application_sdk/testing/e2e/portforward.py`
+- **Summary:** Make one HTTP call to a K8s Service via an ephemeral port-forward.
+- **Defined in:** `application_sdk/testing/harness/cluster/_portforward.py`
+
+#### `kubeconfig_apis`
+
+- **Import:** `from application_sdk.testing.harness.cluster import kubeconfig_apis`
+- **Also importable from:** `application_sdk.testing.harness.cluster.kube`
+- **Signature:** `kubeconfig_apis(*, kube_context: str | None = None)`
+- **Summary:** Build one thread's API bundle from the ambient kubeconfig.
+- **Defined in:** `application_sdk/testing/harness/cluster/kube.py`
 
 #### `lazy`
 
@@ -4245,6 +4327,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `poll_until(probe: Probe[T], *, ...)`
 - **Summary:** Poll until *settled*, or until the budget, grace or watchdog says stop.
 - **Defined in:** `application_sdk/testing/harness/waiting.py`
+
+#### `port_forward`
+
+- **Import:** `from application_sdk.testing.e2e.portforward import port_forward`
+- **Also importable from:** `application_sdk.testing.harness.cluster`
+- **Signature:** `port_forward(namespace: str, service: str, port: int, *, timeout: float = 30.0)`
+- **Summary:** Hold one tunnel to a Service for a batch of calls.
+- **Defined in:** `application_sdk/testing/harness/cluster/_portforward.py`
 
 #### `purge_connection`
 
