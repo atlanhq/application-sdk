@@ -26,6 +26,7 @@ from application_sdk.constants import (
     TRACES_FILE_NAME,
     UPSTREAM_OBJECT_STORE_NAME,
 )
+from application_sdk.observability.utils import in_temporal_workflow
 
 # --- Path configuration ---
 # Structure: observability/<mode>/<signal>/year=.../hour=.../file.json.gz
@@ -392,10 +393,6 @@ class AtlanObservability(Generic[T], ABC):
         # both guards answer "am I in a workflow" the same way; the previous
         # ``workflow.unsafe.in_sandbox()`` check missed passed-through modules
         # and unsandboxed workers. See utils.in_temporal_workflow.
-        from application_sdk.observability.utils import (  # noqa: PLC0415 — circular: utils imports observability.context, which this module is imported alongside
-            in_temporal_workflow,
-        )
-
         if in_temporal_workflow():
             return
 
