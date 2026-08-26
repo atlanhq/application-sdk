@@ -49,8 +49,9 @@ raise-on-failure adapter the connector suites keep. The one exception is an
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import timedelta
-from typing import TypeAlias, TypeVar
+from typing import Generic, TypeAlias, TypeVar
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.harness._poll import until_deadline_async
@@ -83,6 +84,42 @@ Classifier: TypeAlias = Callable[[BaseException], "timedelta | None"]
 #: Cap on the rendered reading a :func:`hold_stable` violation carries as its
 #: fingerprint. A violating pod list is a report line, not a payload dump.
 _RENDER_LIMIT = 120
+
+
+@dataclass(frozen=True, slots=True)
+class _Observation(Generic[T]):
+    """A reading that was actually taken, wrapped so its absence has a spelling.
+
+    Both primitives have to answer "did any probe ever succeed?", and neither may
+    answer it with ``last_value is None``: ``Probe[T]`` puts no bound on ``T``, so
+    ``None`` is a perfectly good reading — a ``ClusterReader`` returning "no such
+    deployment", a status field that is legitimately null. Deciding on ``is None``
+    turns a successful ``None`` into "never observed", which reports a hold that
+    held as :class:`~application_sdk.testing.harness.outcome.Indeterminate` and a
+    poll that read its target as never having read it.
+
+    So the holder is the sentinel: ``None`` here means *no observation object*,
+    which the probe cannot produce, while ``_Observation(None)`` is a reading of
+    ``None``. Same reasoning, and the same shape, as
+    :class:`~application_sdk.testing.harness.expectations.Unreadable` — a failed
+    read may not borrow the vocabulary of a successful one.
+
+    Attributes:
+        value: The reading, whatever ``T`` is.
+    """
+
+    value: T
+
+
+def _last(observation: _Observation[T] | None) -> T | None:
+    """Unwrap an observation for an outcome's ``last`` field.
+
+    ``Outcome.last`` is typed ``T | None`` and so cannot itself distinguish a
+    reading of ``None`` from no reading at all. That conflation is confined to
+    the report: no *decision* in this module is taken on it — see
+    :class:`_Observation`.
+    """
+    return None if observation is None else observation.value
 
 
 def _seconds(value: timedelta | None) -> float | None:
@@ -222,7 +259,7 @@ async def poll_until(
     streak = 0
     attempts = 0
     elapsed = 0.0
-    last_value: T | None = None
+    observation: _Observation[T] | None = None
     last_error: BaseException | None = None
     last_fingerprint: str | None = None
     last_progress = 0.0
@@ -265,7 +302,7 @@ async def poll_until(
                     elapsed=timedelta(seconds=elapsed),
                     cause=error,
                     transient_failures=streak,
-                    last=last_value,
+                    last=_last(observation),
                 )
             # Back off for as long as the origin asked when it said so, rather
             # than for the poll cadence: an overloaded origin answering
@@ -293,7 +330,7 @@ async def poll_until(
             continue
 
         streak = 0
-        last_value = value
+        observation = _Observation(value)
         if not has_started and started is not None and started(value):
             has_started = True
         if fingerprint is not None:
@@ -339,7 +376,10 @@ async def poll_until(
                 last=value,
             )
 
-    if last_value is None and last_error is not None:
+    # Never *observed*, not "the last reading happened to be None" — a wait that
+    # read its target and one that never could are different claims, and a
+    # `Probe[None]` makes them identical to an `is None` test.
+    if observation is None and last_error is not None:
         return Indeterminate(
             label=label,
             attempts=attempts,
@@ -352,7 +392,7 @@ async def poll_until(
         attempts=attempts,
         elapsed=timedelta(seconds=elapsed),
         budget=budget.timeout,
-        last=last_value,
+        last=_last(observation),
     )
 
 
@@ -410,7 +450,7 @@ async def hold_stable(
     streak = 0
     attempts = 0
     elapsed = 0.0
-    last_value: T | None = None
+    observation: _Observation[T] | None = None
     last_error: BaseException | None = None
 
     async for attempt in until_deadline_async(
@@ -445,7 +485,7 @@ async def hold_stable(
                     elapsed=timedelta(seconds=elapsed),
                     cause=error,
                     transient_failures=streak,
-                    last=last_value,
+                    last=_last(observation),
                 )
             gap = _honoured_gap(
                 backoff,
@@ -458,7 +498,7 @@ async def hold_stable(
             continue
 
         streak = 0
-        last_value = value
+        observation = _Observation(value)
         if not invariant(value):
             return Stalled(
                 label=label,
@@ -472,10 +512,15 @@ async def hold_stable(
                 last=value,
             )
 
-    if last_value is None:
-        # Never read once across the whole hold. There is no reading to call
-        # settled, and calling the invariant held would be a claim about a
-        # window nothing observed.
+    if observation is None:
+        # Never read once across the whole hold — the *holder* is absent, which
+        # a probe cannot produce. A hold over a `Probe[None]` whose every reading
+        # was a legitimate `None` observed its window perfectly well, and tested
+        # for with `is None` it would have been reported as unobservable.
+        #
+        # `observation is None` implies a classified error was absorbed: the loop
+        # always yields one attempt, and an attempt either produced a reading or
+        # raised. The fallback keeps `cause` typed rather than covering a path.
         return Indeterminate(
             label=label,
             attempts=attempts,
@@ -487,5 +532,5 @@ async def hold_stable(
         label=label,
         attempts=attempts,
         elapsed=timedelta(seconds=elapsed),
-        value=last_value,
+        value=observation.value,
     )
