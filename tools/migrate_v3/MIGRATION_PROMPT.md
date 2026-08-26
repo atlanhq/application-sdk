@@ -754,18 +754,17 @@ class TestMyConnector(BaseTest):
 ```python
 # TODO(upgrade-v3): human must validate this test is equivalent to the original
 import pytest
-from application_sdk.testing.e2e import AppConfig, run_workflow, wait_for_workflow
+from application_sdk.testing.e2e import run_workflow, wait_for_workflow
+from application_sdk.testing.harness import AppUnderTest
 
 @pytest.fixture(scope="session")
-def app_config() -> AppConfig:
-    return AppConfig(
+def app_config() -> AppUnderTest:
+    return AppUnderTest(
         app_name="my-connector",
-        app_module="my_connector.main:MyExtractor",
         namespace="default",
-        image="ghcr.io/atlanhq/my-connector:latest",
     )
 
-async def test_metadata_extraction(app_config: AppConfig) -> None:
+async def test_metadata_extraction(app_config: AppUnderTest) -> None:
     workflow_id = await run_workflow(
         namespace=app_config.namespace,
         service=app_config.app_name,
@@ -787,7 +786,7 @@ async def test_metadata_extraction(app_config: AppConfig) -> None:
 
 | v2 | v3 |
 |----|----|
-| `BaseTest` class | `AppConfig` fixtures |
+| `BaseTest` class | `AppUnderTest` fixtures |
 | `self.run_workflow(name, payload)` | `run_workflow(namespace, service, port, name, payload)` |
 | Built-in wait/poll | `wait_for_workflow(namespace, service, port, workflow_id, timeout)` |
 | `self.default_payload()` | Explicit `payload` dict — extract values from the v2 method body |
