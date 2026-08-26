@@ -65,6 +65,7 @@ from application_sdk.testing.e2e._errors import (
     ProgressWatchdogUnreachableError,
     SeededConnectionNotSearchableError,
     UnknownConnectorTypeError,
+    WorkerNotHealthyError,
 )
 from application_sdk.testing.e2e._manifest_identity import (
     DagNodeIdentity,
@@ -2352,13 +2353,22 @@ class BaseE2ETest:
         The no-source tier: when a connector has no extraction source in CI
         (``source_available`` False), the full-DAG e2e can't extract, so it
         proves the worker came up instead — a GET of ``/server/health`` returns
-        2xx. This is a hard assertion (raises ``AssertionError`` when the worker
-        never becomes healthy), so an unhealthy worker fails RED. The *caller*
-        (``test_full_dag_runs_end_to_end``) then raises ``pytest.skip`` so a
-        healthy worker reports SKIPPED, not a green pass — because the full DAG
-        was never exercised. The sdr-e2e CI action already gates on the same
+        2xx. This is a hard assertion, so an unhealthy worker fails RED. The
+        *caller* (``test_full_dag_runs_end_to_end``) then raises ``pytest.skip``
+        so a healthy worker reports SKIPPED, not a green pass — because the full
+        DAG was never exercised. The sdr-e2e CI action already gates on the same
         endpoint before pytest; re-asserting it here keeps a bare local
         ``pytest`` meaningful as a worker-deploy smoke check.
+
+        Raises:
+            WorkerNotHealthyError: The worker never answered 2xx inside
+                ``worker_health_timeout_seconds``. Typed since FND-240, which
+                names the bare ``AssertionError`` this used to raise: the last
+                failure seen is now a *field* rather than a fragment of a
+                sentence, and a refused connection and a 503 point at different
+                halves of a deployment. It **is** an ``AssertionError`` as well,
+                so a connector suite's existing ``except AssertionError`` — a
+                clause this method's own docstring invited — still catches it.
         """
         url = os.environ.get("E2E_WORKER_HEALTH_URL", self.worker_health_url)
         logger.info("Worker-up-only tier: probing %s", url)
@@ -2379,12 +2389,20 @@ class BaseE2ETest:
             except (urllib.error.URLError, OSError) as exc:
                 last_error = str(exc)
             if attempt.is_last:
-                raise AssertionError(
-                    f"App worker for {self.connector_short_name} did not become "
-                    f"healthy at {url} within {self.worker_health_timeout_seconds}s "
-                    f"({attempt.number} attempts, {attempt.elapsed:.0f}s elapsed; "
-                    f"last: {last_error}). No source is provisioned, so this run "
-                    "only checks that the worker deploys and serves /server/health."
+                raise WorkerNotHealthyError(
+                    message=(
+                        f"App worker for {self.connector_short_name} did not "
+                        f"become healthy at {url} within "
+                        f"{self.worker_health_timeout_seconds}s "
+                        f"({attempt.number} attempts, {attempt.elapsed:.0f}s "
+                        f"elapsed; last: {last_error}). No source is "
+                        "provisioned, so this run only checks that the worker "
+                        "deploys and serves /server/health."
+                    ),
+                    url=url,
+                    attempts=attempt.number,
+                    elapsed_seconds=attempt.elapsed,
+                    last_error=last_error,
                 )
 
     # ------------------------------------------------------------------

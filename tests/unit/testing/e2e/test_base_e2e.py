@@ -26,6 +26,7 @@ from application_sdk.testing.e2e._errors import (
     MissingHarnessClassAttrError,
     MissingHarnessEnvError,
     ProgressWatchdogUnreachableError,
+    WorkerNotHealthyError,
 )
 from application_sdk.testing.e2e.base import (
     _PURGE_BATCH_SIZE,
@@ -579,6 +580,55 @@ class TestWorkerUpTier:
         )
         with pytest.raises(AssertionError, match="did not become healthy"):
             harness.assert_worker_up()
+
+    def test_the_worker_failure_is_typed_and_still_an_assertion_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Both halves of the FND-240 change, in one raise.
+
+        The leaf is typed — ``last_error`` is a field a report can read rather
+        than a fragment of a sentence, and a refused connection and a 503 point
+        at different halves of a deployment. And it is still an
+        ``AssertionError``, because this method's docstring promised one since it
+        existed and out-of-repo connector suites are entitled to have written
+        ``except AssertionError`` against it. Typing the leaf is worth doing;
+        taking that clause away from the fleet to do it is not.
+        """
+        harness = self._harness()
+
+        def _unavailable(url: str, timeout: int = 10) -> _FakeHealthResponse:
+            return _FakeHealthResponse(503)
+
+        monkeypatch.setattr(
+            "application_sdk.testing.e2e.base.urllib.request.urlopen", _unavailable
+        )
+        with pytest.raises(WorkerNotHealthyError) as excinfo:
+            harness.assert_worker_up()
+
+        error = excinfo.value
+        assert isinstance(error, AssertionError)
+        assert error.code == "PRECONDITION_WORKER_NOT_HEALTHY"
+        assert error.url == harness.worker_health_url
+        assert error.last_error == "HTTP 503"
+        assert error.attempts is not None and error.attempts >= 1
+
+    def test_a_refused_connection_and_a_5xx_are_told_apart(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The reason ``last_error`` is a field. "Nothing is listening" and "it is
+        listening and unhappy" send an operator to different places."""
+        harness = self._harness()
+
+        def _refused(url: str, timeout: int = 10) -> _FakeHealthResponse:
+            raise urllib.error.URLError("connection refused")
+
+        monkeypatch.setattr(
+            "application_sdk.testing.e2e.base.urllib.request.urlopen", _refused
+        )
+        with pytest.raises(WorkerNotHealthyError) as excinfo:
+            harness.assert_worker_up()
+
+        assert "connection refused" in (excinfo.value.last_error or "")
 
 
 class TestStallGuardDirectModeWarning:

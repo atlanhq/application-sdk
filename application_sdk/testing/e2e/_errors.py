@@ -57,6 +57,7 @@ __all__ = [
     "RequestDelivery",
     "SeededConnectionNotSearchableError",
     "UnknownConnectorTypeError",
+    "WorkerNotHealthyError",
 ]
 
 # ---------------------------------------------------------------------------
@@ -180,6 +181,47 @@ class SeededConnectionNotSearchableError(PreconditionError):
 
     code: ClassVar[str] = "PRECONDITION_SEEDED_CONNECTION_NOT_SEARCHABLE"
     expected_state: str | None = "seeded connection searchable in Atlas"
+
+
+@dataclass(kw_only=True)
+class WorkerNotHealthyError(PreconditionError, AssertionError):
+    """The app worker never served a 2xx from ``/server/health``.
+
+    The no-source tier's whole verdict. When a connector has no extraction source
+    in CI the full DAG cannot run, so
+    :meth:`~application_sdk.testing.e2e.base.BaseE2ETest.assert_worker_up` proves
+    the worker deployed instead — and an unhealthy worker must fail RED rather
+    than be reported as the skip that a *healthy* one earns.
+
+    ``PreconditionError`` for the reason
+    :class:`SeededConnectionNotSearchableError` is one: the budget did not run
+    out on work that was progressing, the state that had to exist before any work
+    could begin never did. Retrying without changing that state is not expected
+    to help.
+
+    **Also an** :class:`AssertionError`, deliberately. That is not a hedge and it
+    is not for pytest's benefit — pytest reds on any exception. It is because
+    ``assert_worker_up``'s docstring has promised an ``AssertionError`` since the
+    method existed, and out-of-repo connector suites are entitled to have written
+    ``except AssertionError`` against it. Typing the leaf is worth doing; taking a
+    documented ``except`` clause away from every connector in the fleet to do it
+    is not, and the two are not in tension — this raise satisfies both.
+
+    Attributes:
+        url: The health endpoint that never answered 2xx.
+        attempts: How many probes were made.
+        elapsed_seconds: Wall-clock time the wait consumed.
+        last_error: The last failure seen — an ``HTTP <code>`` or a transport
+            error's own message. The single most useful field: a refused
+            connection and a 503 point at different halves of a deployment.
+    """
+
+    code: ClassVar[str] = "PRECONDITION_WORKER_NOT_HEALTHY"
+    expected_state: str | None = "app worker serving 2xx from /server/health"
+    url: str | None = None
+    attempts: int | None = None
+    elapsed_seconds: float | None = None
+    last_error: str | None = None
 
 
 @dataclass(kw_only=True)
