@@ -291,16 +291,7 @@ async def test_every_remaining_stub_names_its_child_issue() -> None:
     from application_sdk.testing.harness import atlas, automation_engine, starters
     from application_sdk.testing.harness.cluster import HttpRequest, HttpResponse
     from application_sdk.testing.harness.evidence import EvidenceBundle, redact
-    from application_sdk.testing.harness.expectations import (
-        AssetExpectations,
-        evaluate_counts,
-        evaluate_locations,
-    )
-    from application_sdk.testing.harness.identity import Minter
     from application_sdk.testing.harness.teardown import purge_connection
-
-    expectations = AssetExpectations()
-    minter = Minter(clock=lambda: 0, randbelow=lambda _n: 0)
 
     class _Reader:
         """Shaped like a ClusterReader so the call is typed, not bypassed."""
@@ -317,13 +308,7 @@ async def test_every_remaining_stub_names_its_child_issue() -> None:
         async def http(self, target, request: HttpRequest) -> HttpResponse:
             raise AssertionError("the stub must raise before calling out")
 
-    for call in (
-        lambda: evaluate_counts({}, expectations),
-        lambda: evaluate_locations({}, expectations),
-        minter.run_id,
-        minter.unique_suffix,
-        lambda: redact(EvidenceBundle(label="x")),
-    ):
+    for call in (lambda: redact(EvidenceBundle(label="x")),):
         with pytest.raises(HarnessNotBuiltError) as caught:
             call()
         assert caught.value.issue == "FND-224"
