@@ -39,6 +39,7 @@ from application_sdk.testing.e2e.client import (
     DAGRunResult,
     DAGRunStatus,
 )
+from application_sdk.testing.harness._poll import fake_clock
 
 
 def _node(name: str, status: DAGNodeStatus) -> DAGNodeResult:
@@ -419,6 +420,32 @@ class TestSeedConnection:
 
         with pytest.raises(PermissionError):
             harness.seed_connection(probe=_probe)
+
+    def test_the_probe_retry_stops_inside_its_stated_budget(
+        self, fake_pyatlan: MagicMock
+    ) -> None:
+        """The off-by-one FND-240 removed along with the hand-rolled deadline.
+
+        The old loop checked ``time.monotonic() >= deadline`` *after* the probe,
+        so a 30s budget at a 10s interval probed at 0, 10, 20 **and 30** — it
+        slept a whole interval past its own timeout to find out it had expired.
+        ``attempt.is_last`` moves that decision before the sleep: three probes,
+        20s of sleeping, and the failure raised at 20s rather than at 30s.
+        """
+        harness = _seeding_harness()
+        harness.atlas_poll_timeout_seconds = 30  # type: ignore[misc]
+        harness.atlas_poll_interval_seconds = 10  # type: ignore[misc]
+        attempts: list[int] = []
+
+        def _probe() -> None:
+            attempts.append(1)
+            raise PermissionError("403 forever")
+
+        with fake_clock() as clock, pytest.raises(PermissionError):
+            harness.seed_connection(probe=_probe)
+
+        assert len(attempts) == 3
+        assert clock.slept == [10, 10]
 
     @pytest.mark.parametrize("exc_type", [TypeError, ValueError])
     def test_a_non_transient_probe_error_fails_fast(

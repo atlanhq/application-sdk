@@ -1090,57 +1090,94 @@ class BaseE2ETest:
             )
 
         if probe is not None:
-            deadline = time.monotonic() + self.atlas_poll_timeout_seconds
-            attempts = 0
-            while True:
-                attempts += 1
-                try:
-                    probe()
-                except Exception as exc:
-                    if isinstance(exc, self._PROBE_NON_TRANSIENT_ERRORS):
-                        # A deterministic probe bug (a TypeError from a wrong
-                        # call signature, a config ValueError) will fail every
-                        # retry identically — burning the whole timeout before
-                        # surfacing. Re-raise immediately instead.
-                        logger.error(
-                            "e2e seed: probe write under %s raised %s, a "
-                            "non-transient error — failing fast rather than "
-                            "retrying until the %ds timeout",
-                            self.connection_qualified_name,
-                            type(exc).__name__,
-                            self.atlas_poll_timeout_seconds,
-                            exc_info=True,
-                        )
-                        raise
-                    if time.monotonic() >= deadline:
-                        logger.error(
-                            "e2e seed: probe write under %s still failing after "
-                            "%d attempt(s) / %ds — a fresh connection 403s child "
-                            "writes until its access policies go live, so this "
-                            "means provisioning never completed",
-                            self.connection_qualified_name,
-                            attempts,
-                            self.atlas_poll_timeout_seconds,
-                            exc_info=True,
-                        )
-                        raise
-                    logger.info(
-                        "e2e seed: probe write under %s not yet permitted "
-                        "(attempt %d) — connection policies not live; retrying",
-                        self.connection_qualified_name,
-                        attempts,
-                    )
-                    time.sleep(self.atlas_poll_interval_seconds)
-                else:
-                    logger.info(
-                        "e2e seed: probe write under %s succeeded after %d "
-                        "attempt(s) — connection policies are live",
-                        self.connection_qualified_name,
-                        attempts,
-                    )
-                    break
+            self._retry_seed_probe(probe)
 
         return self.connection_qualified_name
+
+    def _retry_seed_probe(self, probe: Callable[[], object]) -> None:
+        """Retry *probe* until it stops raising, or the Atlas budget runs out.
+
+        The loop is
+        :func:`~application_sdk.testing.harness._poll.until_deadline` (FND-240),
+        which is what removes the last hand-rolled ``time.monotonic() +
+        timeout`` deadline in this file — and with it the off-by-one every one of
+        them shared: the budget check sat *after* the probe, so the loop slept a
+        whole ``atlas_poll_interval_seconds`` past its stated timeout before
+        noticing. ``attempt.is_last`` makes that decision before the sleep.
+
+        Not :func:`~application_sdk.testing.harness.waiting.poll_until`, for one
+        reason: ``probe`` is a *synchronous* callable a connector suite supplies,
+        and the primitive is async by construction (decision D1). Reaching it
+        from here would mean either blocking the bridge's loop inside a
+        suite-supplied write or offloading it to a thread — both workarounds
+        built to be deleted when child H moves the sync boundary up to this
+        class's public methods. Its three sibling loops in this file take the
+        same shape for the same reason.
+
+        Args:
+            probe: The representative child write. Its return value is ignored;
+                only whether it raises matters.
+
+        Raises:
+            Exception: Whatever *probe* last raised — immediately for a
+                non-transient error, or on the final attempt otherwise.
+                Propagated rather than swallowed: a suite whose seed never
+                became writable must fail, not run against a connection it
+                cannot populate.
+        """
+        for attempt in until_deadline(
+            self.atlas_poll_timeout_seconds,
+            self.atlas_poll_interval_seconds,
+            label=f"a permitted child write under {self.connection_qualified_name}",
+            # The per-attempt line below already reports progress; a generic
+            # "still waiting" heartbeat would duplicate it.
+            heartbeat_seconds=0,
+        ):
+            try:
+                probe()
+            except Exception as exc:
+                if isinstance(exc, self._PROBE_NON_TRANSIENT_ERRORS):
+                    # A deterministic probe bug (a TypeError from a wrong
+                    # call signature, a config ValueError) will fail every
+                    # retry identically — burning the whole timeout before
+                    # surfacing. Re-raise immediately instead.
+                    logger.error(
+                        "e2e seed: probe write under %s raised %s, a "
+                        "non-transient error — failing fast rather than "
+                        "retrying until the %ds timeout",
+                        self.connection_qualified_name,
+                        type(exc).__name__,
+                        self.atlas_poll_timeout_seconds,
+                        exc_info=True,
+                    )
+                    raise
+                if attempt.is_last:
+                    logger.error(
+                        "e2e seed: probe write under %s still failing after "
+                        "%d attempt(s) / %ds — a fresh connection 403s child "
+                        "writes until its access policies go live, so this "
+                        "means provisioning never completed",
+                        self.connection_qualified_name,
+                        attempt.number,
+                        self.atlas_poll_timeout_seconds,
+                        exc_info=True,
+                    )
+                    raise
+                # conformance: ignore[L006] one line per poll of an atlas_poll_interval_seconds loop (30s by default), not a hot loop; a seed that never becomes writable is diagnosed from how many attempts were refused and for how long
+                logger.info(
+                    "e2e seed: probe write under %s not yet permitted "
+                    "(attempt %d) — connection policies not live; retrying",
+                    self.connection_qualified_name,
+                    attempt.number,
+                )
+                continue
+            logger.info(
+                "e2e seed: probe write under %s succeeded after %d "
+                "attempt(s) — connection policies are live",
+                self.connection_qualified_name,
+                attempt.number,
+            )
+            return
 
     # ------------------------------------------------------------------
     # Subclass hooks — override these
