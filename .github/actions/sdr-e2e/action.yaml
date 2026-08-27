@@ -752,6 +752,22 @@ runs:
         # Read by BaseE2ETest.setup_method(): "false" degrades the full-DAG
         # e2e to a worker-up-only check when no source is provisioned.
         E2E_SOURCE_AVAILABLE: ${{ inputs.source-available }}
+        # The host pytest harness is a test CLIENT: no daprd, and no components
+        # directory. `ObservabilityBase._components_dir()` resolves to
+        # `DAPR_COMPONENTS_PATH` or `./components`, and neither exists here --
+        # the CI components this action selects land in `ci-deploy/components`,
+        # which is mounted into the worker container, not the runner. So every
+        # observability flush resolved the `objectstore` binding, raised
+        # StorageBindingNotFoundError, and logged a full traceback at WARNING.
+        # Non-fatal by design, but pure noise: the harness has no deployment
+        # store to ship its own telemetry to, and pointing it at the CI
+        # component would not help either (bindings.localstorage, rootPath
+        # /tmp/atlan-data -- a path inside the container).
+        #
+        # Only connectors that set pytest's `log_cli` ever SAW it, because the
+        # SDK emits this one through stdlib `logging`, not loguru. The failing
+        # lookup happened on every connector regardless.
+        ATLAN_ENABLE_OBSERVABILITY_STORE_SINK: "false"
       run: |
         mkdir -p results
         set +e
