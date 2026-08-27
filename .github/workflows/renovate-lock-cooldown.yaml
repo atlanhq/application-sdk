@@ -98,9 +98,8 @@ jobs:
     steps:
       # A real (non-github-actions[bot]) identity is required: the push below must
       # re-trigger the PR's required checks against the new commit, which a push
-      # made with the default GITHUB_TOKEN does not. Same reason, same mechanism
-      # as dependabot-requirements-sync.yaml, which has been pushing to this
-      # repo's renovate/** branches on that basis.
+      # made with the default GITHUB_TOKEN does not. Confirmed empirically on this
+      # repo's renovate/** branches — an App-token push does re-trigger them.
       - name: Mint fleet App token
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
@@ -135,8 +134,8 @@ jobs:
           BASE_BRANCH: ${{ github.event.repository.default_branch }}
         run: git fetch --no-tags --depth=1 origin "+refs/heads/$BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH"
 
-      # Pinned to the same uv the fleet runner and the requirements sync use — a
-      # resolver version skew here would show up as unexplained lock churn.
+      # Pinned to the same uv the fleet runner uses — a resolver version skew
+      # here would show up as unexplained lock churn.
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.12.6"

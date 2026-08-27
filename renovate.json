@@ -37,8 +37,7 @@
     }
   ],
   "ignorePaths": [
-    "contract-toolkit/examples/**",
-    "requirements.txt"
+    "contract-toolkit/examples/**"
   ],
   "ignoreDeps": [
     "cgr.dev/atlan.com/app-framework-golden",

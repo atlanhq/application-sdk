@@ -13,7 +13,7 @@ Commit statuses are per-SHA and Renovate only stamps commits it authored. So the
 moment any in-repo workflow adds a commit to a Renovate branch, the head moves
 off the stamped SHA and the gate withholds forever. That is not hypothetical: on
 application-sdk#3216 atlan-ci posted three approvals, each dismissed by the next
-push, and the PR finally merged on a human's approval after
+push, and the PR finally merged on a human's approval after the since-removed
 ``dependabot-requirements-sync.yaml`` added the last commit. Every lock-refresh
 PR that gets a bot commit has needed a human ever since.
 
