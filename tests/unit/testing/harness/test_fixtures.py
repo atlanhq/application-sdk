@@ -885,3 +885,19 @@ def test_the_tenant_clients_are_built_and_closed_around_the_test(
         """
     )
     suite.runpytest().assert_outcomes(passed=1)
+
+
+def test_every_fixture_is_exported() -> None:
+    """``__all__`` is what the capability manifest renders, so a fixture missing
+    from it is one a composer cannot discover without reading the source.
+
+    An invariant rather than a one-off fix, because pytest discovers a fixture
+    whether or not it is exported — so nothing else in the tree notices. The two
+    that were missing were ``harness_connection_type`` and
+    ``harness_app_under_test``: the only two a composer *must* declare, and so
+    exactly the two worst to leave out of the manifest.
+    """
+    exported = set(fixtures_api.__all__)
+    defined = {name for name in dir(fixtures_api) if name.startswith("harness_")}
+    assert defined - exported == set()
+    assert all(hasattr(fixtures_api, name) for name in exported)

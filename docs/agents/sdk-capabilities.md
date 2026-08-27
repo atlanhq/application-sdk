@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.29.0
-source-sha:    3b44c0a39767080d6dffccf48dc9a9efbb5d3e27
-source-date:   2026-08-27T13:23:09Z
+source-sha:    4eb964f4230ca77522a4edbb19abd8bcf6e8acda
+source-date:   2026-08-27T15:27:14+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 245 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 247 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -4280,6 +4280,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** An Automation Engine client over one pooled connection, closed at teardown.
 - **Defined in:** `application_sdk/testing/harness/fixtures.py`
 
+#### `harness_app_under_test`
+
+- **Import:** `from application_sdk.testing.harness.fixtures import harness_app_under_test`
+- **Signature:** `harness_app_under_test() -> AppUnderTest`
+- **Summary:** Where to find the app under test inside a cluster.
+- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+
 #### `harness_atlas_client`
 
 - **Import:** `from application_sdk.testing.harness.fixtures import harness_atlas_client`
@@ -4313,6 +4320,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Import:** `from application_sdk.testing.harness.fixtures import harness_connection_teardown`
 - **Signature:** `harness_connection_teardown(harness_connection_identity: ConnectionIdentity, ...)`
 - **Summary:** Yield this test's connection identity, and purge it afterwards.
+- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+
+#### `harness_connection_type`
+
+- **Import:** `from application_sdk.testing.harness.fixtures import harness_connection_type`
+- **Signature:** `harness_connection_type() -> str`
+- **Summary:** Atlan catalog type segment for the connection this run creates.
 - **Defined in:** `application_sdk/testing/harness/fixtures.py`
 
 #### `harness_environ`

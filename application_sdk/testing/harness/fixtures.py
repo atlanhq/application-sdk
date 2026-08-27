@@ -120,10 +120,12 @@ logger = get_logger(__name__)
 __all__ = [
     "EvidenceLog",
     "harness_ae_client",
+    "harness_app_under_test",
     "harness_atlas_client",
     "harness_budget_profile",
     "harness_cluster_reader",
     "harness_connection_identity",
+    "harness_connection_type",
     "harness_connection_teardown",
     "harness_environ",
     "harness_evidence",
