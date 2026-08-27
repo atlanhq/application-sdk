@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from publish_fleet_dashboard import (  # noqa: E402
     BUCKET,
     merge_history,
+    orphans,
     publish,
     refresh_manifest,
 )
@@ -296,3 +297,108 @@ def test_history_download_non_404_with_not_found_phrase_is_not_first_publish(tmp
         merge_history(local, PREFIX, "slug", tmp_path, run=throttled)
 
     assert s3.objects[key] == stored  # history untouched
+
+
+# ── departed repos (FND-960) ─────────────────────────────────────────────────
+
+
+def test_orphans_are_the_stored_objects_a_scan_did_not_produce():
+    assert orphans(["a.json", "b.json"], {"a.json"}) == ["b.json"]
+    assert orphans(["a.json"], {"a.json", "b.json"}) == []
+
+
+def test_a_full_fleet_run_retires_a_repo_that_left_the_fleet(tmp_path):
+    """The scanners exclude archived repos, so the scan stops covering one.
+
+    Because the manifest is rebuilt by listing the bucket, its object used to
+    keep it enumerated on every dashboard forever.
+    """
+    s3 = FakeS3(
+        {
+            f"{BUCKET}/{PREFIX}/repos/atlanhq_atlan-mysql-app.json": "{}",
+            f"{BUCKET}/{PREFIX}/repos/atlanhq_atlan-dead-app.json": "{}",
+            f"{BUCKET}/{PREFIX}/repos/atlanhq_atlan-hive-app.json": "{}",
+            f"{BUCKET}/{PREFIX}/repos/atlanhq_atlan-adf-app.json": "{}",
+            f"{BUCKET}/{PREFIX}/repos/atlanhq_atlan-gcs-app.json": "{}",
+        }
+    )
+    publish(
+        _scan_dir(
+            tmp_path,
+            repos=(
+                "atlanhq_atlan-mysql-app",
+                "atlanhq_atlan-hive-app",
+                "atlanhq_atlan-adf-app",
+                "atlanhq_atlan-gcs-app",
+            ),
+        ),
+        PREFIX,
+        single_repo=False,
+        tmp_dir=tmp_path,
+        run=s3,
+    )
+    manifest = json.loads(s3.objects[f"{BUCKET}/{PREFIX}/repos.json"])
+    assert "atlanhq_atlan-dead-app.json" not in manifest
+    assert "atlanhq_atlan-mysql-app.json" in manifest
+
+
+def test_a_retired_repo_is_omitted_but_never_deleted(tmp_path):
+    """Excluding is idempotent and reversible; deleting dashboard history is not."""
+    dead = f"{BUCKET}/{PREFIX}/repos/atlanhq_atlan-dead-app.json"
+    s3 = FakeS3(
+        {
+            dead: "{}",
+            f"{BUCKET}/{PREFIX}/repos/atlanhq_atlan-mysql-app.json": "{}",
+            f"{BUCKET}/{PREFIX}/repos/atlanhq_atlan-hive-app.json": "{}",
+            f"{BUCKET}/{PREFIX}/repos/atlanhq_atlan-adf-app.json": "{}",
+            f"{BUCKET}/{PREFIX}/repos/atlanhq_atlan-gcs-app.json": "{}",
+            f"{BUCKET}/{PREFIX}/history/atlanhq_atlan-dead-app.jsonl": "{}\n",
+        }
+    )
+    publish(
+        _scan_dir(
+            tmp_path,
+            repos=(
+                "atlanhq_atlan-mysql-app",
+                "atlanhq_atlan-hive-app",
+                "atlanhq_atlan-adf-app",
+                "atlanhq_atlan-gcs-app",
+            ),
+        ),
+        PREFIX,
+        single_repo=False,
+        tmp_dir=tmp_path,
+        run=s3,
+    )
+    assert dead in s3.objects
+    assert f"{BUCKET}/{PREFIX}/history/atlanhq_atlan-dead-app.jsonl" in s3.objects
+
+
+def test_a_single_repo_run_never_retires_anything(tmp_path):
+    """Its one document says nothing about the rest of the fleet."""
+    s3 = FakeS3(
+        {
+            f"{BUCKET}/{PREFIX}/repos/atlanhq_atlan-mysql-app.json": "{}",
+            f"{BUCKET}/{PREFIX}/repos/atlanhq_atlan-metabase-app.json": "{}",
+        }
+    )
+    publish(_scan_dir(tmp_path), PREFIX, single_repo=True, tmp_dir=tmp_path, run=s3)
+    manifest = json.loads(s3.objects[f"{BUCKET}/{PREFIX}/repos.json"])
+    assert "atlanhq_atlan-metabase-app.json" in manifest
+
+
+def test_a_partial_scan_retires_nothing(tmp_path, capsys):
+    """A crashed or rate-limited scan makes most of the fleet look departed.
+
+    Dropping them would read as a catastrophic regression on every panel, so
+    above the cap the manifest keeps everything and the run says why.
+    """
+    stored = {
+        f"{BUCKET}/{PREFIX}/repos/atlanhq_atlan-app-{i}.json": "{}" for i in range(10)
+    }
+    stored[f"{BUCKET}/{PREFIX}/repos/atlanhq_atlan-mysql-app.json"] = "{}"
+    s3 = FakeS3(stored)
+    publish(_scan_dir(tmp_path), PREFIX, single_repo=False, tmp_dir=tmp_path, run=s3)
+    manifest = json.loads(s3.objects[f"{BUCKET}/{PREFIX}/repos.json"])
+    assert len(manifest) == 11
+    assert "absent from this scan" in capsys.readouterr().err

@@ -41,13 +41,16 @@ H deletes is one function rather than four scattered ``except`` blocks.
 from __future__ import annotations
 
 import asyncio
+import secrets
 import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING, TypeAlias, TypeVar, Union
 
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.testing.harness.atlas._errors import UnknownConnectorTypeError
 from application_sdk.testing.harness.budgets import Budget
 from application_sdk.testing.harness.outcome import (
     Indeterminate,
@@ -77,16 +80,28 @@ T = TypeVar("T")
 Reading: TypeAlias = Union[Settled[T], Indeterminate[T]]
 
 __all__ = [
+    "ADMIN_ROLE_NAME",
     "DEFAULT_TYPE_NAMES",
+    "AdminIdentity",
     "Reading",
+    "admin_identity",
     "atlas_client",
     "connection_exists",
     "count_assets",
     "count_lineage",
     "count_total_assets",
+    "create_connection",
     "poll_for_connection",
     "sample_qualified_names",
+    # Leaf
+    "UnknownConnectorTypeError",
 ]
+
+#: The built-in tenant role every harness-created Connection falls back to.
+#: Atlas refuses a Connection with no non-empty admin list at all
+#: (``ATLAS-400-00-114``), and this is the role that lets *any* tenant admin
+#: manage the ephemeral connection rather than only the token that created it.
+ADMIN_ROLE_NAME = "$admin"
 
 #: Types a connector run counts by default. The five levels of the SQL asset
 #: hierarchy, in the order a reader expects to see them.
@@ -551,3 +566,171 @@ async def _counts(
         elapsed=elapsed,
         value=dict(zip(type_names, counts, strict=True)),
     )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AdminIdentity:
+    """Who may administer a Connection this run creates.
+
+    Both halves are the *fallback* — what the harness resolves when a suite
+    pinned no explicit ACL of its own. Neither is optional in practice, and they
+    fail differently, which is why they are one value rather than two reads a
+    caller has to remember to pair:
+
+    * without a role, Atlas refuses the Connection outright
+      (``ATLAS-400-00-114``: at least one admin list must be non-empty);
+    * without the *creating* identity in ``adminUsers``, the connection is
+      created and then cannot be purged — the ``$admin`` role alone is not
+      enough when the service account does not hold it, so teardown 403s
+      (``ATLAS-403-00-001``) and orphans the connection and everything under it
+      on a shared tenant, while the leg still passes because a teardown failure
+      is only a warning.
+
+    Attributes:
+        roles: Role GUIDs, empty when the role could not be resolved.
+        users: Usernames, empty when the current user could not be read.
+    """
+
+    roles: tuple[str, ...] = ()
+    users: tuple[str, ...] = ()
+
+
+async def admin_identity(
+    client: AsyncAtlanClient, *, role_name: str = ADMIN_ROLE_NAME
+) -> Reading[AdminIdentity]:
+    """Resolve the admin ACL fallback for a harness-created Connection.
+
+    **One reader, two policies.** ``BaseE2ETest.setup_method`` degraded to an
+    empty ACL on any failure and let Atlas reject the Connection later, while
+    ``SQLAppE2ETest._resolve_admin_role_guid`` raised
+    ``AdminRoleNotResolvedError`` on an absent role — two implementations of one
+    lookup that disagreed about what an unresolvable ``$admin`` means. The
+    disagreement is a *policy*, so it stays with the callers: this returns the
+    reading, and each decides whether an empty answer is fatal.
+
+    Args:
+        client: An open client from :func:`atlas_client`.
+        role_name: Role to resolve. Defaults to :data:`ADMIN_ROLE_NAME`.
+
+    Returns:
+        :class:`~application_sdk.testing.harness.outcome.Settled` carrying the
+        identity — whose fields are *empty* when the tenant simply has no such
+        role or no resolvable current user — or
+        :class:`~application_sdk.testing.harness.outcome.Indeterminate` when the
+        lookup could not be performed at all. The two are different answers: a
+        tenant without a ``$admin`` role is a finding about the tenant, and an
+        unreachable role cache is a finding about the network.
+    """
+    label = f"admin identity ({role_name}) on the tenant"
+    started = time.monotonic()
+    try:
+        guid = await client.role_cache.get_id_for_name(role_name)
+        current = await client.user.get_current()
+    except Exception as error:
+        return _unreadable(label, started, error)
+    username = getattr(current, "username", "") or ""
+    if not guid:
+        logger.warning(
+            "the %s role is not present on this tenant, so a Connection created "
+            "with no explicit admin_roles will be rejected (ATLAS-400-00-114) — "
+            "set connection_admin_roles on the suite",
+            role_name,
+        )
+    name, attempts, elapsed = _one_shot(label, started)
+    return Settled(
+        label=name,
+        attempts=attempts,
+        elapsed=elapsed,
+        value=AdminIdentity(
+            roles=(guid,) if guid else (),
+            users=(username,) if username else (),
+        ),
+    )
+
+
+async def create_connection(
+    client: AsyncAtlanClient,
+    *,
+    qualified_name: str,
+    display_name: str,
+    connector_type: str,
+    admin_users: Sequence[str] = (),
+    admin_groups: Sequence[str] = (),
+    admin_roles: Sequence[str] = (),
+) -> str:
+    """Create a Connection at an exact qualified name, and return that name.
+
+    **The qualified name is an input, not an output**, and that is the one
+    behavioural difference from the ``Connection.creator`` call this replaces.
+    ``creator`` derives the name itself as ``default/<type>/<epoch>`` — one
+    second of resolution — and the lifted code then *adopted* whatever came
+    back, discarding the run's own minted name. Two legs of one e2e matrix
+    starting in the same second therefore shared a connection, and the first to
+    finish purged the other's assets. Taking the name from
+    :meth:`~application_sdk.testing.harness.identity.Minter.connection_identity`
+    is what makes the run's teardown target its own connection and nobody
+    else's, and what lets a test predict the name at all.
+
+    Args:
+        client: An open client from :func:`atlas_client`.
+        qualified_name: Exact qualified name to create at, from the minter.
+        display_name: Human-facing name on the same connection.
+        connector_type: Atlan connector type value — the catalog segment, e.g.
+            ``"api"`` or ``"postgres"``.
+        admin_users: Usernames on the connection's admin ACL.
+        admin_groups: Group aliases on the admin ACL.
+        admin_roles: Role GUIDs on the admin ACL.
+
+    Returns:
+        *qualified_name*, unchanged. Returned rather than assumed so the call
+        site reads as an adoption and cannot drift back into deriving one.
+
+    Raises:
+        UnknownConnectorTypeError: *connector_type* is not a pyatlan
+            ``AtlanConnectorType``.
+        Exception: Whatever pyatlan raises if the save is rejected — an empty
+            admin ACL (``ATLAS-400-00-114``), an unknown role GUID, a
+            network fault. Not collapsed into a verdict: unlike every read in
+            this module, a failed *write* leaves the caller with no connection
+            at all, and there is no degraded mode to report.
+    """
+    from pyatlan.model.assets import Connection  # noqa: PLC0415
+    from pyatlan.model.enums import AtlanConnectorType  # noqa: PLC0415
+
+    try:
+        resolved = AtlanConnectorType(connector_type)
+    except ValueError as error:
+        raise UnknownConnectorTypeError(
+            message=(
+                f"cannot create a Connection because {connector_type!r} is not a "
+                "pyatlan AtlanConnectorType. Pass the Atlan catalog type segment "
+                "(e.g. 'api' for the OpenAPI connector, whose short name is "
+                "'openapi')"
+            ),
+            value_summary=connector_type,
+        ) from error
+
+    # The three validations ``Connection.creator`` performs, on the async caches.
+    # Kept because they are what turns a typo in an ACL into an error naming the
+    # bad value, rather than an Atlas rejection naming the whole request.
+    await client.user_cache.validate_names(names=list(admin_users))
+    await client.role_cache.validate_idstrs(idstrs=list(admin_roles))
+    await client.group_cache.validate_aliases(aliases=list(admin_groups))
+
+    connection = Connection(
+        attributes=Connection.Attributes(
+            name=display_name,
+            qualified_name=qualified_name,
+            connector_name=resolved.value,
+            category=resolved.category.value,
+            admin_users=set(admin_users),
+            admin_groups=set(admin_groups),
+            admin_roles=set(admin_roles),
+        )
+    )
+    # The negative placeholder ``Connection.creator`` gets from ``@init_guid``:
+    # Atlas assigns the real GUID, and a create without one is rejected.
+    connection.guid = str(-secrets.randbelow(10_000_000_000_000_000) - 1)
+    await client.asset.save(connection)
+    logger.info("harness: created connection %s", qualified_name)
+    return qualified_name
