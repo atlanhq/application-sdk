@@ -50,7 +50,18 @@ Module map:
     rather than wrapping it. ``kubectl`` survives there only as transport, for
     the port-forward that reaches an app handler Service.
 ``temporal``
-    Read-only Temporal Protocol — pollers and workflow status.
+    Read-only Temporal Protocol — pollers and workflow status — and the
+    ``temporalio`` backend behind it. The poller read makes an *observation*
+    available where ``NoWorkerOnTaskQueueError`` currently reasons from three
+    minutes of silence; it does not yet replace it. Nothing in ``testing/e2e``
+    calls this module, and it was not lifted from code in this repo — the poller
+    half re-expresses ``suite/ports/temporal.py`` in
+    ``atlanhq/app-runtime-test-suite``, so its unit tests are a golden table for
+    the plain reason that there is no local original to run a differential
+    against. Not the only module here whose pin is a captured table, and not a
+    claim that it is: see the provenance paragraph below. Adopting it in
+    ``poll_native_status`` is child H's, with the rest of the re-expression.
+    No extra to install: ``temporalio`` has been a core dependency since v3.1.
 ``atlas``
     Atlas reads, split out of ``testing/e2e/client.py`` — async, one client per
     batch, and an unreadable search reported as a verdict rather than as zero.
@@ -63,8 +74,8 @@ Module map:
     Purge mechanics, including the batching that is a correctness bound.
 
 ``bridge``, ``waiting``, ``outcome``, ``spec``, ``budgets``, ``expectations``,
-``identity``, ``atlas``, ``automation_engine`` and ``cluster`` are real; the rest
-are typed stubs, each naming the child issue that fills it in.
+``identity``, ``atlas``, ``automation_engine``, ``cluster`` and ``temporal`` are
+real; the rest are typed stubs, each naming the child issue that fills it in.
 
 ``atlas`` and ``automation_engine`` are the first two that ``testing/e2e``
 actually calls: since child F, ``AEWorkflowClient`` is a set of one-line

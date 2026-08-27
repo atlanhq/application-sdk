@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.29.0
-source-sha:    87901cf1141d4a0ebad578030a5e4347111e7adf
-source-date:   2026-08-27T01:30:51+01:00
+source-sha:    faf9b47620aa53af11cf7d017255c8cb5e92ae55
+source-date:   2026-08-27T02:55:32+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 199 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 209 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3597,9 +3597,9 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `PollerInfo`
 
 - **Import:** `from application_sdk.testing.harness.temporal import PollerInfo`
-- **Signature:** `class PollerInfo(*, identity: str, last_access: datetime, build_id: str | None = None) -> None`
+- **Signature:** `class PollerInfo(*, ...)`
 - **Summary:** One worker seen polling a task queue.
-- **Defined in:** `application_sdk/testing/harness/temporal/__init__.py`
+- **Defined in:** `application_sdk/testing/harness/temporal/_states.py`
 
 #### `PortForward`
 
@@ -3734,12 +3734,56 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** :func:`~application_sdk.testing.harness.run_sync` was called from a running loop.
 - **Defined in:** `application_sdk/testing/harness/_errors.py`
 
+#### `TaskQueueType`
+
+- **Import:** `from application_sdk.testing.harness.temporal import TaskQueueType`
+- **Signature:** `class TaskQueueType`
+- **Summary:** Which half of a task queue a poller is holding.
+- **Defined in:** `application_sdk/testing/harness/temporal/_states.py`
+
+#### `TemporalConnectFailedError`
+
+- **Import:** `from application_sdk.testing.harness.temporal import TemporalConnectFailedError`
+- **Signature:** `class TemporalConnectFailedError(*, ...)`
+- **Summary:** Could not establish a client against the Temporal frontend.
+- **Defined in:** `application_sdk/testing/harness/temporal/_errors.py`
+
+#### `TemporalConnection`
+
+- **Import:** `from application_sdk.testing.harness.temporal import TemporalConnection`
+- **Also importable from:** `application_sdk.testing.harness.temporal.client`
+- **Signature:** `class TemporalConnection(*, client: Client, namespace: str, address: str, close: Callable[[], Awaitable[None]] = _noop)`
+- **Summary:** One loop's client, plus whatever transport is holding it up.
+- **Defined in:** `application_sdk/testing/harness/temporal/client.py`
+
 #### `TemporalReader`
 
 - **Import:** `from application_sdk.testing.harness.temporal import TemporalReader`
 - **Signature:** `class TemporalReader`
 - **Summary:** Read Temporal state. No mutation, by decision.
-- **Defined in:** `application_sdk/testing/harness/temporal/__init__.py`
+- **Defined in:** `application_sdk/testing/harness/temporal/_protocols.py`
+
+#### `TemporalReaderLoopMismatchError`
+
+- **Import:** `from application_sdk.testing.harness.temporal import TemporalReaderLoopMismatchError`
+- **Signature:** `class TemporalReaderLoopMismatchError(*, ...)`
+- **Summary:** A connected reader was used from a different event loop than it opened on.
+- **Defined in:** `application_sdk/testing/harness/temporal/_errors.py`
+
+#### `TemporalReadFailedError`
+
+- **Import:** `from application_sdk.testing.harness.temporal import TemporalReadFailedError`
+- **Signature:** `class TemporalReadFailedError(*, ...)`
+- **Summary:** A Temporal read reached the frontend and did not come back with data.
+- **Defined in:** `application_sdk/testing/harness/temporal/_errors.py`
+
+#### `TemporalServiceReader`
+
+- **Import:** `from application_sdk.testing.harness.temporal import TemporalServiceReader`
+- **Also importable from:** `application_sdk.testing.harness.temporal.client`
+- **Signature:** `class TemporalServiceReader(*, ...)`
+- **Summary:** Read Temporal state through the ``temporalio`` client.
+- **Defined in:** `application_sdk/testing/harness/temporal/client.py`
 
 #### `TenantAuth`
 
@@ -3804,7 +3848,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Import:** `from application_sdk.testing.harness.temporal import WorkflowExecutionStatus`
 - **Signature:** `class WorkflowExecutionStatus`
 - **Summary:** Terminal and non-terminal states a workflow execution can report.
-- **Defined in:** `application_sdk/testing/harness/temporal/__init__.py`
+- **Defined in:** `application_sdk/testing/harness/temporal/_states.py`
+
+#### `WorkflowNotFoundError`
+
+- **Import:** `from application_sdk.testing.harness.temporal import WorkflowNotFoundError`
+- **Signature:** `class WorkflowNotFoundError(*, ...)`
+- **Summary:** Temporal has no execution under this workflow ID.
+- **Defined in:** `application_sdk/testing/harness/temporal/_errors.py`
 
 #### `WorkflowRunHandle`
 
@@ -3818,7 +3869,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Import:** `from application_sdk.testing.harness.temporal import WorkflowStatus`
 - **Signature:** `class WorkflowStatus(*, ...)`
 - **Summary:** One workflow execution's state.
-- **Defined in:** `application_sdk/testing/harness/temporal/__init__.py`
+- **Defined in:** `application_sdk/testing/harness/temporal/_states.py`
 
 #### `WriteRecovery`
 
@@ -4028,6 +4079,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `format_validation_report(results: list[dict[str, Any]])`
 - **Summary:** Format pandera validation results into a human-readable report.
 - **Defined in:** `application_sdk/testing/integration/validation.py`
+
+#### `frontend_connection`
+
+- **Import:** `from application_sdk.testing.harness.temporal import frontend_connection`
+- **Also importable from:** `application_sdk.testing.harness.temporal.client`
+- **Signature:** `frontend_connection(*, address: str, namespace: str, api_key: str | None = None, tls: bool = False)`
+- **Summary:** Connect to a Temporal frontend at a known address.
+- **Defined in:** `application_sdk/testing/harness/temporal/client.py`
 
 #### `generate_json_report`
 
@@ -4336,6 +4395,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Hold one tunnel to a Service for a batch of calls.
 - **Defined in:** `application_sdk/testing/harness/cluster/_portforward.py`
 
+#### `port_forwarded_connection`
+
+- **Import:** `from application_sdk.testing.harness.temporal import port_forwarded_connection`
+- **Also importable from:** `application_sdk.testing.harness.temporal.client`
+- **Signature:** `port_forwarded_connection(*, *, ...)`
+- **Summary:** Connect to an in-cluster Temporal frontend Service through a tunnel.
+- **Defined in:** `application_sdk/testing/harness/temporal/client.py`
+
 #### `purge_connection`
 
 - **Import:** `from application_sdk.testing.harness.teardown import purge_connection`
@@ -4385,6 +4452,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `sample_qualified_names(client: AsyncAtlanClient, *, ...)`
 - **Summary:** Sample up to *per_type* qualified names per type under the connection.
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
+#### `stale_version_pollers`
+
+- **Import:** `from application_sdk.testing.harness.temporal import stale_version_pollers`
+- **Signature:** `stale_version_pollers(pollers: Iterable[PollerInfo], *, current_build_id: str | None)`
+- **Summary:** Return the pollers that are *not* on *current_build_id*.
+- **Defined in:** `application_sdk/testing/harness/temporal/_states.py`
 
 #### `start_on_task_queue`
 
