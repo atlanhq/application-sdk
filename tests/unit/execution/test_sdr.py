@@ -741,21 +741,29 @@ class TestSdrPreflightObjectStoreChecks:
         check = result.checks[1]
         assert check.passed is False
         assert check.error is not None
-        assert check.error.category == FailureCategory.DEPENDENCY_UNAVAILABLE
-        assert check.error.code == "OBJECT_STORE_ACCESS"
-        assert check.error.retryable is False
-        # DEF-3: customer-run infra routes to the customer, not the app team.
+        # Customer-owned store → SourceUnavailableError, so category + audience
+        # both route to the customer (not the DEPENDENCY_UNAVAILABLE/PLATFORM pair,
+        # which is unreachable from any leaf type).
         from application_sdk.errors.categories import Audience
 
+        assert check.error.category == FailureCategory.SOURCE_UNAVAILABLE
+        assert check.error.code == "SOURCE_UNAVAILABLE"
         assert check.error.audience == Audience.USER
-        # DEF-5: the class-specific remediation is carried, not discarded.
+        assert check.error.retryable is True
+        # The class-specific remediation is carried, not discarded.
         assert check.error.suggested_action is not None
         assert "read and write access" in check.error.suggested_action
+        # Probe context rides along as evidence via to_failure_details().
+        assert check.error.evidence.get("endpoint") == "objectstore"
+        assert check.error.evidence.get("network_error") == "permission denied"
         # Simple, non-technical failure copy (no probe internals in the UI).
         assert "not accessible" in check.resolved_message
         assert "403" not in check.resolved_message
-        # DEF-6: the banner carries the real reason, not "Preflight check not_ready".
+        # The banner carries the real reason (typed + string), not "not_ready".
         assert result.message == "Configured object store is not accessible."
+        assert result.error is not None
+        assert result.error.category == FailureCategory.SOURCE_UNAVAILABLE
+        assert result.resolved_message == "Configured object store is not accessible."
 
     async def test_failed_check_does_not_upgrade_partial(self) -> None:
         """A handler PARTIAL/NOT_READY verdict is left untouched on failure."""
@@ -812,9 +820,12 @@ class TestSecretStoreCheckRow:
     the failure category must come from ``store_down`` (is the store the
     blocker?), not from whether a fetch happened."""
 
-    def test_store_down_is_dependency_unavailable(self) -> None:
+    def test_store_down_is_source_unavailable(self) -> None:
+        # The customer owns the secret store, so a store outage is a
+        # SourceUnavailableError (SOURCE_UNAVAILABLE / audience=USER), not the
+        # DEPENDENCY_UNAVAILABLE/PLATFORM pair that would route to the app team.
         from application_sdk.credentials.agent import SecretStoreCheckResult
-        from application_sdk.errors.categories import FailureCategory
+        from application_sdk.errors.categories import Audience, FailureCategory
 
         row = _secret_store_check_row(
             SecretStoreCheckResult(
@@ -822,12 +833,15 @@ class TestSecretStoreCheckRow:
                 store_down=True,
                 fatal=True,
                 substituted=0,
-                message="Secret store is not reachable.",
+                message="Configured secret store is not accessible.",
+                suggested_action="Check that the secret store is running.",
             )
         )
         assert row.passed is False
         assert row.error is not None
-        assert row.error.category == FailureCategory.DEPENDENCY_UNAVAILABLE
+        assert row.error.category == FailureCategory.SOURCE_UNAVAILABLE
+        assert row.error.audience == Audience.USER
+        assert row.error.suggested_action == "Check that the secret store is running."
 
     def test_config_gap_is_precondition_not_dependency_unavailable(self) -> None:
         # A multi-key spec with no secret-path is fatal (creds can't resolve) but

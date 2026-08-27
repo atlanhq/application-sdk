@@ -33,9 +33,12 @@ with workflow.unsafe.imports_passed_through():
     from application_sdk.credentials.ref import CredentialRef
     from application_sdk.credentials.resolver import CredentialResolver
     from application_sdk.credentials.spec import AgentCredentialSpec
-    from application_sdk.errors.categories import Audience, FailureCategory
-    from application_sdk.errors.leaves import DependencyUnavailableError
-    from application_sdk.errors.wire import FailureDetails
+    from application_sdk.errors.base import AppError
+    from application_sdk.errors.leaves import (
+        DependencyUnavailableError,
+        PreconditionError,
+        SourceUnavailableError,
+    )
     from application_sdk.handler.context import bind_invocation_context
     from application_sdk.handler.contracts import (
         AuthInput,
@@ -358,9 +361,10 @@ async def _append_object_store_checks(output: PreflightOutput) -> None:
     Runs the customer object-store access check (deployment store + upstream
     Atlan upload proxy) and appends one ``PreflightCheck`` per probed store to
     ``output.checks`` so they render as UI check rows alongside the handler's own
-    source/credential checks.  A failed probe carries a typed ``FailureDetails``
-    (``DEPENDENCY_UNAVAILABLE`` / ``OBJECT_STORE_ACCESS``) so the message and
-    remediation hint surface in the UI.
+    source/credential checks.  A failed probe carries a typed
+    ``SourceUnavailableError`` (customer-owned store → ``SOURCE_UNAVAILABLE`` /
+    ``audience=USER``) so the message, remediation, and probe evidence surface
+    in the UI and route to the customer.
 
     No-op when not in SDR mode (``check_object_store_access`` returns ``[]`` when
     ``ENABLE_ATLAN_UPLOAD`` is falsy).  If any object-store check fails and the
@@ -393,7 +397,7 @@ async def _append_object_store_checks(output: PreflightOutput) -> None:
             name = _OBJECT_STORE_CHECK_NAMES.get(
                 result.label, f"{result.label} object store"
             )
-            error: FailureDetails | None = None
+            error: AppError | None = None
             if result.passed:
                 message = _OBJECT_STORE_SUCCESS_MESSAGES.get(
                     result.label, "Configured object store is accessible."
@@ -411,24 +415,23 @@ async def _append_object_store_checks(output: PreflightOutput) -> None:
                     result.label,
                     result.message,
                 )
-                error = FailureDetails(
-                    category=FailureCategory.DEPENDENCY_UNAVAILABLE,
-                    code="OBJECT_STORE_ACCESS",
-                    retryable=False,
-                    # These failures are customer infra the customer runs, so
-                    # AE / SLA routing must attribute them to the customer, not
-                    # the app team (the FailureDetails default).
-                    audience=Audience.USER,
+                # Customer-owned store → SourceUnavailableError (SOURCE_UNAVAILABLE
+                # / audience=USER) so category-only routing also attributes this
+                # to the customer. The probe's binding, classifier bucket, and
+                # cause ride along as evidence via to_failure_details(). The
+                # suggested_action is the customer-facing next step (the
+                # classifier's own hint is engineer-facing and stays in the log).
+                error = SourceUnavailableError(
                     message=message,
-                    # The precise, class-specific next step — previously computed
-                    # by the classifier and discarded. Falls back to the
-                    # connectivity remediation for an unclassified failure.
                     suggested_action=_OBJECT_STORE_ACTIONS.get(
                         (result.label, result.error_class or ""),
                         _OBJECT_STORE_ACTIONS[(result.label, "connectivity / unknown")]
                         if result.label in ("deployment", "upstream")
                         else None,
                     ),
+                    source_type=f"{result.label} object store",
+                    endpoint=result.binding_name,
+                    network_error=result.error_class,
                 )
             output.checks.append(
                 PreflightCheck(
@@ -442,10 +445,14 @@ async def _append_object_store_checks(output: PreflightOutput) -> None:
         output.total_duration_ms += elapsed_ms
         if first_failure_message is not None and output.status == PreflightStatus.READY:
             output.status = PreflightStatus.NOT_READY
-            # Give the overall banner a real reason. Without this the envelope
-            # falls back to "Preflight check not_ready" while the cause sits in a
-            # row below.
-            output.message = first_failure_message
+            # Give the aggregate verdict the first failure's typed error and a
+            # banner string. Without this the envelope falls back to
+            # "Preflight check not_ready" while the cause sits in a row below.
+            # status was READY here, so the first failed row is an object-store one.
+            first_failed = next((c for c in output.checks if not c.passed), None)
+            if first_failed is not None:
+                output.error = first_failed.error
+                output.message = first_failed.resolved_message
     except Exception:
         # Must never break the handler's own preflight result.
         logger.warning(
@@ -458,27 +465,25 @@ async def _append_object_store_checks(output: PreflightOutput) -> None:
 def _secret_store_check_row(result: SecretStoreCheckResult) -> PreflightCheck:
     """Build the secret-store preflight check row from a probe result.
 
-    Name avoids the "SDR" acronym (the frontend spaces out capitals). Failure
-    category distinguishes a store outage (DEPENDENCY_UNAVAILABLE) from a config
-    gap (PRECONDITION) — a multi-key spec with no secret-path is the latter even
-    though the store is never contacted, so it keys off ``store_down``, not
-    whether a fetch happened."""
-    error: FailureDetails | None = None
+    Name avoids the "SDR" acronym (the frontend spaces out capitals). The failure
+    is a customer-owned secret store, so both leaf types route to the customer
+    (audience=USER): a store outage is a SourceUnavailableError, while a config
+    gap (e.g. a multi-key spec with no secret-path, where the store is never
+    contacted) is a PreconditionError. Keyed off ``store_down``, not whether a
+    fetch happened."""
+    error: AppError | None = None
     if not result.passed:
-        error = FailureDetails(
-            category=(
-                FailureCategory.DEPENDENCY_UNAVAILABLE
-                if result.store_down
-                else FailureCategory.PRECONDITION
-            ),
-            code="SECRET_STORE_ACCESS",
-            retryable=False,
-            # Customer-run infrastructure — route to the customer, not the app
-            # team (the FailureDetails default).
-            audience=Audience.USER,
-            message=result.message,
-            suggested_action=result.suggested_action,
-        )
+        if result.store_down:
+            error = SourceUnavailableError(
+                message=result.message,
+                suggested_action=result.suggested_action,
+                source_type="secret store",
+            )
+        else:
+            error = PreconditionError(
+                message=result.message,
+                suggested_action=result.suggested_action,
+            )
     return PreflightCheck(
         name="Secret store",
         passed=result.passed,
@@ -550,6 +555,7 @@ def build_sdr_activities(
                 output = PreflightOutput(
                     status=PreflightStatus.NOT_READY,
                     message=secret_result.message,
+                    error=secret_row.error,
                     checks=[secret_row],
                 )
                 await _append_object_store_checks(output)
