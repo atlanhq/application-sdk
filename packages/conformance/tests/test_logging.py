@@ -136,6 +136,24 @@ def test_l004_silent_with_exc_info_true() -> None:
     assert "L004" not in _ids(src)
 
 
+def test_l004_fires_without_exc_info_for_bound_exception() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    x()\nexcept Exception as exc:\n"
+        "    logger.error('failed')\n"
+    )
+    assert "L004" in _ids(src)
+
+
+def test_l004_silent_with_bound_exception_as_exc_info() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    x()\nexcept Exception as exc:\n"
+        "    logger.error('failed', exc_info=exc)\n"
+    )
+    assert "L004" not in _ids(src)
+
+
 def test_l004_silent_for_exception_method() -> None:
     # logger.exception() implicitly attaches exc_info — exempt from L004
     src = (

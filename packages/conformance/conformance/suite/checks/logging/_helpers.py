@@ -159,12 +159,21 @@ def get_logger_method(
     return None
 
 
-def has_exc_info_true(call: ast.Call) -> bool:
-    """True if the call has ``exc_info=True`` among its keywords."""
+def has_exc_info_true(call: ast.Call, exception_name: str | None = None) -> bool:
+    """True if the call has literal or current-exception ``exc_info``.
+
+    ``logging`` also accepts an exception value for ``exc_info``.  When the
+    value is the name bound by the surrounding ``except ... as`` clause, it is
+    truthy and carries the same traceback as ``exc_info=True``.
+    """
     for kw in call.keywords:
         if kw.arg == "exc_info":
             val = kw.value
-            return isinstance(val, ast.Constant) and val.value is True
+            if isinstance(val, ast.Constant) and val.value is True:
+                return True
+            if exception_name is not None and isinstance(val, ast.Name):
+                return val.id == exception_name
+            return False
     return False
 
 
