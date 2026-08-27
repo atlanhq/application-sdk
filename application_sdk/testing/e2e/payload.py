@@ -31,6 +31,7 @@ from typing import Any
 
 import orjson
 
+from application_sdk.testing._agent_credentials import agent_credential_ref_keys
 from application_sdk.testing.e2e.credential import CredentialBody
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
 
@@ -150,7 +151,15 @@ def build_agent_json(
     agent: AgentSpec,
     connector_short_name: str,
 ) -> dict[str, Any]:
-    """Build the agent_json routing block for AGENT-mode extract args."""
+    """Build the agent_json routing block for AGENT-mode extract args.
+
+    The credential ref-keys are prefixed with the spec's own ``auth_type``, not
+    a fixed ``basic`` — ``transform_agent_credentials`` collapses only the
+    prefix matching the block's ``auth-type``, so a non-basic connector
+    (glue/athena ``iam``, Azure ``service_principal``, token/OAuth) would
+    otherwise receive no credential fields at all and fail inside its own
+    client with a source-authentication error (FND-923).
+    """
     block: dict[str, Any] = {
         "host": database.host,
         "port": database.port,
@@ -160,8 +169,10 @@ def build_agent_json(
         "key-type": agent.key_type,
         "aws-auth-method": agent.aws_auth_method,
         "azure-auth-method": agent.azure_auth_method,
-        "basic.username": f"SDR_{connector_short_name.upper()}_USERNAME",
-        "basic.password": f"SDR_{connector_short_name.upper()}_PASSWORD",
+        **agent_credential_ref_keys(
+            auth_type=database.auth_type,
+            connector_short_name=connector_short_name,
+        ),
     }
     # Connector-specific connection fields ride as dotted ``extra.<k>`` keys.
     # The prime case is ``database``: postgres (and any SQL client whose

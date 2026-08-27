@@ -10,7 +10,9 @@ from __future__ import annotations
 from typing import Any
 
 import orjson
+import pytest
 
+from application_sdk.common.transforms import transform_agent_credentials
 from application_sdk.contracts.types import ConnectionRef
 from application_sdk.testing.e2e.credential import CredentialBody
 from application_sdk.testing.e2e.payload import (
@@ -354,6 +356,70 @@ class TestBuildAgentJson:
         db = DatabaseSpec(host="mysql", port=3306, username="u", password="p")
         aj = build_agent_json(db, self._AGENT, "mysql")
         assert not any(k.startswith("extra.") for k in aj)
+
+    # --- FND-923: credential ref-keys must follow the spec's own auth_type ---
+    #
+    # transform_agent_credentials collapses ONLY the prefix matching the
+    # bundle's own auth-type. When build_agent_json hard-coded ``basic.*``,
+    # every non-basic connector (glue/athena ``iam``, Azure
+    # ``service_principal``, token/OAuth) reached its client with no
+    # credential fields at all and died inside its own client with a *source*
+    # authentication error — routinely misdiagnosed as a provisioning problem.
+
+    @pytest.mark.parametrize(
+        "auth_type",
+        ["basic", "iam", "keypair", "service_principal", "token"],
+    )
+    def test_credential_refs_use_declared_auth_type(self, auth_type: str) -> None:
+        db = DatabaseSpec(
+            host="h", port=1, username="u", password="p", auth_type=auth_type
+        )
+        aj = build_agent_json(db, self._AGENT, "glue")
+        assert aj[f"{auth_type}.username"] == "SDR_GLUE_USERNAME"
+        assert aj[f"{auth_type}.password"] == "SDR_GLUE_PASSWORD"
+        # The prefix and the declared auth-type can never disagree.
+        assert aj["auth-type"] == auth_type
+
+    @pytest.mark.parametrize(
+        "auth_type",
+        ["basic", "iam", "keypair", "service_principal", "token"],
+    )
+    def test_transform_collapses_refs_to_root_for_every_auth_type(
+        self, auth_type: str
+    ) -> None:
+        """The end-to-end contract: what the connector's client actually reads.
+
+        Glue's client does ``credentials.get("username")`` at root level; a
+        dotted leftover is invisible to it. boto3 does not raise on
+        ``aws_access_key_id=None`` — it falls back to the ambient credential
+        chain and fails later as "Could not authenticate", which is why this
+        was expensive to diagnose.
+        """
+        db = DatabaseSpec(
+            host="h", port=1, username="u", password="p", auth_type=auth_type
+        )
+        creds = transform_agent_credentials(build_agent_json(db, self._AGENT, "glue"))
+        assert creds["username"] == "SDR_GLUE_USERNAME"
+        assert creds["password"] == "SDR_GLUE_PASSWORD"
+        # Nothing left dotted — an uncollapsed key is a silently empty credential.
+        assert not [k for k in creds if "." in k]
+
+    def test_basic_output_is_unchanged(self) -> None:
+        """Backward compatibility: the default auth_type is byte-identical."""
+        db = DatabaseSpec(host="h", port=1, username="u", password="p")
+        aj = build_agent_json(db, self._AGENT, "mysql")
+        assert aj["basic.username"] == "SDR_MYSQL_USERNAME"
+        assert aj["basic.password"] == "SDR_MYSQL_PASSWORD"
+
+    def test_blank_auth_type_falls_back_to_basic(self) -> None:
+        """A blank auth_type would collapse nothing, so it takes the default.
+
+        ``transform_agent_credentials`` builds no prefix at all from an empty
+        ``authType``; emitting bare ``.username`` would be unrecoverable.
+        """
+        db = DatabaseSpec(host="h", port=1, username="u", password="p", auth_type="")
+        aj = build_agent_json(db, self._AGENT, "mysql")
+        assert aj["basic.username"] == "SDR_MYSQL_USERNAME"
 
 
 _BUNDLE_AGENT_JSON = {

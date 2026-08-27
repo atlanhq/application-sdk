@@ -31,6 +31,8 @@ from typing import Any
 
 import orjson
 
+from application_sdk.testing._agent_credentials import agent_credential_ref_keys
+
 
 class RunMode(str, Enum):
     """Whether the connector runs in tenant or in caller-controlled CI."""
@@ -198,8 +200,12 @@ def build_seed_dag(
             "key-type": agent.key_type,
             "aws-auth-method": agent.aws_auth_method,
             "azure-auth-method": agent.azure_auth_method,
-            "basic.username": f"SDR_{connector_short_name.upper()}_USERNAME",
-            "basic.password": f"SDR_{connector_short_name.upper()}_PASSWORD",
+            # Prefix follows database.auth_type, not a fixed "basic" — see
+            # agent_credential_ref_keys (FND-923).
+            **agent_credential_ref_keys(
+                auth_type=database.auth_type,
+                connector_short_name=connector_short_name,
+            ),
         }
 
     return {
@@ -429,9 +435,12 @@ def build_ae_payload(
                 # In agent mode the username/password fields are *secret-store
                 # keys*, not literal values — the agent's local Dapr
                 # secret-store resolves them at workflow time. Callers should
-                # pre-populate the secret store with these keys.
-                "basic.username": f"SDR_{connector_short_name.upper()}_USERNAME",
-                "basic.password": f"SDR_{connector_short_name.upper()}_PASSWORD",
+                # pre-populate the secret store with these keys. The dotted
+                # prefix follows database.auth_type (FND-923).
+                **agent_credential_ref_keys(
+                    auth_type=database.auth_type,
+                    connector_short_name=connector_short_name,
+                ),
             }
         )
         parameters.append(
@@ -498,15 +507,16 @@ def build_ae_payload(
                     "name": "agent-json.azure-auth-method",
                     "value": agent.azure_auth_method,
                 },
-                {
-                    "name": "agent-json.basic.username",
-                    "value": f"SDR_{connector_short_name.upper()}_USERNAME",
-                },
-                {
-                    "name": "agent-json.basic.password",
-                    "value": f"SDR_{connector_short_name.upper()}_PASSWORD",
-                },
             ]
+        )
+        # Flat credential rows carry the same auth_type-derived prefix as the
+        # nested bundle above, so the two can't drift apart (FND-923).
+        parameters.extend(
+            {"name": f"agent-json.{key}", "value": value}
+            for key, value in agent_credential_ref_keys(
+                auth_type=database.auth_type,
+                connector_short_name=connector_short_name,
+            ).items()
         )
 
     # Flat connection.* parameter rows (UI sends both the nested JSON

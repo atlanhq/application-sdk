@@ -57,6 +57,7 @@ from dataclasses import dataclass, field
 from typing import ClassVar
 
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.testing._agent_credentials import agent_credential_ref_keys
 from application_sdk.testing.full_dag._errors import (
     HarnessMethodNotImplementedError,
     ManifestDagMissingError,
@@ -592,8 +593,12 @@ class BaseFullDAGE2ETest:
                 "key-type": agent.key_type,
                 "aws-auth-method": agent.aws_auth_method,
                 "azure-auth-method": agent.azure_auth_method,
-                "basic.username": (f"SDR_{self.connector_short_name.upper()}_USERNAME"),
-                "basic.password": (f"SDR_{self.connector_short_name.upper()}_PASSWORD"),
+                # Prefix follows database.auth_type, not a fixed "basic" — see
+                # agent_credential_ref_keys (FND-923).
+                **agent_credential_ref_keys(
+                    auth_type=database.auth_type,
+                    connector_short_name=self.connector_short_name,
+                ),
             }
             # Transition hook (mirrors testing.e2e.BaseE2ETest.agent_json): a
             # connector needing a non-basic shape (keypair/token/iam) overrides
