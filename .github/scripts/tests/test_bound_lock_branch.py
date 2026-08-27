@@ -3,8 +3,8 @@
 Pure-unit: the bound itself is stubbed (it has its own suite in
 test_renovate_uv_lock_bounded.py), and uv is never invoked. What needs cover here
 is the orchestration around it, because every one of its failure modes is silent:
-a project skipped, an exempt set that lost a name, a partial commit that merges an
-unbounded lock, or a requirements.txt left describing the lock we just replaced.
+a project skipped, an exempt set that lost a name, or a partial commit that merges
+an unbounded lock.
 """
 
 from __future__ import annotations
@@ -45,10 +45,9 @@ def git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
-    """A repo shaped like application-sdk: two uv projects, one npm project, and a
-    requirements.txt. All four files the refresh lane rewrites."""
+    """A repo shaped like application-sdk: two uv projects and one npm project.
+    All three files the refresh lane rewrites."""
     (tmp_path / "uv.lock").write_text("root lock\n")
-    (tmp_path / "requirements.txt").write_text("stale==1.0.0\n")
     sub = tmp_path / "packages" / "conformance"
     sub.mkdir(parents=True)
     (sub / "uv.lock").write_text("sub lock\n")
@@ -257,23 +256,15 @@ class TestMain:
         monkeypatch.setattr(orchestrator.bounded, "main", fake_main)
         monkeypatch.setattr(orchestrator.npm_bounded, "main", fake_npm_main)
 
-    def test_one_commit_carries_every_lock_and_the_requirements_export(
-        self, monkeypatch, in_repo
-    ):
-        """One commit, not four: each push re-fires the PR's whole check suite."""
+    def test_one_commit_carries_every_lock(self, monkeypatch, in_repo):
+        """One commit, not three: each push re-fires the PR's whole check suite."""
         self._stub_bound(monkeypatch)
-        monkeypatch.setattr(
-            orchestrator,
-            "export_requirements",
-            lambda root: (root / "requirements.txt").write_text("bounded==2.0.0\n"),
-        )
 
         assert orchestrator.main(["--window", "P7D", "--baseline-ref", "HEAD"]) == 0
         assert head_files(in_repo) == {
             "uv.lock",
             "packages/conformance/uv.lock",
             f"{orchestrator.NPM_PROJECT}/package-lock.json",
-            "requirements.txt",
         }
         assert head_subject(in_repo) == orchestrator.COMMIT_MESSAGE
 
@@ -287,14 +278,9 @@ class TestMain:
         did apply.
         """
         self._stub_bound(monkeypatch, npm_code=1)
-        exported: list[Path] = []
-        monkeypatch.setattr(
-            orchestrator, "export_requirements", lambda root: exported.append(root)
-        )
 
         assert orchestrator.main(["--window", "P7D", "--baseline-ref", "HEAD"]) == 1
         assert head_subject(in_repo) == "base"
-        assert exported == [], "the export must not run against a half-bound tree"
 
     def test_a_failed_bound_commits_nothing_at_all(self, monkeypatch, in_repo):
         """Fail-closed, and specifically not fail-partial.
@@ -310,25 +296,7 @@ class TestMain:
             return 0 if directory.name != "conformance" else 1
 
         monkeypatch.setattr(orchestrator.bounded, "main", fake_main)
-        exported: list[Path] = []
-        monkeypatch.setattr(
-            orchestrator, "export_requirements", lambda root: exported.append(root)
-        )
 
-        assert orchestrator.main(["--window", "P7D", "--baseline-ref", "HEAD"]) == 1
-        assert head_subject(in_repo) == "base"
-        assert exported == [], "the export must not run against a half-bound tree"
-
-    def test_a_failed_requirements_export_commits_nothing(self, monkeypatch, in_repo):
-        # requirements.txt is what the Dockerfiles and downstream installs read.
-        # Committing the bounded locks while it still describes the pre-bound
-        # resolve would ship the bound and the thing it replaced in one PR.
-        self._stub_bound(monkeypatch)
-
-        def boom(root: Path) -> None:
-            raise RuntimeError("uv export failed")
-
-        monkeypatch.setattr(orchestrator, "export_requirements", boom)
         assert orchestrator.main(["--window", "P7D", "--baseline-ref", "HEAD"]) == 1
         assert head_subject(in_repo) == "base"
 
@@ -339,7 +307,6 @@ class TestMain:
         the backstop that stops a loop if that guard is ever removed.
         """
         self._stub_bound(monkeypatch, rewrite=False)
-        monkeypatch.setattr(orchestrator, "export_requirements", lambda root: None)
 
         assert orchestrator.main(["--window", "P7D", "--baseline-ref", "HEAD"]) == 0
         assert head_subject(in_repo) == "base"
@@ -348,60 +315,10 @@ class TestMain:
         # The branch auto-merges, so anything incidental in the working tree — a
         # uv cache, a stray artefact — must not be able to ride along.
         self._stub_bound(monkeypatch)
-        monkeypatch.setattr(orchestrator, "export_requirements", lambda root: None)
         (in_repo / "SHOULD-NOT-BE-COMMITTED").write_text("x\n")
 
         assert orchestrator.main(["--window", "P7D", "--baseline-ref", "HEAD"]) == 0
         assert "SHOULD-NOT-BE-COMMITTED" not in head_files(in_repo)
-
-
-class TestExportRequirements:
-    def test_export_is_frozen_so_it_cannot_re_resolve(self):
-        """`--frozen` makes this a projection of the bound lock, not a resolve.
-
-        Without it, `uv export` may update the lock — re-introducing precisely the
-        versions the bound just excluded, into the file downstream installs read.
-        And not `--all-extras`, which would widen what gets pinned.
-        """
-        assert orchestrator.REQUIREMENTS_EXPORT == [
-            "uv",
-            "export",
-            "--no-hashes",
-            "--frozen",
-        ]
-
-    def test_a_failing_export_raises_rather_than_leaving_a_stale_file(
-        self, monkeypatch, repo
-    ):
-        monkeypatch.setattr(
-            orchestrator.subprocess,
-            "run",
-            lambda *a, **k: subprocess.CompletedProcess(a[0], 1, "", "no solution"),
-        )
-        with pytest.raises(RuntimeError, match="requirements.txt"):
-            orchestrator.export_requirements(repo)
-        assert (repo / "requirements.txt").read_text() == "stale==1.0.0\n"
-
-    def test_a_repo_without_requirements_txt_is_a_clean_no_op(self, monkeypatch, repo):
-        (repo / "requirements.txt").unlink()
-        monkeypatch.setattr(
-            orchestrator.subprocess,
-            "run",
-            lambda *a, **k: pytest.fail("uv export must not run with no target"),
-        )
-        orchestrator.export_requirements(repo)
-        assert not (repo / "requirements.txt").exists()
-
-    def test_a_successful_export_replaces_the_file(self, monkeypatch, repo):
-        monkeypatch.setattr(
-            orchestrator.subprocess,
-            "run",
-            lambda *a, **k: subprocess.CompletedProcess(
-                a[0], 0, "bounded==2.0.0\n", ""
-            ),
-        )
-        orchestrator.export_requirements(repo)
-        assert (repo / "requirements.txt").read_text() == "bounded==2.0.0\n"
 
 
 class TestOwnsItsCommit:
