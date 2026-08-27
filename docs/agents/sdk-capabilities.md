@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.29.0
-source-sha:    fdba29c258e3aead766eeb18d1a11c5aea7c57ca
-source-date:   2026-08-27T10:22:03+05:30
+source-sha:    be72036471bfe69b852334575b485743ef097160
+source-date:   2026-08-27T12:04:35+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 209 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 212 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3455,6 +3455,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** A loopback HTTP server that replays a connector's reconstructed responses.
 - **Defined in:** `application_sdk/testing/fake_source.py`
 
+#### `HttpFakeSourceFactory`
+
+- **Import:** `from application_sdk.testing import HttpFakeSourceFactory`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `class HttpFakeSourceFactory()`
+- **Summary:** The fakes one pytest session built, owned in one place.
+- **Defined in:** `application_sdk/testing/fake_source.py`
+
 #### `HttpRequest`
 
 - **Import:** `from application_sdk.testing.harness.cluster import HttpRequest`
@@ -3950,6 +3958,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** AppRegistry reset before and after each test.
 - **Defined in:** `application_sdk/testing/fixtures.py`
 
+#### `clean_http_fake_sources`
+
+- **Import:** `from application_sdk.testing import clean_http_fake_sources`
+- **Signature:** `clean_http_fake_sources(http_fake_source_factory: HttpFakeSourceFactory)`
+- **Summary:** Recorded requests and route hits reset before and after each test.
+- **Defined in:** `application_sdk/testing/fixtures.py`
+
 #### `clean_task_registry`
 
 - **Import:** `from application_sdk.testing import clean_task_registry`
@@ -4164,6 +4179,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `hold_stable(probe: Probe[T], *, ...)`
 - **Summary:** Assert *invariant* holds for every reading across the whole budget.
 - **Defined in:** `application_sdk/testing/harness/waiting.py`
+
+#### `http_fake_source_factory`
+
+- **Import:** `from application_sdk.testing import http_fake_source_factory`
+- **Signature:** `http_fake_source_factory()`
+- **Summary:** Session-scoped factory for started HttpFakeSource servers.
+- **Defined in:** `application_sdk/testing/fixtures.py`
 
 #### `is_dict`
 
