@@ -252,7 +252,7 @@ packaging==26.3
     #   pytest-rerunfailures
 pastel==0.2.1
     # via poethepoet
-platformdirs==4.11.3
+platformdirs==4.11.4
     # via virtualenv
 pluggy==1.6.0
     # via pytest
@@ -315,7 +315,7 @@ python-dateutil==2.9.0.post0
     # via
     #   botocore
     #   pyatlan
-python-discovery==1.5.2
+python-discovery==1.5.3
     # via virtualenv
 python-dotenv==1.2.3
     # via
