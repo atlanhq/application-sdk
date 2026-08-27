@@ -51,18 +51,18 @@ from application_sdk.testing.harness.expectations import UNREADABLE, Finding
 
 
 @pytest.mark.parametrize(
-    ("line", "leaked"),
+    ("line", "expected"),
     [
-        ("password=hunter2 host=db1", "hunter2"),
-        ('"apiKey": "abc123def"', "abc123def"),
-        ("'client_secret': 'shh-dont'", "shh-dont"),
-        ("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9", "eyJhbGciOiJIUzI1NiJ9"),
-        ("DRIVER={x};UID=sa;PWD={se;cret};", "se;cret"),
-        ("X-Api-Key: zzz-top-secret", "zzz-top-secret"),
-        ("AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI", "wJalrXUtnFEMI"),
-        ("postgresql://svc:pa55@db.internal/x", "pa55"),
-        ("set-cookie: session=deadbeef", "deadbeef"),
-        ("private_key=-----BEGIN", "-----BEGIN"),
+        ("password=hunter2 host=db1", "password=*** host=db1"),
+        ('"apiKey": "abc123def"', '"apiKey": "***"'),
+        ("'client_secret': 'shh-dont'", "'client_secret': '***'"),
+        ("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9", "Authorization: ***"),
+        ("DRIVER={x};UID=sa;PWD={se;cret};", "DRIVER={x};UID=sa;PWD=***;"),
+        ("X-Api-Key: zzz-top-secret", "X-Api-Key: ***"),
+        ("AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI", "AWS_SECRET_ACCESS_KEY=***"),
+        ("postgresql://svc:pa55@db.internal/x", "postgresql://***@db.internal/x"),
+        ("set-cookie: session=deadbeef", "set-cookie: ***"),
+        ("private_key=-----BEGIN", "private_key=***"),
     ],
     ids=[
         "bare key=value",
@@ -77,9 +77,22 @@ from application_sdk.testing.harness.expectations import UNREADABLE, Finding
         "PEM body",
     ],
 )
-def test_a_credential_shaped_value_does_not_survive(line: str, leaked: str) -> None:
-    assert leaked not in redact_text(line)
-    assert PLACEHOLDER in redact_text(line)
+def test_a_credential_shaped_value_does_not_survive(line: str, expected: str) -> None:
+    """Exact equality, not ``leaked not in redacted``.
+
+    The weaker form was here first and it cannot reject the failure that
+    actually happens. Partial redaction — the escaped-quote truncation, a value
+    class that stops one character early — leaves output that satisfies every
+    "the secret is gone"-shaped assertion you can write about it: the *whole*
+    literal is indeed absent, and a placeholder is indeed present. Only naming
+    the entire expected line rejects a residue.
+
+    It also pins the other half of the contract, which a negative assertion
+    cannot express at all: that the neighbouring host, the ODBC ``UID`` and the
+    next ``key=value`` pair **survive**. An over-redacting filter is a bundle
+    nobody can act on, and it would pass the weak form perfectly.
+    """
+    assert redact_text(line) == expected
 
 
 def test_the_neighbouring_pair_in_a_connection_string_survives() -> None:
@@ -130,7 +143,9 @@ def test_a_bare_literal_with_no_key_beside_it_is_blanked() -> None:
     prior art registers values rather than names."""
     line = "GET /api/meta/atlas?t=glpat-ABCDEF failed"
 
-    assert "glpat-ABCDEF" not in redact_text(line, secrets=["glpat-ABCDEF"])
+    assert redact_text(line, secrets=["glpat-ABCDEF"]) == (
+        f"GET /api/meta/atlas?t={PLACEHOLDER} failed"
+    )
 
 
 def test_a_two_character_literal_is_ignored() -> None:
@@ -140,15 +155,15 @@ def test_a_two_character_literal_is_ignored() -> None:
 
 
 @pytest.mark.parametrize(
-    "line",
+    ("line", "expected"),
     [
-        r'"password": "part\"secret"',
-        r"{'client_secret': 'a\'b'}",
+        (r'"password": "part\"secret"', '"password": "***"'),
+        (r"{'client_secret': 'a\'b'}", "{'client_secret': '***'}"),
     ],
     ids=["JSON with an escaped double quote", "escaped single quote"],
 )
 def test_an_escaped_quote_inside_a_value_does_not_truncate_the_match(
-    line: str,
+    line: str, expected: str
 ) -> None:
     """The tail after an escaped quote is the leak a naive ``"[^"]*"`` ships.
 
@@ -156,12 +171,17 @@ def test_an_escaped_quote_inside_a_value_does_not_truncate_the_match(
     the log, so this is the *normal* shape for such a value rather than an edge
     case — and truncating at the escape leaves the remainder in an uploaded
     artifact while the line still looks redacted.
-    """
-    redacted = redact_text(line)
 
-    assert "secret" not in redacted or "part" not in redacted
-    assert PLACEHOLDER in redacted
-    assert redacted.count(PLACEHOLDER) == 1
+    **Exact equality, and that is the point.** The first version of this test
+    asserted ``"secret" not in redacted or "part" not in redacted``, plus a
+    placeholder count — and all three of those hold for the *buggy* output
+    ``'"password": "***"secret"'``, because ``part`` is already gone and there
+    is still exactly one placeholder. A revert of ``_KEYED_VALUE_RE`` would have
+    gone green. A partial-redaction bug leaves output that satisfies every
+    "the secret is gone"-shaped assertion you can write about it; only naming
+    the whole expected line rejects it.
+    """
+    assert redact_text(line) == expected
 
 
 def test_the_replacement_order_is_enforced_where_the_replacing_happens() -> None:
@@ -292,7 +312,16 @@ def test_redaction_is_idempotent() -> None:
 
 def test_write_bundle_redacts_without_being_asked(tmp_path: Path) -> None:
     """This is the boundary the bundle crosses. Making redaction the caller's
-    responsibility is what leaves the one path that forgot."""
+    responsibility is what leaves the one path that forgot.
+
+    Absence over the whole written directory rather than exact equality, and
+    deliberately so: the question at *this* level is whether every file the
+    boundary produces went through the filter, not what the filter does to one
+    line. What the filter does is pinned exactly, line by line, above — so a
+    partial-redaction residue is rejected there, where the assertion can name a
+    whole expected output, rather than here, where it would have to name a
+    directory.
+    """
     write_bundle(_bundle(), tmp_path, secrets=["hunter2"])
 
     written = "\n".join(
