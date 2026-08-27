@@ -499,8 +499,37 @@ class PreflightOutput(BaseModel):
     message: str = ""
     """Human-readable summary. Seeds the gate's abort reason when set."""
 
+    error: FailureDetails | None = None
+    """Typed aggregate failure — the reason the overall verdict is NOT_READY,
+    mirroring :attr:`PreflightCheck.error`. Lets the aggregate reason carry
+    category / audience / suggested_action / evidence instead of degrading to the
+    bare :attr:`message` string. Additive and optional: handlers that set only
+    ``message`` are unaffected, and the gate prefers this when present. A bare
+    ``AppError`` assigned here is coerced via :meth:`AppError.to_failure_details`.
+
+    Populated by the SDR preflight when it downgrades a READY verdict to
+    NOT_READY on a blocking infra-access row (secret store, object store,
+    deployment reachability) — pinned to the first such failure so the banner
+    is not a non-fatal row. Left ``None`` when the verdict is PARTIAL or when
+    only non-fatal rows failed; the gate then falls back to a failed check's
+    own error, then to ``message``."""
+
     total_duration_ms: float = 0.0
     """Total time for all checks in milliseconds."""
+
+    @field_validator("error", mode="before")
+    @classmethod
+    def _coerce_error(cls, value: Any) -> Any:
+        if isinstance(value, AppError):
+            return value.to_failure_details()
+        return value
+
+    @property
+    def resolved_message(self) -> str:
+        """Aggregate message under the precedence rule: ``error`` wins when set."""
+        if self.error is not None:
+            return self.error.message
+        return self.message
 
 
 # ---------------------------------------------------------------------------
