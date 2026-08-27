@@ -332,7 +332,7 @@ def integration_kit(
         set_infrastructure(ctx)
         return ctx
 
-    @pytest_asyncio.fixture(scope="session")
+    @pytest_asyncio.fixture(scope="session", loop_scope="session")
     async def embedded_temporal() -> Any:
         """Boot the embedded Temporal dev server for the session."""
         from application_sdk.dev import embedded_runtime  # noqa: PLC0415
@@ -340,7 +340,7 @@ def integration_kit(
         async with embedded_runtime(log_level=log_level) as runtime:
             yield runtime
 
-    @pytest_asyncio.fixture(scope="session")
+    @pytest_asyncio.fixture(scope="session", loop_scope="session")
     async def temporal_client(embedded_temporal: Any) -> Any:
         """Connect to the embedded dev server."""
         from application_sdk.execution import (  # noqa: PLC0415
@@ -355,7 +355,7 @@ def integration_kit(
             enable_prometheus=enable_prometheus,
         )
 
-    @pytest_asyncio.fixture(scope="session")
+    @pytest_asyncio.fixture(scope="session", loop_scope="session")
     async def worker(temporal_client: Any, infrastructure: Any) -> Any:  # noqa: ARG001
         """Run the App's worker in-process, with infrastructure already wired."""
         from application_sdk.execution import create_worker  # noqa: PLC0415

@@ -112,6 +112,7 @@ from .comparison import (
 )
 from .corpus import (
     GOLDEN_ROOT_ENV,
+    SUPPORTED_SUFFIXES,
     GoldenCorpus,
     GoldenLayout,
     read_records,
@@ -134,12 +135,13 @@ from .validation import (
 # =============================================================================
 
 __all__ = [
-    # Shared in-process integration fixtures (FND-817)
+    # Shared in-process integration fixtures
     "AppExecutor",
     "IntegrationKit",
     "integration_kit",
-    # Golden corpus layout and loader (FND-818)
+    # Golden corpus layout and loader
     "GOLDEN_ROOT_ENV",
+    "SUPPORTED_SUFFIXES",
     "GoldenCorpus",
     "GoldenLayout",
     "read_records",
