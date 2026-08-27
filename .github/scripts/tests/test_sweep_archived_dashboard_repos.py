@@ -26,9 +26,12 @@ PREFIX = "conformance-dashboard"
 
 
 class FakeS3:
-    def __init__(self, initial=None):
+    def __init__(self, initial=None, rm_denies=()):
         self.objects = dict(initial or {})
         self.removed: list = []
+        # Substrings of keys the bucket refuses to delete, mirroring an
+        # AccessDenied / throttled `aws s3 rm` (non-zero, object survives).
+        self.rm_denies = tuple(rm_denies)
 
     def __call__(self, args: list) -> tuple:
         if args[:2] == ["s3", "ls"]:
@@ -39,6 +42,8 @@ class FakeS3:
             )
             return 0, listing, ""
         if args[:2] == ["s3", "rm"]:
+            if any(d in args[2] for d in self.rm_denies):
+                return 1, "", "An error occurred (AccessDenied)"
             self.removed.append(args[2])
             self.objects.pop(args[2], None)
             return 0, "", ""
@@ -159,3 +164,42 @@ def test_everything_reading_as_archived_sweeps_nothing(tmp_path, capsys):
     assert s3.removed == []
     assert len(result["refused"]) == 5
     assert "sweeping none" in capsys.readouterr().err
+
+
+def test_a_refused_delete_keeps_the_slug_in_the_manifest(tmp_path):
+    """The object survives, so its row must too — otherwise the panel drops a
+    repo whose data is still in the bucket and no later run reconsiders it."""
+    s3 = FakeS3(
+        _bucket("atlanhq_atlan-live-app", "atlanhq_atlan-dead-app"),
+        rm_denies=("atlanhq_atlan-dead-app",),
+    )
+    result = sweep(
+        PREFIX,
+        tmp_path,
+        run=s3,
+        gh=_gh(archived=("atlanhq/atlan-dead-app",)),
+    )
+    assert result["swept"] == []
+    assert result["refused"] == ["atlanhq_atlan-dead-app"]
+    assert f"{BUCKET}/{PREFIX}/repos.json" not in s3.objects
+
+
+def test_a_partial_delete_failure_still_sweeps_the_rest(tmp_path):
+    """One refused prefix row must not strand the deletes that did land."""
+    s3 = FakeS3(
+        _bucket("atlanhq_atlan-live-app", "atlanhq_a-dead-app", "atlanhq_b-dead-app"),
+        rm_denies=("atlanhq_b-dead-app",),
+    )
+    result = sweep(
+        PREFIX,
+        tmp_path,
+        run=s3,
+        gh=_gh(archived=("atlanhq/a-dead-app", "atlanhq/b-dead-app")),
+        max_fraction=1.0,
+    )
+    assert result["swept"] == ["atlanhq_a-dead-app"]
+    assert result["refused"] == ["atlanhq_b-dead-app"]
+    assert json.loads(s3.objects[f"{BUCKET}/{PREFIX}/repos.json"]) == [
+        "atlanhq_atlan-live-app.json",
+        "atlanhq_b-dead-app.json",
+    ]

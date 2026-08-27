@@ -16,6 +16,10 @@ Deletion is limited to repos GitHub definitively reports as ``archived: true``:
   scope would otherwise read as "the whole fleet was deleted".
 * An unreadable answer is likewise reported, never acted on.
 
+A delete the bucket refuses (AccessDenied, throttling) leaves the slug in
+``repos.json``: the manifest tracks what is actually stored, so a row may only
+disappear once its objects have.
+
 ``--max-fraction`` caps how much of a prefix one invocation may remove, because
 a bad token makes everything look archived and a manifest missing most of the
 fleet reads as a catastrophic regression on every panel at once.
@@ -170,27 +174,45 @@ def sweep(
             "unknown": unknown,
         }
 
+    swept: list = []
+    undeleted: list = []
     for slug in archived:
         print(
             f"{prefix}: {'would sweep' if dry_run else 'sweeping'} {slug}",
             file=sys.stderr,
         )
         if dry_run:
+            swept.append(slug)
             continue
-        # A missing object is fine — the point is that it is gone afterwards.
-        run(["s3", "rm", f"{BUCKET}/{prefix}/repos/{slug}.json"])
-        run(["s3", "rm", f"{BUCKET}/{prefix}/history/{slug}.jsonl"])
+        # A missing object is fine — `aws s3 rm` exits 0 for a key that is
+        # already gone, and the point is that it is gone afterwards. A non-zero
+        # code is therefore a real refusal (AccessDenied, throttling): the
+        # object survives, so its manifest row has to survive with it rather
+        # than the slug vanishing from repos.json while its data stays.
+        codes = [
+            run(["s3", "rm", f"{BUCKET}/{prefix}/repos/{slug}.json"])[0],
+            run(["s3", "rm", f"{BUCKET}/{prefix}/history/{slug}.jsonl"])[0],
+        ]
+        if any(codes):
+            print(
+                f"::warning::{prefix}: {slug} — delete refused, keeping its "
+                "manifest row so the manifest keeps matching the bucket",
+                file=sys.stderr,
+            )
+            undeleted.append(slug)
+            continue
+        swept.append(slug)
 
-    if not dry_run:
+    if not dry_run and swept:
         rebuild_manifest(
-            prefix, [s for s in slugs if s not in set(archived)], tmp_dir, run=run
+            prefix, [s for s in slugs if s not in set(swept)], tmp_dir, run=run
         )
 
     return {
         "prefix": prefix,
         "stored": len(slugs),
-        "swept": archived,
-        "refused": [],
+        "swept": swept,
+        "refused": undeleted,
         "unknown": unknown,
     }
 
@@ -239,8 +261,9 @@ def main(argv: Optional[list] = None) -> int:
             f"{r['prefix']}: stored={r['stored']} swept={len(r['swept'])} "
             f"refused={len(r['refused'])} unreadable={len(r['unknown'])}"
         )
-    # A refusal is the safety rail firing on evidence we do not trust — surface
-    # it as a failed run so nobody reads the green tick as "nothing to clean".
+    # A refusal is either safety rail firing — evidence we do not trust, or a
+    # delete the bucket would not accept — so surface it as a failed run rather
+    # than let a green tick read as "nothing left to clean".
     return 1 if any(r["refused"] for r in results) else 0
 
 
