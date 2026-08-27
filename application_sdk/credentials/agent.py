@@ -613,9 +613,13 @@ async def check_secret_store_access(
     so the caller can build credentials without a second store fetch.
     """
     if secret_store is None:
+        # No secret store configured is a permanent deployment config gap, not a
+        # transient outage — the store doesn't exist, it isn't "down". So this is
+        # a PreconditionError (retryable=False), NOT a retryable SourceUnavailable:
+        # store_down stays False, same as the config-gap branches below.
         return SecretStoreCheckResult(
             passed=False,
-            store_down=True,
+            store_down=False,
             fatal=True,
             substituted=0,
             message="Secret store is not configured for the SDR deployment.",

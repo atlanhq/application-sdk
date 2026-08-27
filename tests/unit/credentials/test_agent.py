@@ -1577,9 +1577,12 @@ class TestCheckSecretStoreAccess:
         )
 
     async def test_fails_when_no_store_configured(self) -> None:
+        # No secret store configured is a permanent config gap, not a transient
+        # outage: store_down is False so the row is a (non-retryable)
+        # PreconditionError, not a retryable SourceUnavailableError.
         r = await check_secret_store_access(self._spec(), None)
         assert r.passed is False
-        assert r.store_down is True
+        assert r.store_down is False
         assert r.fatal is True
         assert r.suggested_action == "Configure a secret store on the SDR deployment."
 

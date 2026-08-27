@@ -992,6 +992,29 @@ class TestSecretStoreCheckRow:
         assert row.passed is False
         assert row.error is not None
         assert row.error.category == FailureCategory.PRECONDITION
+        # A config gap is permanent — it must not be advertised as retryable.
+        assert row.error.retryable is False
+
+    def test_no_store_configured_is_a_non_retryable_precondition(self) -> None:
+        # "No secret store configured" is a deployment config gap, not a store
+        # outage: PRECONDITION / retryable=False, never a retryable
+        # SourceUnavailableError. store_down is False for exactly this reason.
+        from application_sdk.credentials.agent import SecretStoreCheckResult
+        from application_sdk.errors.categories import FailureCategory
+
+        row = _secret_store_check_row(
+            SecretStoreCheckResult(
+                passed=False,
+                store_down=False,
+                fatal=True,
+                substituted=0,
+                message="Secret store is not configured for the SDR deployment.",
+                suggested_action="Configure a secret store on the SDR deployment.",
+            )
+        )
+        assert row.error is not None
+        assert row.error.category == FailureCategory.PRECONDITION
+        assert row.error.retryable is False
 
     def test_passed_row_has_no_error(self) -> None:
         from application_sdk.credentials.agent import SecretStoreCheckResult
