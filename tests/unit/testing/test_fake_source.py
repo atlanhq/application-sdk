@@ -35,6 +35,14 @@ from application_sdk.testing.fake_source import (
     serve,
 )
 
+# CI runs the unit tier with ``--disable-socket --allow-unix-socket`` (see
+# .github/actions/unit-tests/action.yaml) so a unit test cannot reach the
+# network. HttpFakeSource's whole purpose is to bind a real loopback listener,
+# so these tests re-enable AF_INET for themselves. The listener is bound to
+# 127.0.0.1 and is unreachable from anything but this process, so the guard's
+# intent — no outbound traffic from the unit tier — still holds.
+pytestmark = pytest.mark.enable_socket
+
 http_fake_source_factory = sdk_fixtures.http_fake_source_factory
 clean_http_fake_sources = sdk_fixtures.clean_http_fake_sources
 
