@@ -21,7 +21,18 @@ feat/fix commit merged to main
 - Analyses conventional commits since the last non-rc tag (`feat` → minor bump, `fix` → patch, `BREAKING CHANGE` / `!:` → major).
 - Updates `pyproject.toml` and regenerates `uv.lock`.
 - Prepends a new section to `CHANGELOG.md` with categorised commits.
-- Opens a PR from `bump-version-main` into `main` with the `release` label.
+- Opens a PR from `bump-version-main` into `main` with the `release` label — or, when
+  that PR is already open, re-syncs its title, body and label to the version this run
+  produced (`.github/scripts/upsert_release_pr.py`).
+
+`bump-version-main` is a *fixed* branch that is force-pushed on every merge to `main`, so
+while a bump PR sits unmerged its content keeps moving: a `feat:` merged after a patch bump
+was computed turns the pending release into a minor one. The PR must therefore be **upserted,
+not created-or-skipped**. The version the PR advertises always comes from the run that last
+touched the branch, never from the run that happened to open it.
+
+Note the tag itself is read from `pyproject.toml` in Stage 2 and never from the PR title, so
+a stale title misleads reviewers rather than mis-tagging a release.
 
 **Caller wiring** (`.github/workflows/release.yaml`):
 ```yaml
