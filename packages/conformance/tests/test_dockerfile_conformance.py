@@ -350,6 +350,24 @@ def test_i003_fires_on_unresolved_build_arg() -> None:
     assert "I003" in _ids(src)
 
 
+def test_i003_fires_on_arg_reference_without_default() -> None:
+    src = (
+        "ARG APP_MODULE\n"
+        "FROM registry.atlan.com/public/app-runtime-base:3\n"
+        "ENV ATLAN_APP_MODULE=${APP_MODULE}\n"
+    )
+    assert "I003" in _ids(src)
+
+
+def test_i003_silent_on_arg_reference_with_default() -> None:
+    src = (
+        "ARG APP_MODULE=app.connector:CassandraApp\n"
+        "FROM registry.atlan.com/public/app-runtime-base:3\n"
+        "ENV ATLAN_APP_MODULE=${APP_MODULE}\n"
+    )
+    assert "I003" not in _ids(src)
+
+
 def test_i003_fires_on_bad_shape_no_colon() -> None:
     src = "FROM registry.atlan.com/public/app-runtime-base:3\nENV ATLAN_APP_MODULE=myapp\n"
     assert "I003" in _ids(src)

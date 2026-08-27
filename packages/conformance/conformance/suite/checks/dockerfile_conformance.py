@@ -482,6 +482,22 @@ def _check_i003(
             )
         ]
 
+    # A direct reference to an ARG with a committed default is resolved by
+    # Docker during the image build.  Only global ARGs and final-stage ARGs
+    # are in scope here; defaults from an unrelated builder stage do not carry
+    # into the final image.
+    first_from = next(
+        (idx for idx, instr in enumerate(instructions) if instr.keyword == "FROM"),
+        len(instructions),
+    )
+    arg_defaults = _arg_defaults(instructions[:first_from])
+    arg_defaults.update(_arg_defaults(instructions[final_start:]))
+    arg_match = _ARG_REF_RE.match(value)
+    if arg_match:
+        arg_name = arg_match.group(1) or arg_match.group(2)
+        if arg_name in arg_defaults:
+            value = arg_defaults[arg_name].strip()
+
     if value.startswith("$"):
         return [
             _make_finding(
