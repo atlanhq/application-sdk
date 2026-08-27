@@ -31,7 +31,7 @@ class ConfigLoader:
     def _load_config(self) -> None:
         """Load and validate the YAML configuration file."""
         try:
-            with open(self.config_path, "r") as file:
+            with open(self.config_path, "r", encoding="utf-8") as file:
                 self.config = yaml.safe_load(file)
             self._validate_config()
         except FileNotFoundError:

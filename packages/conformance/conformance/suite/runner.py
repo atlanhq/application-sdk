@@ -64,6 +64,7 @@ from conformance.suite.checks import (
     security,
     test_quality,
     test_structure,
+    text_io_encoding,
     transform_templates,
 )
 from conformance.suite.checks._ast_common import TOOL_VERSION, detect_scope
@@ -319,6 +320,11 @@ _CHECKS: list[CheckRegistration] = [
         series=security.SERIES,
         discover=security.discover,
         scan_path=security.scan_path,
+    ),
+    CheckRegistration(
+        series=text_io_encoding.SERIES,
+        discover=text_io_encoding.discover,
+        scan_path=text_io_encoding.scan_path,
     ),
 ]
 
