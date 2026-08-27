@@ -1390,6 +1390,59 @@ def test_p014_silent_on_correctly_typed_task(tmp_path: Path) -> None:
     assert p014 == []
 
 
+def test_p014_silent_on_task_input_derived_from_sdk_template_contract(
+    tmp_path: Path,
+) -> None:
+    """An in-tree input extending the SDK's ExtractionTaskInput is valid."""
+    files = {
+        "contracts.py": (
+            "from application_sdk.templates.contracts import ExtractionTaskInput\n"
+            "\n"
+            "class SynapseTaskInput(ExtractionTaskInput):\n"
+            "    pass\n"
+        ),
+        "connector.py": (
+            _APP_IMPORTS + "from application_sdk.contracts import Output\n"
+            "from contracts import SynapseTaskInput\n"
+            "class MyApp(App):\n"
+            "    @task\n"
+            "    async def fetch(self, input: SynapseTaskInput) -> Output:\n"
+            "        return Output()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f for f in findings if f.rule_id == "P014"] == []
+
+
+def test_p014_fires_on_task_input_derived_from_local_extraction_task_input(
+    tmp_path: Path,
+) -> None:
+    """A local class named like an SDK contract is still checked normally."""
+    files = {
+        "contracts.py": (
+            "from pydantic import BaseModel\n"
+            "\n"
+            "class ExtractionTaskInput(BaseModel):\n"
+            "    pass\n"
+            "\n"
+            "class SynapseTaskInput(ExtractionTaskInput):\n"
+            "    pass\n"
+        ),
+        "connector.py": (
+            _APP_IMPORTS + "from application_sdk.contracts import Output\n"
+            "from contracts import SynapseTaskInput\n"
+            "class MyApp(App):\n"
+            "    @task\n"
+            "    async def fetch(self, input: SynapseTaskInput) -> Output:\n"
+            "        return Output()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p014 = [f for f in findings if f.rule_id == "P014"]
+    assert len(p014) == 1
+    assert "SynapseTaskInput" in p014[0].message
+
+
 def test_p014_silent_on_non_sdk_task_decorator(tmp_path: Path) -> None:
     """@celery.task with untyped args → not P014 (provenance-excluded)."""
     src = (

@@ -179,6 +179,7 @@ def resolve_ancestor(
     by_name: dict[str, ClassRecord],
     cache: dict[str, bool | None],
     visiting: set[str],
+    known_ancestors: frozenset[str] = frozenset(),
 ) -> bool | None:
     """Transitively resolve *name*'s base chain looking for *target*.
 
@@ -199,6 +200,8 @@ def resolve_ancestor(
     """
     if name == target:
         return True
+    if name in known_ancestors and name not in by_name:
+        return name.endswith(target)
     if name in cache:
         return cache[name]
     if name in visiting:
@@ -211,7 +214,9 @@ def resolve_ancestor(
     visiting.add(name)
     result: bool = False
     for base in rec.bases:
-        sub = resolve_ancestor(base, target, by_name, cache, visiting)
+        sub = resolve_ancestor(
+            base, target, by_name, cache, visiting, known_ancestors
+        )
         if sub is True:
             result = True
             break

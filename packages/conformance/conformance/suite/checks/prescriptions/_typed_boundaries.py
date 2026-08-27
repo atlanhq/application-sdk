@@ -113,6 +113,11 @@ _CLEARLY_UNTYPED: frozenset[str] = frozenset(
     }
 )
 
+# These SDK template bases are intentionally outside an app's scanned source
+# tree. Keep this list narrow: a same-named class in the scanned tree must still
+# be resolved and rejected when it does not reach Input/Output.
+_KNOWN_SDK_CONTRACT_ANCESTORS: frozenset[str] = frozenset({"ExtractionTaskInput"})
+
 # ── Annotation analysis ───────────────────────────────────────────────────────
 
 
@@ -304,7 +309,17 @@ def _check_one_annotation(
         return None
 
     # ── Case 3c: cross-file resolution ───────────────────────────────────────
-    result = resolve_ancestor(ann_name, target_base, by_name, cache, set())
+    # SDK template contracts are outside the scanned source tree.  Preserve
+    # their ancestry when they are used as bases of an in-tree contract, while
+    # continuing to resolve similarly named local classes normally.
+    result = resolve_ancestor(
+        ann_name,
+        target_base,
+        by_name,
+        cache,
+        set(),
+        _KNOWN_SDK_CONTRACT_ANCESTORS,
+    )
     if result is False:
         # Found in scanned universe but does not reach Input/Output.
         return _make_boundary_finding(

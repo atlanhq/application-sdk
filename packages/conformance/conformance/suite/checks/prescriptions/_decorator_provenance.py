@@ -33,6 +33,7 @@ from ._constants import _SDK_MODULE_PREFIX
 _SDK_CONTRACT_MODULE_PREFIXES: tuple[str, ...] = (
     "application_sdk.contracts",
     "application_sdk.handler.contracts",
+    "application_sdk.templates.contracts",
 )
 
 
