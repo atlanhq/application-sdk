@@ -386,6 +386,99 @@ _LOG_TEXT = (
 )
 
 
+class _PerContainerLogs:
+    """A ``read_namespaced_pod_log`` that answers differently per container."""
+
+    def __init__(self, by_container: dict[str, str]) -> None:
+        self._by_container = by_container
+
+    def __call__(self, container: str) -> str:
+        return self._by_container[container]
+
+
+async def test_logs_from_two_pods_merge_on_the_server_timestamp():
+    """The claim both docstrings make, pinned: merged, not pod-then-container.
+
+    A selector-wide read is only worth more than a per-pod one if a request that
+    one pod handled and another logged about comes back in the order it happened.
+    Concatenating by pod would put every `web-0` line before every `web-1` line
+    and lose exactly that.
+    """
+    apis = FakeApis(
+        pods=_listing(
+            pod_body("web-0", containers=[{"name": "app", "restartCount": 0}]),
+            pod_body("web-1", containers=[{"name": "app", "restartCount": 0}]),
+        )
+    )
+    per_pod = {
+        "web-0": (
+            "2026-08-26T10:00:00.000000000Z accepted\n"
+            "2026-08-26T10:00:02.000000000Z replied\n"
+        ),
+        "web-1": (
+            "2026-08-26T10:00:01.000000000Z forwarded\n"
+            "2026-08-26T10:00:03.000000000Z done\n"
+        ),
+    }
+    reader = reader_over(apis)
+    original = reader.container_log
+
+    async def _per_pod(namespace, pod, container, **kwargs):
+        _ = await original(namespace, pod, container, **kwargs)
+        return per_pod[pod]
+
+    reader.container_log = _per_pod  # type: ignore[method-assign]
+
+    lines = [line async for line in reader.logs("conn", "app=web")]
+
+    assert [(line.pod, line.message) for line in lines] == [
+        ("web-0", "accepted"),
+        ("web-1", "forwarded"),
+        ("web-0", "replied"),
+        ("web-1", "done"),
+    ]
+
+
+async def test_an_untimestamped_line_stays_with_the_line_it_continues():
+    """A stack trace must not scatter across the other pods' output.
+
+    Frames arrive with no prefix of their own, so they inherit the last timestamp
+    seen *in their own stream* — which keeps them adjacent to their header
+    wherever the merge places it.
+    """
+    apis = FakeApis(
+        pods=_listing(
+            pod_body("web-0", containers=[{"name": "app", "restartCount": 0}]),
+            pod_body("web-1", containers=[{"name": "app", "restartCount": 0}]),
+        )
+    )
+    per_pod = {
+        "web-0": (
+            "2026-08-26T10:00:00.000000000Z Traceback (most recent call last):\n"
+            '  File "x.py", line 1\n'
+            "ValueError: boom\n"
+        ),
+        "web-1": "2026-08-26T10:00:01.000000000Z still serving\n",
+    }
+    reader = reader_over(apis)
+    original = reader.container_log
+
+    async def _per_pod(namespace, pod, container, **kwargs):
+        _ = await original(namespace, pod, container, **kwargs)
+        return per_pod[pod]
+
+    reader.container_log = _per_pod  # type: ignore[method-assign]
+
+    lines = [line async for line in reader.logs("conn")]
+
+    assert [line.message for line in lines] == [
+        "Traceback (most recent call last):",
+        '  File "x.py", line 1',
+        "ValueError: boom",
+        "still serving",
+    ]
+
+
 async def test_logs_yield_one_line_per_line_with_parsed_timestamps():
     apis = FakeApis(
         pods=_listing(
@@ -552,7 +645,7 @@ async def test_http_goes_through_a_port_forward_and_returns_the_status_as_a_valu
     fake = _patched_port_forward(session)
 
     with patch("application_sdk.testing.harness.cluster.kube.port_forward", fake):
-        response = await reader_over(FakeApis()).http(
+        response = await reader_over(FakeApis(), kube_context="e2e-gcp").http(
             ServiceTarget(namespace="conn", service="handler", port=8000),
             HttpRequest(
                 method="POST",
@@ -569,7 +662,13 @@ async def test_http_goes_through_a_port_forward_and_returns_the_status_as_a_valu
     assert response.body == {"detail": "down"}
     assert response.text == '{"detail":"down"}'
     assert session.calls == [("POST", "/api/v1/workflows", {"a": 1}, {"X-Test": "1"})]
-    assert fake.seen == (("conn", "handler", 8000), {"timeout": 7.0})
+    # The tunnel is pinned to the same context the reads use. Without this the
+    # reader would list pods from one cluster and tunnel into another, both calls
+    # succeeding and nothing logged.
+    assert fake.seen == (
+        ("conn", "handler", 8000),
+        {"timeout": 7.0, "kube_context": "e2e-gcp"},
+    )
 
 
 async def test_a_non_json_body_is_reported_as_text_only():
@@ -633,6 +732,12 @@ def test_each_thread_gets_its_own_bundle():
 # ---------------------------------------------------------------------------
 # Building from a kubeconfig
 # ---------------------------------------------------------------------------
+
+
+def test_the_readers_context_is_readable_by_whatever_else_reaches_that_cluster():
+    """`LogCollector`'s kubectl artefacts and `http()`'s tunnel both need it."""
+    assert reader_over(FakeApis(), kube_context="e2e-gcp").kube_context == "e2e-gcp"
+    assert reader_over(FakeApis()).kube_context is None
 
 
 def test_a_missing_extra_names_the_extra_rather_than_a_module():

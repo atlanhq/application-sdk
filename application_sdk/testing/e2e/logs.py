@@ -13,6 +13,11 @@ and their whole value is that a person reading a red CI leg sees exactly what th
 would have seen at a terminal. Replacing them with sanitized JSON would be a
 different artefact wearing the same filename.
 
+All three pin the reader's ``kube_context``. An evidence bundle that describes a
+different cluster from the one the reads came from is worse than no bundle: it
+is wrong in a way nothing flags, because ``kubectl`` against the current context
+succeeds perfectly well — it just answers about somewhere else.
+
 **This collector is allowed to fail open, and it is the only thing here that
 is.** The ban on empty-result-on-error (FND-224's C4) is about readings that get
 *graded*: an unreadable count must not be scored as a low count. An evidence dump
@@ -28,10 +33,12 @@ evidence collection lands properly in
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from pathlib import Path
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.harness.cluster import PodState
+from application_sdk.testing.harness.cluster._portforward import kubectl_argv
 from application_sdk.testing.harness.cluster.kube import KubernetesReader
 
 logger = get_logger(__name__)
@@ -41,7 +48,7 @@ logger = get_logger(__name__)
 _TAIL_LINES = 10_000
 
 
-async def _run_to_file(args: list[str], output_path: Path) -> None:
+async def _run_to_file(args: Sequence[str], output_path: Path) -> None:
     """Run a command and write its stdout to a file (best-effort, never raises)."""
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -116,7 +123,14 @@ class LogCollector:
             tasks.append(
                 loop.create_task(
                     _run_to_file(
-                        ["kubectl", "describe", "pod", pod.name, "-n", self.namespace],
+                        kubectl_argv(
+                            "describe",
+                            "pod",
+                            pod.name,
+                            "-n",
+                            self.namespace,
+                            kube_context=self.reader.kube_context,
+                        ),
                         self.output_dir / f"{pod.name}-describe.txt",
                     )
                 )
@@ -149,7 +163,15 @@ class LogCollector:
         tasks.append(
             loop.create_task(
                 _run_to_file(
-                    ["kubectl", "get", "pods", "-n", self.namespace, "-o", "wide"],
+                    kubectl_argv(
+                        "get",
+                        "pods",
+                        "-n",
+                        self.namespace,
+                        "-o",
+                        "wide",
+                        kube_context=self.reader.kube_context,
+                    ),
                     self.output_dir / "pods-wide.txt",
                 )
             )
@@ -166,14 +188,14 @@ class LogCollector:
             return
 
         await _run_to_file(
-            [
-                "kubectl",
+            kubectl_argv(
                 "get",
                 "events",
                 "-n",
                 self.namespace,
                 "--sort-by=.lastTimestamp",
-            ],
+                kube_context=self.reader.kube_context,
+            ),
             self.output_dir / "events.txt",
         )
 

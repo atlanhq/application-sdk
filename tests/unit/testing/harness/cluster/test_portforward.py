@@ -7,6 +7,7 @@ everything below the "one tunnel per session" divider is new behaviour.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -286,6 +287,79 @@ async def test_closing_a_session_twice_is_harmless():
     async with port_forward("ns", "svc", 8080) as session:
         await session.aclose()
         await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_the_tunnel_pins_the_kube_context_it_was_given():
+    """Reads from one cluster and a tunnel into another is a silent wrong answer.
+
+    Both calls succeed — `kubectl` is perfectly happy with the current context —
+    so nothing errors and nothing is logged. The only symptom is a result that
+    makes no sense, which is why this is asserted on the argv.
+    """
+    pf_proc = _kubectl_proc()
+
+    with (
+        patch(_STUB_PORT, return_value=54321),
+        patch("asyncio.create_subprocess_exec", return_value=pf_proc) as mock_exec,
+        patch(_STUB_WAIT, new=AsyncMock()),
+        patch("httpx.AsyncClient.request", new=AsyncMock()),
+    ):
+        async with port_forward("ns", "svc", 8080, kube_context="e2e-gcp") as session:
+            await session.request("GET", "/status")
+
+    argv = list(mock_exec.call_args[0])
+    assert "--context" in argv
+    assert argv[argv.index("--context") + 1] == "e2e-gcp"
+
+
+@pytest.mark.asyncio
+async def test_no_context_named_means_no_context_flag():
+    """`None` is "whatever is current", which is right when nothing named one."""
+    pf_proc = _kubectl_proc()
+
+    with (
+        patch(_STUB_PORT, return_value=54321),
+        patch("asyncio.create_subprocess_exec", return_value=pf_proc) as mock_exec,
+        patch(_STUB_WAIT, new=AsyncMock()),
+        patch("httpx.AsyncClient.request", new=AsyncMock()),
+    ):
+        async with port_forward("ns", "svc", 8080) as session:
+            await session.request("GET", "/status")
+
+    assert "--context" not in list(mock_exec.call_args[0])
+
+
+@pytest.mark.asyncio
+async def test_concurrent_requests_open_exactly_one_tunnel():
+    """The lazy open is check-then-act, so two callers could each spawn a kubectl.
+
+    Only one would be recorded in `_proc`; the other would run unreferenced for
+    the rest of the session. Sequential use never hits it, which is exactly why a
+    leaked subprocess is not something to leave to usage.
+    """
+    procs: list[MagicMock] = []
+
+    async def _spawn(*_args: object, **_kwargs: object) -> MagicMock:
+        # Yield control mid-open, so a second caller can interleave here — which
+        # is the whole race, and would not happen with a synchronous double.
+        await asyncio.sleep(0)
+        proc = _kubectl_proc()
+        procs.append(proc)
+        return proc
+
+    with (
+        patch(_STUB_PORT, side_effect=[54321, 54322, 54323, 54324]),
+        patch("asyncio.create_subprocess_exec", new=_spawn),
+        patch(_STUB_WAIT, new=AsyncMock()),
+        patch("httpx.AsyncClient.request", new=AsyncMock()),
+    ):
+        async with port_forward("ns", "svc", 8080) as session:
+            await asyncio.gather(*(session.request("GET", "/status") for _ in range(4)))
+
+    assert (
+        len(procs) == 1
+    ), f"{len(procs)} kubectl processes spawned, {len(procs) - 1} leaked"
 
 
 @pytest.mark.asyncio

@@ -419,10 +419,13 @@ async def test_the_child_e_kubectl_reads_are_gone() -> None:
             if '"kubectl"' in path.read_text(encoding="utf-8")
         )
 
+    # Exactly one place in either package builds a `kubectl` argv, and it is the
+    # helper that pins `--context`. `LogCollector`'s three remaining artefacts
+    # (`describe`, `get pods -o wide`, `get events`) go through it rather than
+    # assembling their own list, which is what keeps the evidence bundle and the
+    # typed reads pointed at the same cluster.
     assert _shells_out(harness_pkg) == ["cluster/_portforward.py"]
-    # In `testing/e2e` only the evidence dump is left: `describe`, `get pods -o
-    # wide` and `get events` are human-readable renderings with no endpoint.
-    assert _shells_out(e2e_pkg) == ["logs.py"]
+    assert _shells_out(e2e_pkg) == []
 
 
 def _unused():  # pragma: no cover — the factory is never called by these asserts

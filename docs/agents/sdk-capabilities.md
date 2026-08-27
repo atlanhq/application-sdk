@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.29.0
-source-sha:    f65743fee924c0839b254a68c538ef7de1ee2064
-source-date:   2026-08-27T00:27:47+01:00
+source-sha:    87901cf1141d4a0ebad578030a5e4347111e7adf
+source-date:   2026-08-27T01:30:51+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -3605,7 +3605,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Import:** `from application_sdk.testing.e2e.portforward import PortForward`
 - **Also importable from:** `application_sdk.testing.harness.cluster`
-- **Signature:** `class PortForward(namespace: str, service: str, port: int, *, timeout: float = 30.0)`
+- **Signature:** `class PortForward(namespace: str, service: str, port: int, *, timeout: float = 30.0, kube_context: str | None = None)`
 - **Summary:** One ``kubectl port-forward`` tunnel to a Service, and calls over it.
 - **Defined in:** `application_sdk/testing/harness/cluster/_portforward.py`
 
@@ -4332,7 +4332,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Import:** `from application_sdk.testing.e2e.portforward import port_forward`
 - **Also importable from:** `application_sdk.testing.harness.cluster`
-- **Signature:** `port_forward(namespace: str, service: str, port: int, *, timeout: float = 30.0)`
+- **Signature:** `port_forward(namespace: str, service: str, port: int, *, timeout: float = 30.0, kube_context: str | None = None)`
 - **Summary:** Hold one tunnel to a Service for a batch of calls.
 - **Defined in:** `application_sdk/testing/harness/cluster/_portforward.py`
 

@@ -41,7 +41,7 @@ from application_sdk.testing.harness._poll import until_deadline_async
 
 logger = get_logger(__name__)
 
-__all__ = ["PortForward", "kube_http_call", "port_forward"]
+__all__ = ["PortForward", "kube_http_call", "kubectl_argv", "port_forward"]
 
 # Tight cadence: the port opens within a few hundred ms once kubectl's tunnel is
 # up, and every attempt already carries its own 1s connect timeout.
@@ -107,17 +107,37 @@ class PortForward:
         service: Service name, without any ``svc/`` prefix.
         port: Remote port to forward to.
         timeout: Default per-request timeout in seconds.
+        kube_context: Kubeconfig context to tunnel through. **Required for
+            correctness whenever the caller reads from a named context**: without
+            it ``kubectl`` uses whichever context the kubeconfig marks current, so
+            a reader built with ``kube_context="e2e-gcp"`` would list pods from
+            one cluster and HTTP-tunnel into another — with no error anywhere,
+            because both calls succeed. ``None`` means "whatever is current",
+            which is only right when the reader did not name one either.
     """
 
     def __init__(
-        self, namespace: str, service: str, port: int, *, timeout: float = 30.0
+        self,
+        namespace: str,
+        service: str,
+        port: int,
+        *,
+        timeout: float = 30.0,
+        kube_context: str | None = None,
     ) -> None:
         self.namespace = namespace
         self.service = service
         self.port = port
         self.timeout = timeout
+        self.kube_context = kube_context
         self._proc: asyncio.subprocess.Process | None = None
         self._client: httpx.AsyncClient | None = None
+        # Guards the lazy open: `_opened` is check-then-act, so two concurrent
+        # `request()` calls on one session could each spawn a `kubectl` and only
+        # one would be recorded — leaking the other for the rest of the session.
+        # Normal use is sequential (one tunnel per `port_forward()`/`http()`),
+        # but a leaked subprocess is not the kind of thing to leave to usage.
+        self._opening = asyncio.Lock()
 
     async def request(
         self,
@@ -180,17 +200,31 @@ class PortForward:
         return await _send()
 
     async def _opened(self) -> httpx.AsyncClient:
-        """Return the tunnel's client, opening the tunnel if it is not up."""
+        """Return the tunnel's client, opening the tunnel if it is not up.
+
+        The double check around the lock is deliberate: the common path is a
+        tunnel that is already up, and taking a lock to discover that would put
+        every request through a serialisation point it does not need.
+        """
         if self._client is not None:
             return self._client
+        async with self._opening:
+            if self._client is not None:
+                return self._client
+            return await self._open()
+
+    async def _open(self) -> httpx.AsyncClient:
+        """Spawn the tunnel and wait for its local port. Callers hold the lock."""
         local_port = _find_free_port()
         self._proc = await asyncio.create_subprocess_exec(
-            "kubectl",
-            "port-forward",
-            f"svc/{self.service}",
-            f"{local_port}:{self.port}",
-            "-n",
-            self.namespace,
+            *kubectl_argv(
+                "port-forward",
+                f"svc/{self.service}",
+                f"{local_port}:{self.port}",
+                "-n",
+                self.namespace,
+                kube_context=self.kube_context,
+            ),
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
@@ -226,9 +260,34 @@ class PortForward:
             proc.kill()
 
 
+def kubectl_argv(*args: str, kube_context: str | None = None) -> tuple[str, ...]:
+    """Build a ``kubectl`` argv, pinning the context when one was named.
+
+    One function so every ``kubectl`` this package still shells out to — the
+    port-forward here, and ``LogCollector``'s ``describe`` / ``get pods -o wide``
+    / ``get events`` — pins the same context as the typed reads do. Splitting
+    that decision across call sites is how a run comes to read one cluster and
+    write evidence about another.
+
+    Args:
+        *args: The ``kubectl`` arguments, without the leading ``kubectl``.
+        kube_context: Context to pin, or ``None`` to accept the current one.
+
+    Returns:
+        The full argv, ready for ``create_subprocess_exec``.
+    """
+    context = ("--context", kube_context) if kube_context else ()
+    return ("kubectl", *args, *context)
+
+
 @asynccontextmanager
 async def port_forward(
-    namespace: str, service: str, port: int, *, timeout: float = 30.0
+    namespace: str,
+    service: str,
+    port: int,
+    *,
+    timeout: float = 30.0,
+    kube_context: str | None = None,
 ) -> AsyncIterator[PortForward]:
     """Hold one tunnel to a Service for a batch of calls.
 
@@ -242,12 +301,16 @@ async def port_forward(
         port: Remote port to forward to.
         timeout: Default per-request timeout in seconds, and the bound on waiting
             for the tunnel's local port to open.
+        kube_context: Kubeconfig context to tunnel through. Pass the same one the
+            reads use, or the tunnel may reach a different cluster entirely.
 
     Yields:
         The session. The tunnel opens on first use, not on entry, and is torn
         down on exit whether or not any call was made.
     """
-    session = PortForward(namespace, service, port, timeout=timeout)
+    session = PortForward(
+        namespace, service, port, timeout=timeout, kube_context=kube_context
+    )
     try:
         yield session
     finally:
@@ -262,6 +325,7 @@ async def kube_http_call(
     path: str,
     body: dict[str, Any] | None = None,
     timeout: float = 30.0,
+    kube_context: str | None = None,
 ) -> httpx.Response:
     """Make one HTTP call to a K8s Service via an ephemeral port-forward.
 
@@ -278,9 +342,13 @@ async def kube_http_call(
         path: Request path, e.g. ``"/health"``.
         body: Optional JSON body for POST/PUT requests.
         timeout: Total timeout in seconds for port-forward + HTTP request.
+        kube_context: Kubeconfig context to tunnel through, or ``None`` for the
+            current one.
 
     Returns:
         The :class:`httpx.Response`, whatever its status.
     """
-    async with port_forward(namespace, service, port, timeout=timeout) as session:
+    async with port_forward(
+        namespace, service, port, timeout=timeout, kube_context=kube_context
+    ) as session:
         return await session.request(method, path, body=body)

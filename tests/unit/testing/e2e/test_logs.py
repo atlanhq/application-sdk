@@ -40,10 +40,14 @@ class _FakeReader:
     """Just the two verbs LogCollector uses, plus a record of the calls."""
 
     def __init__(
-        self, pods: list[PodState] | BaseException, log_text: str = "log line"
+        self,
+        pods: list[PodState] | BaseException,
+        log_text: str = "log line",
+        kube_context: str | None = None,
     ) -> None:
         self._pods = pods
         self._log_text = log_text
+        self.kube_context = kube_context
         self.log_calls: list[dict[str, Any]] = []
 
     async def pods(self, namespace: str, selector: str = "") -> list[PodState]:
@@ -269,6 +273,54 @@ async def test_container_logs_are_written_as_utf8_not_as_the_locale_encoding(
 
     assert written == [{"encoding": "utf-8", "errors": "replace"}]
     assert (output_dir / "handler-my-pod.log").read_text(encoding="utf-8") == log_text
+
+
+@pytest.mark.asyncio
+async def test_the_kubectl_artefacts_pin_the_readers_context(output_dir: Path):
+    """Evidence about a different cluster is worse than no evidence.
+
+    The reads go through the typed client and honour `kube_context`; `describe`,
+    `get pods -o wide` and `get events` still shell out, and `kubectl` without
+    `--context` follows whichever context the kubeconfig marks current. That
+    mismatch produces a bundle that is confidently about somewhere else, with
+    every command exiting 0.
+    """
+    commands: list[tuple[str, ...]] = []
+
+    def _record(*args: str, **_kwargs: object) -> MagicMock:
+        commands.append(args)
+        return _make_proc()
+
+    reader = _FakeReader([_pod("my-pod", handler=0)], kube_context="e2e-gcp")
+
+    with patch("asyncio.create_subprocess_exec", side_effect=_record):
+        collector = LogCollector("test-ns", output_dir, reader=reader)
+        await collector.collect()
+        await collector.collect_events()
+
+    assert commands, "no kubectl artefacts were collected"
+    for argv in commands:
+        assert argv[0] == "kubectl"
+        assert "--context" in argv, argv
+        assert argv[argv.index("--context") + 1] == "e2e-gcp"
+
+
+@pytest.mark.asyncio
+async def test_no_context_named_leaves_the_kubectl_argv_alone(output_dir: Path):
+    commands: list[tuple[str, ...]] = []
+
+    def _record(*args: str, **_kwargs: object) -> MagicMock:
+        commands.append(args)
+        return _make_proc()
+
+    with patch("asyncio.create_subprocess_exec", side_effect=_record):
+        collector = LogCollector(
+            "test-ns", output_dir, reader=_FakeReader([_pod("my-pod", handler=0)])
+        )
+        await collector.collect()
+
+    assert commands
+    assert all("--context" not in argv for argv in commands)
 
 
 @pytest.mark.asyncio

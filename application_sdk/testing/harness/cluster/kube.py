@@ -57,12 +57,14 @@ backend is another factory passed to the same reader rather than a second reader
 
 from __future__ import annotations
 
+import asyncio
 import functools
+import heapq
 import threading
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol, cast
 
 import httpx
@@ -410,6 +412,17 @@ class KubernetesReader:
         )
         self._local = threading.local()
 
+    @property
+    def kube_context(self) -> str | None:
+        """Kubeconfig context these reads go through, or ``None`` for the current.
+
+        Public because it is not merely informational: anything that reaches the
+        same cluster by another route — ``LogCollector``'s ``kubectl describe``,
+        the port-forward behind :meth:`http` — has to pin the *same* context, and
+        a private attribute would leave each of them guessing.
+        """
+        return self._kube_context
+
     # -- the client, per thread ---------------------------------------------
 
     def _apis(self) -> KubernetesApis:
@@ -519,13 +532,25 @@ class KubernetesReader:
         Raises:
             ClusterReadFailedError: If the pod listing or a log read failed.
         """
-        for pod in await self.pods(namespace, selector):
-            for container in pod.containers or {}:
-                text = await self.container_log(
-                    namespace, pod.name, container, since=since
-                )
-                for line in _log_lines(pod.name, container, text):
-                    yield line
+        sources = [
+            (pod.name, container)
+            for pod in await self.pods(namespace, selector)
+            for container in pod.containers or {}
+        ]
+        if not sources:
+            return
+        texts = await asyncio.gather(
+            *(
+                self.container_log(namespace, pod, container, since=since)
+                for pod, container in sources
+            )
+        )
+        streams = [
+            _sortable(_log_lines(pod, container, text))
+            for (pod, container), text in zip(sources, texts, strict=True)
+        ]
+        for _key, line in heapq.merge(*streams, key=lambda entry: entry[0]):
+            yield line
 
     async def http(self, target: ServiceTarget, request: HttpRequest) -> HttpResponse:
         """Make an HTTP call against an in-cluster Service.
@@ -535,6 +560,12 @@ class KubernetesReader:
         a read and ``kubernetes.stream``'s equivalent is a socket-level API, not
         a drop-in (see
         :mod:`application_sdk.testing.harness.cluster._portforward`).
+
+        The tunnel is pinned to this reader's :attr:`kube_context`. Without that
+        it would follow whichever context the kubeconfig marks current, and a
+        reader built for one cluster would read pods from it while tunnelling
+        into another — both calls succeeding, nothing logged, and the only
+        symptom a result that makes no sense.
 
         Args:
             target: Service and port to reach.
@@ -546,7 +577,11 @@ class KubernetesReader:
         """
         timeout_seconds = request.timeout.total_seconds()
         async with port_forward(
-            target.namespace, target.service, target.port, timeout=timeout_seconds
+            target.namespace,
+            target.service,
+            target.port,
+            timeout=timeout_seconds,
+            kube_context=self._kube_context,
         ) as session:
             response = await session.request(
                 request.method,
@@ -966,6 +1001,37 @@ def _log_lines(pod: str, container: str, text: str) -> Iterator[LogLine]:
         yield LogLine(
             pod=pod, container=container, message=message, timestamp=timestamp
         )
+
+
+def _sortable(lines: Iterator[LogLine]) -> list[tuple[tuple[datetime, int], LogLine]]:
+    """Key one container's lines so a k-way merge can order them across pods.
+
+    Two properties the key has to hold, and neither is free:
+
+    *An untimestamped line stays attached to the line it continues.* A stack
+    trace arrives as one timestamped line followed by frames with no prefix of
+    their own; sorting those to the front (or dropping them to the end) would
+    scatter a traceback across every other pod's output. So a line with no
+    timestamp inherits the last one seen **in its own stream**, which keeps the
+    frames adjacent to their header wherever that header lands.
+
+    *Each stream is sorted by its own key.* ``heapq.merge`` merges sorted inputs
+    only. The inherited timestamp is non-decreasing and the position breaks ties
+    within a stream, so it is — and the position also makes the order total, so
+    two pods logging in the same millisecond merge deterministically instead of
+    by whichever read finished first.
+
+    Leading lines with no timestamp at all inherit ``datetime.min``: they were
+    logged before anything this read can date, and sorting them first is the only
+    honest answer.
+    """
+    keyed: list[tuple[tuple[datetime, int], LogLine]] = []
+    carried = datetime.min.replace(tzinfo=UTC)
+    for position, line in enumerate(lines):
+        if line.timestamp is not None:
+            carried = line.timestamp
+        keyed.append(((carried, position), line))
+    return keyed
 
 
 def _split_timestamp(line: str) -> tuple[datetime | None, str]:
