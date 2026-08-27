@@ -302,3 +302,5 @@ async def test_every_listed_hit_lands_somewhere_on_the_report():
 
     # -1 for the connection itself, which was not part of the child listing.
     assert (report.purged - 1) + len(report.orphaned) == len(listed)
+    assert report.orphaned == (f"{_QN}/noguid",)
+    assert not report.complete
