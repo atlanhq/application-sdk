@@ -600,3 +600,31 @@ def test_the_package_declares_all_so_the_manifest_extractor_finds_it() -> None:
 
     assert "run_sync" in harness.__all__
     assert all(hasattr(harness, name) for name in harness.__all__)
+
+
+def test_importing_the_harness_does_not_require_pytest() -> None:
+    """``fixtures`` is child I's pytest layer, and the package must not import it.
+
+    Static, not a runtime probe, because a runtime one cannot see the difference
+    once this test module has already imported ``fixtures`` itself. The property
+    is worth pinning rather than trusting: pytest is not a runtime dependency of
+    this SDK, so a convenience re-export from the package ``__init__`` would make
+    ``import application_sdk.testing.harness`` fail in a production process — and
+    the failure would surface as an ``ImportError`` naming a module nobody asked
+    for.
+    """
+    import ast
+    from pathlib import Path
+
+    import application_sdk.testing.harness as harness_pkg
+
+    source = Path(str(harness_pkg.__file__)).read_text(encoding="utf-8")
+    imported = {
+        node.module
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.ImportFrom) and node.module
+    }
+    assert "application_sdk.testing.harness.fixtures" not in imported
+    # The one entry point a composer registers, named in the module map so the
+    # import path is discoverable without reading this test.
+    assert "harness.fixtures" in (harness_pkg.__doc__ or "")
