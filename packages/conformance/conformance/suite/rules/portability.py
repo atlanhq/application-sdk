@@ -1,10 +1,11 @@
 """Cross-platform portability rule definitions (P046).
 
-``Path.read_text()`` / ``Path.write_text()`` called without ``encoding=`` decode
-and encode using the **locale's** preferred encoding.  That is UTF-8 on the
-Linux containers the SDK ships on and on macOS, and **cp1252 on Windows** — which
-the SDK's own unit matrix runs (``windows-latest``, 3.11 → 3.14).  The same file
-therefore reads back differently depending on where the code runs.
+``Path.read_text()``, ``Path.write_text()`` and a text-mode ``open()`` called
+without ``encoding=`` decode and encode using the **locale's** preferred
+encoding.  That is UTF-8 on the Linux containers the SDK ships on and on macOS,
+and **cp1252 on Windows** — which the SDK's own unit matrix runs
+(``windows-latest``, 3.11 → 3.14).  The same file therefore reads back
+differently depending on where the code runs.
 
 The trigger is narrower than "contains non-ASCII", which is why the shape
 survives review: cp1252 maps ``é`` and ``—`` perfectly well and has no mapping
@@ -20,10 +21,12 @@ one that runs a Windows CI leg and ships the library that consumer apps import;
 app repos build Linux containers only.  Widening to ``both`` is a one-line change
 if a Windows leg ever lands in the fleet, and would be the right call then.
 
-The rule governs ``read_text`` / ``write_text`` only.  Text-mode ``open()`` is
-the same hazard in a different spelling and is deliberately left for a follow-up:
-its population in the SDK is an order of magnitude larger and mostly ``/proc``
-and CSV handles, so folding it in here would trade a reviewable rule for a sweep.
+The rule covers every spelling of the hazard, not just the one that broke a
+build: ``read_text`` / ``write_text``, the builtin ``open`` and its
+signature-compatible aliases, ``Path.open`` and its lookalikes, the text mode of
+``gzip`` / ``bz2`` / ``lzma``, and the ``tempfile`` factories.  Banning one
+spelling would leave the next one open, which is the failure mode a rule exists
+to end.
 
 Rule-id stability (non-migration policy)
 ----------------------------------------
@@ -53,25 +56,27 @@ RULES: tuple[RuleDefinition, ...] = (
         orthogonal_gate="tests",
         since="0.24.0",
         rationale=(
-            "Path.read_text()/write_text() with no encoding= use the locale's "
-            "preferred encoding, so the same file round-trips differently per "
-            "platform: UTF-8 on the Linux containers we ship on and on macOS, "
-            "cp1252 on Windows, which the SDK's unit matrix runs. A source file "
-            "or an evidence artefact containing a character cp1252 cannot map "
-            "(an arrow or a tick, while an accented letter or an em dash passes "
-            "fine) raises UnicodeDecodeError on Windows only, so the defect is "
-            "invisible to exactly the CI legs that stay green."
+            "Path.read_text()/write_text() and a text-mode open() with no "
+            "encoding= use the locale's preferred encoding, so the same file "
+            "round-trips differently per platform: UTF-8 on the Linux containers "
+            "we ship on and on macOS, cp1252 on Windows, which the SDK's unit "
+            "matrix runs. A source file or an evidence artefact containing a "
+            "character cp1252 cannot map (an arrow or a tick, while an accented "
+            "letter or an em dash passes fine) raises UnicodeDecodeError on "
+            "Windows only, so the defect is invisible to exactly the CI legs that "
+            "stay green."
         ),
         short_description=(
-            "Path.read_text()/write_text() called without encoding= — decodes "
-            "using the platform locale"
+            "Text file IO without encoding= — read_text/write_text or a "
+            "text-mode open() decoding by platform locale"
         ),
         full_description=(
-            "``Path.read_text()`` and ``Path.write_text()`` fall back to\n"
-            "``locale.getpreferredencoding(False)`` when no ``encoding=`` is\n"
-            "given.  That resolves to UTF-8 on Linux and macOS and to cp1252 on\n"
-            "Windows, so a file written or read without an explicit encoding is\n"
-            "only as portable as the characters that happen to be in it.\n"
+            "``Path.read_text()``, ``Path.write_text()`` and a text-mode\n"
+            "``open()`` fall back to ``locale.getpreferredencoding(False)`` when\n"
+            "no ``encoding=`` is given.  That resolves to UTF-8 on Linux and\n"
+            "macOS and to cp1252 on Windows, so a file written or read without an\n"
+            "explicit encoding is only as portable as the characters that happen\n"
+            "to be in it.\n"
             "\n"
             "Fix it one of two ways, and the right one depends on what the text\n"
             "is for:\n"
@@ -94,6 +99,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "``**kwargs`` splat the checker cannot see into.  The decode-free\n"
             "``importlib.metadata.Distribution.read_text(filename)`` lookalike\n"
             "passes because it takes a positional argument.\n"
+            "\n"
+            "For ``open``-like calls, only **text mode** is graded — binary reads\n"
+            "and writes decode nothing.  The builtin ``open`` / ``io.open`` /\n"
+            "``aiofiles.open`` and ``<path>.open(...)`` are text unless the mode\n"
+            'says ``"b"``; ``gzip`` / ``bz2`` / ``lzma`` and the ``tempfile``\n'
+            'factories are binary unless the mode says ``"t"``.  Receivers whose\n'
+            "``open`` never yields a decoded stream are skipped outright\n"
+            "(``os`` returns a file descriptor, ``tarfile`` / ``zipfile`` return\n"
+            "archive members, ``codecs.open`` is binary without an encoding), as\n"
+            "is ``SafeFileOps.open`` — the SDK wrapper resolves UTF-8 for its\n"
+            "callers, so a call site passing no encoding is already correct.\n"
             "\n"
             "Suppress a reviewed exception with a justification:\n"
             "``# conformance: ignore[P046] <reason>``.\n"

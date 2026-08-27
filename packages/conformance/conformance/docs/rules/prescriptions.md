@@ -1788,16 +1788,17 @@ unavoidable exception and stays visible in SARIF.
 
 **Tier:** `warn` · **Scope:** `sdk` · **Category:** `portability` · **Autofixable:** — · **Since:** 0.24.0
 
-> Path.read_text()/write_text() called without encoding= — decodes using the platform locale
+> Text file IO without encoding= — read_text/write_text or a text-mode open() decoding by platform locale
 
-**Rationale:** Path.read_text()/write_text() with no encoding= use the locale's preferred encoding, so
-the same file round-trips differently per platform: UTF-8 on the Linux containers we
-ship on and on macOS, cp1252 on Windows, which the SDK's unit matrix runs. A source file
-or an evidence artefact containing a character cp1252 cannot map (an arrow or a tick,
-while an accented letter or an em dash passes fine) raises UnicodeDecodeError on Windows
-only, so the defect is invisible to exactly the CI legs that stay green.
+**Rationale:** Path.read_text()/write_text() and a text-mode open() with no encoding= use the locale's
+preferred encoding, so the same file round-trips differently per platform: UTF-8 on the
+Linux containers we ship on and on macOS, cp1252 on Windows, which the SDK's unit matrix
+runs. A source file or an evidence artefact containing a character cp1252 cannot map (an
+arrow or a tick, while an accented letter or an em dash passes fine) raises
+UnicodeDecodeError on Windows only, so the defect is invisible to exactly the CI legs
+that stay green.
 
-`Path.read_text()` and `Path.write_text()` fall back to
+`Path.read_text()`, `Path.write_text()` and a text-mode `open()` fall back to
 `locale.getpreferredencoding(False)` when no `encoding=` is given.  That resolves to
 UTF-8 on Linux and macOS and to cp1252 on Windows, so a file written or read without an
 explicit encoding is only as portable as the characters that happen to be in it.
@@ -1819,6 +1820,15 @@ encoding=...)` and `write_text(data, "utf-8")` all pass, as does any call carryi
 `**kwargs` splat the checker cannot see into.  The decode-free
 `importlib.metadata.Distribution.read_text(filename)` lookalike passes because it takes
 a positional argument.
+
+For `open`-like calls, only **text mode** is graded — binary reads and writes decode
+nothing.  The builtin `open` / `io.open` / `aiofiles.open` and `<path>.open(...)` are
+text unless the mode says `"b"`; `gzip` / `bz2` / `lzma` and the `tempfile` factories
+are binary unless the mode says `"t"`.  Receivers whose `open` never yields a decoded
+stream are skipped outright (`os` returns a file descriptor, `tarfile` / `zipfile`
+return archive members, `codecs.open` is binary without an encoding), as is
+`SafeFileOps.open` — the SDK wrapper resolves UTF-8 for its callers, so a call site
+passing no encoding is already correct.
 
 Suppress a reviewed exception with a justification: `# conformance: ignore[P046]
 <reason>`.

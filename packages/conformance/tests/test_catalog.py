@@ -596,9 +596,10 @@ def test_catalog_p_series_present() -> None:
     public error contract; an ``except`` on an internal class silently stops
     matching when the SDK changes which class a boundary surfaces, because the
     replacement is a sibling rather than a subclass (CONNECT-970).
-    P046 is LocaleDependentTextIO — Path.read_text()/write_text() with no
-    encoding= decode using the locale's codec, which is cp1252 on the Windows
-    legs of the SDK's unit matrix and UTF-8 everywhere else (FND-924).
+    P046 is LocaleDependentTextIO — Path.read_text()/write_text() and a
+    text-mode open() with no encoding= decode using the locale's codec, which is
+    cp1252 on the Windows legs of the SDK's unit matrix and UTF-8 everywhere
+    else (FND-924).
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """

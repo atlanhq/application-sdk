@@ -279,3 +279,134 @@ def test_scan_path_survives_an_undecodable_file(tmp_path: Path) -> None:
     bad.write_bytes(b"p.read_text()  # \xff\xfe not utf-8\n")
 
     assert scan_path(bad, tmp_path) == []
+
+
+# ── open() — fires on a text-mode call with no encoding ──────────────────────
+
+
+def test_p046_fires_on_bare_builtin_open() -> None:
+    """No mode argument means mode ``"r"``, which is text."""
+    fs = _rule("with open(path) as fh:\n    body = fh.read()\n")
+    assert len(fs) == 1 and fs[0].line == 1
+
+
+def test_p046_fires_on_explicit_text_modes() -> None:
+    for mode in ('"r"', '"w"', '"a"', '"r+"', '"w+"', '"rt"'):
+        assert len(_rule(f"open(p, {mode})\n")) == 1, mode
+
+
+def test_p046_fires_on_path_open_with_no_arguments() -> None:
+    """``Path.open()`` takes ``mode`` first — absent means text."""
+    assert len(_rule("with yaml_file.open() as fh:\n    pass\n")) == 1
+
+
+def test_p046_fires_on_path_open_with_a_text_mode() -> None:
+    assert len(_rule('with history_path.open("a") as fh:\n    pass\n')) == 1
+
+
+def test_p046_fires_on_open_carrying_newline_but_no_encoding() -> None:
+    """``newline=`` is a text-mode-only kwarg — it confirms text, not encoding."""
+    assert len(_rule('open(file_path, "w", newline="")\n')) == 1
+
+
+def test_p046_fires_on_io_and_aiofiles_open() -> None:
+    """Signature-compatible aliases of the builtin, so the mode index matches."""
+    assert len(_rule("io.open(path)\n")) == 1
+    assert len(_rule("aiofiles.open(path)\n")) == 1
+
+
+def test_p046_fires_on_compressed_open_only_in_text_mode() -> None:
+    """``gzip``/``bz2``/``lzma`` default to binary — text needs an explicit ``t``."""
+    for module in ("gzip", "bz2", "lzma"):
+        assert len(_rule(f'{module}.open(path, "wt")\n')) == 1, module
+        assert _rule(f'{module}.open(path, "wb")\n') == [], module
+        assert _rule(f"{module}.open(path)\n") == [], module
+
+
+def test_p046_fires_on_a_text_mode_tempfile() -> None:
+    """``NamedTemporaryFile`` defaults to ``"w+b"``; a text mode opts into the locale."""
+    assert len(_rule('tempfile.NamedTemporaryFile(mode="w")\n')) == 1
+    assert _rule('tempfile.NamedTemporaryFile(mode="wb")\n') == []
+    assert _rule("tempfile.NamedTemporaryFile(delete=False)\n") == []
+
+
+def test_p046_fires_on_a_bare_imported_tempfile_factory() -> None:
+    """``from tempfile import NamedTemporaryFile`` is as common as the dotted form."""
+    src = 'from tempfile import NamedTemporaryFile\nNamedTemporaryFile(mode="w")\n'
+    assert len(_rule(src)) == 1
+
+
+def test_p046_fires_on_a_builtin_open_whose_mode_is_dynamic() -> None:
+    """``open`` is an unambiguous name, so an unreadable mode stays a real risk.
+
+    This is the deliberate asymmetry with ``<expr>.open`` below: there is no
+    lookalike named plain ``open``, so the conservative direction is to flag.
+    """
+    assert len(_rule("open(path, mode)\n")) == 1
+
+
+# ── open() — silent ──────────────────────────────────────────────────────────
+
+
+def test_p046_silent_on_binary_modes() -> None:
+    for mode in ('"rb"', '"wb"', '"ab"', '"r+b"', '"w+b"'):
+        assert _rule(f"open(p, {mode})\n") == [], mode
+    assert _rule('with path.open("rb") as fh:\n    pass\n') == []
+
+
+def test_p046_silent_on_open_with_an_encoding() -> None:
+    assert _rule('open(path, encoding="utf-8")\n') == []
+    assert _rule('open(path, "w", encoding="utf-8")\n') == []
+    assert _rule('path.open(encoding="utf-8")\n') == []
+    assert _rule('path.open("a", encoding="utf-8")\n') == []
+
+
+def test_p046_silent_on_open_with_a_positional_encoding() -> None:
+    """``open(file, mode, buffering, encoding)`` — index 3; ``Path.open`` — index 2."""
+    assert _rule('open(path, "r", -1, "utf-8")\n') == []
+    assert _rule('path.open("r", -1, "utf-8")\n') == []
+
+
+def test_p046_silent_on_os_open_which_returns_a_descriptor() -> None:
+    """``os.open`` yields an int fd — no decode step exists to get wrong."""
+    src = "fd = os.open(str(path), os.O_WRONLY | os.O_CREAT, 0o600)\n"
+    assert _rule(src) == []
+
+
+def test_p046_silent_on_archive_and_database_opens() -> None:
+    """These ``open``s return archive members or handles, never a decoded stream."""
+    assert _rule('tarfile.open(tmp_name, "r:gz")\n') == []
+    assert _rule("zipfile.open(name)\n") == []
+    assert _rule('codecs.open(path, "r")\n') == []
+    assert _rule("webbrowser.open(url)\n") == []
+    assert _rule("shelve.open(path)\n") == []
+
+
+def test_p046_silent_on_a_zipfile_member_open() -> None:
+    """The lookalike that motivates skipping an unreadable ``<expr>.open`` mode.
+
+    ``zf.open(member)`` passes a *member name* where ``Path.open`` takes its
+    mode, and the receiver is a local variable, so no receiver check can tell
+    them apart.  Treating an unreadable mode as text would report this — a
+    binary archive read — as a locale defect.
+    """
+    src = 'with zf.open(member) as src, target.open("wb") as dst:\n    pass\n'
+    assert _rule(src) == []
+
+
+def test_p046_silent_on_the_safefileops_wrapper() -> None:
+    """``SafeFileOps.open`` resolves UTF-8 itself, so its callers are correct.
+
+    Flagging them would report the wrapper's entire reason for existing as the
+    defect it was written to prevent.
+    """
+    assert _rule("with SafeFileOps.open(file_name, mode=mode) as f:\n    pass\n") == []
+
+
+def test_p046_silent_on_a_kwargs_splat_in_an_open() -> None:
+    assert _rule("open(path, **opts)\n") == []
+
+
+def test_p046_silent_on_an_unrelated_open_ish_name() -> None:
+    assert _rule("session.open_connection(host)\n") == []
+    assert _rule("cursor.reopen()\n") == []
