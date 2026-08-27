@@ -9,6 +9,7 @@ from application_sdk.errors.leaves import (
     DataIntegrityError,
     DependencyUnavailableError,
     InvalidInputError,
+    PreconditionError,
 )
 
 
@@ -48,3 +49,52 @@ class LocalVaultResponseInvariantError(DataIntegrityError):
 
     code: ClassVar[str] = "DATA_INTEGRITY_LOCAL_VAULT_RESPONSE"
     location: str | None = "local-vault"
+
+
+@dataclass(kw_only=True)
+class IntegrationEnvOrderingError(PreconditionError):
+    """An ``ATLAN_*`` env var was set after application_sdk snapshotted it."""
+
+    code: ClassVar[str] = "PRECONDITION_INTEGRATION_ENV_ORDERING"
+
+
+@dataclass(kw_only=True)
+class AppRegistrationMissingError(PreconditionError):
+    """The App under test never reached the registry create_worker snapshots."""
+
+    code: ClassVar[str] = "PRECONDITION_APP_NOT_REGISTERED"
+
+
+@dataclass(kw_only=True)
+class GoldenLayoutError(InvalidInputError):
+    """A declared golden-corpus layout is self-inconsistent."""
+
+    code: ClassVar[str] = "INVALID_INPUT_GOLDEN_LAYOUT"
+
+
+@dataclass(kw_only=True)
+class GoldenCorpusLayoutError(InvalidInputError):
+    """A golden corpus on disk does not match its declared layout."""
+
+    code: ClassVar[str] = "INVALID_INPUT_GOLDEN_CORPUS_LAYOUT"
+
+
+@dataclass(kw_only=True)
+class GoldenCorpusFormatError(InvalidInputError):
+    """A golden-corpus file is unparseable or does not hold records."""
+
+    code: ClassVar[str] = "INVALID_INPUT_GOLDEN_CORPUS_FORMAT"
+
+
+@dataclass(kw_only=True)
+class GoldenParquetSupportError(PreconditionError):
+    """A parquet corpus file was found without pyarrow installed."""
+
+    code: ClassVar[str] = "PRECONDITION_GOLDEN_PARQUET_SUPPORT"
+
+
+@dataclass(kw_only=True)
+class GoldenCorpusUnavailableError(DependencyUnavailableError):
+    """No golden corpus is configured — the skip case, not a failure."""
+
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_GOLDEN_CORPUS"

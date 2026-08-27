@@ -110,6 +110,14 @@ from .comparison import (
     load_actual_output,
     load_expected_data,
 )
+from .corpus import (
+    GOLDEN_ROOT_ENV,
+    GoldenCorpus,
+    GoldenLayout,
+    read_records,
+    require_golden_corpus,
+)
+from .embedded import AppExecutor, IntegrationKit, integration_kit
 from .lazy import Lazy, evaluate_if_lazy, is_lazy, lazy
 from .models import APIType, Scenario, ScenarioResult
 from .runner import BaseIntegrationTest, generate_test_methods, parametrize_scenarios
@@ -126,6 +134,16 @@ from .validation import (
 # =============================================================================
 
 __all__ = [
+    # Shared in-process integration fixtures (FND-817)
+    "AppExecutor",
+    "IntegrationKit",
+    "integration_kit",
+    # Golden corpus layout and loader (FND-818)
+    "GOLDEN_ROOT_ENV",
+    "GoldenCorpus",
+    "GoldenLayout",
+    "read_records",
+    "require_golden_corpus",
     # Models
     "APIType",
     "Scenario",
