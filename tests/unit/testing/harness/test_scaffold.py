@@ -517,10 +517,17 @@ def test_the_temporal_readers_need_no_extra() -> None:
 
 
 async def test_every_remaining_stub_names_its_child_issue() -> None:
+    """One stub left, and it still names the child that fills it in.
+
+    Child G (FND-243) landed ``evidence.redact``, ``teardown.purge_connection``
+    and ``starters.start_via_automation_engine``, so those three moved out of
+    this list and into their own tests. ``start_via_app_handler`` moves with the
+    cluster reader in child E, and until then this is what keeps its
+    ``HarnessNotBuiltError`` carrying an issue rather than a bare
+    ``NotImplementedError`` an auditor would have to grep prose for.
+    """
     from application_sdk.testing.harness import starters
     from application_sdk.testing.harness.cluster import HttpRequest, HttpResponse
-    from application_sdk.testing.harness.evidence import EvidenceBundle, redact
-    from application_sdk.testing.harness.teardown import purge_connection
 
     class _Reader:
         """Shaped like a ClusterReader so the call is typed, not bypassed."""
@@ -537,15 +544,7 @@ async def test_every_remaining_stub_names_its_child_issue() -> None:
         async def http(self, target, request: HttpRequest) -> HttpResponse:
             raise AssertionError("the stub must raise before calling out")
 
-    for call in (lambda: redact(EvidenceBundle(label="x")),):
-        with pytest.raises(HarnessNotBuiltError) as caught:
-            call()
-        assert caught.value.issue == "FND-224"
-        assert caught.value.operation
-
     for coro in (
-        purge_connection("default/x/1"),
-        starters.start_via_automation_engine({}),
         starters.start_via_app_handler(
             starters.HttpWorkflowSpec(
                 target=ServiceTarget(namespace="ns", service="svc", port=8000),
@@ -558,6 +557,35 @@ async def test_every_remaining_stub_names_its_child_issue() -> None:
             await coro
         assert caught.value.issue == "FND-224"
         assert caught.value.operation
+
+
+async def test_child_g_left_no_stub_behind() -> None:
+    """The three child-G surfaces reach real work, not a ``HarnessNotBuiltError``.
+
+    Same shape as the queue starter's own check: each is driven with an argument
+    that cannot possibly work, so the failure proves the stub is gone without
+    standing up a tenant. ``HarnessNotBuiltError`` is a ``NotImplementedError``,
+    which none of these are — so a regression that reinstated a stub fails here
+    rather than passing as "it raised something".
+    """
+    from application_sdk.testing.harness import starters
+    from application_sdk.testing.harness.evidence import EvidenceBundle, redact
+    from application_sdk.testing.harness.teardown import PurgeReport, purge_connection
+
+    assert redact(EvidenceBundle(label="x")) == EvidenceBundle(label="x")
+
+    # `purge_connection` reports rather than raises, on every path — so "the stub
+    # is gone" is a *returned report*, not an exception. A reinstated stub would
+    # raise `HarnessNotBuiltError` out of this call and fail here.
+    report = await purge_connection(object(), "default/x/1")  # type: ignore[arg-type]
+    assert isinstance(report, PurgeReport)
+    assert report.errors and not report.complete
+
+    with pytest.raises(AttributeError):
+        await starters.start_via_automation_engine(
+            starters.AEWorkflowSpec(name="x"),
+            client=object(),  # type: ignore[arg-type]
+        )
 
 
 # ---------------------------------------------------------------------------

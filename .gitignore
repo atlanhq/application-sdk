@@ -193,3 +193,7 @@ remediation/runs/
 
 # Renovate setup
 renovate-config/README.md
+
+# CI scratch: the sdr-e2e composite writes test output, container logs and the
+# harness evidence bundle here, then uploads the directory as an artifact.
+results/
