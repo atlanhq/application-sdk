@@ -580,6 +580,10 @@ class SecretStoreCheckResult:
     substituted: int
     message: str
     resolved: dict[str, Any] | None = None
+    # One imperative customer-facing next step for the failing case; None on a
+    # pass. Set per scenario so the caller's typed FailureDetails carries a real
+    # remediation instead of cramming it into ``message``.
+    suggested_action: str | None = None
 
 
 async def check_secret_store_access(
@@ -614,7 +618,8 @@ async def check_secret_store_access(
             store_down=True,
             fatal=True,
             substituted=0,
-            message="No secret store is configured on the SDR deployment.",
+            message="Secret store is not configured for the SDR deployment.",
+            suggested_action="Configure a secret store on the SDR deployment.",
         )
 
     raw = spec.to_raw_dict()
@@ -629,10 +634,8 @@ async def check_secret_store_access(
             store_down=False,
             fatal=True,
             substituted=0,
-            message=(
-                "Multi-key credentials require a secret-path, but none is "
-                "configured — the secret keys cannot be resolved."
-            ),
+            message="No secret-path is configured for this credential.",
+            suggested_action="Set secret-path on the connection's credentials.",
         )
 
     try:
@@ -649,7 +652,8 @@ async def check_secret_store_access(
             store_down=False,
             fatal=True,
             substituted=0,
-            message="Secret store is reachable, but the configured secret-path was not found.",
+            message="Configured secret store is accessible, but secret-path is not found.",
+            suggested_action="Check that secret-path matches where the secrets are stored.",
         )
     except (
         DependencyUnavailableError,
@@ -661,7 +665,8 @@ async def check_secret_store_access(
             store_down=True,
             fatal=True,
             substituted=0,
-            message="Secret store is not reachable.",
+            message="Configured secret store is not accessible.",
+            suggested_action="Check that the secret store is running and reachable from the SDR worker.",
         )
 
     resolved_flat, substituted = _substitute(raw, bundle)
@@ -675,8 +680,12 @@ async def check_secret_store_access(
             fatal=False,
             substituted=0,
             message=(
-                "Secret store is reachable, but no secret was resolved. Check "
-                "that the configured secret keys / secret-path exist in the store."
+                "Configured secret store is accessible, but secret reference "
+                "could not be resolved. The specified value will be used as is."
+            ),
+            suggested_action=(
+                "Check that the configured secret keys and secret-path exist in "
+                "the store."
             ),
             resolved=resolved,
         )
@@ -685,6 +694,9 @@ async def check_secret_store_access(
         store_down=False,
         fatal=False,
         substituted=substituted,
-        message=f"Secret store reachable; {substituted} secret(s) resolved.",
+        message=(
+            f"Configured secret store is accessible - {substituted} secret(s) "
+            "retrieved."
+        ),
         resolved=resolved,
     )

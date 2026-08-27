@@ -33,7 +33,7 @@ with workflow.unsafe.imports_passed_through():
     from application_sdk.credentials.ref import CredentialRef
     from application_sdk.credentials.resolver import CredentialResolver
     from application_sdk.credentials.spec import AgentCredentialSpec
-    from application_sdk.errors.categories import FailureCategory
+    from application_sdk.errors.categories import Audience, FailureCategory
     from application_sdk.errors.leaves import DependencyUnavailableError
     from application_sdk.errors.wire import FailureDetails
     from application_sdk.handler.context import bind_invocation_context
@@ -64,33 +64,64 @@ logger = get_logger(__name__)
 # the name by inserting a space before every capital, so "SDR" would render as
 # "S D R". The SDR context lives in the (verbatim) messages below instead.
 _OBJECT_STORE_CHECK_NAMES: dict[str, str] = {
-    "deployment": "Object store",
-    "upstream": "Metadata / egress connectivity",
+    "deployment": "Deployment object store",
+    "upstream": "Metadata upload connectivity",
 }
 
 # User-facing success copy per object-store role. Keeps the interactive
 # preflight rows readable; the technical ObjectStoreCheckResult.message is still
-# used for the *failure* case so the operator sees the real diagnostic + hint.
+# logged worker-side for the operator.
 _OBJECT_STORE_SUCCESS_MESSAGES: dict[str, str] = {
-    "deployment": "Object Store configuration for SDR deployment successful",
-    "upstream": (
-        "Metadata/Egress connectivity from SDR to Atlan SaaS tenant successful"
+    "deployment": (
+        "Configured object store is accessible. Read and write access confirmed."
     ),
+    "upstream": "SDR worker can upload metadata to Atlan.",
 }
 
-# Deliberately simple failure copy — the preflight row just states the store is
-# down, without the technical probe error (endpoint/permission internals stay in
-# the worker log, not the UI).
+# Simple failure copy for the UI — states what failed, not how to fix it (the
+# fix is the typed suggested action below). The technical probe error/hint stays
+# in the worker log.
 _OBJECT_STORE_FAILURE_MESSAGES: dict[str, str] = {
-    "deployment": "Object store for the SDR deployment is not reachable.",
-    "upstream": "Metadata/Egress object store (SDR → Atlan) is not reachable.",
+    "deployment": "Configured object store is not accessible.",
+    "upstream": "SDR worker cannot upload metadata to Atlan.",
+}
+
+# Customer-facing remediation per (role, classifier bucket). The classifier's own
+# hint (ObjectStoreCheckResult.hint) is engineer-facing and stays in the log;
+# this is the user-facing next step keyed off the same error_class so the precise
+# answer is no longer computed and discarded.
+_OBJECT_STORE_ACTIONS: dict[tuple[str, str], str] = {
+    (
+        "deployment",
+        "permission denied",
+    ): "Grant the object store credentials read and write access to the bucket or container.",
+    (
+        "deployment",
+        "invalid credentials",
+    ): "Update the object store credentials — the key may be wrong, expired, or malformed.",
+    (
+        "deployment",
+        "connectivity / unknown",
+    ): "Check the object store endpoint, name, and network access from the SDR worker.",
+    (
+        "upstream",
+        "permission denied",
+    ): "Grant the upstream credentials read and write access to the Atlan upload target.",
+    (
+        "upstream",
+        "invalid credentials",
+    ): "Update the upstream credentials — the key may be wrong, expired, or malformed.",
+    (
+        "upstream",
+        "connectivity / unknown",
+    ): "Check that the SDR worker can reach Atlan, and verify the upstream endpoint.",
 }
 
 # Leading row asserting the SDR deployment itself is reachable: if this activity
 # is executing, a worker on the customer's task queue picked it up. Name avoids
 # the "SDR" acronym (frontend spaces out capitals → "S D R"); the message keeps it.
 _SDR_REACHABLE_CHECK_NAME = "Deployment reachability"
-_SDR_REACHABLE_MESSAGE = "SDR Deployment is reachable."
+_SDR_REACHABLE_MESSAGE = "The SDR worker is reachable."
 
 
 SDR_TEST_AUTH_ACTIVITY = "sdr:test_auth"
@@ -357,23 +388,24 @@ async def _append_object_store_checks(output: PreflightOutput) -> None:
             ),
         )
 
-        any_failed = False
+        first_failure_message: str | None = None
         for result in results:
             name = _OBJECT_STORE_CHECK_NAMES.get(
-                result.label, f"Object store access ({result.label})"
+                result.label, f"{result.label} object store"
             )
             error: FailureDetails | None = None
             if result.passed:
                 message = _OBJECT_STORE_SUCCESS_MESSAGES.get(
-                    result.label, result.message
+                    result.label, "Configured object store is accessible."
                 )
             else:
-                any_failed = True
                 # Simple, non-technical failure copy for the UI; the detailed
                 # probe error/hint is logged worker-side, not surfaced here.
                 message = _OBJECT_STORE_FAILURE_MESSAGES.get(
-                    result.label, f"{result.label} object store is not reachable."
+                    result.label, "Configured object store is not accessible."
                 )
+                if first_failure_message is None:
+                    first_failure_message = message
                 logger.info(
                     "SDR object-store check failed (%s): %s",
                     result.label,
@@ -383,7 +415,20 @@ async def _append_object_store_checks(output: PreflightOutput) -> None:
                     category=FailureCategory.DEPENDENCY_UNAVAILABLE,
                     code="OBJECT_STORE_ACCESS",
                     retryable=False,
+                    # These failures are customer infra the customer runs, so
+                    # AE / SLA routing must attribute them to the customer, not
+                    # the app team (the FailureDetails default).
+                    audience=Audience.USER,
                     message=message,
+                    # The precise, class-specific next step — previously computed
+                    # by the classifier and discarded. Falls back to the
+                    # connectivity remediation for an unclassified failure.
+                    suggested_action=_OBJECT_STORE_ACTIONS.get(
+                        (result.label, result.error_class or ""),
+                        _OBJECT_STORE_ACTIONS[(result.label, "connectivity / unknown")]
+                        if result.label in ("deployment", "upstream")
+                        else None,
+                    ),
                 )
             output.checks.append(
                 PreflightCheck(
@@ -395,8 +440,12 @@ async def _append_object_store_checks(output: PreflightOutput) -> None:
             )
 
         output.total_duration_ms += elapsed_ms
-        if any_failed and output.status == PreflightStatus.READY:
+        if first_failure_message is not None and output.status == PreflightStatus.READY:
             output.status = PreflightStatus.NOT_READY
+            # Give the overall banner a real reason. Without this the envelope
+            # falls back to "Preflight check not_ready" while the cause sits in a
+            # row below.
+            output.message = first_failure_message
     except Exception:
         # Must never break the handler's own preflight result.
         logger.warning(
@@ -424,7 +473,11 @@ def _secret_store_check_row(result: SecretStoreCheckResult) -> PreflightCheck:
             ),
             code="SECRET_STORE_ACCESS",
             retryable=False,
+            # Customer-run infrastructure — route to the customer, not the app
+            # team (the FailureDetails default).
+            audience=Audience.USER,
             message=result.message,
+            suggested_action=result.suggested_action,
         )
     return PreflightCheck(
         name="Secret store",

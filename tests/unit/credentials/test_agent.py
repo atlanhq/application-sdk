@@ -1553,7 +1553,8 @@ class TestCheckSecretStoreAccess:
         # The store itself is the failure: a fatal DEPENDENCY_UNAVAILABLE outage.
         assert r.store_down is True
         assert r.fatal is True
-        assert "not reachable" in r.message
+        assert "not accessible" in r.message
+        assert r.suggested_action is not None
 
     async def test_fails_when_nothing_resolves(self) -> None:
         class EmptyStore:

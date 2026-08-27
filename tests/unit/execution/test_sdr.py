@@ -690,17 +690,17 @@ class TestSdrPreflightObjectStoreChecks:
         names = [c.name for c in result.checks]
         assert names == [
             "Deployment reachability",
-            "Object store",
-            "Metadata / egress connectivity",
+            "Deployment object store",
+            "Metadata upload connectivity",
         ]
         # Names avoid the "SDR" acronym so the frontend title-caser doesn't
         # render it as "S D R"; the SDR context lives in the messages.
         assert not any("SDR" in n for n in names)
         messages = [c.message for c in result.checks]
         assert messages == [
-            "SDR Deployment is reachable.",
-            "Object Store configuration for SDR deployment successful",
-            "Metadata/Egress connectivity from SDR to Atlan SaaS tenant successful",
+            "The SDR worker is reachable.",
+            "Configured object store is accessible. Read and write access confirmed.",
+            "SDR worker can upload metadata to Atlan.",
         ]
         assert all(c.passed for c in result.checks)
         # The probe's elapsed time is folded into the output's duration
@@ -737,16 +737,25 @@ class TestSdrPreflightObjectStoreChecks:
         # Row 0 is the "SDR deployment reachable" marker; row 1 is the failed probe.
         assert len(result.checks) == 2
         assert result.checks[0].passed is True
-        assert result.checks[0].message == "SDR Deployment is reachable."
+        assert result.checks[0].message == "The SDR worker is reachable."
         check = result.checks[1]
         assert check.passed is False
         assert check.error is not None
         assert check.error.category == FailureCategory.DEPENDENCY_UNAVAILABLE
         assert check.error.code == "OBJECT_STORE_ACCESS"
         assert check.error.retryable is False
+        # DEF-3: customer-run infra routes to the customer, not the app team.
+        from application_sdk.errors.categories import Audience
+
+        assert check.error.audience == Audience.USER
+        # DEF-5: the class-specific remediation is carried, not discarded.
+        assert check.error.suggested_action is not None
+        assert "read and write access" in check.error.suggested_action
         # Simple, non-technical failure copy (no probe internals in the UI).
-        assert "not reachable" in check.resolved_message
+        assert "not accessible" in check.resolved_message
         assert "403" not in check.resolved_message
+        # DEF-6: the banner carries the real reason, not "Preflight check not_ready".
+        assert result.message == "Configured object store is not accessible."
 
     async def test_failed_check_does_not_upgrade_partial(self) -> None:
         """A handler PARTIAL/NOT_READY verdict is left untouched on failure."""
