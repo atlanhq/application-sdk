@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.29.0
-source-sha:    f8a48658633d1c28ff57fb9ff34206a599543f18
-source-date:   2026-08-27T16:25:33+01:00
+source-sha:    8008fbe8d08aff4dbaef8882023cc12c2471dcd9
+source-date:   2026-08-27T18:24:55+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -5906,7 +5906,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `status: PreflightStatus` — Overall verdict — decides the gate. ``NOT_READY`` blocks the run only in
   - `checks: list[PreflightCheck]` `= []` — Individual check results (display + failure attribution).
   - `message: str` `= ''` — Human-readable summary. Seeds the gate's abort reason when set.
+  - `error: FailureDetails | None` — Typed aggregate failure — the reason the overall verdict is NOT_READY,
   - `total_duration_ms: float` `= 0.0` — Total time for all checks in milliseconds.
+  - `resolved_message: str` — Aggregate message under the precedence rule: ``error`` wins when set.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `SqlMetadataObject`

@@ -270,6 +270,41 @@ class TestPreflightGateActivity:
         assert names == ["conn", "auth"]
         assert "Auth failed" in err.message
 
+    async def test_not_ready_prefers_aggregate_output_error(self) -> None:
+        # A non-fatal row sits ahead of the real cause in ``checks``. The handler
+        # pinned the real cause on ``result.error``, so the block's primary detail
+        # must come from there — not the first failed check with an error.
+        from application_sdk.errors.leaves import SourceUnavailableError
+
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            error=SourceUnavailableError(
+                message="Configured object store is not accessible.",
+                suggested_action="Grant read and write access.",
+            ),
+            checks=[
+                PreflightCheck(
+                    name="secret",
+                    passed=False,
+                    error=AuthError(message="a soft secret-store row"),
+                ),
+                PreflightCheck(
+                    name="objstore",
+                    passed=False,
+                    error=SourceUnavailableError(
+                        message="Configured object store is not accessible."
+                    ),
+                ),
+            ],
+        )
+        with pytest.raises(ApplicationError) as excinfo:
+            await _verdict_gate(out)(PreflightGateInput())
+        details = excinfo.value.details[0]
+        # From result.error (SOURCE_UNAVAILABLE), not the first check's AuthError.
+        assert details.category is FailureCategory.SOURCE_UNAVAILABLE
+        assert details.suggested_action == "Grant read and write access."
+        assert "Configured object store is not accessible." in excinfo.value.message
+
     async def test_not_ready_without_error_falls_back_to_precondition(self) -> None:
         out = PreflightOutput(
             status=PreflightStatus.NOT_READY,
