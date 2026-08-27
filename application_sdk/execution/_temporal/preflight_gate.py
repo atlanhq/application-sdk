@@ -620,19 +620,26 @@ def _check_matrix_json(checks: list[PreflightCheck]) -> str:
 def _build_block_error(result: PreflightOutput, app_name: str) -> Any:
     """Build the ``PreflightFailed`` ApplicationError for a NOT_READY verdict.
 
-    ``details[0]`` is the primary failure's ``FailureDetails``: the first failed
-    check's typed ``error`` when present, else the first failed check's message
-    wrapped in ``PreconditionError`` and stamped with the ``PREFLIGHT_FALLBACK_CODE``
-    sentinel ``code`` (so the outcome event's ``reason`` marks an un-migrated block).
-    ``details[1]`` carries every check so the red activity pane shows them — a failed
-    activity has no result payload.
+    ``details[0]`` is the primary failure's ``FailureDetails``: the handler's typed
+    aggregate ``result.error`` when present, else the first failed check's typed
+    ``error``, else the first failed check's message wrapped in ``PreconditionError``
+    and stamped with the ``PREFLIGHT_FALLBACK_CODE`` sentinel ``code`` (so the
+    outcome event's ``reason`` marks an un-migrated block). ``details[1]`` carries
+    every check so the red activity pane shows them — a failed activity has no
+    result payload.
     """
     from application_sdk.execution.errors import ApplicationError  # noqa: PLC0415
 
     failed = [c for c in result.checks if not c.passed]
-    primary = next((c for c in failed if c.error is not None), None)
-    if primary is not None and primary.error is not None:
-        details = primary.error
+    # Prefer the handler's typed aggregate error. It is the reason the verdict is
+    # NOT_READY and stays pinned to the real cause even when a non-fatal row is
+    # inserted ahead of it in ``checks``; the per-check scan is the fallback for
+    # handlers that set only ``checks``.
+    primary_error = result.error or next(
+        (c.error for c in failed if c.error is not None), None
+    )
+    if primary_error is not None:
+        details = primary_error
         if details.app_name is None:
             details = details.model_copy(update={"app_name": app_name})
     else:
@@ -649,7 +656,9 @@ def _build_block_error(result: PreflightOutput, app_name: str) -> Any:
 
     joined = "; ".join(m for m in (c.resolved_message for c in failed) if m)
     reason = (
-        result.message or joined or "Preflight check failed; aborting before extraction"
+        result.resolved_message
+        or joined
+        or "Preflight check failed; aborting before extraction"
     )
     checks_payload = {"checks": [_dump_check(c) for c in result.checks]}
     return ApplicationError(
