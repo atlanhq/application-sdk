@@ -1545,6 +1545,59 @@ def test_p013_fires_on_multi_hop_invalid_base(tmp_path: Path) -> None:
     assert "FetchInput" in p013[0].message
 
 
+def test_p013_fires_on_local_subclass_of_non_sdk_base(tmp_path: Path) -> None:
+    """A local entrypoint contract inheriting from BaseModel is not an SDK contract."""
+    files = {
+        "contracts.py": (
+            "from pydantic import BaseModel\n"
+            "class OracleIncrementalExtractionInput(BaseModel):\n"
+            "    connection_id: str = ''\n"
+        ),
+        "out.py": (
+            "from application_sdk.contracts import Output\n"
+            "class FetchOutput(Output):\n"
+            "    rows: int = 0\n"
+        ),
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import OracleIncrementalExtractionInput\n"
+            "from out import FetchOutput\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def run_it(self, input: OracleIncrementalExtractionInput) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f for f in findings if f.rule_id == "P013"]
+
+
+def test_p013_silent_on_local_subclass_of_sdk_template_contract(tmp_path: Path) -> None:
+    """A local contract subclassing an SDK template Input is a valid boundary."""
+    files = {
+        "contracts.py": (
+            "from application_sdk.templates.contracts import IncrementalExtractionInput\n"
+            "class OracleIncrementalExtractionInput(IncrementalExtractionInput):\n"
+            "    connection_id: str = ''\n"
+        ),
+        "out.py": (
+            "from application_sdk.templates.contracts import IncrementalExtractionOutput\n"
+            "class OracleIncrementalExtractionOutput(IncrementalExtractionOutput):\n"
+            "    rows: int = 0\n"
+        ),
+        "connector.py": (
+            _APP_IMPORTS
+            + "from contracts import OracleIncrementalExtractionInput\n"
+            + "from out import OracleIncrementalExtractionOutput\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def run_it(self, input: OracleIncrementalExtractionInput) -> OracleIncrementalExtractionOutput:\n"
+            "        return OracleIncrementalExtractionOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f for f in findings if f.rule_id == "P013"] == []
+
+
 # TEST 9 — attribute-form non-SDK entrypoint decorator
 
 
