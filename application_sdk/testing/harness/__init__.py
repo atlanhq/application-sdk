@@ -43,7 +43,12 @@ Module map:
 ``expectations``
     The two pure evaluators — asset counts and qualified-name locations.
 ``evidence``
-    Evidence bundle collection, and redaction at the boundary that ships it.
+    Evidence bundle collection, and redaction at the boundary that ships it —
+    two filters, because key-name matching alone cannot see a value a driver
+    echoed back with no key beside it. Child G (FND-243); wired into the
+    connector failure path, which writes into the directory the shared CI
+    composite already uploads, so a failed leg leaves a redacted bundle behind
+    with no workflow change.
 ``spec``
     ``AppUnderTest`` — where to find the app under test in a cluster.
 ``substrate``
@@ -85,22 +90,28 @@ Module map:
     The async AE reader and the non-idempotent submit's retry, from the same
     split, plus the ``native-status`` wire types and the leaves they raise.
 ``starters``
-    Three ways to start a workflow; deliberately no shared signature. One of the
-    three is real: ``start_on_task_queue`` (FND-246) dispatches onto a Temporal
-    task queue, which is the runtime suite's first scenario and was unbuilt on
-    both sides — the Slack thread that scoped this project recorded it as already
-    existing, and ``testing/e2e/workflows.run_workflow`` is an HTTP POST to the
-    app's handler Service that never touches a queue. New work, so its tests are
-    claims rather than a differential; see the module's own note on provenance
-    below. The other two are stubs naming their child issue.
+    Three ways to start a workflow; deliberately no shared signature. Two of the
+    three are real, and they are real in different ways. ``start_on_task_queue``
+    (FND-246) dispatches onto a Temporal task queue — the runtime suite's first
+    scenario, and unbuilt on both sides: the Slack thread that scoped this
+    project recorded it as already existing, and
+    ``testing/e2e/workflows.run_workflow`` is an HTTP POST to the app's handler
+    Service that never touches a queue. New work, so its tests are claims rather
+    than a differential; see the module's own note on provenance below.
+    ``start_via_automation_engine`` (child G, FND-243) is the opposite: a plain
+    lift of ``_bootstrap_workflow`` plus the submit half of ``run_full_dag``,
+    with an original to be pinned against. ``start_via_app_handler`` is still a
+    stub, naming child E.
 ``teardown``
-    Purge mechanics, including the batching that is a correctness bound.
+    Purge mechanics (child G, FND-243), including the batching that is a
+    correctness bound and the read-everything-before-deleting order that an
+    offset-paginated search makes mandatory.
 
 ``bridge``, ``waiting``, ``outcome``, ``spec``, ``substrate``, ``budgets``,
 ``expectations``, ``identity``, ``preconditions``, ``fixtures``, ``atlas``,
-``automation_engine``, ``cluster`` and ``temporal`` are real, and so is one of
-``starters``' three functions; the rest are typed stubs, each naming the child
-issue that fills it in.
+``automation_engine``, ``cluster``, ``temporal``, ``evidence`` and ``teardown``
+are real, and so are two of ``starters``' three functions; the rest are typed
+stubs, each naming the child issue that fills it in.
 
 ``atlas`` and ``automation_engine`` are the first two that ``testing/e2e``
 actually calls: since child F, ``AEWorkflowClient`` is a set of one-line

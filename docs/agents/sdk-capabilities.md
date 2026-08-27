@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.29.0
-source-sha:    7060513617b5021bfe7df81b2f7afe097678f4ec
-source-date:   2026-08-27T22:05:09+05:30
+source-sha:    8008fbe8d08aff4dbaef8882023cc12c2471dcd9
+source-date:   2026-08-27T18:24:55+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 247 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 255 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3091,7 +3091,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `AERunHandle`
 
 - **Import:** `from application_sdk.testing.harness.starters import AERunHandle`
-- **Signature:** `class AERunHandle(*, workflow_slug: str, run_id: str)`
+- **Signature:** `class AERunHandle(*, workflow_slug: str, run_id: str, seed_version: int | None = None)`
 - **Summary:** A run started through the Automation Engine.
 - **Defined in:** `application_sdk/testing/harness/starters/_specs.py`
 
@@ -3102,6 +3102,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class AEWorkflowClient(tenant_url: str, ...)`
 - **Summary:** Thin sync wrapper over the harness's AE and Atlas readers.
 - **Defined in:** `application_sdk/testing/e2e/client.py`
+
+#### `AEWorkflowSpec`
+
+- **Import:** `from application_sdk.testing.harness.starters import AEWorkflowSpec`
+- **Signature:** `class AEWorkflowSpec(*, ...)`
+- **Summary:** A workflow to start through the Automation Engine.
+- **Defined in:** `application_sdk/testing/harness/starters/_specs.py`
 
 #### `APIType`
 
@@ -3787,6 +3794,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Work started, then stopped making observable progress.
 - **Defined in:** `application_sdk/testing/harness/outcome.py`
 
+#### `SubmitRetry`
+
+- **Import:** `from application_sdk.testing.harness.starters import SubmitRetry`
+- **Signature:** `class SubmitRetry(*, retries: int, sleep_seconds: int)`
+- **Summary:** How hard the AE submit tries before it gives up.
+- **Defined in:** `application_sdk/testing/harness/starters/_specs.py`
+
 #### `Substrate`
 
 - **Import:** `from application_sdk.testing.harness import Substrate`
@@ -4095,6 +4109,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `cold_start_submit_kwargs(timeout_seconds: int, poll_interval_seconds: int)`
 - **Summary:** Re-size the AE submit's retry to a cold start.
 - **Defined in:** `application_sdk/testing/harness/automation_engine/retry.py`
+
+#### `collect_pod_evidence`
+
+- **Import:** `from application_sdk.testing.harness.evidence import collect_pod_evidence`
+- **Signature:** `collect_pod_evidence(namespace: str, *, ...)`
+- **Summary:** Collect container logs and pod state from *namespace* into one bundle.
+- **Defined in:** `application_sdk/testing/harness/evidence.py`
 
 #### `compare_category`
 
@@ -4674,7 +4695,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `purge_connection`
 
 - **Import:** `from application_sdk.testing.harness.teardown import purge_connection`
-- **Signature:** `purge_connection(connection_qualified_name: str) -> PurgeReport`
+- **Signature:** `purge_connection(client: AsyncAtlanClient, connection_qualified_name: str) -> PurgeReport`
 - **Summary:** Delete every asset under *connection_qualified_name*, then the connection.
 - **Defined in:** `application_sdk/testing/harness/teardown.py`
 
@@ -4688,8 +4709,15 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `redact`
 
 - **Import:** `from application_sdk.testing.harness.evidence import redact`
-- **Signature:** `redact(bundle: EvidenceBundle) -> EvidenceBundle`
+- **Signature:** `redact(bundle: EvidenceBundle, *, secrets: Sequence[str] = ()) -> EvidenceBundle`
 - **Summary:** Return *bundle* with credential-shaped values replaced by placeholders.
+- **Defined in:** `application_sdk/testing/harness/evidence.py`
+
+#### `redact_text`
+
+- **Import:** `from application_sdk.testing.harness.evidence import redact_text`
+- **Signature:** `redact_text(text: str, *, secrets: Sequence[str] = ()) -> str`
+- **Summary:** Return *text* with credential-shaped and literally-known values blanked.
 - **Defined in:** `application_sdk/testing/harness/evidence.py`
 
 #### `run_comparison`
@@ -4729,6 +4757,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Sample up to *per_type* qualified names per type under the connection.
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
+#### `secrets_from_environment`
+
+- **Import:** `from application_sdk.testing.harness.evidence import secrets_from_environment`
+- **Signature:** `secrets_from_environment(environ: Mapping[str, str], *, also: Sequence[str] = ()) -> tuple[str, ...]`
+- **Summary:** Collect the literal values a run is holding, for :func:`redact`'s ``secrets``.
+- **Defined in:** `application_sdk/testing/harness/evidence.py`
+
 #### `stale_version_pollers`
 
 - **Import:** `from application_sdk.testing.harness.temporal import stale_version_pollers`
@@ -4753,9 +4788,9 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `start_via_automation_engine`
 
 - **Import:** `from application_sdk.testing.harness.starters import start_via_automation_engine`
-- **Signature:** `start_via_automation_engine(spec: Mapping[str, object]) -> AERunHandle`
-- **Summary:** Start a run through the Automation Engine.
-- **Defined in:** `application_sdk/testing/harness/starters/__init__.py`
+- **Signature:** `start_via_automation_engine(spec: AEWorkflowSpec, *, client: AEClient, minter: Minter | None = None)`
+- **Summary:** Create, seed, publish and submit a workflow through the Automation Engine.
+- **Defined in:** `application_sdk/testing/harness/starters/_ae.py`
 
 #### `starts_with`
 
@@ -4791,6 +4826,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `wait_for_workflow(namespace: str, ...)`
 - **Summary:** Poll GET /api/v1/workflows/{id} until the workflow reaches a terminal state.
 - **Defined in:** `application_sdk/testing/e2e/workflows.py`
+
+#### `write_bundle`
+
+- **Import:** `from application_sdk.testing.harness.evidence import write_bundle`
+- **Signature:** `write_bundle(bundle: EvidenceBundle, output_dir: Path, *, secrets: Sequence[str] = ()) -> Sequence[Path]`
+- **Summary:** Redact *bundle* and write it under *output_dir*.
+- **Defined in:** `application_sdk/testing/harness/evidence.py`
 
 ### Constants and Enums
 
@@ -4832,6 +4874,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/outcome.py`
 
+#### `PLACEHOLDER`
+
+- **Import:** `from application_sdk.testing.harness.evidence import PLACEHOLDER`
+- **Signature:** `PLACEHOLDER`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/evidence.py`
+
 #### `Probe`
 
 - **Import:** `from application_sdk.testing.harness import Probe`
@@ -4860,6 +4909,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `SampleRead: TypeAlias`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `SECRET_KEY_FRAGMENTS`
+
+- **Import:** `from application_sdk.testing.harness.evidence import SECRET_KEY_FRAGMENTS`
+- **Signature:** `SECRET_KEY_FRAGMENTS: tuple[str, ...]`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/evidence.py`
 
 #### `UNREADABLE`
 
