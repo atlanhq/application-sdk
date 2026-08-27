@@ -7,6 +7,11 @@ Usage::
 
     from application_sdk.testing import MockStateStore, app_context, MockCredentialStore
 
+For an HTTP source with no container to pull, :class:`HttpFakeSource` fills the
+same fixture slot a testcontainer would::
+
+    from application_sdk.testing import HttpFakeSource, offset_page
+
 Fixtures (import into conftest.py or test files)::
 
     from application_sdk.testing import (
@@ -22,6 +27,18 @@ Fixtures (import into conftest.py or test files)::
     )
 """
 
+from application_sdk.testing.fake_source import (
+    CursorPage,
+    FakeRequest,
+    FakeResponse,
+    FakeSourceGroup,
+    HttpFakeSource,
+    OffsetPage,
+    assert_extract_roundtrip,
+    cursor_page,
+    offset_page,
+    serve,
+)
 from application_sdk.testing.fixtures import (
     app_context,
     clean_app_registry,
@@ -43,21 +60,29 @@ from application_sdk.testing.mocks import (
 )
 
 __all__ = [
-    # Mocks
+    "CursorPage",
+    "FakeRequest",
+    "FakeResponse",
+    "FakeSourceGroup",
+    "HttpFakeSource",
     "MockBinding",
     "MockCredentialStore",
     "MockHeartbeatController",
     "MockPubSub",
     "MockSecretStore",
     "MockStateStore",
-    # Fixtures
+    "OffsetPage",
     "app_context",
+    "assert_extract_roundtrip",
     "clean_app_registry",
     "clean_task_registry",
+    "cursor_page",
     "mock_binding",
     "mock_credential_store",
     "mock_heartbeat",
     "mock_pubsub",
     "mock_secret_store",
     "mock_state_store",
+    "offset_page",
+    "serve",
 ]
