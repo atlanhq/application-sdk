@@ -26,10 +26,11 @@ silently assumes.
   SHOW, read vs list, table vs view) is not coverage.
 - Ground the grant, do not guess it. Check official source documentation
   for the exact endpoint, scope, SQL object, or client operation, and cite
-  the documented permission and its URL. If documentation is unavailable or
-  ambiguous, ask the author for an authoritative citation — never infer a
-  permission from a method or object name. Without a citation this rule
-  reports "unverified, author to confirm", not a HIGH finding.
+  the documented permission and its URL. Never infer a permission from a
+  method or object name. If documentation is unavailable or ambiguous, do
+  not raise a finding on the guess: leave this rule `checked`, raise no
+  finding, and put the open question in the review summary — name the
+  operation and ask the author for an authoritative citation.
 - Weight the silent case hardest: a missing grant that returns an empty
   result instead of erroring produces a green run with missing assets.
   A loud mid-run auth failure is the lesser sibling — neither is
