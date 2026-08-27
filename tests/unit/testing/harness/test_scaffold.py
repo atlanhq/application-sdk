@@ -414,7 +414,9 @@ async def test_the_child_e_kubectl_reads_are_gone() -> None:
         return sorted(
             path.relative_to(root).as_posix()
             for path in root.rglob("*.py")
-            if '"kubectl"' in path.read_text()
+            # encoding pinned: these sources are UTF-8 and full of em-dashes, and
+            # `read_text()` would decode them as cp1252 on Windows
+            if '"kubectl"' in path.read_text(encoding="utf-8")
         )
 
     assert _shells_out(harness_pkg) == ["cluster/_portforward.py"]

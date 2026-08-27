@@ -110,7 +110,7 @@ async def test_collect_writes_container_logs(output_dir: Path):
 
     log_file = output_dir / "handler-my-pod.log"
     assert log_file.exists()
-    assert "handler log line" in log_file.read_text()
+    assert "handler log line" in log_file.read_text(encoding="utf-8")
     assert reader.log_calls == [
         {
             "pod": "my-pod",
@@ -230,6 +230,45 @@ async def test_an_uncreatable_output_dir_stops_before_reading_anything(
         await collector.collect_events()
 
     assert reader.log_calls == []
+
+
+@pytest.mark.asyncio
+async def test_container_logs_are_written_as_utf8_not_as_the_locale_encoding(
+    output_dir: Path,
+):
+    """The locale must never decide how a container's output is written.
+
+    ``Path.write_text`` with no ``encoding`` uses the locale's — cp1252 on
+    Windows, which cannot represent most of what a container logs, so a single
+    non-ASCII character raises and the whole evidence file is lost. Asserted on
+    the kwarg rather than on the round trip because the round trip passes either
+    way on a UTF-8 platform: this bug is invisible to Linux CI, which is exactly
+    why it needs pinning rather than observing.
+    """
+    # An arrow, not an accent: cp1252 encodes é and — quite happily, so a test
+    # written with those would pass against the bug it claims to pin.
+    log_text = "extract → transform: 100 rows"
+    with pytest.raises(UnicodeEncodeError):
+        log_text.encode("cp1252")
+
+    reader = _FakeReader([_pod("my-pod", handler=0)], log_text=log_text)
+    written: list[dict[str, Any]] = []
+    real_write_text = Path.write_text
+
+    def _record(self: Path, data: str, **kwargs: Any) -> int:
+        if self.suffix == ".log":
+            written.append(kwargs)
+        return real_write_text(self, data, **kwargs)
+
+    with (
+        patch("asyncio.create_subprocess_exec", return_value=_make_proc()),
+        patch.object(Path, "write_text", _record),
+    ):
+        collector = LogCollector("test-ns", output_dir, reader=reader)
+        await collector.collect()
+
+    assert written == [{"encoding": "utf-8", "errors": "replace"}]
+    assert (output_dir / "handler-my-pod.log").read_text(encoding="utf-8") == log_text
 
 
 @pytest.mark.asyncio

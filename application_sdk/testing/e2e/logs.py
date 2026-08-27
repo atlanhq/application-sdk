@@ -224,7 +224,11 @@ class LogCollector:
                 previous=previous,
                 tail_lines=_TAIL_LINES,
             )
-            output_path.write_text(text)
+            # Explicit UTF-8: `write_text` otherwise uses the locale encoding,
+            # which is cp1252 on Windows and cannot represent most of what a
+            # container logs. `errors="replace"` because this is evidence — one
+            # undecodable character must not cost the whole file.
+            output_path.write_text(text, encoding="utf-8", errors="replace")
         except Exception as exc:
             logger.warning(
                 "Failed to collect %slogs for %s/%s/%s error_type=%s",
