@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import http.client
 import json
+import re
 import socket
+import threading
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
@@ -17,18 +20,26 @@ from typing import Any
 import pytest
 
 from application_sdk.testing import fake_source
+from application_sdk.testing import fixtures as sdk_fixtures
 from application_sdk.testing.fake_source import (
     CursorPage,
     FakeRequest,
     FakeResponse,
     FakeSourceGroup,
     HttpFakeSource,
+    HttpFakeSourceFactory,
     OffsetPage,
     assert_extract_roundtrip,
     cursor_page,
     offset_page,
     serve,
 )
+
+http_fake_source_factory = sdk_fixtures.http_fake_source_factory
+clean_http_fake_sources = sdk_fixtures.clean_http_fake_sources
+
+CATALOG = r"/api/catalog"
+HYPHENATED = "X-Fake-AuthToken"
 
 OBJECTS = [
     {"id": f"obj-{index:02d}", "name": f"object {index:02d}"} for index in range(1, 8)
@@ -982,3 +993,500 @@ class TestSessionScopedFixtureShape:
                 )
         assert all(result == GOLDEN for result in results)
         assert len(fake.requests) == 8 * len(GOLDEN)
+
+
+def _settled_thread_count(timeout: float = 2.0) -> int:
+    """The live thread count once two consecutive samples agree.
+
+    An unrelated pool spinning up mid-measurement would otherwise make the
+    thread-baseline assertions flaky.
+    """
+    deadline = time.monotonic() + timeout
+    previous = threading.active_count()
+    while time.monotonic() < deadline:
+        time.sleep(0.05)
+        current = threading.active_count()
+        if current == previous:
+            return current
+        previous = current
+    return previous
+
+
+def _catalog_source(**kwargs: Any) -> HttpFakeSource:
+    """Three request shapes on one path, told apart only by ``select``.
+
+    The shape a real metadata catalog has: a bare collection GET, a per-record
+    schema GET, and a property-resolution GET whose ``select`` carries two
+    comma-separated names.
+    """
+    source = HttpFakeSource(name="catalog", **kwargs)
+    source.route(CATALOG, lambda _r: {"shape": "collection"}, query={"select": False})
+    source.route(
+        CATALOG,
+        lambda r: {"shape": "record", "select": r.param("select")},
+        query={"select": re.compile(r"[^,]+")},
+    )
+    source.route(
+        CATALOG,
+        lambda r: {"shape": "property", "select": r.param("select")},
+        query={"select": re.compile(r"[^,]+,[^,]+")},
+    )
+    return source
+
+
+class TestQueryConstrainedRoutes:
+    """One path, several request shapes — each its own route, so usage counts."""
+
+    def test_three_shapes_on_one_path_dispatch_separately(self) -> None:
+        with _catalog_source() as source:
+            url = source.base_url
+            assert _json(f"{url}{CATALOG}")[1] == {"shape": "collection"}
+            assert _json(f"{url}{CATALOG}?select=account")[1] == {
+                "shape": "record",
+                "select": "account",
+            }
+            assert _json(f"{url}{CATALOG}?select=account,name")[1] == {
+                "shape": "property",
+                "select": "account,name",
+            }
+            assert list(source.unmatched) == []
+            assert source.unused_routes() == []
+
+    def test_exact_value_constraint(self) -> None:
+        source = HttpFakeSource()
+        source.route(r"/api/thing", lambda _r: {"mode": "full"}, query={"mode": "full"})
+        with source:
+            assert _json(f"{source.base_url}/api/thing?mode=full")[1] == {
+                "mode": "full"
+            }
+            assert _json(f"{source.base_url}/api/thing?mode=partial")[0] == 404
+
+    def test_present_constraint_accepts_any_value_including_blank(self) -> None:
+        source = HttpFakeSource()
+        source.route(r"/api/thing", lambda _r: {"seen": True}, query={"cursor": True})
+        with source:
+            assert _json(f"{source.base_url}/api/thing?cursor=abc")[1] == {"seen": True}
+            assert _json(f"{source.base_url}/api/thing?cursor=")[1] == {"seen": True}
+            assert _json(f"{source.base_url}/api/thing")[0] == 404
+
+    def test_absent_constraint_rejects_a_blank_value(self) -> None:
+        source = HttpFakeSource()
+        source.route(r"/api/thing", lambda _r: {"bare": True}, query={"cursor": False})
+        with source:
+            assert _json(f"{source.base_url}/api/thing")[1] == {"bare": True}
+            assert _json(f"{source.base_url}/api/thing?other=1")[1] == {"bare": True}
+            assert _json(f"{source.base_url}/api/thing?cursor=")[0] == 404
+
+    def test_regex_constraint_fullmatches_the_value(self) -> None:
+        source = HttpFakeSource()
+        source.route(
+            r"/api/thing",
+            lambda _r: {"ok": True},
+            query={"id": re.compile(r"\d+")},
+        )
+        with source:
+            assert _json(f"{source.base_url}/api/thing?id=123")[1] == {"ok": True}
+            assert _json(f"{source.base_url}/api/thing?id=123x")[0] == 404
+
+    def test_multiple_conditions_must_all_hold(self) -> None:
+        source = HttpFakeSource()
+        source.route(
+            r"/api/thing",
+            lambda _r: {"ok": True},
+            query={"mode": "full", "deep": True},
+        )
+        with source:
+            url = source.base_url
+            assert _json(f"{url}/api/thing?mode=full&deep=1")[1] == {"ok": True}
+            assert _json(f"{url}/api/thing?mode=full")[0] == 404
+            assert _json(f"{url}/api/thing?deep=1")[0] == 404
+
+    def test_most_specific_wins_over_registration_order(self) -> None:
+        """The path-only fallback registered first must not swallow the variant."""
+        source = HttpFakeSource()
+        source.route(r"/api/thing", lambda _r: {"which": "fallback"})
+        source.route(
+            r"/api/thing", lambda _r: {"which": "variant"}, query={"mode": "full"}
+        )
+        with source:
+            assert _json(f"{source.base_url}/api/thing?mode=full")[1] == {
+                "which": "variant"
+            }
+            assert _json(f"{source.base_url}/api/thing")[1] == {"which": "fallback"}
+
+    def test_more_conditions_beat_fewer(self) -> None:
+        source = HttpFakeSource()
+        source.route(r"/api/thing", lambda _r: {"which": "one"}, query={"mode": "full"})
+        source.route(
+            r"/api/thing",
+            lambda _r: {"which": "two"},
+            query={"mode": "full", "deep": True},
+        )
+        with source:
+            assert _json(f"{source.base_url}/api/thing?mode=full&deep=1")[1] == {
+                "which": "two"
+            }
+            assert _json(f"{source.base_url}/api/thing?mode=full")[1] == {
+                "which": "one"
+            }
+
+    def test_equally_specific_routes_keep_registration_order(self) -> None:
+        source = HttpFakeSource()
+        source.route(r"/api/thing", lambda _r: {"which": "first"}, query={"mode": True})
+        source.route(
+            r"/api/thing", lambda _r: {"which": "second"}, query={"mode": True}
+        )
+        with source:
+            assert _json(f"{source.base_url}/api/thing?mode=x")[1] == {"which": "first"}
+
+    def test_a_query_miss_is_distinguishable_from_a_path_miss(self) -> None:
+        with _catalog_source() as source:
+            _json(f"{source.base_url}{CATALOG}?select=a,b,c")
+            assert [r.path for r in source.unmatched] == [CATALOG]
+            assert [r.path for r in source.unmatched_query] == [CATALOG]
+
+    def test_a_path_miss_is_not_recorded_as_a_query_miss(self) -> None:
+        with _catalog_source() as source:
+            _json(f"{source.base_url}/api/absent")
+            assert [r.path for r in source.unmatched] == ["/api/absent"]
+            assert list(source.unmatched_query) == []
+
+    def test_a_wrong_method_is_not_recorded_as_a_query_miss(self) -> None:
+        with _catalog_source() as source:
+            _request(f"{source.base_url}{CATALOG}", method="POST", data=b"{}")
+            assert len(source.unmatched) == 1
+            assert list(source.unmatched_query) == []
+
+    def test_a_query_miss_is_logged_distinctly(self, warnings: list[str]) -> None:
+        with _catalog_source() as source:
+            _json(f"{source.base_url}{CATALOG}?select=a,b,c")
+        assert any("no registered query variant" in message for message in warnings)
+        assert not any("has no route for" in message for message in warnings)
+
+    def test_hits_counts_one_variant_or_every_variant(self) -> None:
+        with _catalog_source() as source:
+            url = source.base_url
+            _json(f"{url}{CATALOG}")
+            _json(f"{url}{CATALOG}?select=account")
+            _json(f"{url}{CATALOG}?select=account,name")
+            _json(f"{url}{CATALOG}?select=other")
+            assert source.hits(CATALOG) == 4
+            assert source.hits(CATALOG, query={"select": False}) == 1
+            assert source.hits(CATALOG, query={"select": re.compile(r"[^,]+")}) == 2
+            assert (
+                source.hits(CATALOG, query={"select": re.compile(r"[^,]+,[^,]+")}) == 1
+            )
+
+    def test_unused_routes_labels_tell_same_path_variants_apart(self) -> None:
+        with _catalog_source() as source:
+            _json(f"{source.base_url}{CATALOG}")
+            assert source.unused_routes() == [
+                f"{CATALOG}?select=~[^,]+",
+                f"{CATALOG}?select=~[^,]+,[^,]+",
+            ]
+
+    def test_the_route_usage_check_names_an_unexercised_variant(self) -> None:
+        """Change 1's whole point: an unexercised shape is now reported."""
+        with _catalog_source() as source:
+            with pytest.raises(AssertionError) as caught:
+                assert_extract_roundtrip(
+                    source,
+                    lambda base_url: _json(f"{base_url}{CATALOG}")[1],
+                    {"shape": "collection"},
+                )
+            message = str(caught.value)
+            assert "never called these fake-source routes" in message
+            assert f"{CATALOG}?select=~[^,]+" in message
+
+    def test_a_query_constrained_route_still_paginates(self) -> None:
+        source = HttpFakeSource(name="catalog")
+        source.route(
+            CATALOG,
+            lambda r: {
+                "select": r.param("select"),
+                "items": list(offset_page(OBJECTS, r, default_limit=3).items),
+            },
+            query={"select": True},
+        )
+        with source:
+            url = f"{source.base_url}{CATALOG}?select=account"
+            first = _json(f"{url}&offset=0&limit=3")[1]
+            second = _json(f"{url}&offset=3&limit=3")[1]
+        assert first == {"select": "account", "items": OBJECTS[0:3]}
+        assert second == {"select": "account", "items": OBJECTS[3:6]}
+
+    def test_labels_spell_every_constraint_form(self) -> None:
+        source = HttpFakeSource()
+        source.route(r"/api/thing", lambda _r: {}, query={"a": True})
+        source.route(r"/api/thing", lambda _r: {}, query={"b": False})
+        source.route(r"/api/thing", lambda _r: {}, query={"c": "exact"})
+        source.route(r"/api/thing", lambda _r: {}, query={"d": re.compile(r"\d+")})
+        assert source.unused_routes() == [
+            r"/api/thing?a=<present>",
+            r"/api/thing?b=<absent>",
+            r"/api/thing?c=exact",
+            r"/api/thing?d=~\d+",
+        ]
+
+    def test_hits_disambiguates_every_constraint_form(self) -> None:
+        source = HttpFakeSource()
+        source.route(r"/api/thing", lambda _r: {"which": "present"}, query={"a": True})
+        source.route(r"/api/thing", lambda _r: {"which": "exact"}, query={"b": "full"})
+        with source:
+            url = source.base_url
+            assert _json(f"{url}/api/thing?a=1")[1] == {"which": "present"}
+            assert _json(f"{url}/api/thing?b=full")[1] == {"which": "exact"}
+        assert source.hits(r"/api/thing", query={"a": True}) == 1
+        assert source.hits(r"/api/thing", query={"b": "full"}) == 1
+        assert source.hits(r"/api/thing", query={"a": False}) == 0
+
+    def test_path_only_routes_report_a_bare_pattern_label(self) -> None:
+        source = HttpFakeSource()
+        source.route(r"/api/thing", lambda _r: {})
+        assert source.unused_routes() == [r"/api/thing"]
+
+    def test_an_unusable_constraint_is_rejected_at_registration(self) -> None:
+        with pytest.raises(TypeError, match="must be a str"):
+            HttpFakeSource().route(r"/a", lambda _r: {}, query={"mode": 3})
+
+    def test_reset_clears_the_query_miss_recording(self) -> None:
+        with _catalog_source() as source:
+            _json(f"{source.base_url}{CATALOG}?select=a,b,c")
+            assert len(source.unmatched_query) == 1
+            source.reset()
+            assert list(source.unmatched_query) == []
+            assert list(source.unmatched) == []
+
+    def test_a_repeated_parameter_is_constrained_on_its_first_value(self) -> None:
+        source = HttpFakeSource()
+        source.route(r"/api/thing", lambda _r: {"ok": True}, query={"mode": "full"})
+        with source:
+            assert _json(f"{source.base_url}/api/thing?mode=full&mode=partial")[1] == {
+                "ok": True
+            }
+
+
+class TestTrailingSlash:
+    def test_a_single_trailing_slash_is_tolerated(self, fake: HttpFakeSource) -> None:
+        status, payload = _json(f"{fake.base_url}/api/objects/")
+        assert status == 200
+        assert payload == {"items": OBJECTS}
+
+    def test_the_recorded_path_keeps_the_slash_as_sent(
+        self, fake: HttpFakeSource
+    ) -> None:
+        _json(f"{fake.base_url}/api/objects/")
+        assert [r.path for r in fake.requests] == ["/api/objects/"]
+
+    def test_an_exact_match_beats_the_normalised_retry(self) -> None:
+        source = HttpFakeSource()
+        source.route(r"/api/thing/", lambda _r: {"which": "with-slash"})
+        source.route(r"/api/thing", lambda _r: {"which": "without-slash"})
+        with source:
+            assert _json(f"{source.base_url}/api/thing/")[1] == {"which": "with-slash"}
+            assert _json(f"{source.base_url}/api/thing")[1] == {
+                "which": "without-slash"
+            }
+
+    def test_a_double_trailing_slash_is_not_normalised(
+        self, fake: HttpFakeSource
+    ) -> None:
+        assert _json(f"{fake.base_url}/api/objects//")[0] == 404
+
+    def test_normalisation_does_not_turn_a_prefix_into_a_match(
+        self, fake: HttpFakeSource
+    ) -> None:
+        assert _json(f"{fake.base_url}/api/objects/obj-03/extra/")[0] == 404
+
+    def test_a_query_constrained_route_tolerates_the_slash_too(self) -> None:
+        with _catalog_source() as source:
+            assert _json(f"{source.base_url}{CATALOG}/?select=account")[1] == {
+                "shape": "record",
+                "select": "account",
+            }
+
+
+class TestThreadTeardown:
+    """stop() must join the per-connection handler threads, not just the accept loop."""
+
+    def test_stop_returns_to_the_thread_baseline(self) -> None:
+        baseline = _settled_thread_count()
+        source = HttpFakeSource(connection_timeout=0.2)
+        source.route(r"/ping", lambda _r: {"ok": True})
+        source.start()
+        assert _json(f"{source.base_url}/ping")[0] == 200
+        source.stop()
+        assert threading.active_count() == baseline
+
+    def test_stop_joins_a_handler_blocked_on_an_idle_keep_alive_connection(
+        self,
+    ) -> None:
+        """The case that slipped through: the thread survived stop() in readline."""
+        baseline = _settled_thread_count()
+        source = HttpFakeSource(connection_timeout=0.2)
+        source.route(r"/ping", lambda _r: {"ok": True})
+        source.start()
+        connection = _connect(source)
+        try:
+            connection.request("GET", "/ping")
+            assert connection.getresponse().read()
+            assert threading.active_count() > baseline
+            source.stop()
+            assert threading.active_count() == baseline
+        finally:
+            connection.close()
+            source.stop()
+
+    def test_stop_warns_about_a_thread_that_outlives_the_join_budget(
+        self, warnings: list[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        release = threading.Event()
+        straggler = threading.Thread(
+            target=release.wait, name="wedged-handler", daemon=True
+        )
+        straggler.start()
+        monkeypatch.setattr(fake_source, "_JOIN_GRACE_SECONDS", 0.05)
+        monkeypatch.setattr(
+            fake_source._FakeSourceServer,
+            "handler_threads",
+            lambda _self: [straggler],
+        )
+        source = HttpFakeSource(name="wedged", connection_timeout=0.01)
+        source.start()
+        try:
+            source.stop()
+            assert any("left 1 thread(s) running" in message for message in warnings)
+            assert any("wedged-handler" in message for message in warnings)
+        finally:
+            release.set()
+            straggler.join(timeout=5)
+
+    def test_stop_on_a_never_started_source_does_nothing(
+        self, warnings: list[str]
+    ) -> None:
+        HttpFakeSource().stop()
+        assert warnings == []
+
+
+class TestHyphenatedResponseHeaders:
+    """``X-Fake-AuthToken=`` is a syntax error, so the mapping form is required."""
+
+    def test_every_constructor_accepts_a_hyphenated_header(self) -> None:
+        header = {HYPHENATED: "token-0123"}
+        assert FakeResponse.json_({}, headers=header).headers == header
+        assert FakeResponse.text("body", headers=header).headers == header
+        assert FakeResponse.raw(b"body", headers=header).headers == header
+
+    def test_keyword_headers_still_work(self) -> None:
+        assert FakeResponse.json_({}, X_Token="a").headers == {"X_Token": "a"}
+        assert FakeResponse.text("b", X_Token="a").headers == {"X_Token": "a"}
+        assert FakeResponse.raw(b"c", X_Token="a").headers == {"X_Token": "a"}
+
+    def test_the_two_forms_combine(self) -> None:
+        response = FakeResponse.json_({}, headers={HYPHENATED: "a"}, X_Plain="b")
+        assert response.headers == {HYPHENATED: "a", "X_Plain": "b"}
+
+    def test_a_keyword_wins_over_the_mapping_on_the_same_key(self) -> None:
+        response = FakeResponse.json_(
+            {}, headers={"X_Token": "from-mapping"}, X_Token="from-keyword"
+        )
+        assert response.headers == {"X_Token": "from-keyword"}
+
+    def test_positional_status_and_content_type_are_unchanged(self) -> None:
+        assert FakeResponse.json_({}, 201).status == 201
+        assert FakeResponse.text("b", 202, "text/html").content_type == "text/html"
+        assert FakeResponse.raw(b"c", 203, "image/png").content_type == "image/png"
+
+    def test_a_hyphenated_header_reaches_the_client(self) -> None:
+        with serve(
+            [
+                (
+                    r"/login",
+                    lambda _r: FakeResponse.json_(
+                        {"ok": True}, headers={HYPHENATED: "token-0123"}
+                    ),
+                )
+            ]
+        ) as url:
+            status, _, headers = _request(f"{url}/login")
+        assert status == 200
+        assert headers[HYPHENATED] == "token-0123"
+
+
+class TestHttpFakeSourceFactory:
+    def test_builds_started_sources_and_stops_them_all(self) -> None:
+        baseline = _settled_thread_count()
+        factory = HttpFakeSourceFactory()
+        first = factory(name="first", connection_timeout=0.2)
+        second = factory(name="second", connection_timeout=0.2)
+        first.route(r"/ping", lambda _r: {"which": "first"})
+        try:
+            assert _json(f"{first.base_url}/ping")[1] == {"which": "first"}
+            assert list(factory.sources) == [first, second]
+        finally:
+            factory.stop_all()
+        assert list(factory.sources) == []
+        assert threading.active_count() == baseline
+        with pytest.raises(RuntimeError, match="not running"):
+            _ = first.base_url
+
+    def test_reset_all_clears_every_source(self) -> None:
+        factory = HttpFakeSourceFactory()
+        source = factory(name="resettable", connection_timeout=0.2)
+        source.route(r"/ping", lambda _r: {"ok": True})
+        try:
+            _json(f"{source.base_url}/ping")
+            assert source.hits(r"/ping") == 1
+            factory.reset_all()
+            assert source.hits(r"/ping") == 0
+            assert list(source.requests) == []
+        finally:
+            factory.stop_all()
+
+    def test_a_source_that_fails_to_start_is_not_remembered(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def boom(_self: HttpFakeSource) -> None:
+            raise OSError("cannot bind")
+
+        monkeypatch.setattr(HttpFakeSource, "start", boom)
+        factory = HttpFakeSourceFactory()
+        with pytest.raises(OSError, match="cannot bind"):
+            factory(name="doomed")
+        assert list(factory.sources) == []
+
+
+@pytest.fixture(scope="session")
+def shipped_fixture_source(
+    http_fake_source_factory: HttpFakeSourceFactory,
+) -> HttpFakeSource:
+    """The connector-side half of the shipped pattern: routes, nothing else."""
+    source = http_fake_source_factory(
+        name="shipped-fixture-source", connection_timeout=0.2
+    )
+    source.route(r"/api/objects", lambda _r: {"items": OBJECTS})
+    return source
+
+
+class TestShippedFixtures:
+    """The session factory plus the function-scoped reset, used as documented."""
+
+    def test_the_session_factory_yields_a_started_server(
+        self,
+        shipped_fixture_source: HttpFakeSource,
+        clean_http_fake_sources: HttpFakeSourceFactory,
+    ) -> None:
+        url = shipped_fixture_source.base_url
+        assert _json(f"{url}/api/objects") == (200, {"items": OBJECTS})
+        assert len(shipped_fixture_source.requests) == 1
+        assert shipped_fixture_source.unused_routes() == []
+        assert list(clean_http_fake_sources.sources) == [shipped_fixture_source]
+
+    def test_recordings_do_not_leak_between_tests(
+        self,
+        shipped_fixture_source: HttpFakeSource,
+        clean_http_fake_sources: HttpFakeSourceFactory,
+    ) -> None:
+        assert list(shipped_fixture_source.requests) == []
+        assert shipped_fixture_source.unused_routes() == [r"/api/objects"]
+        assert _json(f"{shipped_fixture_source.base_url}/api/objects")[0] == 200

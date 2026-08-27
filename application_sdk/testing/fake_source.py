@@ -22,6 +22,10 @@ a fake::
         with fake:
             yield fake.base_url
 
+That fixture ships too — ``http_fake_source_factory`` and
+``clean_http_fake_sources`` in :mod:`application_sdk.testing.fixtures` handle the
+session lifecycle and the per-test reset, leaving the connector only its routes.
+
 What stays with the connector is the part that is genuinely per-source: the
 endpoint map, the response envelope, and any auth-signature scheme. Those are
 irreducible — a NetSuite swagger fragment and a MicroStrategy folder listing have
@@ -41,6 +45,12 @@ called nothing the fake did not model. That assertion is what makes a
 reverse-engineered fake evidence rather than a tautology, and
 :func:`assert_extract_roundtrip` makes it for you.
 
+The same reasoning is why :meth:`HttpFakeSource.route` can constrain query
+parameters. A source whose distinct request shapes share one path and differ only
+by a parameter would otherwise register as a single route, and the
+"every registered route was exercised" check would pass while covering one of
+three shapes. One route per shape keeps that check honest.
+
 Stdlib only, by constraint: ``pytest-httpserver`` and ``respx`` are not fleet
 dependencies, and adding one would make these suites unrunnable in normal CI.
 """
@@ -51,6 +61,7 @@ import base64
 import json
 import re
 import threading
+import time
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -66,6 +77,7 @@ __all__ = [
     "FakeResponse",
     "FakeSourceGroup",
     "HttpFakeSource",
+    "HttpFakeSourceFactory",
     "OffsetPage",
     "assert_extract_roundtrip",
     "cursor_page",
@@ -77,6 +89,8 @@ logger = get_logger(__name__)
 
 _LOOPBACK = "127.0.0.1"
 _METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
+_CONNECTION_TIMEOUT_SECONDS = 5.0
+_JOIN_GRACE_SECONDS = 5.0
 _MAX_BODY_BYTES = 64 * 1024 * 1024
 _MAX_CHUNK_LINE_BYTES = 8192
 _BODY_REFUSALS = {
@@ -149,6 +163,12 @@ class FakeResponse:
     A handler may return this, or any of the shorthands
     :meth:`HttpFakeSource.route` documents — ``dict``/``list`` for a 200 JSON
     body, ``(status, body)`` for an explicit status, or ``None`` for a 404.
+
+    Every constructor takes headers two ways: a ``headers`` mapping and keyword
+    arguments. The mapping is the general form — a real source's header names are
+    routinely not Python identifiers, and ``X-Some-Token`` cannot be spelled as a
+    keyword at all — while the keyword form stays the shorthand for the names that
+    happen to be identifiers. Given the same key both ways, the keyword wins.
     """
 
     status: int = 200
@@ -157,13 +177,20 @@ class FakeResponse:
     headers: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
-    def json_(cls, body: Any, status: int = 200, **headers: str) -> FakeResponse:
+    def json_(
+        cls,
+        body: Any,
+        status: int = 200,
+        *,
+        headers: Mapping[str, str] | None = None,
+        **header_kwargs: str,
+    ) -> FakeResponse:
         """A JSON response; ``body`` is serialised with :func:`json.dumps`."""
         return cls(
             status=status,
             body=body,
             content_type="application/json",
-            headers=headers,
+            headers=_merge_headers(headers, header_kwargs),
         )
 
     @classmethod
@@ -172,10 +199,17 @@ class FakeResponse:
         body: str,
         status: int = 200,
         content_type: str = "text/plain; charset=utf-8",
-        **headers: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        **header_kwargs: str,
     ) -> FakeResponse:
         """A text response, for sources that answer in XML, CSV or SOAP."""
-        return cls(status=status, body=body, content_type=content_type, headers=headers)
+        return cls(
+            status=status,
+            body=body,
+            content_type=content_type,
+            headers=_merge_headers(headers, header_kwargs),
+        )
 
     @classmethod
     def raw(
@@ -183,10 +217,17 @@ class FakeResponse:
         body: bytes,
         status: int = 200,
         content_type: str = "application/octet-stream",
-        **headers: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        **header_kwargs: str,
     ) -> FakeResponse:
         """A byte-for-byte response, for a source whose payload must not be re-encoded."""
-        return cls(status=status, body=body, content_type=content_type, headers=headers)
+        return cls(
+            status=status,
+            body=body,
+            content_type=content_type,
+            headers=_merge_headers(headers, header_kwargs),
+        )
 
     def encode(self, default_content_type: str) -> tuple[bytes, str]:
         """Serialise the body, returning the bytes and the content type to send."""
@@ -207,24 +248,159 @@ class FakeResponse:
 Handler = Callable[[FakeRequest], Any]
 Authorizer = Callable[[FakeRequest], Any]
 
+QueryConstraint = str | re.Pattern[str] | bool
+"""One query-parameter condition on a route.
+
+A ``str`` means the parameter's value must equal it exactly; a compiled regex
+means :meth:`~re.Pattern.fullmatch` against the value; ``True`` means the
+parameter must be present with any value (including empty); ``False`` means it
+must be absent.
+"""
+
+QuerySpec = Mapping[str, QueryConstraint]
+"""A route's query conditions, all of which must hold for the route to match."""
+
+
+def _merge_headers(
+    headers: Mapping[str, str] | None, header_kwargs: Mapping[str, str]
+) -> Mapping[str, str]:
+    if not headers:
+        return dict(header_kwargs)
+    merged = dict(headers)
+    merged.update(header_kwargs)
+    return merged
+
+
+def _spell_constraint(constraint: QueryConstraint) -> str:
+    if constraint is True:
+        return "<present>"
+    if constraint is False:
+        return "<absent>"
+    if isinstance(constraint, re.Pattern):
+        return f"~{constraint.pattern}"
+    return constraint
+
+
+def _constraint_key(constraint: QueryConstraint) -> tuple[str, str]:
+    """A comparable form, since two equal :func:`re.compile` results are not."""
+    if constraint is True:
+        return ("present", "")
+    if constraint is False:
+        return ("absent", "")
+    if isinstance(constraint, re.Pattern):
+        return ("regex", constraint.pattern)
+    return ("exact", constraint)
+
+
+def _query_key(
+    query: Sequence[tuple[str, QueryConstraint]],
+) -> tuple[tuple[str, tuple[str, str]], ...]:
+    return tuple(sorted((name, _constraint_key(c)) for name, c in query))
+
+
+def _validated_query(
+    query: QuerySpec | None,
+) -> tuple[tuple[str, QueryConstraint], ...]:
+    if not query:
+        return ()
+    for name, constraint in query.items():
+        if not isinstance(constraint, (bool, str, re.Pattern)):
+            raise TypeError(
+                f"query constraint for {name!r} must be a str (exact value), a "
+                "compiled regex (fullmatch), True (present) or False (absent), "
+                f"got {type(constraint).__name__}"
+            )
+    return tuple(query.items())
+
+
+def _candidate_paths(path: str) -> tuple[str, ...]:
+    """The path as sent, then the same path without a single trailing slash."""
+    if len(path) > 1 and path.endswith("/") and not path.endswith("//"):
+        return (path, path[:-1])
+    return (path,)
+
 
 @dataclass(frozen=True)
 class _Route:
     pattern: re.Pattern[str]
     methods: frozenset[str]
     handler: Handler
+    query: tuple[tuple[str, QueryConstraint], ...] = ()
+
+    @property
+    def label(self) -> str:
+        """The pattern, plus its query conditions when it has any.
+
+        Routes sharing one path pattern are otherwise indistinguishable in
+        :meth:`HttpFakeSource.unused_routes`, which is exactly the diagnostic that
+        has to name them.
+        """
+        if not self.query:
+            return self.pattern.pattern
+        spelled = "&".join(
+            f"{name}={_spell_constraint(constraint)}" for name, constraint in self.query
+        )
+        return f"{self.pattern.pattern}?{spelled}"
 
     def matches_path(self, path: str) -> re.Match[str] | None:
         return self.pattern.fullmatch(path)
+
+    def matches_query(self, query: Mapping[str, Sequence[str]]) -> bool:
+        for name, constraint in self.query:
+            values = query.get(name)
+            value = values[0] if values else None
+            if constraint is True:
+                if value is None:
+                    return False
+            elif constraint is False:
+                if value is not None:
+                    return False
+            elif isinstance(constraint, re.Pattern):
+                if value is None or constraint.fullmatch(value) is None:
+                    return False
+            elif value != constraint:
+                return False
+        return True
+
+
+class _FakeSourceServer(ThreadingHTTPServer):
+    """Tracks the per-connection handler threads it starts, so they can be joined.
+
+    :class:`~socketserver.ThreadingMixIn` only remembers non-daemon threads, and
+    these are daemons on purpose — a wedged fake must never keep the interpreter
+    alive. Remembering them here is what lets :meth:`HttpFakeSource.stop` wait for
+    them and report the ones that outlive their budget.
+    """
+
+    daemon_threads = True
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self._handler_threads: set[threading.Thread] = set()
+        self._handler_lock = threading.Lock()
+        super().__init__(*args, **kwargs)
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        current = threading.current_thread()
+        with self._handler_lock:
+            self._handler_threads.add(current)
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            with self._handler_lock:
+                self._handler_threads.discard(current)
+
+    def handler_threads(self) -> list[threading.Thread]:
+        with self._handler_lock:
+            return list(self._handler_threads)
 
 
 class HttpFakeSource:
     """A loopback HTTP server that replays a connector's reconstructed responses.
 
     Register routes, enter as a context manager, hand :attr:`base_url` to the
-    connector's client. Routes are matched in registration order by
-    :meth:`re.Pattern.fullmatch` against the path (no query string), and named
-    groups arrive as ``request.path_params``.
+    connector's client. Routes are matched by :meth:`re.Pattern.fullmatch` against
+    the path (no query string), and named groups arrive as ``request.path_params``.
+    A route may additionally constrain query parameters — see :meth:`route`.
 
     A handler may return a :class:`FakeResponse`, a ``dict``/``list`` (200 JSON),
     a ``str``/``bytes`` (200, default content type), a ``(status, body)`` tuple,
@@ -244,6 +420,7 @@ class HttpFakeSource:
         authorize: Authorizer | None = None,
         warn_unmatched: bool = True,
         name: str = "fake-source",
+        connection_timeout: float = _CONNECTION_TIMEOUT_SECONDS,
     ) -> None:
         self.name = name
         self.default_content_type = default_content_type
@@ -252,12 +429,14 @@ class HttpFakeSource:
         )
         self.authorize = authorize
         self.warn_unmatched = warn_unmatched
+        self.connection_timeout = connection_timeout
         self._routes: list[_Route] = []
-        self._server: ThreadingHTTPServer | None = None
+        self._server: _FakeSourceServer | None = None
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
         self._requests: list[FakeRequest] = []
         self._unmatched: list[FakeRequest] = []
+        self._unmatched_query: list[FakeRequest] = []
         self._hits: dict[int, int] = {}
         for pattern, handler in routes:
             self.route(pattern, handler)
@@ -268,13 +447,48 @@ class HttpFakeSource:
         handler: Handler,
         *,
         methods: Sequence[str] = ("GET",),
+        query: QuerySpec | None = None,
     ) -> Self:
         """Register ``handler`` for paths fully matching ``pattern``.
 
         Returns ``self``, so registrations chain. ``pattern`` is a regex matched
         against the path with :meth:`~re.Pattern.fullmatch`; use named groups for
-        path parameters. Registration order is match order, so a specific route
-        must be registered before a broader one that would also match it.
+        path parameters.
+
+        ``query`` narrows the route to requests whose query string satisfies every
+        condition in it (see :data:`QueryConstraint` for the four forms). That is
+        for the source whose distinct request shapes share one path and differ only
+        by a parameter — a metadata catalog answering a collection GET, a
+        per-record schema GET and a property-resolution GET all off the same path,
+        told apart by ``select``::
+
+            CATALOG = r"/services/rest/record/v1/metadata-catalog"
+            fake.route(CATALOG, catalog_collection, query={"select": False})
+            fake.route(CATALOG, record_schema, query={"select": re.compile(r"[^,]+")})
+            fake.route(
+                CATALOG, property_schema, query={"select": re.compile(r"[^,]+,[^,]+")}
+            )
+
+        Registering those as three routes rather than one branching handler is what
+        keeps :meth:`hits`, :meth:`unused_routes` and
+        :func:`assert_extract_roundtrip`'s route-usage check meaningful: each shape
+        is separately counted, so a shape the extract never exercises is reported
+        instead of hidden behind a sibling's hit.
+
+        **Precedence.** Among the routes matching a request's path and method, the
+        one with the most query conditions satisfied wins; ties go to the earliest
+        registered. A route with no ``query`` is therefore the fallback for its
+        path, whenever it was registered — while routes that are equally specific
+        keep the registration-order rule they have always had.
+
+        **Trailing slash.** The path is tried as sent, then again without a single
+        trailing slash. A source that tolerates ``/objects/`` for ``/objects``
+        needs no ``/?`` in the pattern, and an exact match always beats the
+        normalised retry, so a route written with a trailing slash still owns it.
+
+        Query conditions gate matching only — ``request.params`` and
+        ``request.query`` still carry the whole query string, so a route pinned on
+        one parameter paginates on the others as usual.
         """
         upper = frozenset(method.upper() for method in methods)
         if not upper:
@@ -284,6 +498,7 @@ class HttpFakeSource:
                 pattern=re.compile(pattern),
                 methods=upper,
                 handler=handler,
+                query=_validated_query(query),
             )
         )
         return self
@@ -333,24 +548,46 @@ class HttpFakeSource:
         with self._lock:
             return list(self._unmatched)
 
-    def hits(self, pattern: str) -> int:
-        """How many requests matched the route registered with ``pattern``."""
+    @property
+    def unmatched_query(self) -> Sequence[FakeRequest]:
+        """The subset of :attr:`unmatched` that missed on the query, not the path.
+
+        A request here reached a route's path and method but satisfied no
+        registered query variant — a modelled endpoint called with a parameter
+        shape the fake does not model, which is a different mistake from calling an
+        endpoint that was never modelled at all, and usually a missing
+        :meth:`route` ``query`` variant rather than a missing route.
+        """
+        with self._lock:
+            return list(self._unmatched_query)
+
+    def hits(self, pattern: str, *, query: QuerySpec | None = None) -> int:
+        """How many requests matched the route registered with ``pattern``.
+
+        When several routes share one path pattern and differ only by their query
+        conditions, pass the same ``query`` the route was registered with to count
+        just that variant. Omitting ``query`` counts every variant of the pattern
+        together.
+        """
+        wanted = None if query is None else _query_key(_validated_query(query))
         with self._lock:
             return sum(
                 count
                 for index, count in self._hits.items()
                 if self._routes[index].pattern.pattern == pattern
+                and (wanted is None or _query_key(self._routes[index].query) == wanted)
             )
 
     def unused_routes(self) -> Sequence[str]:
-        """Patterns of routes no request ever matched.
+        """Labels of routes no request ever matched.
 
         A route the extract never called is either dead fixture weight or a code
-        path the test believes it covers and does not.
+        path the test believes it covers and does not. A query-constrained route's
+        label carries its conditions, so same-path variants are told apart.
         """
         with self._lock:
             return [
-                route.pattern.pattern
+                route.label
                 for index, route in enumerate(self._routes)
                 if not self._hits.get(index)
             ]
@@ -363,14 +600,14 @@ class HttpFakeSource:
         with self._lock:
             self._requests.clear()
             self._unmatched.clear()
+            self._unmatched_query.clear()
             self._hits.clear()
 
     def start(self) -> Self:
         """Bind an ephemeral loopback port and serve in a daemon thread."""
         if self._server is not None:
             return self
-        server = ThreadingHTTPServer((_LOOPBACK, 0), _make_handler_class(self))
-        server.daemon_threads = True
+        server = _FakeSourceServer((_LOOPBACK, 0), _make_handler_class(self))
         thread = threading.Thread(
             target=server.serve_forever,
             name=f"{self.name}-server",
@@ -382,15 +619,41 @@ class HttpFakeSource:
         return self
 
     def stop(self) -> None:
-        """Shut the server down and join its thread. Idempotent."""
+        """Shut the server down and join every thread it started. Idempotent.
+
+        The per-connection handler threads are joined too, not just the accept
+        loop's. An idle keep-alive connection leaves its handler blocked in
+        ``readline``, which ``shutdown()`` does nothing about — so the handler
+        class carries a socket ``timeout`` (``connection_timeout``): the read wakes,
+        the handler closes the connection, and the thread exits to be joined here.
+        A thread still alive when the budget runs out is logged rather than
+        silently left behind.
+        """
         server, thread = self._server, self._thread
         self._server = None
         self._thread = None
+        if server is None and thread is None:
+            return
+        pending: list[threading.Thread] = []
         if server is not None:
             server.shutdown()
+            pending.extend(server.handler_threads())
             server.server_close()
         if thread is not None:
-            thread.join(timeout=5)
+            pending.append(thread)
+        budget = self.connection_timeout + _JOIN_GRACE_SECONDS
+        deadline = time.monotonic() + budget
+        for pending_thread in pending:
+            pending_thread.join(timeout=max(0.0, deadline - time.monotonic()))
+        stranded = sorted(item.name for item in pending if item.is_alive())
+        if stranded:
+            logger.warning(
+                "%s stop() left %d thread(s) running after %.1fs: %s",
+                self.name,
+                len(stranded),
+                budget,
+                ", ".join(stranded),
+            )
 
     def __enter__(self) -> Self:
         return self.start()
@@ -407,46 +670,88 @@ class HttpFakeSource:
             if denied is not None:
                 return denied
 
-        for index, route in enumerate(self._routes):
-            match = route.matches_path(request.path)
-            if match is None or request.method not in route.methods:
-                continue
-            with self._lock:
-                self._hits[index] = self._hits.get(index, 0) + 1
-            matched = FakeRequest(
-                method=request.method,
-                path=request.path,
-                params=request.params,
-                query=request.query,
-                path_params=match.groupdict(),
-                headers=request.headers,
-                body=request.body,
-            )
-            try:
-                response = _coerce(route.handler(matched))
-            except Exception as exc:  # a handler bug must answer, not hang
-                logger.warning(
-                    "%s handler for %r raised: %r",
-                    self.name,
-                    route.pattern.pattern,
-                    exc,
-                    exc_info=True,
-                )
-                return FakeResponse.json_(
-                    {"error": "fake source handler raised", "detail": repr(exc)},
-                    status=500,
-                )
-            return response if response is not None else _not_found(self.not_found_body)
+        selected, query_variant_missed = self._select(request)
+        if selected is None:
+            return self._record_unmatched(request, query_variant_missed)
 
+        index, route, match = selected
+        with self._lock:
+            self._hits[index] = self._hits.get(index, 0) + 1
+        matched = FakeRequest(
+            method=request.method,
+            path=request.path,
+            params=request.params,
+            query=request.query,
+            path_params=match.groupdict(),
+            headers=request.headers,
+            body=request.body,
+        )
+        try:
+            response = _coerce(route.handler(matched))
+        except Exception as exc:  # a handler bug must answer, not hang
+            logger.warning(
+                "%s handler for %r raised: %r",
+                self.name,
+                route.label,
+                exc,
+                exc_info=True,
+            )
+            return FakeResponse.json_(
+                {"error": "fake source handler raised", "detail": repr(exc)},
+                status=500,
+            )
+        return response if response is not None else _not_found(self.not_found_body)
+
+    def _select(
+        self, request: FakeRequest
+    ) -> tuple[tuple[int, _Route, re.Match[str]] | None, bool]:
+        """The winning route, and whether the miss was a query miss.
+
+        Most-specific-wins: among the routes matching this path and method, the one
+        with the most query conditions, earliest registration breaking a tie. The
+        path as sent is resolved fully before the trailing-slash-stripped form is
+        tried, so an exact match can never lose to a normalised one.
+        """
+        method_matched = False
+        for path in _candidate_paths(request.path):
+            best: tuple[int, _Route, re.Match[str]] | None = None
+            for index, route in enumerate(self._routes):
+                match = route.matches_path(path)
+                if match is None or request.method not in route.methods:
+                    continue
+                method_matched = True
+                if not route.matches_query(request.query):
+                    continue
+                if best is None or len(route.query) > len(best[1].query):
+                    best = (index, route, match)
+            if best is not None:
+                return best, False
+        return None, method_matched
+
+    def _record_unmatched(
+        self, request: FakeRequest, query_variant_missed: bool
+    ) -> FakeResponse:
         with self._lock:
             self._unmatched.append(request)
+            if query_variant_missed:
+                self._unmatched_query.append(request)
         if self.warn_unmatched:
-            logger.warning(
-                "%s has no route for %s %s — answering 404",
-                self.name,
-                request.method,
-                request.path,
-            )
+            if query_variant_missed:
+                logger.warning(
+                    "%s matched the path of %s %s but no registered query variant "
+                    "(query %r) — answering 404",
+                    self.name,
+                    request.method,
+                    request.path,
+                    dict(request.query),
+                )
+            else:
+                logger.warning(
+                    "%s has no route for %s %s — answering 404",
+                    self.name,
+                    request.method,
+                    request.path,
+                )
         return _not_found(self.not_found_body)
 
 
@@ -472,11 +777,17 @@ def _make_handler_class(fake: HttpFakeSource) -> type[BaseHTTPRequestHandler]:
     catch-all: a ``POST`` to a GET-only fake gets a 404, not a 501 with a body
     the connector's client may not expect — and never a socket that just sits
     there while the client waits for a response that no ``do_POST`` will write.
+
+    The class-level ``timeout`` is the other half of a clean teardown: it puts a
+    read deadline on each accepted connection, so a handler parked in ``readline``
+    on an idle keep-alive socket wakes, closes, and lets its thread end instead of
+    outliving :meth:`HttpFakeSource.stop`.
     """
 
     class _Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
         server_version = "HttpFakeSource/1.0"
+        timeout = fake.connection_timeout
 
         def log_message(self, format: str, *args: Any) -> None:
             """Silenced: the default access log is stderr noise under pytest."""
@@ -630,6 +941,56 @@ class FakeSourceGroup:
 
     def __exit__(self, *_exc: object) -> None:
         for source in reversed(list(self.sources.values())):
+            source.stop()
+
+
+class HttpFakeSourceFactory:
+    """The fakes one pytest session built, owned in one place.
+
+    Backs the shipped fixture pair (``http_fake_source_factory`` and
+    ``clean_http_fake_sources`` in :mod:`application_sdk.testing.fixtures`). Routes
+    are the per-connector part and stay in the connector's own session fixture;
+    starting the servers, resetting recordings between tests and stopping
+    everything at the end are the same everywhere and happen here::
+
+        @pytest.fixture(scope="session")
+        def source_url(http_fake_source_factory) -> str:
+            fake = http_fake_source_factory(name="my-source")
+            fake.route(r"/api/v1/objects", list_objects)
+            return fake.base_url
+
+        def test_extract(source_url, clean_http_fake_sources) -> None:
+            ...
+    """
+
+    def __init__(self) -> None:
+        self._sources: list[HttpFakeSource] = []
+
+    def __call__(self, **kwargs: Any) -> HttpFakeSource:
+        """Build and start one fake; ``kwargs`` are :class:`HttpFakeSource`'s."""
+        source = HttpFakeSource(**kwargs)
+        self._sources.append(source)
+        try:
+            source.start()
+        except Exception:
+            self._sources.remove(source)
+            raise
+        return source
+
+    @property
+    def sources(self) -> Sequence[HttpFakeSource]:
+        """Every fake built so far, in creation order."""
+        return list(self._sources)
+
+    def reset_all(self) -> None:
+        """:meth:`HttpFakeSource.reset` every fake, leaving the servers running."""
+        for source in self._sources:
+            source.reset()
+
+    def stop_all(self) -> None:
+        """Stop every fake, newest first, and forget them."""
+        sources, self._sources = self._sources, []
+        for source in reversed(sources):
             source.stop()
 
 
