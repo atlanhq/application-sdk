@@ -253,9 +253,12 @@ class DAGProgressStalledError(PreconditionError):
 
     Categorised ``PRECONDITION`` where the generic
     :class:`~application_sdk.testing.harness._errors.WaitStalledError` is a
-    ``TIMEOUT`` (per ADR-0018). This one predates the ADR and keeps its category
-    so no existing consumer sees a reclassification; normalising the pair is
-    listed on FND-240.
+    ``TIMEOUT`` (per ADR-0018). FND-240 looked at normalising the pair and
+    **declined**: ``code`` is the field a structured failure envelope carries and
+    alert rules route on, so flipping this one's category silently re-routes
+    every consumer's stall alert. That is an error-contract change, and it
+    belongs at the next major with the rest of them — not folded into a refactor
+    whose whole constraint is that behaviour is preserved.
     """
 
     code: ClassVar[str] = "PRECONDITION_DAG_PROGRESS_STALLED"

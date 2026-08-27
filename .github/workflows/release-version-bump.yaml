@@ -179,42 +179,46 @@ jobs:
       - name: Commit and open PR
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          TARGET_BRANCH: ${{ inputs.target_branch }}
+          RELEASE_LABEL: ${{ inputs.release_label }}
+          CURRENT_VERSION: ${{ steps.versions.outputs.current }}
+          NEW_VERSION: ${{ steps.bump.outputs.new }}
         run: |
           set -euo pipefail
           git config --global user.name 'atlan-ci'
           git config --global user.email 'it@atlan.com'
 
-          BRANCH="bump-version-${{ inputs.target_branch }}"
+          BRANCH="bump-version-${TARGET_BRANCH}"
           git checkout -b "$BRANCH"
           git add pyproject.toml uv.lock CHANGELOG.md
-          git commit -m "chore: bump version to ${{ steps.bump.outputs.new }}"
+          git commit -m "chore: bump version to ${NEW_VERSION}"
           # --force-with-lease: safer than --force — fails if another CI run pushed
           # to this bot-owned bump branch concurrently, which is the correct behavior.
           git push origin "$BRANCH" --force-with-lease
 
-          EXISTING=$(gh pr list \
-            --head "$BRANCH" \
-            --base "${{ inputs.target_branch }}" \
-            --state open \
-            --json number \
-            --jq '.[0].number')
-
-          if [ -n "$EXISTING" ]; then
-            echo "PR #${EXISTING} already exists for ${BRANCH}, skipping creation."
-          else
-            gh label create "${{ inputs.release_label }}" \
-              --color 0e8a16 \
-              --description "Release version-bump PR" 2>/dev/null || true
-            gh pr create \
-              --base "${{ inputs.target_branch }}" \
-              --title "Bump version to ${{ steps.bump.outputs.new }}" \
-              --body "Automated version bump after merge to ${{ inputs.target_branch }}.
+          cat > "${RUNNER_TEMP}/bump-pr-body.md" <<EOF
+          Automated version bump after merge to ${TARGET_BRANCH}.
 
           This PR updates:
           - pyproject.toml
           - uv.lock
           - CHANGELOG.md
 
-          Version: ${{ steps.versions.outputs.current }} → ${{ steps.bump.outputs.new }}" \
-              --label "${{ inputs.release_label }}"
-          fi
+          Version: ${CURRENT_VERSION} → ${NEW_VERSION}
+          EOF
+
+          # Upsert rather than create-or-skip. This branch is fixed and gets
+          # force-pushed on every re-fire, so while the bump PR stays open the
+          # *content* keeps moving — an app that merges a `feat:` after a patch
+          # bump was computed ends up shipping a minor. The old `else` branch
+          # only created the PR, leaving the title and body frozen at the first
+          # run's version while the diff said something else
+          # (atlanhq/atlan-oracle-app#258). The script re-syncs title, body and
+          # the release label, and no-ops when they already match.
+          python3 .sdk-scripts/.github/scripts/upsert_release_pr.py \
+            --repo "${GITHUB_REPOSITORY}" \
+            --base "${TARGET_BRANCH}" \
+            --head "${BRANCH}" \
+            --title "Bump version to ${NEW_VERSION}" \
+            --body-file "${RUNNER_TEMP}/bump-pr-body.md" \
+            --label "${RELEASE_LABEL}"

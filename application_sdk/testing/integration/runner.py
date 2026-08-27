@@ -40,6 +40,7 @@ import pytest
 import requests as http_requests
 
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.testing.harness._poll import until_deadline
 from application_sdk.validation import validate_transformed_dir
 
 from .client import IntegrationTestClient
@@ -1007,6 +1008,21 @@ class BaseIntegrationTest:
     ) -> str:
         """Poll the workflow status until completion or timeout.
 
+        The loop is
+        :func:`~application_sdk.testing.harness._poll.until_deadline` (FND-240),
+        which leaves the harness with **one** deadline idiom rather than three.
+        This was the last ``time.time()`` one, and moving it to the monotonic
+        clock is the point rather than a side effect: a wall-clock budget is
+        wrong in both directions — an NTP step forward expires a wait that had
+        time left, and a step backward extends one that should have ended.
+
+        The unbounded transient tolerance is deliberately **kept**: an
+        unsuccessful status response warns and polls on, for the whole budget,
+        exactly as before. FND-240 notes the missing cap; picking a number for it
+        needs evidence about how often a *local* Temporal answers unsuccessfully,
+        which this change has none of, and a cap guessed here would turn a slow
+        local server into a failed test.
+
         Args:
             workflow_id: The workflow ID.
             run_id: The run ID.
@@ -1019,9 +1035,11 @@ class BaseIntegrationTest:
         Raises:
             TimeoutError: If the workflow does not complete within the timeout.
         """
-        start_time = time.time()
-
-        while True:
+        for attempt in until_deadline(
+            timeout,
+            interval,
+            label=f"workflow {workflow_id}/{run_id}",
+        ):
             status_response = self.client.get_workflow_status(workflow_id, run_id)
 
             if not status_response.get("success", False):
@@ -1034,14 +1052,17 @@ class BaseIntegrationTest:
                 if current_status != "RUNNING":
                     return current_status
 
-            elapsed = time.time() - start_time
-            if elapsed > timeout:
+            if attempt.is_last:
                 raise TimeoutError(
                     f"Workflow {workflow_id}/{run_id} did not complete "
-                    f"within {timeout}s (elapsed: {elapsed:.0f}s)"
+                    f"within {timeout}s (elapsed: {attempt.elapsed:.0f}s, "
+                    f"{attempt.number} attempt(s))"
                 )
 
-            time.sleep(interval)
+        raise AssertionError(  # pragma: no cover — the is_last branch fires first
+            f"poll loop for workflow {workflow_id}/{run_id} ended without a "
+            "final attempt"
+        )
 
     def _get_nested_value(self, data: dict[str, Any], path: str) -> Any:
         """Get a value from a nested dictionary using dot notation.

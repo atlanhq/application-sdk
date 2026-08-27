@@ -15,6 +15,7 @@ import httpx
 import pytest
 
 from application_sdk.testing.harness.cluster._portforward import (
+    PortForward,
     _wait_for_port,
     kube_http_call,
     port_forward,
@@ -416,3 +417,157 @@ async def test_no_override_leaves_the_sessions_own_timeout_in_place():
     assert request.await_args is not None
     assert "timeout" not in request.await_args.kwargs
     assert session.timeout == 11.0
+
+
+# ---------------------------------------------------------------------------
+# The tunnel's address, for a client this module cannot make the call for
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_address_opens_the_tunnel_and_names_its_near_end():
+    """``temporalio`` speaks gRPC and takes a bare ``host:port``, so the Temporal
+    reader needs the tunnel's near end rather than an HTTP session over it."""
+    pf_proc = _kubectl_proc()
+
+    with (
+        patch(_STUB_PORT, return_value=54321),
+        patch("asyncio.create_subprocess_exec", return_value=pf_proc) as mock_exec,
+        patch(_STUB_WAIT, new=AsyncMock()),
+    ):
+        async with port_forward("ns", "svc", 7233) as session:
+            assert await session.address() == "127.0.0.1:54321"
+
+    assert mock_exec.call_count == 1
+    pf_proc.terminate.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_the_address_and_a_request_share_one_tunnel():
+    """The reason ``address`` is on this class rather than a second
+    implementation elsewhere: a session that is asked for both opens one
+    ``kubectl`` process, not two."""
+    pf_proc = _kubectl_proc()
+    mock_response = MagicMock(spec=httpx.Response)
+
+    with (
+        patch(_STUB_PORT, return_value=54321),
+        patch("asyncio.create_subprocess_exec", return_value=pf_proc) as mock_exec,
+        patch(_STUB_WAIT, new=AsyncMock()),
+        patch("httpx.AsyncClient.request", new=AsyncMock(return_value=mock_response)),
+    ):
+        async with port_forward("ns", "svc", 7233) as session:
+            address = await session.address()
+            await session.request("GET", "/status")
+            assert await session.address() == address
+
+    assert mock_exec.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_a_closed_session_reopens_on_the_next_address_call():
+    """``aclose`` clears the port as well as the client, so a reused session does
+    not hand out the address of a tunnel it has already terminated."""
+    procs = [_kubectl_proc(), _kubectl_proc()]
+
+    with (
+        patch(_STUB_PORT, side_effect=[54321, 54322]),
+        patch("asyncio.create_subprocess_exec", side_effect=procs),
+        patch(_STUB_WAIT, new=AsyncMock()),
+    ):
+        async with port_forward("ns", "svc", 7233) as session:
+            assert await session.address() == "127.0.0.1:54321"
+            await session.aclose()
+            assert await session.address() == "127.0.0.1:54322"
+
+
+@pytest.mark.asyncio
+async def test_an_address_on_a_tunnel_that_never_opens_does_not_leak_the_process():
+    """Same leak the HTTP path guards: the ``kubectl`` child is already running by
+    the time the readiness wait gives up."""
+    pf_proc = _kubectl_proc()
+
+    with (
+        patch(_STUB_PORT, return_value=54321),
+        patch("asyncio.create_subprocess_exec", return_value=pf_proc),
+        patch(_STUB_WAIT, new=AsyncMock(side_effect=TimeoutError("never ready"))),
+        pytest.raises(TimeoutError),
+    ):
+        async with port_forward("ns", "svc", 7233) as session:
+            await session.address()
+
+    pf_proc.terminate.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_first_calls_spawn_exactly_one_tunnel():
+    """Both lazy-open entry points serialise on the same lock.
+
+    `address()` and `request()` are two separate doors onto one spawn, so a guard
+    covering only the HTTP one lets them race into two `kubectl` processes and
+    leak the unreferenced one — the leak FND-241 closed, reopened by FND-247
+    adding the second door.
+
+    `_wait_for_port` is replaced with a function that actually yields, and that
+    is the whole test. Patched with a bare `AsyncMock` it completes without ever
+    returning to the event loop, so `gather` runs each task start-to-finish and
+    the interleaving this exists to catch cannot occur — the test passes with the
+    lock removed. Verified by removing it: one real suspension point is the
+    difference between a regression test and a green line.
+    """
+    procs = [_kubectl_proc(), _kubectl_proc(), _kubectl_proc(), _kubectl_proc()]
+    mock_response = MagicMock(spec=httpx.Response)
+
+    async def _yielding_wait(*_args: Any, **_kwargs: Any) -> None:
+        await asyncio.sleep(0)
+
+    with (
+        patch(_STUB_PORT, side_effect=[54321, 54322, 54323, 54324]),
+        patch("asyncio.create_subprocess_exec", side_effect=procs) as mock_exec,
+        patch(_STUB_WAIT, new=_yielding_wait),
+        patch("httpx.AsyncClient.request", new=AsyncMock(return_value=mock_response)),
+    ):
+        async with port_forward("ns", "svc", 7233) as session:
+            await asyncio.gather(
+                session.address(),
+                session.request("GET", "/status"),
+                session.address(),
+                session.request("GET", "/status"),
+            )
+
+    assert mock_exec.call_count == 1, (
+        f"{mock_exec.call_count} kubectl processes spawned for one tunnel; "
+        "all but one are leaked"
+    )
+
+
+@pytest.mark.asyncio
+async def test_aclose_clears_both_fields_so_the_next_open_rebuilds():
+    """`aclose` has to clear the port as well as the client.
+
+    Deliberately NOT a claim that the spawn/client window is closed — this is
+    sequential, and a sequential test cannot demonstrate a race. What it pins is
+    the invariant the window fix relies on: after `aclose`, neither `_client` nor
+    `_local_port` survives, so nothing can point a fresh client at a terminated
+    process by reading a stale port.
+    """
+    procs = [_kubectl_proc(), _kubectl_proc()]
+
+    with (
+        patch(_STUB_PORT, side_effect=[54321, 54322]),
+        patch("asyncio.create_subprocess_exec", side_effect=procs),
+        patch(_STUB_WAIT, new=AsyncMock()),
+    ):
+        session = PortForward("ns", "svc", 7233)
+        client = await session._opened()
+        assert str(client.base_url) == "http://127.0.0.1:54321"
+        assert session._local_port == 54321
+
+        await session.aclose()
+        assert session._client is None
+        assert session._local_port is None
+
+        rebuilt = await session._opened()
+        assert str(rebuilt.base_url) == "http://127.0.0.1:54322"
+        assert session._local_port == 54322
+        await session.aclose()

@@ -325,19 +325,22 @@ unavailable in a non-declaring repo: CI can report findings that nobody can then
 remediate locally or in-PR. A dev-group declaration restores the loop and never reaches
 the runtime image, because dev groups are not installed by a production sync (FND-419).
 The declaration alone is not enough, which is why this rule also grades its shape: the
-D-series leg resolves the suite out of the app's uv.lock, so an exact pin ('==0.13.0'),
-a '~=' compatible-release pin, or a one-sided '>=0.17.0' either freezes the ruleset
-grading the repo or leaves it unbounded, and a pyproject-only edit that never reaches
-uv.lock leaves the console script absent in CI, which installs from the lock. A floor
-plus the 1.0.0 major boundary, locked, is the one shape that keeps the repo on a current
-ruleset without admitting an unreviewed major. Customer impact: a repo whose ruleset is
-frozen silently stops being graded by every rule added since that version — including
-the ones that describe guaranteed runtime failures, such as a transform path that raises
-ImportError on every record (D010) or a Dapr component fetch that rate-limits under CI
-concurrency (D009). The app then ships a defect that a current ruleset would have
-blocked, and because the gate reported success the first thing that reveals it is the
-customer's own failed crawl. Where a declaration is missing outright, the remediation
-loop cannot run in the repo at all, so nothing can be fixed there even once it is found.
+D-series leg resolves the suite out of the app's uv.lock, so an exact pin ('==0.13.0')
+or a '~=' compatible-release pin freezes the ruleset grading the repo, a bare '>=0.17.0'
+leaves it unbounded, and a pyproject-only edit that never reaches uv.lock leaves the
+console script absent in CI, which installs from the lock. A cap at the 1.0.0 major
+boundary, locked, is what keeps the repo on a current ruleset without admitting an
+unreviewed major. A floor is not required — it neither freezes nor unfreezes the
+ruleset, because resolution takes the newest version under the cap either way — so a
+plain '<=1.0.0' and a two-sided '>=0.17.0,<1.0.0' are both accepted. Customer impact: a
+repo whose ruleset is frozen silently stops being graded by every rule added since that
+version — including the ones that describe guaranteed runtime failures, such as a
+transform path that raises ImportError on every record (D010) or a Dapr component fetch
+that rate-limits under CI concurrency (D009). The app then ships a defect that a current
+ruleset would have blocked, and because the gate reported success the first thing that
+reveals it is the customer's own failed crawl. Where a declaration is missing outright,
+the remediation loop cannot run in the repo at all, so nothing can be fixed there even
+once it is found.
 
 Every app should declare `atlan-application-sdk-conformance` in a dev/test dependency
 array, with a specifier that can float, and have it resolved in `uv.lock`.  At most one
@@ -350,13 +353,16 @@ separately,    because a floating runtime entry satisfies every other check    (
 console script really does spawn) while shipping a    dev-only tool in the runtime
 image.  Reported even when a    correct dev-group entry also exists: the runtime line
 still    has to be deleted.  The fix is to move the entry, not to    add a second one.
-3. **Specifier can float** — a floor *and* an upper bound, and    not a pin.
-`==0.13.0`, `===0.13.0`, `~=0.17.0`, a bare    `>=0.17.0` and a bare `<1.0.0` are all
-rejected. 4. **Present in** `uv.lock` — checked only when a lock exists    and parses,
-so a missing or malformed lock never manufactures    a finding.
+3. **Specifier can float** — an upper bound, and not a pin.    `==0.13.0`, `===0.13.0`,
+`~=0.17.0` and a bare    `>=0.17.0` are all rejected.  A floor is optional: it does
+not change which version resolves under the cap, so both    `<=1.0.0` and
+`>=0.17.0,<1.0.0` are accepted. 4. **Present in** `uv.lock` — checked only when a lock
+exists    and parses, so a missing or malformed lock never manufactures    a finding.
 
-The canonical form is `[dependency-groups].dev`, matching `atlan-app-template`:
-`"atlan-application-sdk-conformance>=0.17.0,<1.0.0"`.
+The canonical form is `[dependency-groups].dev`:
+`"atlan-application-sdk-conformance<=1.0.0"`.  A repo already carrying the earlier
+two-sided form (`">=0.17.0,<1.0.0"`, which `atlan-app-template` ships) conforms as it
+stands and needs no edit.
 
 The package is not needed at runtime and must never be added to `[project.dependencies]`
 — dev groups are excluded from a production sync, so the declaration cannot reach the

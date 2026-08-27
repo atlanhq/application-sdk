@@ -432,11 +432,102 @@ def _unused():  # pragma: no cover — the factory is never called by these asse
     raise AssertionError("the protocol checks are structural, not behavioural")
 
 
+async def test_the_temporal_readers_are_real() -> None:
+    """FND-247 filled the ``temporal`` stub: the Protocol had no backend at all,
+    and ``NoWorkerOnTaskQueueError`` was inferred from three minutes of silence
+    rather than read.
+
+    Asserted here for the reason child E's deletion is: what belongs in the
+    scaffold's own test file is the proof that the package no longer holds a stub
+    under these names, so a revert cannot quietly restore one.
+    """
+    from application_sdk.testing.harness import temporal
+
+    assert isinstance(
+        temporal.TemporalServiceReader(connect=_unused), temporal.TemporalReader
+    )
+    for name in ("frontend_connection", "port_forwarded_connection"):
+        assert callable(getattr(temporal, name))
+
+    # The nullable twin is deliberately *not* on the Protocol: a caller waiting
+    # for an AE-dispatched execution to appear needs absence as a value, and a
+    # caller that already has an id wants the raise.
+    assert not hasattr(temporal.TemporalReader, "find_workflow_status")
+    assert callable(temporal.TemporalServiceReader.find_workflow_status)
+
+
+async def test_the_queue_starter_is_real() -> None:
+    """FND-246 filled one of ``starters``' three stubs. Asserted here for the
+    reason the temporal and cluster landings are: what belongs in the scaffold's
+    own test file is the proof that the package no longer holds a stub under this
+    name, so a revert cannot quietly restore one.
+
+    The queue name is checked here too, because the spec is where the check
+    lives and a stub restored *behind* a still-validating spec would be the
+    confusing shape — the construction would fail the same way while nothing
+    dispatched.
+    """
+    from application_sdk.testing.harness import starters
+
+    with pytest.raises(starters.UnusableTaskQueueError):
+        starters.QueueWorkflowSpec(
+            workflow_type="w", task_queue="atlan-{app_name}-{deployment_name}"
+        )
+
+    spec = starters.QueueWorkflowSpec.for_deployment(
+        workflow_type="w", app_name="hello-world", deployment_name="default"
+    )
+    assert spec.task_queue == "atlan-hello-world-default"
+
+    # Reaches a real dispatch rather than a `HarnessNotBuiltError`: the
+    # connection's client is deliberately not one, so the failure proves the stub
+    # is gone without standing up a frontend. `HarnessNotBuiltError` is a
+    # `NotImplementedError`, which `AttributeError` is not.
+    from application_sdk.testing.harness.temporal import TemporalConnection
+
+    with pytest.raises(AttributeError):
+        await starters.start_on_task_queue(
+            spec,
+            connection=TemporalConnection(
+                client=object(),  # type: ignore[arg-type]
+                namespace="default",
+                address="127.0.0.1:7233",
+            ),
+        )
+
+
+def test_the_temporal_readers_need_no_extra() -> None:
+    """FND-247's amendment expected ``temporalio`` behind the ``[workflows]``
+    extra, with the readers import-guarded. It is a *core* dependency since v3.1
+    and ``[workflows]`` is an alias resolving to it — so unlike ``cluster``'s
+    ``harness`` extra there is nothing to guard, and this pins the correction
+    rather than leaving it in a PR description."""
+    import tomllib
+    from pathlib import Path
+
+    pyproject = Path(__file__).resolve().parents[4] / "pyproject.toml"
+    with pyproject.open("rb") as handle:
+        project = tomllib.load(handle)["project"]
+
+    assert any(dep.startswith("temporalio") for dep in project["dependencies"])
+    assert any(
+        dep.startswith("temporalio")
+        for dep in project["optional-dependencies"]["workflows"]
+    )
+
+
 async def test_every_remaining_stub_names_its_child_issue() -> None:
+    """One stub left, and it still names the child that fills it in.
+
+    Child G (FND-243) landed ``evidence.redact``, ``teardown.purge_connection``
+    and ``starters.start_via_automation_engine``, so those three moved out of
+    this list and into their own tests. ``start_via_app_handler`` moves with the
+    cluster reader in child E, and until then this is what keeps its
+    ``HarnessNotBuiltError`` carrying an issue rather than a bare
+    ``NotImplementedError`` an auditor would have to grep prose for.
+    """
     from application_sdk.testing.harness import starters
     from application_sdk.testing.harness.cluster import HttpRequest, HttpResponse
-    from application_sdk.testing.harness.evidence import EvidenceBundle, redact
-    from application_sdk.testing.harness.teardown import purge_connection
 
     class _Reader:
         """Shaped like a ClusterReader so the call is typed, not bypassed."""
@@ -453,18 +544,7 @@ async def test_every_remaining_stub_names_its_child_issue() -> None:
         async def http(self, target, request: HttpRequest) -> HttpResponse:
             raise AssertionError("the stub must raise before calling out")
 
-    for call in (lambda: redact(EvidenceBundle(label="x")),):
-        with pytest.raises(HarnessNotBuiltError) as caught:
-            call()
-        assert caught.value.issue == "FND-224"
-        assert caught.value.operation
-
     for coro in (
-        purge_connection("default/x/1"),
-        starters.start_via_automation_engine({}),
-        starters.start_on_task_queue(
-            starters.QueueWorkflowSpec(workflow_type="w", task_queue="q")
-        ),
         starters.start_via_app_handler(
             starters.HttpWorkflowSpec(
                 target=ServiceTarget(namespace="ns", service="svc", port=8000),
@@ -477,6 +557,35 @@ async def test_every_remaining_stub_names_its_child_issue() -> None:
             await coro
         assert caught.value.issue == "FND-224"
         assert caught.value.operation
+
+
+async def test_child_g_left_no_stub_behind() -> None:
+    """The three child-G surfaces reach real work, not a ``HarnessNotBuiltError``.
+
+    Same shape as the queue starter's own check: each is driven with an argument
+    that cannot possibly work, so the failure proves the stub is gone without
+    standing up a tenant. ``HarnessNotBuiltError`` is a ``NotImplementedError``,
+    which none of these are — so a regression that reinstated a stub fails here
+    rather than passing as "it raised something".
+    """
+    from application_sdk.testing.harness import starters
+    from application_sdk.testing.harness.evidence import EvidenceBundle, redact
+    from application_sdk.testing.harness.teardown import PurgeReport, purge_connection
+
+    assert redact(EvidenceBundle(label="x")) == EvidenceBundle(label="x")
+
+    # `purge_connection` reports rather than raises, on every path — so "the stub
+    # is gone" is a *returned report*, not an exception. A reinstated stub would
+    # raise `HarnessNotBuiltError` out of this call and fail here.
+    report = await purge_connection(object(), "default/x/1")  # type: ignore[arg-type]
+    assert isinstance(report, PurgeReport)
+    assert report.errors and not report.complete
+
+    with pytest.raises(AttributeError):
+        await starters.start_via_automation_engine(
+            starters.AEWorkflowSpec(name="x"),
+            client=object(),  # type: ignore[arg-type]
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -519,3 +628,31 @@ def test_the_package_declares_all_so_the_manifest_extractor_finds_it() -> None:
 
     assert "run_sync" in harness.__all__
     assert all(hasattr(harness, name) for name in harness.__all__)
+
+
+def test_importing_the_harness_does_not_require_pytest() -> None:
+    """``fixtures`` is child I's pytest layer, and the package must not import it.
+
+    Static, not a runtime probe, because a runtime one cannot see the difference
+    once this test module has already imported ``fixtures`` itself. The property
+    is worth pinning rather than trusting: pytest is not a runtime dependency of
+    this SDK, so a convenience re-export from the package ``__init__`` would make
+    ``import application_sdk.testing.harness`` fail in a production process — and
+    the failure would surface as an ``ImportError`` naming a module nobody asked
+    for.
+    """
+    import ast
+    from pathlib import Path
+
+    import application_sdk.testing.harness as harness_pkg
+
+    source = Path(str(harness_pkg.__file__)).read_text(encoding="utf-8")
+    imported = {
+        node.module
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.ImportFrom) and node.module
+    }
+    assert "application_sdk.testing.harness.fixtures" not in imported
+    # The one entry point a composer registers, named in the module map so the
+    # import path is discoverable without reading this test.
+    assert "harness.fixtures" in (harness_pkg.__doc__ or "")

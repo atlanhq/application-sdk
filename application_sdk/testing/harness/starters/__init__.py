@@ -7,169 +7,77 @@ new way to start work would widen both. As three functions, a base class simply
 calls the one it wants, and a fourth way to start work (a cluster mutation, a
 chaos injection) is a fourth function with nothing in the middle to widen.
 
-**Only one of the three exists today.** ``testing/e2e/workflows.run_workflow`` is
-:func:`start_via_app_handler`: an HTTP ``POST /api/v1/workflows`` to the app's
-*handler Service* through an ephemeral ``kubectl port-forward``. It never touches
-a Temporal task queue. :func:`start_via_automation_engine` is the AE submit,
-lifting from ``testing/e2e/client.py``. :func:`start_on_task_queue` is **new work
-on both sides** — nothing in either repo starts a workflow by dispatching
-directly to a queue — and it is the runtime suite's *first* scenario, because
-everything else depends on it working.
+**Two of the three are real.** :func:`start_on_task_queue` dispatches straight
+onto a Temporal task queue (FND-246) — new work on both sides of this project,
+not a lift: nothing in this SDK or in ``atlanhq/app-runtime-test-suite`` started
+a workflow that way before, and it is the runtime suite's *first* scenario
+because everything else depends on it working. See
+:mod:`application_sdk.testing.harness.starters._queue` for the correction to the
+record that scoping it turned on.
 
-:func:`start_via_automation_engine` lands in child G on FND-224.
-:func:`start_via_app_handler` moves with the cluster reader in child E.
-:func:`start_on_task_queue` is a separate issue, outside FND-224.
+:func:`start_via_automation_engine` is the opposite kind of module: a plain
+extraction (child G, FND-243) of ``BaseE2ETest._bootstrap_workflow`` plus the
+submit half of ``run_full_dag``, so it *can* be pinned against the code it came
+from. What it adds is nothing; what it removes is the last part of the AE path
+that only existed inside a base class.
+
+One is still a stub. ``testing/e2e/workflows.run_workflow`` is
+:func:`start_via_app_handler`: an HTTP ``POST /api/v1/workflows`` to the app's
+*handler Service* through an ephemeral ``kubectl port-forward``, which never
+touches a task queue. It moves with the cluster reader in child E.
+
+Module map:
+
+``_specs``
+    The specs and handles — three pairs, no shared base, plus the submit
+    retry's typed sizing.
+``_queue``
+    :func:`start_on_task_queue`, and where its client comes from.
+``_ae``
+    :func:`start_via_automation_engine`, and the four-write sequence it owns.
+``_errors``
+    The three leaves a dispatch can raise.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass, field
-
 from application_sdk.testing.harness._errors import HarnessNotBuiltError
-from application_sdk.testing.harness.cluster import ClusterReader, ServiceTarget
+from application_sdk.testing.harness.cluster import ClusterReader
+from application_sdk.testing.harness.starters._ae import start_via_automation_engine
+from application_sdk.testing.harness.starters._errors import (
+    UnusableTaskQueueError,
+    WorkflowStartConflictError,
+    WorkflowStartFailedError,
+)
+from application_sdk.testing.harness.starters._queue import start_on_task_queue
+from application_sdk.testing.harness.starters._specs import (
+    AERunHandle,
+    AEWorkflowSpec,
+    HttpRunHandle,
+    HttpWorkflowSpec,
+    QueueWorkflowSpec,
+    SubmitRetry,
+    WorkflowRunHandle,
+)
 
 __all__ = [
+    # Specs and handles
     "AERunHandle",
+    "AEWorkflowSpec",
     "HttpRunHandle",
     "HttpWorkflowSpec",
     "QueueWorkflowSpec",
+    "SubmitRetry",
     "WorkflowRunHandle",
+    # The three ways to start work
     "start_on_task_queue",
     "start_via_app_handler",
     "start_via_automation_engine",
+    # Leaves
+    "UnusableTaskQueueError",
+    "WorkflowStartConflictError",
+    "WorkflowStartFailedError",
 ]
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class AERunHandle:
-    """A run started through the Automation Engine.
-
-    Lives here with the other two run handles rather than in
-    :mod:`application_sdk.testing.harness.automation_engine`, where it was first
-    sketched. Child F moved the AE reader over and found no use for it: the
-    submit returns AE's run id, the slug is the caller's own, and giving that
-    pair a name inside the reader would have been a fourth vocabulary for the
-    same reading. It *is* a starter handle, and the module whose whole subject
-    is "three ways to start work, three unrelated handles" is where the third
-    one belongs.
-
-    Attributes:
-        workflow_slug: AE's slug for the workflow the run belongs to.
-        run_id: AE's identifier for this run.
-    """
-
-    workflow_slug: str
-    run_id: str
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class QueueWorkflowSpec:
-    """A workflow to dispatch straight onto a Temporal task queue.
-
-    Attributes:
-        workflow_type: Registered workflow type name.
-        task_queue: Queue to dispatch on. Not derived here: the derivation is
-            :func:`application_sdk.common.task_queue.derive_task_queue`, and
-            re-deriving it in the harness would add a sixth independent
-            derivation of the seam this project is trying to collapse.
-        workflow_id: Explicit workflow ID. ``None`` mints one.
-        argument: The workflow's single input argument.
-    """
-
-    workflow_type: str
-    task_queue: str
-    workflow_id: str | None = None
-    argument: Mapping[str, object] = field(default_factory=dict)
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class HttpWorkflowSpec:
-    """A workflow to start by calling the app's own handler Service.
-
-    Attributes:
-        target: Handler Service and port to POST to.
-        workflow_name: Workflow name the handler routes on.
-        body: Request body.
-    """
-
-    target: ServiceTarget
-    workflow_name: str
-    body: Mapping[str, object] = field(default_factory=dict)
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class WorkflowRunHandle:
-    """A run started directly on a task queue.
-
-    Attributes:
-        workflow_id: The workflow ID that was started.
-        run_id: Temporal's run ID for this execution.
-        task_queue: Queue it was dispatched on, echoed back so a caller can
-            assert the queue it *meant* to use is the queue it got.
-    """
-
-    workflow_id: str
-    run_id: str
-    task_queue: str
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class HttpRunHandle:
-    """A run started through the app's handler Service.
-
-    Attributes:
-        workflow_id: The workflow ID the handler reports. The handler's response
-            is the only identifier available on this path — there is no run ID
-            until the workflow is looked up in Temporal.
-    """
-
-    workflow_id: str
-
-
-async def start_via_automation_engine(spec: Mapping[str, object]) -> AERunHandle:
-    """Start a run through the Automation Engine.
-
-    Args:
-        spec: The AE submit payload, as
-            :func:`application_sdk.testing.e2e.payload.build_ae_payload` builds it.
-
-    Returns:
-        The AE run handle.
-
-    Raises:
-        HarnessNotBuiltError: Always — implementation is child G on FND-224.
-    """
-    raise HarnessNotBuiltError(
-        message="start_via_automation_engine is not implemented yet",
-        operation="start_via_automation_engine",
-        reason="child G on FND-224",
-        issue="FND-224",
-        component="harness_starters",
-    )
-
-
-async def start_on_task_queue(spec: QueueWorkflowSpec) -> WorkflowRunHandle:
-    """Start a workflow by dispatching it directly onto a Temporal task queue.
-
-    Args:
-        spec: What to start, and where.
-
-    Returns:
-        The run handle.
-
-    Raises:
-        HarnessNotBuiltError: Always — new work, tracked as a separate issue
-            outside FND-224. Nothing in the SDK or the runtime suite starts a
-            workflow this way today.
-    """
-    raise HarnessNotBuiltError(
-        message="start_on_task_queue is not implemented yet",
-        operation="start_on_task_queue",
-        reason="new work on both sides, tracked as a separate issue outside FND-224",
-        issue="FND-224",
-        component="harness_starters",
-    )
 
 
 async def start_via_app_handler(

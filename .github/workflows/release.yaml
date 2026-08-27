@@ -99,25 +99,41 @@ jobs:
       - name: Commit version bump and changelog
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TARGET_BRANCH: ${{ github.ref_name }}
         run: |
+          set -euo pipefail
           git config --global user.name 'atlan-ci'
           git config --global user.email 'it@atlan.com'
 
-          branch_name="bump-version-${{ github.ref_name }}"
-          git checkout -b $branch_name
+          branch_name="bump-version-${TARGET_BRANCH}"
+          git checkout -b "$branch_name"
 
           git add pyproject.toml uv.lock CHANGELOG.md application_sdk/version.py
-          git commit -m "chore: bump version to ${{ env.NEW_VERSION }}"
-          git push origin $branch_name --force
+          git commit -m "chore: bump version to ${NEW_VERSION}"
+          git push origin "$branch_name" --force
 
-          gh pr create --base ${{ github.ref_name }} --title "Bump version to ${{ env.NEW_VERSION }}" --body "Automated version bump after merge to main.
+          cat > "${RUNNER_TEMP}/bump-pr-body.md" <<EOF
+          Automated version bump after merge to ${TARGET_BRANCH}.
 
-            This PR updates:
-            - pyproject.toml
-            - application_sdk/version.py
-            - CHANGELOG.md
+          This PR updates:
+          - pyproject.toml
+          - uv.lock
+          - application_sdk/version.py
+          - CHANGELOG.md
 
-            Version: ${{ env.CURRENT_VERSION }} → ${{ env.NEW_VERSION }}" --label "release" || \
-            echo "PR already exists for bump-version-${{ github.ref_name }}, skipping creation."
+          Version: ${CURRENT_VERSION} → ${NEW_VERSION}
+          EOF
 
-          # gh pr merge --squash --admin
+          # Upsert rather than create-or-skip. The bump branch is fixed and
+          # force-pushed on each merge to main, so a bump PR that stays open
+          # keeps accumulating commits — and the old `|| echo "already exists"`
+          # left its title and body pinned to the first run's version while the
+          # diff moved on. See upsert_release_pr.py; it also re-attaches the
+          # `release` label, which tag-and-release.yaml gates on.
+          python3 .github/scripts/upsert_release_pr.py \
+            --repo "${GITHUB_REPOSITORY}" \
+            --base "${TARGET_BRANCH}" \
+            --head "$branch_name" \
+            --title "Bump version to ${NEW_VERSION}" \
+            --body-file "${RUNNER_TEMP}/bump-pr-body.md" \
+            --label "release"

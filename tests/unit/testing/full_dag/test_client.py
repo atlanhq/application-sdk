@@ -7,10 +7,12 @@ sync ``AEWorkflowClient`` facade.
 
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 import pytest
 
+from application_sdk.testing.e2e.client import _FORBIDDEN_ATTEMPTS_REMOVAL_VERSION
 from application_sdk.testing.full_dag._errors import (
     AtlanApiHttpError,
     AtlanApiResponseInvariantError,
@@ -225,3 +227,77 @@ def test_poll_atlas_for_connection_bails_after_not_found_streak(
             )
             is False
         )
+
+
+def test_max_forbidden_attempts_says_it_does_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The vestigial knob now announces itself rather than being ``del``'d unread.
+
+    The poll reads the search index, whose ACL is permissive, so a 403 never
+    surfaces and there is no 403 budget to bound. Deleting the argument unread is
+    the shape that lets a caller keep passing a number and believe it does
+    something; FND-240 makes it say so, with a named removal version so the
+    warning is something to act on.
+    """
+    client, _ = _make_client(monkeypatch, [])
+    monkeypatch.setattr(
+        client, "_atlas", lambda: fake_atlas(lambda _request: FakeSearchResult(count=1))
+    )
+    with fake_clock(), pytest.warns(DeprecationWarning, match="has no effect"):
+        assert (
+            client.poll_atlas_for_connection(
+                "default/mysql/test",
+                interval_seconds=1,
+                timeout_seconds=10,
+                max_forbidden_attempts=5,
+            )
+            is True
+        )
+
+
+def test_omitting_the_vestigial_knob_is_silent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Why the default became ``None`` rather than staying ``5``: with a real
+    default there is no way to tell "the caller asked for this" from "the
+    signature did", and every single call would warn."""
+    client, _ = _make_client(monkeypatch, [])
+    monkeypatch.setattr(
+        client, "_atlas", lambda: fake_atlas(lambda _request: FakeSearchResult(count=1))
+    )
+    with fake_clock(), warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        assert (
+            client.poll_atlas_for_connection(
+                "default/mysql/test", interval_seconds=1, timeout_seconds=10
+            )
+            is True
+        )
+
+
+def test_the_vestigial_knob_names_its_removal_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The notice spells "v4.0" literally; this is what stops that drifting.
+
+    Conformance rule B002 reads a deprecation notice as written in the source, so
+    interpolating ``_FORBIDDEN_ATTEMPTS_REMOVAL_VERSION`` would make a compliant
+    deprecation look like one that never named a removal version. Spelling it
+    twice needs one assertion tying them together — the same shape ``AppConfig``'s
+    own removal-version test uses.
+    """
+    client, _ = _make_client(monkeypatch, [])
+    monkeypatch.setattr(
+        client, "_atlas", lambda: fake_atlas(lambda _request: FakeSearchResult(count=1))
+    )
+    with fake_clock(), pytest.warns(DeprecationWarning) as caught:
+        client.poll_atlas_for_connection(
+            "default/mysql/test",
+            interval_seconds=1,
+            timeout_seconds=10,
+            max_forbidden_attempts=5,
+        )
+    message = str(caught[0].message)
+    assert f"removed in v{_FORBIDDEN_ATTEMPTS_REMOVAL_VERSION}" in message
+    assert "use max_not_found_attempts instead" in message

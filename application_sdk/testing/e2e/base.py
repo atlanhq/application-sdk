@@ -53,6 +53,7 @@ from application_sdk.common.task_queue import (
     derive_task_queue,
 )
 from application_sdk.contracts.types import ConnectionRef
+from application_sdk.errors.base import safe_traceback
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.e2e._errors import (
     DAGProgressStalledError,
@@ -65,6 +66,7 @@ from application_sdk.testing.e2e._errors import (
     ProgressWatchdogUnreachableError,
     SeededConnectionNotSearchableError,
     UnknownConnectorTypeError,
+    WorkerNotHealthyError,
 )
 from application_sdk.testing.e2e._manifest_identity import (
     DagNodeIdentity,
@@ -88,6 +90,12 @@ from application_sdk.testing.e2e.payload import (
 )
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
 from application_sdk.testing.harness._poll import until_deadline
+from application_sdk.testing.harness.evidence import (
+    EvidenceBundle,
+    secrets_from_environment,
+    write_bundle,
+)
+from application_sdk.testing.harness.expectations import Finding
 
 logger = get_logger(__name__)
 
@@ -456,6 +464,15 @@ class BaseE2ETest:
     # universal fields and the subclass's extra fields fall to their defaults,
     # so no ``_mustache_substitutions()`` override is needed just to add params.
     substitutions_class: ClassVar[type[MustacheSubstitutions]] = MustacheSubstitutions
+
+    # Where a failed run writes its redacted evidence bundle, relative to the
+    # pytest working directory. ``results/`` is deliberate rather than arbitrary:
+    # it is the directory the shared ``sdr-e2e`` composite already points
+    # ``upload-artifact`` at, so a bundle written here becomes a CI artifact with
+    # no workflow change and lands beside the container log that action dumps.
+    # A suite running outside that action gets a local directory and the same
+    # files. Set to "" to write nothing.
+    evidence_dir: ClassVar[str] = "results/e2e-evidence"
 
     ae_poll_interval_seconds: ClassVar[int] = 10
     ae_poll_timeout_seconds: ClassVar[int] = 600
@@ -1090,57 +1107,94 @@ class BaseE2ETest:
             )
 
         if probe is not None:
-            deadline = time.monotonic() + self.atlas_poll_timeout_seconds
-            attempts = 0
-            while True:
-                attempts += 1
-                try:
-                    probe()
-                except Exception as exc:
-                    if isinstance(exc, self._PROBE_NON_TRANSIENT_ERRORS):
-                        # A deterministic probe bug (a TypeError from a wrong
-                        # call signature, a config ValueError) will fail every
-                        # retry identically — burning the whole timeout before
-                        # surfacing. Re-raise immediately instead.
-                        logger.error(
-                            "e2e seed: probe write under %s raised %s, a "
-                            "non-transient error — failing fast rather than "
-                            "retrying until the %ds timeout",
-                            self.connection_qualified_name,
-                            type(exc).__name__,
-                            self.atlas_poll_timeout_seconds,
-                            exc_info=True,
-                        )
-                        raise
-                    if time.monotonic() >= deadline:
-                        logger.error(
-                            "e2e seed: probe write under %s still failing after "
-                            "%d attempt(s) / %ds — a fresh connection 403s child "
-                            "writes until its access policies go live, so this "
-                            "means provisioning never completed",
-                            self.connection_qualified_name,
-                            attempts,
-                            self.atlas_poll_timeout_seconds,
-                            exc_info=True,
-                        )
-                        raise
-                    logger.info(
-                        "e2e seed: probe write under %s not yet permitted "
-                        "(attempt %d) — connection policies not live; retrying",
-                        self.connection_qualified_name,
-                        attempts,
-                    )
-                    time.sleep(self.atlas_poll_interval_seconds)
-                else:
-                    logger.info(
-                        "e2e seed: probe write under %s succeeded after %d "
-                        "attempt(s) — connection policies are live",
-                        self.connection_qualified_name,
-                        attempts,
-                    )
-                    break
+            self._retry_seed_probe(probe)
 
         return self.connection_qualified_name
+
+    def _retry_seed_probe(self, probe: Callable[[], object]) -> None:
+        """Retry *probe* until it stops raising, or the Atlas budget runs out.
+
+        The loop is
+        :func:`~application_sdk.testing.harness._poll.until_deadline` (FND-240),
+        which is what removes the last hand-rolled ``time.monotonic() +
+        timeout`` deadline in this file — and with it the off-by-one every one of
+        them shared: the budget check sat *after* the probe, so the loop slept a
+        whole ``atlas_poll_interval_seconds`` past its stated timeout before
+        noticing. ``attempt.is_last`` makes that decision before the sleep.
+
+        Not :func:`~application_sdk.testing.harness.waiting.poll_until`, for one
+        reason: ``probe`` is a *synchronous* callable a connector suite supplies,
+        and the primitive is async by construction (decision D1). Reaching it
+        from here would mean either blocking the bridge's loop inside a
+        suite-supplied write or offloading it to a thread — both workarounds
+        built to be deleted when child H moves the sync boundary up to this
+        class's public methods. Its three sibling loops in this file take the
+        same shape for the same reason.
+
+        Args:
+            probe: The representative child write. Its return value is ignored;
+                only whether it raises matters.
+
+        Raises:
+            Exception: Whatever *probe* last raised — immediately for a
+                non-transient error, or on the final attempt otherwise.
+                Propagated rather than swallowed: a suite whose seed never
+                became writable must fail, not run against a connection it
+                cannot populate.
+        """
+        for attempt in until_deadline(
+            self.atlas_poll_timeout_seconds,
+            self.atlas_poll_interval_seconds,
+            label=f"a permitted child write under {self.connection_qualified_name}",
+            # The per-attempt line below already reports progress; a generic
+            # "still waiting" heartbeat would duplicate it.
+            heartbeat_seconds=0,
+        ):
+            try:
+                probe()
+            except Exception as exc:
+                if isinstance(exc, self._PROBE_NON_TRANSIENT_ERRORS):
+                    # A deterministic probe bug (a TypeError from a wrong
+                    # call signature, a config ValueError) will fail every
+                    # retry identically — burning the whole timeout before
+                    # surfacing. Re-raise immediately instead.
+                    logger.error(
+                        "e2e seed: probe write under %s raised %s, a "
+                        "non-transient error — failing fast rather than "
+                        "retrying until the %ds timeout",
+                        self.connection_qualified_name,
+                        type(exc).__name__,
+                        self.atlas_poll_timeout_seconds,
+                        exc_info=True,
+                    )
+                    raise
+                if attempt.is_last:
+                    logger.error(
+                        "e2e seed: probe write under %s still failing after "
+                        "%d attempt(s) / %ds — a fresh connection 403s child "
+                        "writes until its access policies go live, so this "
+                        "means provisioning never completed",
+                        self.connection_qualified_name,
+                        attempt.number,
+                        self.atlas_poll_timeout_seconds,
+                        exc_info=True,
+                    )
+                    raise
+                # conformance: ignore[L006] one line per poll of an atlas_poll_interval_seconds loop (30s by default), not a hot loop; a seed that never becomes writable is diagnosed from how many attempts were refused and for how long
+                logger.info(
+                    "e2e seed: probe write under %s not yet permitted "
+                    "(attempt %d) — connection policies not live; retrying",
+                    self.connection_qualified_name,
+                    attempt.number,
+                )
+                continue
+            logger.info(
+                "e2e seed: probe write under %s succeeded after %d "
+                "attempt(s) — connection policies are live",
+                self.connection_qualified_name,
+                attempt.number,
+            )
+            return
 
     # ------------------------------------------------------------------
     # Subclass hooks — override these
@@ -1659,7 +1713,14 @@ class BaseE2ETest:
             description=f"Full-DAG e2e harness — {self.connector_short_name}",
         )
         logger.info("Created (or reused) AE workflow: name=%s slug=%s", name, slug)
-        time.sleep(3)
+        # AE has a brief indexing window before a fresh slug is queryable by
+        # /versions. This used to be an unconditional ``time.sleep(3)``, which is
+        # wrong in both directions — it charged every run three seconds it
+        # usually did not need, and was no help at all on the run where indexing
+        # took four. Now a real readiness read, advisory rather than a gate:
+        # ``create_version`` retries on 404 for exactly this reason, and that
+        # retry is what makes the sequence safe either way.
+        self.client.wait_for_slug(slug)
 
         extract_queue = self._extract_task_queue()
 
@@ -2315,13 +2376,22 @@ class BaseE2ETest:
         The no-source tier: when a connector has no extraction source in CI
         (``source_available`` False), the full-DAG e2e can't extract, so it
         proves the worker came up instead — a GET of ``/server/health`` returns
-        2xx. This is a hard assertion (raises ``AssertionError`` when the worker
-        never becomes healthy), so an unhealthy worker fails RED. The *caller*
-        (``test_full_dag_runs_end_to_end``) then raises ``pytest.skip`` so a
-        healthy worker reports SKIPPED, not a green pass — because the full DAG
-        was never exercised. The sdr-e2e CI action already gates on the same
+        2xx. This is a hard assertion, so an unhealthy worker fails RED. The
+        *caller* (``test_full_dag_runs_end_to_end``) then raises ``pytest.skip``
+        so a healthy worker reports SKIPPED, not a green pass — because the full
+        DAG was never exercised. The sdr-e2e CI action already gates on the same
         endpoint before pytest; re-asserting it here keeps a bare local
         ``pytest`` meaningful as a worker-deploy smoke check.
+
+        Raises:
+            WorkerNotHealthyError: The worker never answered 2xx inside
+                ``worker_health_timeout_seconds``. Typed since FND-240, which
+                names the bare ``AssertionError`` this used to raise: the last
+                failure seen is now a *field* rather than a fragment of a
+                sentence, and a refused connection and a 503 point at different
+                halves of a deployment. It **is** an ``AssertionError`` as well,
+                so a connector suite's existing ``except AssertionError`` — a
+                clause this method's own docstring invited — still catches it.
         """
         url = os.environ.get("E2E_WORKER_HEALTH_URL", self.worker_health_url)
         logger.info("Worker-up-only tier: probing %s", url)
@@ -2342,12 +2412,20 @@ class BaseE2ETest:
             except (urllib.error.URLError, OSError) as exc:
                 last_error = str(exc)
             if attempt.is_last:
-                raise AssertionError(
-                    f"App worker for {self.connector_short_name} did not become "
-                    f"healthy at {url} within {self.worker_health_timeout_seconds}s "
-                    f"({attempt.number} attempts, {attempt.elapsed:.0f}s elapsed; "
-                    f"last: {last_error}). No source is provisioned, so this run "
-                    "only checks that the worker deploys and serves /server/health."
+                raise WorkerNotHealthyError(
+                    message=(
+                        f"App worker for {self.connector_short_name} did not "
+                        f"become healthy at {url} within "
+                        f"{self.worker_health_timeout_seconds}s "
+                        f"({attempt.number} attempts, {attempt.elapsed:.0f}s "
+                        f"elapsed; last: {last_error}). No source is "
+                        "provisioned, so this run only checks that the worker "
+                        "deploys and serves /server/health."
+                    ),
+                    url=url,
+                    attempts=attempt.number,
+                    elapsed_seconds=attempt.elapsed,
+                    last_error=last_error,
                 )
 
     # ------------------------------------------------------------------
@@ -2408,7 +2486,31 @@ class BaseE2ETest:
         # here, under this test's own ephemeral QN so teardown purges it.
         self.seed_prerequisites()
 
-        outcome = self.run_full_dag()
+        # One wrapper around the run and the whole assertion ladder, rather than
+        # a collection call at each of the six exits. The exits are what a
+        # future assertion is added *between*, and an evidence hook per exit is
+        # one a new assertion silently does not get.
+        outcome: FullDAGOutcome | None = None
+        try:
+            outcome = self.run_full_dag()
+            self._assert_full_dag_outcome(outcome)
+        # conformance: ignore[E004] re-raised unchanged on the next line; this collects evidence for a failure it does not handle, and swallowing it would replace a real verdict with a green run
+        except Exception as failure:
+            self._collect_failure_evidence(failure, outcome)
+            raise
+
+    def _assert_full_dag_outcome(self, outcome: FullDAGOutcome) -> None:
+        """The assertion ladder, split out so one wrapper can cover all of it.
+
+        Args:
+            outcome: What the run produced.
+
+        Raises:
+            AssertionError: On the first unmet expectation, in the documented
+                order. Split from :meth:`test_full_dag_runs_end_to_end` purely so
+                the evidence wrapper there has one body to guard; the sequence
+                and the messages are unchanged.
+        """
         # The Connection clause only applies to an entrypoint that publishes
         # inventory. With expect_connection False the Atlas probes never ran, so
         # consulting connection_in_atlas here would fail every such run.
@@ -2476,3 +2578,140 @@ class BaseE2ETest:
                 "lineage-app + lineage-publish nodes reported success but "
                 "no lineage rows reached Atlas."
             )
+
+    # ------------------------------------------------------------------
+    # Evidence
+    # ------------------------------------------------------------------
+
+    def _collect_failure_evidence(
+        self, failure: BaseException, outcome: FullDAGOutcome | None
+    ) -> None:
+        """Write a redacted evidence bundle for a failed run.
+
+        Called on every path out of :meth:`test_full_dag_runs_end_to_end` that is
+        not a pass, including the ones where ``run_full_dag`` itself raised and
+        there is no outcome to describe — which are the runs that most need the
+        AE identity recorded somewhere a person can find it after the job is
+        gone.
+
+        Best-effort by construction, and that is not a hedge: this runs inside an
+        ``except`` block whose job is to re-raise a real verdict. A collector
+        that raised here would replace the failure being diagnosed with its own,
+        which is the exact miscue :meth:`teardown_method` is written to avoid.
+
+        **No pod logs on this path, and that is not an omission.** The connector
+        CI leg has no ``kubectl`` route into the tenant vcluster — that is the
+        same constraint that makes the AE submit the only tenant-facing probe of
+        the installed app pod — so the pod half of an evidence bundle is not
+        collectable from here. The container that *is* local is dumped by the CI
+        action into the same ``results/`` directory this writes into
+        (``sdr-container.log``), so the two land in one artifact.
+
+        Args:
+            failure: What went wrong. Its formatted traceback is written as an
+                artifact, secret-redacted like everything else.
+            outcome: The run's outcome when there was one, else ``None``.
+        """
+        if not self.evidence_dir:
+            return
+        try:
+            bundle = self._failure_evidence(failure, outcome)
+            written = write_bundle(
+                bundle,
+                Path(self.evidence_dir) / type(self).__name__,
+                secrets=secrets_from_environment(
+                    os.environ,
+                    # Not credential-shaped by name and not a credential by
+                    # value, but a tenant hostname identifies a customer
+                    # environment and this bundle is uploaded and retained.
+                    also=("ATLAN_BASE_URL",),
+                ),
+            )
+            if written:
+                logger.info(
+                    "e2e evidence: wrote %d file(s) under %s",
+                    len(written),
+                    Path(self.evidence_dir) / type(self).__name__,
+                )
+        # conformance: ignore[E004] evidence boundary — this runs inside an except block re-raising the real verdict, and a collector failure must never replace it
+        except Exception:
+            logger.warning(
+                "e2e evidence: could not write the failure bundle — the run's own "
+                "verdict is unaffected",
+                exc_info=True,
+            )
+
+    def _failure_evidence(
+        self, failure: BaseException, outcome: FullDAGOutcome | None
+    ) -> EvidenceBundle:
+        """Build the bundle for *failure*, from whatever the run got as far as.
+
+        Args:
+            failure: What went wrong.
+            outcome: The run's outcome when there was one, else ``None``.
+
+        Returns:
+            The bundle, unredacted — redaction is :func:`write_bundle`'s, at the
+            boundary that ships it.
+        """
+        findings = [
+            Finding(
+                subject=type(failure).__name__,
+                detail=str(failure),
+                expectation="full-dag e2e",
+            )
+        ]
+        readings: dict[str, object] = {
+            "connector": self.connector_short_name,
+            "entrypoint": self._resolved_entrypoint(),
+            "mode": self.mode.value,
+            "run_id": self.run_id,
+            "connection_qualified_name": getattr(self, "connection_qualified_name", ""),
+            "extract_task_queue": self._extract_task_queue(),
+            "seed_version": self._seed_version,
+        }
+        if outcome is not None:
+            ae_result = outcome.ae_result
+            readings.update(
+                {
+                    "ae_run_id": ae_result.run_id,
+                    "ae_workflow_slug": ae_result.workflow_slug,
+                    "ae_status": ae_result.status.value,
+                    # The per-node table is the single most-read part of a failed
+                    # leg, so it goes in the machine-readable half rather than
+                    # only into the rendered text below.
+                    "dag_nodes": [
+                        {
+                            "name": node.name,
+                            "status": node.status.value,
+                            "error_message": node.error_message,
+                            "duration_seconds": node.duration_seconds,
+                            # The queue the *seed* asked for, not a guarantee of
+                            # what ran — Heracles re-fetches the tenant's own
+                            # manifest at submit. See :class:`NodeDispatch`.
+                            "dispatch_requested_to": (
+                                dispatch.task_queue
+                                if (dispatch := self._node_dispatch.get(node.name))
+                                else None
+                            ),
+                        }
+                        for node in ae_result.nodes
+                    ],
+                    "connection_in_atlas": outcome.connection_in_atlas,
+                    "asset_counts": dict(outcome.asset_counts),
+                    "total_assets": outcome.total_assets,
+                    "lineage_present": outcome.lineage_present,
+                }
+            )
+        artifacts = {"traceback.txt": safe_traceback(failure)}
+        if outcome is not None:
+            artifacts["dag-nodes.txt"] = (
+                f"{self._dag_outcome_headline(outcome.ae_result)}\n"
+                f"{self._describe_dag_nodes(outcome.ae_result)}"
+            )
+        return EvidenceBundle(
+            label=f"{type(self).__name__} — {self.connector_short_name}",
+            findings=tuple(findings),
+            readings=readings,
+            artifacts=artifacts,
+        )
