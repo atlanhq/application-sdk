@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 
+from application_sdk.testing import fake_source
 from application_sdk.testing.fake_source import (
     CursorPage,
     FakeRequest,
@@ -51,6 +52,18 @@ def _request(
 def _json(url: str, **kwargs: Any) -> tuple[int, Any]:
     status, body, _ = _request(url, **kwargs)
     return status, json.loads(body) if body else None
+
+
+@pytest.fixture
+def warnings(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Capture the module logger's warnings without depending on the loguru sink."""
+    captured: list[str] = []
+
+    def record(message: str, *args: Any, **_kwargs: Any) -> None:
+        captured.append(message % args if args else message)
+
+    monkeypatch.setattr(fake_source.logger, "warning", record)
+    return captured
 
 
 @pytest.fixture
@@ -201,22 +214,16 @@ class TestCatchAllFastFourOhFour:
         assert list(fake.unmatched) == []
 
     def test_unmatched_is_logged(
-        self, fake: HttpFakeSource, caplog: pytest.LogCaptureFixture
+        self, fake: HttpFakeSource, warnings: list[str]
     ) -> None:
-        with caplog.at_level("WARNING", logger="application_sdk.testing.fake_source"):
-            _json(f"{fake.base_url}/api/absent")
-        assert "no route for GET /api/absent" in caplog.text
+        _json(f"{fake.base_url}/api/absent")
+        assert any("no route for" in message for message in warnings)
+        assert any("/api/absent" in message for message in warnings)
 
-    def test_warn_unmatched_can_be_silenced(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        source = HttpFakeSource(warn_unmatched=False)
-        with (
-            source,
-            caplog.at_level("WARNING", logger="application_sdk.testing.fake_source"),
-        ):
+    def test_warn_unmatched_can_be_silenced(self, warnings: list[str]) -> None:
+        with HttpFakeSource(warn_unmatched=False) as source:
             _json(f"{source.base_url}/api/absent")
-        assert caplog.text == ""
+        assert warnings == []
 
 
 class TestHandlerContract:
@@ -283,7 +290,7 @@ class TestHandlerContract:
         assert (status, body) == (200, payload)
 
     def test_handler_exception_becomes_a_500_not_a_dropped_connection(
-        self, caplog: pytest.LogCaptureFixture
+        self, warnings: list[str]
     ) -> None:
         def boom(_request: FakeRequest) -> Any:
             raise RuntimeError("synthetic handler bug")
@@ -293,6 +300,7 @@ class TestHandlerContract:
         assert status == 500
         assert payload is not None
         assert "synthetic handler bug" in payload["detail"]
+        assert any("raised" in message for message in warnings)
 
     def test_head_sends_no_body_but_still_answers(self) -> None:
         source = HttpFakeSource()

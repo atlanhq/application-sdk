@@ -49,7 +49,6 @@ from __future__ import annotations
 
 import base64
 import json
-import logging
 import re
 import threading
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
@@ -58,6 +57,8 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Self
 from urllib.parse import parse_qs, urlsplit
+
+from application_sdk.observability.logger_adaptor import get_logger
 
 __all__ = [
     "CursorPage",
@@ -72,7 +73,7 @@ __all__ = [
     "serve",
 ]
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _LOOPBACK = "127.0.0.1"
 _METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
@@ -424,6 +425,7 @@ class HttpFakeSource:
                     self.name,
                     route.pattern.pattern,
                     exc,
+                    exc_info=True,
                 )
                 return FakeResponse.json_(
                     {"error": "fake source handler raised", "detail": repr(exc)},
