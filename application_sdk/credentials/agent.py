@@ -595,12 +595,15 @@ async def check_secret_store_access(
     Never raises — returns a structured result the preflight renders as a check
     row. Failure modes, and how they map onto ``store_down`` / ``fatal``:
 
-    1. **Store down** (``store_down``, ``fatal``) — no secret store configured, or
-       the store errors / is unreachable. The store itself is the blocker.
-    2. **Unresolvable config** (``fatal`` only) — a multi-key (non single-key) spec
-       with no ``secret-path``: the ref-keys have nowhere to resolve from. The
-       store may be perfectly healthy — this is a *config* gap, so it is a
-       ``PRECONDITION``, not a store outage; the store is never contacted.
+    1. **Store down** (``store_down``, ``fatal``) — a configured store errors or
+       is unreachable. The store itself is the blocker (``SourceUnavailable``,
+       retryable). A *missing* store is not this case: it is a permanent config
+       gap, handled as a ``PRECONDITION`` (see below), not a store outage.
+    2. **Unresolvable config** (``fatal`` only, ``store_down`` stays False) — no
+       store is configured at all, or a multi-key (non single-key) spec has no
+       ``secret-path`` so the ref-keys have nowhere to resolve from. A *config*
+       gap, so it is a ``PRECONDITION`` (retryable=False); the store is never
+       contacted.
     3. **Secret-path not found** (``fatal`` only) — the store is reachable but the
        configured ``secret-path`` doesn't exist, so credentials can't resolve.
     4. **Nothing resolved** (neither flag) — the store is reachable but not a

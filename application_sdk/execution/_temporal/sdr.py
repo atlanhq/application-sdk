@@ -129,21 +129,35 @@ def _object_store_failure(
     error_class: str | None,
     binding_name: str,
     message: str,
+    hint: str | None = None,
 ) -> AppError:
     """Map a failed object-store probe onto the taxonomy leaf for its bucket+role.
 
+    A missing or unparseable binding (``"not configured"``) is a permanent
+    deployment config gap, so it maps to ``PreconditionError`` (retryable=False)
+    — never a transient outage the platform would retry. Its customer step is the
+    probe's own ``hint`` ("add a Dapr component named ..."), which is otherwise
+    engineer-facing and discarded.
+
     Permission and auth buckets use the USER leaves that already match
     (``AppPermissionDeniedError``, ``AuthError``) so a 403 is not retried as a
-    transient outage. Availability then splits on role: the customer-owned
-    deployment store is ``SourceUnavailableError`` (USER); the upstream Atlan
-    upload proxy is ``DependencyUnavailableError`` (PLATFORM). Customer-facing
-    ``suggested_action`` is kept in every case.
+    transient outage. Remaining availability failures split on role: the
+    customer-owned deployment store is ``SourceUnavailableError`` (USER); the
+    upstream Atlan upload proxy is ``DependencyUnavailableError`` (PLATFORM).
+    Customer-facing ``suggested_action`` is kept in every case.
     """
     bucket = error_class or "connectivity / unknown"
     action = _OBJECT_STORE_ACTIONS.get(
         (label, bucket),
         _OBJECT_STORE_ACTIONS.get((label, "connectivity / unknown")),
     )
+    if bucket == "not configured":
+        return PreconditionError(
+            message=message,
+            suggested_action=hint or action,
+            resource=binding_name,
+            expected_state="configured",
+        )
     if bucket == "permission denied":
         return AppPermissionDeniedError(
             message=message,
@@ -463,23 +477,29 @@ async def _append_object_store_checks(output: PreflightOutput) -> None:
                 )
             else:
                 # Simple, non-technical failure copy for the UI; the detailed
-                # probe error/hint is logged worker-side, not surfaced here.
+                # probe cause + engineer hint go to the worker log.
                 message = _OBJECT_STORE_FAILURE_MESSAGES.get(
                     result.label, "Configured object store is not accessible."
                 )
-                logger.info(
-                    "SDR object-store check failed (%s): %s",
+                # A failed access probe on a row the customer is about to see is
+                # not informational — warn, and actually carry the classifier's
+                # engineer-facing hint (its only other reader is the boot path).
+                logger.warning(
+                    "SDR object-store check failed (%s): %s | hint: %s",
                     result.label,
                     result.message,
+                    result.hint or "(none)",
                 )
-                # Bucket+role → existing USER/PLATFORM leaves. suggested_action
-                # stays the customer-facing next step; the classifier's own
-                # hint is engineer-facing and stays in the log.
+                # Bucket+role → taxonomy leaf. suggested_action stays the
+                # customer-facing next step; the engineer hint is logged above.
+                # ``hint`` is passed only so the not-configured branch can use the
+                # probe's own "add a Dapr component" guidance as the customer step.
                 error = _object_store_failure(
                     label=result.label,
                     error_class=result.error_class,
                     binding_name=result.binding_name,
                     message=message,
+                    hint=result.hint,
                 )
             check = PreflightCheck(
                 name=name,

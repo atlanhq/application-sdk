@@ -838,6 +838,100 @@ class TestSdrPreflightObjectStoreChecks:
         assert check.error.retryable is True
         assert check.error.evidence.get("endpoint") == "objectstore"
 
+    async def test_not_configured_object_store_is_non_retryable_precondition(
+        self,
+    ) -> None:
+        """A missing binding is a permanent config gap, not a transient outage.
+
+        The probe emits ``"not configured"`` (bypassing the classifier); it must
+        map to PRECONDITION / retryable=False for both the customer-owned
+        deployment store and the upstream Atlan proxy, and it must surface the
+        probe's own "add a Dapr component" hint as the customer step rather than
+        discarding it behind a generic connectivity action.
+        """
+        from application_sdk.errors.categories import FailureCategory
+        from application_sdk.storage.preflight import ObjectStoreCheckResult
+
+        handler = _StubHandler()
+        preflight = self._preflight(handler)
+        results = [
+            ObjectStoreCheckResult(
+                label="deployment",
+                binding_name="objectstore",
+                passed=False,
+                error_class="not configured",
+                hint="Add a Dapr component named 'objectstore'.",
+            ),
+            ObjectStoreCheckResult(
+                label="upstream",
+                binding_name="atlan-objectstore",
+                passed=False,
+                error_class="not configured",
+                hint="Add a Dapr component named 'atlan-objectstore'.",
+            ),
+        ]
+        with mock.patch(
+            "application_sdk.execution._temporal.sdr.check_object_store_access",
+            mock.AsyncMock(return_value=results),
+        ):
+            result = await preflight(PreflightInput(credentials=[]))
+
+        for row, binding in (
+            (result.checks[1], "objectstore"),
+            (result.checks[2], "atlan-objectstore"),
+        ):
+            assert row.error is not None
+            assert row.error.category == FailureCategory.PRECONDITION
+            assert row.error.retryable is False
+            # The probe's engineer hint becomes the customer step.
+            assert (
+                row.error.suggested_action == f"Add a Dapr component named '{binding}'."
+            )
+
+    def test_every_producer_bucket_maps_to_a_leaf(self) -> None:
+        """Every bucket the producer can emit maps to a typed, correctly-retryable leaf.
+
+        Enumerated from the producers themselves — the classifier's outputs plus
+        the ``"not configured"`` path that bypasses it — so a renamed bucket
+        fails here instead of silently falling through ``_object_store_failure``
+        to the retryable connectivity default. Availability buckets stay
+        retryable; a permanent config gap must not.
+        """
+        from application_sdk.execution._temporal.sdr import _object_store_failure
+        from application_sdk.storage.preflight import _classify_access_error
+
+        classifier_buckets = {
+            _classify_access_error(exc)[0]
+            for exc in (
+                Exception("403 AccessDenied"),
+                Exception("401 SignatureDoesNotMatch"),
+                Exception("connection refused"),
+            )
+        }
+        # Producer surface = classifier buckets ∪ the direct "not configured" path.
+        reachable = classifier_buckets | {"not configured"}
+        # Sanity: the classifier's own documented buckets are all covered.
+        assert {
+            "permission denied",
+            "invalid credentials",
+            "connectivity / unknown",
+        } <= reachable
+
+        for bucket in reachable:
+            for label in ("deployment", "upstream"):
+                err = _object_store_failure(
+                    label=label,
+                    error_class=bucket,
+                    binding_name="binding",
+                    message="failed",
+                    hint="do the thing",
+                )
+                fd = err.to_failure_details()
+                assert fd.suggested_action, f"{label}/{bucket} produced no action"
+                # A permanent config gap is never advertised as retryable.
+                if bucket == "not configured":
+                    assert fd.retryable is False, f"{label}/{bucket} was retryable"
+
     async def test_banner_pins_object_store_over_nonfatal_secret_store(self) -> None:
         """A non-fatal secret-store row must not become the aggregate banner."""
         from application_sdk.errors.categories import FailureCategory
