@@ -456,6 +456,46 @@ async def test_the_temporal_readers_are_real() -> None:
     assert callable(temporal.TemporalServiceReader.find_workflow_status)
 
 
+async def test_the_queue_starter_is_real() -> None:
+    """FND-246 filled one of ``starters``' three stubs. Asserted here for the
+    reason the temporal and cluster landings are: what belongs in the scaffold's
+    own test file is the proof that the package no longer holds a stub under this
+    name, so a revert cannot quietly restore one.
+
+    The queue name is checked here too, because the spec is where the check
+    lives and a stub restored *behind* a still-validating spec would be the
+    confusing shape — the construction would fail the same way while nothing
+    dispatched.
+    """
+    from application_sdk.testing.harness import starters
+
+    with pytest.raises(starters.UnusableTaskQueueError):
+        starters.QueueWorkflowSpec(
+            workflow_type="w", task_queue="atlan-{app_name}-{deployment_name}"
+        )
+
+    spec = starters.QueueWorkflowSpec.for_deployment(
+        workflow_type="w", app_name="hello-world", deployment_name="default"
+    )
+    assert spec.task_queue == "atlan-hello-world-default"
+
+    # Reaches a real dispatch rather than a `HarnessNotBuiltError`: the
+    # connection's client is deliberately not one, so the failure proves the stub
+    # is gone without standing up a frontend. `HarnessNotBuiltError` is a
+    # `NotImplementedError`, which `AttributeError` is not.
+    from application_sdk.testing.harness.temporal import TemporalConnection
+
+    with pytest.raises(AttributeError):
+        await starters.start_on_task_queue(
+            spec,
+            connection=TemporalConnection(
+                client=object(),  # type: ignore[arg-type]
+                namespace="default",
+                address="127.0.0.1:7233",
+            ),
+        )
+
+
 def test_the_temporal_readers_need_no_extra() -> None:
     """FND-247's amendment expected ``temporalio`` behind the ``[workflows]``
     extra, with the readers import-guarded. It is a *core* dependency since v3.1
@@ -506,9 +546,6 @@ async def test_every_remaining_stub_names_its_child_issue() -> None:
     for coro in (
         purge_connection("default/x/1"),
         starters.start_via_automation_engine({}),
-        starters.start_on_task_queue(
-            starters.QueueWorkflowSpec(workflow_type="w", task_queue="q")
-        ),
         starters.start_via_app_handler(
             starters.HttpWorkflowSpec(
                 target=ServiceTarget(namespace="ns", service="svc", port=8000),

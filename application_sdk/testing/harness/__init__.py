@@ -71,13 +71,21 @@ Module map:
     The async AE reader and the non-idempotent submit's retry, from the same
     split, plus the ``native-status`` wire types and the leaves they raise.
 ``starters``
-    Three ways to start a workflow; deliberately no shared signature.
+    Three ways to start a workflow; deliberately no shared signature. One of the
+    three is real: ``start_on_task_queue`` (FND-246) dispatches onto a Temporal
+    task queue, which is the runtime suite's first scenario and was unbuilt on
+    both sides — the Slack thread that scoped this project recorded it as already
+    existing, and ``testing/e2e/workflows.run_workflow`` is an HTTP POST to the
+    app's handler Service that never touches a queue. New work, so its tests are
+    claims rather than a differential; see the module's own note on provenance
+    below. The other two are stubs naming their child issue.
 ``teardown``
     Purge mechanics, including the batching that is a correctness bound.
 
 ``bridge``, ``waiting``, ``outcome``, ``spec``, ``budgets``, ``expectations``,
 ``identity``, ``atlas``, ``automation_engine``, ``cluster`` and ``temporal`` are
-real; the rest are typed stubs, each naming the child issue that fills it in.
+real, and so is one of ``starters``' three functions; the rest are typed stubs,
+each naming the child issue that fills it in.
 
 ``atlas`` and ``automation_engine`` are the first two that ``testing/e2e``
 actually calls: since child F, ``AEWorkflowClient`` is a set of one-line
@@ -97,6 +105,9 @@ pinned against **captured numbers** instead. ``cluster`` is the first kind — i
 retired ``testing/e2e/pods.py``, so there was an original to compare against.
 ``temporal`` is the second, and says so in its own entry above — so "pinned
 against the code they were lifted from" is not true of every module here.
+``starters``' queue dispatch is neither: there is no original anywhere, in this
+repo or the runtime suite, so its tests assert claims about the dispatch it makes
+and cannot borrow either kind of authority.
 
 ``waiting`` started as the first kind and became the second in child D, which is
 the case worth reading carefully because the change was not a choice: its pin

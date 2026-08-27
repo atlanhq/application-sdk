@@ -1,4 +1,10 @@
-"""Test doubles for the ``temporalio`` Temporal reader (FND-247).
+"""Test doubles for the ``temporalio`` Temporal reader (FND-247) and the
+direct-to-task-queue starter (FND-246).
+
+One fake serves both, and that is load-bearing rather than tidy: the starter's
+own claim is that the run it dispatched is the run a later status read describes,
+and a test that started against one double and read against another could not
+check it — the two would agree by construction.
 
 The doubles hand back **real protobuf messages and a real
 ``WorkflowExecutionDescription``**, for the reason
@@ -13,14 +19,22 @@ The narrowing needs a *real* ``RPCError`` for the same reason: the backend
 converts only ``temporalio``'s error type and lets everything else through, so a
 stub exception would let a test pass against a narrowing that had stopped
 working.
+
+The start hands back a **real** ``WorkflowHandle`` for the sharpest version of
+that reasoning. ``run_id`` on a handle built by ``start_workflow`` is ``None`` by
+documented design and ``result_run_id`` carries the started run — a stub handle
+would happily expose whichever attribute the code under test read, so the bug
+the real object catches (reading ``run_id`` and finding every started run
+unidentifiable) is invisible against a mock.
 """
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 from temporalio.api.common.v1 import WorkerVersionCapabilities
 from temporalio.api.common.v1 import WorkflowExecution as WireWorkflowExecution
@@ -34,7 +48,7 @@ from temporalio.api.workflowservice.v1 import (
     DescribeTaskQueueResponse,
     DescribeWorkflowExecutionResponse,
 )
-from temporalio.client import WorkflowExecutionDescription
+from temporalio.client import Client, WorkflowExecutionDescription, WorkflowHandle
 from temporalio.converter import DataConverter
 from temporalio.service import RPCError, RPCStatusCode
 
@@ -47,7 +61,9 @@ __all__ = [
     "FakeTemporal",
     "RPCError",
     "RPCStatusCode",
+    "connection_over",
     "describe_response",
+    "started",
     "on_a_fresh_loop",
     "poller",
     "reader_over",
@@ -150,6 +166,47 @@ async def workflow_description(
     )
 
 
+def started(
+    *,
+    workflow_id: str = "wf-1",
+    result_run_id: str | None = "run-1",
+    first_execution_run_id: str | None = None,
+) -> _Start:
+    """What a scripted ``start_workflow`` answers with.
+
+    Args:
+        workflow_id: The id the handle reports back, which the starter echoes
+            onto its own handle rather than re-using the id it sent.
+        result_run_id: The started run, where ``start_workflow`` actually puts
+            it. ``None`` exercises the answer that names no run.
+        first_execution_run_id: The fallback field, left unset by default so a
+            reader of ``result_run_id`` is the only thing that passes.
+    """
+    return _Start(
+        workflow_id=workflow_id,
+        result_run_id=result_run_id,
+        first_execution_run_id=first_execution_run_id,
+    )
+
+
+@dataclass(frozen=True)
+class _Start:
+    """A scripted start answer, turned into a real handle at call time."""
+
+    workflow_id: str
+    result_run_id: str | None
+    first_execution_run_id: str | None
+
+    def handle(self, client: Any) -> WorkflowHandle[Any, Any]:
+        """A real ``WorkflowHandle``, shaped as ``start_workflow`` builds one."""
+        return WorkflowHandle(
+            client,
+            self.workflow_id,
+            result_run_id=self.result_run_id,
+            first_execution_run_id=self.first_execution_run_id,
+        )
+
+
 class _FakeWorkflowService:
     """The one ``workflow_service`` verb the poller read calls."""
 
@@ -179,16 +236,33 @@ class _FakeHandle:
 
 
 class _FakeClient:
-    """Shaped like the parts of ``temporalio.client.Client`` a read touches."""
+    """Shaped like the parts of ``temporalio.client.Client`` a read or a start touches."""
 
-    def __init__(self, fake: FakeTemporal) -> None:
+    def __init__(self, fake: FakeTemporal, *, namespace: str = "default") -> None:
         self.workflow_service = _FakeWorkflowService(fake)
+        self.namespace = namespace
         self._fake = fake
 
     def get_workflow_handle(
         self, workflow_id: str, *, run_id: str | None = None, **_: Any
     ) -> _FakeHandle:
         return _FakeHandle(self._fake, workflow_id, run_id)
+
+    async def start_workflow(
+        self, workflow: str, **kwargs: Any
+    ) -> WorkflowHandle[Any, Any]:
+        """Record the dispatch and answer with the next scripted start.
+
+        Every keyword is recorded rather than only the ones asserted on, so a
+        test can pin what the starter did *not* send as well as what it did — an
+        ``id_reuse_policy`` or a ``memo`` appearing here is a behaviour change
+        the recorded call makes visible.
+        """
+        self._fake.calls.append(("start_workflow", workflow, kwargs))
+        answer = _answer(self._fake.next_start())
+        if isinstance(answer, _Start):
+            return answer.handle(self)
+        raise AssertionError(f"scripted start answer is not a _Start: {answer!r}")
 
 
 class FakeTemporal:
@@ -203,6 +277,10 @@ class FakeTemporal:
         pollers: What each ``describe_task_queue`` answers with, in order. A
             ``BaseException`` is raised instead of returned.
         descriptions: What each ``describe`` answers with, in order.
+        starts: What each ``start_workflow`` answers with, in order — a
+            :func:`started` answer, or a ``BaseException`` to raise. Defaults to
+            one plain successful start, so a test about the reads never has to
+            mention the starter.
     """
 
     def __init__(
@@ -210,14 +288,17 @@ class FakeTemporal:
         *,
         pollers: Sequence[Answer] = (),
         descriptions: Sequence[Answer] = (),
+        starts: Sequence[Answer] = (),
     ) -> None:
         self.calls: list[tuple[str, Any, dict[str, Any]]] = []
         self.connects: list[str] = []
         self.closes = 0
         self._pollers = list(pollers) or [describe_response()]
         self._descriptions = list(descriptions)
+        self._starts = list(starts) or [started()]
         self._poller_index = 0
         self._description_index = 0
+        self._start_index = 0
 
     # -- the connection factory --------------------------------------------
 
@@ -260,6 +341,11 @@ class FakeTemporal:
         self._poller_index += 1
         return value
 
+    def next_start(self) -> Answer:
+        value = self._starts[min(self._start_index, len(self._starts) - 1)]
+        self._start_index += 1
+        return value
+
     def next_description(self) -> Answer:
         if not self._descriptions:
             raise AssertionError("no `descriptions` were scripted for this fake")
@@ -294,6 +380,33 @@ class FakeTemporal:
 def reader_over(fake: FakeTemporal, **kwargs: Any) -> TemporalServiceReader:
     """A reader wired to *fake* instead of to a real frontend."""
     return TemporalServiceReader(connect=fake.connect(), **kwargs)
+
+
+def connection_over(
+    fake: FakeTemporal,
+    *,
+    namespace: str = "default",
+    address: str = "127.0.0.1:7233",
+) -> TemporalConnection:
+    """A :class:`TemporalConnection` wired to *fake* instead of to a frontend.
+
+    A **real** ``TemporalConnection`` around a fake client, rather than a double
+    for the connection itself: it is the type the starter takes, it is a frozen
+    dataclass with no behaviour to fake, and building the real one is what keeps
+    a test honest about which of its fields the starter actually reads.
+
+    The ``cast`` is the honest spelling of the one thing that is not real. The
+    field's type is ``temporalio``'s own ``Client``, so pyright is right that
+    this is not one; a ``Protocol`` invented to make it one would be a second
+    declaration of ``start_workflow``'s signature, free to drift from the
+    engine's.
+    """
+    return TemporalConnection(
+        client=cast(Client, _FakeClient(fake, namespace=namespace)),
+        namespace=namespace,
+        address=address,
+        close=fake._close,
+    )
 
 
 def on_a_fresh_loop(work: Callable[[], Awaitable[Any]]) -> Any:

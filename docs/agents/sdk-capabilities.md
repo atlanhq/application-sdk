@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.29.0
-source-sha:    faf9b47620aa53af11cf7d017255c8cb5e92ae55
-source-date:   2026-08-27T02:55:32+01:00
+source-sha:    d2a955a22aa3bd7c18224814b7ad80b688368786
+source-date:   2026-08-27T13:42:01+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 209 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 212 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3091,9 +3091,9 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `AERunHandle`
 
 - **Import:** `from application_sdk.testing.harness.starters import AERunHandle`
-- **Signature:** `class AERunHandle(*, workflow_slug: str, run_id: str) -> None`
+- **Signature:** `class AERunHandle(*, workflow_slug: str, run_id: str)`
 - **Summary:** A run started through the Automation Engine.
-- **Defined in:** `application_sdk/testing/harness/starters/__init__.py`
+- **Defined in:** `application_sdk/testing/harness/starters/_specs.py`
 
 #### `AEWorkflowClient`
 
@@ -3432,16 +3432,16 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `HttpRunHandle`
 
 - **Import:** `from application_sdk.testing.harness.starters import HttpRunHandle`
-- **Signature:** `class HttpRunHandle(*, workflow_id: str) -> None`
+- **Signature:** `class HttpRunHandle(*, workflow_id: str)`
 - **Summary:** A run started through the app's handler Service.
-- **Defined in:** `application_sdk/testing/harness/starters/__init__.py`
+- **Defined in:** `application_sdk/testing/harness/starters/_specs.py`
 
 #### `HttpWorkflowSpec`
 
 - **Import:** `from application_sdk.testing.harness.starters import HttpWorkflowSpec`
-- **Signature:** `class HttpWorkflowSpec(*, target: ServiceTarget, workflow_name: str, body: Mapping[str, object] = dict()) -> None`
+- **Signature:** `class HttpWorkflowSpec(*, target: ServiceTarget, workflow_name: str, body: Mapping[str, object] = dict())`
 - **Summary:** A workflow to start by calling the app's own handler Service.
-- **Defined in:** `application_sdk/testing/harness/starters/__init__.py`
+- **Defined in:** `application_sdk/testing/harness/starters/_specs.py`
 
 #### `Indeterminate`
 
@@ -3629,7 +3629,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Import:** `from application_sdk.testing.harness.starters import QueueWorkflowSpec`
 - **Signature:** `class QueueWorkflowSpec(*, ...)`
 - **Summary:** A workflow to dispatch straight onto a Temporal task queue.
-- **Defined in:** `application_sdk/testing/harness/starters/__init__.py`
+- **Defined in:** `application_sdk/testing/harness/starters/_specs.py`
 
 #### `ReferentialFailure`
 
@@ -3799,6 +3799,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** A reading that could not be taken.
 - **Defined in:** `application_sdk/testing/harness/expectations.py`
 
+#### `UnusableTaskQueueError`
+
+- **Import:** `from application_sdk.testing.harness.starters import UnusableTaskQueueError`
+- **Signature:** `class UnusableTaskQueueError(*, ...)`
+- **Summary:** The task-queue name could not name a queue any worker polls.
+- **Defined in:** `application_sdk/testing/harness/starters/_errors.py`
+
 #### `Verdict`
 
 - **Import:** `from application_sdk.testing.harness import Verdict`
@@ -3860,9 +3867,23 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `WorkflowRunHandle`
 
 - **Import:** `from application_sdk.testing.harness.starters import WorkflowRunHandle`
-- **Signature:** `class WorkflowRunHandle(*, workflow_id: str, run_id: str, task_queue: str) -> None`
+- **Signature:** `class WorkflowRunHandle(*, workflow_id: str, run_id: str, task_queue: str)`
 - **Summary:** A run started directly on a task queue.
-- **Defined in:** `application_sdk/testing/harness/starters/__init__.py`
+- **Defined in:** `application_sdk/testing/harness/starters/_specs.py`
+
+#### `WorkflowStartConflictError`
+
+- **Import:** `from application_sdk.testing.harness.starters import WorkflowStartConflictError`
+- **Signature:** `class WorkflowStartConflictError(*, ...)`
+- **Summary:** A run is already using this workflow id.
+- **Defined in:** `application_sdk/testing/harness/starters/_errors.py`
+
+#### `WorkflowStartFailedError`
+
+- **Import:** `from application_sdk.testing.harness.starters import WorkflowStartFailedError`
+- **Signature:** `class WorkflowStartFailedError(*, ...)`
+- **Summary:** The dispatch did not come back with a started run.
+- **Defined in:** `application_sdk/testing/harness/starters/_errors.py`
 
 #### `WorkflowStatus`
 
@@ -4463,9 +4484,9 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `start_on_task_queue`
 
 - **Import:** `from application_sdk.testing.harness.starters import start_on_task_queue`
-- **Signature:** `start_on_task_queue(spec: QueueWorkflowSpec) -> WorkflowRunHandle`
+- **Signature:** `start_on_task_queue(spec: QueueWorkflowSpec, *, connection: TemporalConnection, minter: Minter | None = None)`
 - **Summary:** Start a workflow by dispatching it directly onto a Temporal task queue.
-- **Defined in:** `application_sdk/testing/harness/starters/__init__.py`
+- **Defined in:** `application_sdk/testing/harness/starters/_queue.py`
 
 #### `start_via_app_handler`
 
