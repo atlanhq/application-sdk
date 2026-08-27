@@ -365,6 +365,18 @@ class TestBuildAgentJson:
     # ``service_principal``, token/OAuth) reached its client with no
     # credential fields at all and died inside its own client with a *source*
     # authentication error — routinely misdiagnosed as a provisioning problem.
+    #
+    # SCOPE OF THESE GUARDS: the dotted *prefix* contract is verified; the two
+    # field names (username/password) are the platform convention, not verified
+    # per auth option. 10 of the 12 contract/app.pkl files surveyed name every
+    # auth option's fields username/password — snowflake ``keypair``, ``okta``
+    # and ``entra_id`` included. The two known-divergent options are
+    # atlan-snowflake-app ``custom_oauth`` (accessTokenSecret/role/warehouse)
+    # and atlan-trino-app ``jwt`` (__jwt_token & friends); ``token`` below
+    # therefore proves the prefix, NOT that a token-shaped connector's client
+    # finds what it reads. Those two must override the ``agent_json()`` hook
+    # until the field names are generated from credentialAuthOptions[*].fields
+    # (FND-945).
 
     @pytest.mark.parametrize(
         "auth_type",
@@ -414,12 +426,25 @@ class TestBuildAgentJson:
     def test_blank_auth_type_falls_back_to_basic(self) -> None:
         """A blank auth_type would collapse nothing, so it takes the default.
 
-        ``transform_agent_credentials`` builds no prefix at all from an empty
-        ``authType``; emitting bare ``.username`` would be unrecoverable.
+        Both halves matter. ``transform_agent_credentials`` derives its prefix
+        from the block's ``auth-type`` and an *empty* prefix is falsy, so the
+        collapse branch never fires: keying the refs ``basic.*`` while leaving
+        ``auth-type: ""`` reproduces the exact silent-empty credential this
+        module exists to prevent. ``build_agent_json`` therefore resolves the
+        declared ``auth-type`` through the same fallback as the prefix.
         """
         db = DatabaseSpec(host="h", port=1, username="u", password="p", auth_type="")
         aj = build_agent_json(db, self._AGENT, "mysql")
         assert aj["basic.username"] == "SDR_MYSQL_USERNAME"
+        assert aj["basic.password"] == "SDR_MYSQL_PASSWORD"
+        # The declared auth-type is defaulted too, not passed through blank.
+        assert aj["auth-type"] == "basic"
+
+        # Same round-trip every sibling guard makes: the client reads root level.
+        creds = transform_agent_credentials(aj)
+        assert creds["username"] == "SDR_MYSQL_USERNAME"
+        assert creds["password"] == "SDR_MYSQL_PASSWORD"
+        assert not [k for k in creds if "." in k]
 
 
 _BUNDLE_AGENT_JSON = {

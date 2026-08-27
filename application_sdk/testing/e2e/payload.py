@@ -31,7 +31,10 @@ from typing import Any
 
 import orjson
 
-from application_sdk.testing._agent_credentials import agent_credential_ref_keys
+from application_sdk.testing._agent_credentials import (
+    agent_credential_ref_keys,
+    resolve_auth_type,
+)
 from application_sdk.testing.e2e.credential import CredentialBody
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
 
@@ -159,11 +162,15 @@ def build_agent_json(
     (glue/athena ``iam``, Azure ``service_principal``, token/OAuth) would
     otherwise receive no credential fields at all and fail inside its own
     client with a source-authentication error (FND-923).
+
+    Both the declared ``auth-type`` and the ref-key prefix run through
+    ``resolve_auth_type``, so they agree even when the spec leaves ``auth_type``
+    blank — a bundle declaring a blank ``auth-type`` collapses nothing at all.
     """
     block: dict[str, Any] = {
         "host": database.host,
         "port": database.port,
-        "auth-type": database.auth_type,
+        "auth-type": resolve_auth_type(database.auth_type),
         "agent-name": agent.agent_name,
         "agent-type": agent.agent_type,
         "key-type": agent.key_type,

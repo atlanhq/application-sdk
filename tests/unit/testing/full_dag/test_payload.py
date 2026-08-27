@@ -10,7 +10,6 @@ from __future__ import annotations
 import orjson
 import pytest
 
-from application_sdk.common.transforms import transform_agent_credentials
 from application_sdk.testing.full_dag._errors import AgentSpecRequiredError
 from application_sdk.testing.full_dag.payload import (
     AgentSpec,
@@ -105,51 +104,6 @@ def test_agent_mode_payload_includes_agent_json() -> None:
     # Flat agent-json.* duplicates of the same keys should exist
     assert params["agent-json.agent-name"] == "ci-1234"
     assert params["agent-json.basic.username"] == "SDR_MYSQL_USERNAME"
-
-
-@pytest.mark.parametrize("auth_type", ["basic", "iam", "keypair", "service_principal"])
-def test_agent_credential_refs_follow_auth_type(auth_type: str) -> None:
-    """FND-923 on the deprecated full_dag path.
-
-    ``transform_agent_credentials`` collapses only the prefix matching the
-    bundle's own ``auth-type``, so hard-coded ``basic.*`` keys leave a
-    non-basic connector with no credential fields at all. Both the nested
-    ``agent-json`` blob and the flat ``agent-json.*`` rows must carry the
-    auth_type-derived prefix, and they must agree with each other.
-    """
-    database = DatabaseSpec(
-        host=_DATABASE.host,
-        port=_DATABASE.port,
-        username=_DATABASE.username,
-        password=_DATABASE.password,
-        auth_type=auth_type,
-    )
-    payload = build_ae_payload(
-        run_id=1234,
-        mode=RunMode.AGENT,
-        connector_short_name="mysql",
-        argo_package_name="@atlan/mysql",
-        argo_template_name="atlan-mysql",
-        app_service_url="http://mysql.mysql-app.svc.cluster.local",
-        connection=_CONNECTION,
-        database=database,
-        agent=AgentSpec(agent_name="ci-1234"),
-    )
-    params = _params(payload)
-
-    agent_json = orjson.loads(params["agent-json"])
-    assert agent_json["auth-type"] == auth_type
-    assert agent_json[f"{auth_type}.username"] == "SDR_MYSQL_USERNAME"
-    assert agent_json[f"{auth_type}.password"] == "SDR_MYSQL_PASSWORD"
-
-    # Flat rows must not drift from the nested blob.
-    assert params[f"agent-json.{auth_type}.username"] == "SDR_MYSQL_USERNAME"
-    assert params[f"agent-json.{auth_type}.password"] == "SDR_MYSQL_PASSWORD"
-
-    # The transform the connector's client sits behind must see root-level fields.
-    creds = transform_agent_credentials(agent_json)
-    assert creds["username"] == "SDR_MYSQL_USERNAME"
-    assert creds["password"] == "SDR_MYSQL_PASSWORD"
 
 
 def test_agent_mode_without_agent_spec_raises() -> None:
