@@ -18,19 +18,34 @@ a bare ``RuntimeError`` from deep in asyncio, while ``run_sync`` raises
 :class:`~application_sdk.testing.harness._errors.SyncBridgeInAsyncContextError`
 naming the ``_async`` twin to await instead.
 
-**This shim is temporary by design.** Child H re-expresses ``testing/e2e`` over
-the harness and moves the sync boundary up to ``BaseE2ETest``'s public methods,
-at which point this class and the two adapters below go away. Two things are
-therefore kept deliberately narrow so that deletion is a deletion and not a
-rewrite:
+.. deprecated:: 3.31
+    Removed in v4.0. Call the ``async`` harness functions —
+    :mod:`application_sdk.testing.harness.atlas` and
+    :mod:`application_sdk.testing.harness.automation_engine` — and reach them
+    from synchronous code through
+    :func:`~application_sdk.testing.harness.bridge.run_sync` if you have no loop
+    of your own.
 
-* the fail-open collapse lives in exactly one function,
-  :func:`_settled_or_fail_open`, rather than in four scattered ``except``
-  blocks;
-* nothing new is added to the surface. Callers that want the third answer —
-  :class:`~application_sdk.testing.harness.outcome.Indeterminate`, "the search
-  could not be read", as distinct from "it read zero" — call the harness
-  functions directly.
+**No longer on the harness' own path.** Child H moved the sync boundary up to
+``BaseE2ETest``'s public methods, and that class now calls
+:class:`~application_sdk.testing.harness.automation_engine.AEClient` and the
+Atlas readers directly. What kept this class alive is a connector suite that
+calls it *itself* — ``atlan-openapi-app``'s connection-reuse e2e waits on
+``self.client.poll_atlas_for_connection`` while seeding its own connection — so
+deleting it would have broken a shipped consumer to save a file. It is
+deprecated instead, and ``BaseE2ETest`` hands it the AE pool the run already
+opened rather than a second one.
+
+The consequence worth knowing before calling it: **this class still fails open**
+on an unreadable Atlas search, and it is now the only thing in the harness that
+does. The readers answer
+:class:`~application_sdk.testing.harness.outcome.Indeterminate` for "the search
+could not be read"; every method here takes a ``dict[str, int]`` or a ``bool``,
+so the third answer has nowhere to go and :func:`_settled_or_fail_open` collapses
+it to zeros with an ``ERROR`` line. ``BaseE2ETest`` no longer does — it raises
+:class:`~application_sdk.testing.e2e._errors.AtlasReadIndeterminateError` — so a
+suite that grades a value from *this* class may still be reporting an Atlas fault
+as a connector one.
 """
 
 from __future__ import annotations
@@ -39,6 +54,8 @@ import warnings
 from contextlib import AbstractAsyncContextManager
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, TypeVar
+
+from typing_extensions import deprecated
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.harness import atlas
@@ -138,14 +155,16 @@ def _warn_vestigial_forbidden_attempts(value: int) -> None:
 def _settled_or_fail_open(outcome: Outcome[T], fallback: T) -> T:
     """Unwrap a settled Atlas read, or fall back to today's empty value.
 
-    **The one place the fail-open behaviour still exists**, and the whole of
-    what child H deletes. The harness readers now distinguish "the search
-    returned nothing" from "the search could not be read"; every caller of this
-    class takes a ``dict[str, int]`` or a ``bool`` and grades it, so the third
-    answer has nowhere to go until those call sites learn it. Collapsing here
-    keeps ``testing/e2e``'s observable behaviour identical to what it was, and
-    keeps the collapse countable — one function, one log line — rather than
-    spread across four ``except Exception: return {}`` blocks.
+    **The one place the fail-open behaviour still exists.** The harness readers
+    distinguish "the search returned nothing" from "the search could not be
+    read", and since child H ``BaseE2ETest`` keeps that distinction all the way
+    to the verdict. This class cannot: every method on it returns a
+    ``dict[str, int]`` or a ``bool``, so the third answer has nowhere to go
+    without changing the signatures a deprecated compatibility surface exists to
+    hold still. Collapsing here keeps the collapse countable — one function, one
+    log line — rather than spread across four ``except Exception: return {}``
+    blocks, and keeps it visible to whoever reads the log of a run that graded
+    one of these values.
 
     Args:
         outcome: What the harness reader returned.
@@ -170,8 +189,22 @@ def _settled_or_fail_open(outcome: Outcome[T], fallback: T) -> T:
     return fallback
 
 
+@deprecated(
+    "AEWorkflowClient is deprecated and will be removed in v4.0. Use "
+    "application_sdk.testing.harness.automation_engine.AEClient and "
+    "application_sdk.testing.harness.atlas directly, reaching them from "
+    "synchronous code through application_sdk.testing.harness.run_sync."
+)
 class AEWorkflowClient:
     """Thin sync wrapper over the harness's AE and Atlas readers.
+
+    .. deprecated:: 3.31
+        Removed in v4.0. Use
+        :class:`~application_sdk.testing.harness.automation_engine.AEClient` and
+        :mod:`application_sdk.testing.harness.atlas` directly, through
+        :func:`~application_sdk.testing.harness.bridge.run_sync` from
+        synchronous code. See the module docstring for what this surface still
+        collapses that those do not.
 
     Stateless aside from the auth material and the pooled connections its two
     readers hold. Every method is idempotent and safe to retry except
@@ -190,6 +223,11 @@ class AEWorkflowClient:
             identity than the API key — useful when the API key's service
             account isn't on an asset's admin ACL but the OAuth client is.
         oauth_client_secret: The secret for ``oauth_client_id``.
+        ae: An AE client to wrap instead of opening one. ``BaseE2ETest`` passes
+            the client its own run already opened, so a suite that reaches for
+            ``self.client`` shares that pool rather than paying a second TLS
+            handshake for the same tenant — and so :meth:`close` closes the one
+            pool rather than half of two.
     """
 
     def __init__(
@@ -199,12 +237,13 @@ class AEWorkflowClient:
         *,
         oauth_client_id: str | None = None,
         oauth_client_secret: str | None = None,
+        ae: AEClient | None = None,
     ) -> None:
         self.tenant_url = tenant_url.rstrip("/")
         self._api_token = api_token
         self._oauth_client_id = oauth_client_id
         self._oauth_client_secret = oauth_client_secret
-        self._ae = AEClient(self.tenant_url, api_token)
+        self._ae = AEClient(self.tenant_url, api_token) if ae is None else ae
 
     def close(self) -> None:
         """Close the AE connection pool. Idempotent; a later call reopens one.

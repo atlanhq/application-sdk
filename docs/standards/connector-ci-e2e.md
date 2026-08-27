@@ -916,6 +916,44 @@ Because a reachable watchdog closes *before* the ceiling, it — not the ceiling
 
 **Why the harness cannot shorten the timeouts that actually bind.** The node-level budget is generous by design: `publish` and `lineage-publish` default to a 3-day `startToCloseTimeoutSeconds` (right for a large tenant doing real work, see [contract-toolkit reference](../../contract-toolkit/docs/reference.md)). But the timeout that produced the stall above was one layer down — a `heartbeat_timeout_seconds` of 3600 on the `publish` activity, which turns each lost heartbeat into an hour of dead time before the retry, well past any e2e budget. Neither is reachable from the harness: at AE submit Heracles re-fetches the manifest from the **tenant-deployed pod** and that DAG is what executes (see [Building the image once](#building-the-image-once)); the seed DAG establishes the workflow record, not the graph. The only effective place is the app's own committed contract — which is the manifest that also ships to production, so shortening it for CI would mean e2e no longer exercises the contract we ship. Precise reporting plus a reachable watchdog is what the harness can do; a heartbeat watchdog in the owning system app ([ADR-0018](../adr/0018-progress-aware-heartbeat.md)) is where that class of stall actually gets fixed.
 
+## What a red leg means when Atlas could not be read (FND-225)
+
+`BaseE2ETest` and `SQLAppE2ETest` are unchanged names with unchanged class attributes and unchanged hooks — a connector suite, and the codegen'd `app/generated/_e2e_base.py` it subclasses, need no edit. What changed underneath is that the harness plumbing now lives in `application_sdk.testing.harness`, and one consequence is visible from a connector repo.
+
+**An Atlas search that could not be read is no longer graded as a low count.** It used to arrive at the assertion ladder as zeros, so an expired token or a 503 from the asset server was reported as:
+
+```
+Atlas inventory under default/mysql/… did not meet expectations:
+  - Table: got 0, expected >= 2
+```
+
+— a confident claim about the connector, made by a run that never read it. The harness readers report "could not read" as its own answer, and the ladder now raises `AtlasReadIndeterminateError` (`DEPENDENCY_UNAVAILABLE_ATLAS_READ_INDETERMINATE`) instead. It is deliberately **not** an `AssertionError`, so pytest reports the leg as an **error** rather than a failure:
+
+```
+Atlas could not be read under default/mysql/…, so 2 expectation(s) went ungraded.
+This is not a verdict on the connector — the run never saw what it landed:
+  - Table: could not be read, so the floor expectation was not graded: …
+```
+
+Read that as "re-run it", not as "the connector regressed". The same distinction closes the mirror bug on the location check (`expected_asset_qn_depth`), which used to fail **open**: a failed sample read returned `[]`, an empty sample is skipped, and so an auth fault was graded as a pass.
+
+**`self.client` is deprecated.** Nothing in the base class routes through `AEWorkflowClient` any more; it is built on first access, warns, and goes away in v4.0. A suite that calls it directly — waiting on a connection it seeded itself, say — should call the harness functions instead:
+
+```python
+from application_sdk.testing.harness import atlas, run_sync
+
+async def _wait() -> bool:
+    async with atlas.atlas_client(base_url, api_key) as client:
+        outcome = await atlas.poll_for_connection(
+            client, qn, budget=self._atlas_connection_budget()
+        )
+        return isinstance(outcome, Settled) and outcome.value
+```
+
+**One behaviour changed on the seeded-connection path.** `seed_connection()` creates the Connection at the qualified name *this run minted*, rather than letting `Connection.creator` derive `default/<type>/<epoch>` and adopting whatever came back. That derivation had one second of resolution, so two legs of one e2e matrix starting in the same second shared a connection — and the first to finish purged the other's assets while both reported a clean teardown.
+
+**Optionally, Temporal can be asked who is polling the extract queue.** `NoWorkerOnTaskQueueError` fires on an inference: nothing started inside `ae_stall_grace_seconds`, so probably nothing is polling. Set `temporal_address` on the suite (or export `E2E_TEMPORAL_ADDRESS`, plus `E2E_TEMPORAL_NAMESPACE`) and the harness reads the queue's pollers and attaches what it saw to the same error. Off by default because the connector CI runner has **no route into a tenant's vcluster** — the same constraint that makes the AE submit the only tenant-facing probe of the installed app pod — so it is for a suite driving a cluster it can actually reach. A read that fails changes nothing: the inference still stands.
+
 ## Contract regeneration before tests
 
 The e2e/integration tests consume `app/generated/manifest.json` (the Automation Engine DAG): the host-side harness reads the committed file, and the connector Docker image `COPY`s `app/generated/` at build time and serves `manifest.json` at runtime. Nothing used to regenerate that file from `contract/app.pkl`, so a Contract Toolkit change — at the app level (`contract/app.pkl`) or the SDK level (`contract-toolkit/src`) — ran against a possibly-stale committed manifest and was never actually exercised (BLDX-1493).

@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.29.0
-source-sha:    8008fbe8d08aff4dbaef8882023cc12c2471dcd9
-source-date:   2026-08-27T18:24:55+01:00
+source-sha:    41ebbafc00b1ae1a5fe30feac981266db5aeb59d
+source-date:   2026-08-27T20:33:08+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 255 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 265 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3080,6 +3080,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 ### Classes
 
+#### `AdminIdentity`
+
+- **Import:** `from application_sdk.testing.harness.atlas import AdminIdentity`
+- **Signature:** `class AdminIdentity(*, roles: tuple[str, ...] = (), users: tuple[str, ...] = ()) -> None`
+- **Summary:** Who may administer a Connection this run creates.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
 #### `AEClient`
 
 - **Import:** `from application_sdk.testing.harness.automation_engine import AEClient`
@@ -3757,6 +3764,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Result of executing a single scenario.
 - **Defined in:** `application_sdk/testing/integration/models.py`
 
+#### `SeededWorkflow`
+
+- **Import:** `from application_sdk.testing.harness.starters import SeededWorkflow`
+- **Signature:** `class SeededWorkflow(*, slug: str, seed_version: int | None = None)`
+- **Summary:** An AE workflow with a published version, ready to be submitted against.
+- **Defined in:** `application_sdk/testing/harness/starters/_specs.py`
+
 #### `ServiceTarget`
 
 - **Import:** `from application_sdk.testing.harness.cluster import ServiceTarget`
@@ -3881,6 +3895,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** How a run authenticates against the tenant under test.
 - **Defined in:** `application_sdk/testing/harness/identity.py`
 
+#### `UnknownConnectorTypeError`
+
+- **Import:** `from application_sdk.testing.harness.atlas import UnknownConnectorTypeError`
+- **Signature:** `class UnknownConnectorTypeError(*, ...)`
+- **Summary:** The suite's connection type is not a pyatlan ``AtlanConnectorType``.
+- **Defined in:** `application_sdk/testing/harness/atlas/_errors.py`
+
 #### `Unreadable`
 
 - **Import:** `from application_sdk.testing.harness.expectations import Unreadable`
@@ -3991,6 +4012,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 ### Functions
 
+#### `admin_identity`
+
+- **Import:** `from application_sdk.testing.harness.atlas import admin_identity`
+- **Signature:** `admin_identity(client: AsyncAtlanClient, *, role_name: str = ADMIN_ROLE_NAME) -> Reading[AdminIdentity]`
+- **Summary:** Resolve the admin ACL fallback for a harness-created Connection.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
 #### `all_of`
 
 - **Import:** `from application_sdk.testing.integration import all_of`
@@ -4011,6 +4039,27 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `app_context(mock_state_store: MockStateStore, mock_secret_store: MockSecretStore)`
 - **Summary:** AppContext wired with MockStateStore and MockSecretStore.
 - **Defined in:** `application_sdk/testing/fixtures.py`
+
+#### `as_count`
+
+- **Import:** `from application_sdk.testing.harness.outcome import as_count`
+- **Signature:** `as_count(reading: Outcome[int]) -> CountRead`
+- **Summary:** Project a one-shot count read into the evaluator's vocabulary.
+- **Defined in:** `application_sdk/testing/harness/outcome.py`
+
+#### `as_counts`
+
+- **Import:** `from application_sdk.testing.harness.outcome import as_counts`
+- **Signature:** `as_counts(reading: Outcome[Mapping[str, int]], type_names: Sequence[str]) -> Mapping[str, CountRead]`
+- **Summary:** Project a per-type count read, spreading an unreadable one over its types.
+- **Defined in:** `application_sdk/testing/harness/outcome.py`
+
+#### `as_samples`
+
+- **Import:** `from application_sdk.testing.harness.outcome import as_samples`
+- **Signature:** `as_samples(reading: Outcome[Mapping[str, Sequence[str]]], type_names: Sequence[str]) -> Mapping[str, SampleRead]`
+- **Summary:** Project a qualified-name sample read the same way :func:`as_counts` does.
+- **Defined in:** `application_sdk/testing/harness/outcome.py`
 
 #### `assert_gate`
 
@@ -4164,6 +4213,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Import:** `from application_sdk.testing.harness.atlas import count_total_assets`
 - **Signature:** `count_total_assets(client: AsyncAtlanClient, connection_qualified_name: str) -> Reading[int]`
 - **Summary:** Count every descendant asset under the connection prefix, ALL types.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
+#### `create_connection`
+
+- **Import:** `from application_sdk.testing.harness.atlas import create_connection`
+- **Signature:** `create_connection(client: AsyncAtlanClient, *, ...)`
+- **Summary:** Create a Connection at an exact qualified name, and return that name.
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
 #### `custom`
@@ -4692,6 +4748,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Connect to an in-cluster Temporal frontend Service through a tunnel.
 - **Defined in:** `application_sdk/testing/harness/temporal/client.py`
 
+#### `publish_seed_version`
+
+- **Import:** `from application_sdk.testing.harness.starters import publish_seed_version`
+- **Signature:** `publish_seed_version(spec: AEWorkflowSpec, *, client: AEClient, minter: Minter | None = None)`
+- **Summary:** Return a slug with a published version, creating and seeding one if needed.
+- **Defined in:** `application_sdk/testing/harness/starters/_ae.py`
+
 #### `purge_connection`
 
 - **Import:** `from application_sdk.testing.harness.teardown import purge_connection`
@@ -4835,6 +4898,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Defined in:** `application_sdk/testing/harness/evidence.py`
 
 ### Constants and Enums
+
+#### `ADMIN_ROLE_NAME`
+
+- **Import:** `from application_sdk.testing.harness.atlas import ADMIN_ROLE_NAME`
+- **Signature:** `ADMIN_ROLE_NAME`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
 #### `Classifier`
 
