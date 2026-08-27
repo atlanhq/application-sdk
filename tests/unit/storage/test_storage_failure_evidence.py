@@ -22,6 +22,7 @@ these tests rather than silently degrade the envelope.
 from __future__ import annotations
 
 import pytest
+from obstore.store import GCSStore, S3Store
 
 from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.storage.errors import (
@@ -188,23 +189,88 @@ def test_a_real_outage_stays_retryable_even_when_the_key_contains_412() -> None:
     assert fd.evidence["http_status"] == 503
 
 
-def test_403_routes_to_permission() -> None:
+@pytest.mark.parametrize(
+    ("status", "provider_code"),
+    [("403 Forbidden", "AccessDenied"), ("404 Not Found", "NoSuchKey")],
+)
+def test_403_and_404_carry_the_status_without_reclassifying(
+    status: str, provider_code: str
+) -> None:
+    """The status reaches evidence, but the leaf and audience are unchanged.
+
+    Reclassifying these would silently move attribution. ``upload_file`` takes
+    an explicit store, so a 403 arrives both from the deployment's own artifact
+    store (APP_OWNER) and from a caller-supplied store pointing at a customer
+    bucket (USER) — the status alone cannot tell those apart, and guessing would
+    put customer-facing attribution on our own infrastructure half the time. A
+    consumer that *does* hold the missing context can branch on
+    ``evidence["http_status"]``.
+    """
     err = _storage_error_for(
-        _gcs_http_error("403 Forbidden", "AccessDenied"),
+        _gcs_http_error(status, provider_code), "artifacts/t.json", "upload failed"
+    )
+    assert type(err) is StorageError
+    fd = err.to_failure_details()
+    assert fd.evidence["http_status"] == int(status.split()[0])
+    assert fd.evidence["provider_code"] == provider_code
+    assert fd.category is FailureCategory.DEPENDENCY_UNAVAILABLE
+    assert fd.audience is Audience.PLATFORM
+
+
+# ── target: identity of the store, never its credentials ────────────────────
+
+
+def test_target_is_derived_from_the_resolved_store() -> None:
+    err = _storage_error_for(
+        _gcs_http_error("500 Internal Server Error", "InternalError"),
+        "artifacts/t.json",
+        "upload failed",
+        GCSStore("example-bucket"),
+    )
+    assert err.to_failure_details().evidence["target"] == (
+        "gs://example-bucket/artifacts/t.json"
+    )
+
+
+def test_target_never_leaks_store_credentials() -> None:
+    """``store.config`` holds live secrets, so ``target`` must be an allowlist.
+
+    An ``S3Store`` exposes ``secret_access_key`` and an ``AzureStore`` exposes
+    ``account_key`` in plaintext. Serialising the config — or the request URL,
+    whose ``X-Goog-Signature`` ``redact_secrets`` does not strip — would put
+    credential material on the wire.
+    """
+    store = S3Store(
+        "example-bucket",
+        region="us-east-1",
+        access_key_id="AKIAEXAMPLE",
+        secret_access_key="test-secret-do-not-emit",
+    )
+    # Guard the premise: if obstore stops exposing the secret this test is
+    # still correct, but it is no longer testing what it claims to.
+    assert store.config.get("secret_access_key") == "test-secret-do-not-emit"
+
+    fd = _storage_error_for(
+        _gcs_http_error("500 Internal Server Error", "InternalError"),
+        "artifacts/t.json",
+        "upload failed",
+        store,
+    ).to_failure_details()
+
+    serialised = fd.model_dump_json()
+    assert "test-secret-do-not-emit" not in serialised
+    assert "AKIAEXAMPLE" not in serialised
+    assert fd.evidence["target"] == "s3://example-bucket/artifacts/t.json"
+
+
+def test_target_is_none_when_no_store_is_available() -> None:
+    """Absent identity must degrade to ``None``, never to a raise."""
+    err = _storage_error_for(
+        _gcs_http_error("500 Internal Server Error", "InternalError"),
         "artifacts/t.json",
         "upload failed",
     )
-    assert isinstance(err, StoragePermissionError)
-    assert err.to_failure_details().retryable is False
-
-
-def test_404_routes_to_not_found() -> None:
-    err = _storage_error_for(
-        _gcs_http_error("404 Not Found", "NoSuchKey"),
-        "artifacts/t.json",
-        "upload failed",
-    )
-    assert isinstance(err, StorageNotFoundError)
+    assert err.to_failure_details().evidence["target"] is None
 
 
 def test_unclassifiable_failure_stays_a_retryable_dependency_error() -> None:

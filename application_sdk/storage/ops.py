@@ -409,6 +409,12 @@ def _is_precondition(exc: BaseException) -> bool:
 # Parsing the two routing-relevant tokens out is what lets a consumer branch on
 # a field: before FND-957 the status existed only inside the free-text cause,
 # which the envelope's length cap usually truncated away before it arrived.
+# Cap for the logged copy of a driver error. Larger than the wire envelope's
+# cap on purpose — the point of the log copy is to outlive the truncation — but
+# still bounded, because ``error_message`` promotes to an indexed OTLP
+# attribute. Matches ``safe_traceback``'s ceiling.
+_LOG_CAUSE_MAX_LEN = 8000
+
 _OBSTORE_HTTP_STATUS_RE = re.compile(r"status code:\s*(\d{3})")
 _PROVIDER_CODE_RE = re.compile(r"<Code>([^<>]{1,64})</Code>")
 
@@ -439,8 +445,56 @@ def _obstore_http_evidence(exc: BaseException) -> tuple[int | None, str | None]:
     )
 
 
-def _storage_error_for(exc: Exception, key: str, message: str) -> Exception:
-    """Build the most specific typed storage error for a failed write.
+# Scheme per obstore store class, for the ``target`` evidence field.
+_STORE_SCHEMES: dict[str, str] = {
+    "GCSStore": "gs",
+    "S3Store": "s3",
+    "AzureStore": "abfs",
+    "LocalStore": "file",
+}
+# Identity keys that are safe to read off a store's ``config``. That dict also
+# carries live credentials -- an ``S3Store`` exposes ``secret_access_key`` and
+# an ``AzureStore`` exposes ``account_key``, both in plaintext -- so this is an
+# allowlist and must stay one. Never put ``store.config`` itself on an error.
+_STORE_IDENTITY_KEYS: tuple[str, ...] = ("bucket", "container_name")
+
+
+def _store_target(store: ObjectStore, key: str) -> str | None:
+    """Return a ``scheme://container/path`` identity for the failing request.
+
+    This is the ``target`` evidence field -- "what were we talking to". It is
+    assembled from the store's class and one allowlisted identity key, never
+    from the request URL and never from ``store.config`` wholesale: a signed
+    URL carries ``X-Goog-Signature``, which ``redact_secrets`` does not strip,
+    and the config dict holds credentials outright.
+
+    Best-effort by design. Returns ``None`` rather than raising, because this
+    only decorates a failure and must never be able to replace it. (FND-957)
+    """
+    try:
+        scheme = _STORE_SCHEMES.get(type(store).__name__, "objectstore")
+        container: str | None = None
+        config = getattr(store, "config", None)
+        if config is not None and hasattr(config, "get"):
+            for candidate in _STORE_IDENTITY_KEYS:
+                value = config.get(candidate)
+                if isinstance(value, str) and value:
+                    container = value
+                    break
+        prefix = getattr(store, "prefix", None)
+        path = f"{prefix}/{key}" if isinstance(prefix, str) and prefix else key
+        return f"{scheme}://{container}/{path}" if container else f"{scheme}:///{path}"
+    except Exception:  # pragma: no cover — identity is decoration, never fatal
+        return None
+
+
+def _storage_error_for(
+    exc: Exception,
+    key: str,
+    message: str,
+    store: ObjectStore | None = None,
+) -> Exception:
+    """Build the typed storage error for a failed write.
 
     Order is load-bearing. The Azure container probe runs first because it is
     the one case whose remediation is a config change rather than a retry. The
@@ -448,15 +502,13 @@ def _storage_error_for(exc: Exception, key: str, message: str) -> Exception:
     the message-substring classifiers elsewhere in this module are heuristics
     over prose and must not pre-empt them.
 
-    Every branch carries the same evidence, so a consumer reads ``http_status``
-    and ``provider_code`` off the envelope regardless of which leaf was
-    chosen. (FND-957)
+    Every branch carries the same evidence, so a consumer reads ``http_status``,
+    ``provider_code`` and ``target`` off the envelope regardless of which leaf
+    was chosen. (FND-957)
     """
     from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         StorageConfigError,
         StorageError,
-        StorageNotFoundError,
-        StoragePermissionError,
         StoragePreconditionError,
     )
 
@@ -469,20 +521,28 @@ def _storage_error_for(exc: Exception, key: str, message: str) -> Exception:
         "cause": exc,
         "http_status": http_status,
         "provider_code": provider_code,
+        "target": _store_target(store, key) if store is not None else None,
     }
     # 412 is the canonical precondition status; GCS also returns 400 with a
     # PreconditionFailed body, and either reading -- the condition did not
     # hold, or the condition itself was rejected as invalid -- fails
-    # identically on every retry of the same request.
+    # identically on every retry of the same request. That makes it a
+    # PRECONDITION rather than an outage, per the litmus test on
+    # ``DependencyUnavailableError``.
+    #
+    # Deliberately the ONLY status that changes the leaf. A 403 or 404 is
+    # genuinely ambiguous here: ``upload_file`` accepts an explicit store, so
+    # the same status arrives both from the deployment's own artifact store
+    # (where the audience is APP_OWNER) and from a caller-supplied store
+    # pointing at a customer bucket (where it is USER). Routing audience off
+    # the status would put customer-facing attribution on our own
+    # infrastructure half the time. The status still reaches ``evidence``, so a
+    # consumer holding the context we lack can branch on it.
     if http_status == 412 or (
         provider_code is not None
         and provider_code.lower() in _PRECONDITION_PROVIDER_CODES
     ):
         return StoragePreconditionError(message, **evidence)
-    if http_status == 403:
-        return StoragePermissionError(message, **evidence)
-    if http_status == 404:
-        return StorageNotFoundError(message, **evidence)
     return StorageError(message, **evidence)
 
 
@@ -521,13 +581,15 @@ def _log_storage_event(
         extra["error_class"] = error_class
     if error_message is not None:
         # The wire envelope length-caps ``cause_repr``, so without this the
-        # provider's own explanation existed nowhere: this event previously
+        # provider's own explanation had nowhere to live: this event previously
         # recorded only ``error_class`` ("GenericError"), with no ``str(exc)``,
-        # no ``exc_info`` and no ``safe_traceback``. Keeping an uncapped
-        # (secret-redacted) copy here means a truncated envelope always has a
-        # full-fidelity counterpart in the logs. ``error_message`` is already
-        # in ``_KNOWN_EXTRA_KEYS``. (FND-957)
-        extra["error_message"] = error_message
+        # no ``exc_info`` and no ``safe_traceback``. A copy here gives a
+        # truncated envelope a higher-fidelity counterpart in the logs.
+        # ``error_message`` is already in ``_KNOWN_EXTRA_KEYS``, so it promotes
+        # to an indexed OTLP attribute — hence the cap, for the same reason
+        # ``safe_traceback`` has one. Callers pass secret-redacted text.
+        # (FND-957)
+        extra["error_message"] = error_message[:_LOG_CAUSE_MAX_LEN]
     msg = f"storage.{op} {outcome} path={store_path}"
     # Keys are bound into loguru record["extra"] and promoted to OTLP indexed
     # attributes by _build_extra_dict in logger_adaptor (all are in _KNOWN_EXTRA_KEYS).
@@ -880,7 +942,7 @@ async def upload_file(
         )
         if isinstance(exc, Exception):
             raise _storage_error_for(
-                exc, key, f"Failed to upload file to key '{key}'"
+                exc, key, f"Failed to upload file to key '{key}'", resolved
             ) from exc
         raise  # re-raise CancelledError / KeyboardInterrupt bare after logging
 
@@ -1274,7 +1336,9 @@ async def _put(
         await obstore.put_async(resolved, key, data, attributes=put_attributes)
     # conformance: ignore[E004] put error handler; all exceptions re-raised via StorageConfigError or StorageError chain
     except Exception as exc:
-        raise _storage_error_for(exc, key, f"Failed to put key '{key}'") from exc
+        raise _storage_error_for(
+            exc, key, f"Failed to put key '{key}'", resolved
+        ) from exc
 
 
 async def put_json(
