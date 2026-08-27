@@ -158,6 +158,8 @@ from application_sdk.testing.harness.identity import (
     read_tenant_auth,
 )
 from application_sdk.testing.harness.outcome import (
+    Indeterminate,
+    Outcome,
     Settled,
     as_count,
     as_counts,
@@ -403,6 +405,25 @@ class FullDAGOutcome:
     used to fail *open* — a failed sample read arrived as an empty list, which is
     also how "this type landed nothing" is spelled, and an empty list is skipped.
     Keeping the distinction here is what closes finding C4 on FND-224."""
+    connection_read: Outcome[bool] | None = None
+    """The Connection poll's verdict, or ``None`` when it never ran.
+
+    :attr:`connection_in_atlas` is its settled projection, and on its own it
+    cannot say *why* it is False. Three verdicts collapse into that boolean and
+    they are not the same finding:
+    :class:`~application_sdk.testing.harness.outcome.NeverStarted` and
+    :class:`~application_sdk.testing.harness.outcome.Expired` mean the
+    Connection never materialised — a real claim about the publish path — while
+    :class:`~application_sdk.testing.harness.outcome.Indeterminate` means Atlas
+    could not be read, which is a claim about Atlas. Keeping the verdict is what
+    lets the ladder tell them apart."""
+    lineage_read: bool | Unreadable | None = None
+    """Whether any lineage asset was observed, or the fact that it could not be
+    read; ``None`` when the probe never ran.
+
+    :attr:`lineage_present` is the settled projection, and ``False`` there means
+    both "no Process exists" and "the count could not be read" — the same
+    fail-closed-but-misattributed shape the asset counts had."""
     connection_expected: bool = True
     """Mirror of the suite's ``expect_connection``, carried here so
     :attr:`succeeded` can tell "the connection is missing" apart from "this
@@ -505,6 +526,10 @@ class BaseE2ETest:
     # and the default is what lets the property answer on an instance whose
     # setup_method never ran (or ran on the worker-up-only tier).
     _client: AEWorkflowClient | None = None
+    # This run's `$admin` reading, taken at most once — see _admin_identity.
+    # Plain instance field with a class-level default, same reason as
+    # source_available above.
+    _admin_reading: "atlas.Reading[atlas.AdminIdentity] | None" = None
     # AE's version number for the seed version this harness published, or None
     # when the harness published none. _assert_deployed_manifest_matches waits
     # for the published version to differ from this before comparing: while AE
@@ -831,6 +856,7 @@ class BaseE2ETest:
         self._node_dispatch = {}
         self._expected_node_identities = {}
         self._seed_version = None
+        self._admin_reading = None
 
         # A pinned progress-stall window that is not strictly below the poll
         # ceiling is a disabled watchdog (see ProgressWatchdogUnreachableError).
@@ -990,7 +1016,7 @@ class BaseE2ETest:
             ]
         ):
             return
-        reading = await atlas.admin_identity(client)
+        reading = await self._admin_identity(client)
         if isinstance(reading, Settled):
             self._auto_admin_roles = reading.value.roles
             self._auto_admin_users = reading.value.users
@@ -1007,6 +1033,31 @@ class BaseE2ETest:
             "ATLAS-400-00-114. Set connection_admin_roles on the test class.",
             exc_info=reading.cause,
         )
+
+    async def _admin_identity(
+        self, client: AsyncAtlanClient
+    ) -> atlas.Reading[atlas.AdminIdentity]:
+        """This run's ``$admin`` reading, taken once and reused.
+
+        Memoised because two callers want the same answer under *different*
+        policies: this class degrades to an empty ACL fallback, and
+        ``SQLAppE2ETest`` raises. Taking two readings would let the second fail
+        after the first succeeded — a transient blip between them turning a
+        healthy run into ``AdminRoleNotResolvedError`` — and would double a
+        network call whose answer cannot change within one test.
+
+        Args:
+            client: The open Atlas client.
+
+        Returns:
+            The reading, settled or indeterminate. Not unwrapped: deciding what
+            an absent role means is the caller's, which is why
+            :func:`~application_sdk.testing.harness.atlas.admin_identity`
+            reports rather than decides.
+        """
+        if self._admin_reading is None:
+            self._admin_reading = await atlas.admin_identity(client)
+        return self._admin_reading
 
     def _read_tenant_auth(self) -> TenantAuth:
         """Read the tenant credentials this run uses, and remember them.
@@ -1073,9 +1124,25 @@ class BaseE2ETest:
             MissingHarnessEnvError: The run has no tenant. That is the
                 worker-up-only tier, where ``setup_method`` deliberately wires
                 nothing: there is no AE client because there is nothing to talk
-                to.
+                to. The tier is reachable *with* a tenant configured
+                (``E2E_SOURCE_AVAILABLE=false`` on a leg that has credentials),
+                so the absent ``_ae`` is what this checks — reading the
+                environment would find a perfectly good tenant and then fail on
+                a missing attribute instead.
         """
         if self._client is None:
+            ae = getattr(self, "_ae", None)
+            if ae is None:
+                raise MissingHarnessEnvError(
+                    message=(
+                        f"{type(self).__name__} has no AE client: setup_method "
+                        "wired none, which is the worker-up-only tier "
+                        "(source_available=False). There is nothing for "
+                        "`self.client` to talk to on that tier — it verifies "
+                        "the worker's health endpoint and exercises no DAG."
+                    ),
+                    field="E2E_SOURCE_AVAILABLE",
+                )
             auth = (
                 self._auth if getattr(self, "_auth", None) else self._read_tenant_auth()
             )
@@ -1084,7 +1151,7 @@ class BaseE2ETest:
                 auth.api_key,
                 oauth_client_id=auth.oauth_client_id,
                 oauth_client_secret=auth.oauth_client_secret,
-                ae=self._ae,
+                ae=ae,
             )
         return self._client
 
@@ -2707,17 +2774,28 @@ class BaseE2ETest:
             )
             connection_in_atlas = isinstance(found, Settled) and found.value
             if not connection_in_atlas:
-                return self._outcome(ae_result, connection_in_atlas=False)
-            return await self._read_inventory(client, ae_result)
+                # The verdict goes with it. Flattening to False here is what made
+                # an unreadable Atlas report as "the Connection just did not
+                # land" — a claim about the publish path, made by a run that
+                # never got an answer.
+                return self._outcome(
+                    ae_result, connection_in_atlas=False, connection_read=found
+                )
+            return await self._read_inventory(client, ae_result, connection_read=found)
 
     async def _read_inventory(
-        self, client: AsyncAtlanClient, ae_result: DAGRunResult
+        self,
+        client: AsyncAtlanClient,
+        ae_result: DAGRunResult,
+        *,
+        connection_read: Outcome[bool] | None = None,
     ) -> FullDAGOutcome:
         """Read counts, the all-types total, lineage and location samples.
 
         Args:
             client: The already-open Atlas client the connection poll used.
             ae_result: The DAG snapshot, carried onto the outcome.
+            connection_read: The Connection poll's verdict, carried through.
 
         Returns:
             The outcome with every Atlas reading attached.
@@ -2753,28 +2831,30 @@ class BaseE2ETest:
             await atlas.count_total_assets(client, self.connection_qualified_name)
         )
 
-        lineage_present = False
+        # Three answers, not two. ``expect_lineage`` is graded on "at least one
+        # Process exists", so an unreadable count folded into False fails the run
+        # with "no lineage rows reached Atlas" — the connector's fault, asserted
+        # by a run that never looked. It is the same C4 shape as the counts, and
+        # it gets the same treatment: a settled zero stays an assertion failure,
+        # an unreadable read is ungraded.
+        lineage_read: bool | Unreadable | None = None
         if self.expect_lineage:
             lineage = await atlas.count_lineage(
                 client, self.connection_qualified_name, probe_types
             )
             if isinstance(lineage, Settled):
-                lineage_present = any(count > 0 for count in lineage.value.values())
+                lineage_read = any(count > 0 for count in lineage.value.values())
                 logger.info(
                     "Lineage inventory under %s: %s lineage_present=%s",
                     self.connection_qualified_name,
                     dict(lineage.value),
-                    lineage_present,
+                    lineage_read,
                 )
             else:
-                # Not folded into the findings: ``expect_lineage`` is graded on
-                # "at least one Process exists", and an unreadable lineage count
-                # is reported here and then fails that assertion the same way an
-                # absent one does. Making it a third answer would widen the
-                # ladder for a check that has no per-type expectations to grade.
+                lineage_read = Unreadable(cause=lineage.cause)
                 logger.warning(
                     "Lineage counts under %s could not be read, so the lineage "
-                    "assertion is graded on no observation at all",
+                    "assertion is not graded",
                     self.connection_qualified_name,
                     exc_info=lineage.cause,
                 )
@@ -2801,9 +2881,10 @@ class BaseE2ETest:
         return self._outcome(
             ae_result,
             connection_in_atlas=True,
+            connection_read=connection_read,
             count_reads=count_reads,
             total_read=total_read,
-            lineage_present=lineage_present,
+            lineage_read=lineage_read,
             sample_reads=sample_reads,
         )
 
@@ -2868,9 +2949,10 @@ class BaseE2ETest:
         ae_result: DAGRunResult,
         *,
         connection_in_atlas: bool,
+        connection_read: Outcome[bool] | None = None,
         count_reads: Mapping[str, CountRead] | None = None,
         total_read: CountRead | None = None,
-        lineage_present: bool = False,
+        lineage_read: bool | Unreadable | None = None,
         sample_reads: Mapping[str, SampleRead] | None = None,
     ) -> FullDAGOutcome:
         """Assemble the outcome, projecting each reading into its settled half.
@@ -2878,13 +2960,17 @@ class BaseE2ETest:
         Args:
             ae_result: The DAG snapshot.
             connection_in_atlas: Whether the Connection was observed.
+            connection_read: The Connection poll's verdict, when it ran.
             count_reads: Per-type counts as read.
             total_read: All-types total as read.
-            lineage_present: Whether any lineage asset was observed.
+            lineage_read: Whether any lineage asset was observed, or the fact
+                that the count could not be read.
             sample_reads: Sampled qualified names as read.
 
         Returns:
-            The outcome.
+            The outcome. Every reading is carried in both shapes: the settled
+            projection a connector suite indexes, and the reading the assertion
+            ladder grades.
         """
         counts = dict(count_reads or {})
         samples = dict(sample_reads or {})
@@ -2896,7 +2982,9 @@ class BaseE2ETest:
                 name: value for name, value in counts.items() if isinstance(value, int)
             },
             total_assets=total_read if isinstance(total_read, int) else 0,
-            lineage_present=lineage_present,
+            lineage_present=lineage_read is True,
+            connection_read=connection_read,
+            lineage_read=lineage_read,
             asset_qn_samples={
                 name: list(value)
                 for name, value in samples.items()
@@ -3227,6 +3315,11 @@ class BaseE2ETest:
                 the evidence wrapper there has one body to guard; the sequence
                 and the messages are unchanged.
         """
+        # Ungraded before unmet, and before the Connection gate below. A poll
+        # that could not be read is not the Connection failing to land, and the
+        # gate cannot tell the two apart from a boolean.
+        self._raise_if_ungraded(self._unreadable_probe_findings(outcome))
+
         # The Connection clause only applies to an entrypoint that publishes
         # inventory. With expect_connection False the Atlas probes never ran, so
         # consulting connection_in_atlas here would fail every such run.
@@ -3303,6 +3396,9 @@ class BaseE2ETest:
                 "wrong):\n" + "\n".join(location_failures)
             )
 
+        # `lineage_present` is False for both "no Process exists" and "never
+        # probed"; an unreadable read can no longer reach here, because
+        # _unreadable_probe_findings raised on it above.
         if self.expect_lineage and not outcome.lineage_present:
             raise AssertionError(
                 "No lineage Process/ColumnProcess assets found under "
@@ -3310,6 +3406,58 @@ class BaseE2ETest:
                 "lineage-app + lineage-publish nodes reported success but "
                 "no lineage rows reached Atlas."
             )
+
+    def _unreadable_probe_findings(self, outcome: FullDAGOutcome) -> Sequence[Finding]:
+        """Findings for the two probes whose verdict is not a per-type count.
+
+        The Connection poll and the lineage count are graded as booleans, so
+        neither has a place in :meth:`_asset_findings` — and both used to lose
+        the difference between "it is not there" and "I could not look".
+
+        Only :class:`~application_sdk.testing.harness.outcome.Indeterminate` is
+        ungraded here, which is narrower than "every non-settled verdict".
+        :class:`~application_sdk.testing.harness.outcome.NeverStarted` and
+        :class:`~application_sdk.testing.harness.outcome.Expired` on the
+        Connection poll mean the Connection never materialised inside the budget
+        — a real finding about the publish path, and one the existing
+        ``AssertionError`` states well. Widening the ungraded set to include them
+        would turn a genuine regression into "could not tell".
+
+        Args:
+            outcome: What the run produced.
+
+        Returns:
+            Zero, one or two findings carrying
+            :data:`~application_sdk.testing.harness.expectations.UNREADABLE`.
+        """
+        findings: list[Finding] = []
+        connection = outcome.connection_read
+        if isinstance(connection, Indeterminate):
+            findings.append(
+                Finding(
+                    subject="Connection",
+                    detail=(
+                        f"could not be read, so whether "
+                        f"{outcome.connection_qualified_name} landed was not "
+                        f"graded: {type(connection.cause).__name__}: "
+                        f"{connection.cause}"
+                    ),
+                    expectation=UNREADABLE,
+                )
+            )
+        lineage = outcome.lineage_read
+        if isinstance(lineage, Unreadable):
+            findings.append(
+                Finding(
+                    subject="lineage",
+                    detail=(
+                        "could not be read, so the lineage expectation was not "
+                        f"graded: {type(lineage.cause).__name__}: {lineage.cause}"
+                    ),
+                    expectation=UNREADABLE,
+                )
+            )
+        return findings
 
     def _raise_if_ungraded(self, findings: Sequence[Finding]) -> None:
         """Fail as a dependency fault when an expectation could not be graded.

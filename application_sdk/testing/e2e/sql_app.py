@@ -50,7 +50,6 @@ from application_sdk.testing.e2e.substitutions import (
     MustacheSubstitutions,
     SQLMustacheSubstitutions,
 )
-from application_sdk.testing.harness import atlas
 from application_sdk.testing.harness.outcome import Settled
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; pyatlan is a lazy import
@@ -295,7 +294,11 @@ class SQLAppE2ETest(BaseE2ETest):
                 could not be read.
         """
         await super()._resolve_run_identity(client)
-        reading = await atlas.admin_identity(client)
+        # The base's call and this one are the *same* reading — `_admin_identity`
+        # memoises it. Taking a second would let a transient blip after a
+        # successful first read raise below, failing a run whose ACL was already
+        # resolved.
+        reading = await self._admin_identity(client)
         roles = reading.value.roles if isinstance(reading, Settled) else ()
         if not roles:
             raise AdminRoleNotResolvedError(

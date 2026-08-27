@@ -265,6 +265,47 @@ def _absorb_ae_blip(error: BaseException) -> timedelta | None:
     return timedelta(seconds=math.ceil(requested))
 
 
+def _retire_transport(
+    http: httpx.AsyncClient | None, loop: asyncio.AbstractEventLoop | None
+) -> None:
+    """Release a pool bound to a loop that is not the one now running.
+
+    Not ``await http.aclose()``, and that is the whole difficulty: the
+    connections in that pool are registered with *its* loop's selector, so
+    closing them from a different loop reaches into another loop's transports.
+    So the close is scheduled **on the owning loop** when that loop is still
+    alive, and skipped when it is not — a closed loop has already torn its
+    transports down, and the sockets went with them.
+
+    Never raises. This runs on the way to serving a request, and a pool that
+    could not be released is a leak, not a failure of the call the caller
+    actually made.
+
+    Args:
+        http: The outgoing pooled client, or ``None`` if there was none.
+        loop: The loop it was built on, or ``None`` if unrecorded.
+    """
+    if http is None or http.is_closed:
+        return
+    if loop is None or loop.is_closed():
+        # Its transports closed with the loop. Nothing to release, and nothing
+        # an operator can do — DEBUG rather than WARNING.
+        logger.debug(
+            "AE transport handed off from a loop that is already closed; "
+            "its connections were released with it"
+        )
+        return
+    try:
+        loop.call_soon_threadsafe(lambda: loop.create_task(http.aclose()))
+    # conformance: ignore[E004] the owning loop can stop between the is_closed() check and this call, which asyncio reports as a bare RuntimeError; there is nothing to recover and the leak is logged rather than raised into an unrelated request
+    except Exception:
+        logger.warning(
+            "AE transport from a previous event loop could not be scheduled "
+            "for close; its pool leaks until the process exits",
+            exc_info=True,
+        )
+
+
 class _DAGProgress:
     """The per-poll progress line, and the ledger behind it.
 
@@ -406,18 +447,29 @@ class AEClient:
     # Low-level HTTP
     # ------------------------------------------------------------------
 
-    def _transport(self) -> httpx.AsyncClient:
+    async def _transport(self) -> httpx.AsyncClient:
         """This client's pooled HTTP connection, created on first use.
 
         ``follow_redirects`` preserves the redirect handling ``urlopen`` gave
         the original implementation and ``httpx`` disables by default. The
         per-request timeout is passed per call rather than baked in here,
         because the submit gets a wider one than every other call.
+
+        ``async`` only so the *outgoing* pool can be released on a loop handoff.
+        Rebuilding without releasing swapped one leak for another: the old
+        client's sockets stay open with nothing referencing them, which on a
+        suite that gives every test its own loop is one leaked pool per test.
+
+        Returns:
+            The pooled client for the running loop.
         """
         loop = asyncio.get_running_loop()
-        if self._http is None or self._http.is_closed or self._http_loop is not loop:
-            self._http = httpx.AsyncClient(follow_redirects=True)
-            self._http_loop = loop
+        current = self._http
+        if current is not None and not current.is_closed and self._http_loop is loop:
+            return current
+        _retire_transport(current, self._http_loop)
+        self._http = httpx.AsyncClient(follow_redirects=True)
+        self._http_loop = loop
         return self._http
 
     async def _drop_transport(self) -> None:
@@ -476,7 +528,7 @@ class AEClient:
         delivery = RequestDelivery.AMBIGUOUS
         for attempt in range(1, _REQUEST_MAX_ATTEMPTS + 1):
             try:
-                resp = await self._transport().request(
+                resp = await (await self._transport()).request(
                     method,
                     url,
                     content=content,

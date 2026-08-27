@@ -29,6 +29,7 @@ import pytest
 
 from application_sdk.testing.e2e._errors import (
     AtlasReadIndeterminateError,
+    MissingHarnessEnvError,
     NoWorkerOnTaskQueueError,
 )
 from application_sdk.testing.e2e.base import BaseE2ETest, FullDAGOutcome
@@ -40,7 +41,12 @@ from application_sdk.testing.e2e.client import (
 )
 from application_sdk.testing.harness import atlas as atlas_api
 from application_sdk.testing.harness.expectations import Unreadable
-from application_sdk.testing.harness.outcome import Indeterminate, Settled
+from application_sdk.testing.harness.outcome import (
+    Expired,
+    Indeterminate,
+    NeverStarted,
+    Settled,
+)
 from application_sdk.testing.harness.temporal import PollerInfo, TaskQueueType
 
 _QN = "default/openapi/1700000000123456"
@@ -168,6 +174,190 @@ class TestUnreadableAtlasIsNotAFailure:
             asset_qn_reads={"APISpec": []},
         )
         suite._assert_full_dag_outcome(outcome)  # must not raise
+
+
+class TestTheConnectionPollKeepsItsVerdict:
+    """`connection_in_atlas` is one boolean over three different findings.
+
+    "It never appeared" and "Atlas could not be read" both flattened to `False`,
+    and the ladder called both *"Connection in Atlas? False"* — sending the
+    reader to the publish path for a fault that was never in it.
+    """
+
+    def _outcome(self, connection_read: Any) -> FullDAGOutcome:
+        return FullDAGOutcome(
+            ae_result=_succeeded("extract"),
+            connection_qualified_name=_QN,
+            connection_in_atlas=False,
+            connection_read=connection_read,
+        )
+
+    def test_an_unreadable_poll_raises_a_dependency_leaf(self) -> None:
+        outcome = self._outcome(
+            Indeterminate(
+                label="Atlas Connection",
+                attempts=10,
+                elapsed=timedelta(seconds=270),
+                cause=RuntimeError("atlas is down"),
+            )
+        )
+        with pytest.raises(AtlasReadIndeterminateError) as exc:
+            _suite()._assert_full_dag_outcome(outcome)
+        assert not isinstance(exc.value, AssertionError)
+        assert exc.value.checks is not None and "Connection" in exc.value.checks
+
+    @pytest.mark.parametrize(
+        "verdict",
+        [
+            pytest.param(
+                NeverStarted(
+                    label="Atlas Connection",
+                    attempts=10,
+                    elapsed=timedelta(seconds=270),
+                    grace=timedelta(seconds=270),
+                ),
+                id="never-started",
+            ),
+            pytest.param(
+                Expired(
+                    label="Atlas Connection",
+                    attempts=50,
+                    elapsed=timedelta(seconds=1500),
+                    budget=timedelta(seconds=1500),
+                ),
+                id="expired",
+            ),
+        ],
+    )
+    def test_a_connection_that_never_appeared_is_still_the_connectors(
+        self, verdict: Any
+    ) -> None:
+        """The narrowing that matters: only *unreadable* is ungraded.
+
+        A poll that read Atlas fine and never saw the Connection is a real
+        finding about the publish path. Ungrading it too would turn a genuine
+        regression into "could not tell".
+        """
+        with pytest.raises(AssertionError, match="Connection in Atlas\\? False"):
+            _suite()._assert_full_dag_outcome(self._outcome(verdict))
+
+    def test_a_run_that_never_probed_is_unaffected(self) -> None:
+        """`connection_read` is None when the DAG failed before the Atlas phase.
+
+        The DAG failure is the verdict there, and it must not be displaced by a
+        complaint about a probe that never ran.
+        """
+        outcome = FullDAGOutcome(
+            ae_result=_succeeded("extract"),
+            connection_qualified_name=_QN,
+            connection_in_atlas=False,
+        )
+        with pytest.raises(AssertionError):
+            _suite()._assert_full_dag_outcome(outcome)
+
+
+class TestTheLineageCountKeepsItsVerdict:
+    """`lineage_present=False` meant both "no Process" and "could not read".
+
+    With `expect_lineage` on, the second was reported as *"no lineage rows
+    reached Atlas"* — the connector's fault, asserted by a run that never
+    looked. The same C4 shape as the counts, on the one probe that was left out.
+    """
+
+    def _outcome(self, lineage_read: Any) -> FullDAGOutcome:
+        return FullDAGOutcome(
+            ae_result=_succeeded("extract"),
+            connection_qualified_name=_QN,
+            connection_in_atlas=True,
+            asset_counts={"APISpec": 3},
+            asset_count_reads={"APISpec": 3},
+            total_asset_read=3,
+            lineage_present=lineage_read is True,
+            lineage_read=lineage_read,
+        )
+
+    def _lineage_suite(self) -> _Suite:
+        class _WithLineage(_Suite):
+            expect_lineage = True
+
+        suite = _WithLineage()
+        suite.connection_qualified_name = _QN
+        return suite
+
+    def test_an_unreadable_lineage_count_raises_a_dependency_leaf(self) -> None:
+        outcome = self._outcome(Unreadable(cause=RuntimeError("atlas is down")))
+        with pytest.raises(AtlasReadIndeterminateError) as exc:
+            self._lineage_suite()._assert_full_dag_outcome(outcome)
+        assert not isinstance(exc.value, AssertionError)
+        assert exc.value.checks is not None and "lineage" in exc.value.checks
+
+    def test_a_settled_zero_still_fails_the_assertion(self) -> None:
+        """The control: read it, and there was no lineage. Still the connector's."""
+        with pytest.raises(AssertionError, match="No lineage"):
+            self._lineage_suite()._assert_full_dag_outcome(self._outcome(False))
+
+    def test_a_settled_true_passes(self) -> None:
+        self._lineage_suite()._assert_full_dag_outcome(self._outcome(True))
+
+
+class TestTheWorkerUpTierHasNoClient:
+    """`setup_method` wires no AE client on the no-source tier.
+
+    Reaching for `self.client` there used to raise `AttributeError` on a private
+    field, because the property built `AEWorkflowClient(..., ae=self._ae)` and
+    `_ae` was never assigned. Reading the *environment* to decide would not have
+    caught it: the tier is reachable with a tenant configured
+    (`E2E_SOURCE_AVAILABLE=false` on a leg that has credentials), so the env is
+    fine and the attribute is still missing.
+    """
+
+    def test_the_leaf_names_the_tier_rather_than_a_private_field(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_BASE_URL", "https://test.example.invalid")
+        monkeypatch.setenv("ATLAN_API_KEY", "test-token")
+        monkeypatch.setenv("E2E_SOURCE_AVAILABLE", "false")
+
+        suite = _Suite()
+        suite.setup_method()
+
+        assert suite.source_available is False
+        with pytest.raises(MissingHarnessEnvError) as exc:
+            _ = suite.client
+        assert "source_available=False" in str(exc.value)
+
+
+class TestTheAdminIdentityIsReadOnce:
+    """Two callers, two policies, one reading.
+
+    The base degrades on an absent `$admin`; `SQLAppE2ETest` raises. Both used
+    to call `atlas.admin_identity` themselves, so a transient blip *between* the
+    two reads failed a run whose ACL had already resolved.
+    """
+
+    def test_the_second_caller_gets_the_first_reading(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        reads = 0
+
+        async def _count(_client: object, **_kwargs: Any) -> Any:
+            nonlocal reads
+            reads += 1
+            return Settled(
+                label="admin",
+                attempts=1,
+                elapsed=timedelta(0),
+                value=SimpleNamespace(roles=("role-guid",), users=("svc",)),
+            )
+
+        monkeypatch.setattr(atlas_api, "admin_identity", _count)
+        suite = _suite()
+
+        first = _run_sync(suite._admin_identity(object()))
+        second = _run_sync(suite._admin_identity(object()))
+
+        assert reads == 1, "the reading must be taken once per run"
+        assert second is first
 
 
 class TestUnreadableCountsReachTheOutcome:
