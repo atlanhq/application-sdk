@@ -192,6 +192,31 @@ always scans the whole repo.  Findings outside the prefix are left untouched.
 WARNING is cleared by either a real fix or a justified inline suppression.  Every
 suppression is routed to the residue report for human audit.
 
+## Headless / harness-driven mode
+
+When a harness invokes this skill non-interactively (no shell, a hard time
+budget, detection pre-executed), the caller states so in its prompt.  Honor
+these adjustments — they replace the corresponding steps of the loop, and
+nothing else changes:
+
+- **The shell being disabled is policy, not an error.**  Never attempt to run
+  a command.  Every command-shaped step is pre-handled by the caller: the
+  detect step has already run (the caller names the SARIF path, typically in
+  the repository root) and the findings ride the prompt.  Work from those.
+- **Recheck is the caller's.**  The harness re-runs detection and every gate
+  after the session ends — an in-session recheck is neither possible nor
+  needed.  Make the edits, then end the session.
+- **Pace yourself: edit early, edit incrementally.**  Begin applying fixes
+  within your first few actions and fix each site as you inspect it.  Do NOT
+  survey the whole repository before the first edit — headless sessions have
+  a hard deadline, and analysis without edits is discarded at it.
+- **Residue is a report, not a retry loop.**  A finding that genuinely cannot
+  be fixed safely is skipped (last resort) and the caller accounts for it;
+  do not burn the budget re-attempting it.
+- All standing rules hold unchanged: never add a suppression outside strict
+  mode, never touch `tests/`, `.github/`, or `conformance/`, never commit or
+  push — leave changes in the working tree.
+
 ## Area status
 
 The live program (`conformance-remediation.prose.md`, resolved from the installed
