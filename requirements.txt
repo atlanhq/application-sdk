@@ -170,7 +170,7 @@ markupsafe==3.0.3
 mdurl==0.1.2
     # via markdown-it-py
 mock==5.2.0
-msal==1.37.0
+msal==1.38.0
     # via
     #   azure-identity
     #   msal-extensions
