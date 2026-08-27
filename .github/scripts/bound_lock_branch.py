@@ -38,18 +38,11 @@ shape:
    bounded resolve does not fail — it silently backtracks to an older SDK.
 
 3. **One commit, not three.** Each push to the branch re-fires the PR's entire
-   required-check suite. Bounding both locks and re-exporting ``requirements.txt``
-   in a single commit costs one CI wave instead of three.
+   required-check suite. Bounding every lock in a single commit costs one CI wave
+   instead of one per file.
 
-4. **``requirements.txt`` is re-exported here.** It is derived from the root lock,
-   and ``dependabot-requirements-sync.yaml`` normally regenerates it on any push
-   to a ``renovate/**`` branch. On *this* branch both workflows would fire on the
-   same push and both would push to the same branch, so the loser takes a
-   non-fast-forward rejection. That workflow skips this branch and hands the file
-   over here, keeping a single writer per branch.
-
-5. **The npm lock is bounded too, by a different driver.** The lane rewrites a
-   fourth file, ``packages/conformance/conformance/package-lock.json``, and npm
+4. **The npm lock is bounded too, by a different driver.** The lane rewrites a
+   third file, ``packages/conformance/conformance/package-lock.json``, and npm
    can express none of the per-package retention ceilings the uv bound depends
    on — so ``renovate_npm_lock_bounded`` gates the whole file instead: take the
    bounded resolve, or restore the base branch's lock verbatim. FND-380. It rides
@@ -115,12 +108,6 @@ PROJECTS: tuple[Project, ...] = (
 # is declared separately rather than squeezed into Project.
 NPM_PROJECT = "packages/conformance/conformance"
 
-# Regenerated from the ROOT lock. Flags match dependabot-requirements-sync.yaml
-# byte for byte so the file this produces is the same file that workflow produces
-# — deliberately not --all-extras, which would widen what the export pins.
-REQUIREMENTS_PATH = "requirements.txt"
-REQUIREMENTS_EXPORT = ["uv", "export", "--no-hashes", "--frozen"]
-
 
 def bound_project(project: Project, window: str, baseline_ref: str, root: Path) -> int:
     """Run the shipped driver over one project. Returns its exit code."""
@@ -161,30 +148,6 @@ def bound_npm(window: str, baseline_ref: str, root: Path) -> int:
             str(root / NPM_PROJECT),
         ]
     )
-
-
-def export_requirements(root: Path) -> None:
-    """Re-derive requirements.txt from the freshly bounded root lock.
-
-    ``--frozen`` is what makes this a projection rather than a second resolve: it
-    exports what the lock says and fails if the lock does not satisfy
-    ``pyproject.toml``, so this can never quietly introduce a version the bound
-    just excluded. A missing requirements.txt is not this script's business to
-    create, so the export is skipped rather than inventing the file.
-    """
-    target = root / REQUIREMENTS_PATH
-    if not target.exists():
-        print(f"No {REQUIREMENTS_PATH} — nothing to re-export.", file=sys.stderr)
-        return
-    result = subprocess.run(
-        REQUIREMENTS_EXPORT, cwd=root, capture_output=True, text=True
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"`{' '.join(REQUIREMENTS_EXPORT)}` failed, so {REQUIREMENTS_PATH} "
-            f"would be left describing the pre-bound lock:\n{result.stderr}"
-        )
-    target.write_text(result.stdout)
 
 
 def stage_and_commit(root: Path, paths: list[str]) -> bool:
@@ -261,15 +224,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         return code
 
-    try:
-        export_requirements(root)
-    except RuntimeError as error:
-        print(str(error), file=sys.stderr)
-        return 1
-
     paths = [f"{p.directory}/uv.lock".removeprefix("./") for p in PROJECTS]
     paths.append(f"{NPM_PROJECT}/{npm_bounded.LOCKFILE}")
-    paths.append(REQUIREMENTS_PATH)
     stage_and_commit(root, paths)
     return 0
 

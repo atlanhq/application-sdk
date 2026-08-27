@@ -136,7 +136,7 @@ def _local_sidecar_ok(local_path: str) -> bool:
         sidecar_path = Path(local_path + ".sha256")
         if not file_path.exists() or not sidecar_path.exists():
             return False
-        stored = sidecar_path.read_text().strip()
+        stored = sidecar_path.read_text(encoding="utf-8").strip()
         h = hashlib.sha256()
         with file_path.open("rb") as fh:
             for chunk in iter(lambda: fh.read(1 << 20), b""):

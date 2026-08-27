@@ -1937,8 +1937,7 @@ def _d011_group(spec: str) -> str:
         "atlan-application-sdk-conformance==0.13.0",  # exact pin (worst case)
         "atlan-application-sdk-conformance===0.13.0",  # arbitrary equality
         "atlan-application-sdk-conformance~=0.17.0",  # compatible-release pin
-        "atlan-application-sdk-conformance>=0.17.0",  # one-sided, no upper
-        "atlan-application-sdk-conformance<1.0.0",  # one-sided, no floor
+        "atlan-application-sdk-conformance>=0.17.0",  # uncapped, no upper
         "atlan-application-sdk-conformance",  # bare name
     ],
 )
@@ -1946,19 +1945,26 @@ def test_d011_fires_on_specifier_that_cannot_float(tmp_path: Path, spec: str) ->
     findings = _d011_scan(tmp_path, _D011_HEAD + _d011_group(spec))
     assert len(findings) == 1
     assert "cannot" in findings[0].message and "float" in findings[0].message
-    # prescribes the canonical two-sided form
-    assert "atlan-application-sdk-conformance>=0.17.0,<1.0.0" in findings[0].message
+    # prescribes the canonical capped form
+    assert "atlan-application-sdk-conformance<=1.0.0" in findings[0].message
 
 
 @pytest.mark.parametrize(
     "spec",
     [
+        # The canonical form: a cap alone, no floor.
+        "atlan-application-sdk-conformance<=1.0.0",
+        "atlan-application-sdk-conformance<1.0.0",
+        # The earlier two-sided form. Still accepted on purpose: the fleet is
+        # already on it (atlan-app-template ships it), and rejecting it would
+        # turn every declaring repo red and churn it back for no gain — a
+        # floor does not change which version resolves under the cap.
         "atlan-application-sdk-conformance>=0.17.0,<1.0.0",
         "atlan-application-sdk-conformance>=0.17.0,<=1.0.0",
         "atlan-application-sdk-conformance>0.16,<1.0.0",
     ],
 )
-def test_d011_accepts_two_sided_floating_ranges(tmp_path: Path, spec: str) -> None:
+def test_d011_accepts_capped_floating_ranges(tmp_path: Path, spec: str) -> None:
     assert _d011_scan(tmp_path, _D011_HEAD + _d011_group(spec)) == []
 
 
@@ -2003,7 +2009,7 @@ def test_d011_fires_on_a_floating_runtime_declaration(tmp_path: Path) -> None:
     assert "runtime image" in f.message
     # tells the remediator where it belongs, in canonical form
     assert "[dependency-groups].dev" in f.message
-    assert "atlan-application-sdk-conformance>=0.17.0,<1.0.0" in f.message
+    assert "atlan-application-sdk-conformance<=1.0.0" in f.message
     # anchored at the offending runtime line (the second array entry), not the
     # dev group
     assert f.line == 6
@@ -2086,9 +2092,43 @@ def test_d011_fires_when_declared_but_missing_from_lock(tmp_path: Path) -> None:
     assert "uv lock" in findings[0].message
 
 
+def test_d011_lock_branch_is_reachable_for_a_cap_only_specifier(
+    tmp_path: Path,
+) -> None:
+    """The canonical `<=1.0.0` must reach branch 4, not stop at branch 3.
+
+    Before a floor became optional, a cap-only declaration failed branch 3 and
+    returned there, so a repo that had never run ``uv lock`` was told its
+    specifier "cannot float" — a message describing the wrong defect and
+    prescribing an edit that would not have fixed anything. Now branch 3 passes
+    and the lock branch gets to report the real problem.
+    """
+    _write_lock(tmp_path, include_conformance=False)
+    findings = _d011_scan(
+        tmp_path,
+        _D011_HEAD + _d011_group("atlan-application-sdk-conformance<=1.0.0"),
+    )
+    assert len(findings) == 1
+    assert "no entry in uv.lock" in findings[0].message
+
+
 def test_d011_clean_when_declared_and_present_in_lock(tmp_path: Path) -> None:
     _write_lock(tmp_path, include_conformance=True)
     assert _d011_scan(tmp_path, _D011_HEAD + _D011_OK_GROUP) == []
+
+
+def test_d011_clean_when_cap_only_specifier_is_present_in_lock(
+    tmp_path: Path,
+) -> None:
+    """The canonical form, end to end: declared, capped, and locked."""
+    _write_lock(tmp_path, include_conformance=True)
+    assert (
+        _d011_scan(
+            tmp_path,
+            _D011_HEAD + _d011_group("atlan-application-sdk-conformance<=1.0.0"),
+        )
+        == []
+    )
 
 
 def test_d011_lock_branch_matches_normalised_lock_name(tmp_path: Path) -> None:
@@ -2128,14 +2168,15 @@ def test_d011_undeclared_takes_precedence_over_the_lock_branch(
 @pytest.mark.parametrize(
     "spec,expected",
     [
-        (">=0.17.0,<1.0.0", True),
+        ("<=1.0.0", True),  # the canonical form: a cap, no floor
+        ("<1.0.0", True),
+        (">=0.17.0,<1.0.0", True),  # a floor is optional, not forbidden
         ("<1.0.0,>=0.17.0", True),  # clause order is irrelevant
         (">0.16,<=1.0.0", True),
         ("==0.13.0", False),
         ("===0.13.0", False),
         ("~=0.17.0", False),
-        (">=0.17.0", False),
-        ("<1.0.0", False),
+        (">=0.17.0", False),  # uncapped: admits an unreviewed major
         ("", False),
         ("   ", False),
     ],
@@ -2144,12 +2185,23 @@ def test_is_floating_range(spec: str, expected: bool) -> None:
     assert _is_floating_range(spec) is expected
 
 
-def test_is_floating_range_is_stricter_than_is_bounded_specifier() -> None:
-    """The two predicates deliberately disagree on pins.
+def test_is_floating_range_and_is_bounded_specifier_disagree_both_ways() -> None:
+    """The two predicates are deliberately different, in both directions.
 
-    D001 accepts ``==X`` as bounded (an exact SDK pin is reviewable); D011 must
-    not, because an exact conformance pin freezes the ruleset that grades the
-    repo.
+    They sit next to each other with near-identical loop bodies, so this pins
+    the disagreement: editing one to match the other silently rewrites a
+    different BLOCK rule.
+
+    On pins, D011 is the stricter one: D001 accepts ``==X`` as bounded (an
+    exact SDK pin is reviewable) while D011 must not, because an exact
+    conformance pin freezes the ruleset that grades the repo.
+
+    On a bare cap it is the other way round: D001 rejects ``<X`` (an SDK
+    dependency with no floor is a real defect) while D011 accepts it, because
+    the floor buys nothing once the cap is there.
     """
     assert _is_bounded_specifier("==0.13.0") is True
     assert _is_floating_range("==0.13.0") is False
+
+    assert _is_bounded_specifier("<1.0.0") is False
+    assert _is_floating_range("<1.0.0") is True

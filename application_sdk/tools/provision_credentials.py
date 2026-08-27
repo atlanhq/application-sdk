@@ -23,7 +23,7 @@ def main() -> None:
     if args.body:
         body = orjson.loads(args.body)
     else:
-        with open(args.from_file) as f:
+        with open(args.from_file, encoding="utf-8") as f:
             body = json.load(f)
 
     base_url = f"http://localhost:{args.port}"

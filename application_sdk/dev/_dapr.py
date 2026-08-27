@@ -263,13 +263,15 @@ def _write_components(
             template.format(
                 objectstore_root=str(objectstore_root.resolve()),
                 eventstore_root=str(eventstore_root.resolve()),
-            )
+            ),
+            encoding="utf-8",
         )
     if secrets_file is not None:
         resolved = str(Path(secrets_file).resolve())
         for name in _FILE_SECRET_STORE_NAMES:
             (components_dir / f"{name}.yaml").write_text(
-                _SECRET_STORE_FILE_YAML.format(name=name, secrets_file=resolved)
+                _SECRET_STORE_FILE_YAML.format(name=name, secrets_file=resolved),
+                encoding="utf-8",
             )
 
 

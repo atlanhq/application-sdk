@@ -381,7 +381,7 @@ class DaprCredentialVault:
             logger.debug("No local secrets file found")
             return {}
         try:
-            all_secrets = orjson.loads(secrets_file.read_text())
+            all_secrets = orjson.loads(secrets_file.read_bytes())
             secret = all_secrets.get(secret_key, {})
             if not secret:
                 logger.debug("No local secret for key %s", secret_key)

@@ -518,7 +518,7 @@ class QueryBasedTransformer(TransformerInterface):
         Returns:
             str: The generated SQL query
         """
-        with open(yaml_path, "r") as f:
+        with open(yaml_path, "r", encoding="utf-8") as f:
             sql_template = yaml.safe_load(f)
 
         sql_template["columns"] = flatten_yaml_columns(sql_template["columns"])

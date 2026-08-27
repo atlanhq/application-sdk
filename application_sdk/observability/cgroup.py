@@ -44,7 +44,7 @@ def _read_first(paths: tuple[str, ...]) -> str | None:
     """Contents of the first readable path, stripped, or ``None``."""
     for path in paths:
         try:
-            with open(path) as fh:
+            with open(path, encoding="utf-8") as fh:
                 return fh.read().strip()
         # conformance: ignore[E014] a missing cgroup file is the expected case off Linux and under partial hierarchies; None is the meaningful answer, and logging per read would fire on every call
         except OSError:
@@ -56,7 +56,7 @@ def _read_int(paths: tuple[str, ...]) -> int | None:
     """First readable path parsed as a non-negative int, or ``None``."""
     for path in paths:
         try:
-            with open(path) as fh:
+            with open(path, encoding="utf-8") as fh:
                 raw = fh.read().strip()
         # conformance: ignore[E014] see _read_first; a partial hierarchy must not raise and must not log per read
         except OSError:
@@ -118,7 +118,7 @@ def reset_memory_peak() -> bool:
         return False
     for path in _MEMORY_PEAK_PATHS:
         try:
-            with open(path, "w") as fh:
+            with open(path, "w", encoding="utf-8") as fh:
                 fh.write("0")
         # conformance: ignore[E014] read-only before Linux 6.8 and absent off Linux; both are expected and mean "fall back to polling"
         except OSError:
