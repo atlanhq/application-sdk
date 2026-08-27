@@ -33,8 +33,8 @@ Matching — ``open`` and friends
 -------------------------------
 An ``open``-like call only decodes in **text mode**, and each family spells both
 "text mode" and "where encoding sits" differently, so the callee is classified
-into one of four signatures (see :class:`_OpenSignature`) rather than matched by
-one shape:
+into a per-family signature (see :class:`_OpenSignature`) rather than matched
+by one shape:
 
 * the builtin ``open`` / ``io.open`` / ``aiofiles.open`` — text by default;
 * ``<expr>.open(...)`` (``Path.open`` and every lookalike) — text by default,
@@ -44,6 +44,8 @@ one shape:
   while leaving ``gzip.open(p, "w")`` (binary) alone;
 * the ``tempfile`` factories — binary by default, but reading an explicit mode
   the builtin's way, so ``NamedTemporaryFile(mode="w")`` is text.
+  ``SpooledTemporaryFile`` takes a ``max_size`` first and so carries its own
+  signature with both indices shifted by one.
 
 Receivers whose ``open`` never yields a decoded text stream are skipped outright
 (``os`` returns a descriptor; ``tarfile``/``zipfile`` return archive members;
@@ -215,11 +217,25 @@ _COMPRESSED_OPEN = _OpenSignature(
     unknown_mode_is_text=None,
 )
 
-#: ``tempfile.NamedTemporaryFile(mode="w+b", buffering, encoding, ...)`` and its
-#: siblings: also binary by default.
+#: ``tempfile.NamedTemporaryFile(mode="w+b", buffering, encoding, ...)`` and
+#: ``TemporaryFile``: binary by default, but reading an explicit mode the
+#: builtin's way, so ``mode="w"`` is text.
 _TEMPFILE_FACTORY = _OpenSignature(
     mode_index=0,
     encoding_index=2,
+    default_is_text=False,
+    explicit_text_needs_t=False,
+    unknown_mode_is_text=None,
+)
+
+#: ``tempfile.SpooledTemporaryFile(max_size=0, mode="w+b", buffering, encoding,
+#: ...)`` — the one sibling that takes a *size* first, so both indices shift by
+#: one.  Sharing :data:`_TEMPFILE_FACTORY` would read ``max_size`` as the mode
+#: (silently skipping ``SpooledTemporaryFile(1024, "w")``, whose first
+#: positional is an int) and would not recognise a positional encoding.
+_SPOOLED_TEMPFILE_FACTORY = _OpenSignature(
+    mode_index=1,
+    encoding_index=3,
     default_is_text=False,
     explicit_text_needs_t=False,
     unknown_mode_is_text=None,
@@ -231,10 +247,12 @@ _BUILTIN_OPEN_RECEIVERS: frozenset[str] = frozenset({"io", "aiofiles"})
 #: Module receivers whose ``open`` is the binary-default compressed-stream form.
 _COMPRESSED_OPEN_RECEIVERS: frozenset[str] = frozenset({"gzip", "bz2", "lzma"})
 
-#: ``tempfile`` factories that return a file object honouring ``mode``.
-_TEMPFILE_FACTORIES: frozenset[str] = frozenset(
-    {"NamedTemporaryFile", "TemporaryFile", "SpooledTemporaryFile"}
-)
+#: ``tempfile`` factories, keyed to the signature each one actually has.
+_TEMPFILE_FACTORIES: dict[str, _OpenSignature] = {
+    "NamedTemporaryFile": _TEMPFILE_FACTORY,
+    "TemporaryFile": _TEMPFILE_FACTORY,
+    "SpooledTemporaryFile": _SPOOLED_TEMPFILE_FACTORY,
+}
 
 #: Receivers whose ``open`` never produces a locale-decoded text stream: it
 #: returns a file *descriptor* (``os``), an archive or archive member
@@ -295,15 +313,13 @@ def _open_signature(func: ast.expr) -> _OpenSignature | None:
     if isinstance(func, ast.Name):
         if func.id == "open":
             return _BUILTIN_OPEN
-        if func.id in _TEMPFILE_FACTORIES:
-            return _TEMPFILE_FACTORY
-        return None
+        return _TEMPFILE_FACTORIES.get(func.id)
     if not isinstance(func, ast.Attribute):
         return None
 
     receiver = _receiver_name(func.value)
     if func.attr in _TEMPFILE_FACTORIES:
-        return _TEMPFILE_FACTORY
+        return _TEMPFILE_FACTORIES[func.attr]
     if func.attr != "open":
         return None
     if receiver in _NON_TEXT_OPEN_RECEIVERS or receiver in _ENCODING_RESOLVING_WRAPPERS:

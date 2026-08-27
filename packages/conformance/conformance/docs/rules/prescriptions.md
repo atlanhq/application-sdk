@@ -1822,13 +1822,22 @@ encoding=...)` and `write_text(data, "utf-8")` all pass, as does any call carryi
 a positional argument.
 
 For `open`-like calls, only **text mode** is graded — binary reads and writes decode
-nothing.  The builtin `open` / `io.open` / `aiofiles.open` and `<path>.open(...)` are
-text unless the mode says `"b"`; `gzip` / `bz2` / `lzma` and the `tempfile` factories
-are binary unless the mode says `"t"`.  Receivers whose `open` never yields a decoded
-stream are skipped outright (`os` returns a file descriptor, `tarfile` / `zipfile`
-return archive members, `codecs.open` is binary without an encoding), as is
-`SafeFileOps.open` — the SDK wrapper resolves UTF-8 for its callers, so a call site
-passing no encoding is already correct.
+nothing — and the families do not agree on how to spell it:
+
+* the builtin `open` / `io.open` / `aiofiles.open` and `<path>.open(...)` are text
+unless the mode says `"b"`.
+
+* `gzip` / `bz2` / `lzma` are binary by default **and** binary for any mode without a
+`"t"`, so `gzip.open(p, "w")` is not graded while `gzip.open(p, "wt")` is.
+
+* the `tempfile` factories are binary by default (`w+b`) but read an explicit mode the
+builtin's way — text whenever `"b"` is absent — so `NamedTemporaryFile(mode="w")` is
+graded.
+
+Receivers whose `open` never yields a decoded stream are skipped outright (`os` returns
+a file descriptor, `tarfile` / `zipfile` return archive members, `codecs.open` is binary
+without an encoding), as is `SafeFileOps.open` — the SDK wrapper resolves UTF-8 for its
+callers, so a call site passing no encoding is already correct.
 
 Suppress a reviewed exception with a justification: `# conformance: ignore[P046]
 <reason>`.

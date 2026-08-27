@@ -410,3 +410,32 @@ def test_p046_silent_on_a_kwargs_splat_in_an_open() -> None:
 def test_p046_silent_on_an_unrelated_open_ish_name() -> None:
     assert _rule("session.open_connection(host)\n") == []
     assert _rule("cursor.reopen()\n") == []
+
+
+# ── open() — SpooledTemporaryFile shifts both indices by one ─────────────────
+
+
+def test_p046_fires_on_a_spooled_tempfile_with_a_keyword_mode() -> None:
+    assert len(_rule('tempfile.SpooledTemporaryFile(mode="w")\n')) == 1
+
+
+def test_p046_fires_on_a_spooled_tempfile_whose_mode_is_positional() -> None:
+    """``SpooledTemporaryFile(max_size, mode, ...)`` — the mode is the *second* arg.
+
+    Sharing ``NamedTemporaryFile``'s signature would read ``max_size`` as the
+    mode here; a non-string int is unreadable, so the call would be skipped and
+    a genuine text-mode temp file would go unreported.
+    """
+    assert len(_rule('tempfile.SpooledTemporaryFile(1024, "w")\n')) == 1
+    assert _rule('tempfile.SpooledTemporaryFile(1024, "w+b")\n') == []
+
+
+def test_p046_silent_on_a_spooled_tempfile_positional_encoding() -> None:
+    """Encoding is index 3 here, not 2 — one past ``NamedTemporaryFile``'s."""
+    assert _rule('tempfile.SpooledTemporaryFile(1024, "w", -1, "utf-8")\n') == []
+    assert len(_rule('tempfile.SpooledTemporaryFile(1024, "w", -1)\n')) == 1
+
+
+def test_p046_silent_on_a_bare_spooled_tempfile() -> None:
+    """No mode argument means ``"w+b"`` — binary."""
+    assert _rule("tempfile.SpooledTemporaryFile(1024)\n") == []

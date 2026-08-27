@@ -101,15 +101,26 @@ RULES: tuple[RuleDefinition, ...] = (
             "passes because it takes a positional argument.\n"
             "\n"
             "For ``open``-like calls, only **text mode** is graded — binary reads\n"
-            "and writes decode nothing.  The builtin ``open`` / ``io.open`` /\n"
-            "``aiofiles.open`` and ``<path>.open(...)`` are text unless the mode\n"
-            'says ``"b"``; ``gzip`` / ``bz2`` / ``lzma`` and the ``tempfile``\n'
-            'factories are binary unless the mode says ``"t"``.  Receivers whose\n'
-            "``open`` never yields a decoded stream are skipped outright\n"
-            "(``os`` returns a file descriptor, ``tarfile`` / ``zipfile`` return\n"
-            "archive members, ``codecs.open`` is binary without an encoding), as\n"
-            "is ``SafeFileOps.open`` — the SDK wrapper resolves UTF-8 for its\n"
-            "callers, so a call site passing no encoding is already correct.\n"
+            "and writes decode nothing — and the families do not agree on how to\n"
+            "spell it:\n"
+            "\n"
+            "* the builtin ``open`` / ``io.open`` / ``aiofiles.open`` and\n"
+            '``<path>.open(...)`` are text unless the mode says ``"b"``.\n'
+            "\n"
+            "* ``gzip`` / ``bz2`` / ``lzma`` are binary by default **and** binary\n"
+            'for any mode without a ``"t"``, so ``gzip.open(p, "w")`` is not graded\n'
+            'while ``gzip.open(p, "wt")`` is.\n'
+            "\n"
+            "* the ``tempfile`` factories are binary by default (``w+b``) but read\n"
+            'an explicit mode the builtin\'s way — text whenever ``"b"`` is absent\n'
+            '— so ``NamedTemporaryFile(mode="w")`` is graded.\n'
+            "\n"
+            "Receivers whose ``open`` never yields a decoded stream are skipped\n"
+            "outright (``os`` returns a file descriptor, ``tarfile`` / ``zipfile``\n"
+            "return archive members, ``codecs.open`` is binary without an\n"
+            "encoding), as is ``SafeFileOps.open`` — the SDK wrapper resolves\n"
+            "UTF-8 for its callers, so a call site passing no encoding is already\n"
+            "correct.\n"
             "\n"
             "Suppress a reviewed exception with a justification:\n"
             "``# conformance: ignore[P046] <reason>``.\n"
