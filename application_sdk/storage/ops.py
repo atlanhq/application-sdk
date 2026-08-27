@@ -40,6 +40,7 @@ import hashlib
 import logging
 import math
 import os
+import re
 import time
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
@@ -400,6 +401,91 @@ def _is_precondition(exc: BaseException) -> bool:
     return "precondition" in msg or "412" in msg
 
 
+# ``object_store`` formats every backend HTTP failure as
+#   "Generic {store} error: Error performing {METHOD} {url} in {elapsed} -
+#    Server returned non-2xx status code: {status} {reason}: {body}"
+# and GCS, S3 and Azure Blob all put an XML
+# ``<Error><Code>...</Code><Message>...</Message></Error>`` in ``{body}``.
+# Parsing the two routing-relevant tokens out is what lets a consumer branch on
+# a field: before FND-957 the status existed only inside the free-text cause,
+# which the envelope's length cap usually truncated away before it arrived.
+_OBSTORE_HTTP_STATUS_RE = re.compile(r"status code:\s*(\d{3})")
+_PROVIDER_CODE_RE = re.compile(r"<Code>([^<>]{1,64})</Code>")
+
+# The provider's own token for "you asked for a condition I will not satisfy".
+# Deliberately keyed off this rather than off :func:`_is_precondition`: that
+# helper's ``"412" in msg`` fallback matches object keys and run GUIDs that
+# merely contain the digits 412 (~1 key in 94 for our artifact layout), which
+# would reclassify a genuine 503 outage as a permanent failure.
+_PRECONDITION_PROVIDER_CODES: frozenset[str] = frozenset(
+    {"preconditionfailed", "conditionnotmet", "invalidprecondition"}
+)
+
+
+def _obstore_http_evidence(exc: BaseException) -> tuple[int | None, str | None]:
+    """Return ``(http_status, provider_code)`` parsed from *exc*, best-effort.
+
+    Both are ``None`` when *exc* is not a backend HTTP failure -- a local store,
+    a request timeout, a credential decode error. Never raises: a parse miss
+    degrades the evidence attached to the failure, it must never replace the
+    failure itself.
+    """
+    text = str(exc)
+    status = _OBSTORE_HTTP_STATUS_RE.search(text)
+    provider = _PROVIDER_CODE_RE.search(text)
+    return (
+        int(status.group(1)) if status else None,
+        provider.group(1) if provider else None,
+    )
+
+
+def _storage_error_for(exc: Exception, key: str, message: str) -> Exception:
+    """Build the most specific typed storage error for a failed write.
+
+    Order is load-bearing. The Azure container probe runs first because it is
+    the one case whose remediation is a config change rather than a retry. The
+    parsed status and provider code decide next, because they are structured;
+    the message-substring classifiers elsewhere in this module are heuristics
+    over prose and must not pre-empt them.
+
+    Every branch carries the same evidence, so a consumer reads ``http_status``
+    and ``provider_code`` off the envelope regardless of which leaf was
+    chosen. (FND-957)
+    """
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        StorageConfigError,
+        StorageError,
+        StorageNotFoundError,
+        StoragePermissionError,
+        StoragePreconditionError,
+    )
+
+    if _is_azure_container_not_found(exc):
+        return StorageConfigError(_azure_container_not_found_message(key))
+
+    http_status, provider_code = _obstore_http_evidence(exc)
+    evidence: dict[str, Any] = {
+        "key": key,
+        "cause": exc,
+        "http_status": http_status,
+        "provider_code": provider_code,
+    }
+    # 412 is the canonical precondition status; GCS also returns 400 with a
+    # PreconditionFailed body, and either reading -- the condition did not
+    # hold, or the condition itself was rejected as invalid -- fails
+    # identically on every retry of the same request.
+    if http_status == 412 or (
+        provider_code is not None
+        and provider_code.lower() in _PRECONDITION_PROVIDER_CODES
+    ):
+        return StoragePreconditionError(message, **evidence)
+    if http_status == 403:
+        return StoragePermissionError(message, **evidence)
+    if http_status == 404:
+        return StorageNotFoundError(message, **evidence)
+    return StorageError(message, **evidence)
+
+
 def _log_storage_event(
     level: int,
     op: str,
@@ -409,6 +495,7 @@ def _log_storage_event(
     elapsed_ms: float | None = None,
     size_bytes: int | None = None,
     error_class: str | None = None,
+    error_message: str | None = None,
 ) -> None:
     """Emit a single structured per-attempt storage event.
 
@@ -432,6 +519,15 @@ def _log_storage_event(
                 extra["throughput_mibps"] = tput
     if error_class is not None:
         extra["error_class"] = error_class
+    if error_message is not None:
+        # The wire envelope length-caps ``cause_repr``, so without this the
+        # provider's own explanation existed nowhere: this event previously
+        # recorded only ``error_class`` ("GenericError"), with no ``str(exc)``,
+        # no ``exc_info`` and no ``safe_traceback``. Keeping an uncapped
+        # (secret-redacted) copy here means a truncated envelope always has a
+        # full-fidelity counterpart in the logs. ``error_message`` is already
+        # in ``_KNOWN_EXTRA_KEYS``. (FND-957)
+        extra["error_message"] = error_message
     msg = f"storage.{op} {outcome} path={store_path}"
     # Keys are bound into loguru record["extra"] and promoted to OTLP indexed
     # attributes by _build_extra_dict in logger_adaptor (all are in _KNOWN_EXTRA_KEYS).
@@ -768,6 +864,10 @@ async def upload_file(
         # ensures cancellation mid-writer-close is logged rather than silently
         # discarding the buffer and leaving no object in the store.
         elapsed_ms = (time.monotonic() - started) * 1000.0
+        from application_sdk.errors.base import (  # noqa: PLC0415 — lazy: avoid import-time cycle errors<->storage
+            redact_secrets,
+        )
+
         _log_storage_event(
             logging.WARNING,
             "upload",
@@ -776,19 +876,11 @@ async def upload_file(
             elapsed_ms=elapsed_ms,
             size_bytes=file_size,
             error_class=_exc_class_name(exc),
+            error_message=redact_secrets(str(exc)),
         )
         if isinstance(exc, Exception):
-            from application_sdk.storage.errors import (  # noqa: PLC0415
-                StorageConfigError,
-                StorageError,
-            )
-
-            if _is_azure_container_not_found(exc):
-                raise StorageConfigError(
-                    _azure_container_not_found_message(key)
-                ) from exc
-            raise StorageError(
-                f"Failed to upload file to key '{key}'", key=key, cause=exc
+            raise _storage_error_for(
+                exc, key, f"Failed to upload file to key '{key}'"
             ) from exc
         raise  # re-raise CancelledError / KeyboardInterrupt bare after logging
 
@@ -1182,14 +1274,7 @@ async def _put(
         await obstore.put_async(resolved, key, data, attributes=put_attributes)
     # conformance: ignore[E004] put error handler; all exceptions re-raised via StorageConfigError or StorageError chain
     except Exception as exc:
-        from application_sdk.storage.errors import (  # noqa: PLC0415
-            StorageConfigError,
-            StorageError,
-        )
-
-        if _is_azure_container_not_found(exc):
-            raise StorageConfigError(_azure_container_not_found_message(key)) from exc
-        raise StorageError(f"Failed to put key '{key}'", key=key, cause=exc) from exc
+        raise _storage_error_for(exc, key, f"Failed to put key '{key}'") from exc
 
 
 async def put_json(

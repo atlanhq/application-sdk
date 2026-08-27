@@ -120,11 +120,89 @@ def test_cause_repr_redacts_query_param_secrets() -> None:
 
 
 def test_cause_repr_truncates_long_messages() -> None:
-    cause = ValueError("x" * 600)
+    cause = ValueError("x" * 2600)
     e = AuthError(message="x", cause=cause)
     fd = e.to_failure_details()
     assert fd.cause_repr is not None
-    assert len(fd.cause_repr) <= len("ValueError: ") + 500 + len("…")
+    # 1200 head + 700 tail + the elision marker, under the type-name prefix.
+    assert len(fd.cause_repr) < len("ValueError: ") + 2000 + len(
+        "…[9999 chars elided]…"
+    )
+
+
+def test_cause_repr_keeps_both_ends_of_a_long_message() -> None:
+    """A backend error puts the request URL at the head and the reason at the tail.
+
+    Head-only truncation spent the whole budget on the URL and deleted the
+    provider's explanation — the failure mode FND-957 was filed for. Both ends
+    must survive, with an explicit marker for what was dropped in between.
+    """
+    cause = ValueError("HEAD_MARKER" + "x" * 2600 + "TAIL_MARKER")
+    fd = AuthError(message="x", cause=cause).to_failure_details()
+    assert fd.cause_repr is not None
+    assert "HEAD_MARKER" in fd.cause_repr
+    assert "TAIL_MARKER" in fd.cause_repr
+    assert "chars elided" in fd.cause_repr
+
+
+def test_cause_repr_keeps_a_full_provider_body_uncut() -> None:
+    """The reported GCS envelope must survive the cap intact.
+
+    Shape and sizes are taken from the real failure: a percent-encoded request
+    URL, the status line, the provider's XML body, then obstore's Rust debug
+    dump. At the old 500-char cap the URL alone consumed 374 and the cut landed
+    inside ``<Message>``. (FND-957)
+    """
+    key = (
+        "artifacts/apps/example-app/workflows/09f02b09-898f-482f-a018-c8a0bb6c6e96/"
+        "runs/01a04040-1c14-7591-b735-b9bde93b9560/transformed/table/chunk-part0000.json"
+    )
+    url = f"https://storage.googleapis.com/example-bucket/{key.replace('/', '%2F')}"
+    body = (
+        "<?xml version='1.0' encoding='UTF-8'?><Error><Code>PreconditionFailed</Code>"
+        "<Message>Invalid precondition during the request: at least one of the "
+        "pre-conditions you specified did not hold.</Message></Error>"
+    )
+    cause = ValueError(
+        f"Generic GCS error: Error performing POST {url}?uploads= in 53.300492ms - "
+        f"Server returned non-2xx status code: 400 Bad Request: {body}"
+        '\n\nDebug source:\nGeneric {\n    store: "GCS",\n}'
+    )
+    fd = AuthError(message="x", cause=cause).to_failure_details()
+    assert fd.cause_repr is not None
+    assert body in fd.cause_repr
+    assert "chars elided" not in fd.cause_repr
+
+
+def test_cause_repr_strips_the_obstore_debug_dump() -> None:
+    """obstore appends a Rust ``Debug source:`` dump after the provider body.
+
+    It is low-density text that competes with the diagnostic for the cap, and
+    keeping it would make a tail-preserving truncation retain the dump instead
+    of the provider's reason.
+    """
+    cause = ValueError(
+        "Generic GCS error: the part that matters"
+        '\n\nDebug source:\nGeneric {\n    store: "GCS",\n    source: Status,\n}'
+    )
+    fd = AuthError(message="x", cause=cause).to_failure_details()
+    assert fd.cause_repr is not None
+    assert "the part that matters" in fd.cause_repr
+    assert "Debug source" not in fd.cause_repr
+
+
+def test_cause_repr_redacts_before_truncating_so_the_tail_is_safe() -> None:
+    """Retaining a tail must not be able to expose an unredacted secret."""
+    cause = ValueError(
+        "connect https://user:hunter2@host/x "
+        + "PAD" * 900
+        + " retry_with api_key=sk-secret123"
+    )
+    fd = AuthError(message="x", cause=cause).to_failure_details()
+    assert fd.cause_repr is not None
+    assert "hunter2" not in fd.cause_repr
+    assert "sk-secret123" not in fd.cause_repr
+    assert "api_key=***" in fd.cause_repr
 
 
 def test_failure_details_json_round_trip() -> None:
