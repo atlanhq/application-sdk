@@ -372,6 +372,14 @@ def write_bundle(
     relative path. Split rather than one blob because that is how they are read:
     a person opens one container's log, a script parses the report.
 
+    **Every file is UTF-8**, unconditionally and regardless of the writing
+    machine's locale — so anything reading one back must say so rather than
+    relying on the platform default, which is cp1252 on Windows. Worth stating
+    as a contract rather than leaving as an implementation detail: a bundle
+    routinely carries a connector name, a driver's error message and a pod's log
+    line, and a reader that decodes those with the wrong codec produces mojibake
+    in the one artefact whose whole job is to be trusted after the fact.
+
     Args:
         bundle: What to write.
         output_dir: Directory to write into. Created if absent.

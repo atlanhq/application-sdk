@@ -256,7 +256,9 @@ def test_write_bundle_redacts_without_being_asked(tmp_path: Path) -> None:
     write_bundle(_bundle(), tmp_path, secrets=["hunter2"])
 
     written = "\n".join(
-        path.read_text() for path in tmp_path.rglob("*") if path.is_file()
+        path.read_text(encoding="utf-8")
+        for path in tmp_path.rglob("*")
+        if path.is_file()
     )
     assert "hunter2" not in written
     assert "abc123" not in written
@@ -265,11 +267,43 @@ def test_write_bundle_redacts_without_being_asked(tmp_path: Path) -> None:
 def test_the_report_is_machine_readable(tmp_path: Path) -> None:
     write_bundle(_bundle(), tmp_path)
 
-    report = json.loads((tmp_path / "report.json").read_text())
+    report = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
 
     assert report["label"] == "TestPostgresE2E — postgres"
     assert [finding["subject"] for finding in report["findings"]] == ["Table", "Column"]
     assert report["readings"]["asset_counts"] == {"Table": 0, "Column": 0}
+
+
+def test_the_bundle_round_trips_non_ascii(tmp_path: Path) -> None:
+    """Every file is UTF-8, and reading one back needs to say so.
+
+    This is a regression test with a specific history: the first revision's
+    assertions read with a bare ``read_text()``, which uses the *locale*
+    encoding — UTF-8 on Linux and macOS, cp1252 on Windows. The suite was green
+    on two platforms and red on the third, on a label carrying an em dash that
+    ``BaseE2ETest`` puts there. The bug was in the reads, not the writes, but it
+    is worth an assertion of its own either way: a connector name, a driver's
+    error message and a pod's log line are all places non-ASCII arrives in a
+    bundle, and evidence that mangles them is evidence someone mistrusts.
+    """
+    bundle = EvidenceBundle(
+        label="Suite — postgres",
+        logs={"pod/worker": ("café ✓",)},
+        readings={"note": "naïve"},
+        artifacts={"traceback.txt": "ValueError: ünicode"},
+    )
+
+    write_bundle(bundle, tmp_path)
+
+    report = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    assert report["label"] == "Suite — postgres"
+    assert report["readings"]["note"] == "naïve"
+    assert (tmp_path / "logs" / "pod-worker.log").read_text(
+        encoding="utf-8"
+    ) == "café ✓"
+    assert (tmp_path / "traceback.txt").read_text(encoding="utf-8") == (
+        "ValueError: ünicode"
+    )
 
 
 def test_each_log_source_gets_its_own_file(tmp_path: Path) -> None:
@@ -277,9 +311,9 @@ def test_each_log_source_gets_its_own_file(tmp_path: Path) -> None:
     serves neither."""
     write_bundle(_bundle(), tmp_path)
 
-    assert (tmp_path / "logs" / "pod-a-worker.log").read_text().splitlines()[1] == (
-        "starting up"
-    )
+    assert (tmp_path / "logs" / "pod-a-worker.log").read_text(
+        encoding="utf-8"
+    ).splitlines()[1] == ("starting up")
 
 
 def test_a_log_source_stays_one_path_segment(tmp_path: Path) -> None:
@@ -319,7 +353,7 @@ def test_an_artifact_cannot_escape_the_output_directory(tmp_path: Path) -> None:
 def test_an_unwritable_directory_is_reported_not_raised(tmp_path: Path) -> None:
     """An evidence dump that failed must not become the failure being diagnosed."""
     blocker = tmp_path / "blocked"
-    blocker.write_text("i am a file, not a directory")
+    blocker.write_text("i am a file, not a directory", encoding="utf-8")
 
     assert write_bundle(_bundle(), blocker / "under") == ()
 
@@ -338,7 +372,7 @@ def test_one_unwritable_file_does_not_cost_the_rest_of_the_bundle(
         tmp_path,
     )
 
-    assert (tmp_path / "notes").read_text() == "first"
+    assert (tmp_path / "notes").read_text(encoding="utf-8") == "first"
     assert [path.name for path in written] == ["report.json", "notes"]
 
 

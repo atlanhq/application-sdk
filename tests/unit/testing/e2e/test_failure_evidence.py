@@ -92,7 +92,11 @@ def _outcome(*, failed: bool = True) -> FullDAGOutcome:
 
 
 def _written(tmp_path: Path) -> str:
-    return "\n".join(path.read_text() for path in tmp_path.rglob("*") if path.is_file())
+    return "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +109,9 @@ def test_a_failed_run_leaves_a_bundle_under_the_evidence_dir(tmp_path: Path) -> 
 
     suite._collect_failure_evidence(AssertionError("Full-DAG e2e failed"), _outcome())
 
-    report = json.loads((tmp_path / "_Suite" / "report.json").read_text())
+    report = json.loads(
+        (tmp_path / "_Suite" / "report.json").read_text(encoding="utf-8")
+    )
     assert report["readings"]["ae_run_id"] == "ae-run-1"
     assert report["readings"]["connector"] == "postgres"
     assert report["findings"][0]["subject"] == "AssertionError"
@@ -118,7 +124,9 @@ def test_the_per_node_table_lands_machine_readable(tmp_path: Path) -> None:
 
     suite._collect_failure_evidence(AssertionError("nope"), _outcome())
 
-    report = json.loads((tmp_path / "_Suite" / "report.json").read_text())
+    report = json.loads(
+        (tmp_path / "_Suite" / "report.json").read_text(encoding="utf-8")
+    )
     assert report["readings"]["dag_nodes"][0]["name"] == "extract"
     assert report["readings"]["dag_nodes"][0]["status"] == DAGNodeStatus.FAILED.value
 
@@ -134,7 +142,9 @@ def test_a_run_that_failed_before_the_outcome_still_leaves_the_identity(
 
     suite._collect_failure_evidence(RuntimeError("AE never answered"), None)
 
-    report = json.loads((tmp_path / "_Suite" / "report.json").read_text())
+    report = json.loads(
+        (tmp_path / "_Suite" / "report.json").read_text(encoding="utf-8")
+    )
     assert report["readings"]["seed_version"] == 1_700_000_099
     assert report["readings"]["connection_qualified_name"] == _CONN_QN
     assert "ae_run_id" not in report["readings"]
@@ -147,7 +157,9 @@ def test_the_traceback_ships_as_its_own_artifact(tmp_path: Path) -> None:
     except ValueError as error:
         suite._collect_failure_evidence(error, None)
 
-    assert "ValueError: boom" in (tmp_path / "_Suite" / "traceback.txt").read_text()
+    assert "ValueError: boom" in (tmp_path / "_Suite" / "traceback.txt").read_text(
+        encoding="utf-8"
+    )
 
 
 # ---------------------------------------------------------------------------
