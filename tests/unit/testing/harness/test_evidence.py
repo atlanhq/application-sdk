@@ -139,6 +139,46 @@ def test_a_two_character_literal_is_ignored() -> None:
     assert redact_text("db1 is up", secrets=["db"]) == "db1 is up"
 
 
+@pytest.mark.parametrize(
+    "line",
+    [
+        r'"password": "part\"secret"',
+        r"{'client_secret': 'a\'b'}",
+    ],
+    ids=["JSON with an escaped double quote", "escaped single quote"],
+)
+def test_an_escaped_quote_inside_a_value_does_not_truncate_the_match(
+    line: str,
+) -> None:
+    """The tail after an escaped quote is the leak a naive ``"[^"]*"`` ships.
+
+    Any credential containing a quote is escaped by whatever serialiser wrote
+    the log, so this is the *normal* shape for such a value rather than an edge
+    case — and truncating at the escape leaves the remainder in an uploaded
+    artifact while the line still looks redacted.
+    """
+    redacted = redact_text(line)
+
+    assert "secret" not in redacted or "part" not in redacted
+    assert PLACEHOLDER in redacted
+    assert redacted.count(PLACEHOLDER) == 1
+
+
+def test_the_replacement_order_is_enforced_where_the_replacing_happens() -> None:
+    """Unsorted input must be as safe as sorted input.
+
+    ``secrets_from_environment`` sorts longest-first, but ``redact`` and
+    ``write_bundle`` take any ``Sequence[str]`` — a caller assembling a plain
+    list has no reason to know the order carries a correctness property. Pinned
+    with a deliberately unsorted sequence, which the sorted-producer test below
+    cannot exercise.
+    """
+    redacted = redact_text("saw tok-abcdef", secrets=["tok", "tok-abcdef"])
+
+    assert redacted == f"saw {PLACEHOLDER}"
+    assert "abcdef" not in redacted
+
+
 def test_a_literal_that_prefixes_another_does_not_leave_a_tail() -> None:
     """Longest first, and this is why. Substituting the prefix first turns
     ``tok-abcdef`` into ``***-abcdef`` — a partial secret in a file that claims

@@ -145,14 +145,23 @@ _AUTH_SCHEMES = ("Basic", "Bearer", "Digest", "Negotiate", "Token", "APIKey")
 #:   quoted value, an ODBC ``{braced}`` one whose ``;`` would otherwise end the
 #:   match early, and an auth scheme plus its token.
 #:
-#: The key's surrounding classes are bounded rather than ``*`` so the pattern
-#: cannot backtrack quadratically over a long unbroken run of word characters —
-#: a container log is exactly where one turns up.
+#: The quoted alternatives consume backslash escapes (``(?:[^"\\]|\\.)*``)
+#: rather than stopping at the first quote. A plain ``"[^"]*"`` truncates at an
+#: **escaped** quote, so ``"password": "part\"secret"`` would redact to
+#: ``"password": "***"secret"`` — the tail written into an uploaded artifact.
+#: JSON is where this arrives: any credential containing a double quote is
+#: escaped by every serialiser that produced the log in the first place. The two
+#: branches are disjoint (the class excludes the backslash the other requires),
+#: so the alternation cannot backtrack catastrophically.
+#:
+#: The key's surrounding classes are bounded rather than ``*`` for the same
+#: reason: the pattern cannot backtrack quadratically over a long unbroken run
+#: of word characters, and a container log is exactly where one turns up.
 _KEYED_VALUE_RE = re.compile(
     r"(?i)(?<![\w-])([\w.-]{0,64}(?:"
     + "|".join(re.escape(fragment) for fragment in SECRET_KEY_FRAGMENTS)
     + r")[\w.-]{0,64})([\"']?\s*[:=]\s*)"
-    + r"(\"[^\"]*\"|'[^']*'|\{[^}]*\}|(?:"
+    + r"(\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*'|\{[^}]*\}|(?:"
     + "|".join(_AUTH_SCHEMES)
     + r")\s+\S+|[^\s,;&#]+)"
 )
@@ -200,7 +209,14 @@ def redact_text(text: str, *, secrets: Sequence[str] = ()) -> str:
         The sanitised text. Idempotent: :data:`PLACEHOLDER` contains no key
         fragment and no literal, so redacting twice changes nothing.
     """
-    for literal in secrets:
+    # Sorted here, not only in `secrets_from_environment`. Ordering is a
+    # *correctness* property of the substitution — replacing a short literal
+    # that prefixes a longer one turns `tok-abcdef` into `***-abcdef` and ships
+    # the tail — so it belongs in the function doing the replacing rather than
+    # in one of the several things that can produce the sequence. `redact` and
+    # `write_bundle` take any `Sequence[str]`, and a caller passing a plain list
+    # has no reason to know the order matters.
+    for literal in sorted(secrets, key=len, reverse=True):
         if len(literal) >= _MIN_LITERAL_LENGTH:
             text = text.replace(literal, PLACEHOLDER)
     text = _KEYED_VALUE_RE.sub(_blank_keyed_value, text)

@@ -261,8 +261,17 @@ async def test_a_run_that_created_nothing_reports_a_complete_purge():
     assert report.complete
 
 
-async def test_an_asset_with_no_guid_is_not_sent_as_one():
-    """A hit pyatlan could not attribute a GUID to cannot be deleted by GUID."""
+async def test_an_asset_with_no_guid_is_reported_orphaned_not_dropped():
+    """A hit with no GUID cannot be deleted, so it must be *named*.
+
+    The first revision of this test asserted the opposite — that the hit is
+    simply skipped — which pinned a real bug rather than a behaviour. Dropping
+    it takes it out of the report as well as out of the DELETE, so the
+    connection purge then succeeds and `complete` answers True over an asset
+    still sitting on a shared tenant. Every hit the search returned has to land
+    somewhere on the report; `purge_by_guid` being the only delete available is
+    a reason it is orphaned, not a reason it is invisible.
+    """
     client = _client(
         children=[FakeAsset(f"{_QN}/t0", ""), FakeAsset(f"{_QN}/t1", "guid-1")]
     )
@@ -271,3 +280,25 @@ async def test_an_asset_with_no_guid_is_not_sent_as_one():
 
     assert client.asset.purged[0] == ["guid-1"]
     assert report.purged == 2  # one child plus the connection
+    assert report.orphaned == (f"{_QN}/t0",)
+    assert report.errors and not report.complete
+
+
+async def test_every_listed_hit_lands_somewhere_on_the_report():
+    """The invariant the accounting rests on: purged + orphaned covers the search.
+
+    Stated as a property over a mixed listing rather than as three separate
+    cases, because the failure it guards against is a hit falling through a gap
+    between them — which no single-case test sees.
+    """
+    listed = [
+        FakeAsset(f"{_QN}/ok0", "guid-0"),
+        FakeAsset(f"{_QN}/noguid", ""),
+        FakeAsset(f"{_QN}/ok1", "guid-1"),
+    ]
+    client = _client(children=listed)
+
+    report = await purge_connection(client, _QN)  # type: ignore[arg-type]
+
+    # -1 for the connection itself, which was not part of the child listing.
+    assert (report.purged - 1) + len(report.orphaned) == len(listed)

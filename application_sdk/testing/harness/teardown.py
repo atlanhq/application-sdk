@@ -128,17 +128,24 @@ async def purge_connection(
         >>> if not report.complete:  # doctest: +SKIP
         ...     logger.warning("manual purge needed: %s", report.orphaned)
     """
-    assets, listing_errors = await _list_children(client, connection_qualified_name)
+    listing = await _list_children(client, connection_qualified_name)
     # An unreadable listing is the one failure that is not partial: nothing is
     # known about what is under the connection, so nothing below it can be
     # purged, and nothing can be *named* as left behind either — which is what
     # the error line has to say instead. The connection purge still runs: it
     # needs no listing, and a connection left behind is exactly the leftover
     # that greens a later run.
-    child_report = (
-        PurgeReport(errors=listing_errors)
-        if listing_errors
-        else await _purge_children(client, connection_qualified_name, assets)
+    #
+    # A hit with no GUID is the other shape, and it is not the same one: the
+    # listing succeeded, the asset is known by name, and it simply cannot be
+    # deleted. It is folded in as orphaned so it appears on the report — a hit
+    # that is neither purged nor named would leave an asset on a shared tenant
+    # behind a report claiming the teardown was clean.
+    purged = await _purge_children(client, connection_qualified_name, listing.assets)
+    child_report = PurgeReport(
+        purged=purged.purged,
+        orphaned=(*listing.unusable, *purged.orphaned),
+        errors=(*listing.errors, *purged.errors),
     )
     connection_report = await _purge_connection_asset(client, connection_qualified_name)
     report = PurgeReport(
@@ -164,9 +171,34 @@ async def purge_connection(
     return report
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _Listing:
+    """What one listing pass established about a connection's descendants.
+
+    Three fields rather than two because a hit can fail to be purgeable without
+    the *listing* having failed: see :attr:`unusable`. Every hit lands in exactly
+    one of them, which is what lets the caller build a report that accounts for
+    everything the search returned.
+
+    Attributes:
+        assets: ``(guid, qualified_name)`` for every hit that can be deleted.
+        unusable: Qualified names of hits Atlas returned with no GUID. Nothing
+            can delete these — ``purge_by_guid`` is the only verb available —
+            so they are orphaned from the moment they are read.
+        errors: One line per problem. Populated alongside :attr:`unusable`, or
+            alone when the search itself could not be read (in which case
+            nothing is known and both other fields are empty — a partial listing
+            would be a purge that under-reports what it left behind).
+    """
+
+    assets: Sequence[tuple[str, str]] = field(default_factory=tuple)
+    unusable: Sequence[str] = field(default_factory=tuple)
+    errors: Sequence[str] = field(default_factory=tuple)
+
+
 async def _list_children(
     client: AsyncAtlanClient, connection_qualified_name: str
-) -> tuple[Sequence[tuple[str, str]], Sequence[str]]:
+) -> _Listing:
     """Read every descendant's GUID and qualified name, in one pass.
 
     Both fields, not just the GUID the DELETE needs: :attr:`PurgeReport.orphaned`
@@ -175,10 +207,11 @@ async def _list_children(
     cleaning up by hand.
 
     Returns:
-        The ``(guid, qualified_name)`` pairs and an empty error tuple, or an
-        empty pair list and one error line. Never both populated: an unreadable
-        listing establishes nothing, and a partial one would be a purge that
-        under-reports what it left behind.
+        A :class:`_Listing`. **Every hit the search returned appears in exactly
+        one of its fields** — that is the invariant, and it is the one a purge
+        report depends on: a hit that is neither purged nor named as orphaned is
+        an asset left on a shared tenant behind a report that says the teardown
+        was clean.
     """
     from pyatlan.model.assets import Asset  # noqa: PLC0415
     from pyatlan.model.fluent_search import FluentSearch  # noqa: PLC0415
@@ -194,9 +227,18 @@ async def _list_children(
         request.dsl.size = _LISTING_PAGE_SIZE
         results = await client.asset.search(request)
         assets: list[tuple[str, str]] = []
+        unusable: list[str] = []
         async for asset in results:
             if asset.guid:
                 assets.append((asset.guid, asset.qualified_name or asset.guid))
+            else:
+                # Not skipped. `purge_by_guid` is the only delete available, so
+                # a hit Atlas could not attribute a GUID to cannot be deleted —
+                # but it exists, under this connection, and dropping it here
+                # would take it out of the report as well as out of the DELETE.
+                # The connection purge then succeeds and `complete` answers True
+                # over an asset still sitting on the tenant.
+                unusable.append(asset.qualified_name or "<asset with no GUID>")
     except Exception as error:
         logger.warning(
             "harness teardown: could not list assets under %s — nothing below the "
@@ -205,11 +247,19 @@ async def _list_children(
             connection_qualified_name,
             exc_info=True,
         )
-        return (), (
-            f"listing assets under {connection_qualified_name} failed: "
-            f"{sanitize_cause_repr(error)}",
+        return _Listing(
+            errors=(
+                f"listing assets under {connection_qualified_name} failed: "
+                f"{sanitize_cause_repr(error)}",
+            )
         )
-    return tuple(assets), ()
+    errors: tuple[str, ...] = ()
+    if unusable:
+        errors = (
+            f"{len(unusable)} listed asset(s) under {connection_qualified_name} "
+            "had no GUID and could not be purged",
+        )
+    return _Listing(assets=tuple(assets), unusable=tuple(unusable), errors=errors)
 
 
 async def _purge_children(
