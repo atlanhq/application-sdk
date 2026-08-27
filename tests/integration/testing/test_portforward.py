@@ -3,11 +3,15 @@
 Moved from tests/unit/testing/e2e/test_portforward.py when the unit suite was
 hardened with --disable-socket.  These tests exercise functions that bind real
 TCP sockets and therefore cannot run as hermetic unit tests.
+
+The code itself moved to ``testing/harness/cluster/_portforward`` with the typed
+cluster backend (FND-241); this imports the private helper from where it now
+lives, since ``testing/e2e/portforward`` re-exports only the public surface.
 """
 
 import pytest
 
-from application_sdk.testing.e2e.portforward import _find_free_port
+from application_sdk.testing.harness.cluster._portforward import _find_free_port
 
 
 @pytest.mark.integration

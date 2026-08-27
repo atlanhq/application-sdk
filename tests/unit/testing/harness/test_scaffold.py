@@ -382,6 +382,56 @@ async def test_the_child_f_stubs_are_gone() -> None:
     assert callable(automation_engine.AEClient)
 
 
+async def test_the_child_e_kubectl_reads_are_gone() -> None:
+    """Child E retired the ``kubectl``-shelling reads rather than wrapping them.
+
+    Asserted rather than eyeballed for the same reason the sibling child asserts
+    that no ``asyncio.run`` is left under ``testing/``: a reintroduced
+    ``kubectl get pods`` is a subprocess, a JSON parse and a ``return []`` on
+    failure, and that last part is the fail-open shape the typed reader exists to
+    remove. A revert would restore all three silently.
+    """
+    import importlib
+    from pathlib import Path
+
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("application_sdk.testing.e2e.pods")
+
+    from application_sdk.testing.harness.cluster import KubernetesReader
+
+    assert isinstance(KubernetesReader(apis=lambda: _unused()), ClusterReader)
+    assert isinstance(KubernetesReader(apis=lambda: _unused()), CustomResourceReader)
+
+    # The harness's only `kubectl` *invocation* is the port-forward transport,
+    # which is not a read: `kubernetes.stream`'s equivalent is a socket API, not
+    # a drop-in. Matched on the quoted argv literal, so the prose that explains
+    # all of this does not count as a call.
+    import application_sdk.testing.e2e as e2e_pkg
+    import application_sdk.testing.harness as harness_pkg
+
+    def _shells_out(package: object) -> list[str]:
+        root = Path(str(getattr(package, "__file__"))).parent
+        return sorted(
+            path.relative_to(root).as_posix()
+            for path in root.rglob("*.py")
+            # encoding pinned: these sources are UTF-8 and full of em-dashes, and
+            # `read_text()` would decode them as cp1252 on Windows
+            if '"kubectl"' in path.read_text(encoding="utf-8")
+        )
+
+    # Exactly one place in either package builds a `kubectl` argv, and it is the
+    # helper that pins `--context`. `LogCollector`'s three remaining artefacts
+    # (`describe`, `get pods -o wide`, `get events`) go through it rather than
+    # assembling their own list, which is what keeps the evidence bundle and the
+    # typed reads pointed at the same cluster.
+    assert _shells_out(harness_pkg) == ["cluster/_portforward.py"]
+    assert _shells_out(e2e_pkg) == []
+
+
+def _unused():  # pragma: no cover — the factory is never called by these asserts
+    raise AssertionError("the protocol checks are structural, not behavioural")
+
+
 async def test_every_remaining_stub_names_its_child_issue() -> None:
     from application_sdk.testing.harness import starters
     from application_sdk.testing.harness.cluster import HttpRequest, HttpResponse
