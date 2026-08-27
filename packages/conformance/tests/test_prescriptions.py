@@ -204,6 +204,30 @@ def test_p003_fires_on_wrong_prefix(tmp_path: Path) -> None:
     assert "APP_NOT_FOUND" in findings[0].message
 
 
+def test_p003_fires_on_registry_code_with_wrong_prefix(
+    tmp_path: Path,
+) -> None:
+    """Registry constants still need to carry the parent category prefix."""
+    src = (
+        "from typing import ClassVar\n"
+        "class BadAuth(AuthError):\n"
+        "    code: ClassVar[str] = codes.FT_INTERNAL_BAD.code\n"
+    )
+    findings = _scan_one(tmp_path, src)
+    assert [f.rule_id for f in findings] == ["P003"]
+
+
+def test_p003_silent_on_registry_code_attribute(tmp_path: Path) -> None:
+    """A ClassVar backed by an error-code registry is an explicit override."""
+    src = (
+        "from typing import ClassVar\n"
+        "class EntraTokenError(AuthError):\n"
+        "    code: ClassVar[str] = codes.FT_AUTH_ENTRA_NO_TOKEN.code\n"
+    )
+    findings = _scan_one(tmp_path, src)
+    assert findings == []
+
+
 def test_p003_fires_on_missing_code_declaration(tmp_path: Path) -> None:
     """Subclasses (transitive) of a leaf must declare their own code."""
     src = "class SilentSubclass(InternalError):\n    pass\n"

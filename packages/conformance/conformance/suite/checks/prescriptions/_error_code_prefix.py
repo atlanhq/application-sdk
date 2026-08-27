@@ -50,6 +50,7 @@ class ClassRecord:
     bases: list[str] = field(default_factory=list)
     code_value: str | None = None
     code_node: ast.AST | None = None
+    code_declared: bool = False
 
 
 def _is_classvar_annotation(annotation: ast.expr | None) -> bool:
@@ -61,11 +62,13 @@ def _is_classvar_annotation(annotation: ast.expr | None) -> bool:
     return _get_name(annotation) == "ClassVar"
 
 
-def _extract_code(cls_node: ast.ClassDef) -> tuple[str | None, ast.AST | None]:
-    """Find the class-level ``code`` literal assignment, if any.
+def _extract_code(
+    cls_node: ast.ClassDef,
+) -> tuple[str | None, ast.AST | None, bool]:
+    """Find the class-level ``code`` assignment, if any.
 
-    Accepts both ``code: ClassVar[str] = "..."`` (the prescribed form) and the
-    plain ``code = "..."`` shorthand.
+    Accepts literal assignments, the plain ``code = "..."`` shorthand, and
+    registry members such as ``codes.FT_AUTH_X.code``.
     """
     for stmt in cls_node.body:
         if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
@@ -78,7 +81,19 @@ def _extract_code(cls_node: ast.ClassDef) -> tuple[str | None, ast.AST | None]:
                 and isinstance(stmt.value, ast.Constant)
                 and isinstance(stmt.value.value, str)
             ):
-                return stmt.value.value, stmt
+                return stmt.value.value, stmt, True
+            # Error-code registries expose the string through a ``.code``
+            # property (for example ``codes.FT_AUTH_X.code``). Preserve the
+            # category-bearing constant name so its prefix is still checked.
+            if (
+                stmt.value is not None
+                and isinstance(stmt.value, ast.Attribute)
+                and stmt.value.attr == "code"
+                and isinstance(stmt.value.value, ast.Attribute)
+                and isinstance(stmt.value.value.value, ast.Name)
+                and stmt.value.value.attr.startswith("FT_")
+            ):
+                return stmt.value.value.attr[3:], stmt, True
         elif isinstance(stmt, ast.Assign):
             for target in stmt.targets:
                 if (
@@ -87,8 +102,8 @@ def _extract_code(cls_node: ast.ClassDef) -> tuple[str | None, ast.AST | None]:
                     and isinstance(stmt.value, ast.Constant)
                     and isinstance(stmt.value.value, str)
                 ):
-                    return stmt.value.value, stmt
-    return None, None
+                    return stmt.value.value, stmt, True
+    return None, None, False
 
 
 def collect_import_aliases(tree: ast.Module) -> dict[str, str]:
@@ -126,7 +141,7 @@ def collect_classes(
             if n is None:
                 continue
             bases.append(aliases.get(n, n))
-        code_value, code_node = _extract_code(node)
+        code_value, code_node, code_declared = _extract_code(node)
         records.append(
             ClassRecord(
                 name=node.name,
@@ -135,6 +150,7 @@ def collect_classes(
                 bases=bases,
                 code_value=code_value,
                 code_node=code_node,
+                code_declared=code_declared,
             )
         )
     return records

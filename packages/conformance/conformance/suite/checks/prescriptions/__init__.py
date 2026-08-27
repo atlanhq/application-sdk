@@ -275,9 +275,11 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
                     break
             if leaf_prefix is None:
                 continue
-            if rec.code_value is None:
+            if not rec.code_declared:
                 findings.append(emit_p003(rec, leaf_prefix, directives))
-            elif not rec.code_value.startswith(f"{leaf_prefix}_"):
+            elif rec.code_value is not None and not rec.code_value.startswith(
+                f"{leaf_prefix}_"
+            ):
                 findings.append(emit_p003(rec, leaf_prefix, directives))
 
     # Pass 4 — emit P013/P014 (cross-file boundary-type enforcement)
