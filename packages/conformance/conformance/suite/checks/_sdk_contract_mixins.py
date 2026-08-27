@@ -53,3 +53,32 @@ SDK_CONTRACT_BASE_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("current_state_prefix", "str", "active"),
     ),
 }
+
+# Template contracts are imported from the installed SDK and therefore are not
+# present in a consumer app's AST scan. Keep their declared fields separately
+# from the base/mixin registry, whose drift test targets ``contracts.base``.
+SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
+    "ExtractionOutput": (
+        SdkField("status", "OutputStatus", "active"),
+        SdkField("metrics", "dict[str, Any] | None", "active"),
+        SdkField("artifacts", "dict[str, Any] | None", "active"),
+        SdkField("output_prefix", "str", "active"),
+        SdkField("transformed_data_prefix", "str", "active"),
+        SdkField("connection_qualified_name", "str", "active"),
+        SdkField("publish_state_prefix", "str", "active"),
+        SdkField("staging_data_prefix", "str", "active"),
+        SdkField("current_state_prefix", "str", "active"),
+        SdkField("workflow_id", "str", "active"),
+        SdkField("success", "bool", "active"),
+        SdkField("databases_extracted", "int", "active"),
+        SdkField("schemas_extracted", "int", "active"),
+        SdkField("tables_extracted", "int", "active"),
+        SdkField("views_extracted", "int", "active"),
+        SdkField("columns_extracted", "int", "active"),
+        SdkField("procedures_extracted", "int", "active"),
+        SdkField("processes_extracted", "int", "active"),
+        SdkField("records_uploaded", "int", "active"),
+        SdkField("error", "str", "active"),
+        SdkField("output_path", "str", "active"),
+    ),
+}

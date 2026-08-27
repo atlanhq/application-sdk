@@ -580,6 +580,45 @@ def test_b005_sdk_mixin_field_resolved_via_static_registry(tmp_path: Path) -> No
     ), "PublishInputMixin.connection_qualified_name must resolve via the SDK registry"
 
 
+_SDK_TEMPLATE_OUTPUT = """\
+from application_sdk.app import App, entrypoint
+from application_sdk.templates.contracts.sql_metadata import (
+    ExtractionInput,
+    ExtractionOutput,
+)
+
+class DbtExtractOutput(ExtractionOutput):
+    pass
+
+class MyApp(App):
+    @entrypoint
+    async def extract(self, input: ExtractionInput) -> DbtExtractOutput:
+        pass
+"""
+
+
+def test_b005_sdk_template_inherited_field_type_change_fires(tmp_path: Path) -> None:
+    """A connector override of an SDK template field remains B005-visible."""
+    source = _SDK_TEMPLATE_OUTPUT.replace(
+        "    pass\n\nclass MyApp", "    records_uploaded: str\n\nclass MyApp"
+    )
+    ledger = _make_ledger(
+        ContractField("DbtExtractOutput", "records_uploaded", "int", "active")
+    )
+    findings = _scan(tmp_path, {"app.py": source}, ledger)
+    assert "B005" in _ids(findings)
+
+
+def test_b005_sdk_template_inherited_fields_silent(tmp_path: Path) -> None:
+    """Fields inherited from SDK ExtractionOutput are not reported as removed."""
+    ledger = _make_ledger(
+        ContractField("DbtExtractOutput", "records_uploaded", "int", "active"),
+        ContractField("DbtExtractOutput", "status", "OutputStatus", "active"),
+    )
+    findings = _scan(tmp_path, {"app.py": _SDK_TEMPLATE_OUTPUT}, ledger)
+    assert "B005" not in _ids(findings)
+
+
 def test_b006_sdk_mixin_field_not_yet_in_ledger_fires_and_notes_inherited(
     tmp_path: Path,
 ) -> None:
