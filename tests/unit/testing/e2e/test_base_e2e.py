@@ -44,6 +44,7 @@ from application_sdk.testing.e2e.client import (
 from application_sdk.testing.e2e.credential import CredentialBody
 from application_sdk.testing.e2e.payload import AgentSpec, DatabaseSpec, RunMode
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
+from application_sdk.testing.harness._poll import fake_clock
 
 
 def _make_connection_ref() -> ConnectionRef:
@@ -512,11 +513,30 @@ class TestSourceAvailabilityGate:
 class TestWorkerUpTier:
     """Worker-up-only assertions when no source is provisioned."""
 
+    @pytest.fixture(autouse=True)
+    def _fake_clock(self):
+        """Run the health-probe loop on a fake clock.
+
+        ``assert_worker_up`` polls through ``until_deadline``, so every test
+        below in which the worker never answers 2xx runs the budget out for
+        real. The old settings — interval ``0``, timeout ``1`` — turned that
+        into a one-second *spin* per test, four seconds across this class, and
+        interval ``0`` meant "poll once and give up" was never distinguishable
+        from "poll until the deadline" (FND-962).
+
+        The interval must stay above zero under the fake: its sleep advances the
+        clock, so a zero gap would never reach the deadline.
+        """
+        with fake_clock():
+            yield
+
     def _harness(self) -> _NoSourceTest:
         harness = _NoSourceTest()
         harness.source_available = False
-        harness.worker_health_poll_interval_seconds = 0
-        harness.worker_health_timeout_seconds = 1
+        # Three attempts, one interval apart: enough that a loop which gave up
+        # after the first probe would fail the attempt-count assertion below.
+        harness.worker_health_poll_interval_seconds = 1
+        harness.worker_health_timeout_seconds = 3
         return harness
 
     def test_test_method_runs_worker_up_only(
@@ -610,7 +630,10 @@ class TestWorkerUpTier:
         assert error.code == "PRECONDITION_WORKER_NOT_HEALTHY"
         assert error.url == harness.worker_health_url
         assert error.last_error == "HTTP 503"
-        assert error.attempts is not None and error.attempts >= 1
+        # It re-probed rather than giving up on the first 503: three attempts is
+        # the whole budget at this interval.
+        assert error.attempts == 3
+        assert error.elapsed_seconds == pytest.approx(2.0)
 
     def test_a_refused_connection_and_a_5xx_are_told_apart(
         self, monkeypatch: pytest.MonkeyPatch

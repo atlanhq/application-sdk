@@ -11,6 +11,14 @@ Three layers, all tenant-free:
 
 The last group is the point of the ticket: a leg that asserts against the wrong
 app must go red, and every *unanswerable* outcome must not.
+
+The waiting ones run under
+:func:`~application_sdk.testing.harness._poll.fake_clock`. They used to patch
+``time.sleep``, which is inert here: ``_read_superseding_published_version``
+drives ``until_deadline``, and that sleeps through ``_poll``'s own swappable
+default, captured at import. So the patch silenced nothing and the retries ran
+on the real clock — five seconds across this file for gaps whose only job is to
+separate two mocked reads (FND-962).
 """
 
 from __future__ import annotations
@@ -30,6 +38,7 @@ from application_sdk.testing.e2e._manifest_identity import (
 )
 from application_sdk.testing.e2e.base import _supersedes
 from application_sdk.testing.e2e.client import AEWorkflowClient, PublishedVersion
+from application_sdk.testing.harness._poll import fake_clock
 from application_sdk.testing.harness.automation_engine.wire import (
     first_version_row as _first_version_row,
 )
@@ -342,7 +351,7 @@ class TestAssertDeployedManifestMatches:
             patch.object(
                 harness.client, "get_published_version", return_value=seed_echo
             ),
-            patch("time.sleep"),
+            fake_clock(),
         ):
             harness._assert_deployed_manifest_matches("mysql-abc")
 
@@ -353,7 +362,7 @@ class TestAssertDeployedManifestMatches:
         )
         with (
             patch.object(harness.client, "get_published_version", return_value=None),
-            patch("time.sleep"),
+            fake_clock(),
         ):
             harness._assert_deployed_manifest_matches("mysql-abc")
 
@@ -366,7 +375,7 @@ class TestAssertDeployedManifestMatches:
             patch.object(
                 harness.client, "get_published_version", return_value=_published({})
             ),
-            patch("time.sleep"),
+            fake_clock(),
         ):
             harness._assert_deployed_manifest_matches("mysql-abc")
 
@@ -384,7 +393,7 @@ class TestAssertDeployedManifestMatches:
         ]
         with (
             patch.object(harness.client, "get_published_version", side_effect=reads),
-            patch("time.sleep"),
+            fake_clock(),
             pytest.raises(DeployedManifestMismatchError),
         ):
             harness._assert_deployed_manifest_matches("mysql-abc")
@@ -403,7 +412,7 @@ class TestAssertDeployedManifestMatches:
             patch.object(
                 harness.client, "get_published_version", return_value=unnumbered
             ),
-            patch("time.sleep"),
+            fake_clock(),
         ):
             harness._assert_deployed_manifest_matches("mysql-abc")
 
@@ -420,7 +429,7 @@ class TestAssertDeployedManifestMatches:
         ]
         with (
             patch.object(harness.client, "get_published_version", side_effect=reads),
-            patch("time.sleep"),
+            fake_clock(),
             pytest.raises(DeployedManifestMismatchError),
         ):
             harness._assert_deployed_manifest_matches("mysql-abc")
@@ -435,7 +444,7 @@ class TestAssertDeployedManifestMatches:
         reads = [_published({}, version=1000), None]
         with (
             patch.object(harness.client, "get_published_version", side_effect=reads),
-            patch("time.sleep"),
+            fake_clock(),
         ):
             harness._assert_deployed_manifest_matches("mysql-abc")
 
@@ -450,7 +459,7 @@ class TestAssertDeployedManifestMatches:
         ]
         with (
             patch.object(harness.client, "get_published_version", side_effect=reads),
-            patch("time.sleep"),
+            fake_clock(),
             pytest.raises(DeployedManifestMismatchError),
         ):
             harness._assert_deployed_manifest_matches("mysql-abc")
