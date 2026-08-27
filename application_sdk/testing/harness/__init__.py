@@ -46,6 +46,20 @@ Module map:
     Evidence bundle collection, and redaction at the boundary that ships it.
 ``spec``
     ``AppUnderTest`` — where to find the app under test in a cluster.
+``substrate``
+    Where the code driving the harness runs relative to the app, and the cluster
+    reader that follows from it. The fourth point of variance, which neither
+    source design document names (child I on FND-224).
+``preconditions``
+    The gate every scenario runs before it dispatches work — the two built-in
+    checks (a worker's health endpoint, and who is polling a task queue), the
+    runner that accumulates their outcomes, and the two leaves it raises for
+    "the starting state was wrong" and "the starting state could not be read".
+``fixtures``
+    The same lifecycle as async pytest fixtures, for a suite that inherits
+    nothing (child I). **Not imported here**: it imports ``pytest``, and this
+    package stays importable in a process with no test framework. Import it as
+    ``application_sdk.testing.harness.fixtures``, or register it as a plugin.
 ``cluster``
     Read-only Kubernetes Protocols, the states they return, and the typed
     ``kubeconfig`` backend behind them — which retired ``testing/e2e/pods.py``
@@ -82,10 +96,11 @@ Module map:
 ``teardown``
     Purge mechanics, including the batching that is a correctness bound.
 
-``bridge``, ``waiting``, ``outcome``, ``spec``, ``budgets``, ``expectations``,
-``identity``, ``atlas``, ``automation_engine``, ``cluster`` and ``temporal`` are
-real, and so is one of ``starters``' three functions; the rest are typed stubs,
-each naming the child issue that fills it in.
+``bridge``, ``waiting``, ``outcome``, ``spec``, ``substrate``, ``budgets``,
+``expectations``, ``identity``, ``preconditions``, ``fixtures``, ``atlas``,
+``automation_engine``, ``cluster`` and ``temporal`` are real, and so is one of
+``starters``' three functions; the rest are typed stubs, each naming the child
+issue that fills it in.
 
 ``atlas`` and ``automation_engine`` are the first two that ``testing/e2e``
 actually calls: since child F, ``AEWorkflowClient`` is a set of one-line
@@ -129,8 +144,12 @@ raises :class:`KubernetesExtraMissingError` naming the extra rather than an
 """
 
 from application_sdk.testing.harness._errors import (
+    FixtureNotConfiguredError,
     HarnessNotBuiltError,
     MissingTenantEnvError,
+    PreconditionsFailedError,
+    PreconditionsIndeterminateError,
+    SubstrateHasNoClusterError,
     SyncBridgeInAsyncContextError,
     WaitExpiredError,
     WaitIndeterminateError,
@@ -157,7 +176,18 @@ from application_sdk.testing.harness.outcome import (
     assert_settled,
     grade,
 )
+from application_sdk.testing.harness.preconditions import (
+    GateReport,
+    HealthReading,
+    PollerReading,
+    PreconditionCheck,
+    assert_gate,
+    check_no_stale_pollers,
+    check_worker_health,
+    run_preconditions,
+)
 from application_sdk.testing.harness.spec import AppUnderTest
+from application_sdk.testing.harness.substrate import Substrate, cluster_reader_for
 from application_sdk.testing.harness.waiting import (
     Classifier,
     Probe,
@@ -201,6 +231,22 @@ __all__ = [
     "Call",
     "RequestBudget",
     "Wait",
-    # App under test
+    # App under test, and where the harness is driving it from
     "AppUnderTest",
+    "Substrate",
+    "SubstrateHasNoClusterError",
+    "cluster_reader_for",
+    # The precondition gate, its two built-in checks and the readings they take
+    "GateReport",
+    "HealthReading",
+    "PollerReading",
+    "PreconditionCheck",
+    "PreconditionsFailedError",
+    "PreconditionsIndeterminateError",
+    "assert_gate",
+    "check_no_stale_pollers",
+    "check_worker_health",
+    "run_preconditions",
+    # Composing the fixtures in `harness.fixtures`
+    "FixtureNotConfiguredError",
 ]
