@@ -218,6 +218,16 @@ class TestFormats:
         path.write_text("\n".join(json.dumps(r) for r in _RECORDS) + "\n\n")
         assert read_records(path) == _RECORDS
 
+    def test_json_suffix_holding_ndjson(self, tmp_path: Path) -> None:
+        path = tmp_path / "records.json"
+        path.write_text("\n".join(json.dumps(r) for r in _RECORDS) + "\n")
+        assert read_records(path) == _RECORDS
+
+    def test_json_suffix_holding_ndjson_with_blank_lines(self, tmp_path: Path) -> None:
+        path = tmp_path / "records.json"
+        path.write_text("\n\n".join(json.dumps(r) for r in _RECORDS) + "\n")
+        assert read_records(path) == _RECORDS
+
     def test_csv(self, tmp_path: Path) -> None:
         path = tmp_path / "a.csv"
         with path.open("w", newline="", encoding="utf-8") as handle:
@@ -261,8 +271,9 @@ class TestFormats:
     def test_malformed_json(self, tmp_path: Path) -> None:
         path = tmp_path / "a.json"
         path.write_text("{not json")
-        with pytest.raises(GoldenCorpusFormatError):
+        with pytest.raises(GoldenCorpusFormatError) as excinfo:
             read_records(path)
+        assert "neither valid JSON nor valid NDJSON" in str(excinfo.value.message)
 
     def test_json_scalar_payload(self, tmp_path: Path) -> None:
         path = tmp_path / "a.json"

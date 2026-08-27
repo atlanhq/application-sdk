@@ -249,8 +249,7 @@ class GoldenCorpus:
                     "selected before any stage can be resolved."
                 ),
                 suggested_action=(
-                    "Call .for_tenant(name) — .tenants() lists what the corpus "
-                    "holds."
+                    "Call .for_tenant(name) — .tenants() lists what the corpus holds."
                 ),
             )
         return self.root / self.tenant
@@ -401,8 +400,7 @@ class GoldenCorpus:
                     "zero records."
                 ),
                 suggested_action=(
-                    "Check the capture step wrote records rather than empty "
-                    "containers."
+                    "Check the capture step wrote records rather than empty containers."
                 ),
             )
         logger.debug(
@@ -448,7 +446,8 @@ def read_records(path: Path) -> list[dict[str, Any]]:
     """Read one corpus file as a list of records.
 
     Dispatches on the suffix: JSON, NDJSON (``.ndjson`` / ``.jsonl``), CSV,
-    parquet.
+    parquet. A ``.json`` file that does not parse as one document is retried as
+    NDJSON, since captured fixtures often keep a streaming producer's filename.
 
     Raises:
         GoldenCorpusFormatError: Unsupported suffix, unparseable content, or a
@@ -504,12 +503,29 @@ def _as_records(path: Path, payload: Any) -> list[dict[str, Any]]:
 
 
 def _read_json(path: Path) -> list[dict[str, Any]]:
+    """Read a ``.json`` corpus file, falling back to NDJSON.
+
+    A ``.json`` file holding one record per line rather than a single document is
+    common in captured fixtures, because a connector that streams records writes
+    exactly that and the capture keeps the producer's filename. Dispatching on
+    the suffix alone would reject those, so an undecodable whole-file parse is
+    retried line by line before it is reported.
+    """
+    from application_sdk.testing.integration._errors import (  # noqa: PLC0415
+        GoldenCorpusFormatError,
+    )
+
     try:
         payload = orjson.loads(path.read_bytes())
     except orjson.JSONDecodeError as exc:
-        raise _format_error(
-            path, "File is not valid JSON.", "Fix or re-capture the file."
-        ) from exc
+        try:
+            return _read_ndjson(path)
+        except GoldenCorpusFormatError:
+            raise _format_error(
+                path,
+                "File is neither valid JSON nor valid NDJSON.",
+                "Fix or re-capture the file.",
+            ) from exc
     return _as_records(path, payload)
 
 
