@@ -373,8 +373,11 @@ def main(argv: list[str] | None = None) -> int:
         repo = slug.replace("_", "/", 1)  # atlanhq_my-app → atlanhq/my-app
 
         try:
-            open_prs_raw: list[dict] = json.loads(open_file.read_text())
-        except (json.JSONDecodeError, OSError) as exc:
+            # read_bytes(), not read_text(): json.loads accepts bytes natively,
+            # so decoding first is a wasted round trip *and* would decode with
+            # the platform locale (cp1252 on Windows) unless told otherwise.
+            open_prs_raw: list[dict] = json.loads(open_file.read_bytes())
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
             print(f"Warning: skipping {open_file}: {exc}", file=sys.stderr)
             continue
 
@@ -383,8 +386,8 @@ def main(argv: list[str] | None = None) -> int:
             merged_file = merged_dir / open_file.name
             if merged_file.exists():
                 try:
-                    merged_raw = json.loads(merged_file.read_text())
-                except (json.JSONDecodeError, OSError):
+                    merged_raw = json.loads(merged_file.read_bytes())
+                except (json.JSONDecodeError, UnicodeDecodeError, OSError):
                     pass
 
         report = _build_repo_report(repo, open_prs_raw, merged_raw)
@@ -392,7 +395,9 @@ def main(argv: list[str] | None = None) -> int:
 
         # Per-repo output.
         repo_path = out_dir / "repos" / f"{slug}.json"
-        repo_path.write_text(json.dumps(_report_to_dict(report), indent=2))
+        repo_path.write_text(
+            json.dumps(_report_to_dict(report), indent=2), encoding="utf-8"
+        )
 
         # Append-only history.
         history_entry = {
@@ -415,7 +420,9 @@ def main(argv: list[str] | None = None) -> int:
 
     # Fleet aggregate.
     fleet = _build_fleet(reports)
-    (out_dir / "fleet.json").write_text(json.dumps(_fleet_to_dict(fleet), indent=2))
+    (out_dir / "fleet.json").write_text(
+        json.dumps(_fleet_to_dict(fleet), indent=2), encoding="utf-8"
+    )
 
     # Fleet history.
     fleet_history = {

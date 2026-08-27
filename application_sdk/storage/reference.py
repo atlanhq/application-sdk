@@ -578,7 +578,7 @@ async def materialize_file_reference(
             if dest_path.exists() and dest_sidecar.exists():
                 try:
                     local_hash = await integrity.sha256_file(dest_path)
-                    if local_hash == dest_sidecar.read_text().strip():
+                    if local_hash == dest_sidecar.read_text(encoding="utf-8").strip():
                         # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
                         logger.debug(
                             "file_ref.materialize.skipped",

@@ -479,7 +479,7 @@ class BaseFullDAGE2ETest:
                 ),
                 resource_identifier=str(path),
             )
-        manifest = orjson.loads(path.read_text())
+        manifest = orjson.loads(path.read_bytes())
         dag = manifest.get("dag")
         if not isinstance(dag, dict) or not dag:
             raise ManifestDagMissingError(
