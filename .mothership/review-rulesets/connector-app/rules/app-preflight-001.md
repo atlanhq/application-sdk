@@ -24,6 +24,12 @@ silently assumes.
   existing check and why it exercises the same grant. An unnamed claim of
   coverage IS the finding — same object, different privilege (SELECT vs
   SHOW, read vs list, table vs view) is not coverage.
+- Ground the grant, do not guess it. Check official source documentation
+  for the exact endpoint, scope, SQL object, or client operation, and cite
+  the documented permission and its URL. If documentation is unavailable or
+  ambiguous, ask the author for an authoritative citation — never infer a
+  permission from a method or object name. Without a citation this rule
+  reports "unverified, author to confirm", not a HIGH finding.
 - Weight the silent case hardest: a missing grant that returns an empty
   result instead of erroring produces a green run with missing assets.
   A loud mid-run auth failure is the lesser sibling — neither is
@@ -31,13 +37,10 @@ silently assumes.
 - The check itself is still bound by APP-VALIDATION-001 — same oracle as
   the real operation. A check that lists what extraction queries passes
   while the run fails.
-- Do not review for a handler that blocks. Two separate axes: handler
-  control flow decides only the *verdict* — a required check
-  short-circuits to `NOT_READY`, an advisory one contributes `PARTIAL`.
-  Whether a `NOT_READY` verdict aborts the run is a gate property,
-  `App.preflight_gate_mode`, never the handler's. Requesting a raise or a
-  block inside the handler is the wrong fix; the missing check is the
-  finding.
+- Do not review for a handler that blocks. The handler returns an honest
+  `READY`, `PARTIAL`, or `NOT_READY` verdict; `App.preflight_gate_mode`
+  alone decides whether `NOT_READY` blocks. Requesting a raise or a block
+  inside the handler is the wrong fix; the missing check is the finding.
 - Safe path: the check exists in the same PR, or the PR names the covering
   check, or it states why the access needs no grant beyond one already
   checked.
