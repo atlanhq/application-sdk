@@ -2092,9 +2092,43 @@ def test_d011_fires_when_declared_but_missing_from_lock(tmp_path: Path) -> None:
     assert "uv lock" in findings[0].message
 
 
+def test_d011_lock_branch_is_reachable_for_a_cap_only_specifier(
+    tmp_path: Path,
+) -> None:
+    """The canonical `<=1.0.0` must reach branch 4, not stop at branch 3.
+
+    Before a floor became optional, a cap-only declaration failed branch 3 and
+    returned there, so a repo that had never run ``uv lock`` was told its
+    specifier "cannot float" — a message describing the wrong defect and
+    prescribing an edit that would not have fixed anything. Now branch 3 passes
+    and the lock branch gets to report the real problem.
+    """
+    _write_lock(tmp_path, include_conformance=False)
+    findings = _d011_scan(
+        tmp_path,
+        _D011_HEAD + _d011_group("atlan-application-sdk-conformance<=1.0.0"),
+    )
+    assert len(findings) == 1
+    assert "no entry in uv.lock" in findings[0].message
+
+
 def test_d011_clean_when_declared_and_present_in_lock(tmp_path: Path) -> None:
     _write_lock(tmp_path, include_conformance=True)
     assert _d011_scan(tmp_path, _D011_HEAD + _D011_OK_GROUP) == []
+
+
+def test_d011_clean_when_cap_only_specifier_is_present_in_lock(
+    tmp_path: Path,
+) -> None:
+    """The canonical form, end to end: declared, capped, and locked."""
+    _write_lock(tmp_path, include_conformance=True)
+    assert (
+        _d011_scan(
+            tmp_path,
+            _D011_HEAD + _d011_group("atlan-application-sdk-conformance<=1.0.0"),
+        )
+        == []
+    )
 
 
 def test_d011_lock_branch_matches_normalised_lock_name(tmp_path: Path) -> None:
