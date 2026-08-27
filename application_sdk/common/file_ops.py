@@ -97,7 +97,17 @@ class SafeFileOps:
         closefd: bool = True,
         opener: Optional[Any] = None,
     ):
-        """Safely open a file, supporting long paths on Windows."""
+        """Safely open a file, supporting long paths on Windows.
+
+        Text-mode opens default to UTF-8 rather than to the platform locale.
+        The builtin's ``encoding=None`` means ``locale.getpreferredencoding()``
+        — UTF-8 on Linux and macOS, cp1252 on Windows — which is precisely the
+        platform this wrapper exists to smooth over, so inheriting that default
+        would make the helper's own reason for existing a hazard. Binary mode
+        takes no encoding at all; passing one there is a ``ValueError``.
+        """
+        if encoding is None and "b" not in mode:
+            encoding = "utf-8"
         f = open(
             convert_to_extended_path(file),
             mode=mode,
