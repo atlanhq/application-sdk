@@ -149,6 +149,24 @@ class Minter:
             return int(ambient)
         return self._clock()
 
+    def seed_version(self) -> int:
+        """Return the version number to publish a seed DAG under.
+
+        A bare clock reading, and deliberately **not** :meth:`run_id`. This
+        number is how the harness later tells its own seed apart from the
+        manifest AE published over it — ``BaseE2ETest._supersedes`` answers
+        "did the tenant replace my seed?" by comparing the two — so two seeds of
+        one workflow must not carry the same number. The ambient
+        ``GITHUB_RUN_ID`` that :meth:`run_id` prefers is constant across every
+        leg of one CI job, so seeding twice under it would report the second
+        seed as the tenant's own manifest.
+
+        Returns:
+            The clock reading, in whole seconds. Opaque to AE beyond its
+            ordering, which is why nothing here tries to make it meaningful.
+        """
+        return self._clock()
+
     def unique_suffix(self) -> str:
         """Return a suffix that makes a name unique within a tenant.
 

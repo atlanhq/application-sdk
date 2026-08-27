@@ -21,14 +21,19 @@ from application_sdk.common.task_queue import (
     DEPLOYMENT_NAME_TOKEN,
     derive_task_queue,
 )
+from application_sdk.testing.harness.automation_engine.retry import (
+    cold_start_submit_kwargs,
+)
 from application_sdk.testing.harness.cluster import ServiceTarget
 from application_sdk.testing.harness.starters._errors import UnusableTaskQueueError
 
 __all__ = [
     "AERunHandle",
+    "AEWorkflowSpec",
     "HttpRunHandle",
     "HttpWorkflowSpec",
     "QueueWorkflowSpec",
+    "SubmitRetry",
     "WorkflowRunHandle",
 ]
 
@@ -54,10 +59,129 @@ class AERunHandle:
     Attributes:
         workflow_slug: AE's slug for the workflow the run belongs to.
         run_id: AE's identifier for this run.
+        seed_version: The version number the starter published this run's seed
+            DAG under, or ``None`` when it published none — which is the case
+            for a spec that named a pre-existing slug. Carried on the handle
+            rather than left with the starter because it is the only way a
+            caller can later tell the harness' own seed apart from the manifest
+            AE published over it at submit; ``BaseE2ETest._supersedes`` is the
+            reader, and its ``None`` branch is exactly this case ("nothing was
+            seeded, so nothing can have been superseded").
     """
 
     workflow_slug: str
     run_id: str
+    seed_version: int | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SubmitRetry:
+    """How hard the AE submit tries before it gives up.
+
+    A typed pair rather than the ``dict[str, int]`` the lifted code threaded
+    through ``**kwargs``. Two reasons, and the second is the one that matters:
+    a mapping of ints is checked by nobody, so a rename on either side fails at
+    runtime inside a non-idempotent write; and the sizing is a *decision* about
+    what the harness is waiting for, which deserves a name.
+
+    :meth:`for_cold_start` is the only way to derive one. There is no second
+    derivation of the budget here — the arithmetic stays in
+    :func:`~application_sdk.testing.harness.automation_engine.cold_start_submit_kwargs`,
+    which carries the reasoning about why widening the submit's *existing* retry
+    loop is the only safe shape for a write that must not be re-entered.
+
+    Attributes:
+        retries: Retries on top of the initial attempt.
+        sleep_seconds: Fixed gap between attempts, before any ``retry_after``
+            the origin names.
+    """
+
+    retries: int
+    sleep_seconds: int
+
+    @classmethod
+    def for_cold_start(
+        cls, *, timeout_seconds: int, poll_interval_seconds: int
+    ) -> SubmitRetry | None:
+        """Size the submit's retry to a tenant-app cold start.
+
+        The AE submit is the only tenant-facing probe of the installed app pod
+        on the connector CI path, because the runner has no ``kubectl`` route
+        into the tenant vcluster. A pod minutes from serving arrives as a
+        generic retryable 5xx, so the budget has to cover a cold start rather
+        than transient AE overload.
+
+        Args:
+            timeout_seconds: Total cold-start budget. Zero or negative answers
+                ``None``, which leaves the submit's own defaults in place.
+            poll_interval_seconds: Gap between submit attempts.
+
+        Returns:
+            The sizing, or ``None`` when the cold-start budget is disabled.
+
+        Raises:
+            MissingHarnessClassAttrError: When *timeout_seconds* is positive but
+                *poll_interval_seconds* is not — the retry count divides by the
+                interval, so a zero would crash rather than gate the submit.
+        """
+        sizing = cold_start_submit_kwargs(timeout_seconds, poll_interval_seconds)
+        if not sizing:
+            return None
+        return cls(
+            retries=sizing["retries"], sleep_seconds=sizing["retry_sleep_seconds"]
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AEWorkflowSpec:
+    """A workflow to start through the Automation Engine.
+
+    Four steps' worth of input in one value: create the AE workflow, seed a DAG
+    version under it, publish that version, submit a run against it. They are
+    one spec rather than four calls because they are one *decision* — a caller
+    that seeded a DAG and did not submit has left a published version on the
+    tenant that nothing will ever run.
+
+    What is deliberately not here is how the seed DAG was *built*. Resolving a
+    manifest's mustache tokens, choosing the extract task queue, falling back to
+    a legacy graph — those are the connector suite's, and they are what makes
+    ``BaseE2ETest`` a base class rather than a function. This spec takes the
+    graph as a value, which is also what lets a runtime scenario supply one that
+    never came from a ``manifest.json`` at all.
+
+    Attributes:
+        name: AE workflow name. The create endpoint is idempotent on it, so
+            re-running under the same name reuses the workflow rather than
+            accumulating one per run.
+        seed_dag: The DAG to publish as this workflow's seed version. Sent
+            verbatim: AE's submit is what makes Heracles fetch the tenant pod's
+            own manifest and publish it *over* this one, so the seed's job is to
+            make the workflow submittable, not to be the graph that runs.
+        payload: The AE submit body, as
+            :func:`application_sdk.testing.e2e.payload.build_ae_payload` builds
+            it.
+        description: Free text on the AE workflow.
+        slug: An AE slug that already exists. Non-empty **skips create, seed and
+            publish entirely** and submits against it — the escape hatch for a
+            suite pointed at a workflow someone else maintains. Not a
+            convenience: seeding over such a workflow would replace a DAG this
+            run does not own.
+        version: Explicit seed version number, or ``None`` to mint one. See
+            :meth:`~application_sdk.testing.harness.identity.Minter.seed_version`
+            for why the minted value is a bare clock reading.
+        submit_retry: How hard the submit tries. ``None`` leaves
+            :meth:`~application_sdk.testing.harness.automation_engine.AEClient.submit_workflow`'s
+            own defaults, which are sized for transient AE overload rather than
+            for a pod cold start.
+    """
+
+    name: str
+    seed_dag: Mapping[str, object] = field(default_factory=dict)
+    payload: Mapping[str, object] = field(default_factory=dict)
+    description: str = ""
+    slug: str = ""
+    version: int | None = None
+    submit_retry: SubmitRetry | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
