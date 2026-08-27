@@ -13,6 +13,37 @@ RUN mkdir -p /app /home/appuser/.local/bin && \
 # Remove curl and bash (not needed at runtime) and clean apk cache
 RUN apk del curl bash && rm -rf /var/cache/apk/*
 
+# Drop the pip/setuptools bootstrap wheels.
+#
+# `py3-pip-wheel` and `py3-setuptools-wheel` are hard dependencies of the
+# python-3.x-base packages, so `apk del` refuses them (verified: it removes 0
+# packages and leaves Python intact). The wheel FILES, however, are only read by
+# `ensurepip` when bootstrapping a virtual environment -- and nothing here does
+# that. Dependencies are installed by `uv`, which is self-contained and never
+# touches these files.
+#
+# Removing them clears five findings that customer scanners report against this
+# base, all of which resolve to the wheel file or to a manifest inside it rather
+# than to anything installed:
+#   CVE-2018-20225   pip         -> the wheel file itself
+#   CVE-2026-57585   msgpack     -> pip/_vendor/bom.cdx.json inside the wheel
+#   CVE-2026-23949   setuptools  -> same manifest
+#   CVE-2025-47273   setuptools  -> same manifest
+#   CVE-2026-59890   setuptools  -> same manifest
+# The manifest lists pip's vendored dependency versions (setuptools 70.3.0,
+# msgpack 1.1.2); neither is installed anywhere in the image.
+#
+# Caveat: this removes the files, not the apk package records. A scanner that
+# reads the apk database rather than file contents will still report
+# py3-pip-wheel. That is a known limit of this change, not an oversight -- the
+# records cannot be removed without taking Python with them.
+#
+# Trade-off: `python -m venv` and `python -m ensurepip` no longer work inside the
+# image. Nothing in the SDK or any connector app uses either (the one `-m venv`
+# in this repo runs on a GitHub runner, not in the container).
+RUN rm -f /usr/share/python-wheels/pip-*.whl \
+          /usr/share/python-wheels/setuptools-*.whl
+
 # Switch to appuser before venv creation
 USER appuser
 
