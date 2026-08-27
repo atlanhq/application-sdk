@@ -6,7 +6,9 @@ customer payloads, hostnames or object ids appear.
 
 from __future__ import annotations
 
+import http.client
 import json
+import socket
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
@@ -52,6 +54,57 @@ def _request(
 def _json(url: str, **kwargs: Any) -> tuple[int, Any]:
     status, body, _ = _request(url, **kwargs)
     return status, json.loads(body) if body else None
+
+
+def _connect(source: HttpFakeSource) -> http.client.HTTPConnection:
+    """A raw keep-alive connection, for request framing urllib cannot express."""
+    return http.client.HTTPConnection("127.0.0.1", source.port, timeout=5)
+
+
+def _headers_only_request(
+    source: HttpFakeSource,
+    headers: dict[str, str],
+    *,
+    path: str = "/api/echo",
+    conn: http.client.HTTPConnection | None = None,
+) -> tuple[int, Any]:
+    """Send headers announcing a body, then send no body at all."""
+    connection = conn or _connect(source)
+    try:
+        connection.putrequest("POST", path, skip_host=True, skip_accept_encoding=True)
+        for key, value in headers.items():
+            connection.putheader(key, value)
+        connection.endheaders()
+        response = connection.getresponse()
+        body = response.read()
+        return response.status, json.loads(body) if body else None
+    finally:
+        if conn is None:
+            connection.close()
+
+
+def _chunked_request(
+    source: HttpFakeSource,
+    raw: bytes,
+    *,
+    half_close: bool = False,
+    path: str = "/api/echo",
+) -> tuple[int, Any]:
+    """Send a hand-written ``Transfer-Encoding: chunked`` body, valid or not."""
+    connection = _connect(source)
+    try:
+        connection.putrequest("POST", path, skip_host=True, skip_accept_encoding=True)
+        connection.putheader("Transfer-Encoding", "chunked")
+        connection.endheaders()
+        if raw:
+            connection.send(raw)
+        if half_close and connection.sock is not None:
+            connection.sock.shutdown(socket.SHUT_WR)
+        response = connection.getresponse()
+        body = response.read()
+        return response.status, json.loads(body) if body else None
+    finally:
+        connection.close()
 
 
 @pytest.fixture
@@ -224,6 +277,121 @@ class TestCatchAllFastFourOhFour:
         with HttpFakeSource(warn_unmatched=False) as source:
             _json(f"{source.base_url}/api/absent")
         assert warnings == []
+
+
+class TestRequestBodyFraming:
+    """A body the server cannot frame must answer and never desync the connection."""
+
+    @pytest.fixture
+    def echo(self) -> Iterator[HttpFakeSource]:
+        source = HttpFakeSource(name="echo-source")
+        source.route(
+            r"/api/echo",
+            lambda r: {"body": r.body.decode()},
+            methods=("POST",),
+        )
+        source.route(r"/api/objects", lambda _r: {"items": OBJECTS})
+        with source:
+            yield source
+
+    def test_chunked_post_body_reaches_the_handler(self, echo: HttpFakeSource) -> None:
+        conn = _connect(echo)
+        try:
+            conn.request("POST", "/api/echo", body=iter([b"one-", b"two-", b"three"]))
+            response = conn.getresponse()
+            assert response.status == 200
+            assert json.loads(response.read()) == {"body": "one-two-three"}
+        finally:
+            conn.close()
+
+    def test_chunked_post_leaves_the_next_request_uncorrupted(
+        self, echo: HttpFakeSource
+    ) -> None:
+        conn = _connect(echo)
+        try:
+            conn.request("POST", "/api/echo", body=iter([b"payload"]))
+            assert conn.getresponse().read() == b'{"body": "payload"}'
+            conn.request("GET", "/api/objects")
+            following = conn.getresponse()
+            assert following.status == 200
+            assert json.loads(following.read()) == {"items": OBJECTS}
+        finally:
+            conn.close()
+
+    def test_empty_chunked_post_is_an_empty_body(self, echo: HttpFakeSource) -> None:
+        conn = _connect(echo)
+        try:
+            conn.request("POST", "/api/echo", body=iter([]))
+            assert json.loads(conn.getresponse().read()) == {"body": ""}
+        finally:
+            conn.close()
+
+    @pytest.mark.parametrize("value", ["abc", "1.5", "-1", "0x10", "12abc"])
+    def test_unparseable_content_length_is_a_400(
+        self, echo: HttpFakeSource, value: str
+    ) -> None:
+        status, payload = _headers_only_request(echo, {"Content-Length": value})
+        assert status == 400
+        assert payload == {"error": "malformed request body"}
+
+    def test_oversize_content_length_is_a_413(self, echo: HttpFakeSource) -> None:
+        status, payload = _headers_only_request(
+            echo, {"Content-Length": str(64 * 1024 * 1024 + 1)}
+        )
+        assert status == 413
+        assert payload == {"error": "request body too large"}
+
+    @pytest.mark.parametrize(
+        ("raw", "half_close"),
+        [
+            (b"not-a-chunk-size\r\n", False),
+            (b"", True),
+            (b"-1\r\n", False),
+            (b"4000001\r\n", False),
+            (b"5\r\nab", True),
+            (b"2\r\nabXX", False),
+            (b"0\r\n", True),
+        ],
+        ids=[
+            "unparseable-size",
+            "eof-before-size",
+            "negative-size",
+            "oversize-chunk",
+            "truncated-chunk",
+            "missing-chunk-terminator",
+            "eof-in-trailers",
+        ],
+    )
+    def test_malformed_chunk_framing_is_a_400(
+        self, echo: HttpFakeSource, raw: bytes, half_close: bool
+    ) -> None:
+        status, payload = _chunked_request(echo, raw, half_close=half_close)
+        assert status == 400
+        assert payload == {"error": "malformed request body"}
+
+    @pytest.mark.parametrize(
+        ("headers", "expected"),
+        [
+            ({"Content-Length": "abc"}, 400),
+            ({"Content-Length": str(64 * 1024 * 1024 + 1)}, 413),
+        ],
+    )
+    def test_a_refused_body_closes_the_connection(
+        self, echo: HttpFakeSource, headers: dict[str, str], expected: int
+    ) -> None:
+        conn = _connect(echo)
+        try:
+            status, _ = _headers_only_request(echo, headers, conn=conn)
+            assert status == expected
+            assert conn.sock is None
+        finally:
+            conn.close()
+
+    def test_refused_body_is_logged(
+        self, echo: HttpFakeSource, warnings: list[str]
+    ) -> None:
+        _headers_only_request(echo, {"Content-Length": "abc"})
+        assert any("could not read the body" in message for message in warnings)
 
 
 class TestHandlerContract:

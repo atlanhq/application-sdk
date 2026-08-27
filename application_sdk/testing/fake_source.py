@@ -78,6 +78,11 @@ logger = get_logger(__name__)
 _LOOPBACK = "127.0.0.1"
 _METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
 _MAX_BODY_BYTES = 64 * 1024 * 1024
+_MAX_CHUNK_LINE_BYTES = 8192
+_BODY_REFUSALS = {
+    400: {"error": "malformed request body"},
+    413: {"error": "request body too large"},
+}
 
 
 @dataclass(frozen=True)
@@ -419,7 +424,7 @@ class HttpFakeSource:
             )
             try:
                 response = _coerce(route.handler(matched))
-            except Exception as exc:  # noqa: BLE001 — a handler bug must answer, not hang
+            except Exception as exc:  # a handler bug must answer, not hang
                 logger.warning(
                     "%s handler for %r raised: %r",
                     self.name,
@@ -473,14 +478,75 @@ def _make_handler_class(fake: HttpFakeSource) -> type[BaseHTTPRequestHandler]:
         protocol_version = "HTTP/1.1"
         server_version = "HttpFakeSource/1.0"
 
-        def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+        def log_message(self, format: str, *args: Any) -> None:
             """Silenced: the default access log is stderr noise under pytest."""
+
+        def _read_chunked_body(self) -> bytes | None:
+            """Decode a ``Transfer-Encoding: chunked`` body, or ``None`` if malformed."""
+            decoded = bytearray()
+            while True:
+                line = self.rfile.readline(_MAX_CHUNK_LINE_BYTES + 1)
+                if not line or len(line) > _MAX_CHUNK_LINE_BYTES:
+                    return None
+                try:
+                    size = int(line.split(b";", 1)[0].strip(), 16)
+                except ValueError:
+                    return None
+                if size < 0 or len(decoded) + size > _MAX_BODY_BYTES:
+                    return None
+                if size == 0:
+                    break
+                chunk = self.rfile.read(size)
+                if len(chunk) != size or self.rfile.read(2) != b"\r\n":
+                    return None
+                decoded += chunk
+            while True:
+                line = self.rfile.readline(_MAX_CHUNK_LINE_BYTES + 1)
+                if not line or len(line) > _MAX_CHUNK_LINE_BYTES:
+                    return None
+                if line in (b"\r\n", b"\n"):
+                    return bytes(decoded)
+
+        def _read_body(self) -> tuple[bytes, int | None]:
+            """Read the request body, returning it with a refusal status or ``None``."""
+            encoding = self.headers.get("Transfer-Encoding", "")
+            if "chunked" in encoding.lower():
+                decoded = self._read_chunked_body()
+                return (b"", 400) if decoded is None else (decoded, None)
+            raw = (self.headers.get("Content-Length") or "").strip()
+            if not raw:
+                return b"", None
+            try:
+                length = int(raw)
+            except ValueError:
+                return b"", 400
+            if length < 0:
+                return b"", 400
+            if length > _MAX_BODY_BYTES:
+                return b"", 413
+            payload = self.rfile.read(length) if length else b""
+            return (payload, None) if len(payload) == length else (b"", 400)
 
         def _handle(self) -> None:
             split = urlsplit(self.path)
             query = parse_qs(split.query, keep_blank_values=True)
-            length = int(self.headers.get("Content-Length") or 0)
-            body = self.rfile.read(min(length, _MAX_BODY_BYTES)) if length > 0 else b""
+            body, refusal = self._read_body()
+            if refusal is not None:
+                self.close_connection = True
+                logger.warning(
+                    "%s could not read the body of %s %s — answering %s",
+                    fake.name,
+                    self.command.upper(),
+                    split.path,
+                    refusal,
+                )
+                self._respond(
+                    FakeResponse.json_(
+                        _BODY_REFUSALS[refusal], status=refusal, Connection="close"
+                    ),
+                    self.command.upper(),
+                )
+                return
             request = FakeRequest(
                 method=self.command.upper(),
                 path=split.path,
@@ -490,9 +556,11 @@ def _make_handler_class(fake: HttpFakeSource) -> type[BaseHTTPRequestHandler]:
                 headers=dict(self.headers.items()),
                 body=body,
             )
-            response = fake._dispatch(request)
+            self._respond(fake._dispatch(request), request.method)
+
+        def _respond(self, response: FakeResponse, method: str) -> None:
             payload, content_type = response.encode(fake.default_content_type)
-            if request.method == "HEAD":
+            if method == "HEAD":
                 payload = b""
             self.send_response(response.status)
             self.send_header("Content-Type", content_type)
