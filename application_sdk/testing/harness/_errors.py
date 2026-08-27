@@ -155,8 +155,9 @@ class WaitStalledError(AppTimeoutError):
     (ADR-0018): a stall *is* a bounded wait that elapsed, just a wait for the
     next change rather than for the end. ``testing/e2e``'s
     ``DAGProgressStalledError`` calls the same condition a ``PRECONDITION``; it
-    predates the ADR and keeps its category so no existing consumer sees a
-    reclassification. Normalising the pair is listed on FND-240.
+    predates the ADR and keeps its category, and FND-240 declined to normalise
+    the pair — see that class for why a ``code`` change is an error-contract
+    change rather than a refactor.
 
     Attributes:
         label: What was being waited on, verbatim from the outcome.

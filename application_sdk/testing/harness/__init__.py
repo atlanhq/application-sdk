@@ -26,8 +26,10 @@ Module map:
 ``bridge``
     The one sync/async bridge. One reused event loop per thread.
 ``_poll``
-    The deadline arithmetic both bounded-wait shapes and ``testing/e2e``'s
-    twelve loops run on. Private; moved here from ``testing/e2e`` in child C.
+    The deadline arithmetic every bounded loop in the harness runs on — both
+    wait shapes, and the handful whose probe is synchronous and so reads it
+    directly. Private; moved here from ``testing/e2e`` in child C, and the sole
+    remaining clock since child D (FND-240).
 ``waiting``
     ``poll_until`` and ``hold_stable`` — the only two bounded-wait shapes.
 ``outcome``
@@ -79,11 +81,32 @@ real; the rest are typed stubs, each naming the child issue that fills it in.
 
 ``atlas`` and ``automation_engine`` are the first two that ``testing/e2e``
 actually calls: since child F, ``AEWorkflowClient`` is a set of one-line
-``run_sync`` shims over them and holds no logic of its own. The rest are still
-pinned against the code they were lifted from by their unit tests rather than by
-being called from it — ``testing/e2e`` is re-expressed over them in child H. For
-``waiting`` that pin is a differential test against ``poll_native_status``
-itself, on identical scripted readings.
+``run_sync`` shims over them and holds no logic of its own. ``waiting`` joined
+them in child D (FND-240) — ``poll_native_status``, ``atlas.poll_for_connection``,
+``workflows.wait_for_workflow`` and ``AEClient.wait_for_slug`` are all expressed
+over :func:`~application_sdk.testing.harness.waiting.poll_until`, and the loops
+whose probe is synchronous read ``_poll``'s deadline arithmetic directly. No
+bounded loop in the harness owns a deadline any more.
+
+The rest are pinned by their unit tests rather than by being called from
+``testing/e2e``, which is child H's change. What that pin *is* differs by
+provenance, and the difference is worth knowing before trusting one: a module
+lifted from code in this repo can be tested **differentially**, against the
+implementation it replaced on identical inputs, while one that was not has to be
+pinned against **captured numbers** instead. ``cluster`` is the first kind — it
+retired ``testing/e2e/pods.py``, so there was an original to compare against.
+``temporal`` is the second, and says so in its own entry above — so "pinned
+against the code they were lifted from" is not true of every module here.
+
+``waiting`` started as the first kind and became the second in child D, which is
+the case worth reading carefully because the change was not a choice: its pin
+*was* a differential against ``poll_native_status`` on identical scripted
+readings, and that stopped meaning anything the moment that function became a
+call to ``poll_until``. A loop compared against itself agrees by construction. So
+the numbers the hand-rolled loop produced — verdict, probe count and exact sleep
+sequence, for fifteen scripts — were captured before the conversion and frozen in
+``test_waiting_equivalence.py`` as a golden table. A differential that has
+quietly become circular is worse than no differential, because it still passes.
 
 The optional ``harness`` extra carries the typed Kubernetes backend for
 ``cluster`` (``pip install 'atlan-application-sdk[harness]'``). It is

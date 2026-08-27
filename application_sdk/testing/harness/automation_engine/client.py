@@ -31,6 +31,7 @@ the retry.
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
@@ -45,6 +46,7 @@ from application_sdk.errors.base import AppError
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.harness._poll import (
     _HEARTBEAT_SECONDS,
+    monotonic,
     sleep_async,
     until_deadline_async,
 )
@@ -60,6 +62,7 @@ from application_sdk.testing.harness.automation_engine._errors import (
     RequestDelivery,
 )
 from application_sdk.testing.harness.automation_engine.retry import (
+    MAX_RETRY_AFTER_SECONDS,
     RETRY_AFTER_BUDGET_SECONDS,
     RunLookup,
     WriteRecovery,
@@ -84,6 +87,16 @@ from application_sdk.testing.harness.automation_engine.wire import (
     safe_node_status,
     safe_run_status,
 )
+from application_sdk.testing.harness.budgets import Budget
+from application_sdk.testing.harness.outcome import (
+    Expired,
+    Indeterminate,
+    NeverStarted,
+    Outcome,
+    Settled,
+    Stalled,
+)
+from application_sdk.testing.harness.waiting import poll_until
 
 logger = get_logger(__name__)
 
@@ -160,12 +173,157 @@ _RECONCILE_PAGE_SIZE = 20
 # as it did before. The machinery below is complete and tested either way.
 _RESUBMIT_WHEN_AE_REPORTS_NO_RUN = False
 
+# Waiting for AE to index a freshly created workflow slug. Replaces an
+# unconditional ``time.sleep(3)`` both full-DAG harnesses ran here (FND-240).
+#
+# The timeout is generous relative to the 3s it replaces because it costs nothing
+# when the answer is already yes: the first probe is at t=0, so an
+# already-indexed slug pays one HTTP call and no sleep at all, where the fixed
+# sleep charged every run three seconds. And unlike the sleep, the budget is what
+# a slower-than-usual index actually gets to use.
+_SLUG_INDEX_TIMEOUT_SECONDS = 30
+_SLUG_INDEX_INTERVAL_SECONDS = 1
+
 # ``_HEARTBEAT_SECONDS`` (imported from ``_poll``) is the cadence for "still
 # polling" heartbeat log lines in ``poll_native_status`` — lineage stages take
 # 2-5 min on small datasets and the status string doesn't change during that
 # time, so the loop would otherwise look wedged in CI output. That loop throttles
 # its own richer progress line to the same cadence and disables the generic
 # heartbeat, rather than emitting two "still waiting" lines.
+
+
+# ---------------------------------------------------------------------------
+# The AE shape ``poll_until`` is given, as four callables plus a ledger
+# ---------------------------------------------------------------------------
+#
+# ``poll_native_status`` used to interleave these with the loop's own clock
+# arithmetic. FND-240 hands the loop to
+# :func:`~application_sdk.testing.harness.waiting.poll_until` and leaves the
+# AE-specific parts here, which is the whole of what child C extracted: the
+# start-grace latch, the progress watchdog and the transient streak are generic,
+# and only *what counts as started*, *what counts as progress* and *which
+# exception is a blip* are about the Automation Engine.
+
+
+def _armed(seconds: int | None) -> timedelta | None:
+    """Read a guard's window, or ``None`` when the caller disabled it.
+
+    ``poll_native_status`` spells "disabled" three ways — ``None``, ``0`` and any
+    negative — and :class:`~application_sdk.testing.harness.budgets.Budget`
+    spells it once, as ``None``. A negative is not folded in for tidiness: left
+    as a duration it would make ``elapsed >= grace`` true on the very first poll
+    and fire the guard before anything could possibly have started.
+    """
+    if seconds is None or seconds <= 0:
+        return None
+    return timedelta(seconds=seconds)
+
+
+def _any_node_started(result: DAGRunResult) -> bool:
+    """True once at least one DAG node has left the not-started set.
+
+    Node-level, not run-level, and that is the load-bearing part: the parent AE
+    workflow runs on the always-on automation-engine queue, so the top-level run
+    flips to ``Running`` even when the connector's own ``extract`` node is stuck
+    because nothing polls its task queue. Keying the start latch on the run
+    status would therefore report every unpolled queue as "started".
+    """
+    return any(not node.status.is_not_started for node in result.nodes)
+
+
+def _absorb_ae_blip(error: BaseException) -> timedelta | None:
+    """How long to back off after a probe error, or ``None`` if it is terminal.
+
+    Absorbs :class:`~application_sdk.errors.base.AppError` and nothing else,
+    which is the ``except AppError`` this replaced: the tenant's Temporal blips
+    during multi-minute runs and AE answers ``AE-COMMON-500-01`` for a few
+    seconds before recovering, whereas a ``TypeError`` from a wrong call
+    signature will raise identically on every attempt and waiting out the budget
+    only delays it.
+
+    Rounding up is the classifier's job rather than the primitive's:
+    :func:`~application_sdk.testing.harness.automation_engine.retry.retry_gap`
+    took ``math.ceil`` because its input is an HTTP body's integer seconds, and
+    :func:`~application_sdk.testing.harness.waiting._honoured_gap` is handed a
+    ``timedelta`` and has no business quantising someone else's duration. Doing
+    it here is what keeps the honoured gaps identical to the hand-rolled loop's.
+
+    Returns:
+        ``timedelta(0)`` for a blip the origin named no backoff for — "absorb
+        this, and the loop's own interval is the gap" — the requested backoff
+        when it did, or ``None`` for anything that is not an ``AppError``.
+    """
+    if not isinstance(error, AppError):
+        return None
+    requested = (
+        error.retry_after_seconds if isinstance(error, AtlanApiHttpError) else None
+    )
+    if requested is None or requested <= 0:
+        return timedelta(0)
+    return timedelta(seconds=math.ceil(requested))
+
+
+class _DAGProgress:
+    """The per-poll progress line, and the ledger behind it.
+
+    Two jobs the generic primitive deliberately does not do, both keyed on the
+    node-glyph summary:
+
+    * **the log.** One line per node-state change, plus a heartbeat at
+      :data:`~application_sdk.testing.harness._poll._HEARTBEAT_SECONDS` even
+      when nothing moved, because a lineage stage sits unchanged for 2-5 minutes
+      and an operator watching a CI leg cannot otherwise tell "still polling"
+      from "harness wedged". The ``L006`` waiver this carries forward is about
+      exactly that throttling, so the line moves here rather than being dropped.
+    * **the quiet gap.**
+      :attr:`~application_sdk.testing.harness.automation_engine.wire.DAGRunResult.seconds_since_last_progress`
+      is stamped onto the observation a *timed-out* poll returns, and
+      :class:`~application_sdk.testing.harness.outcome.Expired` does not carry
+      it — the watchdog's own window is on
+      :class:`~application_sdk.testing.harness.outcome.Stalled`, which is the
+      verdict where it fired. This sees every successful reading, so it can
+      answer the question in the one case the verdict cannot.
+
+    Elapsed comes from :func:`~application_sdk.testing.harness._poll.monotonic`
+    rather than a private clock, so it is the same reading the loop's own
+    ``Attempt.elapsed`` is measured against and a ``fake_clock`` test sees one
+    consistent timeline.
+    """
+
+    def __init__(self) -> None:
+        self._started = monotonic()
+        self._last_summary: str | None = None
+        self._last_logged = 0.0
+        #: Elapsed at the most recent successful reading.
+        self.last_elapsed = 0.0
+        #: Elapsed at the most recent *change* in the summary.
+        self.last_progress = 0.0
+
+    def observe(self, result: DAGRunResult) -> None:
+        """Record one successful reading and log it if it is worth a line."""
+        elapsed = monotonic() - self._started
+        self.last_elapsed = elapsed
+        summary = result.fingerprint
+        changed = summary != self._last_summary
+        if changed:
+            self.last_progress = elapsed
+        if not (changed or (elapsed - self._last_logged) >= _HEARTBEAT_SECONDS):
+            return
+        # conformance: ignore[L006] throttled to status-changes plus a heartbeat every _HEARTBEAT_SECONDS (see the class docstring), not per-iteration; demoting to DEBUG would hide long-running-stage progress in CI
+        logger.info(
+            "%s AE run [%3ds] %s — %s",
+            RUN_GLYPHS.get(result.status.value, "•"),
+            int(elapsed),
+            result.status.value,
+            summary,
+        )
+        self._last_summary = summary
+        self._last_logged = elapsed
+
+    @property
+    def quiet_seconds(self) -> float:
+        """How long the summary had been unchanged at the last reading."""
+        return max(0.0, self.last_elapsed - self.last_progress)
 
 
 class AEClient:
@@ -562,6 +720,141 @@ class AEClient:
             retry_after_seconds=requested_retry_after(body),
         )
 
+    async def slug_resolves(self, slug: str) -> bool | None:
+        """Does AE resolve *slug* yet? ``None`` when the read did not settle it.
+
+        ``GET /automation/api/v1/workflows/<slug>/versions?page=0&page_size=1``.
+        The route family is the one :meth:`get_published_version` already reads,
+        so it exists and this client already authenticates against it; dropping
+        the ``is_published`` filter is what makes it answerable for a workflow
+        that has no published version yet, which is every workflow at this point
+        in a run.
+
+        The claim is narrow on purpose: a 2xx means AE resolved the slug, and a
+        404 is the same "Workflow with slug 'X' not found" that
+        :meth:`create_version` retries on. Nothing else is interpreted —
+        a 5xx, a transport failure or a 403 all answer ``None``, because none of
+        them says anything about whether the slug is indexed and treating an
+        overloaded AE as "not indexed" would poll out a budget over a fact it
+        never learned.
+
+        Absorbs every failure :meth:`_request` classifies — a transport error,
+        a timeout, any status — and answers ``None`` for it. It does **not**
+        absorb what ``_request`` itself lets through, and that set is not empty:
+        ``httpx.TooManyRedirects`` and ``httpx.DecodingError`` are
+        ``RequestError`` but *not* ``TransportError``, so ``_request``'s
+        ``except (httpx.TransportError, OSError)`` misses them, and the
+        transport is built with ``follow_redirects=True`` — which makes a
+        redirect loop on a misconfigured tenant proxy a real way for this to
+        raise. Stated rather than written as "never raises": the two sibling
+        reads on this route family say that, inherit the same hole, and a caller
+        who believes it writes no ``except`` at all. Widening ``_request``'s
+        narrowing is the actual fix and belongs with whoever owns it, not in a
+        bounded-wait change.
+
+        Returns:
+            ``True`` if AE resolved the slug, ``False`` if it answered that it
+            does not exist, ``None`` if the read settled nothing.
+        """
+        path = (
+            f"/automation/api/v1/workflows/{quote(slug, safe='')}"
+            "/versions?page=0&page_size=1"
+        )
+        try:
+            status, body = await self._request("GET", path)
+        except AppError:
+            logger.warning(
+                "slug-resolution read for %s did not get through; whether AE "
+                "has indexed it stays unknown",
+                slug,
+                exc_info=True,
+            )
+            return None
+        if status < 300:
+            return True
+        if status == 404:
+            return False
+        logger.warning(
+            "slug-resolution read for %s returned HTTP %d, which says nothing "
+            "about indexing\nresponse=%r",
+            slug,
+            status,
+            body,
+        )
+        return None
+
+    async def wait_for_slug(
+        self,
+        slug: str,
+        *,
+        timeout_seconds: int = _SLUG_INDEX_TIMEOUT_SECONDS,
+        interval_seconds: int = _SLUG_INDEX_INTERVAL_SECONDS,
+    ) -> bool:
+        """Wait until AE resolves *slug*, so the version create is not a guess.
+
+        **Replaces an unconditional ``time.sleep(3)``** (FND-240), which both
+        full-DAG harnesses ran between :meth:`create_workflow` and
+        :meth:`create_version` because AE has a brief indexing window before a
+        fresh slug is queryable. A fixed sleep is wrong in both directions: it
+        charges every run three seconds it usually does not need, and it is no
+        help at all on the run where indexing takes four.
+
+        **Advisory, never a gate.** :meth:`create_version` retries on 404 for
+        exactly this reason, and that retry is what actually makes the sequence
+        safe. So this returns a bool for the log rather than raising, and a wait
+        that ends unresolved is *not* a failure — it hands over to the same
+        retry that carried the whole sequence before this method existed. The
+        rule that keeps it honest: a readiness read that replaces a guess must
+        not be stricter than the guess it replaced.
+
+        Args:
+            slug: The workflow slug :meth:`create_workflow` returned.
+            timeout_seconds: Total budget. Generous relative to the 3s it
+                replaces, because it costs nothing when the answer is already
+                yes — which is the usual case, and the first probe is at t=0.
+            interval_seconds: Gap between probes.
+
+        Returns:
+            ``True`` once AE resolved the slug. ``False`` if the budget ran out
+            with AE still answering 404, or if no read ever settled it — two
+            different things, distinguished in the log rather than in the return
+            type, because the caller does the same thing either way.
+        """
+
+        async def probe() -> bool | None:
+            return await self.slug_resolves(slug)
+
+        outcome = await poll_until(
+            probe,
+            # ``None`` is not ``False``: an unreadable probe must not end the
+            # wait as though AE had answered.
+            settled=lambda resolved: resolved is True,
+            budget=Budget(
+                timeout=timedelta(seconds=timeout_seconds),
+                poll_interval=timedelta(seconds=interval_seconds),
+                heartbeat=None,
+            ),
+            label=f"AE resolving workflow slug '{slug}'",
+        )
+        if isinstance(outcome, Settled):
+            logger.info(
+                "AE resolved slug %s after %d probe(s) in %.1fs",
+                slug,
+                outcome.attempts,
+                outcome.elapsed.total_seconds(),
+            )
+            return True
+        logger.warning(
+            "AE had not resolved slug %s after %d probe(s) in %.0fs (last read: "
+            "%r) — continuing to the version create, whose own 404 retry is what "
+            "makes this sequence safe either way",
+            slug,
+            outcome.attempts,
+            outcome.elapsed.total_seconds(),
+            getattr(outcome, "last", None),
+        )
+        return False
+
     async def create_version(
         self,
         slug: str,
@@ -580,6 +873,16 @@ class AEClient:
         Retries on HTTP 404 (indexing lag — slug not yet queryable after
         create_workflow), HTTP 5xx (AE under load), and timeout.
 
+        ``retries`` means retries: this used to pass ``total_attempts=retries``,
+        so ``retries=5`` bought four of them while ``create_workflow``'s and
+        ``submit_workflow``'s identically-named parameter bought five. FND-240
+        normalised the four onto ``retries + 1``, the convention
+        :meth:`_post_with_retry` documents and the only one the parameter's name
+        is true under. The direction is deliberate: the other pair could have
+        been changed to match instead, but that shortens
+        ``cold_start_submit_kwargs``' budget, which divides a timeout by an
+        interval and needs the attempt count it asked for.
+
         Returns:
             The version number assigned by AE (typically a Unix
             timestamp, but treat as opaque int).
@@ -587,7 +890,7 @@ class AEClient:
         status, body = await self._post_with_retry(
             f"/automation/api/v1/workflows/{slug}/versions",
             body=version_payload,
-            total_attempts=retries,
+            total_attempts=retries + 1,
             sleep_seconds=retry_sleep_seconds,
             retryable=lambda s, b: s == 404 or s >= 500,
             op_name="create_version",
@@ -616,10 +919,13 @@ class AEClient:
         AE can lag a few seconds between version-create and version-
         publish — early calls return 404 (AE-WF-404-02 "version not
         found"). Retries on any non-success response and timeout.
+
+        ``retries`` means retries — see :meth:`create_version` for why the four
+        AE writes were normalised onto ``retries + 1`` (FND-240).
         """
         status, body = await self._post_with_retry(
             f"/automation/api/v1/workflows/{slug}/versions/{version}/publish",
-            total_attempts=retries,
+            total_attempts=retries + 1,
             sleep_seconds=retry_sleep_seconds,
             retryable=lambda s, b: (
                 s >= 300 or not (isinstance(b, dict) and b.get("status") == "success")
@@ -629,7 +935,9 @@ class AEClient:
         if status < 300 and isinstance(body, dict) and body.get("status") == "success":
             return
         raise AtlanApiHttpError(
-            message=f"publish_version failed after {retries} attempts: {body!r}",
+            message=(
+                f"publish_version failed after {retries + 1} attempt(s): {body!r}"
+            ),
             target="POST /automation/api/v1/workflows/.../versions/.../publish",
             retry_after_seconds=requested_retry_after(body),
         )
@@ -1141,50 +1449,62 @@ class AEClient:
     ) -> DAGRunResult:
         """Poll until the run reaches a terminal top-level status.
 
-        Logs a one-line summary per poll only when the status string
-        changes (i.e. progress moments), to avoid spamming logs during
-        long-running publish / lineage stages.
+        **The loop is
+        :func:`~application_sdk.testing.harness.waiting.poll_until`** (FND-240).
+        Child C extracted the start-grace latch, the progress watchdog and the
+        transient streak *from this function*; what is left here is the four
+        AE-specific callables (:func:`_any_node_started`, ``result.fingerprint``,
+        ``result.status.is_terminal``, :func:`_absorb_ae_blip`), the
+        :class:`~application_sdk.testing.harness.budgets.Budget` its keyword
+        arguments convert into, and :func:`_dag_run_verdict` — which turns the
+        generic verdict back into the AE leaf carrying this connector's
+        remediation advice.
 
-        Tolerates transient HTTP failures from :meth:`get_native_status`:
-        the tenant's Temporal occasionally blips during multi-minute
-        runs and AE then returns ``AE-COMMON-500-01: An unexpected
-        error occurred`` for a few seconds before recovering. We log
-        a warning and keep polling rather than failing the whole test
-        on a single bad response. After ``max_transient_failures``
-        consecutive errors we give up and re-raise — that's a
-        sustained outage, not a blip, and there's no point waiting.
-        When the failing response names a ``retry_after``, the next poll
-        waits that long instead of ``interval_seconds``, so an origin asking
-        for a 2-minute backoff doesn't consume the whole failure streak
-        inside its own wait window. Honoured waiting is capped per poll loop
-        at
-        :data:`~application_sdk.testing.harness.automation_engine.retry.RETRY_AFTER_BUDGET_SECONDS`
-        (same accounting as :meth:`_post_with_retry`) and each sleep is clamped
-        to the remaining ``timeout_seconds`` budget, so the loop never sleeps
-        past its own deadline.
+        Every observable behaviour is preserved and pinned rather than asserted:
+        ``test_waiting_equivalence.py`` fixes the verdict, the probe count and
+        the exact sleep sequence of fifteen scripted runs against the numbers the
+        hand-rolled loop produced. Two things did change, both log-only:
+
+        * the give-up-on-the-streak line is now the primitive's ``WARNING``
+          rather than this loop's ``ERROR``. The streak count it carried is
+          still on it, and the origin's error still propagates to the caller,
+          which is what makes the failure red.
+        * the per-poll progress line — throttled to node-state changes plus a
+          heartbeat, and the reason for the ``L006`` waiver — moved to
+          :class:`_DAGProgress`, which the probe wrapper calls. It is not
+          dropped: an operator watching a CI leg needs it to tell "still
+          polling" from "harness wedged", and a lineage stage sits unchanged for
+          minutes.
+
+        Tolerates transient HTTP failures from :meth:`get_native_status`: the
+        tenant's Temporal occasionally blips during multi-minute runs and AE then
+        returns ``AE-COMMON-500-01: An unexpected error occurred`` for a few
+        seconds before recovering. After ``max_transient_failures`` *consecutive*
+        errors the wait gives up and the origin's own error is re-raised — that
+        is a sustained outage, not a blip. When the failing response names a
+        ``retry_after`` the next poll waits that long instead of
+        ``interval_seconds``, so an origin asking for a 2-minute backoff doesn't
+        consume the whole failure streak inside its own wait window; honoured
+        waiting is capped per wait at
+        :data:`~application_sdk.testing.harness.automation_engine.retry.MAX_RETRY_AFTER_SECONDS`
+        and per loop at
+        :data:`~application_sdk.testing.harness.automation_engine.retry.RETRY_AFTER_BUDGET_SECONDS`,
+        and each sleep is clamped to the remaining budget.
 
         Fail-fast stall guard: when ``stall_grace_seconds`` is a positive int
-        (``None`` or any value ``<= 0`` disables it) and NO DAG node has left the
-        not-started set (``Pending`` / ``Scheduled``) within that window, raise
+        (``None`` or any value ``<= 0`` disables it — see :func:`_armed`) and NO
+        DAG node has left the not-started set within that window, raise
         :class:`~application_sdk.testing.harness.automation_engine._errors.NoWorkerOnTaskQueueError`
-        instead of hanging for the full ``timeout_seconds``. The parent AE
-        workflow runs on the always-on automation-engine queue, so the top-level
-        run flips to ``Running`` even when the connector's ``extract`` node is
-        stuck because no worker polls its task queue — hence the check is on
-        node-level start, not the run status. ``stall_task_queue`` is included in
-        the error message so the operator can see which queue had no worker.
+        instead of hanging for the full ``timeout_seconds``. ``stall_task_queue``
+        is named in the message so the operator can see which queue had no
+        worker.
 
-        Progress watchdog: when ``progress_stall_seconds`` is a positive int
-        (``None`` / ``<= 0`` disables it), the run fails fast if NO DAG node
-        changes state for that window *after* at least one node has started.
-        This catches a node that began but is wedged ``Running`` (e.g. an
-        extract stuck on a slow/failing upload) — the start-stall guard above
-        is a one-time latch and would miss it, so the harness would otherwise
-        poll the full ``timeout_seconds``. The window is deliberately wide
-        (well above a legitimately slow single node — lineage on deep queues
-        can sit ``Running`` for many minutes) so healthy runs never trip it;
-        it exists to turn an indefinite hang into a fast, self-terminating
-        failure with the last-seen node states, instead of a manual cancel.
+        Progress watchdog: when ``progress_stall_seconds`` is a positive int, the
+        run fails fast if the node-glyph summary does not change for that window
+        *after* at least one node has started. This catches a node that began but
+        is wedged ``Running`` — the start latch above is one-shot and would miss
+        it. The window is deliberately wide (lineage on deep queues legitimately
+        sits ``Running`` for many minutes) so healthy runs never trip it.
 
         On hitting ``timeout_seconds`` the last observation is returned rather
         than raised — but stamped with ``timed_out_after_seconds`` and
@@ -1194,208 +1514,221 @@ class AEClient:
         :attr:`~application_sdk.testing.harness.automation_engine.wire.DAGRunResult.timed_out`
         before treating the node states as a verdict.
 
-        Note:
-            Still a hand-rolled loop rather than a call to
-            :func:`~application_sdk.testing.harness.waiting.poll_until`, whose
-            start-grace latch and no-change watchdog were extracted from exactly
-            this function. Consolidating the two is child D (FND-240) and is
-            deliberately not folded into this move: the AE-specific leaves this
-            loop raises carry connector remediation advice
-            (:class:`~application_sdk.testing.harness.automation_engine._errors.NoWorkerOnTaskQueueError`
-            names the task queue to check) that
-            :func:`~application_sdk.testing.harness.outcome.assert_settled`'s
-            generic leaves do not, and re-deriving that mapping is a behaviour
-            change to review on its own rather than inside a 2,500-line move.
-            ``test_waiting_equivalence.py`` already pins the two loops as
-            equivalent on the parts that do transfer.
+        Args:
+            run_id: The AE run to watch.
+            interval_seconds: Nominal gap between polls.
+            timeout_seconds: Total wall-clock budget for the whole wait.
+            max_transient_failures: Length of the consecutive probe-error streak
+                that ends the wait. The Nth error is the one that gives up, so
+                ``5`` absorbs four; ``0`` and ``1`` both mean "end on the first".
+            stall_grace_seconds: Start-grace window, or ``None``/``<= 0`` to
+                disable the latch.
+            stall_task_queue: Task queue named in the no-worker message.
+            progress_stall_seconds: Progress-watchdog window, or ``None``/``<= 0``
+                to disable it.
+
+        Returns:
+            The terminal observation, or the last one seen when the budget ran
+            out (stamped, per above).
+
+        Raises:
+            AutomationEngineNotDispatchingError: Nothing started inside the grace
+                window and the run was still ``Pending`` — AE never dispatched
+                it, so the app's queue is not implicated.
+            NoWorkerOnTaskQueueError: Nothing started inside the grace window
+                while the run was live — AE dispatched and nothing picked it up.
+            DAGProgressStalledError: A node started, then the summary froze for
+                the whole watchdog window.
+            AtlanApiTimeoutError: The budget ran out without one usable reading.
+            AppError: The origin's own error, when the transient streak gave up.
         """
-        last_summary: str | None = None
-        last_result: DAGRunResult | None = None
-        transient_streak = 0
-        # Seconds spent waiting *beyond* the poll interval because the origin
-        # asked for longer — same accounting ``_post_with_retry`` keeps, so
-        # both retry loops bound honoured backoff at RETRY_AFTER_BUDGET_SECONDS.
-        honoured_seconds = 0.0
-        last_log_elapsed = 0.0  # seconds since the last info log fired
-        last_elapsed = 0.0  # elapsed at the last successful observation
-        any_node_started = False  # any node reached Running/terminal (stall guard)
-        last_progress_elapsed = (
-            0.0  # elapsed at the last node-state transition (progress watchdog)
+        budget = Budget(
+            timeout=timedelta(seconds=timeout_seconds),
+            poll_interval=timedelta(seconds=interval_seconds),
+            start_grace=_armed(stall_grace_seconds),
+            stall_timeout=_armed(progress_stall_seconds),
+            max_transient_failures=max_transient_failures,
+            retry_after_budget=timedelta(seconds=RETRY_AFTER_BUDGET_SECONDS),
+            max_retry_after=timedelta(seconds=MAX_RETRY_AFTER_SECONDS),
+            # _DAGProgress emits the richer per-poll line; the generic "still
+            # waiting" heartbeat would double it.
+            heartbeat=None,
         )
-        async for attempt in until_deadline_async(
-            timeout_seconds,
-            interval_seconds,
+        progress = _DAGProgress()
+
+        async def probe() -> DAGRunResult:
+            result = await self.get_native_status(run_id)
+            progress.observe(result)
+            return result
+
+        outcome = await poll_until(
+            probe,
+            settled=lambda result: result.status.is_terminal,
+            started=_any_node_started,
+            fingerprint=lambda result: result.fingerprint,
+            transient=_absorb_ae_blip,
+            budget=budget,
             label=f"AE run {run_id}",
-            # This loop emits its own richer progress line (per node-state change
-            # plus a heartbeat at the same cadence); the generic one would double it.
-            heartbeat_seconds=0,
-        ):
-            elapsed = attempt.elapsed
-            try:
-                result = await self.get_native_status(run_id)
-            except AppError as e:
-                transient_streak += 1
-                if transient_streak >= max_transient_failures:
-                    # conformance: ignore[L009] adds caller-invisible loop state (consecutive-failure streak count) not carried by the re-raised exception; not a duplicate of the raise site
-                    logger.error(
-                        "native-status failed %d times in a row — giving up: %s",
-                        transient_streak,
-                        e,
-                        exc_info=True,
-                    )
-                    raise
-                # Back off for as long as the origin asked when it said so,
-                # rather than the poll cadence: an overloaded tenant answering
-                # "retry_after: 120" would otherwise burn the whole
-                # max_transient_failures streak inside its own wait window.
-                # The loop's own clock advances by the real wait, so
-                # timeout_seconds still bounds it.
-                gap = retry_gap(
-                    e.retry_after_seconds if isinstance(e, AtlanApiHttpError) else None,
-                    default_seconds=interval_seconds,
-                    budget_left=RETRY_AFTER_BUDGET_SECONDS - honoured_seconds,
-                )
-                honoured_seconds += gap.seconds - interval_seconds
-                # ``sleep_next`` clamps to the residual budget, so a 120s
-                # honoured wait against a 50s remaining budget does not block
-                # the full 120s before the timeout is re-checked — and it
-                # reports back the gap actually taken, for the log below.
-                sleep_for = attempt.sleep_next(gap.seconds)
-                logger.warning(
-                    "native-status transient error (streak %d/%d): %s — sleeping %ds%s and retrying",
-                    transient_streak,
-                    max_transient_failures,
-                    e,
-                    sleep_for,
-                    gap.origin_note,
-                    exc_info=True,
-                )
-                continue
-            transient_streak = 0
-            last_result = result
-            last_elapsed = elapsed
-            # Stall guard: a node has "started" once it leaves the not-started
-            # set. Tracked as a latch so a node that starts and finishes between
-            # polls still counts.
-            if any(not n.status.is_not_started for n in result.nodes):
-                any_node_started = True
-            summary = result.fingerprint
-            run_glyph = RUN_GLYPHS.get(result.status.value, "•")
-            # Any change in the node-glyph summary means at least one node
-            # changed state = forward progress; reset the watchdog clock.
-            if summary != last_summary:
-                last_progress_elapsed = elapsed
-            # Log on every status change. Also emit a heartbeat every
-            # ``_HEARTBEAT_SECONDS`` even when the status hasn't moved,
-            # so long-running stages (lineage takes 2-5 min) don't look
-            # silent in CI logs. Without the heartbeat the operator
-            # can't distinguish "still polling" from "harness wedged".
-            should_log = (
-                summary != last_summary
-                or (elapsed - last_log_elapsed) >= _HEARTBEAT_SECONDS
-            )
-            if should_log:
-                # conformance: ignore[L006] throttled to status-changes plus a heartbeat every _HEARTBEAT_SECONDS (see comment above), not per-iteration; demoting to DEBUG would hide long-running-stage progress in CI
-                logger.info(
-                    "%s AE run [%3ds] %s — %s",
-                    run_glyph,
-                    int(elapsed),
-                    result.status.value,
-                    summary,
-                )
-                last_summary = summary
-                last_log_elapsed = elapsed
-            if result.status.is_terminal:
-                return result
-            # Fail fast when nothing has started within the grace window. Which
-            # system is at fault depends on the top-level status: a run still
-            # Pending was never dispatched by AE, so the app's queue cannot be
-            # the cause; a live parent means AE dispatched and the connector's
-            # own node is the one nothing picked up.
-            if (
-                # only a positive grace arms the guard; None or any value <= 0
-                # disables it (a negative would otherwise fire on the first poll)
-                stall_grace_seconds is not None
-                and stall_grace_seconds > 0
-                and not any_node_started
-                and elapsed >= stall_grace_seconds
-            ):
-                if result.status is DAGRunStatus.PENDING:
-                    raise AutomationEngineNotDispatchingError(
-                        message=(
-                            f"AE run {run_id} was still Pending after "
-                            f"{stall_grace_seconds}s, so it was never dispatched and "
-                            "no DAG node could start. Nothing was offered to the "
-                            "app's task queue, so the app's worker and agent name "
-                            "are not implicated — check the tenant's automation "
-                            "engine (contention on a shared e2e tenant, or an AE "
-                            "worker not processing new runs)."
-                        ),
-                    )
-                queue_hint = (
-                    f" task queue '{stall_task_queue}'"
-                    if stall_task_queue
-                    else " the extract task queue"
-                )
-                raise NoWorkerOnTaskQueueError(
-                    message=(
-                        f"No DAG node started within {stall_grace_seconds}s for run "
-                        f"{run_id} (top-level status={result.status.value}), so AE "
-                        f"dispatched but nothing picked the node up. This almost "
-                        f"always means no worker is polling{queue_hint}. "
-                        "Verify the test's agent_spec().agent_name resolves to the "
-                        "queue the deployed worker polls "
-                        "(atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}); a "
-                        "common cause is a second e2e test class using a different "
-                        "agent_name than the single worker the CI job started."
-                    ),
-                )
-            # Progress watchdog: a node started but the DAG hasn't changed
-            # state for the whole window -> wedged. Fail fast with the last
-            # node states instead of polling the full timeout (see docstring).
-            if (
-                progress_stall_seconds is not None
-                and progress_stall_seconds > 0
-                and any_node_started
-                and (elapsed - last_progress_elapsed) >= progress_stall_seconds
-            ):
-                # Stamp the stall onto the observation and attach it, rather
-                # than rendering a ``name=status`` list here: naming the task
-                # queue and the child workflow needs the seed DAG's routing,
-                # which only the harness holds. One renderer, two entry points.
-                raise DAGProgressStalledError(
-                    message=(
-                        f"No DAG node changed state for {progress_stall_seconds}s for "
-                        f"run {run_id} (top-level status={result.status.value}). A node "
-                        "started but is not progressing — most often wedged on a "
-                        "slow/failing step (e.g. extract stuck on an object-store "
-                        "upload). Failing fast instead of polling the full "
-                        f"{timeout_seconds}s. Last-seen node states are attached as "
-                        "``result``."
-                    ),
-                    result=replace(
-                        result,
-                        progress_stalled_after_seconds=float(progress_stall_seconds),
-                        seconds_since_last_progress=max(
-                            0.0, elapsed - last_progress_elapsed
-                        ),
-                    ),
-                )
-        # Timeout: return the last observation so callers can include
-        # node-level state in the failure message rather than just
-        # "timed out after Xs". Stamp the ceiling onto it: returning the
-        # observation bare made every caller read the last-seen node states as
-        # a verdict, so a node that was never dispatched surfaced as a node
-        # failure with ``error=None``.
-        if last_result is not None:
-            return replace(
-                last_result,
-                timed_out_after_seconds=float(timeout_seconds),
-                seconds_since_last_progress=max(
-                    0.0, last_elapsed - last_progress_elapsed
+        )
+        return _dag_run_verdict(
+            outcome,
+            run_id=run_id,
+            progress=progress,
+            stall_grace_seconds=stall_grace_seconds,
+            stall_task_queue=stall_task_queue,
+            progress_stall_seconds=progress_stall_seconds,
+            timeout_seconds=timeout_seconds,
+            max_transient_failures=max_transient_failures,
+        )
+
+
+def _dag_run_verdict(
+    outcome: Outcome[DAGRunResult],
+    *,
+    run_id: str,
+    progress: _DAGProgress,
+    stall_grace_seconds: int | None,
+    stall_task_queue: str,
+    progress_stall_seconds: int | None,
+    timeout_seconds: int,
+    max_transient_failures: int,
+) -> DAGRunResult:
+    """Turn a generic wait verdict into the AE answer ``poll_native_status`` owes.
+
+    Deliberately **not**
+    :func:`~application_sdk.testing.harness.outcome.assert_settled`. That adapter
+    raises the generic leaves, and the four AE leaves this raises instead exist
+    for their remediation advice: ``NoWorkerOnTaskQueueError`` names the task
+    queue to check and the ``agent_spec()`` mismatch that usually causes it,
+    which a ``WaitNeverStartedError`` carrying a label cannot. Losing that would
+    be the behaviour change FND-227 declined to make inside a move.
+
+    Two verdicts are not raises at all, and that is the other reason this
+    function exists:
+
+    * :class:`~application_sdk.testing.harness.outcome.Expired` *returns* the
+      last observation, stamped, because a caller needs the node breakdown to
+      say which node was where when the harness stopped watching.
+    * :class:`~application_sdk.testing.harness.outcome.Indeterminate` splits in
+      two. A streak that gave up re-raises the origin's own error, so the
+      operator sees AE's message rather than a wrapper around it. A budget that
+      expired having never read anything raises
+      :class:`~application_sdk.testing.harness.automation_engine._errors.AtlanApiTimeoutError`,
+      because there is no observation to stamp and returning one would mean
+      inventing it. The two are told apart by the streak length: the wait only
+      gives up at ``max_transient_failures``, so any shorter streak is the
+      deadline having ended the loop.
+
+    Args:
+        outcome: What the wait returned.
+        run_id: The run, for the messages.
+        progress: The ledger that watched the same readings — the only thing
+            that can answer "how long had it been quiet?" on an
+            :class:`~application_sdk.testing.harness.outcome.Expired`.
+        stall_grace_seconds: The configured start grace, quoted in the message.
+        stall_task_queue: The queue to name, or empty for the generic hint.
+        progress_stall_seconds: The configured watchdog window.
+        timeout_seconds: The configured ceiling, stamped onto a timed-out result.
+        max_transient_failures: The streak length that would have given up.
+
+    Returns:
+        The settled observation, or the last one seen at the ceiling.
+
+    Raises:
+        AutomationEngineNotDispatchingError: See :meth:`AEClient.poll_native_status`.
+        NoWorkerOnTaskQueueError: See :meth:`AEClient.poll_native_status`.
+        DAGProgressStalledError: See :meth:`AEClient.poll_native_status`.
+        AtlanApiTimeoutError: See :meth:`AEClient.poll_native_status`.
+    """
+    if isinstance(outcome, Settled):
+        return outcome.value
+
+    if isinstance(outcome, NeverStarted):
+        # Which system is at fault depends on the top-level status: a run still
+        # Pending was never dispatched by AE, so the app's queue cannot be the
+        # cause; a live parent means AE dispatched and the connector's own node
+        # is the one nothing picked up.
+        if outcome.last is not None and outcome.last.status is DAGRunStatus.PENDING:
+            raise AutomationEngineNotDispatchingError(
+                message=(
+                    f"AE run {run_id} was still Pending after "
+                    f"{stall_grace_seconds}s, so it was never dispatched and "
+                    "no DAG node could start. Nothing was offered to the "
+                    "app's task queue, so the app's worker and agent name "
+                    "are not implicated — check the tenant's automation "
+                    "engine (contention on a shared e2e tenant, or an AE "
+                    "worker not processing new runs)."
                 ),
             )
-        raise AtlanApiTimeoutError(
-            message=f"native-status timed out after {timeout_seconds}s with no response",
-            timeout_seconds=float(timeout_seconds),
+        queue_hint = (
+            f" task queue '{stall_task_queue}'"
+            if stall_task_queue
+            else " the extract task queue"
         )
+        status = outcome.last.status.value if outcome.last is not None else "unknown"
+        raise NoWorkerOnTaskQueueError(
+            message=(
+                f"No DAG node started within {stall_grace_seconds}s for run "
+                f"{run_id} (top-level status={status}), so AE "
+                f"dispatched but nothing picked the node up. This almost "
+                f"always means no worker is polling{queue_hint}. "
+                "Verify the test's agent_spec().agent_name resolves to the "
+                "queue the deployed worker polls "
+                "(atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}); a "
+                "common cause is a second e2e test class using a different "
+                "agent_name than the single worker the CI job started."
+            ),
+        )
+
+    if isinstance(outcome, Stalled) and outcome.last is not None:
+        # The configured window, falling back to the *observed* quiet gap rather
+        # than to zero. Unreachable today — ``_armed`` leaves
+        # ``budget.stall_timeout`` None for a non-positive window, so
+        # ``poll_until`` cannot return Stalled — but a fallback of 0 would stamp
+        # "the watchdog window was 0 seconds" onto a diagnostic, which is a lie
+        # that sends the reader hunting a phantom. The observed gap is true
+        # whatever the configuration was.
+        window = progress_stall_seconds or outcome.stall_window.total_seconds()
+        # Stamp the stall onto the observation and attach it, rather than
+        # rendering a ``name=status`` list here: naming the task queue and the
+        # child workflow needs the seed DAG's routing, which only the harness
+        # holds. One renderer, two entry points.
+        raise DAGProgressStalledError(
+            message=(
+                f"No DAG node changed state for {progress_stall_seconds}s for "
+                f"run {run_id} (top-level status={outcome.last.status.value}). A "
+                "node started but is not progressing — most often wedged on a "
+                "slow/failing step (e.g. extract stuck on an object-store "
+                "upload). Failing fast instead of polling the full "
+                f"{timeout_seconds}s. Last-seen node states are attached as "
+                "``result``."
+            ),
+            result=replace(
+                outcome.last,
+                progress_stalled_after_seconds=float(window),
+                seconds_since_last_progress=outcome.stall_window.total_seconds(),
+            ),
+        )
+
+    if isinstance(outcome, Expired) and outcome.last is not None:
+        # Returning the observation bare made every caller read the last-seen
+        # node states as a verdict, so a node that was never dispatched
+        # surfaced as a node failure with ``error=None``. Stamp the ceiling.
+        return replace(
+            outcome.last,
+            timed_out_after_seconds=float(timeout_seconds),
+            seconds_since_last_progress=progress.quiet_seconds,
+        )
+
+    if isinstance(outcome, Indeterminate) and outcome.transient_failures >= max(
+        1, max_transient_failures
+    ):
+        # The streak gave up. ``poll_until`` already logged the streak length at
+        # WARNING; re-raising the origin's own error is what makes the run red
+        # and puts AE's message in front of the operator.
+        raise outcome.cause
+
+    raise AtlanApiTimeoutError(
+        message=f"native-status timed out after {timeout_seconds}s with no response",
+        timeout_seconds=float(timeout_seconds),
+    )
