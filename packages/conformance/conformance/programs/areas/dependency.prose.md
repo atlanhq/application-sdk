@@ -56,12 +56,12 @@ human review of residue is the
 backstop.
 
 **`D011` validates the specifier's *shape*, not its *values*.**  The detector
-rejects pins and one-sided ranges, so a bare name or `==0.13.0` cannot slip
+rejects pins and uncapped ranges, so a bare name or `==0.13.0` cannot slip
 through as `D001`'s wrong cap can.  What it does **not** check is whether the
-floor is sensible: rewriting `>=0.17.0` to `>=0.1.0,<1.0.0` clears the finding
-while admitting ancient releases.  The prescription below (keep the app's floor
-when it is higher; never lower one) is the only safeguard for that, and human
-review of residue is the backstop.
+cap is the right one: rewriting `>=0.17.0` to `<=0.1.0` clears the finding while
+freezing the repo on an ancient release.  The prescription below (cap at
+`1.0.0`; keep any existing floor, never lower one) is the only safeguard for
+that, and human review of residue is the backstop.
 
 The lock branch (branch 4) is also the one D-series finding whose fix is
 **not** a `pyproject.toml` edit — it needs `uv lock`.  The re-detection gate
@@ -141,8 +141,10 @@ fix.  The re-detection gate is authoritative for this area — see
   D001.  One rule, four branches; read the message to tell them apart, because
   the fix differs.  The canonical target in
   all four cases is
-  `"atlan-application-sdk-conformance>=0.17.0,<1.0.0"` in
-  `[dependency-groups].dev`, matching `atlan-app-template`.
+  `"atlan-application-sdk-conformance<=1.0.0"` in
+  `[dependency-groups].dev`.  A floor is accepted but not required, so a repo
+  already carrying the earlier `">=0.17.0,<1.0.0"` (the form
+  `atlan-app-template` ships) raises no finding and must not be rewritten.
 
   1. *"does not declare"* — the package appears in no dependency array, so
      `uv run atlan-application-sdk-conformance` (the form this loop and the
@@ -162,11 +164,12 @@ fix.  The re-detection gate is authoritative for this area — see
      whole fix.  `finding.line` anchors at the offending
      `[project.dependencies]` entry.
   3. *"cannot float"* — declared, but the specifier is a pin (`==0.13.0`,
-     `===0.13.0`, `~=0.17.0`) or one-sided (`>=0.17.0` with no upper bound, or
-     a bare `<1.0.0` with no floor).  Rewrite **that entry only** to the
-     canonical two-sided form, preserving its position in the array.  Keep the
-     app's existing floor if it is higher than `0.17.0`; never lower a floor.
-     `finding.line` anchors at the declaring line.
+     `===0.13.0`, `~=0.17.0`) or uncapped (`>=0.17.0` with no upper bound).
+     Rewrite **that entry only** to the canonical capped form, preserving its
+     position in the array.  Where the offending entry already carries a floor
+     worth keeping, add the cap and leave the floor as it is
+     (`>=0.19.0` → `>=0.19.0,<1.0.0`); never lower a floor, and never add one
+     that was not there.  `finding.line` anchors at the declaring line.
   4. *"no entry in uv.lock"* — declared and floating, but unresolved in the
      lock.  This one is **not** a `pyproject.toml` edit: run `uv lock` and
      commit the result.  Classify it `judgment` and route to residue if the
