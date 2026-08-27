@@ -31,11 +31,13 @@ the retry.
 
 from __future__ import annotations
 
+import asyncio
 import math
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from types import TracebackType
 from typing import Any
 from urllib.parse import quote
 
@@ -339,17 +341,66 @@ class AEClient:
             long-lived API key or a short-lived OAuth ``client_credentials``
             access token.
 
+    Use it as an async context manager where the lifetime fits a block::
+
+        async with AEClient(url, token) as client:
+            run_id = await client.submit_workflow(payload, slug=slug)
+
+    That is the shape :class:`~application_sdk.testing.harness.cluster.PortForward`
+    has, and the reason is the same one seven rounds of review on that class
+    established: teardown expressed as a block is a property of the code, while
+    teardown expressed as a separate ``aclose`` is a property of the caller
+    remembering — and the second one produced a never-closed leak twice.
+    :meth:`aclose` stays public for the callers whose lifetime does not fit a
+    block, which includes ``BaseE2ETest``, where the client is opened in
+    ``setup_method`` and closed in ``teardown_method``.
+
     Note:
         The pooled ``httpx.AsyncClient`` is bound to the event loop that first
-        used it. Call :meth:`aclose` from the same loop when the run is over;
-        not calling it leaks one pool until the process exits, which is
-        survivable in a test process and is why it is not enforced.
+        used it: its connections live in that loop's selector, so reusing the
+        pool from a second loop fails inside ``httpx`` rather than here. Since
+        FND-225 the pool records the loop that opened it and is *rebuilt* when a
+        different one asks for it, so a legitimate hand-off — a fixture opening
+        the client on one loop and a suite driving it from another — costs one
+        reconnect instead of an error nobody could act on. Nothing is raised,
+        because there is nothing to lose: dropping an idle pool leaks no
+        request, and the only way to lose one is to drop it mid-flight, which
+        this cannot do (the swap happens between requests, on the loop that is
+        about to issue the next one). Not calling :meth:`aclose` at all leaks
+        one pool until the process exits, which is survivable in a test process
+        and is why it is not enforced.
     """
 
     def __init__(self, tenant_url: str, api_token: str) -> None:
         self.tenant_url = tenant_url.rstrip("/")
         self._api_token = api_token
         self._http: httpx.AsyncClient | None = None
+        #: The loop ``_http`` was built on, so a pool bound to a dead or
+        #: different loop is rebuilt rather than reused into an httpx failure.
+        self._http_loop: asyncio.AbstractEventLoop | None = None
+
+    async def __aenter__(self) -> AEClient:
+        """Enter the block. Nothing is opened here — the pool is built on first use.
+
+        Returns:
+            This client.
+        """
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Close the pooled connection on the way out of the block.
+
+        Args:
+            exc_type: Exception class, if the block raised.
+            exc: The exception, if the block raised.
+            traceback: Its traceback, if the block raised.
+        """
+        await self.aclose()
 
     # ------------------------------------------------------------------
     # Low-level HTTP
@@ -363,8 +414,10 @@ class AEClient:
         per-request timeout is passed per call rather than baked in here,
         because the submit gets a wider one than every other call.
         """
-        if self._http is None or self._http.is_closed:
+        loop = asyncio.get_running_loop()
+        if self._http is None or self._http.is_closed or self._http_loop is not loop:
             self._http = httpx.AsyncClient(follow_redirects=True)
+            self._http_loop = loop
         return self._http
 
     async def _drop_transport(self) -> None:
@@ -375,7 +428,7 @@ class AEClient:
         escape. The single-use client this replaced got that for free; keeping
         it explicit is what makes pooling on the happy path safe.
         """
-        http, self._http = self._http, None
+        http, self._http, self._http_loop = self._http, None, None
         if http is not None and not http.is_closed:
             await http.aclose()
 

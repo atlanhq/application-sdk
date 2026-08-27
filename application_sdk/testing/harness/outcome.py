@@ -39,7 +39,7 @@ and a pass is never claimed over a read that did not happen.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from enum import StrEnum
@@ -51,7 +51,13 @@ from application_sdk.testing.harness._errors import (
     WaitNeverStartedError,
     WaitStalledError,
 )
-from application_sdk.testing.harness.expectations import UNREADABLE, Finding
+from application_sdk.testing.harness.expectations import (
+    UNREADABLE,
+    CountRead,
+    Finding,
+    SampleRead,
+    Unreadable,
+)
 
 __all__ = [
     "Expired",
@@ -61,6 +67,9 @@ __all__ = [
     "Settled",
     "Stalled",
     "Verdict",
+    "as_count",
+    "as_counts",
+    "as_samples",
     "assert_settled",
     "grade",
 ]
@@ -331,3 +340,98 @@ def grade(
             continue
         return Verdict.FAILED
     return Verdict.INDETERMINATE if unreadable else Verdict.PASSED
+
+
+# ---------------------------------------------------------------------------
+# The projection from a verdict into an expectation's reading
+# ---------------------------------------------------------------------------
+#
+# Two vocabularies, deliberately. A *wait* has five verdicts because it can
+# expire or stall; a *reading fed to an expectation* has two — you have the
+# number, or you do not. Neither collapses into the other without losing
+# something, so the seam between them is these three functions rather than an
+# ``isinstance`` at every call site.
+#
+# They live here rather than beside the evaluators that consume their output
+# because this module already imports
+# :mod:`application_sdk.testing.harness.expectations` (``grade`` reduces
+# findings alongside verdicts) and the dependency can only run one way.
+
+
+def as_count(reading: Outcome[int]) -> CountRead:
+    """Project a one-shot count read into the evaluator's vocabulary.
+
+    Args:
+        reading: What the reader answered.
+
+    Returns:
+        The number, or an
+        :class:`~application_sdk.testing.harness.expectations.Unreadable`
+        carrying the cause.
+    """
+    if isinstance(reading, Settled):
+        return reading.value
+    return Unreadable(cause=_cause_of(reading))
+
+
+def as_counts(
+    reading: Outcome[Mapping[str, int]], type_names: Sequence[str]
+) -> Mapping[str, CountRead]:
+    """Project a per-type count read, spreading an unreadable one over its types.
+
+    Args:
+        reading: What the reader answered. The Atlas reader answers per *batch*:
+            one failed type makes the whole mapping unreadable, because a mapping
+            with four real numbers and one silent zero is graded as a real
+            reading and the zero is the one an expectation trips on.
+        type_names: The types that were asked for, so an unreadable batch still
+            produces an entry for each — a type simply *missing* from the mapping
+            counts as zero, which is the fail-open this projection closes.
+
+    Returns:
+        Type name -> count or ``Unreadable``.
+    """
+    if isinstance(reading, Settled):
+        return dict(reading.value)
+    unreadable = Unreadable(cause=_cause_of(reading))
+    return dict.fromkeys(type_names, unreadable)
+
+
+def as_samples(
+    reading: Outcome[Mapping[str, Sequence[str]]], type_names: Sequence[str]
+) -> Mapping[str, SampleRead]:
+    """Project a qualified-name sample read the same way :func:`as_counts` does.
+
+    Args:
+        reading: What the reader answered.
+        type_names: The types that were asked for.
+
+    Returns:
+        Type name -> sampled names or ``Unreadable``. The distinction matters
+        more here than for counts:
+        :func:`~application_sdk.testing.harness.expectations.evaluate_locations`
+        *skips* an empty sample, so a failed read spelled as an empty list is a
+        silent pass.
+    """
+    if isinstance(reading, Settled):
+        return {name: list(value) for name, value in reading.value.items()}
+    unreadable = Unreadable(cause=_cause_of(reading))
+    return dict.fromkeys(type_names, unreadable)
+
+
+def _cause_of(reading: Outcome[Any]) -> BaseException:
+    """The exception behind a non-settled reading, or a stand-in for it.
+
+    Args:
+        reading: The reading that did not settle.
+
+    Returns:
+        :attr:`Indeterminate.cause` when there is one. Every one-shot read in
+        :mod:`application_sdk.testing.harness.atlas` answers :class:`Settled` or
+        :class:`Indeterminate`, so the fallback exists only so a future verdict
+        cannot make this raise while assembling a report about something else.
+    """
+    cause = getattr(reading, "cause", None)
+    if isinstance(cause, BaseException):
+        return cause
+    return RuntimeError(f"{reading.label} answered {type(reading).__name__}")
