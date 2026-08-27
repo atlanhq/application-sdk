@@ -3222,7 +3222,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Import:** `from application_sdk.testing.full_dag import BaseFullDAGE2ETest`
 - **Signature:** `class BaseFullDAGE2ETest`
-- **Summary:** Deprecated (v4.0) — pytest base; use ``application_sdk.testing.e2e.BaseE2ETest``.
+- **Summary:** Deprecated: pytest base — use ``application_sdk.testing.e2e.BaseE2ETest``.
 - **Defined in:** `application_sdk/testing/full_dag/base.py`
 
 #### `BaseIntegrationTest`
@@ -3776,7 +3776,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Import:** `from application_sdk.testing.full_dag import SQLAppE2EFullTest`
 - **Signature:** `class SQLAppE2EFullTest`
-- **Summary:** Deprecated (v4.0) — SQL full-DAG base; use ``application_sdk.testing.e2e.SQLAppE2ETest``.
+- **Summary:** Deprecated: SQL full-DAG base — use ``application_sdk.testing.e2e.SQLAppE2ETest``.
 - **Defined in:** `application_sdk/testing/full_dag/sql_app.py`
 
 #### `SQLAppE2ETest`

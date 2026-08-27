@@ -13,7 +13,7 @@ This doc covers what the SDK ships — the composite action, the reusable workfl
 | `build-app-image` composite action | `.github/actions/build-app-image/action.yaml` | SDK-ref repin → manifest regeneration → buildx build/push → platform assert → interpreter assert. Extracted from `sdr-e2e` so the image can be built **once per run** ahead of the e2e matrix, and optionally multi-arch (see [Building the image once](#building-the-image-once)). |
 | `e2e-full-reusable.yaml` reusable workflow | `.github/workflows/e2e-full-reusable.yaml` | Boilerplate (120-min timeout, concurrency group, env wiring, agent-name resolution) for the full-DAG pipeline. Connector repos `uses:` it as a 5-line wrapper. |
 | `e2e-apps` cross-repo dispatcher | `.github/actions/e2e-apps/action.yaml` | Fires `workflow_dispatch` on the connector repo with the apps-sdk PR's head SHA. Polls for completion, surfaces a sticky status comment on the SDK PR. |
-| `BaseSDRIntegrationTest` | `application_sdk/testing/sdr/` | pytest base for the SDR pipeline. Connector test class declares `Scenario(...)` instances. |
+| ~~`BaseSDRIntegrationTest`~~ | `application_sdk/testing/sdr/` | pytest base for the SDR pipeline. Connector test class declares `Scenario(...)` instances. **Deprecated since 3.23.0, removed in v4.0** — it emits a `DeprecationWarning` on subclass and conformance B001 flags consumers fleet-wide. There is no drop-in replacement yet: see [The SDR base class](#the-sdr-base-class). |
 | `BaseE2ETest` / `SQLAppE2ETest` | `application_sdk/testing/e2e/` | pytest base for the full-DAG pipeline. `BaseE2ETest` is connector-agnostic and is what the codegen'd `app/generated/_e2e_base.py` subclasses; SQL connectors use `SQLAppE2ETest` on top of it, subclassing with `include_filter`, `expected_min_asset_counts`, `database_spec()`, etc. |
 | ~~`SQLAppE2EFullTest` / `BaseFullDAGE2ETest`~~ | `application_sdk/testing/full_dag/` | **Deprecated, removed in v4.0.** The predecessor of the row above; it emits a `DeprecationWarning` on import and its client / error types are already re-exports of the `testing/e2e` ones. Do not start a new suite here — see [Which harness](#which-harness). |
 
@@ -28,7 +28,18 @@ New suites use `application_sdk.testing.e2e`. Nothing new should be written agai
 
 `BaseE2ETest` is connector-agnostic and is already the base for every scaffolded app. The SQL-shaped parameter rows (`include-filter` / `exclude-filter`) come from `SQLAppE2ETest`, not from the base — so "my connector is not SQL, so I need the old harness" does not follow. If a non-SQL connector genuinely cannot express its manifest tokens through `BaseE2ETest`, that is an SDK gap worth filing, not a reason to start a `full_dag` suite.
 
-`application_sdk.testing.full_dag` is deprecated and removed in v4.0. It emits a `DeprecationWarning` on import, and its `client` / `_errors` modules are already thin re-exports of the `testing/e2e` ones. Suites still on it (domo, looker, saperp at time of writing) are pinned to released SDKs where it still works; they need migrating before a v4 repin, not preserving as a second supported path.
+`application_sdk.testing.full_dag` is deprecated and removed in v4.0. It emits a `DeprecationWarning` on import and on subclassing `BaseFullDAGE2ETest` / `SQLAppE2EFullTest`, and its `client` / `_errors` modules are already thin re-exports of the `testing/e2e` ones. Suites still on it (domo, looker, saperp at time of writing) are pinned to released SDKs where it still works; they need migrating before a v4 repin, not preserving as a second supported path.
+
+The `full_dag` package is **frozen** (FND-245): it gets no backports from `application_sdk/testing/harness/` and no drift repair. Its duplicate mustache substitution and its unconditional sleep stay as they are and die with the package at v4.0. Effort that would have gone into collapsing it into re-export shims goes into migrating the three remaining suites instead.
+
+### The SDR base class
+
+`BaseSDRIntegrationTest` is deprecated on the same v4.0 clock but is **not** in the same position, so do not read the `full_dag` guidance above onto it:
+
+- ~29 connector repos import it today, against 3 for `full_dag`.
+- Its nominal replacement (`BaseE2ETest` with `mode = RunMode.AGENT`) is a *different tier of test*. SDR suites are compose-stack credential-resolution and preflight `Scenario` tests; `BaseE2ETest` submits a workflow to the tenant and asserts the full DAG. Porting a suite across that boundary drops the preflight coverage rather than preserving it — see the note on `_assert_deployed_manifest_matches` in `application_sdk/testing/e2e/base.py`, which is explicit that post-submit assertion is what is lost versus the preflight it replaces.
+
+So: write no new SDR suites, but do not migrate an existing one on the strength of the deprecation warning alone. The v4.0 removal date for `application_sdk/testing/sdr/` is under review; a scenario-shaped surface on `testing/e2e` has to land first.
 
 ## The two pipelines
 
@@ -244,6 +255,8 @@ required check.
     report-title:       # OPTIONAL. Override the auto-derived PR-comment title.
                         # Auto: tests/sdr/ → "SDR Integration Tests (testcontainer)",
                         #       tests/full_dag/ → "E2E Full Tests (system apps)".
+                        # tests/e2e/ has no special-case title and derives
+                        # "E2E Tests"; set this if you want the fuller label.
     secrets-script:     # OPTIONAL. Path to the script that writes
                         # <sdr-config-dir>/secrets/credentials.json from env vars.
                         # Default: .github/sdr-e2e/make-secrets.sh.
@@ -298,7 +311,10 @@ jobs:
     with:
       app-name:                 # REQUIRED.
       app-image-name:           # REQUIRED.
-      test-path:                # OPTIONAL. Default tests/full_dag/.
+      test-path:                # OPTIONAL. Default tests/full_dag/ — the deprecated
+                                # layout, kept only so existing callers don't break.
+                                # New suites live in tests/e2e/, so set this
+                                # explicitly rather than taking the default.
       secrets-script:           # OPTIONAL. Default .github/e2e/make-secrets-e2e-full.py.
       components-dir:           # OPTIONAL. Default .github/e2e/e2e-full-components.
       compose-overlay:          # OPTIONAL. Default .github/e2e/e2e-full-docker-compose.yaml.
