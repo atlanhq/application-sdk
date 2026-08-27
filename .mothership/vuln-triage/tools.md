@@ -58,7 +58,7 @@ gh pr create --repo atlanhq/application-sdk --base main \
 
 ### Bump PR (Case 1 only — our dependency, scan-confirmed fix)
 
-Touches **only** `pyproject.toml`, `uv.lock`, `requirements.txt`.
+Touches **only** `pyproject.toml` and `uv.lock`.
 
 ```bash
 git checkout -b fix/bump-<pkg>-<version>-<cve-id> origin/main
@@ -116,9 +116,8 @@ uv --version
 #    version. If the range already allows it, leave pyproject.toml alone —
 #    the lockfile is what pins the resolved version.
 
-# 3. Regenerate the lockfile (blanket upgrade) + requirements in lockstep.
+# 3. Regenerate the lockfile (blanket upgrade).
 uv sync --all-extras --all-groups --upgrade
-uv export --no-hashes --frozen > requirements.txt
 ```
 
 ## Validation greps (MUST pass before pushing the Case-1 draft PR)
@@ -129,9 +128,8 @@ that motivated this flow. Detail the blocker on the ticket and tag Vaibhav/Chris
 ```bash
 grep -q '^revision = '  uv.lock          || { echo "FAIL: lock revision header lost"; exit 1; }
 grep -q 'upload-time'   uv.lock          || { echo "FAIL: upload-time stripped"; exit 1; }
-grep -q '# via'         requirements.txt || { echo "FAIL: # via annotations stripped"; exit 1; }
 
-uv run pre-commit run --files uv.lock requirements.txt pyproject.toml
+uv run pre-commit run --files uv.lock pyproject.toml
 uv run pytest tests/unit/ -x -q --timeout=60
 ```
 
