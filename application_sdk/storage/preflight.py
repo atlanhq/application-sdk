@@ -201,8 +201,10 @@ class ObjectStoreCheckResult:
         label: Human-readable role label ("deployment" or "upstream").
         binding_name: The Dapr component name backing the store.
         passed: Whether the write → read round-trip succeeded.
-        error_class: Classifier bucket on failure (e.g. "permission denied",
-            "invalid credentials", "connectivity / unknown"); ``None`` on success.
+        error_class: Bucket on failure — always one of
+            :data:`_OBJECT_STORE_ERROR_CLASSES` (the classifier's buckets, plus
+            "not configured" for a binding that was never probed); ``None`` on
+            success.
         cause: Concise failure cause (exception text or timeout note); ``None`` on
             success.
         hint: Remediation hint on failure; ``None`` on success.
