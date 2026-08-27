@@ -30,6 +30,7 @@ from application_sdk.testing.e2e._manifest_identity import (
 )
 from application_sdk.testing.e2e.base import _supersedes
 from application_sdk.testing.e2e.client import AEWorkflowClient, PublishedVersion
+from application_sdk.testing.harness._poll import fake_clock
 from application_sdk.testing.harness.automation_engine import AEClient
 from application_sdk.testing.harness.automation_engine.wire import (
     first_version_row as _first_version_row,
@@ -89,8 +90,21 @@ def _reads(harness: _Harness, *, returns: Any = None, side_effect: Any = None) -
 
 
 def _assert_matches(harness: _Harness, slug: str) -> None:
-    """Drive the check from a synchronous test, through the harness' own bridge."""
-    run_sync(harness._assert_deployed_manifest_matches(slug))
+    """Drive the check from a synchronous test, through the harness' own bridge.
+
+    Under ``fake_clock`` so the poll gaps cost nothing. The wait runs on
+    ``poll_until`` -> ``until_deadline_async``, which sleeps through ``_poll``'s
+    own swappable default — the reason the ``patch("time.sleep")`` these tests
+    used to carry was inert, and why they still spent five real seconds between
+    them separating two mocked reads (FND-962). Applied here rather than per
+    test so a new waiting test cannot forget it; it is a no-op for the ones that
+    settle on the first read.
+
+    The fake advances only ``_poll``'s clock, never ``time.monotonic`` — the
+    bridge's event loop reads that for its own timers.
+    """
+    with fake_clock():
+        run_sync(harness._assert_deployed_manifest_matches(slug))
 
 
 # ---------------------------------------------------------------------------

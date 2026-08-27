@@ -390,9 +390,23 @@ class TestUnreadableCountsReachTheOutcome:
 
 
 def _run_sync(coro: Any) -> Any:
+    """Drive one of the suite's coroutines from a synchronous test.
+
+    Under ``fake_clock`` so the bounded waits inside cost nothing. The Atlas
+    count poll runs its whole ``atlas_asset_poll_timeout_seconds`` budget
+    whenever the expectations are never met — which is the case every one of
+    these tests sets up — and that is ten real seconds of ``asyncio.sleep`` per
+    call on the default 15s/5s timings (FND-962). Applied here rather than per
+    test so a new one cannot forget it.
+
+    Only ``_poll``'s clock is faked, never ``time.monotonic`` — the bridge's
+    event loop reads that for its own timers.
+    """
+    from application_sdk.testing.harness._poll import fake_clock
     from application_sdk.testing.harness.bridge import run_sync
 
-    return run_sync(coro)
+    with fake_clock():
+        return run_sync(coro)
 
 
 @asynccontextmanager

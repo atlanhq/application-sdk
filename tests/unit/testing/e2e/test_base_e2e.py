@@ -45,6 +45,7 @@ from application_sdk.testing.e2e.client import (
 from application_sdk.testing.e2e.credential import CredentialBody
 from application_sdk.testing.e2e.payload import AgentSpec, DatabaseSpec, RunMode
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
+from application_sdk.testing.harness._poll import fake_clock
 
 
 @asynccontextmanager
@@ -618,13 +619,33 @@ class TestSourceAvailabilityGate:
 class TestWorkerUpTier:
     """Worker-up-only assertions when no source is provisioned."""
 
+    @pytest.fixture(autouse=True)
+    def _fake_clock(self):
+        """Run the health-probe loop on a fake clock.
+
+        ``assert_worker_up`` waits through ``poll_until`` ->
+        ``until_deadline_async``, so every test below in which the worker never
+        answers 2xx runs the budget out for real. The old settings — interval
+        ``0``, timeout ``1`` — made that a one-second *spin* per test, four
+        seconds across this class, and interval ``0`` left "polls once and gives
+        up" indistinguishable from "polls to the deadline" (FND-962).
+
+        The interval must stay above zero under the fake: its sleep advances the
+        clock, so a zero gap would never reach the deadline.
+        """
+        with fake_clock():
+            yield
+
     def _harness(self, *responses: object) -> _NoSourceTest:
         """A no-source harness whose health probe runs on a scripted transport."""
         transport = _scripted_http(*responses) if responses else None
 
         class _Scripted(_NoSourceTest):
-            worker_health_poll_interval_seconds = 0
-            worker_health_timeout_seconds = 1
+            # Three attempts, one interval apart: enough that a loop which gave
+            # up after the first probe would fail the attempt-count assertion
+            # below. Free under the fake clock above.
+            worker_health_poll_interval_seconds = 1
+            worker_health_timeout_seconds = 3
 
             def _worker_health_transport(self) -> httpx.AsyncBaseTransport | None:
                 return transport
@@ -690,7 +711,9 @@ class TestWorkerUpTier:
         assert error.code == "PRECONDITION_WORKER_NOT_HEALTHY"
         assert error.url == harness.worker_health_url
         assert error.last_error == "HTTP 503"
-        assert error.attempts is not None and error.attempts >= 1
+        # It re-probed rather than giving up on the first 503: three attempts is
+        # the whole budget at this interval.
+        assert error.attempts == 3
 
     def test_a_refused_connection_and_a_5xx_are_told_apart(self) -> None:
         """The reason ``last_error`` is a field. "Nothing is listening" and "it is
