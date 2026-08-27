@@ -741,28 +741,158 @@ class TestSdrPreflightObjectStoreChecks:
         check = result.checks[1]
         assert check.passed is False
         assert check.error is not None
-        # Customer-owned store → SourceUnavailableError, so category + audience
-        # both route to the customer (not the DEPENDENCY_UNAVAILABLE/PLATFORM pair,
-        # which is unreachable from any leaf type).
+        # Permission bucket → AppPermissionDeniedError (USER, not retryable).
         from application_sdk.errors.categories import Audience
 
-        assert check.error.category == FailureCategory.SOURCE_UNAVAILABLE
-        assert check.error.code == "SOURCE_UNAVAILABLE"
+        assert check.error.category == FailureCategory.PERMISSION
+        assert check.error.code == "PERMISSION"
         assert check.error.audience == Audience.USER
-        assert check.error.retryable is True
+        assert check.error.retryable is False
         # The class-specific remediation is carried, not discarded.
         assert check.error.suggested_action is not None
         assert "read and write access" in check.error.suggested_action
         # Probe context rides along as evidence via to_failure_details().
-        assert check.error.evidence.get("endpoint") == "objectstore"
-        assert check.error.evidence.get("network_error") == "permission denied"
+        assert check.error.evidence.get("resource") == "objectstore"
+        assert check.error.evidence.get("required_action") == "read and write"
         # Simple, non-technical failure copy (no probe internals in the UI).
         assert "not accessible" in check.resolved_message
         assert "403" not in check.resolved_message
         # The banner carries the real reason (typed + string), not "not_ready".
         assert result.message == "Configured object store is not accessible."
         assert result.error is not None
-        assert result.error.category == FailureCategory.SOURCE_UNAVAILABLE
+        assert result.error.category == FailureCategory.PERMISSION
+        assert result.resolved_message == "Configured object store is not accessible."
+
+    async def test_failed_object_store_maps_auth_and_availability_leaves(self) -> None:
+        """Classifier buckets map onto existing USER/PLATFORM leaves, not one retryable leaf."""
+        from application_sdk.errors.categories import Audience, FailureCategory
+        from application_sdk.storage.preflight import ObjectStoreCheckResult
+
+        handler = _StubHandler()
+        preflight = self._preflight(handler)
+
+        results = [
+            ObjectStoreCheckResult(
+                label="deployment",
+                binding_name="objectstore",
+                passed=False,
+                error_class="invalid credentials",
+            ),
+            ObjectStoreCheckResult(
+                label="upstream",
+                binding_name="atlan-objectstore",
+                passed=False,
+                error_class="connectivity / unknown",
+            ),
+        ]
+        with mock.patch(
+            "application_sdk.execution._temporal.sdr.check_object_store_access",
+            mock.AsyncMock(return_value=results),
+        ):
+            result = await preflight(PreflightInput(credentials=[]))
+
+        auth_row, upstream_row = result.checks[1], result.checks[2]
+        assert auth_row.error is not None
+        assert auth_row.error.category == FailureCategory.AUTH
+        assert auth_row.error.audience == Audience.USER
+        assert auth_row.error.retryable is False
+        assert auth_row.error.suggested_action is not None
+        assert "expired" in auth_row.error.suggested_action
+
+        assert upstream_row.error is not None
+        assert upstream_row.error.category == FailureCategory.DEPENDENCY_UNAVAILABLE
+        assert upstream_row.error.audience == Audience.PLATFORM
+        assert upstream_row.error.retryable is True
+        assert upstream_row.error.evidence.get("target") == "atlan-objectstore"
+
+        # Banner is pinned to the first object-store failure (deployment/auth),
+        # not rescanned from all checks.
+        assert result.error is not None
+        assert result.error.category == FailureCategory.AUTH
+
+    async def test_deployment_connectivity_is_source_unavailable(self) -> None:
+        """Customer-owned store outage stays SOURCE_UNAVAILABLE / USER."""
+        from application_sdk.errors.categories import Audience, FailureCategory
+        from application_sdk.storage.preflight import ObjectStoreCheckResult
+
+        handler = _StubHandler()
+        preflight = self._preflight(handler)
+        results = [
+            ObjectStoreCheckResult(
+                label="deployment",
+                binding_name="objectstore",
+                passed=False,
+                error_class="connectivity / unknown",
+            ),
+        ]
+        with mock.patch(
+            "application_sdk.execution._temporal.sdr.check_object_store_access",
+            mock.AsyncMock(return_value=results),
+        ):
+            result = await preflight(PreflightInput(credentials=[]))
+
+        check = result.checks[1]
+        assert check.error is not None
+        assert check.error.category == FailureCategory.SOURCE_UNAVAILABLE
+        assert check.error.audience == Audience.USER
+        assert check.error.retryable is True
+        assert check.error.evidence.get("endpoint") == "objectstore"
+
+    async def test_banner_pins_object_store_over_nonfatal_secret_store(self) -> None:
+        """A non-fatal secret-store row must not become the aggregate banner."""
+        from application_sdk.errors.categories import FailureCategory
+        from application_sdk.storage.preflight import ObjectStoreCheckResult
+
+        handler = _StubHandler()
+        preflight = self._preflight(handler)
+
+        zero_resolved = SecretStoreCheckResult(
+            passed=False,
+            store_down=False,
+            fatal=False,
+            substituted=0,
+            message="Secret store is reachable, but no secret was resolved.",
+            suggested_action="Check that the configured secret keys exist.",
+            resolved={"username": "literal-user"},
+        )
+        object_store = [
+            ObjectStoreCheckResult(
+                label="deployment",
+                binding_name="objectstore",
+                passed=False,
+                error_class="permission denied",
+            ),
+        ]
+        fake_infra = mock.MagicMock()
+        fake_infra.secret_store = mock.MagicMock(name="SecretStore")
+        with (
+            mock.patch(
+                "application_sdk.execution._temporal.sdr.get_infrastructure",
+                return_value=fake_infra,
+            ),
+            mock.patch(
+                "application_sdk.execution._temporal.sdr.check_secret_store_access",
+                new=mock.AsyncMock(return_value=zero_resolved),
+            ),
+            mock.patch(
+                "application_sdk.execution._temporal.sdr.check_object_store_access",
+                mock.AsyncMock(return_value=object_store),
+            ),
+        ):
+            result = await preflight(
+                PreflightInput(agent_json={"agent-name": "acme", "secret-path": "p"})
+            )
+
+        secret_check = next(c for c in result.checks if c.name == "Secret store")
+        assert secret_check.passed is False
+        object_check = next(
+            c for c in result.checks if c.name == "Deployment object store"
+        )
+        assert object_check.passed is False
+        assert result.status == PreflightStatus.NOT_READY
+        assert result.error is not None
+        assert result.error.category == FailureCategory.PERMISSION
+        assert result.message == "Configured object store is not accessible."
         assert result.resolved_message == "Configured object store is not accessible."
 
     async def test_failed_check_does_not_upgrade_partial(self) -> None:

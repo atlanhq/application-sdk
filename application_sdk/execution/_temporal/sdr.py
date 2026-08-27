@@ -35,6 +35,8 @@ with workflow.unsafe.imports_passed_through():
     from application_sdk.credentials.spec import AgentCredentialSpec
     from application_sdk.errors.base import AppError
     from application_sdk.errors.leaves import (
+        AppPermissionDeniedError,
+        AuthError,
         DependencyUnavailableError,
         PreconditionError,
         SourceUnavailableError,
@@ -119,6 +121,58 @@ _OBJECT_STORE_ACTIONS: dict[tuple[str, str], str] = {
         "connectivity / unknown",
     ): "Check that the SDR worker can reach Atlan, and verify the upstream endpoint.",
 }
+
+
+def _object_store_failure(
+    *,
+    label: str,
+    error_class: str | None,
+    binding_name: str,
+    message: str,
+) -> AppError:
+    """Map a failed object-store probe onto the taxonomy leaf for its bucket+role.
+
+    Permission and auth buckets use the USER leaves that already match
+    (``AppPermissionDeniedError``, ``AuthError``) so a 403 is not retried as a
+    transient outage. Availability then splits on role: the customer-owned
+    deployment store is ``SourceUnavailableError`` (USER); the upstream Atlan
+    upload proxy is ``DependencyUnavailableError`` (PLATFORM). Customer-facing
+    ``suggested_action`` is kept in every case.
+    """
+    bucket = error_class or "connectivity / unknown"
+    action = _OBJECT_STORE_ACTIONS.get(
+        (label, bucket),
+        _OBJECT_STORE_ACTIONS.get((label, "connectivity / unknown")),
+    )
+    if bucket == "permission denied":
+        return AppPermissionDeniedError(
+            message=message,
+            suggested_action=action,
+            resource=binding_name,
+            required_action="read and write",
+        )
+    if bucket == "invalid credentials":
+        return AuthError(
+            message=message,
+            suggested_action=action,
+            failure_reason=bucket,
+        )
+    if label == "upstream":
+        return DependencyUnavailableError(
+            message=message,
+            suggested_action=action,
+            service="object_store",
+            target=binding_name,
+            network_error=bucket,
+        )
+    return SourceUnavailableError(
+        message=message,
+        suggested_action=action,
+        source_type=f"{label} object store",
+        endpoint=binding_name,
+        network_error=bucket,
+    )
+
 
 # Leading row asserting the SDR deployment itself is reachable: if this activity
 # is executing, a worker on the customer's task queue picked it up. Name avoids
@@ -361,15 +415,20 @@ async def _append_object_store_checks(output: PreflightOutput) -> None:
     Runs the customer object-store access check (deployment store + upstream
     Atlan upload proxy) and appends one ``PreflightCheck`` per probed store to
     ``output.checks`` so they render as UI check rows alongside the handler's own
-    source/credential checks.  A failed probe carries a typed
-    ``SourceUnavailableError`` (customer-owned store → ``SOURCE_UNAVAILABLE`` /
-    ``audience=USER``) so the message, remediation, and probe evidence surface
-    in the UI and route to the customer.
+    source/credential checks.  A failed probe carries a typed leaf matched to
+    the classifier bucket and store role (permission → ``AppPermissionDeniedError``,
+    auth → ``AuthError``, deployment availability → ``SourceUnavailableError``,
+    upstream availability → ``DependencyUnavailableError``) so the message,
+    remediation, and probe evidence surface in the UI and route to the right
+    audience.
 
     No-op when not in SDR mode (``check_object_store_access`` returns ``[]`` when
     ``ENABLE_ATLAN_UPLOAD`` is falsy).  If any object-store check fails and the
     handler reported ``READY``, the verdict is downgraded to ``NOT_READY``; an
-    already ``NOT_READY``/``PARTIAL`` verdict is left untouched.
+    already ``NOT_READY``/``PARTIAL`` verdict is left untouched. The aggregate
+    banner is pinned to the object-store row that triggered the downgrade, not
+    the first failed check in ``output.checks`` (a non-fatal secret-store row
+    may already be present).
 
     Never raises — any unexpected error is logged and the handler's own result is
     returned unchanged.
@@ -392,7 +451,7 @@ async def _append_object_store_checks(output: PreflightOutput) -> None:
             ),
         )
 
-        first_failure_message: str | None = None
+        first_failed_object_store: PreflightCheck | None = None
         for result in results:
             name = _OBJECT_STORE_CHECK_NAMES.get(
                 result.label, f"{result.label} object store"
@@ -408,51 +467,42 @@ async def _append_object_store_checks(output: PreflightOutput) -> None:
                 message = _OBJECT_STORE_FAILURE_MESSAGES.get(
                     result.label, "Configured object store is not accessible."
                 )
-                if first_failure_message is None:
-                    first_failure_message = message
                 logger.info(
                     "SDR object-store check failed (%s): %s",
                     result.label,
                     result.message,
                 )
-                # Customer-owned store → SourceUnavailableError (SOURCE_UNAVAILABLE
-                # / audience=USER) so category-only routing also attributes this
-                # to the customer. The probe's binding, classifier bucket, and
-                # cause ride along as evidence via to_failure_details(). The
-                # suggested_action is the customer-facing next step (the
-                # classifier's own hint is engineer-facing and stays in the log).
-                error = SourceUnavailableError(
+                # Bucket+role → existing USER/PLATFORM leaves. suggested_action
+                # stays the customer-facing next step; the classifier's own
+                # hint is engineer-facing and stays in the log.
+                error = _object_store_failure(
+                    label=result.label,
+                    error_class=result.error_class,
+                    binding_name=result.binding_name,
                     message=message,
-                    suggested_action=_OBJECT_STORE_ACTIONS.get(
-                        (result.label, result.error_class or ""),
-                        _OBJECT_STORE_ACTIONS[(result.label, "connectivity / unknown")]
-                        if result.label in ("deployment", "upstream")
-                        else None,
-                    ),
-                    source_type=f"{result.label} object store",
-                    endpoint=result.binding_name,
-                    network_error=result.error_class,
                 )
-            output.checks.append(
-                PreflightCheck(
-                    name=name,
-                    passed=result.passed,
-                    message=message,
-                    error=error,
-                )
+            check = PreflightCheck(
+                name=name,
+                passed=result.passed,
+                message=message,
+                error=error,
             )
+            if not result.passed and first_failed_object_store is None:
+                first_failed_object_store = check
+            output.checks.append(check)
 
         output.total_duration_ms += elapsed_ms
-        if first_failure_message is not None and output.status == PreflightStatus.READY:
+        if (
+            first_failed_object_store is not None
+            and output.status == PreflightStatus.READY
+        ):
             output.status = PreflightStatus.NOT_READY
-            # Give the aggregate verdict the first failure's typed error and a
-            # banner string. Without this the envelope falls back to
-            # "Preflight check not_ready" while the cause sits in a row below.
-            # status was READY here, so the first failed row is an object-store one.
-            first_failed = next((c for c in output.checks if not c.passed), None)
-            if first_failed is not None:
-                output.error = first_failed.error
-                output.message = first_failed.resolved_message
+            # Pin the banner to the object-store row that triggered the
+            # downgrade. A non-fatal secret-store failure is inserted before
+            # this function runs, so scanning ``output.checks`` for the first
+            # failed row would copy that earlier row instead.
+            output.error = first_failed_object_store.error
+            output.message = first_failed_object_store.resolved_message
     except Exception:
         # Must never break the handler's own preflight result.
         logger.warning(
