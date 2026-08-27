@@ -51,6 +51,7 @@ from conformance.suite.checks._entrypoint_contract_fields import (
     resolve_contract_fields,
 )
 from conformance.suite.checks.deprecation._ledger_schema import (
+    LEDGER_VERSION,
     ContractField,
     ContractLedger,
     load_ledger,
@@ -202,7 +203,18 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(2)
 
     outfile: Path = args.outfile
-    existing = load_ledger(outfile if outfile.exists() else None)
+    # An app with no ledger yet starts from EMPTY, never from `load_ledger(None)`
+    # — that falls through to the SDK's own packaged ledger (resolution step 4),
+    # and `build_ledger` is append-only, so every SDK template contract
+    # (QueryExtractionInput, QueryExtractionOutput, …) would be copied into the
+    # consumer's brand-new ledger and could never be removed. Any app class
+    # sharing one of those names then draws B005 "field removed" for every SDK
+    # field it does not have, forever (live: 14 of clickhouse's 25 findings).
+    existing = (
+        load_ledger(outfile)
+        if outfile.exists()
+        else ContractLedger(version=LEDGER_VERSION, fields=[])
+    )
     ledger = build_ledger(repo_root, existing)
     content = serialize(ledger)
 
