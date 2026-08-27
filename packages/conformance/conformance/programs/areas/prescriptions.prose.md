@@ -633,3 +633,35 @@ which scans template YAML, not Python.
   parent, and every shipped template carries `typeName:` and `status:` as
   top-level leaf keys under `columns:`, emitted bare.  The alias-slot argument
   is the whole reason, and it stands on its own.
+
+**Portability rule (P046)** — suggest-only, scope=sdk,
+`classification = "judgment"`; backed by `suite.checks.text_io_encoding`, which
+also walks `packages/**` (the shared discovery walk drops any `conformance`
+path component, and this rule governs that package's sources too).
+
+- **P046 LocaleDependentTextIO** (WARN) — `Path.read_text()` /
+  `Path.write_text()` with no `encoding=` use `locale.getpreferredencoding()`:
+  UTF-8 on the Linux containers we ship on and on macOS, **cp1252 on Windows**,
+  which the SDK's unit matrix runs (`windows-latest`, 3.11 → 3.14).  The trigger
+  is narrower than "non-ASCII" — cp1252 maps `é` and `—` fine and has no mapping
+  for `→` or `✓` — so the failure is a `UnicodeDecodeError` on the Windows legs
+  alone while every other leg stays green.
+
+  **Two remedies, and picking the wrong one is the common mistake.**  When the
+  read feeds `orjson.loads` / `json.loads` — the message says so, naming the
+  parser — the fix is `path.read_bytes()`: both parsers accept bytes natively,
+  so the decode is a wasted round trip *and* is the entire source of the locale
+  dependency.  Adding `encoding="utf-8"` there papers over a conversion that
+  should not be happening.  Everywhere else, `encoding="utf-8"` (or the suite's
+  own `safe_read_text`, which defaults to it and returns `None` rather than
+  raising on undecodable bytes) is the fix.
+
+  **Never propose a round-trip test as the pin.**  A fixture that writes and
+  reads back its own sample passes against this bug on every UTF-8 platform,
+  i.e. on every leg that stays green when Windows goes red.  A regression pin
+  must assert on the `encoding=` argument.
+
+  `tests/**` is deliberately out of scope: nearly every match there is a test
+  writing its own ASCII fixture and reading it back, where the locale cannot
+  bite.  The one dangerous test-side shape — a test reading *repo sources* — is
+  a much smaller population and is not graded by this rule.

@@ -432,9 +432,19 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "S002",
     }, app_scoped
     # SDK-only rules: the SDK must keep Temporal contained behind its seam
-    # (P006/P007, BLDX-1417) and declare its deprecations correctly (B002–B004).
+    # (P006/P007, BLDX-1417), declare its deprecations correctly (B002–B004),
+    # and keep its text file IO locale-independent (P046) — the SDK repo is the
+    # only one in the fleet that runs a Windows CI leg, where the platform
+    # default codec is cp1252 rather than UTF-8.
     sdk_scoped = {r.id for r in rules if r.scope == RuleScope.SDK}
-    assert sdk_scoped == {"B002", "B003", "B004", "P006", "P007"}, sdk_scoped
+    assert sdk_scoped == {
+        "B002",
+        "B003",
+        "B004",
+        "P006",
+        "P007",
+        "P046",
+    }, sdk_scoped
     both = {r.id for r in rules if r.scope == RuleScope.BOTH}
     assert both == {r.id for r in rules} - app_scoped - sdk_scoped
 
@@ -586,6 +596,9 @@ def test_catalog_p_series_present() -> None:
     public error contract; an ``except`` on an internal class silently stops
     matching when the SDK changes which class a boundary surfaces, because the
     replacement is a sibling rather than a subclass (CONNECT-970).
+    P046 is LocaleDependentTextIO — Path.read_text()/write_text() with no
+    encoding= decode using the locale's codec, which is cp1252 on the Windows
+    legs of the SDK's unit matrix and UTF-8 everywhere else (FND-924).
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -636,6 +649,7 @@ def test_catalog_p_series_present() -> None:
         "P043",
         "P044",
         "P045",
+        "P046",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
