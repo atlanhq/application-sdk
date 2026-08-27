@@ -408,7 +408,7 @@ def main(argv: list[str] | None = None) -> int:
             "autoMergeEligibleButStuck": report.summary.auto_merge_eligible_but_stuck,
         }
         history_path = out_dir / f"history_{slug}.jsonl"
-        with history_path.open("a") as fh:
+        with history_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(history_entry) + "\n")
 
         print(
@@ -431,7 +431,7 @@ def main(argv: list[str] | None = None) -> int:
         "reposWithOpenPRs": fleet.repos_with_open_prs,
         "totalOpenPRs": fleet.total_open_prs,
     }
-    with (out_dir / "history_fleet.jsonl").open("a") as fh:
+    with (out_dir / "history_fleet.jsonl").open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(fleet_history) + "\n")
 
     print(
