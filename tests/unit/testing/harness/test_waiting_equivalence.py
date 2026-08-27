@@ -56,9 +56,11 @@ from application_sdk.testing.e2e.client import (
     DAGNodeStatus,
     DAGRunResult,
     DAGRunStatus,
-    _node_glyph,
 )
 from application_sdk.testing.harness._poll import fake_clock
+from application_sdk.testing.harness.automation_engine.wire import (
+    node_glyph as _node_glyph,
+)
 from application_sdk.testing.harness.budgets import CONNECTOR_CI, Wait
 from application_sdk.testing.harness.waiting import poll_until
 
@@ -198,8 +200,16 @@ class _Replay:
         return item
 
 
-def _live(script: Script) -> Observed:
-    """Run the script through ``poll_native_status``."""
+async def _live(script: Script) -> Observed:
+    """Run the script through ``poll_native_status``.
+
+    Awaited on
+    :class:`~application_sdk.testing.harness.automation_engine.client.AEClient`
+    rather than called through ``AEWorkflowClient``: since child F the facade is
+    a one-line ``run_sync`` shim, and ``run_sync`` refuses to re-enter a running
+    loop — which this test is. The loop under comparison is the coroutine
+    either way.
+    """
     client = AEWorkflowClient(
         tenant_url="https://tenant.example.com", api_token="tok-test"
     )
@@ -208,12 +218,13 @@ def _live(script: Script) -> Observed:
     stall = _AE.stall_timeout
     assert grace is not None and stall is not None, "the AE_RUN profile arms both"
 
-    with patch.object(
-        client, "get_native_status", side_effect=lambda _id: replay.next()
-    ):
+    async def _read(_run_id: str) -> DAGRunResult:
+        return replay.next()
+
+    with patch.object(client._ae, "get_native_status", side_effect=_read):
         with fake_clock() as clock:
             try:
-                result = client.poll_native_status(
+                result = await client._ae.poll_native_status(
                     _RUN_ID,
                     interval_seconds=int(_AE.poll_interval.total_seconds()),
                     timeout_seconds=int(_AE.timeout.total_seconds()),
@@ -314,7 +325,7 @@ _SCENARIOS: dict[str, Script] = {
 async def test_the_primitive_and_the_live_loop_agree(name: str) -> None:
     """Same script, same verdict, same probe count, same sleep sequence."""
     script = _SCENARIOS[name]
-    assert await _harness(script) == _live(script)
+    assert await _harness(script) == await _live(script)
 
 
 # ---------------------------------------------------------------------------
@@ -350,7 +361,7 @@ async def test_a_non_apperror_propagates_from_both_loops() -> None:
     with pytest.raises(ValueError):
         await _harness([ValueError("a bug in the probe, not a blip")])
     with pytest.raises(ValueError):
-        _live([ValueError("a bug in the probe, not a blip")])
+        await _live([ValueError("a bug in the probe, not a blip")])
 
 
 async def test_the_stall_verdict_names_the_summary_that_froze() -> None:

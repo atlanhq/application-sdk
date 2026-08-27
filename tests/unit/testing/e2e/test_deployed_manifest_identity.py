@@ -29,10 +29,9 @@ from application_sdk.testing.e2e._manifest_identity import (
     node_identities,
 )
 from application_sdk.testing.e2e.base import _supersedes
-from application_sdk.testing.e2e.client import (
-    AEWorkflowClient,
-    PublishedVersion,
-    _first_version_row,
+from application_sdk.testing.e2e.client import AEWorkflowClient, PublishedVersion
+from application_sdk.testing.harness.automation_engine.wire import (
+    first_version_row as _first_version_row,
 )
 
 
@@ -234,7 +233,7 @@ class TestGetPublishedVersion:
     def test_reads_the_published_version_and_its_dag(self) -> None:
         client = _make_client()
         body = {"data": [{"version": 42, "dag": _LOCAL_DAG}]}
-        with patch.object(client, "_request", return_value=(200, body)) as request:
+        with patch.object(client._ae, "_request", return_value=(200, body)) as request:
             published = client.get_published_version("mysql-abc")
         assert published == PublishedVersion(version=42, dag=_LOCAL_DAG)
         _, path = request.call_args.args
@@ -245,32 +244,34 @@ class TestGetPublishedVersion:
 
     def test_the_slug_is_url_encoded(self) -> None:
         client = _make_client()
-        with patch.object(client, "_request", return_value=(200, {"data": []})) as req:
+        with patch.object(
+            client._ae, "_request", return_value=(200, {"data": []})
+        ) as req:
             client.get_published_version("a/b?c")
         assert "workflows/a%2Fb%3Fc/versions" in req.call_args.args[1]
 
     def test_a_version_row_without_a_dag_yields_an_empty_dag(self) -> None:
         client = _make_client()
-        with patch.object(client, "_request", return_value=(200, {"data": [{}]})):
+        with patch.object(client._ae, "_request", return_value=(200, {"data": [{}]})):
             published = client.get_published_version("s")
         assert published == PublishedVersion(version=None, dag={})
 
     @pytest.mark.parametrize("status", [404, 500, 503])
     def test_a_non_2xx_answers_none_rather_than_raising(self, status: int) -> None:
         client = _make_client()
-        with patch.object(client, "_request", return_value=(status, {"err": "x"})):
+        with patch.object(client._ae, "_request", return_value=(status, {"err": "x"})):
             assert client.get_published_version("s") is None
 
     def test_a_transport_failure_answers_none_rather_than_raising(self) -> None:
         """The check is an enhancement on top of the run; a read that cannot get
         through must never be the thing that fails the leg."""
         client = _make_client()
-        with patch.object(client, "_request", side_effect=AppError(message="down")):
+        with patch.object(client._ae, "_request", side_effect=AppError(message="down")):
             assert client.get_published_version("s") is None
 
     def test_an_unparseable_envelope_answers_none(self) -> None:
         client = _make_client()
-        with patch.object(client, "_request", return_value=(200, "not json")):
+        with patch.object(client._ae, "_request", return_value=(200, "not json")):
             assert client.get_published_version("s") is None
 
 

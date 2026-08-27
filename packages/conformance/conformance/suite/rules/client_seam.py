@@ -34,12 +34,17 @@ Scope
 -----
 ``P019`` is ``both``: consumer apps are the primary target, but the SDK's own
 product code has zero raw-Atlan-HTTP today, so running it on the SDK keeps that
-clean and catches a future regression.  The SDK's one intentional raw-urllib
-Atlan path is the e2e harness in ``application_sdk/testing/e2e/client.py``; it is
-scanned (the ``testing`` subpackage is shipped, not a ``tests/`` dir) but stays
-silent because it builds its request URL from variables
-(``f"{self.tenant_url}{path}"``) — the documented heuristic false-negative — and
-any deliberate exception is handled by inline ``# conformance: ignore[P019]``.
+clean and catches a future regression.  The SDK's one intentional raw-HTTP Atlan
+path is the test harness's Automation Engine reader in
+``application_sdk/testing/harness/automation_engine/client.py`` — it moved there
+from ``application_sdk/testing/e2e/client.py`` in FND-242, and moved from
+``urllib`` to ``httpx.AsyncClient`` on the way.  It is scanned (the ``testing``
+subpackage is shipped, not a ``tests/`` dir) but stays silent because it builds
+its request URL from variables (``f"{self.tenant_url}{path}"``) — the documented
+heuristic false-negative — and any deliberate exception is handled by inline
+``# conformance: ignore[P019]``.  The Atlas half of that same split reaches
+Atlan through ``pyatlan``'s ``AsyncAtlanClient``, which is the blessed
+dependency and never in scope for this rule.
 """
 
 from __future__ import annotations

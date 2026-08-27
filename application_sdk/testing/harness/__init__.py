@@ -49,21 +49,27 @@ Module map:
 ``temporal``
     Read-only Temporal Protocol — pollers and workflow status.
 ``atlas``
-    Atlas reads, split out of ``testing/e2e/client.py``.
+    Atlas reads, split out of ``testing/e2e/client.py`` — async, one client per
+    batch, and an unreadable search reported as a verdict rather than as zero.
 ``automation_engine``
-    AE reads and the non-idempotent submit's retry, from the same split.
+    The async AE reader and the non-idempotent submit's retry, from the same
+    split, plus the ``native-status`` wire types and the leaves they raise.
 ``starters``
     Three ways to start a workflow; deliberately no shared signature.
 ``teardown``
     Purge mechanics, including the batching that is a correctness bound.
 
-``bridge``, ``waiting``, ``outcome``, ``spec``, ``budgets``, ``expectations``
-and ``identity`` are real; the rest are typed stubs, each naming the child issue
-that fills it in. Nothing outside this package consumes any of it yet —
-``testing/e2e`` is re-expressed over it in child H, and until then the extracted
-modules are pinned against the code they were lifted from by their unit tests
-rather than by being called from it. For ``waiting`` that pin is a differential
-test against ``poll_native_status`` itself, on identical scripted readings.
+``bridge``, ``waiting``, ``outcome``, ``spec``, ``budgets``, ``expectations``,
+``identity``, ``atlas`` and ``automation_engine`` are real; the rest are typed
+stubs, each naming the child issue that fills it in.
+
+``atlas`` and ``automation_engine`` are the first two that ``testing/e2e``
+actually calls: since child F, ``AEWorkflowClient`` is a set of one-line
+``run_sync`` shims over them and holds no logic of its own. The rest are still
+pinned against the code they were lifted from by their unit tests rather than by
+being called from it — ``testing/e2e`` is re-expressed over them in child H. For
+``waiting`` that pin is a differential test against ``poll_native_status``
+itself, on identical scripted readings.
 
 The optional ``harness`` extra carries the typed Kubernetes backend for
 ``cluster`` (``pip install 'atlan-application-sdk[harness]'``). It is

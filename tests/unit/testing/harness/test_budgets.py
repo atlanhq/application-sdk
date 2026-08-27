@@ -15,14 +15,18 @@ from datetime import timedelta
 import pytest
 
 from application_sdk.testing.e2e.base import BaseE2ETest, _derive_progress_stall_seconds
-from application_sdk.testing.e2e.client import (
+from application_sdk.testing.harness.automation_engine import cold_start_submit_kwargs
+from application_sdk.testing.harness.automation_engine.client import (
     _HTTP_TIMEOUT,
-    _MAX_RETRY_AFTER_SECONDS,
     _REQUEST_BACKOFF_SECONDS,
     _REQUEST_MAX_ATTEMPTS,
-    _RETRY_AFTER_BUDGET_SECONDS,
     _SUBMIT_TIMEOUT,
-    cold_start_submit_kwargs,
+)
+from application_sdk.testing.harness.automation_engine.retry import (
+    MAX_RETRY_AFTER_SECONDS as _MAX_RETRY_AFTER_SECONDS,
+)
+from application_sdk.testing.harness.automation_engine.retry import (
+    RETRY_AFTER_BUDGET_SECONDS as _RETRY_AFTER_BUDGET_SECONDS,
 )
 from application_sdk.testing.harness.budgets import (
     CONNECTOR_CI,

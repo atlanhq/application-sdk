@@ -14,13 +14,13 @@ Discovery note
 --------------
 Unlike the orchestration series, this check uses the **shared** discovery walk,
 which excludes ``tests/`` / ``test/`` dirs (and infra dirs) but **not** the
-shipped ``testing/`` subpackage.  So the SDK's e2e harness
-(``application_sdk/testing/e2e/client.py``), which makes intentional low-level
-``urllib`` calls to Atlan, *is* scanned — it stays silent only because it builds
-its request URL from variables, which the heuristic deliberately does not match
-(see ``_raw_http_to_atlan``).  A harness that hit Atlan with a *literal* URL
-would fire P019 (WARN); the right tool there is an inline
-``# conformance: ignore[P019] <reason>``.
+shipped ``testing/`` subpackage.  So the SDK's test harness
+(``application_sdk/testing/harness/automation_engine/client.py``), which makes
+intentional low-level ``httpx`` calls to Atlan, *is* scanned — it stays silent
+only because it builds its request URL from variables, which the heuristic
+deliberately does not match (see ``_raw_http_to_atlan``).  A harness that hit
+Atlan with a *literal* URL would fire P019 (WARN); the right tool there is an
+inline ``# conformance: ignore[P019] <reason>``.
 
 Inline suppression
 ------------------

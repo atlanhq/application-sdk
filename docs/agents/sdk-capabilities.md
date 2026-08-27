@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.29.0
-source-sha:    9a2afbd6d898717f72a1059eb0c19baacf54550f
-source-date:   2026-08-26T22:41:32+01:00
+source-sha:    39d4a36db4fa466c67b470800708ca1c6cfe0961
+source-date:   2026-08-27T00:14:54+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 170 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 187 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3080,19 +3080,27 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 ### Classes
 
+#### `AEClient`
+
+- **Import:** `from application_sdk.testing.harness.automation_engine import AEClient`
+- **Also importable from:** `application_sdk.testing.harness.automation_engine.client`
+- **Signature:** `class AEClient(tenant_url: str, api_token: str)`
+- **Summary:** Async client for the Automation Engine endpoints a full-DAG run uses.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/client.py`
+
 #### `AERunHandle`
 
-- **Import:** `from application_sdk.testing.harness.automation_engine import AERunHandle`
+- **Import:** `from application_sdk.testing.harness.starters import AERunHandle`
 - **Signature:** `class AERunHandle(*, workflow_slug: str, run_id: str) -> None`
-- **Summary:** What a successful submit returns.
-- **Defined in:** `application_sdk/testing/harness/automation_engine/__init__.py`
+- **Summary:** A run started through the Automation Engine.
+- **Defined in:** `application_sdk/testing/harness/starters/__init__.py`
 
 #### `AEWorkflowClient`
 
 - **Import:** `from application_sdk.testing.full_dag import AEWorkflowClient`
-- **Also importable from:** `application_sdk.testing.full_dag.client`
+- **Also importable from:** `application_sdk.testing.e2e.client`, `application_sdk.testing.full_dag.client`
 - **Signature:** `class AEWorkflowClient(tenant_url: str, ...)`
-- **Summary:** Thin wrapper over the three Atlan endpoints used by full-DAG tests.
+- **Summary:** Thin sync wrapper over the harness's AE and Atlas readers.
 - **Defined in:** `application_sdk/testing/e2e/client.py`
 
 #### `APIType`
@@ -3109,6 +3117,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class AppConfig(app_name: str = '', ...)`
 - **Summary:** Deprecated (removed in v4.0) — use :class:`AppUnderTest`.
 - **Defined in:** `application_sdk/testing/e2e/config.py`
+
+#### `AppNotReadyError`
+
+- **Import:** `from application_sdk.testing.harness.automation_engine import AppNotReadyError`
+- **Signature:** `class AppNotReadyError(*, ...)`
+- **Summary:** The tenant-installed app pod did not accept connections before AE submit.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/_errors.py`
 
 #### `AppUnderTest`
 
@@ -3146,6 +3161,41 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class AssetValidationReport(total: int = 0, ...)`
 - **Summary:** Aggregate outcome of validating a batch of transformed assets.
 - **Defined in:** `application_sdk/validation/assets.py`
+
+#### `AtlanAEWorkflowAlreadyActiveError`
+
+- **Import:** `from application_sdk.testing.harness.automation_engine import AtlanAEWorkflowAlreadyActiveError`
+- **Signature:** `class AtlanAEWorkflowAlreadyActiveError(*, ...)`
+- **Summary:** A run for the AE workflow is already active, so a new submit was rejected.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/_errors.py`
+
+#### `AtlanApiHttpError`
+
+- **Import:** `from application_sdk.testing.harness.automation_engine import AtlanApiHttpError`
+- **Signature:** `class AtlanApiHttpError(*, ...)`
+- **Summary:** Non-2xx response from the Atlan Automation Engine API.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/_errors.py`
+
+#### `AtlanApiResponseInvariantError`
+
+- **Import:** `from application_sdk.testing.harness.automation_engine import AtlanApiResponseInvariantError`
+- **Signature:** `class AtlanApiResponseInvariantError(*, ...)`
+- **Summary:** AE API returned 2xx but the expected field (slug, run_id) was absent.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/_errors.py`
+
+#### `AtlanApiTimeoutError`
+
+- **Import:** `from application_sdk.testing.harness.automation_engine import AtlanApiTimeoutError`
+- **Signature:** `class AtlanApiTimeoutError(*, ...)`
+- **Summary:** No response received from the AE API before the timeout elapsed.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/_errors.py`
+
+#### `AutomationEngineNotDispatchingError`
+
+- **Import:** `from application_sdk.testing.harness.automation_engine import AutomationEngineNotDispatchingError`
+- **Signature:** `class AutomationEngineNotDispatchingError(*, ...)`
+- **Summary:** The AE run never left ``Pending`` within the stall-grace window.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/_errors.py`
 
 #### `BaseE2ETest`
 
@@ -3229,33 +3279,42 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 #### `DAGNodeResult`
 
-- **Import:** `from application_sdk.testing.full_dag.client import DAGNodeResult`
+- **Import:** `from application_sdk.testing.e2e.client import DAGNodeResult`
+- **Also importable from:** `application_sdk.testing.full_dag.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
 - **Signature:** `class DAGNodeResult(name: str, ...)`
 - **Summary:** One row of the per-node breakdown returned by ``native-status``.
-- **Defined in:** `application_sdk/testing/e2e/client.py`
+- **Defined in:** `application_sdk/testing/harness/automation_engine/wire.py`
 
 #### `DAGNodeStatus`
 
 - **Import:** `from application_sdk.testing.full_dag import DAGNodeStatus`
-- **Also importable from:** `application_sdk.testing.full_dag.client`
+- **Also importable from:** `application_sdk.testing.e2e.client`, `application_sdk.testing.full_dag.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
 - **Signature:** `class DAGNodeStatus`
 - **Summary:** Status values returned by ``native-status`` per DAG node.
-- **Defined in:** `application_sdk/testing/e2e/client.py`
+- **Defined in:** `application_sdk/testing/harness/automation_engine/wire.py`
+
+#### `DAGProgressStalledError`
+
+- **Import:** `from application_sdk.testing.harness.automation_engine import DAGProgressStalledError`
+- **Signature:** `class DAGProgressStalledError(*, ...)`
+- **Summary:** A DAG node ran without any state transition for the progress window.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/_errors.py`
 
 #### `DAGRunResult`
 
-- **Import:** `from application_sdk.testing.full_dag.client import DAGRunResult`
+- **Import:** `from application_sdk.testing.e2e.client import DAGRunResult`
+- **Also importable from:** `application_sdk.testing.full_dag.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
 - **Signature:** `class DAGRunResult(run_id: str, ...)`
-- **Summary:** Full result returned by :meth:`AEWorkflowClient.poll_native_status`.
-- **Defined in:** `application_sdk/testing/e2e/client.py`
+- **Summary:** Full result of one ``native-status`` read.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/wire.py`
 
 #### `DAGRunStatus`
 
 - **Import:** `from application_sdk.testing.full_dag import DAGRunStatus`
-- **Also importable from:** `application_sdk.testing.full_dag.client`
+- **Also importable from:** `application_sdk.testing.e2e.client`, `application_sdk.testing.full_dag.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
 - **Signature:** `class DAGRunStatus`
 - **Summary:** Top-level status of an AE workflow run.
-- **Defined in:** `application_sdk/testing/e2e/client.py`
+- **Defined in:** `application_sdk/testing/harness/automation_engine/wire.py`
 
 #### `DataForgeSource`
 
@@ -3441,13 +3500,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** In-memory state store with call-tracking for unit tests.
 - **Defined in:** `application_sdk/testing/mocks.py`
 
-#### `NativeStatus`
-
-- **Import:** `from application_sdk.testing.harness.automation_engine import NativeStatus`
-- **Signature:** `class NativeStatus(*, node_states: Mapping[str, str], finished: bool, fingerprint: str) -> None`
-- **Summary:** One reading of a run's ``native-status``.
-- **Defined in:** `application_sdk/testing/harness/automation_engine/__init__.py`
-
 #### `NeverStarted`
 
 - **Import:** `from application_sdk.testing.harness import NeverStarted`
@@ -3455,6 +3507,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class NeverStarted(*, label: str, attempts: int, elapsed: timedelta, grace: timedelta, last: T | None = None)`
 - **Summary:** Nothing ever started, so the budget was spent waiting for work to begin.
 - **Defined in:** `application_sdk/testing/harness/outcome.py`
+
+#### `NoWorkerOnTaskQueueError`
+
+- **Import:** `from application_sdk.testing.harness.automation_engine import NoWorkerOnTaskQueueError`
+- **Signature:** `class NoWorkerOnTaskQueueError(*, ...)`
+- **Summary:** No worker started any DAG node while the AE run was live.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/_errors.py`
 
 #### `PodPhase`
 
@@ -3476,6 +3535,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class PollerInfo(*, identity: str, last_access: datetime, build_id: str | None = None) -> None`
 - **Summary:** One worker seen polling a task queue.
 - **Defined in:** `application_sdk/testing/harness/temporal/__init__.py`
+
+#### `PublishedVersion`
+
+- **Import:** `from application_sdk.testing.e2e.client import PublishedVersion`
+- **Also importable from:** `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
+- **Signature:** `class PublishedVersion(version: int | None, dag: dict[str, Any])`
+- **Summary:** The workflow version AE currently serves as published, and its DAG.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/wire.py`
 
 #### `PurgeReport`
 
@@ -3506,12 +3573,27 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Everything one outbound call, including its retries, is allowed to spend.
 - **Defined in:** `application_sdk/testing/harness/budgets.py`
 
+#### `RequestDelivery`
+
+- **Import:** `from application_sdk.testing.harness.automation_engine import RequestDelivery`
+- **Signature:** `class RequestDelivery`
+- **Summary:** Whether a failed HTTP request can have taken effect at the origin.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/_errors.py`
+
 #### `ResourceRef`
 
 - **Import:** `from application_sdk.testing.harness.cluster import ResourceRef`
 - **Signature:** `class ResourceRef(*, group: str, version: str, plural: str) -> None`
 - **Summary:** Identifies a custom-resource kind by its API coordinates.
 - **Defined in:** `application_sdk/testing/harness/cluster/__init__.py`
+
+#### `RunLookup`
+
+- **Import:** `from application_sdk.testing.e2e.client import RunLookup`
+- **Also importable from:** `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.retry`
+- **Signature:** `class RunLookup(run_id: str | None = None, conclusive: bool = False)`
+- **Summary:** What a read of AE's run list learned about a run we expected to exist.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/retry.py`
 
 #### `RunMode`
 
@@ -3665,6 +3747,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** One workflow execution's state.
 - **Defined in:** `application_sdk/testing/harness/temporal/__init__.py`
 
+#### `WriteRecovery`
+
+- **Import:** `from application_sdk.testing.e2e.client import WriteRecovery`
+- **Also importable from:** `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.retry`
+- **Signature:** `class WriteRecovery(body: dict[str, Any] | None = None, proven_absent: bool = False)`
+- **Summary:** What a follow-up read learned about a write whose response was lost.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/retry.py`
+
 ### Functions
 
 #### `all_of`
@@ -3695,6 +3785,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `assert_settled(outcome: Outcome[T])`
 - **Summary:** Return the settled value, or raise the typed leaf for the verdict.
 - **Defined in:** `application_sdk/testing/harness/outcome.py`
+
+#### `atlas_client`
+
+- **Import:** `from application_sdk.testing.harness.atlas import atlas_client`
+- **Signature:** `atlas_client(tenant_url: str, *, ...)`
+- **Summary:** Open one ``AsyncAtlanClient`` for a batch of Atlas reads.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
 #### `between`
 
@@ -3741,10 +3838,11 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 #### `cold_start_submit_kwargs`
 
-- **Import:** `from application_sdk.testing.full_dag.client import cold_start_submit_kwargs`
+- **Import:** `from application_sdk.testing.e2e.client import cold_start_submit_kwargs`
+- **Also importable from:** `application_sdk.testing.full_dag.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.retry`
 - **Signature:** `cold_start_submit_kwargs(timeout_seconds: int, poll_interval_seconds: int)`
-- **Summary:** Re-size :meth:`AEWorkflowClient.submit_workflow`'s retry to a cold start.
-- **Defined in:** `application_sdk/testing/e2e/client.py`
+- **Summary:** Re-size the AE submit's retry to a cold start.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/retry.py`
 
 #### `compare_category`
 
@@ -3760,6 +3858,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Compare actual extracted metadata against an expected baseline.
 - **Defined in:** `application_sdk/testing/integration/comparison.py`
 
+#### `connection_exists`
+
+- **Import:** `from application_sdk.testing.harness.atlas import connection_exists`
+- **Signature:** `connection_exists(client: AsyncAtlanClient, qualified_name: str) -> Reading[bool]`
+- **Summary:** Search-based Connection probe — works around the direct-fetch ACL.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
 #### `contains`
 
 - **Import:** `from application_sdk.testing.integration import contains`
@@ -3770,8 +3875,22 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `count_assets`
 
 - **Import:** `from application_sdk.testing.harness.atlas import count_assets`
-- **Signature:** `count_assets(connection_qualified_name: str, type_names: Sequence[str]) -> Outcome[Mapping[str, int]]`
-- **Summary:** Count assets of each named type under a connection.
+- **Signature:** `count_assets(client: AsyncAtlanClient, ...)`
+- **Summary:** Count active assets of each named type under a connection.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
+#### `count_lineage`
+
+- **Import:** `from application_sdk.testing.harness.atlas import count_lineage`
+- **Signature:** `count_lineage(client: AsyncAtlanClient, ...)`
+- **Summary:** Count assets of each named type that have lineage attached.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
+#### `count_total_assets`
+
+- **Import:** `from application_sdk.testing.harness.atlas import count_total_assets`
+- **Signature:** `count_total_assets(client: AsyncAtlanClient, connection_qualified_name: str) -> Reading[int]`
+- **Summary:** Count every descendant asset under the connection prefix, ALL types.
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
 #### `custom`
@@ -4112,12 +4231,12 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Create a pytest parametrize decorator for scenarios.
 - **Defined in:** `application_sdk/testing/integration/runner.py`
 
-#### `poll_native_status`
+#### `poll_for_connection`
 
-- **Import:** `from application_sdk.testing.harness.automation_engine import poll_native_status`
-- **Signature:** `poll_native_status(handle: AERunHandle, *, budget: Budget) -> Outcome[NativeStatus]`
-- **Summary:** Poll a run's native status until it settles, stalls or runs out of budget.
-- **Defined in:** `application_sdk/testing/harness/automation_engine/__init__.py`
+- **Import:** `from application_sdk.testing.harness.atlas import poll_for_connection`
+- **Signature:** `poll_for_connection(client: AsyncAtlanClient, qualified_name: str, *, budget: Budget) -> Outcome[bool]`
+- **Summary:** Poll Atlas until the Connection appears, or the budget or grace says stop.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
 #### `poll_until`
 
@@ -4173,8 +4292,8 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `sample_qualified_names`
 
 - **Import:** `from application_sdk.testing.harness.atlas import sample_qualified_names`
-- **Signature:** `sample_qualified_names(connection_qualified_name: str, *, ...)`
-- **Summary:** Sample qualified names of each named type under a connection.
+- **Signature:** `sample_qualified_names(client: AsyncAtlanClient, *, ...)`
+- **Summary:** Sample up to *per_type* qualified names per type under the connection.
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
 #### `start_on_task_queue`
@@ -4204,13 +4323,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `starts_with(prefix: str, *, description: str | None = None)`
 - **Summary:** Assert that the actual value starts with the given prefix.
 - **Defined in:** `application_sdk/testing/integration/assertions.py`
-
-#### `submit_run`
-
-- **Import:** `from application_sdk.testing.harness.automation_engine import submit_run`
-- **Signature:** `submit_run(payload: Mapping[str, object], *, budget: Budget) -> Outcome[AERunHandle]`
-- **Summary:** Submit a run to the Automation Engine, retrying only where it is safe to.
-- **Defined in:** `application_sdk/testing/harness/automation_engine/__init__.py`
 
 #### `validate_asset`
 
@@ -4265,6 +4377,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/expectations.py`
 
+#### `DEFAULT_TYPE_NAMES`
+
+- **Import:** `from application_sdk.testing.harness.atlas import DEFAULT_TYPE_NAMES`
+- **Signature:** `DEFAULT_TYPE_NAMES: tuple[str, ...]`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
 #### `Outcome`
 
 - **Import:** `from application_sdk.testing.harness import Outcome`
@@ -4287,6 +4406,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `PURGE_BATCH_SIZE`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/teardown.py`
+
+#### `Reading`
+
+- **Import:** `from application_sdk.testing.harness.atlas import Reading`
+- **Signature:** `Reading: TypeAlias`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
 #### `SampleRead`
 

@@ -73,7 +73,9 @@ class TestDAGNodeStatusSkipped:
         assert not DAGNodeStatus.PENDING.is_skipped
 
     def test_skipped_parses_from_wire(self) -> None:
-        from application_sdk.testing.e2e.client import _safe_node_status
+        from application_sdk.testing.harness.automation_engine.wire import (
+            safe_node_status as _safe_node_status,
+        )
 
         assert _safe_node_status("Skipped") is DAGNodeStatus.SKIPPED
         assert _safe_node_status("Omitted") is DAGNodeStatus.OMITTED

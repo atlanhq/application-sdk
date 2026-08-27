@@ -20,6 +20,7 @@ from application_sdk.errors.leaves import (
 
 __all__ = [
     "HarnessNotBuiltError",
+    "MissingHarnessClassAttrError",
     "MissingTenantEnvError",
     "SyncBridgeInAsyncContextError",
     "WaitExpiredError",
@@ -65,6 +66,20 @@ class HarnessNotBuiltError(UnimplementedError, NotImplementedError):
     code: ClassVar[str] = "UNIMPLEMENTED_HARNESS_NOT_BUILT"
     issue: str | None = None
     component: str | None = "test_harness"
+
+
+@dataclass(kw_only=True)
+class MissingHarnessClassAttrError(InvalidInputError):
+    """A required class-level attribute was not set on the test harness.
+
+    Moved here from ``testing/e2e/_errors.py`` with the AE half of
+    ``client.py`` (child F on FND-224): ``cold_start_submit_kwargs`` raises it,
+    and a harness module cannot import from the package child H re-expresses
+    over it. Same class, same ``code`` — ``testing/e2e/_errors`` re-exports it,
+    so every existing import and ``except`` clause is unchanged.
+    """
+
+    code: ClassVar[str] = "INVALID_INPUT_HARNESS_CLASS_ATTR"
 
 
 @dataclass(kw_only=True)

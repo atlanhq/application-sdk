@@ -121,6 +121,21 @@ class Attempt:
         return gap
 
 
+async def sleep_async(seconds: float) -> None:
+    """Await *seconds* through this module's swappable sleep.
+
+    The gap between two attempts of a *retry* loop rather than of a deadline
+    loop — a bounded ``for`` over :func:`until_deadline_async` owns its own
+    sleeping, but the AE write retries in
+    :mod:`application_sdk.testing.harness.automation_engine.client` count
+    attempts instead of watching a clock, so they have no :class:`Attempt` to
+    ask. Routing them here rather than calling :func:`asyncio.sleep` directly
+    puts them under :func:`fake_clock` with everything else, so a test asserts a
+    retry's real gap sequence instead of counting calls to a patched sleep.
+    """
+    await _async_sleep(seconds)
+
+
 def _log_heartbeat(label: str, attempt: Attempt, timeout_seconds: float) -> None:
     """Emit the throttled "still waiting" progress line.
 
