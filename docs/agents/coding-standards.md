@@ -143,10 +143,12 @@ beside one). Each row stamps `failure.audience` (who must act) except `proceeded
   records stay `warning`, terse, no stack.
 - **Interactive surfaces** (the HTTP `/workflows/v1/check` endpoint and the SDR
   `sdr:preflight_check` activity) emit the sibling `Preflight check outcome` row via
-  `emit_preflight_check_outcome`, at `info` because the log is not the delivery channel —
-  the verdict travels back to the caller as the HTTP response body / the activity result —
-  with `preflight_surface` naming the surface; handler crashes stay `error` at each
-  surface's boundary handler.
+  `emit_preflight_check_outcome`, with `preflight_surface` naming the surface. The level
+  follows whether the log is the delivery channel: HTTP rows stay `info` (the verdict IS
+  the response body rendered in the setup form); SDR failures surface through a workflow
+  run log read at the default ERROR filter, so SDR rows mirror the gate — `not_ready` at
+  `error`, advisory failure at `warning`, clean at `info`. Handler crashes stay `error`
+  at each surface's boundary handler.
 
 ## Contract Evolution
 

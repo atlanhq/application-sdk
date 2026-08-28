@@ -288,9 +288,11 @@ class TestBuildSdrActivities:
             )
         assert result.status == PreflightStatus.NOT_READY
         assert handler.preflight_input is None  # short-circuited, handler never ran
+        # A failed SDR test-connection surfaces through a run log read at the
+        # default ERROR filter, so the row mirrors the gate and lands at ERROR.
         event = next(
             c.kwargs
-            for c in ml.info.call_args_list
+            for c in ml.error.call_args_list
             if c.args and c.args[0] == "Preflight check outcome"
         )
         assert event["preflight_surface"] == "sdr"

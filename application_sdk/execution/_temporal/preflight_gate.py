@@ -692,12 +692,14 @@ def emit_preflight_check_outcome(
 
     One attribute schema for every surface that runs ``Handler.preflight_check``,
     so the setup funnel (HTTP form check, SDR test-connection) is queryable next
-    to run-time gate verdicts. Interactive verdicts log at INFO because the log
-    is not the delivery channel: the verdict itself travels back to the caller
-    (the HTTP response body rendered in the setup form; the SDR activity
-    result), unlike a gate block, where the log row is all the customer gets.
-    Handler crashes are logged at ERROR by each surface's own boundary handler.
-    Callers pass their module logger so the row keeps the surface's source.
+    to run-time gate verdicts. The level follows whether the log is the delivery
+    channel. HTTP rows are always INFO: the verdict IS the response body,
+    rendered in the setup form. SDR failures surface through a workflow run log
+    a customer reads at the default ERROR filter, so those rows mirror the
+    gate's map — ``not_ready`` at ERROR, a passed verdict carrying a failed
+    advisory check at WARNING, clean at INFO. Handler crashes are logged at
+    ERROR by each surface's own boundary handler. Callers pass their module
+    logger so the row keeps the surface's source.
     """
     failed = [c for c in result.checks if not c.passed]
     # The aggregate error wins over check order, mirroring _build_block_error:
@@ -714,7 +716,15 @@ def emit_preflight_check_outcome(
         extra[FAILURE_AUDIENCE_KEY] = primary.audience.value
     if request_id is not None:
         extra["request_id"] = request_id
-    log.info(
+    if surface == "http":
+        emit = log.info
+    elif result.status is PreflightStatus.NOT_READY:
+        emit = log.error
+    elif failed:
+        emit = log.warning
+    else:
+        emit = log.info
+    emit(
         PREFLIGHT_CHECK_EVENT,
         outcome=result.status.value,
         reason=reason,

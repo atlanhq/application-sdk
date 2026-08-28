@@ -1240,19 +1240,54 @@ class TestEmitPreflightCheckOutcome:
         assert json.loads(kwargs[CHECK_MATRIX_KEY])[0]["name"] == "auth"
         assert FAILURE_AUDIENCE_KEY not in kwargs
 
-    def test_not_ready_typed_reason_and_audience(self) -> None:
+    def test_sdr_not_ready_is_error_with_reason_and_audience(self) -> None:
+        # SDR mirrors the gate: the failure surfaces through a workflow run log
+        # read at the default ERROR filter, so the row must be the ERROR record.
         out = PreflightOutput(
             status=PreflightStatus.NOT_READY,
             checks=[
                 PreflightCheck(name="auth", passed=False, error=AuthError(message="x"))
             ],
         )
-        kwargs = self._emit(out, surface="sdr").info.call_args.kwargs
-        # Still INFO: the person who triggered the check sees the verdict on screen.
+        log = self._emit(out, surface="sdr")
+        log.error.assert_called_once()
+        log.info.assert_not_called()
+        kwargs = log.error.call_args.kwargs
         assert kwargs["outcome"] == "not_ready"
         assert kwargs["reason"] == "AUTH"
         assert kwargs[FAILURE_AUDIENCE_KEY] == "USER"
         assert kwargs[PREFLIGHT_SURFACE_KEY] == "sdr"
+
+    def test_http_not_ready_stays_info(self) -> None:
+        # HTTP: the verdict IS the response body rendered in the setup form —
+        # the log is not the delivery channel, so no level escalation.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(name="auth", passed=False, error=AuthError(message="x"))
+            ],
+        )
+        log = self._emit(out, surface="http")
+        log.info.assert_called_once()
+        log.error.assert_not_called()
+
+    def test_sdr_advisory_failure_warns(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.PARTIAL,
+            checks=[
+                PreflightCheck(name="auth", passed=True),
+                PreflightCheck(name="tables", passed=False, message="advisory"),
+            ],
+        )
+        log = self._emit(out, surface="sdr")
+        log.warning.assert_called_once()
+        log.error.assert_not_called()
+
+    def test_sdr_clean_stays_info(self) -> None:
+        out = PreflightOutput(status=PreflightStatus.READY, checks=[])
+        log = self._emit(out, surface="sdr")
+        log.info.assert_called_once()
+        log.error.assert_not_called()
 
     def test_aggregate_error_outranks_first_failed_check(self) -> None:
         # Mirrors _build_block_error: SDR inserts a non-fatal secret-store row
@@ -1272,7 +1307,7 @@ class TestEmitPreflightCheckOutcome:
                 PreflightCheck(name="auth", passed=False),
             ],
         )
-        kwargs = self._emit(out, surface="sdr").info.call_args.kwargs
+        kwargs = self._emit(out, surface="sdr").error.call_args.kwargs
         assert kwargs["reason"] == "AUTH"
         assert kwargs[FAILURE_AUDIENCE_KEY] == "USER"
 
