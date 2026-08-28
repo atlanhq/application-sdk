@@ -84,6 +84,86 @@ _CONNECTIVITY_HINT = (
     "bucket/container name, and network connectivity from this pod/host."
 )
 
+# Bucket for a binding that was never probed because it is absent or
+# unparseable.  Bypasses the classifier entirely (there is no exception to
+# classify), so it is named here rather than derived from a rule.
+_NOT_CONFIGURED = "not configured"
+_CONNECTIVITY_UNKNOWN = "connectivity / unknown"
+
+
+@dataclass(frozen=True)
+class _AccessErrorRule:
+    """One classifier bucket: how to recognise it, and what to tell the reader.
+
+    Table-driven rather than a chain of ``if`` branches so the set of buckets
+    the probe can emit is *enumerable* — see :data:`_OBJECT_STORE_ERROR_CLASSES`.
+    A new bucket added as a branch could fall through the consumer's
+    bucket-to-error-leaf mapping unnoticed; a new bucket added as a rule cannot.
+    """
+
+    bucket: str
+    hint: str
+    pattern: re.Pattern[str] | None = None
+    markers: tuple[str, ...] = ()
+
+    def matches(self, msg: str) -> bool:
+        """Whether *msg* (already lowercased) falls in this bucket."""
+        if self.pattern is not None and self.pattern.search(msg):
+            return True
+        return any(marker in msg for marker in self.markers)
+
+
+_ACCESS_ERROR_RULES: tuple[_AccessErrorRule, ...] = (
+    _AccessErrorRule(
+        bucket="permission denied",
+        pattern=_RE_403,
+        markers=(
+            "accessdenied",
+            "access denied",
+            "forbidden",
+            "not authorized",
+            "authorization failed",
+        ),
+        hint=(
+            "The credentials are valid but lack the required read/write "
+            "permissions on this bucket. Grant the IAM/ACL permissions needed "
+            "for get and put operations."
+        ),
+    ),
+    _AccessErrorRule(
+        bucket="invalid credentials",
+        pattern=_RE_401,
+        markers=(
+            "invalidaccesskeyid",
+            "invalid access key",
+            "signaturedoesnotmatch",
+            "unauthenticated",
+            "invalid credentials",
+        ),
+        hint=(
+            "The credentials in the Dapr component appear to be invalid "
+            "(wrong key, expired token, or malformed secret). Update the binding "
+            "component or the referenced secret values."
+        ),
+    ),
+)
+
+# Bucket used when no rule matches — a network fault, an unmapped provider
+# error, or a probe timeout.
+_FALLBACK_RULE = _AccessErrorRule(
+    bucket=_CONNECTIVITY_UNKNOWN,
+    hint=_CONNECTIVITY_HINT,
+)
+
+# Every ``error_class`` a failed :class:`ObjectStoreCheckResult` can carry: the
+# classifier's rules, its fallback, and the not-configured path that bypasses
+# it.  Consumers mapping buckets onto typed errors assert against *this* rather
+# than a copy of the literals, so adding a rule without a mapping fails a test
+# instead of silently taking the consumer's default branch.
+_OBJECT_STORE_ERROR_CLASSES: frozenset[str] = frozenset(
+    {rule.bucket for rule in (*_ACCESS_ERROR_RULES, _FALLBACK_RULE)} | {_NOT_CONFIGURED}
+)
+
 
 def _classify_access_error(exc: BaseException) -> tuple[str, str]:
     """Classify an obstore exception into (error_class, remediation_hint).
@@ -93,49 +173,19 @@ def _classify_access_error(exc: BaseException) -> tuple[str, str]:
     word-boundary regex (``\\b403\\b``) to avoid false positives from request
     IDs or byte counts that happen to contain those digits.
 
+    Every bucket returned here is in :data:`_OBJECT_STORE_ERROR_CLASSES` by
+    construction — both are derived from :data:`_ACCESS_ERROR_RULES`.
+
     Returns:
         A 2-tuple of (error_class_label, remediation_hint).
     """
     msg = str(exc).lower()
 
-    if _RE_403.search(msg) or any(
-        marker in msg
-        for marker in (
-            "accessdenied",
-            "access denied",
-            "forbidden",
-            "not authorized",
-            "authorization failed",
-        )
-    ):
-        return (
-            "permission denied",
-            "The credentials are valid but lack the required read/write "
-            "permissions on this bucket. Grant the IAM/ACL permissions needed "
-            "for get and put operations.",
-        )
+    for rule in _ACCESS_ERROR_RULES:
+        if rule.matches(msg):
+            return (rule.bucket, rule.hint)
 
-    if _RE_401.search(msg) or any(
-        marker in msg
-        for marker in (
-            "invalidaccesskeyid",
-            "invalid access key",
-            "signaturedoesnotmatch",
-            "unauthenticated",
-            "invalid credentials",
-        )
-    ):
-        return (
-            "invalid credentials",
-            "The credentials in the Dapr component appear to be invalid "
-            "(wrong key, expired token, or malformed secret). Update the binding "
-            "component or the referenced secret values.",
-        )
-
-    return (
-        "connectivity / unknown",
-        _CONNECTIVITY_HINT,
-    )
+    return (_FALLBACK_RULE.bucket, _FALLBACK_RULE.hint)
 
 
 @dataclass(frozen=True)
@@ -151,8 +201,10 @@ class ObjectStoreCheckResult:
         label: Human-readable role label ("deployment" or "upstream").
         binding_name: The Dapr component name backing the store.
         passed: Whether the write → read round-trip succeeded.
-        error_class: Classifier bucket on failure (e.g. "permission denied",
-            "invalid credentials", "connectivity / unknown"); ``None`` on success.
+        error_class: Bucket on failure — always one of
+            :data:`_OBJECT_STORE_ERROR_CLASSES` (the classifier's buckets, plus
+            "not configured" for a binding that was never probed); ``None`` on
+            success.
         cause: Concise failure cause (exception text or timeout note); ``None`` on
             success.
         hint: Remediation hint on failure; ``None`` on success.
@@ -448,7 +500,7 @@ async def check_object_store_access(
                     label=label,
                     binding_name=binding_name,
                     passed=False,
-                    error_class="not configured",
+                    error_class=_NOT_CONFIGURED,
                     cause=(
                         f"the '{binding_name}' binding is absent or could not be "
                         "parsed, so the store is unavailable"
@@ -478,7 +530,7 @@ async def check_object_store_access(
                 label=label,
                 binding_name=binding_name,
                 passed=False,
-                error_class="connectivity / unknown",
+                error_class=_CONNECTIVITY_UNKNOWN,
                 cause=f"probe timed out after {_PROBE_TIMEOUT_SECS:.0f}s",
                 hint=_CONNECTIVITY_HINT,
                 failed_operation="connectivity",

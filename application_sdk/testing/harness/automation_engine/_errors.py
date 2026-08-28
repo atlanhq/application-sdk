@@ -205,10 +205,22 @@ class NoWorkerOnTaskQueueError(PreconditionError):
     remediation advice in the message — which queue to check, which agent name
     resolves to it — and that advice is precisely what could not come along into
     a shared primitive.
+
+    Attributes:
+        observed_pollers: What Temporal reports is actually polling the queue,
+            when the harness could ask. A *field* rather than more prose in the
+            message, because the two are different kinds of claim: everything in
+            the message is inferred from three minutes of silence, and this is
+            observed. A report that mixes them cannot tell a reader which half
+            to trust, and ``None`` — the default, and what a connector CI leg
+            with no route to the tenant's frontend always gets — says the
+            inference is all there is. See
+            :meth:`application_sdk.testing.e2e.base.BaseE2ETest._observed_pollers`.
     """
 
     code: ClassVar[str] = "PRECONDITION_NO_WORKER_ON_TASK_QUEUE"
     expected_state: str | None = "a worker polling the extract task queue"
+    observed_pollers: str | None = None
 
 
 @dataclass(kw_only=True)
@@ -253,9 +265,12 @@ class DAGProgressStalledError(PreconditionError):
 
     Categorised ``PRECONDITION`` where the generic
     :class:`~application_sdk.testing.harness._errors.WaitStalledError` is a
-    ``TIMEOUT`` (per ADR-0018). This one predates the ADR and keeps its category
-    so no existing consumer sees a reclassification; normalising the pair is
-    listed on FND-240.
+    ``TIMEOUT`` (per ADR-0018). FND-240 looked at normalising the pair and
+    **declined**: ``code`` is the field a structured failure envelope carries and
+    alert rules route on, so flipping this one's category silently re-routes
+    every consumer's stall alert. That is an error-contract change, and it
+    belongs at the next major with the rest of them — not folded into a refactor
+    whose whole constraint is that behaviour is preserved.
     """
 
     code: ClassVar[str] = "PRECONDITION_DAG_PROGRESS_STALLED"

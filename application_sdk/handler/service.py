@@ -1960,7 +1960,7 @@ def _register_workflow_routes(
                         break
 
         if target is not None:
-            with open(target) as f:
+            with open(target, encoding="utf-8") as f:
                 raw = json.load(f)
             data: dict[str, Any] = {
                 "config": orjson.dumps(raw.get("config", raw)).decode()

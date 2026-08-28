@@ -301,17 +301,13 @@ its exempt set carries the SDK *and* pyatlan. Exempting the SDK alone does not
 fail; a bounded resolve that cannot see a fresh pyatlan silently backtracks to an
 older SDK instead.
 
-**One writer per branch.** `dependabot-requirements-sync.yaml` also triggers on
-pushes to `renovate/**` and also pushes. On this one branch both would fire on
-the same push and the loser would take a non-fast-forward rejection — so that
-workflow skips this branch, and the bound re-exports `requirements.txt` itself,
-in the same commit. One commit rather than three also matters on its own: each
-push re-fires the PR's entire required-check suite.
+**One commit, not one per lock.** Every push to the branch re-fires the PR's
+entire required-check suite, so the bound rewrites both uv locks and the npm lock
+in a single commit.
 
-The workflow pushes with a minted App token, not `GITHUB_TOKEN`, for the reason
-recorded in `dependabot-requirements-sync.yaml`: a `GITHUB_TOKEN` push does not
-re-trigger the PR's required checks, which would leave the PR green against a
-commit that is no longer its head.
+The workflow pushes with a minted App token, not `GITHUB_TOKEN`: a `GITHUB_TOKEN`
+push does not re-trigger the PR's required checks, which would leave the PR green
+against a commit that is no longer its head.
 
 The job runs only for a push made by one of the Renovate identities the approval
 gate also accepts as PR authors (`RENOVATE_AUTHORS`), pinned to that list by a
@@ -329,7 +325,7 @@ not-green — correctly, since a post-upgrade command that was skipped and one t
 ran clean are otherwise indistinguishable — so approval is withheld and stays
 withheld. This is not new and not hypothetical: on #3216 atlan-ci posted three
 approvals, each dismissed by the next push, and the PR merged on a human's
-approval after the requirements sync added the last commit.
+approval after the since-removed requirements sync added the last commit.
 
 `carry_artifact_status.py` closes it for this lane by republishing the state it
 **reads from our commit's parent**, and only when that state is `success`. A

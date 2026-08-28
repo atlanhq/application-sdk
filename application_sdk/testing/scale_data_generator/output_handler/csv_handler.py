@@ -13,7 +13,9 @@ class CsvFormatHandler(OutputFormatHandler):
 
     def initialize_file(self, table_name: str) -> None:
         file_path = self.get_file_path(table_name)
-        self.file_handlers[table_name] = open(file_path, "w", newline="")
+        self.file_handlers[table_name] = open(
+            file_path, "w", newline="", encoding="utf-8"
+        )
 
     def write_record(
         self, table_name: str, record: Dict[str, Any], is_last: bool = False

@@ -1,14 +1,16 @@
 """Typed error leaves for the full-DAG end-to-end test harness.
 
-Ten of these moved into the harness with the AE half of ``client.py`` (child F
-on FND-224) and are re-exported below: nine to
+Eleven of these have moved into the harness and are re-exported below. Ten went
+with the AE half of ``client.py`` (child F on FND-224): nine to
 :mod:`application_sdk.testing.harness.automation_engine._errors` because the AE
 reader raises them, and ``MissingHarnessClassAttrError`` to
 :mod:`application_sdk.testing.harness._errors` because ``cold_start_submit_kwargs``
-does. Same class objects and same ``code`` values, so every existing import and
-``except`` clause here is unchanged; the move is only about direction, since a
-harness module cannot raise a leaf that lives in the package child H
-re-expresses over it.
+does. ``UnknownConnectorTypeError`` went to
+:mod:`application_sdk.testing.harness.atlas._errors` in child H, because
+``create_connection`` is what raises it now. Same class objects and same ``code``
+values, so every existing import and ``except`` clause here is unchanged; the
+move is only about direction, since a harness module cannot raise a leaf that
+lives in the package child H re-expresses over it.
 """
 
 from __future__ import annotations
@@ -18,12 +20,14 @@ from typing import ClassVar
 
 from application_sdk.errors.leaves import (
     DataIntegrityError,
+    DependencyUnavailableError,
     InvalidInputError,
     NotFoundError,
     PreconditionError,
     UnimplementedError,
 )
 from application_sdk.testing.harness._errors import MissingHarnessClassAttrError
+from application_sdk.testing.harness.atlas._errors import UnknownConnectorTypeError
 from application_sdk.testing.harness.automation_engine._errors import (
     AppNotReadyError,
     AtlanAEWorkflowAlreadyActiveError,
@@ -39,6 +43,7 @@ from application_sdk.testing.harness.automation_engine._errors import (
 __all__ = [
     "AdminRoleNotResolvedError",
     "AgentSpecRequiredError",
+    "AtlasReadIndeterminateError",
     "AppNotReadyError",
     "AtlanAEWorkflowAlreadyActiveError",
     "AtlanApiHttpError",
@@ -57,6 +62,7 @@ __all__ = [
     "RequestDelivery",
     "SeededConnectionNotSearchableError",
     "UnknownConnectorTypeError",
+    "WorkerNotHealthyError",
 ]
 
 # ---------------------------------------------------------------------------
@@ -150,20 +156,32 @@ class ProgressWatchdogUnreachableError(InvalidInputError):
 
 
 @dataclass(kw_only=True)
-class UnknownConnectorTypeError(InvalidInputError):
-    """The suite's connection type is not a pyatlan ``AtlanConnectorType``.
+class AtlasReadIndeterminateError(DependencyUnavailableError):
+    """An Atlas read the run is graded on could not be taken at all.
 
-    Raised by :meth:`~application_sdk.testing.e2e.base.BaseE2ETest.seed_connection`,
-    which needs a real connector type to create the Connection. The harness's
-    own ``connection_type or connector_short_name`` fallback is fine for
-    composing a qualifiedName segment but not for this, because an app name and
-    an Atlan catalog type legitimately differ (the OpenAPI connector is
-    ``connector_short_name="openapi"`` / ``connection_type="api"``). Failing
-    here names the fix rather than surfacing a bare pyatlan ``ValueError``.
+    Not an ``AssertionError``, and that is the whole point of the leaf. Before
+    child H a failed Atlas search arrived at the assertion ladder as zeros, so an
+    expired token or a 503 was reported as "the connector landed no assets" — a
+    confident claim about the thing under test, made by a run that never read
+    it. The harness readers answer
+    :class:`~application_sdk.testing.harness.outcome.Indeterminate` for that
+    case, and this is what
+    :meth:`~application_sdk.testing.e2e.base.BaseE2ETest._assert_full_dag_outcome`
+    raises when it sees one: pytest reports an *error* rather than a failure, so
+    a red leg cannot be read as a connector regression.
+
+    ``DEPENDENCY_UNAVAILABLE`` for the reason
+    :class:`~application_sdk.testing.harness._errors.WaitIndeterminateError`
+    carries it: the same call is expected to work once Atlas recovers, which is
+    the category's own litmus test.
+
+    Attributes:
+        checks: Comma-separated names of the expectations that went ungraded.
     """
 
-    code: ClassVar[str] = "INVALID_INPUT_UNKNOWN_CONNECTOR_TYPE"
-    field: str | None = "connection_type"
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_ATLAS_READ_INDETERMINATE"
+    component: str | None = "e2e_harness_atlas"
+    checks: str | None = None
 
 
 @dataclass(kw_only=True)
@@ -180,6 +198,47 @@ class SeededConnectionNotSearchableError(PreconditionError):
 
     code: ClassVar[str] = "PRECONDITION_SEEDED_CONNECTION_NOT_SEARCHABLE"
     expected_state: str | None = "seeded connection searchable in Atlas"
+
+
+@dataclass(kw_only=True)
+class WorkerNotHealthyError(PreconditionError, AssertionError):
+    """The app worker never served a 2xx from ``/server/health``.
+
+    The no-source tier's whole verdict. When a connector has no extraction source
+    in CI the full DAG cannot run, so
+    :meth:`~application_sdk.testing.e2e.base.BaseE2ETest.assert_worker_up` proves
+    the worker deployed instead — and an unhealthy worker must fail RED rather
+    than be reported as the skip that a *healthy* one earns.
+
+    ``PreconditionError`` for the reason
+    :class:`SeededConnectionNotSearchableError` is one: the budget did not run
+    out on work that was progressing, the state that had to exist before any work
+    could begin never did. Retrying without changing that state is not expected
+    to help.
+
+    **Also an** :class:`AssertionError`, deliberately. That is not a hedge and it
+    is not for pytest's benefit — pytest reds on any exception. It is because
+    ``assert_worker_up``'s docstring has promised an ``AssertionError`` since the
+    method existed, and out-of-repo connector suites are entitled to have written
+    ``except AssertionError`` against it. Typing the leaf is worth doing; taking a
+    documented ``except`` clause away from every connector in the fleet to do it
+    is not, and the two are not in tension — this raise satisfies both.
+
+    Attributes:
+        url: The health endpoint that never answered 2xx.
+        attempts: How many probes were made.
+        elapsed_seconds: Wall-clock time the wait consumed.
+        last_error: The last failure seen — an ``HTTP <code>`` or a transport
+            error's own message. The single most useful field: a refused
+            connection and a 503 point at different halves of a deployment.
+    """
+
+    code: ClassVar[str] = "PRECONDITION_WORKER_NOT_HEALTHY"
+    expected_state: str | None = "app worker serving 2xx from /server/health"
+    url: str | None = None
+    attempts: int | None = None
+    elapsed_seconds: float | None = None
+    last_error: str | None = None
 
 
 @dataclass(kw_only=True)

@@ -7,7 +7,9 @@ capturing the boilerplate every SQL connector needs:
 * :meth:`agent_spec` — derives a unique-per-run agent name.
 * :meth:`agent_json` — the one derivation of the agent-mode routing
   block, feeding both the mustache blob and the flat AE routing rows.
-* :meth:`connection_spec` — resolves the tenant's ``$admin`` role GUID.
+* :meth:`connection_spec` — puts the tenant's ``$admin`` role on the admin ACL.
+  The GUID itself is resolved once per test in :meth:`_resolve_run_identity`,
+  through the shared Atlas reader the base class uses.
 * :meth:`_mustache_substitutions` — builds :class:`SQLMustacheSubstitutions`
   from ``database_spec()`` + ``agent_spec()``.
 * :meth:`_build_legacy_seed_dag` — hand-crafted 5-node DAG for connectors
@@ -27,7 +29,7 @@ Subclasses provide:
 from __future__ import annotations
 
 import os
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from application_sdk.contracts.types import ConnectionRef
 from application_sdk.testing.e2e._errors import (
@@ -48,6 +50,10 @@ from application_sdk.testing.e2e.substitutions import (
     MustacheSubstitutions,
     SQLMustacheSubstitutions,
 )
+from application_sdk.testing.harness.outcome import Settled
+
+if TYPE_CHECKING:  # pragma: no cover - typing only; pyatlan is a lazy import
+    from pyatlan.client.aio.client import AsyncAtlanClient
 
 
 class SQLAppE2ETest(BaseE2ETest):
@@ -168,9 +174,31 @@ class SQLAppE2ETest(BaseE2ETest):
         return build_agent_json(self.database_spec(), agent, self.connector_short_name)
 
     def connection_spec(self) -> ConnectionSpec:
-        """Connection identity with ``$admin`` role on the admin ACL."""
+        """Connection identity with ``$admin`` role on the admin ACL.
+
+        Returns:
+            The spec. The role GUID is resolved in
+            :meth:`_resolve_run_identity` during ``setup_method``, not here: the
+            lookup is an Atlas read, every read in this harness is ``async``
+            since FND-224's decision D1, and a synchronous method cannot take
+            one without either blocking the harness' loop or opening a second
+            client of its own.
+
+        Raises:
+            AdminRoleNotResolvedError: ``setup_method`` did not run, so nothing
+                resolved the role. Naming that is the point — the alternative is
+                an ``AttributeError`` on a private field.
+        """
         if not hasattr(self, "_admin_role_guid"):
-            self._admin_role_guid = self._resolve_admin_role_guid()
+            raise AdminRoleNotResolvedError(
+                message=(
+                    f"{type(self).__name__}.connection_spec() was called before "
+                    "setup_method resolved the `$admin` role GUID. The lookup is "
+                    "an Atlas read and happens once per test, in "
+                    "_resolve_run_identity; a suite driving this class outside "
+                    "pytest has to call setup_method first."
+                )
+            )
         # Same fallback the base spec applies (base.py): when a suite pins no
         # explicit admin users, fall back to the current API token's username.
         # Without it this spec goes out with an EMPTY adminUsers, the connection
@@ -245,24 +273,40 @@ class SQLAppE2ETest(BaseE2ETest):
             database=self.database_spec(),
         )
 
-    @staticmethod
-    def _resolve_admin_role_guid() -> str:
-        """Look up the tenant's ``$admin`` role GUID via pyatlan."""
-        from pyatlan.client.atlan import AtlanClient  # noqa: PLC0415
+    async def _resolve_run_identity(self, client: AsyncAtlanClient) -> None:
+        """Resolve the ``$admin`` role GUID this suite's ACL requires.
 
-        # conformance: ignore[P024] e2e harness admin-role lookup runs outside the async execution path; sync pyatlan is intentional
-        client = AtlanClient(
-            base_url=os.environ["ATLAN_BASE_URL"],
-            api_key=os.environ["ATLAN_API_KEY"],
-        )
-        guid = client.role_cache.get_id_for_name("$admin")
-        if guid is None:
+        The same reader the base class uses —
+        :func:`~application_sdk.testing.harness.atlas.admin_identity` — with a
+        different *policy* on the same reading, which is why that function
+        returns a reading instead of choosing for both callers. The base
+        degrades to an empty fallback and lets Atlas reject the Connection with
+        a message an operator can read; this one raises, because a SQL suite's
+        ``connection_spec`` puts the role on the ACL unconditionally and a
+        Connection that landed with empty ``adminRoles`` would 403 the
+        back-side direct-fetch probe long after the cause.
+
+        Args:
+            client: The open Atlas client, with this run's identity.
+
+        Raises:
+            AdminRoleNotResolvedError: The tenant has no ``$admin`` role, or it
+                could not be read.
+        """
+        await super()._resolve_run_identity(client)
+        # The base's call and this one are the *same* reading — `_admin_identity`
+        # memoises it. Taking a second would let a transient blip after a
+        # successful first read raise below, failing a run whose ACL was already
+        # resolved.
+        reading = await self._admin_identity(client)
+        roles = reading.value.roles if isinstance(reading, Settled) else ()
+        if not roles:
             raise AdminRoleNotResolvedError(
                 message=(
-                    "pyatlan role_cache could not resolve `$admin` role GUID "
-                    f"against {os.environ['ATLAN_BASE_URL']} — Connection "
-                    "would land with empty adminRoles and the back-side "
-                    "direct-fetch probe would 403."
-                )
+                    "Could not resolve the tenant's `$admin` role GUID — "
+                    "Connection would land with empty adminRoles and the "
+                    "back-side direct-fetch probe would 403."
+                ),
+                cause=getattr(reading, "cause", None),
             )
-        return guid
+        self._admin_role_guid = roles[0]

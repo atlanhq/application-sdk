@@ -1,36 +1,36 @@
-"""``poll_until`` against ``poll_native_status``, on identical scripted readings.
+"""``poll_native_status`` and ``poll_until``, on identical scripted readings.
 
-FND-227 is an *extraction*: the start-grace latch, the progress watchdog and the
-transient streak with its retry-after budget all already work — as interleaved
-statements inside ``AEWorkflowClient.poll_native_status``, coupled to the AE
-``native-status`` wire shape, the ``DAGNodeStatus`` vocabulary and a node-glyph
-summary string. Claiming the generic primitive preserves them needs evidence,
-and "the 58 existing client tests still pass" is not that evidence: those tests
-exercise the live loop, which this PR does not touch.
+FND-227 was an *extraction*: the start-grace latch, the progress watchdog and the
+transient streak with its retry-after budget all already worked — as interleaved
+statements inside ``poll_native_status``, coupled to the AE ``native-status``
+wire shape, the ``DAGNodeStatus`` vocabulary and a node-glyph summary string.
+This file was the differential evidence that the generic primitive preserved
+them, run before the live loop was touched.
 
-So the evidence is differential. Each scenario below is one script — a list of
-readings and errors — fed to *both* loops:
+**FND-240 consolidated the two, so this file changed job.** ``poll_native_status``
+*is* :func:`~application_sdk.testing.harness.waiting.poll_until` now, and a
+comparison of a loop against itself proves nothing. So the pre-conversion numbers
+were captured and are pinned here as :data:`_GOLDEN` — the same three observable
+things per scenario, **which verdict, after how many probes, having slept exactly
+which gaps**, as produced by the hand-rolled loop. That is what makes "behaviour
+preserving" a fact rather than a claim in a commit message, and it survives the
+conversion in a way a self-comparison would not.
 
-* the live one, through a patched ``get_native_status``;
-* :func:`~application_sdk.testing.harness.waiting.poll_until`, with the AE shape
-  supplied as the four callables the primitive takes in.
+The sleep sequence is the load-bearing column: it is what catches a retry-after
+clamp, an off-by-one in the budget accounting or a lost interval floor, none of
+which change the verdict.
 
-Both run under :func:`~application_sdk.testing.harness._poll.fake_clock`, so the
-comparison covers three observable things and not just the answer: **which
-verdict, after how many probes, having slept exactly which gaps.** The sleep
-sequence is the load-bearing one — it is what catches a retry-after clamp, an
-off-by-one in the budget accounting or a lost interval floor, none of which
-change the verdict.
+Two comparisons still run against ``poll_until`` directly, and both remain
+non-trivial after the conversion because :meth:`AEClient.poll_native_status`
+reaches the primitive through its *own* conversion — the keyword arguments into a
+:class:`~application_sdk.testing.harness.budgets.Budget`, the AE shape into four
+callables, the verdict back into an AE leaf:
 
-The budget both sides run on is ``CONNECTOR_CI[Wait.AE_RUN]``, converted back to
-the live loop's keyword arguments. That makes this a check on the profile too: if
-child B's lift of those numbers were wrong, the two loops would diverge here.
-
-Re-expressing the live loop *on* the primitive is child D (FND-240) — its client
-is synchronous until child F converts it, and bridging a sync method onto an
-async primitive in the meantime would be a workaround built to be deleted. This
-file is what stands in for that proof until then, and it costs the connector path
-no diff at all.
+* ``test_the_primitive_and_the_live_loop_agree`` pins that conversion against the
+  hand-written callables below. A ``stall_grace_seconds`` that stopped arming
+  ``start_grace``, or a classifier that stopped rounding, diverges here.
+* the budget both sides run on is ``CONNECTOR_CI[Wait.AE_RUN]``, converted back
+  to the live loop's keyword arguments — so this is a check on the profile too.
 """
 
 from __future__ import annotations
@@ -67,11 +67,14 @@ from application_sdk.testing.harness.waiting import poll_until
 _RUN_ID = "test-run-123"
 _AE = CONNECTOR_CI.budgets[Wait.AE_RUN]
 
-#: The two vocabularies, side by side. Every live outcome — a returned result or
-#: a raised leaf — has exactly one harness verdict, and the mapping is the
-#: extraction's actual claim: four connector-specific leaves collapse to the
-#: three generic verdicts that carry the *diagnosis*, while the remediation
-#: advice those leaves exist for stays with them.
+#: The two vocabularies, side by side — and since FND-240 this table *is* the
+#: independent statement of what
+#: :func:`~application_sdk.testing.harness.automation_engine.client._dag_run_verdict`
+#: implements. Every live outcome, returned result or raised leaf, has exactly one
+#: harness verdict: four connector-specific leaves collapse to the three generic
+#: verdicts that carry the *diagnosis*, while the remediation advice those leaves
+#: exist for stays with them. Written here rather than imported from the code
+#: under test, so an inverted branch in that mapping has somewhere to fail.
 _SAME_VERDICT = {
     "terminal": "Settled",
     "timed_out": "Expired",
@@ -321,9 +324,59 @@ _SCENARIOS: dict[str, Script] = {
 }
 
 
+#: What the **hand-rolled** loop did with each script, captured before FND-240
+#: replaced it with ``poll_until``. Not derived from the current code: these are
+#: transcribed from a run against the pre-conversion ``poll_native_status``, so
+#: they cannot drift with the implementation they exist to constrain.
+#:
+#: A change here is a change in what a connector's e2e run does — how many times
+#: it asks AE, and how long it waits between asks. That is reviewable on its own
+#: terms; silently absorbing it into a refactor is what this table prevents.
+_GOLDEN: dict[str, Observed] = {
+    "a-backoff-request-below-the-interval": Observed("Settled", 2, (10,)),
+    "a-blip-that-asks-for-a-backoff": Observed("Settled", 2, (30,)),
+    "a-blip-then-progress-then-more-blips": Observed("Settled", 6, (10,) * 5),
+    "a-fractional-backoff-request": Observed("Settled", 2, (31,)),
+    "a-pathological-backoff-request": Observed("Settled", 2, (120,)),
+    "blips-below-the-streak": Observed("Settled", 5, (10,) * 4),
+    "blips-that-each-ask-for-a-backoff": Observed("Settled", 4, (120, 120, 80)),
+    "no-node-ever-starts": Observed("NeverStarted", 19, (10,) * 18),
+    "progressing-past-the-ceiling": Observed("Expired", 60, (10,) * 59),
+    "settles-after-progress": Observed("Settled", 3, (10, 10)),
+    "settles-immediately": Observed("Settled", 1, ()),
+    "settles-on-a-failed-run": Observed("Settled", 2, (10,)),
+    "started-then-frozen": Observed("Stalled", 31, (10,) * 30),
+    "the-run-is-never-dispatched": Observed("NeverStarted", 19, (10,) * 18),
+    "the-streak-gives-up": Observed("Indeterminate", 5, (10,) * 4),
+}
+
+
+def test_every_scenario_has_a_golden() -> None:
+    """A script with no pinned numbers is a script this file does not constrain.
+
+    Cheap, and it is the failure mode the table invites: adding a scenario to
+    ``_SCENARIOS`` and forgetting the pin leaves it silently unchecked by the
+    only test that knows what the old loop did.
+    """
+    assert sorted(_GOLDEN) == sorted(_SCENARIOS)
+
+
+@pytest.mark.parametrize("name", sorted(_SCENARIOS))
+async def test_the_live_loop_still_does_what_it_did_before(name: str) -> None:
+    """Same verdict, same probe count, same sleep sequence as the old loop."""
+    assert await _live(_SCENARIOS[name]) == _GOLDEN[name]
+
+
 @pytest.mark.parametrize("name", sorted(_SCENARIOS))
 async def test_the_primitive_and_the_live_loop_agree(name: str) -> None:
-    """Same script, same verdict, same probe count, same sleep sequence."""
+    """The live loop's own conversion matches the hand-written one.
+
+    ``poll_native_status`` builds the :class:`Budget` and the four callables from
+    its keyword arguments; :func:`_harness` writes them out by hand. Same script
+    through both is what catches a guard that stopped being armed or a classifier
+    that stopped rounding — neither of which the golden table alone would find,
+    since it is the live loop's own output on both sides of that comparison.
+    """
     script = _SCENARIOS[name]
     assert await _harness(script) == await _live(script)
 
@@ -357,11 +410,69 @@ async def test_each_verdict_is_actually_reached(name: str, verdict: str) -> None
 async def test_a_non_apperror_propagates_from_both_loops() -> None:
     """The classifier absorbs ``AppError`` and nothing else, matching the live
     ``except AppError``: a deterministic bug in the probe must not be waited out.
+
+    **The probe count is what asserts "not waited out"**, and without it this
+    test passes on a broken classifier. Verified mechanically: with
+    ``_absorb_ae_blip``'s ``isinstance(error, AppError)`` narrowing removed, the
+    ``ValueError`` is absorbed, the streak runs to
+    ``max_transient_failures``, and ``_dag_run_verdict`` then re-raises
+    ``outcome.cause`` — which is the same ``ValueError``. So
+    ``pytest.raises(ValueError)`` alone is satisfied by the mutation it exists to
+    catch; only the attempt count distinguishes failing on the first probe from
+    waiting out five.
     """
-    with pytest.raises(ValueError):
-        await _harness([ValueError("a bug in the probe, not a blip")])
-    with pytest.raises(ValueError):
-        await _live([ValueError("a bug in the probe, not a blip")])
+    bug = ValueError("a bug in the probe, not a blip")
+
+    # The primitive, driven with the AE shape written out by hand.
+    primitive = _Replay([bug])
+
+    async def probe() -> DAGRunResult:
+        return primitive.next()
+
+    with fake_clock(), pytest.raises(ValueError):
+        await poll_until(
+            probe,
+            settled=_ae_settled,
+            started=_ae_started,
+            fingerprint=_ae_fingerprint,
+            transient=_ae_transient,
+            budget=_AE,
+            label=f"AE run {_RUN_ID}",
+        )
+    assert primitive.calls == 1, (
+        f"poll_until probed {primitive.calls} times; a deterministic probe bug "
+        "must fail on the first, not be waited out"
+    )
+
+    # The live loop, through its own Budget and classifier conversion.
+    live = _Replay([bug])
+    client = AEWorkflowClient(
+        tenant_url="https://tenant.example.com", api_token="tok-test"
+    )
+
+    async def _read(_run_id: str) -> DAGRunResult:
+        return live.next()
+
+    grace, stall = _AE.start_grace, _AE.stall_timeout
+    assert grace is not None and stall is not None
+    with (
+        patch.object(client._ae, "get_native_status", side_effect=_read),
+        fake_clock(),
+        pytest.raises(ValueError),
+    ):
+        await client._ae.poll_native_status(
+            _RUN_ID,
+            interval_seconds=int(_AE.poll_interval.total_seconds()),
+            timeout_seconds=int(_AE.timeout.total_seconds()),
+            max_transient_failures=_AE.max_transient_failures,
+            stall_grace_seconds=int(grace.total_seconds()),
+            progress_stall_seconds=int(stall.total_seconds()),
+        )
+    assert live.calls == 1, (
+        f"poll_native_status probed {live.calls} times; with the classifier's "
+        "AppError narrowing removed this reaches 5 and still raises ValueError, "
+        "which is why the count is the assertion and not the exception type"
+    )
 
 
 async def test_the_stall_verdict_names_the_summary_that_froze() -> None:

@@ -19,9 +19,13 @@ from application_sdk.errors.leaves import (
 )
 
 __all__ = [
+    "FixtureNotConfiguredError",
     "HarnessNotBuiltError",
     "MissingHarnessClassAttrError",
     "MissingTenantEnvError",
+    "PreconditionsFailedError",
+    "PreconditionsIndeterminateError",
+    "SubstrateHasNoClusterError",
     "SyncBridgeInAsyncContextError",
     "WaitExpiredError",
     "WaitIndeterminateError",
@@ -100,6 +104,95 @@ class MissingTenantEnvError(InvalidInputError):
     field: str | None = "ATLAN_BASE_URL,ATLAN_API_KEY"
 
 
+@dataclass(kw_only=True)
+class FixtureNotConfiguredError(PreconditionError):
+    """A composer requested a harness fixture without declaring what it needs.
+
+    The three points of variance the harness deliberately does *not* assume are
+    shared — tenant wiring, app wiring and execution substrate (FND-244) — are
+    published as fixtures a composer overrides. Where there is no defensible
+    default, the default raises this instead of guessing: a fixture that guessed
+    would reach whichever cluster the developer's ``kubectl`` last pointed at, or
+    invent a connection type that teardown then purges under.
+
+    Raised only when the dependent fixture is actually requested, so a suite that
+    never asks for a connection identity never has to declare a connection type.
+
+    Attributes:
+        fixture: Name of the fixture to override, so the message names the fix
+            rather than describing it.
+    """
+
+    code: ClassVar[str] = "PRECONDITION_HARNESS_FIXTURE_NOT_CONFIGURED"
+    component: str | None = "harness_fixtures"
+    fixture: str | None = None
+
+
+@dataclass(kw_only=True)
+class SubstrateHasNoClusterError(PreconditionError):
+    """A cluster read was requested on a substrate that has no cluster.
+
+    The connector harness runs against a docker-compose worker on ``localhost``;
+    there is no Kubernetes API to read, and no kubeconfig that would be the right
+    one. Answering with a reader that fails on first use, or silently reading
+    whichever cluster the ambient kubeconfig names, are both worse than saying so
+    at the seam.
+
+    Attributes:
+        substrate: The declared substrate, so the message says which choice
+            produced the refusal.
+    """
+
+    code: ClassVar[str] = "PRECONDITION_HARNESS_SUBSTRATE_HAS_NO_CLUSTER"
+    component: str | None = "harness_fixtures"
+    substrate: str | None = None
+
+
+@dataclass(kw_only=True)
+class PreconditionsFailedError(PreconditionError):
+    """The scenario's starting state was read, and it was not fit to test on.
+
+    Deliberately **not** an ``AssertionError``: under pytest that makes an unmet
+    precondition an *error* rather than a *failure*, which is the whole point of
+    the gate — a red leg that reads as "the thing under test regressed" when the
+    environment was never prepared costs a diagnosis, and the gate exists to
+    split those two.
+
+    Attributes:
+        checks: Labels of the checks that were not met, comma-separated. A field
+            rather than only a message fragment so a report can group by check.
+        verdict: The graded verdict, for a caller routing on it without
+            re-grading.
+    """
+
+    code: ClassVar[str] = "PRECONDITION_HARNESS_PRECONDITIONS_FAILED"
+    component: str | None = "harness_preconditions"
+    checks: str | None = None
+    verdict: str | None = None
+
+
+@dataclass(kw_only=True)
+class PreconditionsIndeterminateError(DependencyUnavailableError):
+    """The scenario's starting state could not be read, so nothing was dispatched.
+
+    The gate's third answer, as a leaf. ``DEPENDENCY_UNAVAILABLE`` rather than
+    ``PRECONDITION`` for the same reason
+    :class:`WaitIndeterminateError` is: the category's own definition is "the
+    same call would work once the dependency recovers", so a CI lane that reruns
+    on infrastructure failure can act on the category without parsing prose — and
+    an expired vcluster token must never be graded as a regression.
+
+    Attributes:
+        checks: Labels of the checks that could not be read, comma-separated.
+        verdict: The graded verdict.
+    """
+
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_HARNESS_PRECONDITIONS_INDETERMINATE"
+    component: str | None = "harness_preconditions"
+    checks: str | None = None
+    verdict: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # The four failing verdicts, as the leaves ``assert_settled`` raises
 # ---------------------------------------------------------------------------
@@ -155,8 +248,9 @@ class WaitStalledError(AppTimeoutError):
     (ADR-0018): a stall *is* a bounded wait that elapsed, just a wait for the
     next change rather than for the end. ``testing/e2e``'s
     ``DAGProgressStalledError`` calls the same condition a ``PRECONDITION``; it
-    predates the ADR and keeps its category so no existing consumer sees a
-    reclassification. Normalising the pair is listed on FND-240.
+    predates the ADR and keeps its category, and FND-240 declined to normalise
+    the pair — see that class for why a ``code`` change is an error-contract
+    change rather than a refactor.
 
     Attributes:
         label: What was being waited on, verbatim from the outcome.

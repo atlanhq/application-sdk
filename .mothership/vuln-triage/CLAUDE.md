@@ -41,8 +41,7 @@ release no longer ships its CVEs — not you.
 ## SDK v3 Context (for dependency reasoning)
 
 - Python deps are managed with `uv`. `pyproject.toml` holds version *ranges*;
-  `uv.lock` pins the *resolved* versions. `requirements.txt` is exported from
-  the lock and must stay in lockstep.
+  `uv.lock` pins the *resolved* versions.
 - The runtime base image (`registry.atlan.com/public/app-runtime-base:3`) is
   **Chainguard**-based. Image-layer CVEs are fixed by a base-image rebuild, not
   by `apk` edits in a Dockerfile.
@@ -52,8 +51,7 @@ release no longer ships its CVEs — not you.
 The GHA gate auto-merges ONLY two PR shapes, by inspecting the changed files:
 
 - **allowlist PR** → touches **only** `.security/base-allowlist.json`
-- **bump PR** → touches **only** a subset of `pyproject.toml`, `uv.lock`,
-  `requirements.txt`
+- **bump PR** → touches **only** a subset of `pyproject.toml`, `uv.lock`
 
 Anything else (a mixed PR, an allowlist PR that also edits code, a bump that also
 needs source changes) will **not** auto-merge — the path-allowlist refuses it and

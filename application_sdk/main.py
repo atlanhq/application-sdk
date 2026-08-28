@@ -403,7 +403,7 @@ def _parse_all_component_yamls(components_dir: Path) -> dict[str, dict[str, str]
     result: dict[str, dict[str, str]] = {}
     try:
         for yaml_file in sorted(components_dir.glob("*.yaml")):
-            with yaml_file.open() as fh:
+            with yaml_file.open(encoding="utf-8") as fh:
                 doc = yaml.safe_load(fh)
             if not doc or doc.get("kind") != "Component":
                 continue

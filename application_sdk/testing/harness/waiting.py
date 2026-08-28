@@ -19,21 +19,35 @@ second deadline implementation; that private module moved here from
 ``testing/e2e/`` as part of child C, because the harness cannot import from the
 package child H is about to re-express over it.
 
-**Nothing in ``testing/e2e`` calls this yet.** Re-expressing its twelve bounded
-loops is child D (FND-240), and the client those loops live on is synchronous
-until child F converts it — routing a sync method through an async primitive on
-the loop bridge in the meantime would be a workaround built to be deleted. What
-stands in for that proof today is
-``tests/unit/testing/harness/test_waiting_equivalence.py``: it drives
-:func:`poll_until` with the AE-shaped probe, predicates, fingerprint and
-retry-after classifier over the *same* scripted readings ``poll_native_status``
-sees, and asserts both produce the same verdict, the same attempt count and the
-same sleep sequence. A differential test against the live loop is stronger
-evidence than "the 58 existing tests still pass", and it costs the connector
-path no diff at all.
+**Child D (FND-240) brought the bounded loops across**, one at a time. Which
+primitive each one reaches for is not uniform, and the split is not arbitrary:
 
-:func:`hold_stable` is **new**. All twelve bounded loops in ``testing/e2e/``
-today are "wait until"; not one is "assert stays". The negative assertion is
+* :func:`poll_until` where the probe is already ``async`` and there is a real
+  verdict to grade — ``poll_native_status`` (the loop these guards were
+  extracted from in the first place), ``atlas.poll_for_connection``,
+  ``workflows.wait_for_workflow``, ``AEClient.wait_for_slug``.
+* :func:`~application_sdk.testing.harness._poll.until_deadline` — the deadline
+  arithmetic alone — where the probe is *synchronous* and supplied by a
+  connector suite or a local test client. Reaching an async primitive from
+  there would mean blocking the bridge's loop inside someone else's write, or
+  offloading it to a thread: workarounds built to be deleted when child H moves
+  the sync boundary up to ``BaseE2ETest``'s public methods. Four loops in
+  ``testing/e2e/base.py`` and one in ``testing/integration/runner.py`` take that
+  shape.
+
+What is uniform is that no loop in the harness owns a deadline any more, and
+there is one clock rather than three.
+
+``tests/unit/testing/harness/test_waiting_equivalence.py`` is the evidence that
+the biggest of those conversions preserved behaviour. It was written *before* it,
+as a differential against the hand-rolled loop; the numbers that comparison
+produced — verdict, probe count and the exact sleep sequence for fifteen scripted
+runs — are now frozen there as a golden table, which is a claim a
+self-comparison could not make once both sides became one loop.
+
+:func:`hold_stable` is **new**, and still has no caller in this repo. Every
+bounded loop the harness has — the twelve child D brought across included — is
+"wait until"; not one is "assert stays". The negative assertion is
 what the runtime scaling scenarios turn on — "a busy pod is never scaled away",
 "it must not scale down while a long activity is still running", and the whole
 steady-state group — because most scaling bugs are wrong *actions* rather than

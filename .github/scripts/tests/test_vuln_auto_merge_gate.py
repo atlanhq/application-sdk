@@ -30,8 +30,8 @@ def classify(*files):
 
 def test_bump_subset_is_bump_shape():
     assert classify("uv.lock") == "bump"
+    assert classify("pyproject.toml") == "bump"
     assert classify("pyproject.toml", "uv.lock") == "bump"
-    assert classify("pyproject.toml", "uv.lock", "requirements.txt") == "bump"
 
 
 def test_empty_is_none():

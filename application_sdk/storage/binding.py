@@ -257,7 +257,7 @@ def _find_component(name: str, components_dir: Path | str) -> dict | None:
     import yaml  # noqa: PLC0415 — defensive: keep inline
 
     for yaml_file in sorted(Path(components_dir).glob("*.yaml")):
-        with yaml_file.open() as fh:
+        with yaml_file.open(encoding="utf-8") as fh:
             doc = yaml.safe_load(fh)
         if (
             doc
@@ -697,7 +697,7 @@ def _adc_is_external_account() -> bool:
     try:
         import json  # noqa: PLC0415
 
-        with open(path) as fh:
+        with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
         # A creds file that parses to a non-dict (``[]``, ``null``, a scalar) is
         # malformed — treat it as "not external_account" and let obstore's own

@@ -4,6 +4,7 @@ Note: Empty path validation is tested in test_path.py via convert_to_extended_pa
 These tests focus on SafeFileOps-specific behavior beyond stdlib wrappers.
 """
 
+import builtins
 from pathlib import Path
 
 import pytest
@@ -118,6 +119,65 @@ class TestSafeFileOpsOpen:
             read_content = f.read()
 
         assert read_content == content
+
+    @pytest.mark.parametrize("mode", ["w", "r", "a", "r+", "w+", None])
+    def test_open_forwards_utf8_for_text_mode(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str | None
+    ) -> None:
+        """A text-mode open with no ``encoding=`` must forward UTF-8, not the locale.
+
+        Asserted on what the wrapper *passes down*, not on the resulting
+        handle's ``encoding`` attribute and not on a round trip. Both of those
+        stay green with the default deleted, because the locale default they
+        fall back to already **is** UTF-8 on Linux and macOS — so they would only
+        fail on the Windows legs this wrapper exists to protect, which is the
+        same blind spot P046 is about. The forwarded kwarg is the one assertion
+        that fails everywhere the moment the default goes.
+        """
+        file_path = tmp_path / "test.txt"
+        file_path.write_text("seed", encoding="utf-8")
+        forwarded: dict[str, object] = {}
+        real_open = builtins.open
+
+        def _spy(*args: object, **kwargs: object):
+            forwarded.update(kwargs)
+            return real_open(*args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(builtins, "open", _spy)
+        args = () if mode is None else (mode,)
+        with SafeFileOps.open(file_path, *args):
+            pass
+
+        assert forwarded["encoding"] == "utf-8"
+
+    @pytest.mark.parametrize("mode", ["wb", "rb", "ab", "r+b", "w+b"])
+    def test_open_forwards_no_encoding_for_binary_mode(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+    ) -> None:
+        """Binary handles take no encoding — forcing one there is a ValueError."""
+        file_path = tmp_path / "test.bin"
+        file_path.write_bytes(b"seed")
+        forwarded: dict[str, object] = {}
+        real_open = builtins.open
+
+        def _spy(*args: object, **kwargs: object):
+            forwarded.update(kwargs)
+            return real_open(*args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(builtins, "open", _spy)
+        with SafeFileOps.open(file_path, mode) as f:
+            assert getattr(f, "encoding", None) is None
+
+        assert forwarded["encoding"] is None
+
+    def test_open_does_not_override_an_explicit_encoding(self, tmp_path: Path) -> None:
+        """The UTF-8 default fills a gap; it never overrides a caller's choice."""
+        file_path = tmp_path / "test.txt"
+        file_path.write_bytes("caf\xe9".encode("cp1252"))
+
+        with SafeFileOps.open(file_path, "r", encoding="cp1252") as f:
+            assert f.encoding.lower() == "cp1252"
+            assert f.read() == "café"
 
 
 class TestSafeFileOpsCopy:

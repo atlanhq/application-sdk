@@ -8,6 +8,8 @@ flow (`run_full_dag`, AE submit + poll, Atlas probe) is covered by
 from __future__ import annotations
 
 import json
+import types
+import warnings
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -103,6 +105,67 @@ def _make_test(manifest_path: str = "app/generated/manifest.json"):
     _Concrete.database_spec = database_spec
     _Concrete.agent_spec = agent_spec
     return _Concrete
+
+
+def test_subclassing_emits_deprecation_warning() -> None:
+    """A consumer subclass warns: the full_dag fork is frozen, removed in v4.0.
+
+    Locks the machine-readable marker that drives the B001 conformance rule and
+    the committed deprecated-symbol manifest. The manifest drift test only locks
+    the *extracted* warning text, not that subclassing still emits it — without
+    this, dropping ``__init_subclass__`` keeps every other test green.
+    """
+    with pytest.warns(
+        DeprecationWarning, match="BaseFullDAGE2ETest is deprecated"
+    ) as caught:
+
+        class _DeprecatedSuite(BaseFullDAGE2ETest):
+            connector_short_name = "demo"
+
+    assert len(caught) == 1, (
+        "a consumer subclass of BaseFullDAGE2ETest should warn exactly once — "
+        f"got {[str(w.message) for w in caught]}"
+    )
+
+
+def _subclass_in_module(module: str) -> list[warnings.WarningMessage]:
+    """Create a ``BaseFullDAGE2ETest`` subclass reported as living in *module*.
+
+    ``types.new_class`` puts ``__module__`` in the class namespace *before*
+    ``__init_subclass__`` runs, so the hook sees it — which a plain ``class``
+    statement followed by reassignment cannot do. Returns the warnings raised
+    during class creation only.
+    """
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        types.new_class(
+            "_Suite",
+            (BaseFullDAGE2ETest,),
+            {},
+            lambda ns: ns.update({"__module__": module}),
+        )
+    return [w for w in caught if w.category is DeprecationWarning]
+
+
+def test_in_package_subclassing_does_not_warn() -> None:
+    """The in-package guard holds: an SDK-internal subclass stays silent.
+
+    ``SQLAppE2EFullTest`` subclasses this class inside the SDK, so an unguarded
+    ``__init_subclass__`` would fire at SDK import with no consumer code to point
+    at. Paired with the consumer-module control below so the test cannot pass by
+    the warning being suppressed for an unrelated reason.
+    """
+    in_package = _subclass_in_module("application_sdk.testing.full_dag.sql_app")
+    assert in_package == [], (
+        "an in-package subclass must not warn — the guard is what keeps SDK "
+        f"import quiet; got {[str(w.message) for w in in_package]}"
+    )
+
+    consumer = _subclass_in_module("tests.connector_app.tests.e2e.test_demo")
+    assert len(consumer) == 1, (
+        "control: the same construction from a consumer module must warn, else "
+        f"the assertion above proves nothing; got {[str(w.message) for w in consumer]}"
+    )
 
 
 def _bootstrap_env(monkeypatch: pytest.MonkeyPatch) -> None:
