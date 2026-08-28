@@ -135,14 +135,18 @@ beside one). Each row stamps `failure.audience` (who must act) except `proceeded
   mode proceeds. There is a real exception behind these and it is the only diagnostic.
 - **Gate plumbing failures** (exception during dispatch — `gate_broken`) — the workflow's
   `no_verdict` row at `error` with `exc_info=True`, audience `APP_OWNER`.
-- **`proceeded` / `skipped` / verdict `would_block`** — `info`.
+- **Advisory failures** (`proceeded` with any failed check — PARTIAL, or READY with a failed
+  advisory row) — the outcome row at `warning`. P047 bans the handler from logging the
+  warning itself, so the gate owns the one level that case is semantically for.
+- **Clean `proceeded` / `skipped` / verdict `would_block`** — `info`.
 - The interceptor's `workflow.ended` / `activity.ended … BLOCKED (preflight gate)` lifecycle
   records stay `warning`, terse, no stack.
 - **Interactive surfaces** (the HTTP `/workflows/v1/check` endpoint and the SDR
   `sdr:preflight_check` activity) emit the sibling `Preflight check outcome` row via
-  `emit_preflight_check_outcome`, always at `info` — the person who triggered the check is
-  watching the screen that shows the verdict — with `preflight_surface` naming the surface;
-  handler crashes stay `error` at each surface's boundary handler.
+  `emit_preflight_check_outcome`, at `info` because the log is not the delivery channel —
+  the verdict travels back to the caller as the HTTP response body / the activity result —
+  with `preflight_surface` naming the surface; handler crashes stay `error` at each
+  surface's boundary handler.
 
 ## Contract Evolution
 

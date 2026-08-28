@@ -692,14 +692,18 @@ def emit_preflight_check_outcome(
 
     One attribute schema for every surface that runs ``Handler.preflight_check``,
     so the setup funnel (HTTP form check, SDR test-connection) is queryable next
-    to run-time gate verdicts. Interactive verdicts always log at INFO: the
-    person who triggered the check is watching the screen that shows the
-    verdict, so an expected wrong-password ``NOT_READY`` is not an ERROR —
-    handler crashes are logged at ERROR by each surface's own boundary handler.
+    to run-time gate verdicts. Interactive verdicts log at INFO because the log
+    is not the delivery channel: the verdict itself travels back to the caller
+    (the HTTP response body rendered in the setup form; the SDR activity
+    result), unlike a gate block, where the log row is all the customer gets.
+    Handler crashes are logged at ERROR by each surface's own boundary handler.
     Callers pass their module logger so the row keeps the surface's source.
     """
     failed = [c for c in result.checks if not c.passed]
-    primary = next((c.error for c in failed if c.error is not None), None)
+    # The aggregate error wins over check order, mirroring _build_block_error:
+    # SDR inserts a non-fatal secret-store row ahead of the real failure and
+    # pins the real one on result.error — first-failed would steal the banner.
+    primary = result.error or next((c.error for c in failed if c.error is not None), None)
     reason = result.status.value
     if result.status is PreflightStatus.NOT_READY:
         reason = primary.code if primary is not None else PREFLIGHT_FALLBACK_CODE
@@ -1016,19 +1020,28 @@ def build_preflight_gate_activity(
             The row is also the level carrier (FND-901): the customer-facing log
             view filters at ERROR, so a ``blocked`` run — and an unverifiable
             source, whose failure is real in both modes — must be the ERROR
-            record itself, not a WARN beside one. Everything else stays INFO.
+            record itself, not a WARN beside one. A ``proceeded`` run carrying a
+            failed check is the advisory case WARNING is semantically for
+            (P047 bans the handler from logging it, so the gate must). Keyed on
+            the checks rather than ``PreflightStatus.PARTIAL`` because PARTIAL
+            is documented display-only — a handler may return READY with a
+            failed advisory row. Clean proceeds, skips and soft-mode verdict
+            ``would_block`` stay INFO.
 
             ``gate_duration_ms`` is measured here rather than summed from
             ``check_matrix``: per-check durations are handler-authored and a
             handler abandoned at ``start_to_close`` keeps running and reports a
             duration past the budget.
             """
-            emit = (
-                logger.error
-                if outcome == "blocked"
+            if (
+                outcome == "blocked"
                 or classification == CLASSIFICATION_SOURCE_UNVERIFIABLE
-                else logger.info
-            )
+            ):
+                emit = logger.error
+            elif outcome == "proceeded" and any(not c.passed for c in checks):
+                emit = logger.warning
+            else:
+                emit = logger.info
             extra: dict[str, Any] = {}
             if audience is not None:
                 extra[FAILURE_AUDIENCE_KEY] = audience

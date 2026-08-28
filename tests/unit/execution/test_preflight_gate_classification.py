@@ -105,11 +105,16 @@ def _gate(handler, *, enforce: bool, budget: float = 0.3):
 
 
 def _outcome_rows(mock_logger) -> list[dict]:
-    # info and error both: the outcome row is the level carrier (FND-901) — a
-    # block or an unverifiable source emits it at error, healthy rows at info.
+    # All three levels: the outcome row is the level carrier (FND-901) — a
+    # block or an unverifiable source emits it at error, advisory-failure
+    # proceeds at warning, healthy rows at info.
     return [
         c.kwargs
-        for c in [*mock_logger.info.call_args_list, *mock_logger.error.call_args_list]
+        for c in [
+            *mock_logger.info.call_args_list,
+            *mock_logger.warning.call_args_list,
+            *mock_logger.error.call_args_list,
+        ]
         if c.args and c.args[0] == "Preflight gate outcome"
     ]
 

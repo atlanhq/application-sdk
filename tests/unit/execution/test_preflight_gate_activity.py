@@ -100,17 +100,22 @@ def _verdict_gate(output: PreflightOutput, *, enforce: bool = True):
 def _outcome_event(mock_logger) -> dict | None:
     """Return the kwargs of the single 'Preflight gate outcome' call, if any.
 
-    Scans info and error: the outcome row is the level carrier (FND-901), so a
-    block emits it at error while healthy rows stay at info.
+    Scans info, warning and error: the outcome row is the level carrier
+    (FND-901) — blocks at error, advisory-failure proceeds at warning,
+    healthy rows at info.
     """
-    for c in [*mock_logger.info.call_args_list, *mock_logger.error.call_args_list]:
+    for c in [
+        *mock_logger.info.call_args_list,
+        *mock_logger.warning.call_args_list,
+        *mock_logger.error.call_args_list,
+    ]:
         if c.args and c.args[0] == "Preflight gate outcome":
             return c.kwargs
     return None
 
 
 def _outcome_level(mock_logger) -> str | None:
-    for level in ("info", "error"):
+    for level in ("info", "warning", "error"):
         for c in getattr(mock_logger, level).call_args_list:
             if c.args and c.args[0] == "Preflight gate outcome":
                 return level
@@ -757,6 +762,25 @@ class TestPreflightGateOutcomeEvent:
         ev = _outcome_event(ml)
         assert ev["outcome"] == "proceeded" and ev["reason"] == "partial"
         assert ev["entrypoint"] == "<implicit>"
+        # Advisory failure: WARNING is the one level semantically for it, and
+        # P047 bans the handler from emitting it — so the gate must.
+        assert _outcome_level(ml) == "warning"
+
+    async def test_ready_with_failed_advisory_check_warns(self) -> None:
+        # Keyed on the checks, not PreflightStatus.PARTIAL: PARTIAL is
+        # documented display-only, so READY with a failed advisory row is the
+        # same advisory case and must not silently flatten to INFO.
+        out = PreflightOutput(
+            status=PreflightStatus.READY,
+            checks=[
+                PreflightCheck(name="auth", passed=True),
+                PreflightCheck(name="tables", passed=False, message="advisory"),
+            ],
+        )
+        with mock.patch(_LOGGER) as ml:
+            await _verdict_gate(out)(PreflightGateInput())
+        assert _outcome_level(ml) == "warning"
+        ml.error.assert_not_called()
 
     async def test_blocked_typed_reason_is_error_code(self) -> None:
         out = PreflightOutput(
@@ -1229,6 +1253,28 @@ class TestEmitPreflightCheckOutcome:
         assert kwargs["reason"] == "AUTH"
         assert kwargs[FAILURE_AUDIENCE_KEY] == "USER"
         assert kwargs[PREFLIGHT_SURFACE_KEY] == "sdr"
+
+    def test_aggregate_error_outranks_first_failed_check(self) -> None:
+        # Mirrors _build_block_error: SDR inserts a non-fatal secret-store row
+        # ahead of the real failure and pins the real one on result.error, so
+        # first-failed must not steal the row's reason or audience.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            error=AuthError(message="real failure").to_failure_details(),
+            checks=[
+                PreflightCheck(
+                    name="Secret store",
+                    passed=False,
+                    error=DependencyUnavailableError(
+                        message="store degraded", service="secret_store"
+                    ).to_failure_details(),
+                ),
+                PreflightCheck(name="auth", passed=False),
+            ],
+        )
+        kwargs = self._emit(out, surface="sdr").info.call_args.kwargs
+        assert kwargs["reason"] == "AUTH"
+        assert kwargs[FAILURE_AUDIENCE_KEY] == "USER"
 
     def test_not_ready_untyped_reason_is_sentinel(self) -> None:
         out = PreflightOutput(
