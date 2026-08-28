@@ -614,12 +614,12 @@ def _check_matrix_json(checks: list[PreflightCheck]) -> str:
                 "name": check.name,
                 "passed": check.passed,
                 "error_code": check.error.code if check.error else "",
-                # orjson emits null for nan/inf; we normalize to 0.0 so the
+                # None (unset) and nan/inf all normalize to 0.0 so the
                 # ClickHouse row stays numeric for downstream JSONExtract, and
                 # never raise — a raise here fails the gate open and loses the
                 # whole event.
                 "duration_ms": check.duration_ms
-                if math.isfinite(check.duration_ms)
+                if check.duration_ms is not None and math.isfinite(check.duration_ms)
                 else 0.0,
             }
         )
