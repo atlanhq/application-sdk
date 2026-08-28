@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.29.0
-source-sha:    4af9646172f78317450ac3e01515d88b4be18ebf
-source-date:   2026-08-27T12:10:32+05:30
+source-sha:    37a418ea788234e8e07be9ad7cb5254a36fde84a
+source-date:   2026-08-28T13:08:04+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 209 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 202 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3155,14 +3155,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** What a run is expected to have landed in Atlas.
 - **Defined in:** `application_sdk/testing/harness/expectations.py`
 
-#### `AssetMismatch`
-
-- **Import:** `from application_sdk.testing import AssetMismatch`
-- **Also importable from:** `application_sdk.testing.golden`
-- **Signature:** `class AssetMismatch(key: str, field_diffs: tuple[FieldDiff, ...])`
-- **Summary:** An asset present on both sides whose fields differ.
-- **Defined in:** `application_sdk/testing/golden.py`
-
 #### `AssetValidationFailure`
 
 - **Import:** `from application_sdk.testing.integration import AssetValidationFailure`
@@ -3373,14 +3365,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** One Deployment's replica counts.
 - **Defined in:** `application_sdk/testing/harness/cluster/_states.py`
 
-#### `DiffPolicy`
-
-- **Import:** `from application_sdk.testing import DiffPolicy`
-- **Also importable from:** `application_sdk.testing.golden`
-- **Signature:** `class DiffPolicy`
-- **Summary:** How strictly a typename's diff is gated.
-- **Defined in:** `application_sdk/testing/golden.py`
-
 #### `EvidenceBundle`
 
 - **Import:** `from application_sdk.testing.harness.evidence import EvidenceBundle`
@@ -3423,14 +3407,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class GapReport(diffs: list[AssetDiff] = list(), summary: dict[str, int] = dict(), expected_file: str | None = None)`
 - **Summary:** Summary of all differences between expected and actual metadata.
 - **Defined in:** `application_sdk/testing/integration/comparison.py`
-
-#### `GoldenReport`
-
-- **Import:** `from application_sdk.testing import GoldenReport`
-- **Also importable from:** `application_sdk.testing.golden`
-- **Signature:** `class GoldenReport(diffs: tuple[TypenameDiff, ...] = ())`
-- **Summary:** The full golden comparison across every typename.
-- **Defined in:** `application_sdk/testing/golden.py`
 
 #### `HarnessNotBuiltError`
 
@@ -3772,22 +3748,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** How a run authenticates against the tenant under test.
 - **Defined in:** `application_sdk/testing/harness/identity.py`
 
-#### `TypenameDiff`
-
-- **Import:** `from application_sdk.testing import TypenameDiff`
-- **Also importable from:** `application_sdk.testing.golden`
-- **Signature:** `class TypenameDiff(typename: str, ...)`
-- **Summary:** The diff for a single typename, and whether it gates.
-- **Defined in:** `application_sdk/testing/golden.py`
-
-#### `TypenameRule`
-
-- **Import:** `from application_sdk.testing import TypenameRule`
-- **Also importable from:** `application_sdk.testing.golden`
-- **Signature:** `class TypenameRule(policy: DiffPolicy = DiffPolicy.STRICT, ...)`
-- **Summary:** The gating decision for one typename.
-- **Defined in:** `application_sdk/testing/golden.py`
-
 #### `Unreadable`
 
 - **Import:** `from application_sdk.testing.harness.expectations import Unreadable`
@@ -3890,14 +3850,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `app_context(mock_state_store: MockStateStore, mock_secret_store: MockSecretStore)`
 - **Summary:** AppContext wired with MockStateStore and MockSecretStore.
 - **Defined in:** `application_sdk/testing/fixtures.py`
-
-#### `assert_matches_golden`
-
-- **Import:** `from application_sdk.testing import assert_matches_golden`
-- **Also importable from:** `application_sdk.testing.golden`
-- **Signature:** `assert_matches_golden(produced: Iterable[Mapping[str, *, ...)`
-- **Summary:** Assert produced records match a golden fixture, per typename rules.
-- **Defined in:** `application_sdk/testing/golden.py`
 
 #### `assert_settled`
 
@@ -4020,14 +3972,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `custom(fn: Callable[[Any], bool], description: str = 'custom')`
 - **Summary:** Create a custom assertion from a user-provided function.
 - **Defined in:** `application_sdk/testing/integration/assertions.py`
-
-#### `diff_golden`
-
-- **Import:** `from application_sdk.testing import diff_golden`
-- **Also importable from:** `application_sdk.testing.golden`
-- **Signature:** `diff_golden(produced: Iterable[Mapping[str, *, ...)`
-- **Summary:** Compare produced records against a golden fixture without asserting.
-- **Defined in:** `application_sdk/testing/golden.py`
 
 #### `discover_categories`
 

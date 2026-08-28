@@ -46,15 +46,6 @@ from application_sdk.testing.fixtures import (
     mock_secret_store,
     mock_state_store,
 )
-from application_sdk.testing.golden import (
-    AssetMismatch,
-    DiffPolicy,
-    GoldenReport,
-    TypenameDiff,
-    TypenameRule,
-    assert_matches_golden,
-    diff_golden,
-)
 from application_sdk.testing.mocks import (
     MockBinding,
     MockCredentialStore,
@@ -91,6 +82,7 @@ __all__ = [
     "mock_secret_store",
     "mock_state_store",
 <<<<<<< HEAD
+<<<<<<< HEAD
     "serve",
 =======
     # Golden-diff assertion
@@ -101,6 +93,8 @@ __all__ = [
     "TypenameRule",
     "assert_matches_golden",
     "diff_golden",
+=======
+>>>>>>> 17882e8c (refactor(testing): drop the golden-diff assertion, keep the volatile-field consolidation | FND-820)
     # Canonical comparison field sets
     "ENVIRONMENT_SCOPED_FIELDS",
     "ENVIRONMENT_SCOPED_NESTED_FIELDS",
