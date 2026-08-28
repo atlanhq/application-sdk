@@ -11,6 +11,8 @@ from time import time
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
 
 if TYPE_CHECKING:
+    from obstore.store import ObjectStore
+
     from application_sdk.storage.ops import BoundStore
 
 import orjson
@@ -96,7 +98,7 @@ class AtlanObservability(Generic[T], ABC):
 
     _last_cleanup_key = "last_cleanup_time"
     _instances: ClassVar[list[Any]] = []
-    _deployment_store: ClassVar["BoundStore | None"] = None
+    _deployment_store: ClassVar["BoundStore | ObjectStore | None"] = None
     _upstream_store: ClassVar["BoundStore | None"] = None
 
     @classmethod
@@ -106,7 +108,7 @@ class AtlanObservability(Generic[T], ABC):
         return os.environ.get("DAPR_COMPONENTS_PATH", "./components")
 
     @classmethod
-    def _get_deployment_store(cls) -> "BoundStore":
+    def _get_deployment_store(cls) -> "BoundStore | ObjectStore":
         if cls._deployment_store is None:
             from application_sdk.storage.binding import (  # noqa: PLC0415
                 create_store_from_binding_with_put_attrs,

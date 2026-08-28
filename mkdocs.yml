@@ -137,6 +137,7 @@ nav:
       - Setup: standards/setup.md
       - DeepWiki MCP: standards/deepwiki.md
       - Review Checklist: standards/review-checklist.md
+      - Cross-Repo Contracts: standards/cross-repo-contracts.md
       - Release Flow: standards/release-flow.md
       - v3 Readiness: standards/v3-readiness.md
   - Architecture Decisions:
