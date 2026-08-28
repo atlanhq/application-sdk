@@ -1,20 +1,32 @@
-"""Integration testing for Apps-SDK. Two tiers — pick by what you are testing.
+"""Integration testing for Apps-SDK.
 
-**The fixture kit** (:mod:`~application_sdk.testing.integration.fixtures`) runs
-the App *in process*: an embedded Temporal dev server, mocked infrastructure, a
-real worker, and an executor that submits through the real data converter. A
-connector star-imports it into ``tests/integration/conftest.py`` and overrides
-the App class. Reach for this to test that a workflow executes correctly — it
-needs no running server. See ``docs/guides/integration-fixtures.md``.
+**Connectors test their App one way: the fixture kit**
+(:mod:`~application_sdk.testing.integration.fixtures`). It runs the App in
+process — embedded Temporal dev server, mocked infrastructure, a real worker,
+and an executor that submits through the real data converter. A connector
+star-imports it into ``tests/integration/conftest.py`` and overrides the App
+class and its source. See ``docs/guides/integration-fixtures.md``.
 
-**The scenario runner** (:class:`BaseIntegrationTest`, documented below) drives
-an *already-running* server's ``/workflows/v1/*`` HTTP endpoints from scenarios
-declared as data. Reach for this to test the HTTP surface of a deployed app.
+**Everything named in this module's ``__all__`` is the older**
+:class:`BaseIntegrationTest` **HTTP scenario framework, kept for the narrow case
+of locking the literal request/response contract of the app server's endpoints.
+For new connectors, do not start there** — see the "recommended pattern" and
+"Legacy: HTTP scenario tests" sections of
+``docs/guides/integration-testing.md``, which this docstring follows.
 
-The two are independent; a connector may use either or both. Everything named in
-``__all__`` here belongs to the scenario runner — the kit's fixtures are imported
-from ``.fixtures`` directly, because pytest has to see them as module-level names
-in the conftest.
+The distinction is not two ways of running the App — in both cases the App runs
+identically, as a worker executing workflows against Temporal. What differs is
+only the submission path: the kit submits through ``AppExecutor``, the scenario
+framework through an HTTP POST to a route that then submits to Temporal. So a
+scenario test is not a different tier of App coverage; it is the same coverage
+reached through the server, plus an assertion on the HTTP envelope. Those
+routes are SDK-owned (:mod:`application_sdk.handler.service`), so a connector
+re-testing them is largely re-testing SDK code. App behaviour belongs in the
+kit; a genuinely *deployed* surface belongs in the ``tests/e2e`` tier.
+
+The kit's fixtures are imported from ``.fixtures`` directly rather than
+re-exported here, because pytest has to see them as module-level names in the
+adopting conftest.
 
 This module provides a declarative, data-driven approach to integration testing.
 Developers define test scenarios as data, and the framework handles everything:

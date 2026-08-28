@@ -69,7 +69,9 @@ def infrastructure(store_root, integration_secrets):
 | `integration_options` | `KitOptions()` | Any knob in the table below needs changing. |
 | `infrastructure` | Mocked stores + `LocalStore` under `store_root` | The suite needs a real store. It receives `store_root`, `integration_source` and `integration_secrets`, so it can point at whatever the source fixture brought up. Must be a generator fixture so teardown still runs. |
 
-`integration_secrets` serves `credential_ref` named-path and agent-spec resolution only. An input routed by legacy `credential_guid` resolves through `DaprCredentialVault` over a live daprd and never reads this store — suites for those apps pass credentials inline, seed a GUID via the app's `/workflows/v1/dev/local-vault` dev endpoint, or stay off these fixtures.
+`integration_secrets` serves `credential_ref` named-path and agent-spec resolution only. An input routed by legacy `credential_guid` resolves through `DaprCredentialVault` over a live daprd and never reads this store.
+
+**That makes `credential_ref` a prerequisite for adopting these fixtures, not an optional preference.** An app still routing by `credential_guid` cannot get its credentials from this store, so it has to seed a GUID via the app's `/workflows/v1/dev/local-vault` dev endpoint against a live daprd — which reintroduces the external runtime the kit exists to remove, and leaves the suite on the legacy HTTP scenario path. Migrating the app's input contract to `credential_ref` is the work that unblocks adoption; until it lands, such a connector stays on the older framework by necessity rather than by choice. Treat a `credential_guid` input as a migration item, not as a reason the kit does not apply.
 
 ### Why a star-import and not a `pytest11` plugin
 
