@@ -39,6 +39,25 @@ def yourapp_executor(executor):
     return executor
 ```
 
+### Overrides replace, they do not wrap
+
+Because the star-import lands these fixtures in your conftest's own namespace, pytest's usual "same name, request the original" idiom is not available — `def infrastructure(infrastructure)` is a `recursive dependency involving fixture 'infrastructure'` error, since there is no outer scope holding a base to request. An override therefore **replaces** the kit's fixture entirely.
+
+That matters most for `infrastructure`, whose body also points observability's deployment store at an in-memory store and restores it on teardown — load-bearing, not incidental. So it is exported as a contextmanager for overrides to reuse rather than copy:
+
+```python
+from application_sdk.testing.integration.fixtures import *  # noqa: F403
+
+
+@pytest.fixture(scope="session")
+def infrastructure(store_root, integration_secrets):
+    # Mocked secret/state stores, but a real object store.
+    with kit_infrastructure(
+        store_root, integration_secrets, storage=my_real_store()
+    ) as ctx:
+        yield ctx
+```
+
 ### The override points
 
 | Fixture | Default | Override when |

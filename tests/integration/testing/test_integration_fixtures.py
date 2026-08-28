@@ -87,11 +87,20 @@ async def test_the_app_runs_through_the_kit(executor):
     output = await executor.execute_app(EchoApp, EchoInput(value=41))
     assert output.result == 42
     # KitOptions.preserve_artifacts, observed from inside the worker fixture's
-    # lifetime — the only place the default exists, since it is unset again on
-    # teardown. _clean_env() strips APPLICATION_SDK_ENABLE_* from the child
-    # environment, so a pass here can only come from the kit's own default.
+    # lifetime — the only place the default exists, since the prior value is
+    # restored on teardown. _clean_env() strips APPLICATION_SDK_ENABLE_* from
+    # the child environment (pinned by its own test), so a pass here can only
+    # come from the kit's own default.
     # It has to ride this async test: a sync one cannot request `worker`.
-    assert os.environ["APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR"] == "false"
+    #
+    # os.getenv, not os.environ[...]: a subscript makes the mapping the subject
+    # of the failing expression, so pytest renders the whole environment - and
+    # this child inherits the developer's - into the report, which the outer
+    # test then re-emits via its own assertion message.
+    cleanup_interceptor = os.getenv("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR")
+    assert cleanup_interceptor == "false", (
+        f"kit default not applied: {cleanup_interceptor!r}"
+    )
 
 
 def test_the_queue_is_the_deployment_queue(integration_task_queue):
@@ -199,8 +208,13 @@ def _run_pytest(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
 def _clean_env() -> dict[str, str]:
     """The ambient environment minus the vars the conftest is meant to own.
 
-    The parent process is itself a pytest run with ``ATLAN_*`` set; inheriting
-    those would mask a conftest that never sets them.
+    The parent may have ``ATLAN_*`` set — a developer's ``.env`` commonly does,
+    and ``tests/integration/conftest.py`` sets the ``APPLICATION_SDK_ENABLE_*``
+    ones autouse for every integration test, this file included. Inheriting
+    either would mask a conftest that never sets them, or let a child assertion
+    pass on the parent's value instead of the kit's own default. Pinned by
+    :func:`test_clean_env_drops_the_vars_the_conftest_must_own`, because a strip
+    nothing asserts on is a strip that can be deleted with this suite green.
     """
     return {
         k: v
@@ -208,6 +222,36 @@ def _clean_env() -> dict[str, str]:
         if k not in {"ATLAN_APPLICATION_NAME", "ATLAN_DEPLOYMENT_NAME"}
         and not k.startswith("APPLICATION_SDK_ENABLE_")
     }
+
+
+def test_clean_env_drops_the_vars_the_conftest_must_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_clean_env`` is the premise of the child assertions; pin it.
+
+    ``test_star_import_suite_passes_end_to_end``'s cleanup-interceptor assertion
+    is only meaningful because the child cannot inherit that variable — and the
+    parent really does set it: ``tests/integration/conftest.py`` sets it autouse
+    for every integration test, this one included. Without the strip the child
+    inherits ``"false"``, ``_artifact_preservation`` takes its "explicit value
+    wins" branch, and the assertion passes on the inherited value instead of the
+    kit's default — so the guard it exists to pin could then be deleted with
+    this whole suite green.
+
+    Asserts on the leaked *key names* only. ``assert "X" not in _clean_env()``
+    would render the whole mapping into the failure output, and this dict is the
+    developer's environment.
+    """
+    monkeypatch.setenv("ATLAN_APPLICATION_NAME", "parent")
+    monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "parent")
+    monkeypatch.setenv("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", "false")
+    leaked = sorted(
+        k
+        for k in _clean_env()
+        if k in {"ATLAN_APPLICATION_NAME", "ATLAN_DEPLOYMENT_NAME"}
+        or k.startswith("APPLICATION_SDK_ENABLE_")
+    )
+    assert leaked == [], f"_clean_env forwarded to the child: {leaked}"
 
 
 def test_star_import_suite_passes_end_to_end(adopting_suite: Path) -> None:

@@ -1,4 +1,20 @@
-"""Integration testing framework for Apps-SDK.
+"""Integration testing for Apps-SDK. Two tiers — pick by what you are testing.
+
+**The fixture kit** (:mod:`~application_sdk.testing.integration.fixtures`) runs
+the App *in process*: an embedded Temporal dev server, mocked infrastructure, a
+real worker, and an executor that submits through the real data converter. A
+connector star-imports it into ``tests/integration/conftest.py`` and overrides
+the App class. Reach for this to test that a workflow executes correctly — it
+needs no running server. See ``docs/guides/integration-fixtures.md``.
+
+**The scenario runner** (:class:`BaseIntegrationTest`, documented below) drives
+an *already-running* server's ``/workflows/v1/*`` HTTP endpoints from scenarios
+declared as data. Reach for this to test the HTTP surface of a deployed app.
+
+The two are independent; a connector may use either or both. Everything named in
+``__all__`` here belongs to the scenario runner — the kit's fixtures are imported
+from ``.fixtures`` directly, because pytest has to see them as module-level names
+in the conftest.
 
 This module provides a declarative, data-driven approach to integration testing.
 Developers define test scenarios as data, and the framework handles everything:
@@ -54,7 +70,7 @@ Supported APIs:
 - config: Get/update workflow config (/workflows/v1/config/{id})
 
 For detailed documentation, see:
-    docs/docs/guides/integration-testing.md
+    docs/guides/integration-testing.md
 """
 
 from typing import TYPE_CHECKING
@@ -210,21 +226,38 @@ _LAZY_EXPORTS: dict[str, str] = {
 }
 
 
+#: The submodules ``_LAZY_EXPORTS`` draws from, as bare attribute names.
+#:
+#: Importing a submodule eagerly binds it as an attribute of its package as a
+#: side effect, so before the lazy conversion ``from .assertions import ...``
+#: made ``integration.assertions`` work. Resolving names through
+#: ``__getattr__`` does not, which silently turned ``integration.models.Scenario``
+#: into an ``AttributeError`` — and worse, into one that depended on whether
+#: something else had already touched a name from that submodule. Serving the
+#: submodules here keeps that access working and makes it order-independent.
+_LAZY_SUBMODULES = frozenset(
+    module.lstrip(".") for module in _LAZY_EXPORTS.values() if module.startswith(".")
+)
+
+
 def __getattr__(name: str) -> object:
     """Import the submodule owning *name* on first access (PEP 562)."""
-    module_name = _LAZY_EXPORTS.get(name)
-    if module_name is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     from importlib import import_module  # noqa: PLC0415
 
-    value = getattr(import_module(module_name, __name__), name)
+    if name in _LAZY_SUBMODULES:
+        value: object = import_module(f".{name}", __name__)
+    else:
+        module_name = _LAZY_EXPORTS.get(name)
+        if module_name is None:
+            raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+        value = getattr(import_module(module_name, __name__), name)
     # Cache on the module so repeat access skips this path entirely.
     globals()[name] = value
     return value
 
 
 def __dir__() -> list[str]:
-    return sorted({*globals(), *_LAZY_EXPORTS})
+    return sorted({*globals(), *_LAZY_EXPORTS, *_LAZY_SUBMODULES})
 
 
 # =============================================================================

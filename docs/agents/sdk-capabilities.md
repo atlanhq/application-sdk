@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 282 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 283 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -4644,6 +4644,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `is_type(expected_type: type, *, description: str | None = None)`
 - **Summary:** Assert that the actual value is an instance of the given type.
 - **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `kit_infrastructure`
+
+- **Import:** `from application_sdk.testing.integration.fixtures import kit_infrastructure`
+- **Signature:** `kit_infrastructure(store_root: Path, *, ...)`
+- **Summary:** The :func:`infrastructure` fixture's body, callable directly.
+- **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
 #### `kube_http_call`
 

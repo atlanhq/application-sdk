@@ -88,21 +88,28 @@ on ``App.on_complete()`` deletes the run's local files and every tracked
 ``TRANSIENT`` object-store ref after each run — so a suite that opens output
 files and asserts on their contents needs it off.
 ``KitOptions.preserve_artifacts`` (on by default) **defaults** the variable to
-``"false"`` when it is unset; an explicit value in the environment wins, and a
-truthy one is logged as a warning so a CI job that exports it does not fail
-every artifact assertion with "output file missing" and nothing pointing at the
-cause. The default is scoped to the ``worker`` fixture's lifetime and unset on
-teardown: ``pytest tests/`` runs integration and unit tests in one process, and
-a cleanup-asserting unit test scheduled after this fixture would otherwise
-silently observe cleanup disabled (BLDX-1283). The option is one-way:
-``preserve_artifacts=False`` leaves the variable untouched rather than forcing
-``"true"``.
+``"false"`` when it is unset or empty; an explicit value in the environment wins,
+and one that leaves cleanup *enabled* is logged as a warning so a CI job that
+exports it does not fail every artifact assertion with "output file missing" and
+nothing pointing at the cause. "Enabled" is decided by the same denylist the SDK
+itself reads (:func:`_cleanup_enabled`) rather than by a second, re-derived
+predicate — an allowlist here diverged for ``"off"``, ``"disabled"``,
+``"  false  "`` and ``""``, staying silent in exactly the cases that delete the
+artifacts. The default is scoped to the ``worker`` fixture's lifetime and the
+prior value restored on teardown: ``pytest tests/`` runs integration and unit
+tests in one process, and a cleanup-asserting unit test scheduled after this
+fixture would otherwise silently observe cleanup disabled (BLDX-1283). The option
+is one-way: ``preserve_artifacts=False`` leaves the variable untouched rather
+than forcing ``"true"``.
 
 Mocked infrastructure is the default for this tier: ``MockSecretStore``,
 ``MockStateStore`` and a ``LocalStore`` under a session temp dir. A suite that
-needs something else overrides the ``infrastructure`` fixture; it receives
-``store_root`` and ``integration_source`` like any other fixture, so a real
-store can be pointed at a container the source fixture brought up. An async
+needs something else overrides the ``infrastructure`` fixture — which
+**replaces** it, since a star-imported fixture cannot be wrapped; call
+:func:`kit_infrastructure` from the override to reuse this body instead of
+copying it. The override receives ``store_root`` and ``integration_source`` like
+any other fixture, so a real store can be pointed at a container the source
+fixture brought up. An async
 lifecycle — a ``daprd`` sidecar, anything needing ``await`` — is out of scope
 for these fixtures; ``atlan-mysql-app`` is the standing exception and the
 reference for that hand-written shape.
@@ -115,7 +122,8 @@ from collections.abc import AsyncIterator, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 import pytest
 import pytest_asyncio
@@ -142,7 +150,24 @@ CLEANUP_INTERCEPTOR_ENV = "APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR"
 APPLICATION_NAME_ENV = "ATLAN_APPLICATION_NAME"
 DEPLOYMENT_NAME_ENV = "ATLAN_DEPLOYMENT_NAME"
 
-_TRUTHY = frozenset({"1", "true", "yes", "on"})
+#: The values that *disable* cleanup, mirroring the SDK's own reader rather than
+#: re-deriving one. ``App.on_complete`` gates on
+#: ``os.environ.get(ENV, "true").lower() not in ("0", "false", "no")`` and
+#: ``execution.settings._bool(..., default=True)`` agrees, so the flag is a
+#: denylist defaulting to on: every value outside this set enables cleanup.
+#:
+#: An allowlist here instead (``{"1", "true", "yes", "on"}``) diverged for
+#: ``"off"``, ``"disabled"``, ``"  false  "`` and ``""`` — the SDK deleted the
+#: run's artifacts while this module stayed silent, which is exactly the
+#: "output file missing" failure :attr:`KitOptions.preserve_artifacts` exists to
+#: prevent. Note the SDK does *not* strip, so ``"  false  "`` enables cleanup.
+_CLEANUP_DISABLED = frozenset({"0", "false", "no"})
+
+
+def _cleanup_enabled(value: str) -> bool:
+    """Whether *value* leaves ``App.on_complete()``'s cleanup switched on."""
+    return value.lower() not in _CLEANUP_DISABLED
+
 
 _SETDEFAULT_FIX = (
     "Move the os.environ.setdefault(...) call above every application_sdk "
@@ -201,15 +226,31 @@ class AppExecutor:
         *,
         execution_id_prefix: str = "",
         entry_point: str | None = None,
-    ) -> object:
-        from application_sdk.app.context import AppContext  # noqa: PLC0415
-        from application_sdk.execution.retry import RetryPolicy  # noqa: PLC0415
+    ) -> Any:
+        # ``Any``, matching ``TemporalExecutorBackend.execute``, because the
+        # concrete type is the App entrypoint's own Output and is not derivable
+        # from ``type[App]`` here. ``object`` would be narrower than the truth
+        # and make the documented ``output.<field>`` a type error at every
+        # adopter's call site (pyright's default mode reports it; this repo
+        # downgrades that rule and excludes ``tests``, so CI here would not).
+        from application_sdk.app.context import (  # noqa: PLC0415 — deferred: keeps app.context off the conftest's import path
+            AppContext,
+        )
+        from application_sdk.execution.retry import (  # noqa: PLC0415 — deferred: keeps execution (and temporalio) off the conftest's import path
+            RetryPolicy,
+        )
 
         app_name = _app_name_of(app_cls) or execution_id_prefix or "app"
         context = AppContext(
             app_name=app_name,
             app_version="0.0.0",
-            run_id=execution_id_prefix or app_name,
+            # Keep AppContext's own uuid4 default rather than reusing the app
+            # name: ``__post_init__`` derives ``correlation_id`` from ``run_id``
+            # and the backend stamps it into the Temporal start memo, so a
+            # constant here logs every run in the suite under one identity — in
+            # the tier whose purpose is debugging a single failing run.
+            run_id=execution_id_prefix or str(uuid4()),
+            execution_id_prefix=execution_id_prefix,
         )
         return await self.backend.execute(
             app_cls,
@@ -235,7 +276,9 @@ def _app_name_of(app_cls: type[App]) -> str | None:
 
 def _verify_env_ordering() -> None:
     """Fail when an ``ATLAN_*`` env var was set after the constants snapshot."""
-    from application_sdk import constants  # noqa: PLC0415
+    from application_sdk import (  # noqa: PLC0415 — deferred by convention only; logger_adaptor above already imported it, so this is a re-bind, NOT what makes the ordering check work
+        constants,
+    )
 
     for env_var, snapshot in (
         (APPLICATION_NAME_ENV, constants.APPLICATION_NAME),
@@ -267,7 +310,9 @@ def _verify_env_ordering() -> None:
 
 def _verify_registration(app_cls: type[App]) -> str:
     """Fail when *app_cls* never reached the App registry; else its name."""
-    from application_sdk.app.registry import AppRegistry  # noqa: PLC0415
+    from application_sdk.app.registry import (  # noqa: PLC0415 — deferred: keeps app.registry off the conftest's import path
+        AppRegistry,
+    )
 
     app_name = _app_name_of(app_cls)
     registered = AppRegistry.get_instance().list_apps()
@@ -303,17 +348,24 @@ def _artifact_preservation(options: KitOptions) -> Iterator[None]:
     BLDX-1283, which the repo's own ``tests/integration/conftest.py`` restores
     per-test to avoid.
 
-    An explicit environment value always wins and is left untouched; a truthy
-    one is warned about, because it silently defeats
+    An explicit environment value always wins and is left untouched; one that
+    leaves cleanup *enabled* is warned about, because it silently defeats
     :attr:`KitOptions.preserve_artifacts` and every artifact assertion in the
-    adopting suite then fails as "output file missing".
+    adopting suite then fails as "output file missing". Whether a value counts
+    as enabled is :func:`_cleanup_enabled`, which mirrors the SDK's own reader —
+    a denylist — rather than re-deriving one.
+
+    An empty value is treated as *absent*, not as an explicit choice. The SDK
+    reads ``""`` as cleanup-on (it is outside the denylist), so honouring it as
+    "the user decided" would disable preservation while suppressing the warning
+    that names the cause. ``export VAR=`` and ``env: VAR: ""`` both produce it.
     """
     if not options.preserve_artifacts:
         yield
         return
     current = os.environ.get(CLEANUP_INTERCEPTOR_ENV)
-    if current is not None:
-        if current.strip().lower() in _TRUTHY:
+    if current is not None and current.strip():
+        if _cleanup_enabled(current):
             logger.warning(
                 "%s=%r is set in the environment, so App.on_complete() will "
                 "delete each run's output files and this suite's artifact "
@@ -329,7 +381,13 @@ def _artifact_preservation(options: KitOptions) -> Iterator[None]:
     try:
         yield
     finally:
-        os.environ.pop(CLEANUP_INTERCEPTOR_ENV, None)
+        # ``current`` is None or empty here. Restore an empty value rather than
+        # popping it: the block took ownership of the variable, it did not take
+        # ownership of whether the variable exists.
+        if current is None:
+            os.environ.pop(CLEANUP_INTERCEPTOR_ENV, None)
+        else:
+            os.environ[CLEANUP_INTERCEPTOR_ENV] = current
 
 
 _verify_env_ordering()
@@ -376,7 +434,9 @@ def integration_task_queue(integration_app_cls: type[App]) -> str:
     ``{app}-queue`` predates the env-var convention and is load-bearing for
     local dev, where nothing reads the manifest's queue anyway.
     """
-    from application_sdk.common.task_queue import task_queue_from_env  # noqa: PLC0415
+    from application_sdk.common.task_queue import (  # noqa: PLC0415 — deferred: reads constants at call time, after the conftest's setdefault
+        task_queue_from_env,
+    )
 
     return task_queue_from_env() or f"{_verify_registration(integration_app_cls)}-queue"
 
@@ -422,44 +482,68 @@ def store_root(
     return tmp_path_factory.mktemp(integration_options.store_root_prefix)
 
 
-@pytest.fixture(scope="session")
-def infrastructure(
+@contextmanager
+def kit_infrastructure(
     store_root: Path,
-    integration_source: object,
     integration_secrets: Mapping[str, str],
+    *,
+    storage: object | None = None,
 ) -> Iterator[InfrastructureContext]:
-    """Wire mocked infrastructure for the session, after the source is up.
+    """The :func:`infrastructure` fixture's body, callable directly.
 
-    Override this fixture to install anything else; it is torn down the same
-    way. The observability deployment store is pointed at an in-memory store
-    for the session so the periodic flush stops retrying against a store that
-    is not there, and restored afterwards.
+    Exported because a star-imported fixture cannot be *wrapped*: pytest's
+    ``def infrastructure(infrastructure)`` idiom needs a base in an outer scope,
+    and the star-import puts this module's fixtures in the adopting conftest's
+    own namespace, so that spelling is a ``recursive dependency`` error.
+    Overrides therefore fully **replace** rather than extend — and replacing
+    used to mean copying this body, including the observability store swap and
+    its restore, which is load-bearing rather than incidental.
+
+    So a suite that wants the mocked stores but a real storage backend writes::
+
+        @pytest.fixture(scope="session")
+        def infrastructure(store_root, integration_secrets):
+            with kit_infrastructure(
+                store_root, integration_secrets, storage=my_real_store()
+            ) as ctx:
+                yield ctx
+
+    Args:
+        store_root: Root for the default session ``LocalStore``.
+        integration_secrets: Seeded into the ``MockSecretStore``.
+        storage: Replaces the default ``create_local_store(store_root)`` when
+            given.
     """
-    from application_sdk.infrastructure.context import (  # noqa: PLC0415
+    from application_sdk.infrastructure.context import (  # noqa: PLC0415 — deferred: keeps infrastructure off the conftest's import path
         InfrastructureContext,
         clear_infrastructure,
         set_infrastructure,
     )
-    from application_sdk.observability.observability import (  # noqa: PLC0415
+    from application_sdk.observability.observability import (  # noqa: PLC0415 — deferred: observability pulls the storage/binding chain
         AtlanObservability,
     )
-    from application_sdk.storage import (  # noqa: PLC0415
+    from application_sdk.storage import (  # noqa: PLC0415 — deferred: keeps obstore off the conftest's import path
         create_local_store,
         create_memory_store,
     )
-    from application_sdk.testing.mocks import (  # noqa: PLC0415
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — deferred: same chain as storage above
+        BoundStore,
+    )
+    from application_sdk.testing.mocks import (  # noqa: PLC0415 — deferred: mocks import the infrastructure protocols
         MockSecretStore,
         MockStateStore,
     )
 
-    del integration_source
     ctx = InfrastructureContext(
         state_store=MockStateStore(),
         secret_store=MockSecretStore(dict(integration_secrets)),
-        storage=create_local_store(store_root),
+        storage=storage if storage is not None else create_local_store(store_root),
     )
     previous_store = AtlanObservability._deployment_store
-    AtlanObservability._deployment_store = create_memory_store()
+    # Wrapped in a BoundStore — the type this ClassVar already holds in
+    # production — so pointing observability at memory needs no widening of a
+    # production annotation to accommodate a test.
+    AtlanObservability._deployment_store = BoundStore(create_memory_store())
     set_infrastructure(ctx)
     try:
         yield ctx
@@ -468,12 +552,32 @@ def infrastructure(
         AtlanObservability._deployment_store = previous_store
 
 
+@pytest.fixture(scope="session")
+def infrastructure(
+    store_root: Path,
+    integration_source: object,
+    integration_secrets: Mapping[str, str],
+) -> Iterator[InfrastructureContext]:
+    """Wire mocked infrastructure for the session, after the source is up.
+
+    Overriding this fixture **replaces** it rather than wrapping it — see
+    :func:`kit_infrastructure`, which is this body as a contextmanager so an
+    override does not have to copy it. The ``integration_source`` dependency is
+    what orders this after the source is up; it is otherwise unused.
+    """
+    del integration_source
+    with kit_infrastructure(store_root, integration_secrets) as ctx:
+        yield ctx
+
+
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def embedded_temporal(
     integration_options: KitOptions,
 ) -> AsyncIterator[EmbeddedRuntime]:
     """Boot the embedded Temporal dev server for the session."""
-    from application_sdk.dev import embedded_runtime  # noqa: PLC0415
+    from application_sdk.dev import (  # noqa: PLC0415 — deferred: dev pulls the embedded Temporal/Dapr download machinery
+        embedded_runtime,
+    )
 
     async with embedded_runtime(log_level=integration_options.log_level) as runtime:
         yield runtime
@@ -486,7 +590,7 @@ async def temporal_client(
     integration_options: KitOptions,
 ) -> Client:
     """Connect to the embedded dev server, in its namespace."""
-    from application_sdk.execution import (  # noqa: PLC0415
+    from application_sdk.execution import (  # noqa: PLC0415 — deferred: keeps temporalio off the conftest's import path
         create_data_converter_for_app,
         create_temporal_client,
     )
@@ -513,7 +617,9 @@ async def worker(
     integration_options: KitOptions,
 ) -> AsyncIterator[None]:
     """Run the App's worker in-process, with infrastructure already wired."""
-    from application_sdk.execution import create_worker  # noqa: PLC0415
+    from application_sdk.execution import (  # noqa: PLC0415 — deferred: keeps temporalio off the conftest's import path
+        create_worker,
+    )
 
     del infrastructure
     _verify_registration(integration_app_cls)
@@ -527,7 +633,9 @@ def executor(
     temporal_client: Client, worker: None, integration_task_queue: str
 ) -> AppExecutor:
     """Executor submitting to the running worker's task queue."""
-    from application_sdk.execution import TemporalExecutorBackend  # noqa: PLC0415
+    from application_sdk.execution import (  # noqa: PLC0415 — deferred: keeps temporalio off the conftest's import path
+        TemporalExecutorBackend,
+    )
 
     del worker
     return AppExecutor(
@@ -551,6 +659,7 @@ __all__ = [
     "integration_secrets",
     "integration_source",
     "integration_task_queue",
+    "kit_infrastructure",
     "store_root",
     "temporal_client",
     "worker",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import contextlib
 import inspect
 import os
 import subprocess
@@ -11,6 +12,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import pytest
 
@@ -69,7 +71,21 @@ class TestExecutorShim:
         await AppExecutor(backend=backend).execute_app(_FakeApp, {})  # type: ignore[arg-type]
         context = backend.calls[0]["context"]
         assert context.app_name == _APP_NAME
-        assert context.run_id == _APP_NAME
+        # NOT the app name: AppContext derives correlation_id from run_id and the
+        # backend stamps it into the Temporal start memo, so a constant would log
+        # every run in the suite under one identity.
+        assert context.run_id != _APP_NAME
+        UUID(context.run_id)
+
+    async def test_each_run_gets_its_own_identity(self) -> None:
+        """Two submissions must be distinguishable in the logs."""
+        backend = _RecordingBackend(calls=[])
+        executor = AppExecutor(backend=backend)
+        await executor.execute_app(_FakeApp, {})  # type: ignore[arg-type]
+        await executor.execute_app(_FakeApp, {})  # type: ignore[arg-type]
+        first, second = (call["context"] for call in backend.calls)
+        assert first.run_id != second.run_id
+        assert first.correlation_id != second.correlation_id
 
     async def test_execution_id_prefix_becomes_run_id(self) -> None:
         backend = _RecordingBackend(calls=[])
@@ -77,6 +93,14 @@ class TestExecutorShim:
             _FakeApp, {}, execution_id_prefix="run-7"
         )
         assert backend.calls[0]["context"].run_id == "run-7"
+
+    async def test_execution_id_prefix_also_reaches_its_own_field(self) -> None:
+        """``AppContext`` has the field; overloading run_id alone left it empty."""
+        backend = _RecordingBackend(calls=[])
+        await AppExecutor(backend=backend).execute_app(  # type: ignore[arg-type]
+            _FakeApp, {}, execution_id_prefix="run-7"
+        )
+        assert backend.calls[0]["context"].execution_id_prefix == "run-7"
 
 
 class TestPreconditions:
@@ -306,6 +330,75 @@ class TestArtifactPreservation:
             pass
         assert warnings == []
 
+    @pytest.mark.parametrize("value", ["off", "disabled", "  false  ", "TRUE"])
+    def test_every_value_the_sdk_reads_as_on_is_warned_about(
+        self, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        """The predicate must be the SDK's denylist, not a truthiness allowlist.
+
+        ``App.on_complete`` enables cleanup for everything outside
+        ``("0", "false", "no")`` and does not strip. An allowlist here
+        (``{"1", "true", "yes", "on"}``) stayed silent for each of these while
+        the SDK deleted the run's artifacts — the exact "output file missing"
+        failure the warning exists to name. ``"  false  "`` is included
+        deliberately: the SDK does not strip, so it means cleanup *on*.
+        """
+        assert fixtures._cleanup_enabled(value), "premise: SDK leaves cleanup on"
+        warnings = _capture_warnings(monkeypatch)
+        monkeypatch.setenv(CLEANUP_INTERCEPTOR_ENV, value)
+        with fixtures._artifact_preservation(KitOptions()):
+            pass
+        assert len(warnings) == 1
+        assert CLEANUP_INTERCEPTOR_ENV in warnings[0]
+
+    @pytest.mark.parametrize("value", ["", "   "])
+    def test_an_empty_value_is_absent_not_a_choice(
+        self, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        """``export VAR=`` must not defeat preservation.
+
+        The SDK reads ``""`` as cleanup-on, so honouring it as "the user
+        decided" disabled preservation *and* suppressed the warning naming the
+        cause — the one combination with no signal at all. Treat it as unset.
+        """
+        monkeypatch.setenv(CLEANUP_INTERCEPTOR_ENV, value)
+        with fixtures._artifact_preservation(KitOptions()):
+            assert os.environ[CLEANUP_INTERCEPTOR_ENV] == "false"
+
+    def test_an_empty_value_is_restored_not_deleted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Taking ownership of the value is not taking ownership of the key."""
+        monkeypatch.setenv(CLEANUP_INTERCEPTOR_ENV, "")
+        with fixtures._artifact_preservation(KitOptions()):
+            pass
+        assert os.environ[CLEANUP_INTERCEPTOR_ENV] == ""
+
+    def test_the_predicate_matches_the_sdks_own_reader(self) -> None:
+        """Pin the mirror, so the two readers cannot drift apart again.
+
+        This is the premise every case above rests on: it reproduces
+        ``App.on_complete``'s expression rather than trusting that
+        ``_cleanup_enabled`` still matches it.
+        """
+        for value in [
+            "true",
+            "1",
+            "yes",
+            "on",
+            "off",
+            "",
+            "  false  ",
+            "disabled",
+            "false",
+            "0",
+            "no",
+            "TRUE",
+            "False",
+        ]:
+            sdk_leaves_cleanup_on = value.lower() not in ("0", "false", "no")
+            assert fixtures._cleanup_enabled(value) is sdk_leaves_cleanup_on, value
+
     def test_declining_leaves_the_environment_alone(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -324,15 +417,67 @@ class TestInfrastructureFixture:
         before = AtlanObservability._deployment_store
         gen = _fn(fixtures.infrastructure)(tmp_path, None, {"k": "v"})
         ctx = next(gen)
-        assert isinstance(ctx.state_store, MockStateStore)
-        assert isinstance(ctx.secret_store, MockSecretStore)
-        assert ctx.storage is not None
-        assert get_infrastructure() is ctx
-        assert AtlanObservability._deployment_store is not before
-        with pytest.raises(StopIteration):
-            next(gen)
+        # try/finally, matching the sibling below: without it a failing
+        # assertion skips the generator's own finally, and the infrastructure
+        # context plus the observability store leak process-wide into whatever
+        # runs next — under `pytest tests/` that is unit tests.
+        try:
+            assert isinstance(ctx.state_store, MockStateStore)
+            assert isinstance(ctx.secret_store, MockSecretStore)
+            assert ctx.storage is not None
+            assert get_infrastructure() is ctx
+            assert AtlanObservability._deployment_store is not before
+        finally:
+            with pytest.raises(StopIteration):
+                next(gen)
         assert get_infrastructure() is None
         assert AtlanObservability._deployment_store is before
+
+    def test_the_swap_is_visible_through_a_subclass(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Resolve through a subclass first — the way production reaches it.
+
+        Both consumers call ``self._get_deployment_store()``, so ``cls`` is the
+        concrete adapter. While the getter cached with ``cls._deployment_store =
+        ...`` that bound a *subclass* attribute shadowing the base ClassVar, and
+        this fixture's swap of the base became a silent no-op: an adopting
+        suite's observability wrote to the real deployment store.
+
+        The cache must be **cold** for this to bite — a warm base short-circuits
+        the assignment and no subclass attribute is ever created, which is why
+        asserting on the base attribute alone (the test above) cannot catch it.
+        """
+        from application_sdk.observability.observability import AtlanObservability
+        from application_sdk.storage import binding
+        from application_sdk.storage.ops import BoundStore
+
+        class _FakeAdapter(AtlanObservability):  # type: ignore[type-arg]
+            pass
+
+        resolved = object()
+        monkeypatch.setattr(
+            binding,
+            "create_store_from_binding_with_put_attrs",
+            lambda *a, **k: (resolved, None),
+        )
+        monkeypatch.setattr(AtlanObservability, "_deployment_store", None)
+
+        # Cold resolve through the subclass: this is the write that used to land
+        # on ``_FakeAdapter`` instead of the base.
+        assert _FakeAdapter._get_deployment_store().store is resolved
+        assert "_deployment_store" not in _FakeAdapter.__dict__
+
+        gen = _fn(fixtures.infrastructure)(tmp_path, None, {})
+        next(gen)
+        try:
+            swapped = _FakeAdapter._get_deployment_store()
+            assert isinstance(swapped, BoundStore)
+            assert swapped.store is not resolved
+        finally:
+            with pytest.raises(StopIteration):
+                next(gen)
+        assert _FakeAdapter._get_deployment_store().store is resolved
 
     async def test_secrets_are_seeded(self, tmp_path: Path) -> None:
         gen = _fn(fixtures.infrastructure)(tmp_path, None, {"creds": '{"a": 1}'})
@@ -342,6 +487,76 @@ class TestInfrastructureFixture:
         finally:
             with pytest.raises(StopIteration):
                 next(gen)
+
+    def test_kit_infrastructure_accepts_a_replacement_store(
+        self, tmp_path: Path
+    ) -> None:
+        """The override path the guide documents, since wrapping is impossible.
+
+        A star-imported fixture cannot be wrapped — ``def infrastructure(
+        infrastructure)`` is a recursive-dependency error — so overrides replace,
+        and replacing used to mean copying the body including the observability
+        swap. This is what makes that unnecessary.
+        """
+        from application_sdk.storage import create_memory_store
+
+        replacement = create_memory_store()
+        with fixtures.kit_infrastructure(
+            tmp_path, {"k": "v"}, storage=replacement
+        ) as ctx:
+            assert ctx.storage is replacement
+
+    def test_kit_infrastructure_defaults_storage_to_the_store_root(
+        self, tmp_path: Path
+    ) -> None:
+        with fixtures.kit_infrastructure(tmp_path, {}) as ctx:
+            assert ctx.storage is not None
+
+
+class TestOptionsReachTheirConsumers:
+    """Every KitOptions knob must be pinned to the call site it feeds.
+
+    ``data_converter``, ``enable_prometheus`` and ``preserve_artifacts`` were
+    covered; ``log_level`` and ``store_root_prefix`` were not, and both could be
+    hardcoded with the whole suite green — which also left ``embedded_temporal``
+    with no unit test at all.
+    """
+
+    async def test_log_level_reaches_the_embedded_runtime(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from application_sdk import dev
+
+        calls: list[dict[str, Any]] = []
+
+        @contextlib.asynccontextmanager
+        async def fake_runtime(**kwargs: Any) -> Any:
+            calls.append(kwargs)
+            yield "runtime"
+
+        monkeypatch.setattr(dev, "embedded_runtime", fake_runtime)
+        gen = _fn(fixtures.embedded_temporal)(KitOptions(log_level="debug"))
+        assert await gen.__anext__() == "runtime"
+        with pytest.raises(StopAsyncIteration):
+            await gen.__anext__()
+        assert calls[0]["log_level"] == "debug"
+
+    def test_store_root_prefix_reaches_the_factory(self, tmp_path: Path) -> None:
+        prefixes: list[str] = []
+
+        class _FakeFactory:
+            def mktemp(self, prefix: str) -> Path:
+                prefixes.append(prefix)
+                return tmp_path
+
+            def getbasetemp(self) -> Path:  # pragma: no cover - unused
+                return tmp_path
+
+        root = _fn(fixtures.store_root)(
+            _FakeFactory(), KitOptions(store_root_prefix="custom-prefix")
+        )
+        assert root == tmp_path
+        assert prefixes == ["custom-prefix"]
 
 
 class TestClientFixture:
@@ -414,6 +629,29 @@ class TestLazyPackage:
         from application_sdk.testing import integration
 
         assert set(integration._LAZY_EXPORTS) == set(integration.__all__)
+
+    def test_submodules_are_still_reachable_as_attributes(self) -> None:
+        """``integration.models.Scenario`` — an access the eager form gave free.
+
+        Importing a submodule binds it on its package as a side effect, so the
+        pre-lazy ``from .models import ...`` made this work. ``__getattr__``
+        resolving names does not, which turned the access into an
+        ``AttributeError`` whose presence depended on whether something else had
+        already touched a name from that submodule — order-dependent, so a test
+        touching ``Scenario`` first would not have noticed.
+        """
+        script = """
+from application_sdk.testing import integration
+
+assert integration.models.Scenario is not None
+assert integration.assertions.equals is not None
+assert "models" in dir(integration)
+assert "assertions" in dir(integration)
+print("OK")
+"""
+        result = _run_python(script)
+        assert result.returncode == 0, result.stderr
+        assert "OK" in result.stdout
 
     def test_type_checking_block_matches_the_lazy_map(self) -> None:
         """The third parallel list, read the way its only two readers read it.
