@@ -246,7 +246,25 @@
     {
       "kind": "class",
       "marker_via": "warn",
-      "message": "application_sdk.testing.sdr.BaseSDRIntegrationTest is deprecated; use application_sdk.testing.e2e.BaseE2ETest with RunMode.AGENT \u2014 will be removed in v4.0",
+      "message": "application_sdk.testing.full_dag.BaseFullDAGE2ETest is deprecated; use application_sdk.testing.e2e.BaseE2ETest \u2014 will be removed in v4.0",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag.base",
+      "removal_version": "4.0",
+      "symbol": "BaseFullDAGE2ETest"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "application_sdk.testing.full_dag.SQLAppE2EFullTest is deprecated; use application_sdk.testing.e2e.SQLAppE2ETest \u2014 will be removed in v4.0",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag.sql_app",
+      "removal_version": "4.0",
+      "symbol": "SQLAppE2EFullTest"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "application_sdk.testing.sdr.BaseSDRIntegrationTest is deprecated; SDR is a deployment mode, not a test tier, so there is no single replacement class \u2014 migrate each concern to where it belongs (auth/preflight: call the handler directly; credential resolution: already covered in application-sdk's tests/unit/credentials; a full DAG: tests/e2e with mode=RunMode.AGENT). See docs/standards/connector-ci-e2e.md \u2014 will be removed in v4.0",
       "migration_target": true,
       "module": "application_sdk.testing.sdr.base",
       "removal_version": "4.0",

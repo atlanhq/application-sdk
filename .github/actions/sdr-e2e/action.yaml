@@ -1263,18 +1263,22 @@ runs:
           const assetBlock = assetSummary ? `\n${assetSummary}\n` : '';
 
           // Validation bullets + stack/re-run footer are pipeline-specific.
-          // SDR exercises auth/preflight/extract against a hermetic
-          // testcontainer DB; Full-DAG additionally drives publish,
-          // query-intelligence, lineage-app and lineage-publish system
-          // apps on a live tenant and asserts asset counts + lineage in
-          // Atlas. Keep the surface narrow per pipeline so reviewers
-          // don't get a misleading "this also validates X" claim.
+          // The two legs differ by how much of the DAG runs, not by tier:
+          // the first drives the connector's own handlers + workflow
+          // against a testcontainer source; Full-DAG additionally drives
+          // publish, query-intelligence, lineage-app and lineage-publish
+          // system apps and asserts asset counts + lineage in Atlas. Both
+          // reach the CI tenant's Temporal — neither is hermetic. Keep the
+          // surface narrow per pipeline so reviewers don't get a
+          // misleading "this also validates X" claim, and do not claim a
+          // leg proves credential resolution: that is application-sdk's
+          // tests/unit/credentials.
           const SDR_TITLE = "SDR Integration Tests (testcontainer)";
           const FULL_DAG_TITLE = "E2E Full Tests (system apps)";
 
           const validatesByPipeline = {
             [SDR_TITLE]: [
-              `- **Credential resolution from secret store** — workflow \`username\`/\`password\` resolved via the Dapr \`local.file\` secret store using \`extraction_method=agent\` + \`agent_json\` → \`AgentCredentialSpec\`, not passed inline. Validates the full SDR credential-ref → secret-store → connector-client chain.`,
+              `- **Agent credential routing** — workflow \`username\`/\`password\` come from the Dapr \`local.file\` secret store via \`extraction_method=agent\` + \`agent_json\` → \`AgentCredentialSpec\`, not inline. Routing only: resolution itself is proven in application-sdk's \`tests/unit/credentials/\`.`,
               `- **Auth** — valid credentials succeed; invalid credentials and unreachable host fail correctly`,
               `- **Preflight** — connectivity, schema/table checks; bad credentials fail correctly`,
               `- **Workflow** — full extraction run on the test instance, polled to \`COMPLETED\` on the tenant's Temporal cluster`,

@@ -53,8 +53,9 @@ from __future__ import annotations
 
 import os
 import time
+import warnings
 from dataclasses import dataclass, field
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.full_dag._errors import (
@@ -118,7 +119,11 @@ class FullDAGOutcome:
 
 
 class BaseFullDAGE2ETest:
-    """Deprecated (v4.0) — pytest base; use ``application_sdk.testing.e2e.BaseE2ETest``.
+    """Deprecated: pytest base — use ``application_sdk.testing.e2e.BaseE2ETest``.
+
+    Removed in v4.0. Subclassing this emits a :class:`DeprecationWarning`, and
+    conformance B001 flags consumers fleet-wide via the deprecated-symbol
+    manifest. This package is frozen — see ``docs/standards/connector-ci-e2e.md``.
 
     Pytest base — subclass per connector, set class attrs.
 
@@ -156,6 +161,22 @@ class BaseFullDAGE2ETest:
         ``database_spec() -> DatabaseSpec``
         ``agent_spec() -> AgentSpec | None``  (None for DIRECT mode)
     """
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        # SQLAppE2EFullTest is defined in this package and would fire this at SDK
+        # import with no consumer code to point at, on top of its own targeted
+        # warning. Skip in-package subclasses — a consumer subclass still warns
+        # here, and B001 catches the import statically via the manifest regardless.
+        if cls.__module__.startswith("application_sdk.testing.full_dag"):
+            return
+        warnings.warn(
+            "application_sdk.testing.full_dag.BaseFullDAGE2ETest is deprecated; "
+            "use application_sdk.testing.e2e.BaseE2ETest "
+            "— will be removed in v4.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     # --- required class attrs (must be overridden) ---------------------
     connector_short_name: ClassVar[str] = ""
