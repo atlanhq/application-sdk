@@ -31,8 +31,14 @@ merged list: consumers compose the sets their own comparison actually needs.
 The run-volatile set is the intersection of what the SDK's two comparison
 engines (:mod:`application_sdk.testing.integration.comparison` and
 :mod:`application_sdk.testing.parity.comparator`) each stripped before they
-shared this module. Connector-specific additions beyond these three are passed
-per-call rather than added here.
+shared this module, and it agrees with what the connector suites independently
+found: MicroStrategy's transformer emits exactly these three keys and no
+``__timestamp`` and no ``guid``; NetSuite's strips these three plus any key
+containing ``__timestamp``; PowerCenter's transform emits none of them at all,
+because its ``id`` is a deterministic uuid5. Three sources, no fourth field —
+which is why the set is fixed here rather than negotiated per connector.
+Connector-specific additions (NetSuite's ``__timestamp`` suffix rule, say) are
+passed per-call rather than added here.
 """
 
 RUN_VOLATILE_FIELDS: frozenset[str] = frozenset(

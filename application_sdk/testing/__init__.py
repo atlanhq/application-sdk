@@ -12,15 +12,17 @@ same fixture slot a testcontainer would::
 
     from application_sdk.testing import HttpFakeSource
 
+Its pytest fixtures are part of the integration kit rather than this module, so
+one star-import gives a connector the factory and its autouse reset together::
+
+    from application_sdk.testing.integration.fixtures import *  # noqa: F403
+
 Fixtures (import into conftest.py or test files)::
 
     from application_sdk.testing import (
-        reset_http_fake_sources,
         app_context,
         clean_app_registry,
-        clean_http_fake_sources,
         clean_task_registry,
-        http_fake_source_factory,
         mock_binding,
         mock_credential_store,
         mock_heartbeat,
@@ -43,16 +45,13 @@ from application_sdk.testing.fake_source import (
 from application_sdk.testing.fixtures import (
     app_context,
     clean_app_registry,
-    clean_http_fake_sources,
     clean_task_registry,
-    http_fake_source_factory,
     mock_binding,
     mock_credential_store,
     mock_heartbeat,
     mock_pubsub,
     mock_secret_store,
     mock_state_store,
-    reset_http_fake_sources,
     restore_logger_init_flags,
 )
 from application_sdk.testing.mocks import (
@@ -88,15 +87,12 @@ __all__ = [
     "MockStateStore",
     "app_context",
     "clean_app_registry",
-    "clean_http_fake_sources",
     "clean_task_registry",
-    "http_fake_source_factory",
     "mock_binding",
     "mock_credential_store",
     "mock_heartbeat",
     "mock_pubsub",
     "mock_secret_store",
     "mock_state_store",
-    "reset_http_fake_sources",
     "restore_logger_init_flags",
 ]

@@ -10,20 +10,22 @@ an ephemeral loopback port, a hand-rolled path dispatch, a JSON writer, a
 silenced access log, and a thread they remember to join on teardown.
 
 :class:`HttpFakeSource` is that plumbing, once. It occupies exactly the slot a
-testcontainer occupies — a session-scoped fixture yielding a base URL — so a
+testcontainer occupies — the kit's session-scoped ``integration_source`` — so a
 connector's integration tier reads the same whether its source is a container or
 a fake::
 
     @pytest.fixture(scope="session")
-    def source_url(http_fake_source_factory) -> str:
+    def integration_source(http_fake_source_factory) -> HttpFakeSource:
         fake = http_fake_source_factory(name="my-source")
         fake.route(r"/api/v1/objects", list_objects)
         fake.route(r"/api/v1/objects/(?P<object_id>[^/]+)", get_object)
-        return fake.base_url
+        return fake
 
-``http_fake_source_factory`` in :mod:`application_sdk.testing.fixtures` owns the
-session lifecycle, and an autouse fixture alongside it resets every fake's
-recordings before each test, leaving the connector only its routes.
+``http_fake_source_factory`` in :mod:`application_sdk.testing.integration.fixtures`
+owns the session lifecycle, and the autouse ``reset_http_fake_sources`` alongside
+it clears every fake's per-test recordings, leaving the connector only its routes.
+Both arrive with the kit's star-import, so there is no second place to wire them
+up from.
 
 What stays with the connector is the part that is genuinely per-source: the
 endpoint map, the response envelope, and any auth-signature scheme. Those are
@@ -55,18 +57,22 @@ body that never arrives.
 
 from __future__ import annotations
 
-import json
 import re
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, ClassVar, Self
+from typing import Any, Self
 from urllib.parse import parse_qs, urlsplit
 
-from application_sdk.errors.leaves import InvalidInputError, PreconditionError
+import orjson
+
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.testing._errors import (
+    FakeSourceNotRunningError,
+    FakeSourceRouteError,
+)
 
 __all__ = [
     "Authorizer",
@@ -98,21 +104,6 @@ _BODY_REFUSALS = {
 }
 
 
-@dataclass(kw_only=True)
-class FakeSourceRouteError(InvalidInputError):
-    """A route was registered with no HTTP methods."""
-
-    code: ClassVar[str] = "INVALID_INPUT_FAKE_SOURCE_ROUTE"
-    field: str | None = "methods"
-
-
-@dataclass(kw_only=True)
-class FakeSourceNotRunningError(PreconditionError):
-    """``base_url`` or ``port`` was read before the server was started."""
-
-    code: ClassVar[str] = "PRECONDITION_FAKE_SOURCE_NOT_RUNNING"
-
-
 @dataclass(frozen=True)
 class FakeRequest:
     """One inbound request, parsed into the pieces a handler actually wants.
@@ -137,9 +128,9 @@ class FakeRequest:
         if not self.body:
             return default
         try:
-            return json.loads(self.body)
+            return orjson.loads(self.body)
         except (ValueError, UnicodeDecodeError):
-            return default
+            return default  # conformance: ignore[E007] a malformed body is the handler's call, not the fake's: it branches on ``default`` to pick a status code, and a log here would fire on every deliberate negative-path test
 
     def param(self, name: str, default: str | None = None) -> str | None:
         """Query parameter ``name``, or ``default`` when absent or empty."""
@@ -159,7 +150,7 @@ class FakeRequest:
         try:
             return int(raw)
         except ValueError:
-            return default
+            return default  # conformance: ignore[E007] documented above: a malformed query value falls back the way the real source would, and the handler sees only the default
 
     def header(self, name: str, default: str | None = None) -> str | None:
         """Header ``name``, matched case-insensitively."""
@@ -256,7 +247,10 @@ class FakeResponse:
         if body is None:
             return b"", content_type or default_content_type
         return (
-            json.dumps(body, default=str).encode(),
+            # OPT_NON_STR_KEYS keeps stdlib json's coercion of non-str dict keys:
+            # a handler replaying a captured payload keyed by int would otherwise
+            # raise where it previously serialised.
+            orjson.dumps(body, default=str, option=orjson.OPT_NON_STR_KEYS),
             content_type or default_content_type,
         )
 
@@ -380,6 +374,7 @@ class HttpFakeSource:
         self._requests: list[FakeRequest] = []
         self._unmatched: list[FakeRequest] = []
         self._hits: dict[int, int] = {}
+        self._lifetime_hits: dict[int, int] = {}
         for pattern, handler in routes:
             self.route(pattern, handler)
 
@@ -470,22 +465,32 @@ class HttpFakeSource:
             )
 
     def unused_routes(self) -> Sequence[str]:
-        """Patterns of routes no request ever matched.
+        """Patterns of routes no request has matched for the life of this fake.
 
         A route the extract never called is either dead fixture weight or a code
         path the test believes it covers and does not.
+
+        Deliberately reads a counter :meth:`reset` does not clear, because the two
+        counters answer questions at different scopes. :meth:`hits` is per-test —
+        "did *this* test call that endpoint?" — and must start at zero for every
+        test. "Is this route dead fixture weight?" is per-suite, and can only be
+        answered once every test has run. Reading the per-test counter here would
+        report every route the *other* tests exercised as unused, which is a
+        failure in any suite with more than one route-usage assertion.
         """
         with self._lock:
             return [
                 route.pattern.pattern
                 for index, route in enumerate(self._routes)
-                if not self._hits.get(index)
+                if not self._lifetime_hits.get(index)
             ]
 
     def reset(self) -> None:
-        """Forget all recorded requests and route hits, keeping the server up.
+        """Forget this test's recorded requests and route hits, keeping the server up.
 
         The move that lets one session-scoped fake serve per-test assertions.
+        :meth:`unused_routes` reads a separate lifetime counter and is unaffected;
+        see its docstring for why the two scopes cannot share one counter.
         """
         with self._lock:
             self._requests.clear()
@@ -576,6 +581,7 @@ class HttpFakeSource:
         index, route, match = selected
         with self._lock:
             self._hits[index] = self._hits.get(index, 0) + 1
+            self._lifetime_hits[index] = self._lifetime_hits.get(index, 0) + 1
         matched = FakeRequest(
             method=request.method,
             path=request.path,
@@ -680,7 +686,7 @@ def _make_handler_class(fake: HttpFakeSource) -> type[BaseHTTPRequestHandler]:
                 try:
                     size = int(line.split(b";", 1)[0].strip(), 16)
                 except ValueError:
-                    return None
+                    return None  # conformance: ignore[E007] a malformed chunk header is a protocol error the caller turns into a 400; the status code is the report
                 if size < 0 or len(decoded) + size > _MAX_BODY_BYTES:
                     return None
                 if size == 0:
@@ -708,6 +714,7 @@ def _make_handler_class(fake: HttpFakeSource) -> type[BaseHTTPRequestHandler]:
             try:
                 length = int(raw)
             except ValueError:
+                # conformance: ignore[E007] a malformed Content-Length is a protocol error reported to the client as the 400 returned here
                 return b"", 400
             if length < 0:
                 return b"", 400

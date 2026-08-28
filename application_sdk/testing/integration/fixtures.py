@@ -30,6 +30,12 @@ ordinary pytest fixtures; a connector star-imports them and overrides the
     def integration_source():
         ...  # a testcontainer, an HTTP fake, whatever this connector extracts from
 
+A source with no image to pull uses :func:`http_fake_source_factory`, which ships
+here rather than in :mod:`application_sdk.testing.fixtures` precisely so that the
+factory and its autouse ``reset_http_fake_sources`` arrive together with the rest
+of the kit — a suite cannot pick up one and miss the other. See
+``docs/guides/integration-fixtures.md``.
+
 Everything else is a plain pytest override. A suite that seeds credentials
 overrides ``integration_secrets``; one that needs a real store overrides
 ``infrastructure`` itself; one that wants Prometheus on overrides
@@ -129,6 +135,7 @@ import pytest
 import pytest_asyncio
 
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.testing.fake_source import HttpFakeSourceFactory
 from application_sdk.testing.integration._errors import (
     AppRegistrationMissingError,
     IntegrationEnvOrderingError,
@@ -143,6 +150,15 @@ if TYPE_CHECKING:
     from application_sdk.infrastructure.context import InfrastructureContext
 
 logger = get_logger(__name__)
+
+_ACTIVE_FAKE_SOURCE_FACTORY: HttpFakeSourceFactory | None = None
+"""The live ``http_fake_source_factory``, or ``None`` before one is requested.
+
+Module-level rather than a fixture dependency because ``reset_http_fake_sources``
+must not *instantiate* the session factory — an autouse fixture that requested it
+would stand up a server for every suite that star-imports the kit, including the
+ones whose source is a container.
+"""
 
 CLEANUP_INTERCEPTOR_ENV = "APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR"
 """Env var gating ``App.on_complete()``'s file and object-store cleanup."""
@@ -453,6 +469,51 @@ def integration_source() -> object:
 
 
 @pytest.fixture(scope="session")
+def http_fake_source_factory() -> Iterator[HttpFakeSourceFactory]:
+    """Session-scoped factory for started :class:`HttpFakeSource` servers.
+
+    The slot a testcontainer fixture occupies, for an HTTP source with no image
+    to pull. Build the fake in the connector's ``integration_source`` override,
+    register that connector's routes on it, and return it — the kit hands it to
+    ``integration_secrets`` and otherwise leaves it alone, exactly as it would a
+    container::
+
+        @pytest.fixture(scope="session")
+        def integration_source(http_fake_source_factory) -> HttpFakeSource:
+            fake = http_fake_source_factory(name="my-source")
+            fake.route(r"/api/v1/objects", list_objects)
+            return fake
+
+    Every fake built here is stopped when the session ends, and
+    ``reset_http_fake_sources`` clears each one's per-test recordings before
+    every test. Both arrive with the same star-import as the rest of the kit, so
+    a suite cannot pick up the factory and miss the reset.
+    """
+    global _ACTIVE_FAKE_SOURCE_FACTORY
+    factory = HttpFakeSourceFactory()
+    _ACTIVE_FAKE_SOURCE_FACTORY = factory
+    try:
+        yield factory
+    finally:
+        _ACTIVE_FAKE_SOURCE_FACTORY = None
+        factory.stop_all()
+
+
+@pytest.fixture(autouse=True)
+def reset_http_fake_sources() -> None:
+    """Reset every session fake's per-test recordings, once a factory is live.
+
+    Autouse and function-scoped, so the pairing with the session factory is
+    structural rather than something each test remembers to request. Tests that
+    run before the factory is first instantiated have no fakes to reset and pay
+    nothing. ``HttpFakeSource.unused_routes()`` reads a lifetime counter this
+    does not touch, so the per-suite dead-route assertion still works.
+    """
+    if _ACTIVE_FAKE_SOURCE_FACTORY is not None:
+        _ACTIVE_FAKE_SOURCE_FACTORY.reset_all()
+
+
+@pytest.fixture(scope="session")
 def integration_secrets(integration_source: object) -> Mapping[str, str]:
     """Seed for the mocked secret store, as a ``{key: json}`` mapping.
 
@@ -653,6 +714,7 @@ __all__ = [
     "KitOptions",
     "embedded_temporal",
     "executor",
+    "http_fake_source_factory",
     "infrastructure",
     "integration_app_cls",
     "integration_options",
@@ -660,6 +722,7 @@ __all__ = [
     "integration_source",
     "integration_task_queue",
     "kit_infrastructure",
+    "reset_http_fake_sources",
     "store_root",
     "temporal_client",
     "worker",

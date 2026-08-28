@@ -27,7 +27,6 @@ from typing import Any
 import pytest
 
 from application_sdk.testing import fake_source
-from application_sdk.testing import fixtures as sdk_fixtures
 from application_sdk.testing.fake_source import (
     FakeRequest,
     FakeResponse,
@@ -38,10 +37,6 @@ from application_sdk.testing.fake_source import (
 )
 
 pytestmark = pytest.mark.allow_hosts(["127.0.0.1"])
-
-http_fake_source_factory = sdk_fixtures.http_fake_source_factory
-clean_http_fake_sources = sdk_fixtures.clean_http_fake_sources
-reset_http_fake_sources = sdk_fixtures.reset_http_fake_sources
 
 HYPHENATED = "X-Fake-AuthToken"
 
@@ -321,7 +316,9 @@ class TestRequestBodyFraming:
         conn = _connect(echo)
         try:
             conn.request("POST", "/api/echo", body=iter([b"payload"]))
-            assert conn.getresponse().read() == b'{"body": "payload"}'
+            # Decoded, not byte-compared: the server owns response framing and
+            # its JSON writer's whitespace is not part of the contract.
+            assert json.loads(conn.getresponse().read()) == {"body": "payload"}
             conn.request("GET", "/api/objects")
             following = conn.getresponse()
             assert following.status == 200
@@ -599,6 +596,19 @@ class TestRecording:
         _json(f"{fake.base_url}/api/objects")
         assert fake.unused_routes() == [r"/api/objects/(?P<object_id>obj-\d+)"]
 
+    def test_unused_routes_survives_reset(self, fake: HttpFakeSource) -> None:
+        """The dead-route ledger is per-suite; only ``hits`` is per-test.
+
+        ``reset`` runs before every test via the kit's autouse fixture, so a
+        ``unused_routes`` that read the per-test counter would report every route
+        the *other* tests exercised — failing any suite with more than one
+        route-usage assertion.
+        """
+        _json(f"{fake.base_url}/api/objects")
+        fake.reset()
+        assert fake.hits(r"/api/objects") == 0
+        assert fake.unused_routes() == [r"/api/objects/(?P<object_id>obj-\d+)"]
+
     def test_reset_clears_recordings_but_keeps_serving(
         self, fake: HttpFakeSource
     ) -> None:
@@ -864,42 +874,6 @@ class TestHttpFakeSourceFactory:
         with pytest.raises(OSError, match="cannot bind"):
             factory(name="doomed")
         assert list(factory.sources) == []
-
-
-@pytest.fixture(scope="session")
-def shipped_fixture_source(
-    http_fake_source_factory: HttpFakeSourceFactory,
-) -> HttpFakeSource:
-    """The connector-side half of the shipped pattern: routes, nothing else."""
-    source = http_fake_source_factory(
-        name="shipped-fixture-source", connection_timeout=0.2
-    )
-    source.route(r"/api/objects", lambda _r: {"items": OBJECTS})
-    return source
-
-
-class TestShippedFixtures:
-    """The session factory plus the function-scoped reset, used as documented."""
-
-    def test_the_session_factory_yields_a_started_server(
-        self,
-        shipped_fixture_source: HttpFakeSource,
-        clean_http_fake_sources: HttpFakeSourceFactory,
-    ) -> None:
-        url = shipped_fixture_source.base_url
-        assert _json(f"{url}/api/objects") == (200, {"items": OBJECTS})
-        assert len(shipped_fixture_source.requests) == 1
-        assert shipped_fixture_source.unused_routes() == []
-        assert list(clean_http_fake_sources.sources) == [shipped_fixture_source]
-
-    def test_recordings_do_not_leak_between_tests(
-        self,
-        shipped_fixture_source: HttpFakeSource,
-        clean_http_fake_sources: HttpFakeSourceFactory,
-    ) -> None:
-        assert list(shipped_fixture_source.requests) == []
-        assert shipped_fixture_source.unused_routes() == [r"/api/objects"]
-        assert _json(f"{shipped_fixture_source.base_url}/api/objects")[0] == 200
 
 
 class TestResponseFramingIsServerOwned:

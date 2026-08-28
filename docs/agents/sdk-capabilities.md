@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.30.0
-source-sha:    411ea0f885b449725bf7b6ff37cebbe2c7fe67e1
-source-date:   2026-08-28T17:31:07+01:00
+source-sha:    4fb03c85dbad5d801a15ae097874b05dbd29c8dc
+source-date:   2026-08-28T17:32:50+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 298 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 297 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3429,14 +3429,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Import:** `from application_sdk.testing.fake_source import FakeSourceNotRunningError`
 - **Signature:** `class FakeSourceNotRunningError(*, ...)`
 - **Summary:** ``base_url`` or ``port`` was read before the server was started.
-- **Defined in:** `application_sdk/testing/fake_source.py`
+- **Defined in:** `application_sdk/testing/_errors.py`
 
 #### `FakeSourceRouteError`
 
 - **Import:** `from application_sdk.testing.fake_source import FakeSourceRouteError`
 - **Signature:** `class FakeSourceRouteError(*, ...)`
 - **Summary:** A route was registered with no HTTP methods.
-- **Defined in:** `application_sdk/testing/fake_source.py`
+- **Defined in:** `application_sdk/testing/_errors.py`
 
 #### `FieldDiff`
 
@@ -4188,13 +4188,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** AppRegistry reset before and after each test.
 - **Defined in:** `application_sdk/testing/fixtures.py`
 
-#### `clean_http_fake_sources`
-
-- **Import:** `from application_sdk.testing import clean_http_fake_sources`
-- **Signature:** `clean_http_fake_sources(http_fake_source_factory: HttpFakeSourceFactory)`
-- **Summary:** The session factory, with recordings reset before and after the test.
-- **Defined in:** `application_sdk/testing/fixtures.py`
-
 #### `clean_task_registry`
 
 - **Import:** `from application_sdk.testing import clean_task_registry`
@@ -4588,10 +4581,10 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 #### `http_fake_source_factory`
 
-- **Import:** `from application_sdk.testing import http_fake_source_factory`
-- **Signature:** `http_fake_source_factory()`
-- **Summary:** Session-scoped factory for started HttpFakeSource servers.
-- **Defined in:** `application_sdk/testing/fixtures.py`
+- **Import:** `from application_sdk.testing.integration.fixtures import http_fake_source_factory`
+- **Signature:** `http_fake_source_factory() -> Iterator[HttpFakeSourceFactory]`
+- **Summary:** Session-scoped factory for started :class:`HttpFakeSource` servers.
+- **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
 #### `infrastructure`
 
@@ -4922,10 +4915,10 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 #### `reset_http_fake_sources`
 
-- **Import:** `from application_sdk.testing import reset_http_fake_sources`
-- **Signature:** `reset_http_fake_sources(request: pytest.FixtureRequest)`
-- **Summary:** Reset every session fake before each test, once the factory exists.
-- **Defined in:** `application_sdk/testing/fixtures.py`
+- **Import:** `from application_sdk.testing.integration.fixtures import reset_http_fake_sources`
+- **Signature:** `reset_http_fake_sources() -> None`
+- **Summary:** Reset every session fake's per-test recordings, once a factory is live.
+- **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
 #### `restore_logger_init_flags`
 
