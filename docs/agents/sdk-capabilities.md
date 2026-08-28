@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.29.0
-source-sha:    41ebbafc00b1ae1a5fe30feac981266db5aeb59d
-source-date:   2026-08-27T20:33:08+01:00
+sdk-version:   3.30.0
+source-sha:    5c71f1f1552ba261d03c426052f20efac43f523f
+source-date:   2026-08-28T07:26:25Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 265 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 266 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -4782,6 +4782,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `redact_text(text: str, *, secrets: Sequence[str] = ()) -> str`
 - **Summary:** Return *text* with credential-shaped and literally-known values blanked.
 - **Defined in:** `application_sdk/testing/harness/evidence.py`
+
+#### `restore_logger_init_flags`
+
+- **Import:** `from application_sdk.testing import restore_logger_init_flags`
+- **Signature:** `restore_logger_init_flags()`
+- **Summary:** Stop a test that reset the logger's init state from leaking it forward.
+- **Defined in:** `application_sdk/testing/fixtures.py`
 
 #### `run_comparison`
 
