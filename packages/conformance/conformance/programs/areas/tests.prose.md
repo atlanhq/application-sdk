@@ -154,15 +154,29 @@ to residue):
 
 - **T003 DeprecatedSdrHarness** — a class under `tests/` subclasses
   `BaseSDRIntegrationTest`, which is deprecated and will be removed in v4.0.
-  Migrate to the agnostic agent-mode e2e harness (same shape as the T002
-  example above): a `BaseE2ETest` subclass via the generated `*GeneratedE2EBase`
-  with `mode = RunMode.AGENT`, `@pytest.mark.e2e`, guarded import.
+  **Do not invent an SDR replacement harness, and do not port the suite
+  wholesale into an e2e test.** SDR is a deployment mode, not a test tier:
+  `RunMode.AGENT` vs `RunMode.DIRECT` is only *where* the connector runs, so
+  most of what an SDR suite asserts is not SDR-specific. Split the scenarios by
+  concern:
 
-  **Ordering matters:** ADD the agent-mode e2e test first and confirm T002 is
-  satisfied, THEN delete the `BaseSDRIntegrationTest` subclass (`test_sdr.py`) —
-  an app that removes the SDR test before adding the e2e replacement would fail
-  T002.  Carry over any behaviour the SDR suite validated (e.g. `manifest_path`
-  assertions) into the e2e test.
+  - `api="auth"` / `api="preflight"` scenarios → call the handler directly
+    (`handler.test_auth(...)`, `handler.preflight_check(...)`) in the app's own
+    unit or integration tests, negative cases included. Not an e2e.
+  - credential resolution → already covered in application-sdk's
+    `tests/unit/credentials`; per-app, test against fake secret stores rather
+    than a live stack.
+  - `api="workflow"` scenarios, and anything asserting a full DAG → `tests/e2e/`
+    via the generated `*GeneratedE2EBase`, choosing the run mode with the `mode`
+    ClassVar.
+
+  **Ordering matters:** an agent-mode e2e (same shape as the T002 example above:
+  `mode = RunMode.AGENT`, `@pytest.mark.e2e`, guarded import) is what satisfies
+  T002, because agent-mode credential routing and upload behaviour are the parts
+  that genuinely differ by mode. ADD that test first and confirm T002 is
+  satisfied, THEN re-home the remaining scenarios per the list above and delete
+  the `BaseSDRIntegrationTest` subclass (`test_sdr.py`) — an app that removes the
+  SDR test before adding the agent-mode e2e would fail T002.
 
   **Also remove the orphaned old SDR CI** in the same change — deleting the
   legacy suite otherwise leaves a permanently failing check.  Fleet

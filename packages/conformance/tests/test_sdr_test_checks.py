@@ -7,8 +7,9 @@ with ``mode = RunMode.AGENT``) or a legacy BaseSDRIntegrationTest subclass.  A
 direct-mode e2e test (``mode = RunMode.DIRECT``) is not SDR coverage.
 
 T003 (DeprecatedSdrHarness) flags any BaseSDRIntegrationTest subclass under
-tests/: the harness is deprecated for the agnostic agent-mode e2e harness
-(BaseE2ETest with mode = RunMode.AGENT) and will be removed in v4.0.
+tests/: the harness is deprecated and removed in v4.0.  Its message names no
+replacement harness — SDR is a deployment mode, not a test tier — and instead
+splits the suite by concern.  An agent-mode e2e remains the T002 answer only.
 
 T002 gates on self_deployed_runtime: true in atlan.yaml.  T003 fires on any
 BaseSDRIntegrationTest subclass regardless of the atlan.yaml flag.
@@ -246,9 +247,21 @@ def test_t003_fires_on_any_sdr_subclass(tmp_path: Path) -> None:
     findings = _run(tmp_path)
     t003 = [f for f in findings if f.rule_id == "T003"]
     assert len(t003) == 1
-    # Message nudges toward the agent-mode e2e harness.
-    assert "deprecated" in t003[0].message
-    assert "RunMode.AGENT" in t003[0].message
+    message = t003[0].message
+    assert "deprecated" in message
+    # The message must split the suite by concern, not name a replacement
+    # harness: SDR is a deployment mode, not a test tier, so auth/preflight and
+    # credential resolution do not belong in an e2e at all. Pinned because the
+    # "migrate to the agnostic agent-mode e2e harness" framing was wrong and
+    # had propagated to six fleet-facing surfaces before it was caught.
+    assert "no single replacement" in message
+    assert "deployment mode, not a test tier" in message
+    assert "handler.test_auth" in message
+    assert "tests/unit/credentials" in message
+    # An agent-mode e2e is still what satisfies T002 — that part is genuinely
+    # mode-specific — so the message keeps naming it, as the T002 answer only.
+    assert "RunMode.AGENT" in message
+    assert "satisfies T002" in message
 
 
 def test_t003_fires_even_with_manifest_path(tmp_path: Path) -> None:

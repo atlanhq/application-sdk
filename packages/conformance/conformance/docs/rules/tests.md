@@ -145,25 +145,21 @@ test tier: `RunMode.AGENT` vs `RunMode.DIRECT` is only *where* the connector run
 most of what an SDR suite asserts is not SDR-specific at all. Split the scenarios by
 concern:
 
-.. list-table:
+```text
+auth / preflight scenarios
+    -> the app's own unit or integration tests, calling the
+       handler directly (handler.test_auth(...),
+       handler.preflight_check(...)), negative cases included.
+       Not an e2e.
 
-```python
-:header-rows: 1
+credential resolution
+    -> already proven once in application-sdk under
+       tests/unit/credentials/. Per-app, test against fake
+       secret stores rather than a live stack.
 
-* - Scenario
-  - Where it belongs
-* - `api="auth"`, `api="preflight"`
-  - The app's own unit or integration tests, calling the handler
-    directly (`handler.test_auth(...)`,
-    `handler.preflight_check(...)`) with negative cases included.
-    Not an e2e.
-* - Credential resolution
-  - Already proven once in application-sdk under
-    `tests/unit/credentials/`. Per-app, test against fake secret
-    stores rather than a live stack.
-* - `api="workflow"` / a full DAG
-  - `tests/e2e/` via the generated `*GeneratedE2EBase`, choosing
-    the run mode with the `mode` ClassVar.
+workflow scenarios / a full DAG
+    -> tests/e2e/ via the generated *GeneratedE2EBase,
+       choosing the run mode with the mode ClassVar.
 ```
 
 **Remediation** — the agent-mode e2e is what satisfies T002, because agent-mode
