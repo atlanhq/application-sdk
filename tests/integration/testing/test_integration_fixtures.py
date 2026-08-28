@@ -74,6 +74,8 @@ def integration_app_cls():
 """
 
 _TEST = """
+import os
+
 import pytest
 
 from application_sdk.common.task_queue import task_queue_from_env
@@ -84,6 +86,12 @@ from kit_smoke_app import EchoApp, EchoInput
 async def test_the_app_runs_through_the_kit(executor):
     output = await executor.execute_app(EchoApp, EchoInput(value=41))
     assert output.result == 42
+    # KitOptions.preserve_artifacts, observed from inside the worker fixture's
+    # lifetime — the only place the default exists, since it is unset again on
+    # teardown. _clean_env() strips APPLICATION_SDK_ENABLE_* from the child
+    # environment, so a pass here can only come from the kit's own default.
+    # It has to ride this async test: a sync one cannot request `worker`.
+    assert os.environ["APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR"] == "false"
 
 
 def test_the_queue_is_the_deployment_queue(integration_task_queue):
@@ -98,6 +106,51 @@ def test_mocked_infrastructure_is_installed(infrastructure):
     assert get_infrastructure() is infrastructure
     assert isinstance(infrastructure.state_store, MockStateStore)
     assert isinstance(infrastructure.secret_store, MockSecretStore)
+"""
+
+# A suite whose App never reaches the registry — the precondition the module
+# docstring of fixtures.py calls load-bearing ("unregistered App fails before
+# create_worker snapshots an empty registry"). Overriding integration_app_cls
+# is what reaches that call: the default fixture raises on the *parameter*,
+# before the worker body runs.
+_UNREGISTERED_CONFTEST = '''
+import os
+
+os.environ.setdefault("ATLAN_APPLICATION_NAME", "kitsmoke")
+os.environ.setdefault("ATLAN_DEPLOYMENT_NAME", "ci")
+
+import pytest  # noqa: E402
+
+from application_sdk.app.base import App  # noqa: E402
+
+from application_sdk.testing.integration.fixtures import *  # noqa: E402, F403
+
+
+class NeverRegisteredApp(App):
+    """Subclasses App without the registration that stamps ``_app_name``."""
+
+
+@pytest.fixture(scope="session")
+def integration_app_cls():
+    return NeverRegisteredApp
+
+
+@pytest.fixture(scope="session")
+def temporal_client():
+    # The guard under test runs before create_worker is handed this, so the
+    # case need not pay ~30s to boot a dev server it will never reach. If the
+    # guard is ever moved below create_worker, this stub makes the test fail
+    # rather than quietly pass.
+    return object()
+'''
+
+_UNREGISTERED_TEST = """
+import pytest
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_the_worker_is_built(worker):
+    raise AssertionError("the worker fixture should have refused to build")
 """
 
 _INI = """
@@ -187,3 +240,26 @@ def test_env_set_after_the_import_fails_collection(adopting_suite: Path) -> None
     result = _run_pytest(adopting_suite, "-q")
     assert result.returncode != 0
     assert "IntegrationEnvOrderingError" in result.stdout + result.stderr
+
+
+def test_the_worker_fixture_refuses_an_unregistered_app(
+    adopting_suite: Path,
+) -> None:
+    """The worker fixture's own precondition, asserted through the fixture.
+
+    ``test_unregistered_app_fails_before_the_worker_is_built`` in the unit
+    suite exercises ``_verify_registration`` directly, and
+    ``test_missing_app_cls_override_is_reported`` above fails on the fixture
+    parameter without ever reaching the worker body. Neither holds the call
+    site itself to anything: deleting line 519 of ``fixtures.py`` leaves both
+    green, and the worker then starts against an empty registry and fails
+    every workflow task it is handed.
+    """
+    suite = adopting_suite / "tests" / "integration"
+    (suite / "conftest.py").write_text(_UNREGISTERED_CONFTEST)
+    (suite / "test_kit.py").write_text(_UNREGISTERED_TEST)
+    result = _run_pytest(adopting_suite, "-q")
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, output
+    assert "AppRegistrationMissingError" in output, output
+    assert "not in the App registry" in output, output

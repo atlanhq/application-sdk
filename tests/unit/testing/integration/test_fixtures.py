@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import inspect
 import os
 import subprocess
@@ -413,6 +414,48 @@ class TestLazyPackage:
         from application_sdk.testing import integration
 
         assert set(integration._LAZY_EXPORTS) == set(integration.__all__)
+
+    def test_type_checking_block_matches_the_lazy_map(self) -> None:
+        """The third parallel list, read the way its only two readers read it.
+
+        ``_LAZY_EXPORTS`` and ``__all__`` are pinned to each other above. The
+        ``if TYPE_CHECKING:`` block is a third copy, and it is the one griffe
+        and pyright resolve names from — neither follows ``__getattr__``. A
+        name added to the other two and omitted here leaves this repo entirely
+        green: runtime resolves it lazily, pyright only errors on names absent
+        from the *target* submodule, and Capability Manifest Drift compares a
+        regenerated manifest against the committed one, so both are missing the
+        symbol and agree. Downstream, it vanishes from
+        ``docs/agents/sdk-capabilities.md`` and types as unknown at every
+        consumer call site — the two failures the block's own comment says it
+        exists to prevent.
+
+        Compared as a dict, not a set, so a name pointed at the wrong module is
+        caught too: ``__getattr__`` would import one module and static readers
+        the other.
+        """
+        from application_sdk.testing import integration
+
+        assert integration.__file__ is not None
+        tree = ast.parse(Path(integration.__file__).read_text())
+        declared: dict[str, str] = {}
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.If)
+                and isinstance(node.test, ast.Name)
+                and node.test.id == "TYPE_CHECKING"
+            ):
+                continue
+            for stmt in ast.walk(node):
+                if isinstance(stmt, ast.ImportFrom):
+                    # Spelled exactly as _LAZY_EXPORTS spells it: a relative
+                    # import keeps its leading dots, an absolute one its path.
+                    module = "." * stmt.level + (stmt.module or "")
+                    for alias in stmt.names:
+                        declared[alias.asname or alias.name] = module
+
+        assert declared, "no TYPE_CHECKING import block found"
+        assert declared == integration._LAZY_EXPORTS
 
 
 def _run_python(script: str) -> subprocess.CompletedProcess[str]:
