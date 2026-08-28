@@ -263,6 +263,11 @@ A ``str`` means the parameter's value must equal it exactly; a compiled regex
 means :meth:`~re.Pattern.fullmatch` against the value; ``True`` means the
 parameter must be present with any value (including empty); ``False`` means it
 must be absent.
+
+A repeated query parameter (``?type=a&type=b``) is tested against its FIRST
+value only — a source whose request shapes differ in a later repetition of the
+same key cannot be discriminated by ``query=``; model those as separate
+handler-side branches on ``request.query`` instead (see :meth:`HttpFakeSource.route`).
 """
 
 QuerySpec = Mapping[str, QueryConstraint]
@@ -497,6 +502,12 @@ class HttpFakeSource:
         Query conditions gate matching only — ``request.params`` and
         ``request.query`` still carry the whole query string, so a route pinned on
         one parameter paginates on the others as usual.
+
+        **Repeated parameters.** A condition tests only the FIRST value of a
+        repeated query parameter (``?type=a&type=b``); a source that dispatches
+        on the full multiset of a repeated key cannot be expressed as separate
+        ``query=``-constrained routes. Model that dispatch inside one handler via
+        ``request.query``, which keeps every value.
         """
         upper = frozenset(method.upper() for method in methods)
         if not upper:
@@ -1233,6 +1244,19 @@ def assert_extract_roundtrip(
     sides before comparison, for an extract whose record order is not guaranteed;
     ``normalise`` is applied to both sides, to drop fields that cannot be stable
     (timestamps, run ids). Returns the extract's output.
+
+    **Direct-call tier only.** This assertion calls ``extract_fn`` synchronously
+    and inspects ``fake.unmatched`` / ``fake.unused_routes()`` immediately after,
+    so it only works for a suite that invokes the extract function in-process.
+    Once the test routes through a Temporal workflow (``execute_app``) there is
+    no callable to hand it, so call the pieces separately instead: run the
+    workflow, then assert on the fake directly from the test after the run
+    completes — the two checks accumulate on the fake instance across its
+    lifetime, not per call, so this still works::
+
+        await executor.execute_app(YourApp, input_data)
+        assert not fake.unmatched
+        assert fake.unused_routes() == []
     """
     if isinstance(fake, FakeSourceGroup):
         actual = extract_fn(**dict(fake.base_urls))
