@@ -703,7 +703,9 @@ def emit_preflight_check_outcome(
     # The aggregate error wins over check order, mirroring _build_block_error:
     # SDR inserts a non-fatal secret-store row ahead of the real failure and
     # pins the real one on result.error — first-failed would steal the banner.
-    primary = result.error or next((c.error for c in failed if c.error is not None), None)
+    primary = result.error or next(
+        (c.error for c in failed if c.error is not None), None
+    )
     reason = result.status.value
     if result.status is PreflightStatus.NOT_READY:
         reason = primary.code if primary is not None else PREFLIGHT_FALLBACK_CODE
