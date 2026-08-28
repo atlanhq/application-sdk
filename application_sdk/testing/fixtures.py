@@ -7,6 +7,19 @@ Import these fixtures in your conftest.py or test files::
 Or import everything via the testing module::
 
     from application_sdk.testing import app_context, mock_state_store
+
+For an HTTP source with no container to pull, ``http_fake_source_factory`` fills
+the testcontainer slot. Build the fake in a session-scoped fixture and return
+its base URL; recordings are reset automatically before every test::
+
+    @pytest.fixture(scope="session")
+    def source_url(http_fake_source_factory) -> str:
+        fake = http_fake_source_factory(name="my-source")
+        fake.route(r"/api/v1/objects", list_objects)
+        return fake.base_url
+
+The autouse reset only applies where these fixtures are visible, so a conftest
+must import ``reset_http_fake_sources`` alongside ``http_fake_source_factory``.
 """
 
 from collections.abc import Generator
@@ -17,6 +30,7 @@ from application_sdk.app.context import AppContext
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.constants import LOCAL_WORKFLOW_ID
 from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter
+from application_sdk.testing.fake_source import HttpFakeSourceFactory
 from application_sdk.testing.mocks import (
     MockBinding,
     MockCredentialStore,
@@ -25,6 +39,8 @@ from application_sdk.testing.mocks import (
     MockSecretStore,
     MockStateStore,
 )
+
+_ACTIVE_FACTORY: HttpFakeSourceFactory | None = None
 
 
 @pytest.fixture
@@ -152,3 +168,61 @@ def restore_logger_init_flags() -> Generator[None, None, None]:
             AtlanLoggerAdapter._initialized = True
         if flush_task_started:
             AtlanLoggerAdapter._flush_task_started = True
+
+
+@pytest.fixture(scope="session")
+def http_fake_source_factory() -> Generator[HttpFakeSourceFactory, None, None]:
+    """Session-scoped factory for started HttpFakeSource servers.
+
+    The slot a testcontainer fixture occupies, for an HTTP source with no image to
+    pull. Call it from the connector's own session-scoped fixture to build a fake,
+    register that connector's routes on the returned instance, and return its
+    ``base_url``; every fake built here is stopped when the session ends::
+
+        @pytest.fixture(scope="session")
+        def source_url(http_fake_source_factory) -> str:
+            fake = http_fake_source_factory(name="my-source")
+            fake.route(r"/api/v1/objects", list_objects)
+            return fake.base_url
+
+    Once this fixture is live, ``reset_http_fake_sources`` clears every fake's
+    recorded requests and route hits before each test, so per-test assertions
+    never read a previous test's traffic.
+    """
+    global _ACTIVE_FACTORY
+    factory = HttpFakeSourceFactory()
+    _ACTIVE_FACTORY = factory
+    try:
+        yield factory
+    finally:
+        _ACTIVE_FACTORY = None
+        factory.stop_all()
+
+
+@pytest.fixture(autouse=True)
+def reset_http_fake_sources(request: pytest.FixtureRequest) -> None:
+    """Reset every session fake before each test, once the factory exists.
+
+    Autouse and function-scoped, so the pairing between the session factory and
+    the per-test reset is structural rather than something every test remembers
+    to request. Tests running before the factory is first instantiated have no
+    fakes to reset and pay nothing.
+    """
+    del request
+    if _ACTIVE_FACTORY is not None:
+        _ACTIVE_FACTORY.reset_all()
+
+
+@pytest.fixture
+def clean_http_fake_sources(
+    http_fake_source_factory: HttpFakeSourceFactory,
+) -> Generator[HttpFakeSourceFactory, None, None]:
+    """The session factory, with recordings reset before and after the test.
+
+    The before-test reset already happens automatically via
+    ``reset_http_fake_sources``; this fixture exists for suites that want to
+    request the factory explicitly, and it additionally resets after the test.
+    """
+    http_fake_source_factory.reset_all()
+    yield http_fake_source_factory
+    http_fake_source_factory.reset_all()
