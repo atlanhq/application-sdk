@@ -59,8 +59,8 @@ collapses only ``{auth-type}.<field>`` to a root-level ``<field>``. A connector
 declaring, say, ``auth-type: "iam"`` while keeping ``basic.*`` keys reaches its
 client with no credential fields at all, and fails as a *source* authentication
 error rather than a payload one (FND-923). The example is ``basic`` throughout;
-for any other auth type derive both from
-:func:`~application_sdk.testing._agent_credentials.agent_credential_ref_keys`.
+for any other auth type both the declared ``auth-type`` and the dotted prefix
+change with it.
 """
 
 from __future__ import annotations
