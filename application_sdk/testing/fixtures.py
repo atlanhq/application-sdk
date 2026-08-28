@@ -7,6 +7,12 @@ Import these fixtures in your conftest.py or test files::
 Or import everything via the testing module::
 
     from application_sdk.testing import app_context, mock_state_store
+
+These are the cross-tier fixtures — registry isolation, mocked infrastructure,
+logger-state restoration. The integration tier's own fixtures, including
+``http_fake_source_factory`` for an HTTP source with no container to pull, live
+in :mod:`application_sdk.testing.integration.fixtures` and are star-imported
+from a connector's ``tests/integration/conftest.py`` as one unit.
 """
 
 from collections.abc import Generator

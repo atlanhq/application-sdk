@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.30.0
-source-sha:    c049bdfc7f824a45030a685534708e6389a08b4b
-source-date:   2026-08-28T12:21:21+01:00
+source-sha:    593ec61a0e3696eb29fcaff3704f3ad15b27add8
+source-date:   2026-08-28T19:48:05+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 283 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 297 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3408,6 +3408,36 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** The budget ran out while work was still progressing.
 - **Defined in:** `application_sdk/testing/harness/outcome.py`
 
+#### `FakeRequest`
+
+- **Import:** `from application_sdk.testing import FakeRequest`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `class FakeRequest(method: str, ...)`
+- **Summary:** One inbound request, parsed into the pieces a handler actually wants.
+- **Defined in:** `application_sdk/testing/fake_source.py`
+
+#### `FakeResponse`
+
+- **Import:** `from application_sdk.testing import FakeResponse`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `class FakeResponse(status: int = 200, ...)`
+- **Summary:** What a handler returns: a status, a body, and optional headers.
+- **Defined in:** `application_sdk/testing/fake_source.py`
+
+#### `FakeSourceNotRunningError`
+
+- **Import:** `from application_sdk.testing.fake_source import FakeSourceNotRunningError`
+- **Signature:** `class FakeSourceNotRunningError(*, ...)`
+- **Summary:** ``base_url`` or ``port`` was read before the server was started.
+- **Defined in:** `application_sdk/testing/_errors.py`
+
+#### `FakeSourceRouteError`
+
+- **Import:** `from application_sdk.testing.fake_source import FakeSourceRouteError`
+- **Signature:** `class FakeSourceRouteError(*, ...)`
+- **Summary:** A route was registered with no HTTP methods.
+- **Defined in:** `application_sdk/testing/_errors.py`
+
 #### `FieldDiff`
 
 - **Import:** `from application_sdk.testing.parity import FieldDiff`
@@ -3465,6 +3495,22 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class HealthReading(*, status: int | None = None, error: str = '')`
 - **Summary:** One reading of an HTTP health endpoint.
 - **Defined in:** `application_sdk/testing/harness/preconditions.py`
+
+#### `HttpFakeSource`
+
+- **Import:** `from application_sdk.testing import HttpFakeSource`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `class HttpFakeSource(*, ...)`
+- **Summary:** A loopback HTTP server that replays a connector's reconstructed responses.
+- **Defined in:** `application_sdk/testing/fake_source.py`
+
+#### `HttpFakeSourceFactory`
+
+- **Import:** `from application_sdk.testing import HttpFakeSourceFactory`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `class HttpFakeSourceFactory()`
+- **Summary:** The fakes one pytest session built, owned in one place.
+- **Defined in:** `application_sdk/testing/fake_source.py`
 
 #### `HttpRequest`
 
@@ -4533,6 +4579,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Assert *invariant* holds for every reading across the whole budget.
 - **Defined in:** `application_sdk/testing/harness/waiting.py`
 
+#### `http_fake_source_factory`
+
+- **Import:** `from application_sdk.testing.integration.fixtures import http_fake_source_factory`
+- **Signature:** `http_fake_source_factory() -> Iterator[HttpFakeSourceFactory]`
+- **Summary:** Session-scoped factory for started :class:`HttpFakeSource` servers.
+- **Defined in:** `application_sdk/testing/integration/fixtures.py`
+
 #### `infrastructure`
 
 - **Import:** `from application_sdk.testing.integration.fixtures import infrastructure`
@@ -4860,6 +4913,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Return *text* with credential-shaped and literally-known values blanked.
 - **Defined in:** `application_sdk/testing/harness/evidence.py`
 
+#### `reset_http_fake_sources`
+
+- **Import:** `from application_sdk.testing.integration.fixtures import reset_http_fake_sources`
+- **Signature:** `reset_http_fake_sources() -> None`
+- **Summary:** Reset every session fake's per-test recordings, once a factory is live.
+- **Defined in:** `application_sdk/testing/integration/fixtures.py`
+
 #### `restore_logger_init_flags`
 
 - **Import:** `from application_sdk.testing import restore_logger_init_flags`
@@ -5018,6 +5078,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
+#### `Authorizer`
+
+- **Import:** `from application_sdk.testing import Authorizer`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `Authorizer`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/fake_source.py`
+
 #### `Classifier`
 
 - **Import:** `from application_sdk.testing.harness import Classifier`
@@ -5062,6 +5130,38 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
+#### `ENVIRONMENT_SCOPED_FIELDS`
+
+- **Import:** `from application_sdk.testing import ENVIRONMENT_SCOPED_FIELDS`
+- **Also importable from:** `application_sdk.testing.volatile_fields`
+- **Signature:** `ENVIRONMENT_SCOPED_FIELDS: frozenset[str]`
+- **Summary:** Fields that differ between environments but are stable across runs.
+- **Defined in:** `application_sdk/testing/volatile_fields.py`
+
+#### `ENVIRONMENT_SCOPED_NESTED_FIELDS`
+
+- **Import:** `from application_sdk.testing import ENVIRONMENT_SCOPED_NESTED_FIELDS`
+- **Also importable from:** `application_sdk.testing.volatile_fields`
+- **Signature:** `ENVIRONMENT_SCOPED_NESTED_FIELDS: frozenset[str]`
+- **Summary:** Attributes holding nested reference objects with environment-scoped contents.
+- **Defined in:** `application_sdk/testing/volatile_fields.py`
+
+#### `Handler`
+
+- **Import:** `from application_sdk.testing import Handler`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `Handler`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/fake_source.py`
+
+#### `HandlerResult`
+
+- **Import:** `from application_sdk.testing import HandlerResult`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `HandlerResult`
+- **Summary:** Everything :func:`_coerce` accepts from a handler or authorizer.
+- **Defined in:** `application_sdk/testing/fake_source.py`
+
 #### `Outcome`
 
 - **Import:** `from application_sdk.testing.harness import Outcome`
@@ -5098,6 +5198,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `Reading: TypeAlias`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
+#### `RUN_VOLATILE_FIELDS`
+
+- **Import:** `from application_sdk.testing import RUN_VOLATILE_FIELDS`
+- **Also importable from:** `application_sdk.testing.volatile_fields`
+- **Signature:** `RUN_VOLATILE_FIELDS: frozenset[str]`
+- **Summary:** Fields that change on every run. Strip before any comparison.
+- **Defined in:** `application_sdk/testing/volatile_fields.py`
 
 #### `SampleRead`
 

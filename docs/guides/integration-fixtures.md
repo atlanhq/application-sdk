@@ -73,6 +73,36 @@ def infrastructure(store_root, integration_secrets):
 
 **That makes `credential_ref` a prerequisite for adopting these fixtures, not an optional preference.** An app still routing by `credential_guid` cannot get its credentials from this store, so it has to seed a GUID via the app's `/workflows/v1/dev/local-vault` dev endpoint against a live daprd — which reintroduces the external runtime the kit exists to remove, and leaves the suite on the legacy HTTP scenario path. Migrating the app's input contract to `credential_ref` is the work that unblocks adoption; until it lands, such a connector stays on the older framework by necessity rather than by choice. Treat a `credential_guid` input as a migration item, not as a reason the kit does not apply.
 
+### Sources with no container: `HttpFakeSource`
+
+SaaS and on-prem HTTP sources have no image to pull, so `integration_source` stands up a loopback HTTP server that replays reconstructed responses instead of a testcontainer. `http_fake_source_factory` owns that server's lifecycle, and ships in the same star-import as the rest of the kit:
+
+```python
+# tests/integration/conftest.py
+from application_sdk.testing import FakeRequest, HttpFakeSource
+
+
+@pytest.fixture(scope="session")
+def integration_source(http_fake_source_factory) -> HttpFakeSource:
+    fake = http_fake_source_factory(name="my-source")
+    fake.route(r"/api/v1/objects", list_objects)
+    fake.route(r"/api/v1/objects/(?P<object_id>[^/]+)", get_object)
+    return fake
+
+
+@pytest.fixture(scope="session")
+def integration_secrets(integration_source: HttpFakeSource) -> dict[str, str]:
+    return {"my-source": json.dumps({"host": integration_source.base_url})}
+```
+
+The fake is an `integration_source` like any other — the kit hands it to `integration_secrets` and otherwise leaves it alone — so the rest of the suite reads identically whether the source is a container or a fake.
+
+What the connector supplies is the part that is genuinely per-source: the endpoint map, the response envelope, and any auth-signature scheme. Everything beneath — the threading server on an ephemeral loopback port, path dispatch with named parameters, the catch-all fast 404, request recording, the silenced access log — is the SDK's.
+
+**Two counters, two scopes.** `reset_http_fake_sources` is autouse, so every test starts with a clean `requests`, `unmatched` and `hits(pattern)` — per-test questions. `unused_routes()` reads a separate lifetime counter the reset does not clear, because "is this route dead fixture weight?" can only be answered once the whole suite has run. Assert it from a session-scoped teardown, not from inside a test.
+
+**Two assertions worth making in every fake-source suite.** `assert not fake.unmatched` catches an extract calling an endpoint the fake does not model — without it the test asserted against a 404. `assert not fake.unused_routes()` catches the reverse: a route carried in the fixture that nothing exercises.
+
 ### Why a star-import and not a `pytest11` plugin
 
 A plugin loads before any conftest runs, so a module-level `application_sdk` import inside it would snapshot `APPLICATION_NAME` / `DEPLOYMENT_NAME` into `application_sdk.constants` *before* the conftest's `os.environ.setdefault` lines execute. Importing from the conftest, below those lines, is the only placement that keeps the env-before-import rule satisfiable. That constraint decides the shape.

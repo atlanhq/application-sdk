@@ -8,6 +8,7 @@ import inspect
 import os
 import subprocess
 import sys
+import urllib.request
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +17,7 @@ from uuid import UUID
 
 import pytest
 
+from application_sdk.testing.fake_source import HttpFakeSource, HttpFakeSourceFactory
 from application_sdk.testing.integration import _errors, fixtures
 from application_sdk.testing.integration.fixtures import (
     CLEANUP_INTERCEPTOR_ENV,
@@ -24,6 +26,11 @@ from application_sdk.testing.integration.fixtures import (
 )
 
 _APP_NAME = "kit-test-app"
+
+# What an adopting conftest gets from ``from ...integration.fixtures import *``.
+# Aliased here because this module imports the kit rather than star-importing it.
+http_fake_source_factory = fixtures.http_fake_source_factory
+reset_http_fake_sources = fixtures.reset_http_fake_sources
 
 
 def _fn(fixture: Any) -> Any:
@@ -742,3 +749,61 @@ def _capture_client(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 class _FakeRuntime:
     host: str = "127.0.0.1:7233"
     namespace: str = "test-ns"
+
+
+@pytest.fixture(scope="session")
+def shipped_fake_source(
+    http_fake_source_factory: HttpFakeSourceFactory,
+) -> HttpFakeSource:
+    """The connector-side half of the shipped pattern: routes, nothing else."""
+    source = http_fake_source_factory(
+        name="shipped-fake-source", connection_timeout=0.2
+    )
+    source.route(r"/api/objects", lambda _r: {"items": [{"id": "obj-01"}]})
+    return source
+
+
+@pytest.mark.allow_hosts(["127.0.0.1"])
+class TestFakeSourceFixtures:
+    """The session factory plus its autouse reset, used as the kit documents."""
+
+    def test_the_session_factory_yields_a_started_server(
+        self,
+        shipped_fake_source: HttpFakeSource,
+        http_fake_source_factory: HttpFakeSourceFactory,
+    ) -> None:
+        with urllib.request.urlopen(  # noqa: S310 - loopback fake on 127.0.0.1
+            f"{shipped_fake_source.base_url}/api/objects"
+        ) as response:
+            assert response.status == 200
+        assert len(shipped_fake_source.requests) == 1
+        assert shipped_fake_source.hits(r"/api/objects") == 1
+        assert list(http_fake_source_factory.sources) == [shipped_fake_source]
+
+    def test_per_test_recordings_do_not_leak_between_tests(
+        self, shipped_fake_source: HttpFakeSource
+    ) -> None:
+        """Whichever order these two run in, each starts with a clean slate.
+
+        The assertion is deliberately not on ``unused_routes``: that reads a
+        lifetime counter the reset does not clear, so it is a per-suite answer
+        and cannot be asserted from inside one test.
+        """
+        assert list(shipped_fake_source.requests) == []
+        assert shipped_fake_source.hits(r"/api/objects") == 0
+
+    def test_the_reset_is_autouse_and_takes_no_arguments(self) -> None:
+        assert _params(fixtures.reset_http_fake_sources) == []
+        assert fixtures.reset_http_fake_sources._fixture_function_marker.autouse
+
+    def test_the_reset_is_a_noop_before_any_factory_exists(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A suite whose source is a container must not pay for this fixture."""
+        monkeypatch.setattr(fixtures, "_ACTIVE_FAKE_SOURCE_FACTORY", None)
+        assert _fn(fixtures.reset_http_fake_sources)() is None
+
+    def test_both_names_ship_in_the_kit_star_import(self) -> None:
+        """The factory and its reset are one unit: neither can be picked up alone."""
+        assert "http_fake_source_factory" in fixtures.__all__
+        assert "reset_http_fake_sources" in fixtures.__all__

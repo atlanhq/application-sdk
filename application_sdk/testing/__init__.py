@@ -7,6 +7,16 @@ Usage::
 
     from application_sdk.testing import MockStateStore, app_context, MockCredentialStore
 
+For an HTTP source with no container to pull, :class:`HttpFakeSource` fills the
+same fixture slot a testcontainer would::
+
+    from application_sdk.testing import HttpFakeSource
+
+Its pytest fixtures are part of the integration kit rather than this module, so
+one star-import gives a connector the factory and its autouse reset together::
+
+    from application_sdk.testing.integration.fixtures import *  # noqa: F403
+
 Fixtures (import into conftest.py or test files)::
 
     from application_sdk.testing import (
@@ -23,6 +33,15 @@ Fixtures (import into conftest.py or test files)::
     )
 """
 
+from application_sdk.testing.fake_source import (
+    Authorizer,
+    FakeRequest,
+    FakeResponse,
+    Handler,
+    HandlerResult,
+    HttpFakeSource,
+    HttpFakeSourceFactory,
+)
 from application_sdk.testing.fixtures import (
     app_context,
     clean_app_registry,
@@ -43,16 +62,29 @@ from application_sdk.testing.mocks import (
     MockSecretStore,
     MockStateStore,
 )
+from application_sdk.testing.volatile_fields import (
+    ENVIRONMENT_SCOPED_FIELDS,
+    ENVIRONMENT_SCOPED_NESTED_FIELDS,
+    RUN_VOLATILE_FIELDS,
+)
 
 __all__ = [
-    # Mocks
+    "ENVIRONMENT_SCOPED_FIELDS",
+    "ENVIRONMENT_SCOPED_NESTED_FIELDS",
+    "RUN_VOLATILE_FIELDS",
+    "Authorizer",
+    "FakeRequest",
+    "FakeResponse",
+    "Handler",
+    "HandlerResult",
+    "HttpFakeSource",
+    "HttpFakeSourceFactory",
     "MockBinding",
     "MockCredentialStore",
     "MockHeartbeatController",
     "MockPubSub",
     "MockSecretStore",
     "MockStateStore",
-    # Fixtures
     "app_context",
     "clean_app_registry",
     "clean_task_registry",
