@@ -542,7 +542,7 @@ jobs:
         if: steps.lock_gate.outputs.decision != 'skip'
         uses: ./.github/actions/twingate-connect
         continue-on-error: true
-        timeout-minutes: 3
+        timeout-minutes: 5
         with:
           service-key: ${{ secrets.TWINGATE_SERVICE_KEY }}
           mothership-url: ${{ vars.MOTHERSHIP_URL }}

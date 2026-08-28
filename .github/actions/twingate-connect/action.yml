@@ -28,7 +28,7 @@ inputs:
   probe-attempts:
     description: 'How many times to poll the probe target before giving up.'
     required: false
-    default: '10'
+    default: '6'
 
 outputs:
   connected:
@@ -54,6 +54,12 @@ runs:
       run: |
         set -uo pipefail
 
+        # An unset repo variable arrives as an EMPTY STRING, which overrides the
+        # action's `default:` (GitHub only applies defaults for omitted inputs).
+        # Without this the probe URL becomes "/health" and every attempt fails,
+        # which reads as "Twingate is broken" when the tunnel is fine.
+        MOTHERSHIP_URL="${MOTHERSHIP_URL:-https://mothership.atlan.dev}"
+
         if [ -z "${TWINGATE_SERVICE_KEY}" ]; then
           echo "::error::service-key resolved empty. Add TWINGATE_SERVICE_KEY to this repo's Actions secrets (Settings -> Secrets and variables -> Actions)."
           exit 1
@@ -62,13 +68,27 @@ runs:
         echo "::group::Install Twingate client"
         echo "deb [trusted=yes] https://packages.twingate.com/apt/ /" \
           | sudo tee /etc/apt/sources.list.d/twingate.list >/dev/null
-        sudo apt-get update -yq
-        sudo apt-get install -yq twingate
+        # Refresh only the Twingate list. A full `apt-get update` pulls every
+        # repo the runner image ships and fails the step if any one of them is
+        # having a bad day - unrelated to us.
+        sudo apt-get update -yq \
+          -o Dir::Etc::sourcelist="sources.list.d/twingate.list" \
+          -o Dir::Etc::sourceparts="-" \
+          -o APT::Get::List-Cleanup="0" || {
+            echo "::error::apt-get update failed for the Twingate repo."; exit 1; }
+        sudo apt-get install -yq twingate || {
+            echo "::error::twingate package failed to install."; exit 1; }
         echo "::endgroup::"
 
         echo "::group::Start headless client"
-        printf '%s' "${TWINGATE_SERVICE_KEY}" | sudo twingate setup --headless=-
-        sudo twingate start
+        # Checked explicitly: the script deliberately does not `set -e`, so an
+        # unchecked failure here would fall through to the probe and be reported
+        # as "reachability failed" - the wrong diagnosis, which is the exact
+        # class of bug #2577 fixed for globalprotect-connect.
+        printf '%s' "${TWINGATE_SERVICE_KEY}" | sudo twingate setup --headless=- || {
+            echo "::error::twingate setup failed - the service key was rejected."; exit 1; }
+        sudo twingate start || {
+            echo "::error::twingate start failed."; exit 1; }
 
         # glibc's resolver sends parallel A/AAAA queries and stalls for 5s when
         # the server answers out of order. Twingate document this; without the
@@ -81,7 +101,7 @@ runs:
 
         echo "Probing ${MOTHERSHIP_URL}/health"
         for i in $(seq 1 "${PROBE_ATTEMPTS}"); do
-          code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${MOTHERSHIP_URL}/health" || echo 000)"
+          code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${MOTHERSHIP_URL}/health" || echo 000)"
           if [ "${code}" = "200" ]; then
             echo "connected=true" >> "$GITHUB_OUTPUT"
             echo "Tunnel up and ${MOTHERSHIP_URL} reachable (attempt ${i})."
