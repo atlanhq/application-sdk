@@ -16,6 +16,7 @@ import pytest
 from application_sdk.app.context import AppContext
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.constants import LOCAL_WORKFLOW_ID
+from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter
 from application_sdk.testing.mocks import (
     MockBinding,
     MockCredentialStore,
@@ -93,3 +94,44 @@ def clean_task_registry() -> Generator[TaskRegistry, None, None]:
     registry = TaskRegistry.get_instance()
     yield registry
     TaskRegistry.reset()
+
+
+@pytest.fixture(autouse=True)
+def restore_logger_init_flags() -> Generator[None, None, None]:
+    """Stop a test that reset the logger's init state from leaking it forward.
+
+    Autouse, so importing it into a conftest is all a suite has to do.
+
+    :meth:`AtlanLoggerAdapter._reset_for_testing` sets ``_initialized`` False so
+    a test can drive a fresh init. That flag is what gates a *destructive* step:
+    ``AtlanLoggerAdapter.__init__`` calls loguru's ``logger.remove()`` — every
+    sink in the process, not just its own — before registering its handlers.
+    Most callers of the reset then construct an adapter, which flips the flag
+    back. One that resets and instead *mocks* the adapter's ``logger`` never
+    does, and exits with the flag still down.
+
+    The next test to run then pays for it. Its first lazy ``get_logger()`` — the
+    metrics/segment import chain fires one inside ``storage.upload_file``, among
+    others — re-initialises and takes out whatever sinks that test had installed,
+    including a log-capture fixture's. The symptom lands in *teardown*, as a
+    ``ValueError: There is no existing handler with id N`` from a
+    ``logger.remove(sink_id)`` for a sink that is already gone, attributed to a
+    test that did nothing wrong.
+
+    Restoring the flags is exact rather than approximate: ``_reset_for_testing``
+    removes no sink itself, so a test that reset without re-initialising left the
+    original handlers in place and True is the truth. A test that did
+    re-initialise ends at True anyway, and this is a no-op.
+
+    Under ``-n auto --dist load`` xdist hands items out as workers free up, so
+    which pair collides is a function of relative test speed rather than of
+    collection order. That is why this surfaced as a single red matrix leg that a
+    rerun could turn green — the same shape as FND-961. See FND-976.
+    """
+    initialized = AtlanLoggerAdapter._initialized
+    flush_task_started = AtlanLoggerAdapter._flush_task_started
+    try:
+        yield
+    finally:
+        AtlanLoggerAdapter._initialized = initialized
+        AtlanLoggerAdapter._flush_task_started = flush_task_started
