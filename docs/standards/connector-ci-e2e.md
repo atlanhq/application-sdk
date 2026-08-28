@@ -13,7 +13,7 @@ This doc covers what the SDK ships — the composite action, the reusable workfl
 | `build-app-image` composite action | `.github/actions/build-app-image/action.yaml` | SDK-ref repin → manifest regeneration → buildx build/push → platform assert → interpreter assert. Extracted from `sdr-e2e` so the image can be built **once per run** ahead of the e2e matrix, and optionally multi-arch (see [Building the image once](#building-the-image-once)). |
 | `e2e-full-reusable.yaml` reusable workflow | `.github/workflows/e2e-full-reusable.yaml` | Boilerplate (120-min timeout, concurrency group, env wiring, agent-name resolution) for the full-DAG pipeline. Connector repos `uses:` it as a 5-line wrapper. |
 | `e2e-apps` cross-repo dispatcher | `.github/actions/e2e-apps/action.yaml` | Fires `workflow_dispatch` on the connector repo with the apps-sdk PR's head SHA. Polls for completion, surfaces a sticky status comment on the SDK PR. |
-| ~~`BaseSDRIntegrationTest`~~ | `application_sdk/testing/sdr/` | pytest base for the SDR pipeline. Connector test class declares `Scenario(...)` instances. **Deprecated since 3.23.0, removed in v4.0** — it emits a `DeprecationWarning` on subclass and conformance B001 flags consumers fleet-wide. There is no drop-in replacement yet: see [The SDR base class](#the-sdr-base-class). |
+| ~~`BaseSDRIntegrationTest`~~ | `application_sdk/testing/sdr/` | pytest base for the SDR pipeline. Connector test class declares `Scenario(...)` instances. **Deprecated since 3.23.0, removed in v4.0** — it emits a `DeprecationWarning` on subclass and conformance B001 flags consumers fleet-wide. There is no single replacement because SDR is a deployment mode, not a test tier: see [The SDR base class](#the-sdr-base-class). |
 | `BaseE2ETest` / `SQLAppE2ETest` | `application_sdk/testing/e2e/` | pytest base for the full-DAG pipeline. `BaseE2ETest` is connector-agnostic and is what the codegen'd `app/generated/_e2e_base.py` subclasses; SQL connectors use `SQLAppE2ETest` on top of it, subclassing with `include_filter`, `expected_min_asset_counts`, `database_spec()`, etc. |
 | ~~`SQLAppE2EFullTest` / `BaseFullDAGE2ETest`~~ | `application_sdk/testing/full_dag/` | **Deprecated, removed in v4.0.** The predecessor of the row above; it emits a `DeprecationWarning` on import and its client / error types are already re-exports of the `testing/e2e` ones. Do not start a new suite here — see [Which harness](#which-harness). |
 
@@ -34,12 +34,32 @@ The `full_dag` package is **frozen** (FND-245): it gets no backports from `appli
 
 ### The SDR base class
 
-`BaseSDRIntegrationTest` is deprecated on the same v4.0 clock but is **not** in the same position, so do not read the `full_dag` guidance above onto it:
+`BaseSDRIntegrationTest` is deprecated on the same v4.0 clock. Removing it needs **no new SDK surface**, because there is no SDR-shaped hole to fill.
 
-- ~29 connector repos import it today, against 3 for `full_dag`.
-- Its nominal replacement (`BaseE2ETest` with `mode = RunMode.AGENT`) is a *different tier of test*. SDR suites are compose-stack credential-resolution and preflight `Scenario` tests; `BaseE2ETest` submits a workflow to the tenant and asserts the full DAG. Porting a suite across that boundary drops the preflight coverage rather than preserving it — see the note on `_assert_deployed_manifest_matches` in `application_sdk/testing/e2e/base.py`, which is explicit that post-submit assertion is what is lost versus the preflight it replaces.
+**SDR is a deployment mode, not a test tier.** `RunMode` in `application_sdk/testing/e2e/payload.py` is documented as "whether the connector runs in tenant or in caller-controlled CI" — `DIRECT` dispatches to the tenant's production-deployed pod, `AGENT` puts an `agent-name` on the *same* Temporal queue so a caller-deployed worker picks it up. That is placement. Auth, preflight, credential resolution and metadata extraction are handler functionality that behaves identically either way; none of them is unique to SDR, and none of them should be pinned to an "SDR" tier.
 
-So: write no new SDR suites, but do not migrate an existing one on the strength of the deprecation warning alone. The v4.0 removal date for `application_sdk/testing/sdr/` is under review; a scenario-shaped surface on `testing/e2e` has to land first.
+`testing/e2e` already models this correctly: one harness, one `mode` ClassVar, tiers 4 and 5 from the same class. `testing/sdr` is the vestige of an older framing in which a deployment mode got its own test base — which is why its three documented additions over `BaseIntegrationTest` turn out not to be about SDR at all:
+
+1. **Workflow completion polling** — a generic convenience, mode-independent.
+2. **"Agent credential routing"** — injects `extraction_method="agent"` plus an `agent_json`. That *is* the mode flag; it is not a distinct capability.
+3. **Multi-entrypoint `workflow_type` injection** — mode-independent.
+
+The deprecation notice on `sdr/base.py` ("use `BaseE2ETest` with `RunMode.AGENT`") repeats the original error: it answers "what replaces the SDR *tier*" by naming a *mode*. Ignore that framing. The honest guidance is per-concern, and none of it mentions SDR:
+
+| Concern | Where it belongs | Canonical example |
+|---|---|---|
+| Handler functionality — auth, preflight | call the handler directly | mysql `tests/integration/test_mysql_handler.py` against a real MySQL, including wrong-password and unreachable-host; metabase `tests/unit/test_handler.py` against a mocked client |
+| Credential resolution | this repo, once | `tests/unit/credentials/` (337 tests, `resolve_agent_json` / `secret-manager` / `secret_path` included); per-app, mysql `tests/integration/test_credential_resolution.py` against fake secret stores |
+| A full DAG, in **either** mode | `tests/e2e/` | the generated `_e2e_base.py`; pick tier 4 or 5 with the `mode` ClassVar, not with a different base class |
+
+The canonical apps (`atlan-openapi-app`, `atlan-mysql-app`, `atlan-metabase-app`) each have exactly `unit/`, `integration/`, `e2e/`. None has a `tests/sdr/`; none uses `Scenario` or `BaseIntegrationTest`.
+
+Two corollaries worth stating, because the intuition tends to run the other way:
+
+- **Credentials are already first-class in `tests/e2e/`.** `application_sdk/testing/e2e/credential.py` generates a typed per-connector `CredentialBody` from `contract/app.pkl` — a stronger contract than a hand-written `agent_spec_template` dict, and the reason connectors needing real credentials (mysql, metabase) run e2e at all.
+- **The compose stack is not SDR-specific.** `e2e-full-reusable.yaml` uses the same `.github/actions/sdr-e2e` composite action, so both pipelines bring up the same atlan-configurator + Dapr + Temporal stack. Running "in the SDR stack" distinguishes nothing.
+
+So: write no new SDR suites, and do not look for an SDR replacement. Place each concern per the table above.
 
 ## The two pipelines
 
