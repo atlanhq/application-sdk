@@ -375,9 +375,8 @@ class PreflightCheck(BaseModel):
     / suggested_action and a redacted, capped ``cause_repr``. Takes precedence over
     :attr:`message`. Ignored on a passed check."""
 
-    duration_ms: float | None = None
-    """App-authored, optional. Not measured by the SDK and not reliable for
-    sizing — use the gate's own ``gate_duration_ms``. ``None`` means unset."""
+    duration_ms: float = 0.0
+    """How long the check took in milliseconds."""
 
     @field_validator("error", mode="before")
     @classmethod

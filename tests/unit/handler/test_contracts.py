@@ -201,9 +201,7 @@ class TestPreflightCheck:
         assert check.passed is False
         assert check.message == ""
         assert check.error is None
-        # None, not 0.0: the SDK does not measure this — a defaulted duration
-        # must read as unset, not as a plausible instant check (FND-901).
-        assert check.duration_ms is None
+        assert check.duration_ms == 0.0
 
     def test_passed(self):
         check = PreflightCheck(name="connectivity", passed=True, duration_ms=50.0)
