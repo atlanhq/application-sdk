@@ -316,3 +316,203 @@ class TestGoldenReportFormatting:
         golden = [asset(f"q{i}", rowCount=2) for i in range(10)]
         text = diff_golden(produced, golden).format_report()
         assert "more asset(s)" in text
+
+
+class TestVacuousPass:
+    def test_assert_raises_when_nothing_was_compared(self):
+        keyless = [{"typeName": "Table", "attributes": {}}]
+        with pytest.raises(AssertionError) as exc:
+            assert_matches_golden(keyless, keyless)
+        message = str(exc.value)
+        assert "nothing was compared" in message
+        assert "get_qualified_name" in message
+        assert "1 produced / 1 golden" in message
+
+    def test_diff_golden_reports_skipped_counts_without_raising(self):
+        keyless = [{"typeName": "Table", "attributes": {}}]
+        report = diff_golden(keyless, keyless)
+        assert report.diffs == ()
+        assert report.produced_skipped == 1
+        assert report.golden_skipped == 1
+        text = report.format_report()
+        assert "No typenames compared." in text
+        assert "skipped for empty key: ours=1 golden=1" in text
+
+    def test_skipped_counts_surface_in_a_non_empty_report(self):
+        report = diff_golden(
+            [asset("q1"), {"typeName": "Table", "attributes": {}}],
+            [asset("q1")],
+        )
+        assert report.produced_skipped == 1
+        assert "skipped for empty key: ours=1 golden=0" in report.format_report()
+
+    def test_expect_typenames_raises_when_golden_lacks_the_typename(self):
+        with pytest.raises(AssertionError, match="missing expected typename"):
+            assert_matches_golden(
+                [asset("q1", typename="Column")],
+                [asset("q1", typename="Column")],
+                expect_typenames={"Table"},
+            )
+
+    def test_expect_typenames_passes_when_present(self):
+        records = [asset("q1", typename="Table")]
+        report = assert_matches_golden(records, records, expect_typenames={"Table"})
+        assert report.diffs[0].golden_count == 1
+
+    def test_expect_typenames_needs_golden_records_not_just_the_bucket(self):
+        with pytest.raises(AssertionError, match="Table"):
+            diff_golden(
+                [asset("q1", typename="Table")],
+                [],
+                expect_typenames={"Table"},
+            )
+
+
+class TestDuplicateJoinKeys:
+    def test_duplicate_golden_key_raises_value_error_naming_the_key(self):
+        with pytest.raises(ValueError, match="golden side") as exc:
+            diff_golden([asset("q1")], [asset("q1"), asset("q1", rowCount=2)])
+        assert "q1" in str(exc.value)
+
+    def test_duplicate_produced_key_raises_value_error(self):
+        with pytest.raises(ValueError, match="produced side"):
+            diff_golden([asset("q1"), asset("q1", rowCount=2)], [asset("q1")])
+
+    def test_assert_matches_golden_also_rejects_duplicates_by_default(self):
+        with pytest.raises(ValueError):
+            assert_matches_golden([asset("q1")], [asset("q1"), asset("q1")])
+
+    def test_last_wins_keeps_old_behaviour_and_reports_the_duplicates(self):
+        report = diff_golden(
+            [asset("q1", rowCount=2)],
+            [asset("q1", rowCount=1), asset("q1", rowCount=2)],
+            on_duplicate_key="last-wins",
+        )
+        diff = report.diffs[0]
+        assert diff.golden_count == 1
+        assert not diff.has_diffs
+        assert diff.duplicate_keys_golden == ("q1",)
+        assert diff.duplicate_keys_ours == ()
+        assert "duplicate keys in golden for Table (1): q1" in report.format_report()
+
+    def test_last_wins_reports_produced_side_duplicates(self):
+        report = diff_golden(
+            [asset("q1"), asset("q1")],
+            [asset("q1")],
+            on_duplicate_key="last-wins",
+        )
+        assert report.diffs[0].duplicate_keys_ours == ("q1",)
+
+    def test_duplicates_are_per_group_not_global(self):
+        report = diff_golden(
+            [asset("q1", typename="Table"), asset("q1", typename="Column")],
+            [asset("q1", typename="Table"), asset("q1", typename="Column")],
+        )
+        assert len(report.diffs) == 2
+
+
+class TestIgnoreSemantics:
+    def test_extra_ignore_adds_to_the_canonical_set(self):
+        report = diff_golden(
+            [asset("q1", myField="a", lastSyncRun="run-b")],
+            [asset("q1", myField="b", lastSyncRun="run-a")],
+            extra_ignore={"myField"},
+        )
+        assert not report.diffs[0].has_diffs
+
+    def test_extra_ignore_does_not_weaken_other_fields(self):
+        report = diff_golden(
+            [asset("q1", myField="a", name="ours")],
+            [asset("q1", myField="b", name="golden")],
+            extra_ignore={"myField"},
+        )
+        (mismatch,) = report.diffs[0].mismatches
+        assert [fd.field_path for fd in mismatch.field_diffs] == ["attributes.name"]
+
+    def test_empty_ignore_keeps_every_field_including_the_canonical_three(self):
+        """Pins the replacement semantics a live consumer relies on."""
+        report = diff_golden(
+            [asset("q1", lastSyncRun="run-b")],
+            [asset("q1", lastSyncRun="run-a")],
+            ignore=frozenset(),
+            extra_ignore=(),
+        )
+        assert report.diffs[0].mismatches
+
+    def test_extra_ignore_composes_with_an_explicit_empty_ignore(self):
+        report = diff_golden(
+            [asset("q1", lastSyncRun="run-b", myField="a")],
+            [asset("q1", lastSyncRun="run-a", myField="b")],
+            ignore=frozenset(),
+            extra_ignore={"myField"},
+        )
+        (mismatch,) = report.diffs[0].mismatches
+        assert [fd.field_path for fd in mismatch.field_diffs] == [
+            "attributes.lastSyncRun"
+        ]
+
+
+class TestGroupBy:
+    def test_group_by_buckets_records_on_a_custom_discriminator(self):
+        produced = [
+            {"record_type": "projects", "id": "p1", "name": "ours"},
+            {"record_type": "reports", "id": "r1"},
+        ]
+        golden = [
+            {"record_type": "projects", "id": "p1", "name": "golden"},
+            {"record_type": "reports", "id": "r1"},
+        ]
+        report = diff_golden(
+            produced,
+            golden,
+            key=lambda r: r["id"],
+            group_by=lambda r: r["record_type"],
+            rules={"projects": TypenameRule(policy=DiffPolicy.INFO_ONLY)},
+        )
+        by_group = {d.typename: d for d in report.diffs}
+        assert sorted(by_group) == ["projects", "reports"]
+        assert by_group["projects"].mismatches
+        assert not by_group["projects"].has_failures
+        assert not report.has_failures
+
+    def test_without_group_by_non_atlas_records_all_land_in_unknown(self):
+        """Pins the documented default: rules= is inert for this tier."""
+        records = [
+            {"record_type": "projects", "id": "p1"},
+            {"record_type": "reports", "id": "r1"},
+        ]
+        report = diff_golden(records, records, key=lambda r: r["id"])
+        assert [d.typename for d in report.diffs] == ["Unknown"]
+        assert report.diffs[0].produced_count == 2
+
+    def test_group_by_overrides_typename_when_both_are_present(self):
+        records = [asset("q1", typename="Table")]
+        report = diff_golden(records, records, group_by=lambda r: "custom")
+        assert report.diffs[0].typename == "custom"
+
+
+class TestConsumerCallSignatures:
+    """Regression pins for the two live consumer call shapes."""
+
+    def test_per_typename_loop_with_default_rule_and_empty_ignore(self):
+        produced = [{"typeName": "projects", "id": "p1", "attributes": {}}]
+        golden = [{"typeName": "projects", "id": "p1", "attributes": {}}]
+        report = assert_matches_golden(
+            produced,
+            golden,
+            key=lambda r: r.get("id", ""),
+            default_rule=TypenameRule(policy=DiffPolicy.NO_EXTRAS),
+            ignore=frozenset(),
+        )
+        assert not report.has_failures
+
+    def test_single_bucket_with_a_volatile_key_set(self):
+        produced = [{"id": "p1", "name": "n", "loaded_at": 2}]
+        golden = [{"id": "p1", "name": "n", "loaded_at": 1}]
+        report = assert_matches_golden(
+            produced,
+            golden,
+            key=lambda r: r["id"],
+            ignore=frozenset({"loaded_at"}),
+        )
+        assert not report.has_failures

@@ -20,6 +20,38 @@ qualified-name construction, not noise. Only
 :data:`~application_sdk.testing.volatile_fields.RUN_VOLATILE_FIELDS` is
 stripped by default.
 
+Grouping: what a "typename" is here
+-----------------------------------
+
+Records are bucketed by ``record["typeName"]`` by default, which fits Atlas
+transformed records. Raw/extract-tier records usually have no ``typeName``, so
+every one of them lands in a single ``"Unknown"`` bucket and ``rules=`` becomes
+inert — there is no typename for a rule to key on. Two legitimate patterns for
+that tier:
+
+* pass ``group_by=`` with the record shape's own discriminator, which restores
+  per-group rules::
+
+      assert_matches_golden(
+          produced,
+          golden,
+          key=lambda r: r["id"],
+          group_by=lambda r: r["record_type"],
+          rules=RULES,
+      )
+
+* or loop in the test, one call per typename, with ``default_rule=`` carrying
+  that typename's strictness. This is the right shape when the produced and
+  golden records for each typename are loaded from separate files anyway::
+
+      for typename, records in produced_by_typename.items():
+          assert_matches_golden(
+              records,
+              golden_by_typename[typename],
+              key=raw_key,
+              default_rule=RULES[typename],
+          )
+
 Per-typename strictness
 -----------------------
 
@@ -54,7 +86,7 @@ on that field, while every other field on that typename still must match.
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.parity.comparator import (
@@ -125,7 +157,11 @@ class AssetMismatch:
 
 @dataclass(frozen=True)
 class TypenameDiff:
-    """The diff for a single typename, and whether it gates."""
+    """The diff for a single typename, and whether it gates.
+
+    ``duplicate_keys_ours`` / ``duplicate_keys_golden`` are only ever populated
+    under ``on_duplicate_key="last-wins"``; the default raises instead.
+    """
 
     typename: str
     rule: TypenameRule
@@ -134,6 +170,8 @@ class TypenameDiff:
     missing_in_ours: tuple[str, ...] = ()
     extra_in_ours: tuple[str, ...] = ()
     mismatches: tuple[AssetMismatch, ...] = ()
+    duplicate_keys_ours: tuple[str, ...] = ()
+    duplicate_keys_golden: tuple[str, ...] = ()
 
     @property
     def failures(self) -> tuple[str, ...]:
@@ -165,9 +203,21 @@ class TypenameDiff:
 
 @dataclass(frozen=True)
 class GoldenReport:
-    """The full golden comparison across every typename."""
+    """The full golden comparison across every typename.
+
+    Attributes:
+        diffs: The diff for every typename seen on either side.
+        produced_skipped: Produced records dropped before comparison because
+            ``key(record)`` was empty.
+        golden_skipped: Golden records dropped for the same reason. A non-zero
+            count is not automatically an error — a corpus can legitimately
+            carry keyless noise rows — but it is the first thing to check when
+            the compared counts look too low.
+    """
 
     diffs: tuple[TypenameDiff, ...] = ()
+    produced_skipped: int = 0
+    golden_skipped: int = 0
 
     @property
     def failing(self) -> tuple[TypenameDiff, ...]:
@@ -180,7 +230,7 @@ class GoldenReport:
     def format_report(self) -> str:
         """Format the report for pytest output."""
         if not self.diffs:
-            return "No typenames compared."
+            return "\n".join(["No typenames compared.", *self._skipped_lines()])
 
         lines: list[str] = []
         if self.has_failures:
@@ -202,6 +252,8 @@ class GoldenReport:
                 f"extra={len(diff.extra_in_ours)} "
                 f"mismatched={len(diff.mismatches)}"
             )
+        lines.extend(self._skipped_lines())
+        lines.extend(self._duplicate_lines())
         lines.append("")
 
         for diff in self.diffs:
@@ -210,6 +262,32 @@ class GoldenReport:
             lines.extend(_format_typename_detail(diff))
 
         return "\n".join(lines)
+
+    def _skipped_lines(self) -> list[str]:
+        if not (self.produced_skipped or self.golden_skipped):
+            return []
+        return [
+            (
+                f"  skipped for empty key: ours={self.produced_skipped} "
+                f"golden={self.golden_skipped}"
+            )
+        ]
+
+    def _duplicate_lines(self) -> list[str]:
+        lines: list[str] = []
+        for diff in self.diffs:
+            for label, keys in (
+                ("ours", diff.duplicate_keys_ours),
+                ("golden", diff.duplicate_keys_golden),
+            ):
+                if not keys:
+                    continue
+                shown = ", ".join(keys[:_MAX_KEYS_SHOWN])
+                lines.append(
+                    f"  duplicate keys in {label} for {diff.typename} "
+                    f"({len(keys)}): {shown}"
+                )
+        return lines
 
 
 def diff_golden(
@@ -220,33 +298,71 @@ def diff_golden(
     rules: Mapping[str, TypenameRule] | None = None,
     default_rule: TypenameRule = TypenameRule(),
     ignore: Collection[str] = RUN_VOLATILE_FIELDS,
+    extra_ignore: Collection[str] = (),
+    on_duplicate_key: Literal["error", "last-wins"] = "error",
+    group_by: Callable[[Mapping[str, Any]], str] | None = None,
+    expect_typenames: Collection[str] | None = None,
 ) -> GoldenReport:
     """Compare produced records against a golden fixture without asserting.
+
+    "Without asserting" means the *diff* is never asserted: a report is
+    returned however badly the two sides differ. Malformed input still raises —
+    a non-unique join key (``on_duplicate_key="error"``) and an unmet
+    ``expect_typenames`` floor are both wrong-test conditions, not diffs.
 
     Args:
         produced: Records the connector just produced.
         golden: Records loaded from the golden fixture.
         key: Extracts the join key from a record. Defaults to
             ``attributes.qualifiedName``. Records with an empty key are skipped
-            and counted in the log.
+            and counted in ``produced_skipped`` / ``golden_skipped``.
         rules: Per-typename gating rules. Typenames absent from this mapping
             use ``default_rule``.
         default_rule: Rule applied to typenames not named in ``rules``.
         ignore: Fields stripped at every depth before comparison. Defaults to
             run-volatile fields only — environment-scoped fields are kept
-            because the golden fixture comes from the same environment.
+            because the golden fixture comes from the same environment. Passing
+            ``ignore=`` REPLACES the default ``RUN_VOLATILE_FIELDS``; to add
+            fields on top of the canonical three, use ``extra_ignore=``.
+        extra_ignore: Fields stripped in addition to ``ignore``, so the
+            canonical run-volatile set is kept.
+        on_duplicate_key: ``"error"`` (default) raises ``ValueError`` when two
+            records on the same side share a join key, because a non-unique key
+            means the comparison is not the one the caller thinks it is.
+            ``"last-wins"`` keeps the last record per key and surfaces the
+            collisions on the report instead.
+        group_by: Buckets records for ``rules=`` lookup. ``None`` uses
+            ``record["typeName"]``, falling back to ``"Unknown"`` — see the
+            module docstring for the raw/extract-tier case.
+        expect_typenames: Coverage floor. When given, every named typename must
+            appear in the report with at least one golden record, else
+            ``AssertionError``.
 
     Returns:
         GoldenReport: The diff for every typename seen on either side.
+
+    Raises:
+        ValueError: If ``on_duplicate_key="error"`` and either side has two
+            records sharing a join key.
+        AssertionError: If ``expect_typenames`` names a typename with no golden
+            records.
     """
     rules = rules or {}
-    produced_by_type = _group_by_typename(produced, key, "produced")
-    golden_by_type = _group_by_typename(golden, key, "golden")
+    produced_by_type, produced_skipped, produced_dupes = _group_by_typename(
+        produced, key, "produced", group_by
+    )
+    golden_by_type, golden_skipped, golden_dupes = _group_by_typename(
+        golden, key, "golden", group_by
+    )
+    if on_duplicate_key == "error":
+        _raise_on_duplicates(produced_dupes, golden_dupes)
+
+    ignore_all = frozenset(ignore) | frozenset(extra_ignore)
 
     diffs: list[TypenameDiff] = []
     for typename in sorted(set(produced_by_type) | set(golden_by_type)):
         rule = rules.get(typename, default_rule)
-        ignored = frozenset(ignore) | rule.ignore_fields
+        ignored = ignore_all | rule.ignore_fields
         ours = produced_by_type.get(typename, {})
         theirs = golden_by_type.get(typename, {})
 
@@ -270,10 +386,19 @@ def diff_golden(
                 missing_in_ours=tuple(sorted(set(theirs) - set(ours))),
                 extra_in_ours=tuple(sorted(set(ours) - set(theirs))),
                 mismatches=tuple(mismatches),
+                duplicate_keys_ours=tuple(sorted(produced_dupes.get(typename, ()))),
+                duplicate_keys_golden=tuple(sorted(golden_dupes.get(typename, ()))),
             )
         )
 
-    return GoldenReport(diffs=tuple(diffs))
+    report = GoldenReport(
+        diffs=tuple(diffs),
+        produced_skipped=produced_skipped,
+        golden_skipped=golden_skipped,
+    )
+    if expect_typenames is not None:
+        _assert_expected_typenames(report, expect_typenames)
+    return report
 
 
 def assert_matches_golden(
@@ -284,6 +409,10 @@ def assert_matches_golden(
     rules: Mapping[str, TypenameRule] | None = None,
     default_rule: TypenameRule = TypenameRule(),
     ignore: Collection[str] = RUN_VOLATILE_FIELDS,
+    extra_ignore: Collection[str] = (),
+    on_duplicate_key: Literal["error", "last-wins"] = "error",
+    group_by: Callable[[Mapping[str, Any]], str] | None = None,
+    expect_typenames: Collection[str] | None = None,
 ) -> GoldenReport:
     """Assert produced records match a golden fixture, per typename rules.
 
@@ -293,15 +422,24 @@ def assert_matches_golden(
         key: Extracts the join key from a record.
         rules: Per-typename gating rules.
         default_rule: Rule applied to typenames not named in ``rules``.
-        ignore: Fields stripped at every depth before comparison.
+        ignore: Fields stripped at every depth before comparison. Passing
+            ``ignore=`` REPLACES the default ``RUN_VOLATILE_FIELDS``; to add
+            fields on top of the canonical three, use ``extra_ignore=``.
+        extra_ignore: Fields stripped in addition to ``ignore``.
+        on_duplicate_key: See :func:`diff_golden`.
+        group_by: See :func:`diff_golden`.
+        expect_typenames: Coverage floor; every named typename must be present
+            with at least one golden record.
 
     Returns:
         GoldenReport: The full report, also on success, so callers can inspect
         the diffs that were reported but not gated.
 
     Raises:
-        AssertionError: If any typename's rule is violated. The message is the
-            formatted field-level report.
+        AssertionError: If nothing was compared at all, if ``expect_typenames``
+            is not met, or if any typename's rule is violated. The message is
+            the formatted field-level report.
+        ValueError: If a join key is not unique — see ``on_duplicate_key``.
     """
     report = diff_golden(
         produced,
@@ -310,7 +448,19 @@ def assert_matches_golden(
         rules=rules,
         default_rule=default_rule,
         ignore=ignore,
+        extra_ignore=extra_ignore,
+        on_duplicate_key=on_duplicate_key,
+        group_by=group_by,
+        expect_typenames=expect_typenames,
     )
+    if not report.diffs:
+        raise AssertionError(
+            "Golden assertion is vacuous: nothing was compared. "
+            f"{report.produced_skipped} produced / {report.golden_skipped} golden "
+            f"record(s) were skipped for an empty comparison key from "
+            f"key={_callable_name(key)}. Zero comparisons is a broken test, "
+            "never a pass."
+        )
     if report.has_failures:
         raise AssertionError(report.format_report())
 
@@ -322,21 +472,71 @@ def _group_by_typename(
     records: Iterable[Mapping[str, Any]],
     key: Callable[[Mapping[str, Any]], str],
     side: str,
-) -> dict[str, dict[str, Mapping[str, Any]]]:
-    """Index records by typeName then by join key."""
+    group_by: Callable[[Mapping[str, Any]], str] | None = None,
+) -> tuple[dict[str, dict[str, Mapping[str, Any]]], int, dict[str, list[str]]]:
+    """Index records by group then by join key.
+
+    Returns the index, the count of records dropped for an empty key, and the
+    join keys that collided per group. Collisions are reported rather than
+    resolved here; the caller decides whether they are fatal.
+    """
     grouped: dict[str, dict[str, Mapping[str, Any]]] = {}
+    duplicates: dict[str, list[str]] = {}
     skipped = 0
     for record in records:
         asset_key = key(record)
         if not asset_key:
             skipped += 1
             continue
-        typename = record.get("typeName", "Unknown")
-        grouped.setdefault(typename, {})[asset_key] = record
+        typename = group_by(record) if group_by else record.get("typeName", "Unknown")
+        bucket = grouped.setdefault(typename, {})
+        if asset_key in bucket:
+            duplicates.setdefault(typename, []).append(asset_key)
+        bucket[asset_key] = record
 
     if skipped:
         logger.warning("Skipped %d %s record(s) with no comparison key", skipped, side)
-    return grouped
+    return grouped, skipped, duplicates
+
+
+def _raise_on_duplicates(
+    produced_dupes: dict[str, list[str]],
+    golden_dupes: dict[str, list[str]],
+) -> None:
+    """Reject a join key that is not unique on either side."""
+    for side, dupes in (("produced", produced_dupes), ("golden", golden_dupes)):
+        if not dupes:
+            continue
+        details = "; ".join(
+            f"{typename}: {', '.join(sorted(set(keys))[:_MAX_KEYS_SHOWN])}"
+            for typename, keys in sorted(dupes.items())
+        )
+        raise ValueError(
+            f"Duplicate join key(s) on the {side} side — {details}. "
+            "The key= callable must be unique per record, otherwise records "
+            "silently shadow each other and the comparison is not the one you "
+            'think it is. Pass on_duplicate_key="last-wins" to keep the old '
+            "last-write-wins behaviour."
+        )
+
+
+def _assert_expected_typenames(
+    report: GoldenReport,
+    expect_typenames: Collection[str],
+) -> None:
+    """Enforce the caller's coverage floor on golden records."""
+    covered = {d.typename for d in report.diffs if d.golden_count > 0}
+    absent = sorted(set(expect_typenames) - covered)
+    if absent:
+        raise AssertionError(
+            "Golden corpus is missing expected typename(s): "
+            f"{', '.join(absent)}. Expected {sorted(set(expect_typenames))}, "
+            f"golden records present for {sorted(covered)}."
+        )
+
+
+def _callable_name(func: Callable[..., Any]) -> str:
+    return getattr(func, "__name__", repr(func))
 
 
 def _truncate(value: Any) -> str:
