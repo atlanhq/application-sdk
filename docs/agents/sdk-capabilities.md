@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.30.0
-source-sha:    52c54f7d1f20efa912df27a5f5214263c4179c6f
-source-date:   2026-08-28T12:10:34+01:00
+source-sha:    5c71f1f1552ba261d03c426052f20efac43f523f
+source-date:   2026-08-28T07:26:25Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 281 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 266 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3132,13 +3132,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Deprecated (removed in v4.0) — use :class:`AppUnderTest`.
 - **Defined in:** `application_sdk/testing/e2e/config.py`
 
-#### `AppExecutor`
-
-- **Import:** `from application_sdk.testing.integration.fixtures import AppExecutor`
-- **Signature:** `class AppExecutor(backend: TemporalExecutorBackend) -> None`
-- **Summary:** Thin shim over :class:`TemporalExecutorBackend` for integration suites.
-- **Defined in:** `application_sdk/testing/integration/fixtures.py`
-
 #### `AppNotReadyError`
 
 - **Import:** `from application_sdk.testing.harness.automation_engine import AppNotReadyError`
@@ -3508,13 +3501,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class IntegrationTestClient(host: str, version: str = 'v1', workflow_endpoint: str = '/start', timeout: int = 30)`
 - **Summary:** Client for integration testing of the Core 3 APIs.
 - **Defined in:** `application_sdk/testing/integration/client.py`
-
-#### `KitOptions`
-
-- **Import:** `from application_sdk.testing.integration.fixtures import KitOptions`
-- **Signature:** `class KitOptions(data_converter: bool = True, ...)`
-- **Summary:** Knobs for the fixture set. Override ``integration_options`` to change one.
-- **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
 #### `KubeconfigUnavailableError`
 
@@ -4250,13 +4236,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Find all category subdirectories across both dirs.
 - **Defined in:** `application_sdk/testing/parity/comparator.py`
 
-#### `embedded_temporal`
-
-- **Import:** `from application_sdk.testing.integration.fixtures import embedded_temporal`
-- **Signature:** `embedded_temporal(integration_options: KitOptions) -> AsyncIterator[EmbeddedRuntime]`
-- **Summary:** Boot the embedded Temporal dev server for the session.
-- **Defined in:** `application_sdk/testing/integration/fixtures.py`
-
 #### `ends_with`
 
 - **Import:** `from application_sdk.testing.integration import ends_with`
@@ -4291,13 +4270,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `evaluate_locations(samples: Mapping[str, SampleRead], expectations: AssetExpectations) -> Sequence[Finding]`
 - **Summary:** Evaluate sampled qualified names against the declared hierarchy depths.
 - **Defined in:** `application_sdk/testing/harness/expectations.py`
-
-#### `executor`
-
-- **Import:** `from application_sdk.testing.integration.fixtures import executor`
-- **Signature:** `executor(temporal_client: Client, worker: None, integration_task_queue: str) -> AppExecutor`
-- **Summary:** Executor submitting to the running worker's task queue.
-- **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
 #### `exists`
 
@@ -4532,48 +4504,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `hold_stable(probe: Probe[T], *, ...)`
 - **Summary:** Assert *invariant* holds for every reading across the whole budget.
 - **Defined in:** `application_sdk/testing/harness/waiting.py`
-
-#### `infrastructure`
-
-- **Import:** `from application_sdk.testing.integration.fixtures import infrastructure`
-- **Signature:** `infrastructure(store_root: Path, ...)`
-- **Summary:** Wire mocked infrastructure for the session, after the source is up.
-- **Defined in:** `application_sdk/testing/integration/fixtures.py`
-
-#### `integration_app_cls`
-
-- **Import:** `from application_sdk.testing.integration.fixtures import integration_app_cls`
-- **Signature:** `integration_app_cls() -> type[App]`
-- **Summary:** The App class under test. Every adopting conftest overrides this.
-- **Defined in:** `application_sdk/testing/integration/fixtures.py`
-
-#### `integration_options`
-
-- **Import:** `from application_sdk.testing.integration.fixtures import integration_options`
-- **Signature:** `integration_options() -> KitOptions`
-- **Summary:** The kit's knobs. Override to return a customised :class:`KitOptions`.
-- **Defined in:** `application_sdk/testing/integration/fixtures.py`
-
-#### `integration_secrets`
-
-- **Import:** `from application_sdk.testing.integration.fixtures import integration_secrets`
-- **Signature:** `integration_secrets(integration_source: object) -> Mapping[str, str]`
-- **Summary:** Seed for the mocked secret store, as a ``{key: json}`` mapping.
-- **Defined in:** `application_sdk/testing/integration/fixtures.py`
-
-#### `integration_source`
-
-- **Import:** `from application_sdk.testing.integration.fixtures import integration_source`
-- **Signature:** `integration_source() -> object`
-- **Summary:** Whatever this connector extracts from; ``None`` until overridden.
-- **Defined in:** `application_sdk/testing/integration/fixtures.py`
-
-#### `integration_task_queue`
-
-- **Import:** `from application_sdk.testing.integration.fixtures import integration_task_queue`
-- **Signature:** `integration_task_queue(integration_app_cls: type[App]) -> str`
-- **Summary:** Task queue the worker listens on and the executor submits to.
-- **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
 #### `is_dict`
 
@@ -4853,6 +4783,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Return *text* with credential-shaped and literally-known values blanked.
 - **Defined in:** `application_sdk/testing/harness/evidence.py`
 
+#### `restore_logger_init_flags`
+
+- **Import:** `from application_sdk.testing import restore_logger_init_flags`
+- **Signature:** `restore_logger_init_flags()`
+- **Summary:** Stop a test that reset the logger's init state from leaking it forward.
+- **Defined in:** `application_sdk/testing/fixtures.py`
+
 #### `run_comparison`
 
 - **Import:** `from application_sdk.testing.parity import run_comparison`
@@ -4932,20 +4869,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Assert that the actual value starts with the given prefix.
 - **Defined in:** `application_sdk/testing/integration/assertions.py`
 
-#### `store_root`
-
-- **Import:** `from application_sdk.testing.integration.fixtures import store_root`
-- **Signature:** `store_root(tmp_path_factory: pytest.TempPathFactory, integration_options: KitOptions) -> Path`
-- **Summary:** Root of the session-scoped LocalStore backing the object store.
-- **Defined in:** `application_sdk/testing/integration/fixtures.py`
-
-#### `temporal_client`
-
-- **Import:** `from application_sdk.testing.integration.fixtures import temporal_client`
-- **Signature:** `temporal_client(embedded_temporal: EmbeddedRuntime, ...)`
-- **Summary:** Connect to the embedded dev server, in its namespace.
-- **Defined in:** `application_sdk/testing/integration/fixtures.py`
-
 #### `validate_asset`
 
 - **Import:** `from application_sdk.testing.integration import validate_asset`
@@ -4974,13 +4897,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Poll GET /api/v1/workflows/{id} until the workflow reaches a terminal state.
 - **Defined in:** `application_sdk/testing/e2e/workflows.py`
 
-#### `worker`
-
-- **Import:** `from application_sdk.testing.integration.fixtures import worker`
-- **Signature:** `worker(temporal_client: Client, ...)`
-- **Summary:** Run the App's worker in-process, with infrastructure already wired.
-- **Defined in:** `application_sdk/testing/integration/fixtures.py`
-
 #### `write_bundle`
 
 - **Import:** `from application_sdk.testing.harness.evidence import write_bundle`
@@ -4997,13 +4913,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
-#### `APPLICATION_NAME_ENV`
-
-- **Import:** `from application_sdk.testing.integration.fixtures import APPLICATION_NAME_ENV`
-- **Signature:** `APPLICATION_NAME_ENV`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/integration/fixtures.py`
-
 #### `Classifier`
 
 - **Import:** `from application_sdk.testing.harness import Classifier`
@@ -5011,13 +4920,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `Classifier: TypeAlias`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/waiting.py`
-
-#### `CLEANUP_INTERCEPTOR_ENV`
-
-- **Import:** `from application_sdk.testing.integration.fixtures import CLEANUP_INTERCEPTOR_ENV`
-- **Signature:** `CLEANUP_INTERCEPTOR_ENV`
-- **Summary:** Env var gating ``App.on_complete()``'s file and object-store cleanup.
-- **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
 #### `CONNECTOR_CI`
 
@@ -5040,13 +4942,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `DEFAULT_TYPE_NAMES: tuple[str, ...]`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
-
-#### `DEPLOYMENT_NAME_ENV`
-
-- **Import:** `from application_sdk.testing.integration.fixtures import DEPLOYMENT_NAME_ENV`
-- **Signature:** `DEPLOYMENT_NAME_ENV`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
 #### `Outcome`
 

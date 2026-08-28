@@ -19,6 +19,7 @@ Fixtures (import into conftest.py or test files)::
         mock_pubsub,
         mock_secret_store,
         mock_state_store,
+        restore_logger_init_flags,
     )
 """
 
@@ -32,6 +33,7 @@ from application_sdk.testing.fixtures import (
     mock_pubsub,
     mock_secret_store,
     mock_state_store,
+    restore_logger_init_flags,
 )
 from application_sdk.testing.mocks import (
     MockBinding,
@@ -60,4 +62,5 @@ __all__ = [
     "mock_pubsub",
     "mock_secret_store",
     "mock_state_store",
+    "restore_logger_init_flags",
 ]
