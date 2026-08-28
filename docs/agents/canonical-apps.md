@@ -17,7 +17,9 @@ Two authorities settle "what is correct": **this repo's own tests**, and **the f
 
 ## What they establish about test layout
 
-All four have exactly three test directories — `unit/`, `integration/`, `e2e/`. None has a `tests/sdr/` or a `tests/full_dag/`, and none uses `Scenario` or `BaseIntegrationTest`. Concerns are placed like this:
+`atlan-openapi-app`, `atlan-mysql-app` and `atlan-metabase-app` each have exactly three test directories — `unit/`, `integration/`, `e2e/`. `atlan-hello-world-app` is the scaffold shape and currently has `tests/unit/` only; treat that as what a new app starts with, not as a gap to fill in the other three.
+
+None of the four has a `tests/sdr/` or a `tests/full_dag/`, and none uses `Scenario` or `BaseIntegrationTest`. Concerns are placed like this:
 
 | Concern | Where | Example |
 |---|---|---|
