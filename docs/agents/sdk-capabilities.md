@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.29.0
-source-sha:    37a418ea788234e8e07be9ad7cb5254a36fde84a
-source-date:   2026-08-28T13:08:04+05:30
+source-sha:    9556209b3db6258924023438a2ed4e4153e7a77a
+source-date:   2026-08-28T13:46:16+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 202 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 214 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3118,6 +3118,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Deprecated (removed in v4.0) — use :class:`AppUnderTest`.
 - **Defined in:** `application_sdk/testing/e2e/config.py`
 
+#### `AppExecutor`
+
+- **Import:** `from application_sdk.testing.integration import AppExecutor`
+- **Also importable from:** `application_sdk.testing.integration.embedded`
+- **Signature:** `class AppExecutor(backend: Any)`
+- **Summary:** Thin shim over :class:`TemporalExecutorBackend` for integration suites.
+- **Defined in:** `application_sdk/testing/integration/embedded.py`
+
 #### `AppNotReadyError`
 
 - **Import:** `from application_sdk.testing.harness.automation_engine import AppNotReadyError`
@@ -3291,6 +3299,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** The read verbs this backend uses from ``CoreV1Api``.
 - **Defined in:** `application_sdk/testing/harness/cluster/kube.py`
 
+#### `CursorPage`
+
+- **Import:** `from application_sdk.testing import CursorPage`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `class CursorPage(items: Sequence[Any], limit: int, total: int, next_cursor: str | None)`
+- **Summary:** One page of a cursor scheme; ``next_cursor`` is opaque, as a real one is.
+- **Defined in:** `application_sdk/testing/fake_source.py`
+
 #### `CustomObjectReads`
 
 - **Import:** `from application_sdk.testing.harness.cluster.kube import CustomObjectReads`
@@ -3380,6 +3396,22 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** The budget ran out while work was still progressing.
 - **Defined in:** `application_sdk/testing/harness/outcome.py`
 
+#### `FakeRequest`
+
+- **Import:** `from application_sdk.testing import FakeRequest`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `class FakeRequest(method: str, ...)`
+- **Summary:** One inbound request, parsed into the pieces a handler actually wants.
+- **Defined in:** `application_sdk/testing/fake_source.py`
+
+#### `FakeResponse`
+
+- **Import:** `from application_sdk.testing import FakeResponse`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `class FakeResponse(status: int = 200, ...)`
+- **Summary:** What a handler returns: a status, a body, and optional headers.
+- **Defined in:** `application_sdk/testing/fake_source.py`
+
 #### `FieldDiff`
 
 - **Import:** `from application_sdk.testing.parity import FieldDiff`
@@ -3414,6 +3446,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class HarnessNotBuiltError(*, ...)`
 - **Summary:** A scaffolded harness function whose implementation has not landed yet.
 - **Defined in:** `application_sdk/testing/harness/_errors.py`
+
+#### `HttpFakeSource`
+
+- **Import:** `from application_sdk.testing import HttpFakeSource`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `class HttpFakeSource(*, ...)`
+- **Summary:** A loopback HTTP server that replays a connector's reconstructed responses.
+- **Defined in:** `application_sdk/testing/fake_source.py`
 
 #### `HttpRequest`
 
@@ -3450,6 +3490,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class Indeterminate(*, ...)`
 - **Summary:** The wait could not reach a verdict — the probe itself failed.
 - **Defined in:** `application_sdk/testing/harness/outcome.py`
+
+#### `IntegrationKit`
+
+- **Import:** `from application_sdk.testing.integration import IntegrationKit`
+- **Also importable from:** `application_sdk.testing.integration.embedded`
+- **Signature:** `class IntegrationKit(store_root: Any, ...)`
+- **Summary:** The fixtures :func:`integration_kit` built, for binding into a conftest.
+- **Defined in:** `application_sdk/testing/integration/embedded.py`
 
 #### `IntegrationTestClient`
 
@@ -3966,6 +4014,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Count every descendant asset under the connection prefix, ALL types.
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
+#### `cursor_page`
+
+- **Import:** `from application_sdk.testing import cursor_page`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `cursor_page(items: Sequence[Any], *, ...)`
+- **Summary:** Slice ``items`` per the request's cursor/limit parameters.
+- **Defined in:** `application_sdk/testing/fake_source.py`
+
 #### `custom`
 
 - **Import:** `from application_sdk.testing.integration import custom`
@@ -4100,6 +4156,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `hold_stable(probe: Probe[T], *, ...)`
 - **Summary:** Assert *invariant* holds for every reading across the whole budget.
 - **Defined in:** `application_sdk/testing/harness/waiting.py`
+
+#### `integration_kit`
+
+- **Import:** `from application_sdk.testing.integration import integration_kit`
+- **Also importable from:** `application_sdk.testing.integration.embedded`
+- **Signature:** `integration_kit(*, *, secrets: Callable[[Any], ...)`
+- **Summary:** Build the canonical integration fixture set for *app_cls*.
+- **Defined in:** `application_sdk/testing/integration/embedded.py`
 
 #### `is_dict`
 
@@ -4386,6 +4450,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Sample up to *per_type* qualified names per type under the connection.
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
+#### `serve`
+
+- **Import:** `from application_sdk.testing import serve`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `serve(routes: Iterable[tuple[str, Handler]] = (), **kwargs: Any)`
+- **Summary:** Run a fake for the duration of the block, yielding just its ``base_url``.
+- **Defined in:** `application_sdk/testing/fake_source.py`
+
 #### `start_on_task_queue`
 
 - **Import:** `from application_sdk.testing.harness.starters import start_on_task_queue`
@@ -4444,6 +4516,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 ### Constants and Enums
 
+#### `APPLICATION_NAME_ENV`
+
+- **Import:** `from application_sdk.testing.integration.embedded import APPLICATION_NAME_ENV`
+- **Signature:** `APPLICATION_NAME_ENV`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/integration/embedded.py`
+
 #### `Classifier`
 
 - **Import:** `from application_sdk.testing.harness import Classifier`
@@ -4451,6 +4530,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `Classifier: TypeAlias`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/waiting.py`
+
+#### `CLEANUP_INTERCEPTOR_ENV`
+
+- **Import:** `from application_sdk.testing.integration.embedded import CLEANUP_INTERCEPTOR_ENV`
+- **Signature:** `CLEANUP_INTERCEPTOR_ENV`
+- **Summary:** Env var gating ``App.on_complete()``'s file and object-store cleanup.
+- **Defined in:** `application_sdk/testing/integration/embedded.py`
 
 #### `CONNECTOR_CI`
 
@@ -4473,6 +4559,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `DEFAULT_TYPE_NAMES: tuple[str, ...]`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
+#### `DEPLOYMENT_NAME_ENV`
+
+- **Import:** `from application_sdk.testing.integration.embedded import DEPLOYMENT_NAME_ENV`
+- **Signature:** `DEPLOYMENT_NAME_ENV`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/integration/embedded.py`
 
 #### `ENVIRONMENT_SCOPED_FIELDS`
 

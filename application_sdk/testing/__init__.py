@@ -81,23 +81,9 @@ __all__ = [
     "mock_pubsub",
     "mock_secret_store",
     "mock_state_store",
-<<<<<<< HEAD
-<<<<<<< HEAD
     "serve",
-=======
-    # Golden-diff assertion
-    "AssetMismatch",
-    "DiffPolicy",
-    "GoldenReport",
-    "TypenameDiff",
-    "TypenameRule",
-    "assert_matches_golden",
-    "diff_golden",
-=======
->>>>>>> 17882e8c (refactor(testing): drop the golden-diff assertion, keep the volatile-field consolidation | FND-820)
     # Canonical comparison field sets
     "ENVIRONMENT_SCOPED_FIELDS",
     "ENVIRONMENT_SCOPED_NESTED_FIELDS",
     "RUN_VOLATILE_FIELDS",
->>>>>>> 4af96461 (refactor(testing): one golden-diff assertion and one volatile-field set (FND-819, FND-820))
 ]
