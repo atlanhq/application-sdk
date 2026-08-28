@@ -209,9 +209,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n"
             "Remediation: express the failure through the typed check result — "
             "``PreflightCheck(passed=False, error=<AppError>.to_failure_details())`` — "
-            "and delete the warning; use INFO/DEBUG for non-failure progress. Only "
-            "the ``preflight_check`` method body is scanned; helper functions it "
-            "calls are not followed."
+            "and delete the warning; use INFO/DEBUG for non-failure progress. "
+            "``warning`` and the deprecated ``warn`` alias are both matched, on any "
+            "receiver named like a logger (``logger``, ``log``, ``self._log``, "
+            "``logging``). Only class-method ``preflight_check`` overrides are "
+            "scanned: module-level per-entrypoint ``preflight_check`` functions are "
+            "not resolved, and helper functions the method calls are not followed."
         ),
         help_uri=f"{_HELP_BASE}#p047",
     ),

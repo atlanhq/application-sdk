@@ -84,6 +84,7 @@ with workflow.unsafe.imports_passed_through():
         GATE_MODE_KEY,
         GATE_TIMEOUT_KEY,
         PREFLIGHT_SURFACE_KEY,
+        AtlanLoggerAdapter,
         get_logger,
     )
 
@@ -679,7 +680,7 @@ def _build_block_error(result: PreflightOutput, app_name: str) -> Any:
 
 
 def emit_preflight_check_outcome(
-    log: Any,
+    log: AtlanLoggerAdapter,
     app_name: str,
     result: PreflightOutput,
     *,

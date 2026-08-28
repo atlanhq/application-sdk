@@ -542,9 +542,20 @@ def test_p047_silent_outside_preflight_check(tmp_path: Path) -> None:
     assert [f.rule_id for f in _scan(tmp_path, {"h.py": src})] == []
 
 
+def test_p047_fires_on_common_logger_aliases(tmp_path: Path) -> None:
+    src = _handler_with_preflight(
+        '        log.warning("via log alias")\n'
+        '        self._log.warning("via private attr")\n'
+        '        logger.warn("deprecated alias")\n'
+        "        return PreflightOutput(checks=[])\n"
+    )
+    assert [f.rule_id for f in _scan(tmp_path, {"h.py": src})] == ["P047"] * 3
+
+
 def test_p047_silent_on_non_logger_receiver(tmp_path: Path) -> None:
     src = _handler_with_preflight(
         '        warnings.warning("not a logger")\n'
+        '        self._client.warning("a source API, not a logger")\n'
         "        return PreflightOutput(checks=[])\n"
     )
     assert [f.rule_id for f in _scan(tmp_path, {"h.py": src})] == []
