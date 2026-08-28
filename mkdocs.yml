@@ -93,6 +93,7 @@ nav:
       # Best practices & testing
       - Best Practices: guides/best-practices.md
       - Integration Testing: guides/integration-testing.md
+      - Shared Integration Fixtures: guides/integration-fixtures.md
   - Concepts:
       - Apps: concepts/apps.md
       - Contracts: concepts/contracts.md

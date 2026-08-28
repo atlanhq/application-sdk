@@ -9,6 +9,7 @@ from application_sdk.errors.leaves import (
     DataIntegrityError,
     DependencyUnavailableError,
     InvalidInputError,
+    PreconditionError,
 )
 
 
@@ -48,3 +49,17 @@ class LocalVaultResponseInvariantError(DataIntegrityError):
 
     code: ClassVar[str] = "DATA_INTEGRITY_LOCAL_VAULT_RESPONSE"
     location: str | None = "local-vault"
+
+
+@dataclass(kw_only=True)
+class IntegrationEnvOrderingError(PreconditionError):
+    """An ``ATLAN_*`` env var was set after application_sdk snapshotted it."""
+
+    code: ClassVar[str] = "PRECONDITION_INTEGRATION_ENV_ORDERING"
+
+
+@dataclass(kw_only=True)
+class AppRegistrationMissingError(PreconditionError):
+    """The App under test never reached the registry create_worker snapshots."""
+
+    code: ClassVar[str] = "PRECONDITION_APP_NOT_REGISTERED"
