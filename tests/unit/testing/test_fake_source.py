@@ -38,10 +38,13 @@ from application_sdk.testing.fake_source import (
 # CI runs the unit tier with ``--disable-socket --allow-unix-socket`` (see
 # .github/actions/unit-tests/action.yaml) so a unit test cannot reach the
 # network. HttpFakeSource's whole purpose is to bind a real loopback listener,
-# so these tests re-enable AF_INET for themselves. The listener is bound to
-# 127.0.0.1 and is unreachable from anything but this process, so the guard's
-# intent — no outbound traffic from the unit tier — still holds.
-pytestmark = pytest.mark.enable_socket
+# so these tests need AF_INET back. ``allow_hosts`` rather than
+# ``enable_socket``: it permits the loopback listener while still refusing any
+# connect to another host with SocketConnectBlockedError, so the guard's intent
+# — no outbound traffic from the unit tier — stays enforced rather than merely
+# asserted in a comment. (Verified: under ``enable_socket`` an outbound connect
+# is allowed and attempted; under ``allow_hosts`` it is blocked.)
+pytestmark = pytest.mark.allow_hosts(["127.0.0.1"])
 
 http_fake_source_factory = sdk_fixtures.http_fake_source_factory
 clean_http_fake_sources = sdk_fixtures.clean_http_fake_sources
@@ -1498,3 +1501,73 @@ class TestShippedFixtures:
         assert list(shipped_fixture_source.requests) == []
         assert shipped_fixture_source.unused_routes() == [r"/api/objects"]
         assert _json(f"{shipped_fixture_source.base_url}/api/objects")[0] == 200
+
+
+class TestResponseFramingIsServerOwned:
+    """A handler must not be able to put a second framing header on the wire."""
+
+    def test_handler_content_length_is_dropped(self) -> None:
+        fake = HttpFakeSource(name="framing")
+        fake.route(
+            r"/dup",
+            lambda _r: FakeResponse.json_({"a": 1}, headers={"Content-Length": "999"}),
+        )
+        with fake:
+            conn = http.client.HTTPConnection("127.0.0.1", fake.port, timeout=5)
+            conn.request("GET", "/dup")
+            response = conn.getresponse()
+            lengths = [
+                v for k, v in response.getheaders() if k.lower() == "content-length"
+            ]
+            body = response.read()
+            conn.close()
+        assert lengths == [str(len(body))], (
+            f"expected exactly the server's own Content-Length, got {lengths!r}"
+        )
+
+    @pytest.mark.parametrize("header", ["Transfer-Encoding", "Connection"])
+    def test_hop_by_hop_headers_are_dropped(self, header: str) -> None:
+        fake = HttpFakeSource(name="framing")
+        fake.route(
+            r"/x", lambda _r: FakeResponse.json_({"a": 1}, headers={header: "chunked"})
+        )
+        with fake:
+            conn = http.client.HTTPConnection("127.0.0.1", fake.port, timeout=5)
+            conn.request("GET", "/x")
+            response = conn.getresponse()
+            sent = [v for k, v in response.getheaders() if k.lower() == header.lower()]
+            response.read()
+            conn.close()
+        assert sent == [], f"{header} should not be echoed from a handler, got {sent!r}"
+
+    def test_a_non_framing_header_still_reaches_the_client(self) -> None:
+        fake = HttpFakeSource(name="framing")
+        fake.route(
+            r"/x", lambda _r: FakeResponse.json_({"a": 1}, headers={"X-Cursor": "abc"})
+        )
+        with fake:
+            conn = http.client.HTTPConnection("127.0.0.1", fake.port, timeout=5)
+            conn.request("GET", "/x")
+            response = conn.getresponse()
+            assert response.getheader("X-Cursor") == "abc"
+            response.read()
+            conn.close()
+
+
+class TestRaisingAuthorizeAnswers:
+    """An authorize hook is consumer code: a bug in it must answer, not hang."""
+
+    def test_raising_authorize_returns_500(self) -> None:
+        def boom(_request: FakeRequest) -> None:
+            raise RuntimeError("authorize blew up")
+
+        fake = HttpFakeSource(name="auth", authorize=boom)
+        fake.route(r"/x", lambda _r: FakeResponse.json_({"ok": True}))
+        with fake:
+            conn = http.client.HTTPConnection("127.0.0.1", fake.port, timeout=5)
+            conn.request("GET", "/x")
+            response = conn.getresponse()
+            status, body = response.status, response.read()
+            conn.close()
+        assert status == 500
+        assert b"authorize" in body

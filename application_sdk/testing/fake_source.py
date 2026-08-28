@@ -93,6 +93,14 @@ _CONNECTION_TIMEOUT_SECONDS = 5.0
 _JOIN_GRACE_SECONDS = 5.0
 _MAX_BODY_BYTES = 64 * 1024 * 1024
 _MAX_CHUNK_LINE_BYTES = 8192
+# Framing and hop-by-hop headers the server owns. A handler that replays a
+# captured response verbatim will carry these, and emitting them alongside the
+# server's own Content-Length puts two conflicting values on the wire: a client
+# that honours the last one waits for a body that never arrives.
+_RESERVED_RESPONSE_HEADERS = frozenset(
+    {"content-length", "transfer-encoding", "connection"}
+)
+
 _BODY_REFUSALS = {
     400: {"error": "malformed request body"},
     413: {"error": "request body too large"},
@@ -666,7 +674,16 @@ class HttpFakeSource:
             self._requests.append(request)
 
         if self.authorize is not None:
-            denied = _coerce(self.authorize(request))
+            try:
+                denied = _coerce(self.authorize(request))
+            except Exception as exc:  # an authorize bug must answer, not hang
+                logger.warning(
+                    "%s authorize hook raised: %r", self.name, exc, exc_info=True
+                )
+                return FakeResponse.json_(
+                    {"error": "fake source authorize raised", "detail": repr(exc)},
+                    status=500,
+                )
             if denied is not None:
                 return denied
 
@@ -856,6 +873,7 @@ def _make_handler_class(fake: HttpFakeSource) -> type[BaseHTTPRequestHandler]:
                         _BODY_REFUSALS[refusal], status=refusal, Connection="close"
                     ),
                     self.command.upper(),
+                    server_owned=True,
                 )
                 return
             request = FakeRequest(
@@ -869,7 +887,16 @@ def _make_handler_class(fake: HttpFakeSource) -> type[BaseHTTPRequestHandler]:
             )
             self._respond(fake._dispatch(request), request.method)
 
-        def _respond(self, response: FakeResponse, method: str) -> None:
+        def _respond(
+            self, response: FakeResponse, method: str, *, server_owned: bool = False
+        ) -> None:
+            """Write *response*.
+
+            ``server_owned`` marks a response this module generated itself (the
+            body refusals, which must send ``Connection: close``). Only handler
+            headers are filtered — a handler cannot be allowed to set framing,
+            but the server still needs to.
+            """
             payload, content_type = response.encode(fake.default_content_type)
             if method == "HEAD":
                 payload = b""
@@ -877,6 +904,14 @@ def _make_handler_class(fake: HttpFakeSource) -> type[BaseHTTPRequestHandler]:
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(payload)))
             for key, value in response.headers.items():
+                if not server_owned and key.lower() in _RESERVED_RESPONSE_HEADERS:
+                    logger.warning(
+                        "%s dropped handler-supplied %r header: the server owns "
+                        "response framing",
+                        fake.name,
+                        key,
+                    )
+                    continue
                 self.send_header(key, value)
             self.end_headers()
             if payload:
