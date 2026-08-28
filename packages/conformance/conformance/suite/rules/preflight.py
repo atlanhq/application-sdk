@@ -8,7 +8,7 @@ they surface a boot-time collision at review time (P032), the app-owned duplicat
 that drifts from the gate (P033), untyped failure results that lose their wire
 metadata (P034), the silent metadata/contract drift that no runtime signal
 can catch (P035), and preflight failures logged below the customer's default
-ERROR filter (P046, FND-901).
+ERROR filter (P047, FND-901).
 
 The detector lives in ``suite.checks.preflight``; these rules reuse the ``P``
 series so they run on the existing P leg of the fleet CI matrix with no workflow
@@ -179,7 +179,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=f"{_HELP_BASE}#p035",
     ),
     RuleDefinition(
-        id="P046",
+        id="P047",
         scope=RuleScope.APP,
         name="PreflightFailureLoggedAsWarning",
         tier=EnforcementTier.WARN,
@@ -213,6 +213,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "the ``preflight_check`` method body is scanned; helper functions it "
             "calls are not followed."
         ),
-        help_uri=f"{_HELP_BASE}#p046",
+        help_uri=f"{_HELP_BASE}#p047",
     ),
 )

@@ -1,4 +1,4 @@
-"""P046 PreflightFailureLoggedAsWarning (FND-901).
+"""P047 PreflightFailureLoggedAsWarning (FND-901).
 
 Flags ``logger.warning(...)`` calls inside a ``Handler.preflight_check``
 override. The customer-facing log view filters at ERROR, so a preflight
@@ -18,7 +18,7 @@ from conformance.suite.schema.findings import Finding
 
 from ._common import Registry, find_preflight_check_sites
 
-_P046 = "P046"
+_P047 = "P047"
 
 
 def _is_logger_warning(node: ast.Call) -> bool:
@@ -44,7 +44,7 @@ def scan(reg: Registry) -> list[Finding]:
             findings.append(
                 make_finding(
                     filename=src.rel,
-                    rule_id=_P046,
+                    rule_id=_P047,
                     node=node,
                     message=(
                         "logger.warning() inside preflight_check — a preflight "

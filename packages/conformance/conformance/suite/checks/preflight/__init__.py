@@ -1,4 +1,4 @@
-"""Preflight-gate checks (P032–P035, P046, BLDX-1545, FND-901).
+"""Preflight-gate checks (P032–P035, P047, BLDX-1545, FND-901).
 
 Cross-file only: ``scan_path`` is a no-op and ``scan_all`` builds one shared
 :class:`~._common.Registry` (single parse + import walk) then runs all rule
@@ -28,7 +28,7 @@ def scan_path(path: Path, root: Path) -> list[Finding]:  # noqa: ARG001
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:
-    """Run the P032–P035 + P046 preflight-gate passes over *paths*."""
+    """Run the P032–P035 + P047 preflight-gate passes over *paths*."""
     reg = build_registry(paths, root)
     findings: list[Finding] = []
     findings.extend(_reserved_gate.scan(reg))
