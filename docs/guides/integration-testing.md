@@ -19,7 +19,7 @@ The older `BaseIntegrationTest` (HTTP scenario) framework is still shipped for t
 
 ### Step 1: Wire the conftest
 
-The SDK also ships this conftest as a parameterized fixture set — `integration_kit()` — so a connector supplies its source fixture and gets the rest, with the ordering rules below enforced rather than commented. See [Shared Integration Fixtures](./integration-fixtures.md), which also defines the golden-corpus layout and its `E2E_GOLDEN_ROOT` contract. The canonical shape below stays the reference for what that kit does.
+The SDK also ships this conftest as a parameterized fixture set — `integration_kit()` — so a connector supplies its source fixture and gets the rest, with the ordering rules below enforced rather than commented. See [Shared Integration Fixtures](./integration-fixtures.md). The canonical shape below stays the reference for what that kit does.
 
 Copy the conftest from any v3 reference connector — they're nearly identical. Below is the canonical shape; the only per-connector knobs are the `_TASK_QUEUE`, the credential-store seed, and the App class import.
 

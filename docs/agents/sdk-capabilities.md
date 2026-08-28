@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.29.0
-source-sha:    f6ca7c941fb9d6e0bc65ed1ddab9654516666e8d
-source-date:   2026-08-27T13:48:51+05:30
+source-sha:    b3b06b132da8b269e4f5eeccc331483434e404d9
+source-date:   2026-08-28T13:13:23+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 211 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 205 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3416,22 +3416,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Summary of all differences between expected and actual metadata.
 - **Defined in:** `application_sdk/testing/integration/comparison.py`
 
-#### `GoldenCorpus`
-
-- **Import:** `from application_sdk.testing.integration import GoldenCorpus`
-- **Also importable from:** `application_sdk.testing.integration.corpus`
-- **Signature:** `class GoldenCorpus(root: Path, layout: GoldenLayout = GoldenLayout(), tenant: str | None = None)`
-- **Summary:** A resolved golden corpus rooted at an existing directory.
-- **Defined in:** `application_sdk/testing/integration/corpus.py`
-
-#### `GoldenLayout`
-
-- **Import:** `from application_sdk.testing.integration import GoldenLayout`
-- **Also importable from:** `application_sdk.testing.integration.corpus`
-- **Signature:** `class GoldenLayout(stages: tuple[str, ...)`
-- **Summary:** The stage names and tenant axis a connector's corpus declares.
-- **Defined in:** `application_sdk/testing/integration/corpus.py`
-
 #### `HarnessNotBuiltError`
 
 - **Import:** `from application_sdk.testing.harness import HarnessNotBuiltError`
@@ -4383,14 +4367,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Delete every asset under *connection_qualified_name*, then the connection.
 - **Defined in:** `application_sdk/testing/harness/teardown.py`
 
-#### `read_records`
-
-- **Import:** `from application_sdk.testing.integration import read_records`
-- **Also importable from:** `application_sdk.testing.integration.corpus`
-- **Signature:** `read_records(path: Path)`
-- **Summary:** Read one corpus file as a list of records.
-- **Defined in:** `application_sdk/testing/integration/corpus.py`
-
 #### `read_tenant_auth`
 
 - **Import:** `from application_sdk.testing.harness.identity import read_tenant_auth`
@@ -4404,14 +4380,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `redact(bundle: EvidenceBundle) -> EvidenceBundle`
 - **Summary:** Return *bundle* with credential-shaped values replaced by placeholders.
 - **Defined in:** `application_sdk/testing/harness/evidence.py`
-
-#### `require_golden_corpus`
-
-- **Import:** `from application_sdk.testing.integration import require_golden_corpus`
-- **Also importable from:** `application_sdk.testing.integration.corpus`
-- **Signature:** `require_golden_corpus(*, *, ...)`
-- **Summary:** Resolve the corpus, or skip the test when none is configured.
-- **Defined in:** `application_sdk/testing/integration/corpus.py`
 
 #### `run_comparison`
 
@@ -4551,14 +4519,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/integration/embedded.py`
 
-#### `GOLDEN_ROOT_ENV`
-
-- **Import:** `from application_sdk.testing.integration import GOLDEN_ROOT_ENV`
-- **Also importable from:** `application_sdk.testing.integration.corpus`
-- **Signature:** `GOLDEN_ROOT_ENV`
-- **Summary:** Single env var overriding the corpus root.
-- **Defined in:** `application_sdk/testing/integration/corpus.py`
-
 #### `Outcome`
 
 - **Import:** `from application_sdk.testing.harness import Outcome`
@@ -4595,14 +4555,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `SampleRead: TypeAlias`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/expectations.py`
-
-#### `SUPPORTED_SUFFIXES`
-
-- **Import:** `from application_sdk.testing.integration import SUPPORTED_SUFFIXES`
-- **Also importable from:** `application_sdk.testing.integration.corpus`
-- **Signature:** `SUPPORTED_SUFFIXES`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/integration/corpus.py`
 
 #### `UNREADABLE`
 

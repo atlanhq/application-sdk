@@ -110,14 +110,6 @@ from .comparison import (
     load_actual_output,
     load_expected_data,
 )
-from .corpus import (
-    GOLDEN_ROOT_ENV,
-    SUPPORTED_SUFFIXES,
-    GoldenCorpus,
-    GoldenLayout,
-    read_records,
-    require_golden_corpus,
-)
 from .embedded import AppExecutor, IntegrationKit, integration_kit
 from .lazy import Lazy, evaluate_if_lazy, is_lazy, lazy
 from .models import APIType, Scenario, ScenarioResult
@@ -139,13 +131,6 @@ __all__ = [
     "AppExecutor",
     "IntegrationKit",
     "integration_kit",
-    # Golden corpus layout and loader
-    "GOLDEN_ROOT_ENV",
-    "SUPPORTED_SUFFIXES",
-    "GoldenCorpus",
-    "GoldenLayout",
-    "read_records",
-    "require_golden_corpus",
     # Models
     "APIType",
     "Scenario",
