@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.29.0
-source-sha:    b3b06b132da8b269e4f5eeccc331483434e404d9
-source-date:   2026-08-28T13:13:23+05:30
+source-sha:    48d7ef4c4045da02c5eb122cb8f4be5fa51af15a
+source-date:   2026-08-28T13:45:43+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 205 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 211 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3299,6 +3299,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** The read verbs this backend uses from ``CoreV1Api``.
 - **Defined in:** `application_sdk/testing/harness/cluster/kube.py`
 
+#### `CursorPage`
+
+- **Import:** `from application_sdk.testing import CursorPage`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `class CursorPage(items: Sequence[Any], limit: int, total: int, next_cursor: str | None)`
+- **Summary:** One page of a cursor scheme; ``next_cursor`` is opaque, as a real one is.
+- **Defined in:** `application_sdk/testing/fake_source.py`
+
 #### `CustomObjectReads`
 
 - **Import:** `from application_sdk.testing.harness.cluster.kube import CustomObjectReads`
@@ -3388,6 +3396,22 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** The budget ran out while work was still progressing.
 - **Defined in:** `application_sdk/testing/harness/outcome.py`
 
+#### `FakeRequest`
+
+- **Import:** `from application_sdk.testing import FakeRequest`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `class FakeRequest(method: str, ...)`
+- **Summary:** One inbound request, parsed into the pieces a handler actually wants.
+- **Defined in:** `application_sdk/testing/fake_source.py`
+
+#### `FakeResponse`
+
+- **Import:** `from application_sdk.testing import FakeResponse`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `class FakeResponse(status: int = 200, ...)`
+- **Summary:** What a handler returns: a status, a body, and optional headers.
+- **Defined in:** `application_sdk/testing/fake_source.py`
+
 #### `FieldDiff`
 
 - **Import:** `from application_sdk.testing.parity import FieldDiff`
@@ -3422,6 +3446,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class HarnessNotBuiltError(*, ...)`
 - **Summary:** A scaffolded harness function whose implementation has not landed yet.
 - **Defined in:** `application_sdk/testing/harness/_errors.py`
+
+#### `HttpFakeSource`
+
+- **Import:** `from application_sdk.testing import HttpFakeSource`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `class HttpFakeSource(*, ...)`
+- **Summary:** A loopback HTTP server that replays a connector's reconstructed responses.
+- **Defined in:** `application_sdk/testing/fake_source.py`
 
 #### `HttpRequest`
 
@@ -3982,6 +4014,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Count every descendant asset under the connection prefix, ALL types.
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
+#### `cursor_page`
+
+- **Import:** `from application_sdk.testing import cursor_page`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `cursor_page(items: Sequence[Any], *, ...)`
+- **Summary:** Slice ``items`` per the request's cursor/limit parameters.
+- **Defined in:** `application_sdk/testing/fake_source.py`
+
 #### `custom`
 
 - **Import:** `from application_sdk.testing.integration import custom`
@@ -4409,6 +4449,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `sample_qualified_names(client: AsyncAtlanClient, *, ...)`
 - **Summary:** Sample up to *per_type* qualified names per type under the connection.
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
+#### `serve`
+
+- **Import:** `from application_sdk.testing import serve`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `serve(routes: Iterable[tuple[str, Handler]] = (), **kwargs: Any)`
+- **Summary:** Run a fake for the duration of the block, yielding just its ``base_url``.
+- **Defined in:** `application_sdk/testing/fake_source.py`
 
 #### `start_on_task_queue`
 
