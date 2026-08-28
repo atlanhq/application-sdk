@@ -5,6 +5,8 @@
 
 This doc covers what the SDK ships — the composite action, the reusable workflow, conventions, and inputs. Connector-side wiring lives in each connector repo; see the mysql-app walkthrough for a copy-pasteable example.
 
+> **Do not invest in "SDR" or "full_dag" as test tiers.** Both names describe *where* a connector runs, or *which* pipeline once ran a suite — never a category of thing under test. `application_sdk.testing.full_dag` is frozen and removed in v4.0; `BaseSDRIntegrationTest` is deprecated and removed in v4.0. Neither needs a replacement harness, a compatibility layer, or new SDK surface. New work is placed per concern — see [The SDR base class](#the-sdr-base-class) for the table. If a proposal starts "to preserve SDR coverage we should…", the premise is wrong: read that section first.
+
 ## What the SDK ships
 
 | Component | Location | Purpose |
@@ -63,12 +65,16 @@ So: write no new SDR suites, and do not look for an SDR replacement. Place each 
 
 ## The two pipelines
 
-| Pipeline | What it validates | Stack | Wall time | Triggers |
-|---|---|---|---|---|
-| **SDR Integration Tests (testcontainer)** | Credential → secret-store → connector-client chain. Auth / preflight / extract polled to `COMPLETED` on CI tenant Temporal. | Hermetic — testcontainer DB + worker + Dapr + Temporal. | ~3 min | Auto on every connector PR push |
-| **E2E Full Tests (system apps)** | Full DAG: connector extract → publish → query-intelligence → lineage-app → lineage-publish. Asset counts + lineage assertions in Atlas. | Live — configurator-generated compose, worker on a dynamic Temporal queue against the CI tenant's full Atlan stack. | ~20–40 min | Label-gated (`e2e`) — see below |
+The two pipeline **names** below are the report titles the composite action emits, derived from the test path. They are labels on CI legs, not test tiers — do not read a category of coverage off them.
 
-Both call the same composite action; difference is test target, Dapr components, compose overlay, and secret-bundle shape.
+| Pipeline (report title) | How much of the DAG runs | Source system | Wall time | Triggers |
+|---|---|---|---|---|
+| **SDR Integration Tests (testcontainer)** | The connector's own handlers and workflow only — no system apps. | Local testcontainer. | ~3 min | Auto on every connector PR push |
+| **E2E Full Tests (system apps)** | Full DAG: connector extract → publish → query-intelligence → lineage-app → lineage-publish, with asset-count and lineage assertions in Atlas. | Whatever the suite points at. | ~20–40 min | Label-gated (`e2e`) — see below |
+
+The distinguishing axis is **how much of the DAG runs**, and therefore wall time and trigger policy. It is not SDR-vs-not, and it is not hermetic-vs-live: both legs call the same composite action, and both reach the CI tenant's Temporal (`<tenant>-temporal.atlan.com`, requiring `ATLAN_BASE_URL` + the OAuth pair). The difference is test target, Dapr components, compose overlay, and secret-bundle shape.
+
+Neither leg is the place credential resolution is proven. That is `tests/unit/credentials/` in this repo — see the table in [The SDR base class](#the-sdr-base-class).
 
 ### What the `e2e` label actually gates
 

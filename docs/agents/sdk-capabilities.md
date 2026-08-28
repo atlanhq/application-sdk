@@ -3236,7 +3236,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Import:** `from application_sdk.testing.sdr import BaseSDRIntegrationTest`
 - **Signature:** `class BaseSDRIntegrationTest`
-- **Summary:** Deprecated: use ``application_sdk.testing.e2e.BaseE2ETest`` with
+- **Summary:** Deprecated: migrate per concern — SDR is a deployment mode, not a test tier.
 - **Defined in:** `application_sdk/testing/sdr/base.py`
 
 #### `Budget`
