@@ -118,10 +118,25 @@ def restore_logger_init_flags() -> Generator[None, None, None]:
     ``logger.remove(sink_id)`` for a sink that is already gone, attributed to a
     test that did nothing wrong.
 
-    Restoring the flags is exact rather than approximate: ``_reset_for_testing``
+    Both flags are treated as **latches: this fixture only ever restores one
+    upward, and never writes False.** Writing a snapshot back verbatim would
+    re-arm the very hazard it exists to close — a test that *starts* with the
+    flag down and then constructs an adapter has installed live sinks by the
+    time it ends, and stamping False back over that hands the next uncached
+    ``get_logger()`` a licence to remove them. Only the True → False transition
+    is a leak; False → True is a test doing the initialisation properly, and it
+    must be allowed to stand.
+
+    Restoring upward is exact rather than approximate. ``_reset_for_testing``
     removes no sink itself, so a test that reset without re-initialising left the
-    original handlers in place and True is the truth. A test that did
-    re-initialise ends at True anyway, and this is a no-op.
+    original handlers in place and True is the truth. And there is no such thing
+    as a legitimately-uninitialised process to protect: importing this module
+    imports ``logger_adaptor``, whose import binds ``default_logger`` and so has
+    already run a full init.
+
+    ``_flush_task_started`` gets the same treatment for the same reason in
+    reverse — it gates thread spawning, so restoring it *down* after a test
+    started a flush task would let a later init spawn a second one.
 
     Under ``-n auto --dist load`` xdist hands items out as workers free up, so
     which pair collides is a function of relative test speed rather than of
@@ -133,5 +148,7 @@ def restore_logger_init_flags() -> Generator[None, None, None]:
     try:
         yield
     finally:
-        AtlanLoggerAdapter._initialized = initialized
-        AtlanLoggerAdapter._flush_task_started = flush_task_started
+        if initialized:
+            AtlanLoggerAdapter._initialized = True
+        if flush_task_started:
+            AtlanLoggerAdapter._flush_task_started = True
