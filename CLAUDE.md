@@ -39,6 +39,7 @@ Where to look next (progressive disclosure):
 - `docs/agents/dev-commands.md` — setup and repeatable workflows.
 - `docs/agents/coding-standards.md` — formatting, logging, exceptions, performance.
 - `docs/agents/testing.md` — test command, coverage config, test layout.
+- `docs/agents/canonical-apps.md` — the four public reference apps (hello-world, openapi, mysql, metabase). Read one of these for how a consumer app *should* look; do not generalise from an arbitrary `atlan-*-app`, which may be mid-migration or carry deprecated patterns.
 - `docs/agents/commits-prs.md` — commit format and PR expectations.
 - `docs/agents/docs-updates.md` — which conceptual docs to update with code changes.
 - `docs/agents/review.md` — code review checklist.

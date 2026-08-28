@@ -2,6 +2,7 @@
 
 > **Audience:** Connector teams onboarding (or maintaining) one of the two end-to-end test pipelines this SDK ships.
 > **Canonical reference adopter:** [`atlanhq/atlan-mysql-app`](https://github.com/atlanhq/atlan-mysql-app) — see its [`docs/CI-E2E.md`](https://github.com/atlanhq/atlan-mysql-app/blob/main/docs/CI-E2E.md) for the full connector-side walkthrough.
+> **All four canonical apps:** `docs/agents/canonical-apps.md` — hello-world, openapi, mysql, metabase. These are the only connector repos worth copying from; an arbitrary `atlan-*-app` may be mid-migration or carry patterns the SDK has since deprecated.
 
 This doc covers what the SDK ships — the composite action, the reusable workflow, conventions, and inputs. Connector-side wiring lives in each connector repo; see the mysql-app walkthrough for a copy-pasteable example.
 
