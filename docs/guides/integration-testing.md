@@ -55,6 +55,11 @@ from app.connector import YourApp  # noqa: F401 — triggers App registration
 # observability flush does not keep retrying and spamming warnings in tests.
 AtlanObservability._deployment_store = create_memory_store()
 
+# A literal here is what the three reference conftests do today, and it is the
+# one line of this listing worth improving on: `task_queue_from_env()` is the
+# same call the worker and the served manifest make, so a literal tests a queue
+# no deployment polls. The shared fixtures derive it — see
+# [Shared Integration Fixtures](./integration-fixtures.md).
 _TASK_QUEUE = "your-app-queue"
 _CREDENTIAL_KEY = "your-app"
 

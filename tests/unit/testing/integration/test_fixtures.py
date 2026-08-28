@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import inspect
 import os
+import subprocess
+import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -107,15 +110,40 @@ class TestPreconditions:
         with pytest.raises(_errors.AppRegistrationMissingError):
             fixtures._verify_registration(_FakeApp)  # type: ignore[arg-type]
 
-    def test_registered_app_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_registered_app_passes_and_yields_the_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from application_sdk.app.registry import AppRegistry
 
         monkeypatch.setattr(AppRegistry, "get_instance", lambda: _FakeRegistry())
-        fixtures._verify_registration(_FakeApp)  # type: ignore[arg-type]
+        assert fixtures._verify_registration(_FakeApp) == _APP_NAME  # type: ignore[arg-type]
 
-    def test_import_time_check_is_wired(self) -> None:
-        source = inspect.getsource(fixtures)
-        assert "\n_verify_env_ordering()\n" in source
+    def test_env_set_after_import_fails_at_import(self) -> None:
+        """The check runs on import, not on first fixture use.
+
+        Asserting on ``inspect.getsource`` would pin the call's *text*; the
+        behaviour that matters is that a mis-ordered conftest cannot collect at
+        all. Only a fresh interpreter can show that, because this one has long
+        since imported the module.
+        """
+        result = _run_python(
+            "import os\n"
+            "os.environ['ATLAN_APPLICATION_NAME'] = 'set-first'\n"
+            "import application_sdk.constants  # snapshots 'set-first'\n"
+            "os.environ['ATLAN_APPLICATION_NAME'] = 'set-too-late'\n"
+            "import application_sdk.testing.integration.fixtures\n"
+        )
+        assert result.returncode != 0
+        assert "IntegrationEnvOrderingError" in result.stderr
+        assert "set-too-late" in result.stderr
+
+    def test_matching_env_imports_cleanly(self) -> None:
+        result = _run_python(
+            "import os\n"
+            "os.environ['ATLAN_APPLICATION_NAME'] = 'in-order'\n"
+            "import application_sdk.testing.integration.fixtures\n"
+        )
+        assert result.returncode == 0, result.stderr
 
 
 class TestOverrideFixtures:
@@ -124,8 +152,49 @@ class TestOverrideFixtures:
             _fn(fixtures.integration_app_cls)()
         assert exc.value.resource == "integration_app_cls"
 
-    def test_task_queue_follows_the_convention(self) -> None:
+    def test_task_queue_is_the_canonical_derivation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The queue the real deployment uses, not a locally invented one.
+
+        Pinned against ``task_queue_from_env`` itself rather than a literal:
+        FND-195 exists because the worker and the served manifest once derived
+        this name independently, and a literal here would re-open that gap
+        while staying green.
+        """
+        from application_sdk.common.task_queue import task_queue_from_env
+
+        monkeypatch.setenv(fixtures.APPLICATION_NAME_ENV, _APP_NAME)
+        monkeypatch.setenv(fixtures.DEPLOYMENT_NAME_ENV, "ci")
+        queue = _fn(fixtures.integration_task_queue)(_FakeApp)
+        assert queue == task_queue_from_env() == f"atlan-{_APP_NAME}-ci"
+
+    def test_task_queue_falls_back_to_the_local_dev_convention(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from application_sdk.app.registry import AppRegistry
+
+        monkeypatch.delenv(fixtures.APPLICATION_NAME_ENV, raising=False)
+        monkeypatch.delenv(fixtures.DEPLOYMENT_NAME_ENV, raising=False)
+        monkeypatch.setattr(AppRegistry, "get_instance", lambda: _FakeRegistry())
         assert _fn(fixtures.integration_task_queue)(_FakeApp) == f"{_APP_NAME}-queue"
+
+    def test_task_queue_fallback_reports_an_unregistered_app(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``_app_name`` is stamped by registration, so its absence is that.
+
+        Reading the attribute bare would raise ``AttributeError`` here — for
+        exactly the case the kit exists to report actionably.
+        """
+        monkeypatch.delenv(fixtures.APPLICATION_NAME_ENV, raising=False)
+        monkeypatch.delenv(fixtures.DEPLOYMENT_NAME_ENV, raising=False)
+
+        class _UnregisteredApp:
+            pass
+
+        with pytest.raises(_errors.AppRegistrationMissingError):
+            _fn(fixtures.integration_task_queue)(_UnregisteredApp)
 
     def test_source_defaults_to_none(self) -> None:
         assert _fn(fixtures.integration_source)() is None
@@ -166,12 +235,29 @@ class TestFixtureGraph:
         assert "integration_secrets" in params
         assert "store_root" in params
 
-    def test_client_takes_the_runtime_namespace(self) -> None:
-        source = inspect.getsource(_fn(fixtures.temporal_client))
-        assert "namespace=embedded_temporal.namespace" in source
-
 
 class TestArtifactPreservation:
+    @pytest.fixture(autouse=True)
+    def _restore_cleanup_env(self) -> Iterator[None]:
+        """Restore the interceptor var around every test in this class.
+
+        ``monkeypatch.delenv(..., raising=False)`` records nothing when the
+        variable is already absent, so a test that then lets the code under
+        test *set* it leaks that value to the end of the session — and this
+        particular variable decides whether ``App.on_complete()`` deletes a
+        run's artifacts, so the leak lands on unrelated tests as a missing
+        output file.
+        """
+        sentinel = object()
+        before: object = os.environ.get(CLEANUP_INTERCEPTOR_ENV, sentinel)
+        try:
+            yield
+        finally:
+            if before is sentinel:
+                os.environ.pop(CLEANUP_INTERCEPTOR_ENV, None)
+            else:
+                os.environ[CLEANUP_INTERCEPTOR_ENV] = str(before)
+
     def test_defaults_the_interceptor_off(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -260,6 +346,64 @@ class TestClientFixture:
             _FakeRuntime(), _FakeApp, KitOptions(data_converter=False)
         )
         assert calls[0]["data_converter"] is None
+
+
+class TestLazyPackage:
+    """The star-import must not pay for the framework it replaces.
+
+    Python imports a parent package before its submodule, so an adopting
+    conftest's ``from ...fixtures import *`` runs
+    ``testing/integration/__init__.py`` first. Eagerly re-exporting there made
+    that import pull in ``BaseIntegrationTest`` and pyatlan_v9 — ~2s warm, per
+    process, under ``pytest -n auto --dist=loadfile``.
+    """
+
+    def test_fixtures_does_not_drag_in_the_scenario_framework(self) -> None:
+        result = _run_python(
+            "import sys\n"
+            "import application_sdk.testing.integration.fixtures\n"
+            "leaked = [m for m in "
+            "('application_sdk.testing.integration.runner',\n"
+            " 'application_sdk.testing.integration.client',\n"
+            " 'application_sdk.testing.integration.validation',\n"
+            " 'application_sdk.validation') if m in sys.modules]\n"
+            "assert not leaked, leaked\n"
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    def test_every_reexport_still_resolves(self) -> None:
+        from application_sdk.testing import integration
+
+        for name in integration.__all__:
+            assert getattr(integration, name) is not None
+        assert set(integration.__all__) <= set(dir(integration))
+
+    def test_unknown_attribute_still_raises(self) -> None:
+        from application_sdk.testing import integration
+
+        with pytest.raises(AttributeError):
+            integration.definitely_not_exported  # type: ignore[attr-defined]
+
+    def test_lazy_map_matches_the_public_api(self) -> None:
+        from application_sdk.testing import integration
+
+        assert set(integration._LAZY_EXPORTS) == set(integration.__all__)
+
+
+def _run_python(script: str) -> subprocess.CompletedProcess[str]:
+    """Run *script* in a fresh interpreter, for import-time behaviour.
+
+    Import-time effects — the env-ordering check, what a module pulls into
+    ``sys.modules`` — cannot be observed in this process, which imported
+    everything during collection.
+    """
+    return subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        cwd=Path(__file__).resolve().parents[4],
+        timeout=120,
+    )
 
 
 def _capture_warnings(monkeypatch: pytest.MonkeyPatch) -> list[str]:

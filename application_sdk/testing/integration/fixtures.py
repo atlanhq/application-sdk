@@ -3,8 +3,9 @@
 Every v3 connector's ``tests/integration/conftest.py`` boots the same thing: an
 embedded Temporal dev server, mocked secret / state / storage infrastructure, an
 in-process worker, and a thin executor shim over
-:class:`~application_sdk.execution.TemporalExecutorBackend`. Only the App class,
-the task queue and the source are per-connector. This module ships the rest as
+:class:`~application_sdk.execution.TemporalExecutorBackend`. Only the App class
+and the source are genuinely per-connector — the task queue is derived, by the
+same call the worker and the served manifest make. This module ships the rest as
 ordinary pytest fixtures; a connector star-imports them and overrides the
 ``integration_*`` fixtures it needs to::
 
@@ -199,7 +200,7 @@ class AppExecutor:
         from application_sdk.app.context import AppContext  # noqa: PLC0415
         from application_sdk.execution.retry import RetryPolicy  # noqa: PLC0415
 
-        app_name = getattr(app_cls, "_app_name", execution_id_prefix or "app")
+        app_name = _app_name_of(app_cls) or execution_id_prefix or "app"
         context = AppContext(
             app_name=app_name,
             app_version="0.0.0",
@@ -212,6 +213,19 @@ class AppExecutor:
             retry_policy=RetryPolicy(),
             entry_point=entry_point,
         )
+
+
+def _app_name_of(app_cls: type[App]) -> str | None:
+    """The App's registered name, or ``None`` when it has none.
+
+    ``_app_name`` is stamped onto the class by registration
+    (:func:`application_sdk.app._ep_registration`), not by ``App`` itself — so
+    its absence is not a missing attribute to route around, it *is* the
+    unregistered case :func:`_verify_registration` reports. One reader here
+    keeps the three call sites from each inventing a different fallback.
+    """
+    name = getattr(app_cls, "_app_name", None)
+    return name if isinstance(name, str) and name else None
 
 
 def _verify_env_ordering() -> None:
@@ -246,11 +260,11 @@ def _verify_env_ordering() -> None:
             )
 
 
-def _verify_registration(app_cls: type[App]) -> None:
-    """Fail when *app_cls* never reached the App registry."""
+def _verify_registration(app_cls: type[App]) -> str:
+    """Fail when *app_cls* never reached the App registry; else its name."""
     from application_sdk.app.registry import AppRegistry  # noqa: PLC0415
 
-    app_name = getattr(app_cls, "_app_name", None)
+    app_name = _app_name_of(app_cls)
     registered = AppRegistry.get_instance().list_apps()
     if app_name is None or app_name not in registered:
         raise AppRegistrationMissingError(
@@ -268,6 +282,7 @@ def _verify_registration(app_cls: type[App]) -> None:
                 "overrides; the import is what populates the registry."
             ),
         )
+    return app_name
 
 
 def _apply_artifact_preservation(options: KitOptions) -> None:
@@ -315,9 +330,27 @@ def integration_app_cls() -> type[App]:
 def integration_task_queue(integration_app_cls: type[App]) -> str:
     """Task queue the worker listens on and the executor submits to.
 
-    Defaults to the ``"<app>-queue"`` convention from the App's registered name.
+    Derived by :func:`application_sdk.common.task_queue.task_queue_from_env` —
+    the *same* call :func:`application_sdk.main._derive_task_queue` makes, and
+    the same value the served manifest stamps for the Automation Engine. That
+    module exists because the worker and the manifest once derived this name
+    independently and disagreed, and nothing failed loudly: AE submitted to one
+    queue, the worker polled another, and the run sat unclaimed until its 24h
+    heartbeat backstop (CONNECT-183, FND-195).
+
+    A local re-derivation here would rebuild exactly that. With the conftest's
+    ``ATLAN_APPLICATION_NAME=yourapp`` / ``ATLAN_DEPLOYMENT_NAME=ci`` the real
+    queue is ``atlan-yourapp-ci``; a ``"<app>-queue"`` literal would be
+    self-consistent across this suite's own worker and executor and therefore
+    green, while testing a queue name no deployment ever uses.
+
+    Only the no-app-name fallback is local, matching ``_derive_task_queue``:
+    ``{app}-queue`` predates the env-var convention and is load-bearing for
+    local dev, where nothing reads the manifest's queue anyway.
     """
-    return f"{integration_app_cls._app_name}-queue"
+    from application_sdk.common.task_queue import task_queue_from_env  # noqa: PLC0415
+
+    return task_queue_from_env() or f"{_verify_registration(integration_app_cls)}-queue"
 
 
 @pytest.fixture(scope="session")

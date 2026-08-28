@@ -44,7 +44,7 @@ def yourapp_executor(executor):
 | Fixture | Default | Override when |
 |---|---|---|
 | `integration_app_cls` | **Required** — raises `AppRegistrationMissingError` telling you to override | Always. |
-| `integration_task_queue` | `"<app>-queue"` from the App's registered name | The suite must match a non-conventional queue name. |
+| `integration_task_queue` | `task_queue_from_env()` — the canonical derivation (`atlan-<app>-<deployment>`), falling back to `"<app>-queue"` when no app name is set | An explicit `ATLAN_TASK_QUEUE`-style override the env cannot express. |
 | `integration_source` | `None` | The connector has a source to bring up: a testcontainer, an in-process HTTP fake, a credential dict. Whatever it yields is handed to `integration_secrets` and otherwise untouched. |
 | `integration_secrets` | `{}` | Credentials are read from the secret store rather than passed inline. Receives `integration_source`; returns a `{key: json}` mapping seeded into `MockSecretStore`. |
 | `integration_options` | `KitOptions()` | Any knob in the table below needs changing. |
@@ -70,6 +70,7 @@ Every async fixture (`embedded_temporal`, `temporal_client`, `worker`) is pinned
 | `preserve_artifacts` | On — **defaults** `APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR` to `"false"` when unset | Read at run time, so the kit can own it. With cleanup on, `App.on_complete()` deletes the run's local files and tracked `TRANSIENT` refs after each run, and every artifact assertion fails as "output file missing". An explicit environment value wins; a truthy one is logged as a warning naming the variable. The option is one-way — `False` leaves the variable untouched rather than forcing `"true"`. |
 | `log_level` | `"error"` | Embedded dev-server verbosity. |
 | Temporal namespace | `embedded_temporal.namespace` | Threaded from the runtime to the client rather than relying on both defaulting to `"default"`. |
+| Task queue | `task_queue_from_env()` | The same call `main._derive_task_queue` makes and the same value the served manifest stamps for the Automation Engine. FND-195 collapsed those to one derivation after the worker and the manifest disagreed and nothing failed loudly — the run sat unclaimed until its 24h heartbeat backstop (CONNECT-183). A local `"<app>-queue"` literal is self-consistent across this suite's own worker and executor, so it stays green while testing a queue no deployment polls. |
 | Fixture scope | Session | One source, one dev server, one worker per suite. |
 | Object-store observability | In-memory store for the session, restored on teardown | Stops the periodic flush retrying against a store that is not there. |
 
