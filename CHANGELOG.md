@@ -1,5 +1,31 @@
 # Changelog
 
+## v3.30.0 (August 28, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.29.0...v3.30.0
+
+### Features
+
+- scaffold application_sdk/testing/harness/ (FND-238) (#3433) (by @cmgrote in [997b697](https://github.com/atlanhq/application-sdk/commit/997b697))
+- extract the harness's pure core — evaluators, budgets, identity (FND-239) (#3435) (by @cmgrote in [35dd101](https://github.com/atlanhq/application-sdk/commit/35dd101))
+- collect per-activity resource usage for tier sizing (#3399) (by @OnkarVO7 in [66bfa01](https://github.com/atlanhq/application-sdk/commit/66bfa01))
+- implement the harness's bounded-wait primitives (FND-227) (#3437) (by @cmgrote in [ed8e65b](https://github.com/atlanhq/application-sdk/commit/ed8e65b))
+- land the typed Kubernetes cluster reader, retiring the kubectl reads (FND-241) (#3439) (by @cmgrote in [41ee8fa](https://github.com/atlanhq/application-sdk/commit/41ee8fa))
+- land the Temporal readers for pollers and workflow status (FND-247) (#3440) (by @cmgrote in [9e9ba8a](https://github.com/atlanhq/application-sdk/commit/9e9ba8a))
+- add a direct-to-task-queue workflow starter (FND-246) (#3460) (by @cmgrote in [3b44c0a](https://github.com/atlanhq/application-sdk/commit/3b44c0a))
+- publish the harness lifecycle as async fixtures for composers (FND-244) (#3464) (by @cmgrote in [2b37fc7](https://github.com/atlanhq/application-sdk/commit/2b37fc7))
+- land the AE starter, evidence with redaction, and teardown (FND-243) (#3462) (by @cmgrote in [318a860](https://github.com/atlanhq/application-sdk/commit/318a860))
+
+### Bug Fixes
+
+- make DatabaseSpec.connector_config_name a warned fallback (#3426) (by @cmgrote in [9f5b89e](https://github.com/atlanhq/application-sdk/commit/9f5b89e))
+- one suffix rule for both NDJSON walk branches (.json/.jsonl/.ndjson) (#3434) (by @vaibhavatlan in [114eb15](https://github.com/atlanhq/application-sdk/commit/114eb15))
+- avoid Segment flush in Temporal workflows [SYSAPPS-328] (#3447) (by @mothership-ai[bot] in [9f9ee1e](https://github.com/atlanhq/application-sdk/commit/9f9ee1e))
+- drop pip/setuptools bootstrap wheels from the base image (4 High, 1 Medium) (#3463) (by @akshanshjaiswal-atlan in [6d7b133](https://github.com/atlanhq/application-sdk/commit/6d7b133))
+- correct preflight failure routing, remediation, and copy (#3458) (by @Lalit3716-atlan in [c3ade68](https://github.com/atlanhq/application-sdk/commit/c3ade68))
+- key agent credential ref-keys off auth_type, not a fixed basic | FND-923 (#3455) (by @hritika-atlan in [4beccc8](https://github.com/atlanhq/application-sdk/commit/4beccc8))
+
+
 ## v3.29.0 (August 25, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.28.3...v3.29.0
