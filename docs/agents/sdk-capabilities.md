@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.29.0
-source-sha:    41ebbafc00b1ae1a5fe30feac981266db5aeb59d
-source-date:   2026-08-27T20:33:08+01:00
+source-sha:    691881485c29a842699c61a4b46bea800b6d7a6e
+source-date:   2026-08-28T08:58:40+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -29,7 +29,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
-| `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 28 |
+| `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 29 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
@@ -2625,6 +2625,13 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 
 - **Import:** `from application_sdk.observability.events import OUTCOME_EVENT_NAMES`
 - **Signature:** `OUTCOME_EVENT_NAMES: Final[frozenset[str]]`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/events.py`
+
+#### `PREFLIGHT_CHECK_EVENT`
+
+- **Import:** `from application_sdk.observability.events import PREFLIGHT_CHECK_EVENT`
+- **Signature:** `PREFLIGHT_CHECK_EVENT: Final`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/observability/events.py`
 
@@ -5947,7 +5954,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `passed: bool` `= False` — Whether the check passed.
   - `message: str` `= ''` — Deprecated: prefer :attr:`error`. Human-facing line shown when ``error``
   - `error: FailureDetails | None` — Typed failure for a failed check — set only on failed checks.
-  - `duration_ms: float` `= 0.0` — How long the check took in milliseconds.
+  - `duration_ms: float | None` — App-authored, optional. Not measured by the SDK and not reliable for
   - `resolved_message: str` — Message under the precedence rule: a failed check's ``error`` wins.
   - `resolved_suggested_action: str` — Suggested action from a failed check's ``error``; empty otherwise.
 - **Defined in:** `application_sdk/handler/contracts.py`
