@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.29.0
-source-sha:    41ebbafc00b1ae1a5fe30feac981266db5aeb59d
-source-date:   2026-08-27T20:33:08+01:00
+sdk-version:   3.30.0
+source-sha:    5c71f1f1552ba261d03c426052f20efac43f523f
+source-date:   2026-08-28T07:26:25Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 265 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 271 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3132,6 +3132,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Deprecated (removed in v4.0) — use :class:`AppUnderTest`.
 - **Defined in:** `application_sdk/testing/e2e/config.py`
 
+#### `AppExecutor`
+
+- **Import:** `from application_sdk.testing.integration import AppExecutor`
+- **Also importable from:** `application_sdk.testing.integration.embedded`
+- **Signature:** `class AppExecutor(backend: Any)`
+- **Summary:** Thin shim over :class:`TemporalExecutorBackend` for integration suites.
+- **Defined in:** `application_sdk/testing/integration/embedded.py`
+
 #### `AppNotReadyError`
 
 - **Import:** `from application_sdk.testing.harness.automation_engine import AppNotReadyError`
@@ -3494,6 +3502,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class Indeterminate(*, ...)`
 - **Summary:** The wait could not reach a verdict — the probe itself failed.
 - **Defined in:** `application_sdk/testing/harness/outcome.py`
+
+#### `IntegrationKit`
+
+- **Import:** `from application_sdk.testing.integration import IntegrationKit`
+- **Also importable from:** `application_sdk.testing.integration.embedded`
+- **Signature:** `class IntegrationKit(store_root: Any, ...)`
+- **Summary:** The fixtures :func:`integration_kit` built, for binding into a conftest.
+- **Defined in:** `application_sdk/testing/integration/embedded.py`
 
 #### `IntegrationTestClient`
 
@@ -4505,6 +4521,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Assert *invariant* holds for every reading across the whole budget.
 - **Defined in:** `application_sdk/testing/harness/waiting.py`
 
+#### `integration_kit`
+
+- **Import:** `from application_sdk.testing.integration import integration_kit`
+- **Also importable from:** `application_sdk.testing.integration.embedded`
+- **Signature:** `integration_kit(*, *, secrets: Callable[[Any], ...)`
+- **Summary:** Build the canonical integration fixture set for *app_cls*.
+- **Defined in:** `application_sdk/testing/integration/embedded.py`
+
 #### `is_dict`
 
 - **Import:** `from application_sdk.testing.integration import is_dict`
@@ -4906,6 +4930,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
+#### `APPLICATION_NAME_ENV`
+
+- **Import:** `from application_sdk.testing.integration.embedded import APPLICATION_NAME_ENV`
+- **Signature:** `APPLICATION_NAME_ENV`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/integration/embedded.py`
+
 #### `Classifier`
 
 - **Import:** `from application_sdk.testing.harness import Classifier`
@@ -4913,6 +4944,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `Classifier: TypeAlias`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/waiting.py`
+
+#### `CLEANUP_INTERCEPTOR_ENV`
+
+- **Import:** `from application_sdk.testing.integration.embedded import CLEANUP_INTERCEPTOR_ENV`
+- **Signature:** `CLEANUP_INTERCEPTOR_ENV`
+- **Summary:** Env var gating ``App.on_complete()``'s file and object-store cleanup.
+- **Defined in:** `application_sdk/testing/integration/embedded.py`
 
 #### `CONNECTOR_CI`
 
@@ -4935,6 +4973,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `DEFAULT_TYPE_NAMES: tuple[str, ...]`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
+#### `DEPLOYMENT_NAME_ENV`
+
+- **Import:** `from application_sdk.testing.integration.embedded import DEPLOYMENT_NAME_ENV`
+- **Signature:** `DEPLOYMENT_NAME_ENV`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/integration/embedded.py`
 
 #### `Outcome`
 
