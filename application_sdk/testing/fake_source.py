@@ -22,10 +22,6 @@ a fake::
         with fake:
             yield fake.base_url
 
-That fixture ships too — ``http_fake_source_factory`` and
-``clean_http_fake_sources`` in :mod:`application_sdk.testing.fixtures` handle the
-session lifecycle and the per-test reset, leaving the connector only its routes.
-
 What stays with the connector is the part that is genuinely per-source: the
 endpoint map, the response envelope, and any auth-signature scheme. Those are
 irreducible — a NetSuite swagger fragment and a MicroStrategy folder listing have
@@ -41,9 +37,8 @@ blocking on a socket until the suite's timeout — which is how this failure mod
 presents when the server only implements ``do_GET``.
 
 *Unmatched-request recording.* The 404s are kept, so a test can assert the extract
-called nothing the fake did not model. That assertion is what makes a
-reverse-engineered fake evidence rather than a tautology, and
-:func:`assert_extract_roundtrip` makes it for you.
+called nothing the fake did not model. That is what makes a reverse-engineered fake
+evidence rather than a tautology.
 
 The same reasoning is why :meth:`HttpFakeSource.route` can constrain query
 parameters. A source whose distinct request shapes share one path and differ only
@@ -75,13 +70,8 @@ __all__ = [
     "CursorPage",
     "FakeRequest",
     "FakeResponse",
-    "FakeSourceGroup",
     "HttpFakeSource",
-    "HttpFakeSourceFactory",
-    "OffsetPage",
-    "assert_extract_roundtrip",
     "cursor_page",
-    "offset_page",
     "serve",
 ]
 
@@ -483,9 +473,8 @@ class HttpFakeSource:
             )
 
         Registering those as three routes rather than one branching handler is what
-        keeps :meth:`hits`, :meth:`unused_routes` and
-        :func:`assert_extract_roundtrip`'s route-usage check meaningful: each shape
-        is separately counted, so a shape the extract never exercises is reported
+        keeps :meth:`hits` and :meth:`unused_routes` meaningful: each shape is
+        separately counted, so a shape the extract never exercises is reported
         instead of hidden behind a sibling's hit.
 
         **Precedence.** Among the routes matching a request's path and method, the
@@ -933,113 +922,6 @@ def _make_handler_class(fake: HttpFakeSource) -> type[BaseHTTPRequestHandler]:
     return _Handler
 
 
-class FakeSourceGroup:
-    """Several fakes started together, for a source split across hosts.
-
-    Some connectors authenticate against one host and read data from another. Each
-    host is its own :class:`HttpFakeSource` on its own port; this starts and stops
-    them as one unit and hands back the URLs by name::
-
-        group = FakeSourceGroup(token=token_fake, data=data_fake)
-        with group:
-            client = Client(token_url=group.url("token"), data_url=group.url("data"))
-    """
-
-    def __init__(self, **sources: HttpFakeSource) -> None:
-        if not sources:
-            raise ValueError("FakeSourceGroup requires at least one source")
-        self.sources: dict[str, HttpFakeSource] = dict(sources)
-
-    def __getitem__(self, name: str) -> HttpFakeSource:
-        return self.sources[name]
-
-    def url(self, name: str) -> str:
-        """Base URL of the named host."""
-        return self.sources[name].base_url
-
-    @property
-    def base_urls(self) -> Mapping[str, str]:
-        """Every host's base URL, keyed by name."""
-        return {name: source.base_url for name, source in self.sources.items()}
-
-    def reset(self) -> None:
-        """Reset the recorded requests on every host."""
-        for source in self.sources.values():
-            source.reset()
-
-    @property
-    def unmatched(self) -> Sequence[FakeRequest]:
-        """Unmatched requests across every host, so one assertion covers the group."""
-        return [
-            request for source in self.sources.values() for request in source.unmatched
-        ]
-
-    def __enter__(self) -> Self:
-        started: list[HttpFakeSource] = []
-        try:
-            for source in self.sources.values():
-                started.append(source.start())
-        except Exception:
-            for source in reversed(started):
-                source.stop()
-            raise
-        return self
-
-    def __exit__(self, *_exc: object) -> None:
-        for source in reversed(list(self.sources.values())):
-            source.stop()
-
-
-class HttpFakeSourceFactory:
-    """The fakes one pytest session built, owned in one place.
-
-    Backs the shipped fixture pair (``http_fake_source_factory`` and
-    ``clean_http_fake_sources`` in :mod:`application_sdk.testing.fixtures`). Routes
-    are the per-connector part and stay in the connector's own session fixture;
-    starting the servers, resetting recordings between tests and stopping
-    everything at the end are the same everywhere and happen here::
-
-        @pytest.fixture(scope="session")
-        def source_url(http_fake_source_factory) -> str:
-            fake = http_fake_source_factory(name="my-source")
-            fake.route(r"/api/v1/objects", list_objects)
-            return fake.base_url
-
-        def test_extract(source_url, clean_http_fake_sources) -> None:
-            ...
-    """
-
-    def __init__(self) -> None:
-        self._sources: list[HttpFakeSource] = []
-
-    def __call__(self, **kwargs: Any) -> HttpFakeSource:
-        """Build and start one fake; ``kwargs`` are :class:`HttpFakeSource`'s."""
-        source = HttpFakeSource(**kwargs)
-        self._sources.append(source)
-        try:
-            source.start()
-        except Exception:
-            self._sources.remove(source)
-            raise
-        return source
-
-    @property
-    def sources(self) -> Sequence[HttpFakeSource]:
-        """Every fake built so far, in creation order."""
-        return list(self._sources)
-
-    def reset_all(self) -> None:
-        """:meth:`HttpFakeSource.reset` every fake, leaving the servers running."""
-        for source in self._sources:
-            source.reset()
-
-    def stop_all(self) -> None:
-        """Stop every fake, newest first, and forget them."""
-        sources, self._sources = self._sources, []
-        for source in reversed(sources):
-            source.stop()
-
-
 @contextmanager
 def serve(
     routes: Iterable[tuple[str, Handler]] = (),
@@ -1060,31 +942,6 @@ def serve(
     fake = HttpFakeSource(routes=routes, **kwargs)
     with fake:
         yield fake.base_url
-
-
-@dataclass(frozen=True)
-class OffsetPage:
-    """One page of an offset/limit scheme, plus everything an envelope needs.
-
-    The envelope stays with the connector — one source calls the next-page field
-    ``nextOffset``, another nests the count under ``meta.total`` — so this carries
-    the numbers and the connector spells them.
-    """
-
-    items: Sequence[Any]
-    offset: int
-    limit: int
-    total: int
-
-    @property
-    def has_more(self) -> bool:
-        """Whether any item remains after this page."""
-        return self.offset + len(self.items) < self.total
-
-    @property
-    def next_offset(self) -> int | None:
-        """Offset of the next page, or ``None`` on the last one."""
-        return self.offset + len(self.items) if self.has_more else None
 
 
 @dataclass(frozen=True)
@@ -1113,36 +970,6 @@ class CursorPage:
     def has_more(self) -> bool:
         """Whether any item remains after this page."""
         return self.next_cursor is not None
-
-
-def offset_page(
-    items: Sequence[Any],
-    request: FakeRequest,
-    *,
-    offset_param: str = "offset",
-    limit_param: str = "limit",
-    default_limit: int = 100,
-    max_limit: int | None = None,
-) -> OffsetPage:
-    """Slice ``items`` per the request's offset/limit parameters.
-
-    Negative offsets and non-positive limits are clamped rather than rejected: a
-    fake that 400s on a client's off-by-one hides the extract bug behind an error
-    the real source would not return.
-    """
-    total = len(items)
-    offset = max(0, request.int_param(offset_param, 0))
-    limit = request.int_param(limit_param, default_limit)
-    if limit <= 0:
-        limit = default_limit
-    if max_limit is not None:
-        limit = min(limit, max_limit)
-    return OffsetPage(
-        items=list(items[offset : offset + limit]),
-        offset=offset,
-        limit=limit,
-        total=total,
-    )
 
 
 def cursor_page(
@@ -1213,112 +1040,3 @@ def _decode_cursor(cursor: str) -> int:
         return int(decoded[2:])
     except ValueError:
         return 0
-
-
-def assert_extract_roundtrip(
-    fake: HttpFakeSource | FakeSourceGroup,
-    extract_fn: Callable[..., Any],
-    golden: Any,
-    *,
-    key: Callable[[Any], Any] | None = None,
-    normalise: Callable[[Any], Any] | None = None,
-    require_all_routes_used: bool = True,
-) -> Any:
-    """Run the real extract against the fake and assert it reproduces ``golden``.
-
-    A fake source reconstructed from captured traffic is only evidence if the
-    connector's own extract, unmodified, turns the fake's responses back into the
-    raw output that was captured. Asserting that is what separates a fake that
-    proves the extract works from one that merely agrees with itself.
-
-    Three things are checked, and the second is the one usually forgotten:
-
-    1. the extract's output equals ``golden``;
-    2. the fake served no unmatched request — otherwise part of the extract ran
-       against a 404 and the comparison silently covered less than it appears to;
-    3. every registered route was used (``require_all_routes_used``) — an unused
-       route is a code path the suite is believed to cover and does not.
-
-    ``extract_fn`` is called with the base URL (a single fake) or with the host
-    URLs as keyword arguments (a :class:`FakeSourceGroup`). ``key`` sorts both
-    sides before comparison, for an extract whose record order is not guaranteed;
-    ``normalise`` is applied to both sides, to drop fields that cannot be stable
-    (timestamps, run ids). Returns the extract's output.
-
-    **Direct-call tier only.** This assertion calls ``extract_fn`` synchronously
-    and inspects ``fake.unmatched`` / ``fake.unused_routes()`` immediately after,
-    so it only works for a suite that invokes the extract function in-process.
-    Once the test routes through a Temporal workflow (``execute_app``) there is
-    no callable to hand it, so call the pieces separately instead: run the
-    workflow, then assert on the fake directly from the test after the run
-    completes — the two checks accumulate on the fake instance across its
-    lifetime, not per call, so this still works::
-
-        await executor.execute_app(YourApp, input_data)
-        assert not fake.unmatched
-        assert fake.unused_routes() == []
-    """
-    if isinstance(fake, FakeSourceGroup):
-        actual = extract_fn(**dict(fake.base_urls))
-    elif isinstance(fake, HttpFakeSource):
-        actual = extract_fn(fake.base_url)
-    else:
-        raise TypeError(
-            "fake must be an HttpFakeSource or a FakeSourceGroup, "
-            f"got {type(fake).__name__}"
-        )
-
-    unmatched = list(fake.unmatched)
-    if unmatched:
-        calls = ", ".join(
-            f"{request.method} {request.path}" for request in unmatched[:10]
-        )
-        raise AssertionError(
-            f"extract called {len(unmatched)} endpoint(s) the fake source does not "
-            f"model, so part of it ran against a 404: {calls}"
-        )
-
-    if require_all_routes_used:
-        unused: list[str] = []
-        if isinstance(fake, FakeSourceGroup):
-            for name, host in fake.sources.items():
-                unused.extend(f"{name}:{pattern}" for pattern in host.unused_routes())
-        else:
-            unused.extend(fake.unused_routes())
-        if unused:
-            raise AssertionError(
-                "extract never called these fake-source routes, so they cover "
-                f"nothing: {', '.join(unused)}"
-            )
-
-    left, right = actual, golden
-    if normalise is not None:
-        left, right = normalise(left), normalise(right)
-    if key is not None:
-        left, right = _sorted_by(left, key), _sorted_by(right, key)
-    if left != right:
-        raise AssertionError(
-            "extract output over the fake source does not match golden raw output\n"
-            f"{_diff(left, right)}"
-        )
-    return actual
-
-
-def _sorted_by(value: Any, key: Callable[[Any], Any]) -> Any:
-    if isinstance(value, (list, tuple)):
-        return sorted(value, key=key)
-    return value
-
-
-def _diff(actual: Any, expected: Any) -> str:
-    """A compact, readable difference for the assertion message."""
-    if isinstance(actual, (list, tuple)) and isinstance(expected, (list, tuple)):
-        lines = [f"actual has {len(actual)} record(s), golden has {len(expected)}"]
-        for index, (left, right) in enumerate(zip(actual, expected)):
-            if left != right:
-                lines.append(f"first difference at index {index}:")
-                lines.append(f"  actual:   {left!r}")
-                lines.append(f"  expected: {right!r}")
-                break
-        return "\n".join(lines)
-    return f"actual:   {actual!r}\nexpected: {expected!r}"

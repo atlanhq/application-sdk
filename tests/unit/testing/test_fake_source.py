@@ -20,18 +20,12 @@ from typing import Any
 import pytest
 
 from application_sdk.testing import fake_source
-from application_sdk.testing import fixtures as sdk_fixtures
 from application_sdk.testing.fake_source import (
     CursorPage,
     FakeRequest,
     FakeResponse,
-    FakeSourceGroup,
     HttpFakeSource,
-    HttpFakeSourceFactory,
-    OffsetPage,
-    assert_extract_roundtrip,
     cursor_page,
-    offset_page,
     serve,
 )
 
@@ -45,9 +39,6 @@ from application_sdk.testing.fake_source import (
 # asserted in a comment. (Verified: under ``enable_socket`` an outbound connect
 # is allowed and attempted; under ``allow_hosts`` it is blocked.)
 pytestmark = pytest.mark.allow_hosts(["127.0.0.1"])
-
-http_fake_source_factory = sdk_fixtures.http_fake_source_factory
-clean_http_fake_sources = sdk_fixtures.clean_http_fake_sources
 
 CATALOG = r"/api/catalog"
 HYPHENATED = "X-Fake-AuthToken"
@@ -650,68 +641,6 @@ class TestAuthorize:
             assert _json(f"{source.base_url}/a") == (200, {"ok": True})
 
 
-class TestOffsetPagination:
-    def _page(self, params: dict[str, str], **kwargs: Any) -> OffsetPage:
-        request = FakeRequest(
-            method="GET",
-            path="/api/objects",
-            params=params,
-            query={},
-            path_params={},
-            headers={},
-            body=b"",
-        )
-        return offset_page(OBJECTS, request, **kwargs)
-
-    def test_first_page_and_has_more(self) -> None:
-        page = self._page({"offset": "0", "limit": "3"})
-        assert [item["id"] for item in page.items] == ["obj-01", "obj-02", "obj-03"]
-        assert (page.offset, page.limit, page.total) == (0, 3, 7)
-        assert page.has_more is True
-        assert page.next_offset == 3
-
-    def test_last_partial_page_terminates(self) -> None:
-        page = self._page({"offset": "6", "limit": "3"})
-        assert [item["id"] for item in page.items] == ["obj-07"]
-        assert page.has_more is False
-        assert page.next_offset is None
-
-    def test_offset_past_the_end_is_an_empty_terminal_page(self) -> None:
-        page = self._page({"offset": "99", "limit": "3"})
-        assert list(page.items) == []
-        assert page.has_more is False
-
-    def test_full_traversal_visits_every_item_exactly_once(self) -> None:
-        seen: list[str] = []
-        offset: int | None = 0
-        while offset is not None:
-            page = self._page({"offset": str(offset), "limit": "2"})
-            seen.extend(item["id"] for item in page.items)
-            offset = page.next_offset
-        assert seen == [item["id"] for item in OBJECTS]
-
-    def test_defaults_apply_when_params_absent(self) -> None:
-        page = self._page({}, default_limit=5)
-        assert (page.offset, page.limit) == (0, 5)
-        assert len(page.items) == 5
-
-    def test_negative_offset_and_bad_limit_are_clamped_not_rejected(self) -> None:
-        page = self._page({"offset": "-4", "limit": "0"}, default_limit=2)
-        assert page.offset == 0
-        assert page.limit == 2
-
-    def test_max_limit_caps_a_client_asking_for_too_much(self) -> None:
-        page = self._page({"limit": "1000"}, max_limit=4)
-        assert page.limit == 4
-        assert len(page.items) == 4
-
-    def test_custom_param_names(self) -> None:
-        page = self._page(
-            {"start": "2", "count": "2"}, offset_param="start", limit_param="count"
-        )
-        assert [item["id"] for item in page.items] == ["obj-03", "obj-04"]
-
-
 class TestCursorPagination:
     def _page(self, params: dict[str, str], **kwargs: Any) -> CursorPage:
         request = FakeRequest(
@@ -799,59 +728,6 @@ class TestCursorPagination:
         assert self._page({"limit": "50"}, max_limit=2).limit == 2
 
 
-class TestFakeSourceGroup:
-    def _group(self) -> FakeSourceGroup:
-        token = HttpFakeSource(name="token-host")
-        token.route(r"/oauth/token", lambda _r: {"access_token": "synthetic-token"})
-        data = HttpFakeSource(name="data-host")
-        data.route(r"/api/objects", lambda _r: {"items": OBJECTS})
-        return FakeSourceGroup(token=token, data=data)
-
-    def test_each_host_gets_its_own_port(self) -> None:
-        with self._group() as group:
-            assert group.url("token") != group.url("data")
-            assert set(group.base_urls) == {"token", "data"}
-
-    def test_both_hosts_serve_their_own_routes(self) -> None:
-        with self._group() as group:
-            assert _json(f"{group.url('token')}/oauth/token")[1] == {
-                "access_token": "synthetic-token"
-            }
-            assert _json(f"{group.url('data')}/api/objects")[0] == 200
-            assert _json(f"{group.url('token')}/api/objects")[0] == 404
-
-    def test_getitem_reaches_the_underlying_source(self) -> None:
-        with self._group() as group:
-            assert group["data"].name == "data-host"
-
-    def test_unmatched_aggregates_across_hosts(self) -> None:
-        with self._group() as group:
-            _json(f"{group.url('token')}/absent-a")
-            _json(f"{group.url('data')}/absent-b")
-            assert sorted(r.path for r in group.unmatched) == [
-                "/absent-a",
-                "/absent-b",
-            ]
-
-    def test_reset_clears_every_host(self) -> None:
-        with self._group() as group:
-            _json(f"{group.url('data')}/api/objects")
-            group.reset()
-            assert list(group["data"].requests) == []
-
-    def test_exit_stops_every_host(self) -> None:
-        group = self._group()
-        with group:
-            pass
-        for source in group.sources.values():
-            with pytest.raises(RuntimeError):
-                _ = source.base_url
-
-    def test_empty_group_is_rejected(self) -> None:
-        with pytest.raises(ValueError, match="at least one source"):
-            FakeSourceGroup()
-
-
 GOLDEN = [
     {"id": "obj-01", "name": "object 01"},
     {"id": "obj-02", "name": "object 02"},
@@ -872,116 +748,13 @@ def _extract_all(base_url: str, *, limit: int = 1) -> list[dict[str, Any]]:
 
 def _paged_source(items: list[dict[str, Any]]) -> HttpFakeSource:
     def list_objects(request: FakeRequest) -> Any:
-        page = offset_page(items, request, default_limit=1)
-        return {"items": list(page.items), "nextOffset": page.next_offset}
+        offset = request.int_param("offset", 0)
+        limit = request.int_param("limit", 1) or 1
+        page = items[offset : offset + limit]
+        next_offset = offset + len(page) if offset + len(page) < len(items) else None
+        return {"items": list(page), "nextOffset": next_offset}
 
     return HttpFakeSource(routes=[(r"/api/objects", list_objects)], name="roundtrip")
-
-
-class TestAssertExtractRoundtrip:
-    def test_passes_when_the_extract_reproduces_golden(self) -> None:
-        with _paged_source(GOLDEN) as fake:
-            actual = assert_extract_roundtrip(fake, _extract_all, GOLDEN)
-        assert actual == GOLDEN
-
-    def test_fails_when_output_differs_from_golden(self) -> None:
-        with (
-            _paged_source([{"id": "obj-01", "name": "drifted"}]) as fake,
-            pytest.raises(AssertionError, match="does not match golden"),
-        ):
-            assert_extract_roundtrip(fake, _extract_all, GOLDEN)
-
-    def test_fails_when_the_extract_called_an_unmodelled_endpoint(self) -> None:
-        def extract(base_url: str) -> list[dict[str, Any]]:
-            _json(f"{base_url}/api/objects?offset=0&limit=99")
-            _json(f"{base_url}/api/not/modelled")
-            return GOLDEN
-
-        with (
-            _paged_source(GOLDEN) as fake,
-            pytest.raises(AssertionError, match="does not model"),
-        ):
-            assert_extract_roundtrip(fake, extract, GOLDEN)
-
-    def test_unmatched_check_precedes_the_equality_check(self) -> None:
-        """A 404'd call must be reported even when the output happens to match."""
-
-        def extract(base_url: str) -> list[dict[str, Any]]:
-            _json(f"{base_url}/api/objects?offset=0&limit=99")
-            _json(f"{base_url}/api/absent")
-            return GOLDEN
-
-        with (
-            _paged_source(GOLDEN) as fake,
-            pytest.raises(AssertionError, match="ran against a 404"),
-        ):
-            assert_extract_roundtrip(fake, extract, GOLDEN)
-
-    def test_fails_when_a_route_was_never_used(self) -> None:
-        with _paged_source(GOLDEN) as fake:
-            fake.route(r"/api/never-called", lambda _r: {})
-            with pytest.raises(AssertionError, match="never called these"):
-                assert_extract_roundtrip(fake, _extract_all, GOLDEN)
-
-    def test_unused_route_check_can_be_waived(self) -> None:
-        with _paged_source(GOLDEN) as fake:
-            fake.route(r"/api/never-called", lambda _r: {})
-            assert_extract_roundtrip(
-                fake, _extract_all, GOLDEN, require_all_routes_used=False
-            )
-
-    def test_key_sorts_both_sides_before_comparing(self) -> None:
-        with _paged_source(list(reversed(GOLDEN))) as fake:
-            assert_extract_roundtrip(
-                fake, _extract_all, GOLDEN, key=lambda record: record["id"]
-            )
-
-    def test_normalise_drops_fields_that_cannot_be_reconstructed(self) -> None:
-        served = [dict(record, source_url="http://fake-host/x") for record in GOLDEN]
-
-        def drop_source_url(records: Any) -> Any:
-            return [
-                {k: v for k, v in record.items() if k != "source_url"}
-                for record in records
-            ]
-
-        with _paged_source(served) as fake:
-            assert_extract_roundtrip(
-                fake, _extract_all, GOLDEN, normalise=drop_source_url
-            )
-
-    def test_works_with_a_group_passing_urls_as_kwargs(self) -> None:
-        token = HttpFakeSource(name="token-host")
-        token.route(r"/oauth/token", lambda _r: {"access_token": "synthetic-token"})
-        group = FakeSourceGroup(token=token, data=_paged_source(GOLDEN))
-
-        def extract(*, token: str, data: str) -> list[dict[str, Any]]:
-            _json(f"{token}/oauth/token")
-            return _extract_all(data)
-
-        with group:
-            assert assert_extract_roundtrip(group, extract, GOLDEN) == GOLDEN
-
-    def test_rejects_a_non_fake_first_argument(self) -> None:
-        with pytest.raises(TypeError, match="HttpFakeSource"):
-            assert_extract_roundtrip("not-a-fake", _extract_all, GOLDEN)  # type: ignore[arg-type]
-
-    def test_diff_message_reports_the_first_differing_index(self) -> None:
-        served = [GOLDEN[0], {"id": "obj-02", "name": "drifted"}]
-        with (
-            _paged_source(served) as fake,
-            pytest.raises(AssertionError, match="first difference at index 1"),
-        ):
-            assert_extract_roundtrip(fake, _extract_all, GOLDEN)
-
-    def test_diff_message_handles_non_sequence_output(self) -> None:
-        source = HttpFakeSource(routes=[(r"/api/one", lambda _r: {"count": 1})])
-        with source, pytest.raises(AssertionError, match="expected:"):
-            assert_extract_roundtrip(
-                source,
-                lambda url: _json(f"{url}/api/one")[1],
-                {"count": 2},
-            )
 
 
 class TestSessionScopedFixtureShape:
@@ -991,7 +764,7 @@ class TestSessionScopedFixtureShape:
         with _paged_source(GOLDEN) as fake:
             for _ in range(3):
                 fake.reset()
-                assert_extract_roundtrip(fake, _extract_all, GOLDEN)
+                assert _extract_all(fake.base_url) == GOLDEN
 
     def test_concurrent_clients_are_served(self) -> None:
         import concurrent.futures
@@ -1196,26 +969,15 @@ class TestQueryConstrainedRoutes:
                 f"{CATALOG}?select=~[^,]+,[^,]+",
             ]
 
-    def test_the_route_usage_check_names_an_unexercised_variant(self) -> None:
-        """Change 1's whole point: an unexercised shape is now reported."""
-        with _catalog_source() as source:
-            with pytest.raises(AssertionError) as caught:
-                assert_extract_roundtrip(
-                    source,
-                    lambda base_url: _json(f"{base_url}{CATALOG}")[1],
-                    {"shape": "collection"},
-                )
-            message = str(caught.value)
-            assert "never called these fake-source routes" in message
-            assert f"{CATALOG}?select=~[^,]+" in message
-
     def test_a_query_constrained_route_still_paginates(self) -> None:
         source = HttpFakeSource(name="catalog")
         source.route(
             CATALOG,
             lambda r: {
                 "select": r.param("select"),
-                "items": list(offset_page(OBJECTS, r, default_limit=3).items),
+                "items": OBJECTS[
+                    r.int_param("offset", 0) : r.int_param("offset", 0) + 3
+                ],
             },
             query={"select": True},
         )
@@ -1422,85 +1184,6 @@ class TestHyphenatedResponseHeaders:
             status, _, headers = _request(f"{url}/login")
         assert status == 200
         assert headers[HYPHENATED] == "token-0123"
-
-
-class TestHttpFakeSourceFactory:
-    def test_builds_started_sources_and_stops_them_all(self) -> None:
-        baseline = _settled_thread_count()
-        factory = HttpFakeSourceFactory()
-        first = factory(name="first", connection_timeout=0.2)
-        second = factory(name="second", connection_timeout=0.2)
-        first.route(r"/ping", lambda _r: {"which": "first"})
-        try:
-            assert _json(f"{first.base_url}/ping")[1] == {"which": "first"}
-            assert list(factory.sources) == [first, second]
-        finally:
-            factory.stop_all()
-        assert list(factory.sources) == []
-        assert threading.active_count() == baseline
-        with pytest.raises(RuntimeError, match="not running"):
-            _ = first.base_url
-
-    def test_reset_all_clears_every_source(self) -> None:
-        factory = HttpFakeSourceFactory()
-        source = factory(name="resettable", connection_timeout=0.2)
-        source.route(r"/ping", lambda _r: {"ok": True})
-        try:
-            _json(f"{source.base_url}/ping")
-            assert source.hits(r"/ping") == 1
-            factory.reset_all()
-            assert source.hits(r"/ping") == 0
-            assert list(source.requests) == []
-        finally:
-            factory.stop_all()
-
-    def test_a_source_that_fails_to_start_is_not_remembered(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        def boom(_self: HttpFakeSource) -> None:
-            raise OSError("cannot bind")
-
-        monkeypatch.setattr(HttpFakeSource, "start", boom)
-        factory = HttpFakeSourceFactory()
-        with pytest.raises(OSError, match="cannot bind"):
-            factory(name="doomed")
-        assert list(factory.sources) == []
-
-
-@pytest.fixture(scope="session")
-def shipped_fixture_source(
-    http_fake_source_factory: HttpFakeSourceFactory,
-) -> HttpFakeSource:
-    """The connector-side half of the shipped pattern: routes, nothing else."""
-    source = http_fake_source_factory(
-        name="shipped-fixture-source", connection_timeout=0.2
-    )
-    source.route(r"/api/objects", lambda _r: {"items": OBJECTS})
-    return source
-
-
-class TestShippedFixtures:
-    """The session factory plus the function-scoped reset, used as documented."""
-
-    def test_the_session_factory_yields_a_started_server(
-        self,
-        shipped_fixture_source: HttpFakeSource,
-        clean_http_fake_sources: HttpFakeSourceFactory,
-    ) -> None:
-        url = shipped_fixture_source.base_url
-        assert _json(f"{url}/api/objects") == (200, {"items": OBJECTS})
-        assert len(shipped_fixture_source.requests) == 1
-        assert shipped_fixture_source.unused_routes() == []
-        assert list(clean_http_fake_sources.sources) == [shipped_fixture_source]
-
-    def test_recordings_do_not_leak_between_tests(
-        self,
-        shipped_fixture_source: HttpFakeSource,
-        clean_http_fake_sources: HttpFakeSourceFactory,
-    ) -> None:
-        assert list(shipped_fixture_source.requests) == []
-        assert shipped_fixture_source.unused_routes() == [r"/api/objects"]
-        assert _json(f"{shipped_fixture_source.base_url}/api/objects")[0] == 200
 
 
 class TestResponseFramingIsServerOwned:

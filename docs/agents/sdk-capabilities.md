@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.29.0
-source-sha:    be72036471bfe69b852334575b485743ef097160
-source-date:   2026-08-27T12:04:35+05:30
+source-sha:    75172e1679908dc9467f2d69b6b646affb232f44
+source-date:   2026-08-28T13:04:46+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 212 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 205 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3404,14 +3404,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** What a handler returns: a status, a body, and optional headers.
 - **Defined in:** `application_sdk/testing/fake_source.py`
 
-#### `FakeSourceGroup`
-
-- **Import:** `from application_sdk.testing import FakeSourceGroup`
-- **Also importable from:** `application_sdk.testing.fake_source`
-- **Signature:** `class FakeSourceGroup(**sources: HttpFakeSource)`
-- **Summary:** Several fakes started together, for a source split across hosts.
-- **Defined in:** `application_sdk/testing/fake_source.py`
-
 #### `FieldDiff`
 
 - **Import:** `from application_sdk.testing.parity import FieldDiff`
@@ -3453,14 +3445,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Also importable from:** `application_sdk.testing.fake_source`
 - **Signature:** `class HttpFakeSource(*, ...)`
 - **Summary:** A loopback HTTP server that replays a connector's reconstructed responses.
-- **Defined in:** `application_sdk/testing/fake_source.py`
-
-#### `HttpFakeSourceFactory`
-
-- **Import:** `from application_sdk.testing import HttpFakeSourceFactory`
-- **Also importable from:** `application_sdk.testing.fake_source`
-- **Signature:** `class HttpFakeSourceFactory()`
-- **Summary:** The fakes one pytest session built, owned in one place.
 - **Defined in:** `application_sdk/testing/fake_source.py`
 
 #### `HttpRequest`
@@ -3627,14 +3611,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class NoWorkerOnTaskQueueError(*, ...)`
 - **Summary:** No worker started any DAG node while the AE run was live.
 - **Defined in:** `application_sdk/testing/harness/automation_engine/_errors.py`
-
-#### `OffsetPage`
-
-- **Import:** `from application_sdk.testing import OffsetPage`
-- **Also importable from:** `application_sdk.testing.fake_source`
-- **Signature:** `class OffsetPage(items: Sequence[Any], offset: int, limit: int, total: int)`
-- **Summary:** One page of an offset/limit scheme, plus everything an envelope needs.
-- **Defined in:** `application_sdk/testing/fake_source.py`
 
 #### `PodPhase`
 
@@ -3907,14 +3883,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** AppContext wired with MockStateStore and MockSecretStore.
 - **Defined in:** `application_sdk/testing/fixtures.py`
 
-#### `assert_extract_roundtrip`
-
-- **Import:** `from application_sdk.testing import assert_extract_roundtrip`
-- **Also importable from:** `application_sdk.testing.fake_source`
-- **Signature:** `assert_extract_roundtrip(fake: HttpFakeSource | FakeSourceGroup, *, ...)`
-- **Summary:** Run the real extract against the fake and assert it reproduces ``golden``.
-- **Defined in:** `application_sdk/testing/fake_source.py`
-
 #### `assert_settled`
 
 - **Import:** `from application_sdk.testing.harness import assert_settled`
@@ -3956,13 +3924,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Import:** `from application_sdk.testing import clean_app_registry`
 - **Signature:** `clean_app_registry()`
 - **Summary:** AppRegistry reset before and after each test.
-- **Defined in:** `application_sdk/testing/fixtures.py`
-
-#### `clean_http_fake_sources`
-
-- **Import:** `from application_sdk.testing import clean_http_fake_sources`
-- **Signature:** `clean_http_fake_sources(http_fake_source_factory: HttpFakeSourceFactory)`
-- **Summary:** Recorded requests and route hits reset before and after each test.
 - **Defined in:** `application_sdk/testing/fixtures.py`
 
 #### `clean_task_registry`
@@ -4180,13 +4141,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Assert *invariant* holds for every reading across the whole budget.
 - **Defined in:** `application_sdk/testing/harness/waiting.py`
 
-#### `http_fake_source_factory`
-
-- **Import:** `from application_sdk.testing import http_fake_source_factory`
-- **Signature:** `http_fake_source_factory()`
-- **Summary:** Session-scoped factory for started HttpFakeSource servers.
-- **Defined in:** `application_sdk/testing/fixtures.py`
-
 #### `is_dict`
 
 - **Import:** `from application_sdk.testing.integration import is_dict`
@@ -4384,14 +4338,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `not_one_of(excluded: list[Any], *, description: str | None = None)`
 - **Summary:** Assert that the actual value is not one of the given values.
 - **Defined in:** `application_sdk/testing/integration/assertions.py`
-
-#### `offset_page`
-
-- **Import:** `from application_sdk.testing import offset_page`
-- **Also importable from:** `application_sdk.testing.fake_source`
-- **Signature:** `offset_page(items: Sequence[Any], *, ...)`
-- **Summary:** Slice ``items`` per the request's offset/limit parameters.
-- **Defined in:** `application_sdk/testing/fake_source.py`
 
 #### `one_of`
 
