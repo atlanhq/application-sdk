@@ -72,6 +72,16 @@ here instead:
   when they disagree, so a too-late assignment fails loudly instead of silently
   mistagging the suite's observability output.
 
+Adopting this kit also means adopting its loop scope: every async fixture it
+builds is pinned ``loop_scope="session"`` (see ``embedded_temporal``,
+``temporal_client`` and ``worker`` below), so the suite's own tests must run
+on the session loop too, or pytest-asyncio fails or mis-schedules them. Set
+both ``asyncio_default_fixture_loop_scope`` and
+``asyncio_default_test_loop_scope`` to ``"session"`` in ``pyproject.toml``'s
+``[tool.pytest.ini_options]``, or mark per-test
+``@pytest.mark.asyncio(loop_scope="session")``. See conformance rule T019 and
+``atlan-openapi-app``'s ``pyproject.toml`` for the reference configuration.
+
 ``APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR`` is different: it is read at run
 time, not at import, so the kit owns it outright. It defaults to ``true``, and
 with it on ``App.on_complete()`` deletes the run's local files and every tracked
@@ -79,9 +89,15 @@ with it on ``App.on_complete()`` deletes the run's local files and every tracked
 suite that opens output files and asserts on their contents needs it off.
 ``preserve_artifacts=True`` (the default here) sets it to ``"false"``.
 
-Mocked infrastructure is the default for this tier. Real infrastructure — a
-``daprd`` sidecar and the production credential-vault path — is available by
-passing ``infrastructure_factory``, and stays an explicit, per-suite decision.
+Mocked infrastructure is the default for this tier. ``infrastructure_factory``
+lets a suite swap in any pre-built, synchronously-constructible
+``InfrastructureContext`` instead of the mocked one — but it is a plain
+``Callable[[Path], Any]`` called synchronously inside this fixture, so it
+cannot host an async lifecycle: a ``daprd`` sidecar, anything needing
+``await`` or teardown. A suite that needs the production Dapr credential-vault
+path is structurally out of scope for this hook and stays off the kit,
+hand-writing its own conftest — ``atlan-mysql-app`` is the standing exception
+and the reference for that shape.
 """
 
 from __future__ import annotations
@@ -261,11 +277,24 @@ def integration_kit(
         secrets: Optional seed for the mocked secret store, called with the
             resolved source-fixture value and returning a ``{key: json}`` mapping.
             Omit for suites that pass credentials inline in the workflow input.
-        infrastructure_factory: Opt-in escape hatch, called with the session's
-            store root and returning an ``InfrastructureContext`` this kit will
-            install as-is. Use it for a suite that must exercise real
-            infrastructure (a ``daprd`` sidecar, the production credential-vault
-            path). Mocked infrastructure remains the default.
+            Serves ``credential_ref`` named-path and agent-spec resolution only
+            — an input routed by legacy ``credential_guid`` resolves through
+            ``DaprCredentialVault`` over a live daprd and never reads this
+            store. Suites for the store-guid apps must either pass credentials
+            inline in the input, seed a GUID via the app's
+            ``/workflows/v1/dev/local-vault`` dev endpoint, or stay off this
+            kit's mocked infrastructure.
+        infrastructure_factory: Opt-in escape hatch, called synchronously with
+            the session's store root and returning a pre-built
+            ``InfrastructureContext`` this kit will install as-is. It swaps the
+            three mocked stores for anything synchronously constructible; it
+            CANNOT host an async lifecycle (a ``daprd`` sidecar, anything
+            needing ``await`` or teardown), because it runs inside this sync
+            fixture. A suite that needs the production Dapr credential-vault
+            path is out of scope for this hook and hand-writes its own
+            conftest instead — ``atlan-mysql-app`` is the standing exception
+            and the reference for that shape. Mocked infrastructure remains
+            the default.
         data_converter: Pass ``create_data_converter_for_app(app_cls)`` to the
             client. On by default: the converter is what round-trips the App's
             typed inputs and outputs across the workflow boundary, so its
@@ -356,7 +385,7 @@ def integration_kit(
         )
 
     @pytest_asyncio.fixture(scope="session", loop_scope="session")
-    async def worker(temporal_client: Any, infrastructure: Any) -> Any:  # noqa: ARG001
+    async def worker(temporal_client: Any, infrastructure: Any) -> Any:
         """Run the App's worker in-process, with infrastructure already wired."""
         from application_sdk.execution import create_worker  # noqa: PLC0415
 
@@ -364,7 +393,7 @@ def integration_kit(
             yield
 
     @pytest.fixture(scope="session")
-    def executor(temporal_client: Any, worker: Any) -> AppExecutor:  # noqa: ARG001
+    def executor(temporal_client: Any, worker: Any) -> AppExecutor:
         """Executor submitting to the running worker's task queue."""
         from application_sdk.execution import TemporalExecutorBackend  # noqa: PLC0415
 
@@ -386,9 +415,9 @@ def integration_kit(
 
 __all__ = [
     "APPLICATION_NAME_ENV",
-    "AppExecutor",
     "CLEANUP_INTERCEPTOR_ENV",
     "DEPLOYMENT_NAME_ENV",
+    "AppExecutor",
     "IntegrationKit",
     "integration_kit",
 ]

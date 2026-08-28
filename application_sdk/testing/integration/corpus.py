@@ -16,6 +16,13 @@ module replaces that with a declared shape.
         raw/                     # the transform's INPUT
         transformed/             # the records the transform should produce
 
+``GoldenLayout``'s default stages are ``("raw", "transformed")`` — a starting
+point for a NEW capture, not a description of what an existing corpus looks
+like. SDK-app captures write ``raw``/``transformed``; legacy-Argo captures
+write ``extracted``/``transformed`` (or the ``-metadata`` suffixed pair).
+Every consumer this module has today declares its stages explicitly rather
+than relying on the default. Declare yours; do not assume it.
+
 Two rules make the divergence collapse rather than reappear:
 
 * **``raw/`` means "the transform's input"** — not "untouched bytes from the
@@ -46,6 +53,31 @@ them differently:
   one of these raises with the offending path named. An empty stage is an error,
   never an empty list: a corpus loader that silently yields nothing turns a
   broken fixture tree into a passing test.
+
+**Per-typename subdirectories.** A stage directory is commonly split into one
+subdirectory per typename (``extracted/tables/``, ``extracted/reports/``,
+...). :meth:`~GoldenCorpus.files` and :meth:`~GoldenCorpus.records` match with
+``rglob``, so both accept a path-shaped ``pattern``:
+``corpus.records("extracted", pattern="tables/*")`` selects only the
+``tables/`` subdirectory — ``records()`` with the default ``pattern="*"``
+still concatenates every file under the stage regardless of which subdirectory
+it came from, flattening the per-typename identity out of the result. Use
+:meth:`~GoldenCorpus.subdirs` to discover what subdirectories a stage holds
+without hardcoding typenames.
+
+**On ``validate=False``.** Both of this module's real consumers pass
+``validate=False`` to :func:`require_golden_corpus`. Reproducing
+``GoldenCorpus.from_env(...).validate()`` against each consumer's committed
+fixture tree raises nothing — every declared stage already holds files for
+every tenant. Neither consumer is routing around a defect in
+:meth:`~GoldenCorpus.validate`: one defers the call until after it has
+confirmed the root holds exactly one tenant directory, then calls it
+explicitly; the other skips it because its tests iterate
+:meth:`~GoldenCorpus.tenants` themselves and read stage contents directly via
+:meth:`~GoldenCorpus.stage_dir`, never through :meth:`~GoldenCorpus.records`.
+``validate=False`` is a sequencing choice about *when* the stage-completeness
+check runs, not evidence that the check itself rejects a legitimate tree
+shape.
 
 Formats: JSON, NDJSON (``.ndjson`` / ``.jsonl``), CSV, parquet. Parquet needs
 ``pyarrow``, which ships in the ``[sql]`` and ``[incremental]`` extras rather
@@ -347,6 +379,16 @@ class GoldenCorpus:
     def input_dir(self) -> Path:
         """Directory of the stage that feeds the transform."""
         return self.stage_dir(self.layout.input_stage)
+
+    def subdirs(self, stage: str) -> tuple[str, ...]:
+        """Immediate child directory names of *stage*, sorted.
+
+        Lets a suite iterate a stage's per-typename subdirectories (see the
+        module docstring) without hardcoding their names. Files directly under
+        the stage are not included.
+        """
+        directory = self.stage_dir(stage)
+        return tuple(sorted(p.name for p in directory.iterdir() if p.is_dir()))
 
     def files(self, stage: str, *, pattern: str = "*") -> tuple[Path, ...]:
         """Data files in *stage* matching *pattern*, sorted, never empty.

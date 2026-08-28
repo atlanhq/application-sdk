@@ -57,6 +57,12 @@ def yourapp_executor(executor):
 
 Suites that pass credentials inline in the workflow input omit `secrets=` entirely and get an empty `MockSecretStore`.
 
+`secrets=` serves `credential_ref` named-path and agent-spec resolution only. An input routed by legacy `credential_guid` resolves through `DaprCredentialVault` over a live daprd and never reads this store — suites for the store-guid apps must either pass credentials inline in the input, seed a GUID via the app's `/workflows/v1/dev/local-vault` dev endpoint, or stay off the kit's mocked infrastructure.
+
+### Adopting the kit means adopting its loop scope
+
+Every async fixture the kit builds (`embedded_temporal`, `temporal_client`, `worker`) is pinned `loop_scope="session"`. A suite's own tests must run on the session loop too, or pytest-asyncio fails or mis-schedules them. Set both `asyncio_default_fixture_loop_scope = "session"` and `asyncio_default_test_loop_scope = "session"` in the app's `pyproject.toml` `[tool.pytest.ini_options]`, or mark per-test `@pytest.mark.asyncio(loop_scope="session")`. See conformance rule T019 and `atlan-openapi-app`'s `pyproject.toml` for the reference configuration.
+
 ### What the kit decides for you
 
 | Knob | Default | Why |
@@ -68,7 +74,7 @@ Suites that pass credentials inline in the workflow input omit `secrets=` entire
 | Fixture scope | Session | One source, one dev server, one worker per suite. |
 | Object-store observability | `AtlanObservability._deployment_store = create_memory_store()` | Stops the periodic flush retrying and spamming warnings. |
 
-Real infrastructure stays available and stays explicit: pass `infrastructure_factory=`, a callable taking the session's store root and returning an `InfrastructureContext` the kit installs as-is. Mocked remains the default.
+`infrastructure_factory=` swaps the three mocked stores for any pre-built, synchronously-constructible `InfrastructureContext` — pass a callable taking the session's store root and returning it, and the kit installs it as-is. It cannot host an async lifecycle (a `daprd` sidecar, anything needing `await` or teardown), because the kit calls it synchronously. A suite that needs the production Dapr credential-vault path stays off the kit and hand-writes its own conftest — `atlan-mysql-app` is the standing exception and the reference for that shape. Mocked remains the default.
 
 ### The ordering rules, enforced rather than commented
 

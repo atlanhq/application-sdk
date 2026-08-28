@@ -200,6 +200,40 @@ class TestStages:
         with pytest.raises(GoldenCorpusLayoutError):
             corpus.records("raw")
 
+    def test_path_shaped_pattern_selects_one_subdir(self, tmp_path: Path) -> None:
+        _write_corpus(tmp_path, stages=("extracted", "transformed"))
+        tables = tmp_path / "extracted" / "tables"
+        tables.mkdir()
+        (tables / "0.json").write_bytes(json.dumps(_RECORDS).encode())
+        reports = tmp_path / "extracted" / "reports"
+        reports.mkdir()
+        other_record = [{"qualifiedName": "b", "typeName": "Report"}]
+        (reports / "0.json").write_bytes(json.dumps(other_record).encode())
+        corpus = GoldenCorpus(
+            root=tmp_path,
+            layout=GoldenLayout(
+                stages=("extracted", "transformed"), input_stage="extracted"
+            ),
+        )
+
+        found = corpus.records("extracted", pattern="tables/*")
+
+        assert found == _RECORDS
+
+    def test_subdirs_returns_only_directories_sorted(self, tmp_path: Path) -> None:
+        _write_corpus(tmp_path, stages=("extracted",))
+        (tmp_path / "extracted" / "b_typename").mkdir()
+        (tmp_path / "extracted" / "a_typename").mkdir()
+        (tmp_path / "extracted" / "loose.json").write_bytes(
+            json.dumps(_RECORDS).encode()
+        )
+        corpus = GoldenCorpus(
+            root=tmp_path,
+            layout=GoldenLayout(stages=("extracted",), input_stage="extracted"),
+        )
+
+        assert corpus.subdirs("extracted") == ("a_typename", "b_typename")
+
 
 class TestFormats:
     def test_json_array(self, tmp_path: Path) -> None:
