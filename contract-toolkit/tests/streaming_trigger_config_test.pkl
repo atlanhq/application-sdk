@@ -222,6 +222,16 @@ facts {
     appBatchedCfg["streaming_batch_wait_seconds"] == 2.5
   }
 
+  // How many events ride in ONE signal — distinct from how many the shard takes
+  // per DAG run. Temporal charges per signal, not per event, and its guidance is
+  // ~5 signals/second into a single workflow; one-per-event breaches that at 5
+  // events/second. A trigger that never sets it still gets the batched default,
+  // because the failure mode of forgetting is silent and expensive.
+  ["App.pkl: events-per-signal renders, and defaults to batched"] {
+    appRealtimeCfg["streaming_events_per_signal"] == 500
+    appBatchedCfg["streaming_events_per_signal"] == 500
+  }
+
   ["App.pkl: streaming does not disturb max_retries / ack_paths"] {
     appRealtimeCfg["max_retries"] == 3
     // ackPaths left empty — AE rejects [], so the toolkit renders fire-and-forget [""].
@@ -243,6 +253,11 @@ facts {
     nativeRealtimeCfg["streaming_batch_wait_seconds"] == 0
   }
 
+  ["NativeApp.pkl: events-per-signal renders, and defaults to batched"] {
+    nativeRealtimeCfg["streaming_events_per_signal"] == 500
+    nativeBatchedCfg["streaming_events_per_signal"] == 500
+  }
+
   ["NativeApp.pkl: batch knobs render verbatim when streaming is on"] {
     nativeBatchedCfg["streaming_batch_size"] == 200
     nativeBatchedCfg["streaming_batch_wait_seconds"] == 2.5
@@ -256,6 +271,25 @@ facts {
 
   ["NativeApp.pkl: a non-streaming trigger emits NO streaming keys at all"] {
     nativeNoStreamCfg.toMap().keys == Set("max_retries", "ack_paths")
+  }
+
+  // The ceiling is a measured cliff, not a style preference: past it the shard
+  // builds a batch inside one workflow activation and risks Temporal's
+  // non-configurable two-second deadlock budget, which fails the task
+  // deterministically and therefore permanently. Caught at eval time so an
+  // author cannot ship it.
+  ["batch size above the measured ceiling is rejected at eval time"] {
+    module.catch(() -> new App.EventTriggerConfig {
+      streamingEnabled = true
+      streamingBatchSize = 1000
+    }.streamingBatchSize) != null
+  }
+
+  ["events-per-signal above one Dapr delivery is rejected at eval time"] {
+    module.catch(() -> new App.EventTriggerConfig {
+      streamingEnabled = true
+      streamingEventsPerSignal = 5000
+    }.streamingEventsPerSignal) != null
   }
 
   ["both schemas render the same streaming shape"] {

@@ -2546,6 +2546,7 @@ local manifestData: Mapping<String, Any> = new Mapping {
                     ["streaming_enabled"] = true
                     ["streaming_batch_size"] = e.triggerConfig.streamingBatchSize
                     ["streaming_batch_wait_seconds"] = e.triggerConfig.streamingBatchWaitSeconds
+                    ["streaming_events_per_signal"] = e.triggerConfig.streamingEventsPerSignal
                   }
                 }
               ["status"] = e.status
@@ -2603,7 +2604,12 @@ class EventTriggerConfig {
   /// events — or `streamingBatchWaitSeconds`, whichever comes first — into a single
   /// run, amortising one node-walk's activity round-trips across many events.
   /// Only meaningful when `streamingEnabled`.
-  streamingBatchSize: Int(this >= 1) = 1
+  /// Capped at 500: above it the shard builds and serializes the whole batch inside
+  /// one workflow activation, and Temporal kills any activation exceeding its
+  /// two-second deadlock budget — a failure that repeats forever, because the task
+  /// fails deterministically and replays the same divergence. Measured on a canary:
+  /// 500 drained a 6,000-event backlog cleanly, 1,000 never dispatched a single batch.
+  streamingBatchSize: Int(this >= 1 && this <= 500) = 1
 
   /// Max time the shard waits for a batch to fill before running the DAG with
   /// whatever accumulated (always at least one event). `0` (the default) means take
@@ -2612,13 +2618,26 @@ class EventTriggerConfig {
   /// Only meaningful when `streamingBatchSize` > 1.
   streamingBatchWaitSeconds: Number(this >= 0) = 0
 
+  /// How many events the consumer packs into ONE signal to the shard. Distinct from
+  /// `streamingBatchSize`, which is how many the shard takes off its queue per DAG
+  /// run: this is about how events *arrive*, that one about how they are *processed*.
+  ///
+  /// Temporal charges per signal, not per event — each takes the shard's single lock,
+  /// appends to its history, wakes a workflow task, and spends one of the 10,000 an
+  /// execution may ever receive. Temporal's guidance is ~5 signals/second sustained,
+  /// which one-signal-per-event breaches at 5 events/second. Lower this only to
+  /// shrink per-signal payloads; there is no latency benefit to sending events singly,
+  /// because the shard batches on arrival either way.
+  /// Only meaningful when `streamingEnabled`.
+  streamingEventsPerSignal: Int(this >= 1 && this <= 1000) = 500
+
   /// Batch knobs are silently inert unless streaming is on — that failure mode is a
   /// trigger that looks tuned and behaves default, which is invisible until someone
   /// reads a latency graph. Fail at eval time instead. Lazy (hidden), so the
   /// renderer must reference it for the throw to fire.
   hidden _streamingShapeCheck: Any =
-    if (!streamingEnabled && (streamingBatchSize > 1 || streamingBatchWaitSeconds > 0))
-      throw("EventTriggerConfig: streamingBatchSize/streamingBatchWaitSeconds require streamingEnabled = true; without it AE ignores both.")
+    if (!streamingEnabled && (streamingBatchSize > 1 || streamingBatchWaitSeconds > 0 || streamingEventsPerSignal != 500))
+      throw("EventTriggerConfig: streamingBatchSize/streamingBatchWaitSeconds/streamingEventsPerSignal require streamingEnabled = true; without it AE ignores all three.")
     else if (streamingBatchSize == 1 && streamingBatchWaitSeconds > 0)
       throw("EventTriggerConfig: streamingBatchWaitSeconds is meaningless at streamingBatchSize = 1 (the shard never waits); raise the batch size or drop the wait.")
     else null
