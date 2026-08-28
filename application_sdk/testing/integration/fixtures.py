@@ -91,8 +91,12 @@ files and asserts on their contents needs it off.
 ``"false"`` when it is unset; an explicit value in the environment wins, and a
 truthy one is logged as a warning so a CI job that exports it does not fail
 every artifact assertion with "output file missing" and nothing pointing at the
-cause. The option is one-way: ``preserve_artifacts=False`` leaves the variable
-untouched rather than forcing ``"true"``.
+cause. The default is scoped to the ``worker`` fixture's lifetime and unset on
+teardown: ``pytest tests/`` runs integration and unit tests in one process, and
+a cleanup-asserting unit test scheduled after this fixture would otherwise
+silently observe cleanup disabled (BLDX-1283). The option is one-way:
+``preserve_artifacts=False`` leaves the variable untouched rather than forcing
+``"true"``.
 
 Mocked infrastructure is the default for this tier: ``MockSecretStore``,
 ``MockStateStore`` and a ``LocalStore`` under a session temp dir. A suite that
@@ -108,6 +112,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -285,23 +290,46 @@ def _verify_registration(app_cls: type[App]) -> str:
     return app_name
 
 
-def _apply_artifact_preservation(options: KitOptions) -> None:
-    """Default the cleanup interceptor off; warn when the environment overrides."""
+@contextmanager
+def _artifact_preservation(options: KitOptions) -> Iterator[None]:
+    """Default the cleanup interceptor off for the block, then restore it.
+
+    Scoped rather than assigned once, because this variable decides whether
+    ``App.on_complete()`` deletes a run's artifacts and the whole process reads
+    it. A plain ``os.environ[...] = "false"`` from a session fixture leaks into
+    every later test in the same process — ``pytest tests/`` runs integration
+    and unit tests together, and cleanup-asserting unit tests scheduled after
+    this fixture would silently observe cleanup disabled. That is the shape of
+    BLDX-1283, which the repo's own ``tests/integration/conftest.py`` restores
+    per-test to avoid.
+
+    An explicit environment value always wins and is left untouched; a truthy
+    one is warned about, because it silently defeats
+    :attr:`KitOptions.preserve_artifacts` and every artifact assertion in the
+    adopting suite then fails as "output file missing".
+    """
     if not options.preserve_artifacts:
+        yield
         return
     current = os.environ.get(CLEANUP_INTERCEPTOR_ENV)
-    if current is None:
-        os.environ[CLEANUP_INTERCEPTOR_ENV] = "false"
+    if current is not None:
+        if current.strip().lower() in _TRUTHY:
+            logger.warning(
+                "%s=%r is set in the environment, so App.on_complete() will "
+                "delete each run's output files and this suite's artifact "
+                "assertions will fail with 'output file missing'. Unset it, or "
+                "set it to 'false', to preserve artifacts as "
+                "KitOptions.preserve_artifacts intends.",
+                CLEANUP_INTERCEPTOR_ENV,
+                current,
+            )
+        yield
         return
-    if current.strip().lower() in _TRUTHY:
-        logger.warning(
-            "%s=%r is set in the environment, so App.on_complete() will delete "
-            "each run's output files and this suite's artifact assertions will "
-            "fail with 'output file missing'. Unset it, or set it to 'false', "
-            "to preserve artifacts as KitOptions.preserve_artifacts intends.",
-            CLEANUP_INTERCEPTOR_ENV,
-            current,
-        )
+    os.environ[CLEANUP_INTERCEPTOR_ENV] = "false"
+    try:
+        yield
+    finally:
+        os.environ.pop(CLEANUP_INTERCEPTOR_ENV, None)
 
 
 _verify_env_ordering()
@@ -489,9 +517,9 @@ async def worker(
 
     del infrastructure
     _verify_registration(integration_app_cls)
-    _apply_artifact_preservation(integration_options)
-    async with create_worker(temporal_client, task_queue=integration_task_queue):
-        yield
+    with _artifact_preservation(integration_options):
+        async with create_worker(temporal_client, task_queue=integration_task_queue):
+            yield
 
 
 @pytest.fixture(scope="session")
