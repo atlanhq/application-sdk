@@ -406,6 +406,24 @@ class TestPreflightEndpoint:
         assert "should_block" not in body["preflight"]
         assert body["preflight"]["checks"] == []
 
+    def test_preflight_emits_structured_outcome_row(self) -> None:
+        # FND-901: the HTTP surface emits the shared "Preflight check outcome"
+        # row (INFO — the caller is watching the screen) instead of prose.
+        client = _make_client()
+        with patch("application_sdk.handler.service.logger") as ml:
+            response = client.post("/workflows/v1/check", json={"credentials": []})
+        assert response.status_code == 200
+        event = next(
+            c.kwargs
+            for c in ml.info.call_args_list
+            if c.args and c.args[0] == "Preflight check outcome"
+        )
+        assert event["preflight_surface"] == "http"
+        assert event["outcome"] == "ready"
+        assert event["request_id"]
+        assert event["check_matrix"] == "[]"
+        ml.error.assert_not_called()
+
     def test_default_handler_reports_success_with_no_checks(self) -> None:
         client = _make_client(handler=DefaultHandler())
         response = client.post(

@@ -25,7 +25,13 @@ def test_existing_names_moved_unchanged() -> None:
 def test_the_new_names_are_the_fourth_and_fifth() -> None:
     assert events.ARTIFACT_VALIDATION_EVENT == "Artifact validation outcome"
     assert events.ARTIFACT_VALIDATION_POSTURE_EVENT == "Artifact validation posture"
-    assert len(events.OUTCOME_EVENT_NAMES) == 5
+    assert len(events.OUTCOME_EVENT_NAMES) == 6
+
+
+def test_the_interactive_preflight_name() -> None:
+    """FND-901: the interactive-surface row, distinct from the gate's body so
+    gate dashboards are not polluted by setup-time checks."""
+    assert events.PREFLIGHT_CHECK_EVENT == "Preflight check outcome"
 
 
 def test_names_are_distinct() -> None:
@@ -33,6 +39,7 @@ def test_names_are_distinct() -> None:
     names = [
         events.PREFLIGHT_OUTCOME_EVENT,
         events.PREFLIGHT_POSTURE_EVENT,
+        events.PREFLIGHT_CHECK_EVENT,
         events.ASSET_VALIDATION_EVENT,
         events.ARTIFACT_VALIDATION_EVENT,
         events.ARTIFACT_VALIDATION_POSTURE_EVENT,
@@ -45,6 +52,7 @@ def test_registry_is_the_full_set() -> None:
     assert events.OUTCOME_EVENT_NAMES == {
         events.PREFLIGHT_OUTCOME_EVENT,
         events.PREFLIGHT_POSTURE_EVENT,
+        events.PREFLIGHT_CHECK_EVENT,
         events.ASSET_VALIDATION_EVENT,
         events.ARTIFACT_VALIDATION_EVENT,
         events.ARTIFACT_VALIDATION_POSTURE_EVENT,
@@ -55,12 +63,14 @@ def test_emitting_modules_still_export_their_names() -> None:
     """v3 has shipped: an existing import site must not break on the move."""
     from application_sdk.app.base import ASSET_VALIDATION_EVENT
     from application_sdk.execution._temporal.preflight_gate import (
+        PREFLIGHT_CHECK_EVENT,
         PREFLIGHT_OUTCOME_EVENT,
         PREFLIGHT_POSTURE_EVENT,
     )
 
     assert PREFLIGHT_OUTCOME_EVENT == events.PREFLIGHT_OUTCOME_EVENT
     assert PREFLIGHT_POSTURE_EVENT == events.PREFLIGHT_POSTURE_EVENT
+    assert PREFLIGHT_CHECK_EVENT == events.PREFLIGHT_CHECK_EVENT
     assert ASSET_VALIDATION_EVENT == events.ASSET_VALIDATION_EVENT
 
 

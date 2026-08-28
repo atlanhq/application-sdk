@@ -36,6 +36,9 @@ with workflow.unsafe.imports_passed_through():
     from application_sdk.errors.categories import FailureCategory
     from application_sdk.errors.leaves import DependencyUnavailableError
     from application_sdk.errors.wire import FailureDetails
+    from application_sdk.execution._temporal.preflight_gate import (
+        emit_preflight_check_outcome,
+    )
     from application_sdk.handler.context import bind_invocation_context
     from application_sdk.handler.contracts import (
         AuthInput,
@@ -500,6 +503,13 @@ def build_sdr_activities(
                     checks=[secret_row],
                 )
                 await _append_object_store_checks(output)
+                emit_preflight_check_outcome(
+                    logger,
+                    binding.app_name,
+                    output,
+                    surface="sdr",
+                    entrypoint=input.entrypoint,
+                )
                 return output
             if secret_result.resolved is not None:
                 input.credentials = HandlerCredential.list_from_raw(
@@ -514,6 +524,13 @@ def build_sdr_activities(
         if secret_row is not None:
             output.checks.insert(0, secret_row)
         await _append_object_store_checks(output)
+        emit_preflight_check_outcome(
+            logger,
+            binding.app_name,
+            output,
+            surface="sdr",
+            entrypoint=input.entrypoint,
+        )
         return output
 
     @activity.defn(name=SDR_FETCH_METADATA_ACTIVITY)

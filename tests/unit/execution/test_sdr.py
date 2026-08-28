@@ -234,6 +234,26 @@ class TestBuildSdrActivities:
         with pytest.raises(AppContextError):
             _ = handler.context
 
+    async def test_preflight_activity_emits_outcome_row(self) -> None:
+        # FND-901: the SDR surface was silent — a failed test-connection left no
+        # log evidence. It now emits the shared "Preflight check outcome" row.
+        handler = _StubHandler()
+        activities = build_sdr_activities(handler, app_name="myapp")
+        by_name = {
+            getattr(a, "__temporal_activity_definition").name: a for a in activities
+        }
+        preflight = by_name[SDR_PREFLIGHT_ACTIVITY]
+        with mock.patch("application_sdk.execution._temporal.sdr.logger") as ml:
+            await preflight(PreflightInput(credentials=[]))
+        event = next(
+            c.kwargs
+            for c in ml.info.call_args_list
+            if c.args and c.args[0] == "Preflight check outcome"
+        )
+        assert event["preflight_surface"] == "sdr"
+        assert event["outcome"] == "ready"
+        assert event["app_name"] == "myapp"
+
     async def test_fetch_metadata_activity_dispatches(self) -> None:
         handler = _StubHandler()
         activities = build_sdr_activities(handler, app_name="myapp")
