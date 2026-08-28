@@ -63,7 +63,14 @@ class AppExecutor:
     def __init__(self, backend: TemporalExecutorBackend) -> None:
         self._backend = backend
 
-    async def execute_app(self, app_cls, input_data, *, execution_id_prefix: str = ""):
+    async def execute_app(
+        self,
+        app_cls,
+        input_data,
+        *,
+        execution_id_prefix: str = "",
+        entry_point: str | None = None,
+    ):
         from application_sdk.app.context import AppContext
         from application_sdk.execution.retry import RetryPolicy
 
@@ -72,7 +79,11 @@ class AppExecutor:
             app_name=app_name, app_version="0.0.0", run_id=execution_id_prefix or app_name
         )
         return await self._backend.execute(
-            app_cls, input_data, context=context, retry_policy=RetryPolicy()
+            app_cls,
+            input_data,
+            context=context,
+            retry_policy=RetryPolicy(),
+            entry_point=entry_point,
         )
 
 
@@ -247,9 +258,29 @@ task_activities = get_all_task_activities()
 
 Those snapshots go straight into the Temporal `Worker(...)`. Importing your App class is what populates them — hence the `# noqa: F401 — triggers App registration` on the App import in the canonical conftest. A worker built before that import starts with **zero workflows** and still starts successfully, because the preflight-gate activity is registered unconditionally and the activity list is therefore never empty. It then fails every workflow task it is handed, for as long as it runs, because the workflow *type* is not registered. The task queue is whatever you passed to `create_worker` — the failure is a type mismatch, not a misrouted queue.
 
+### pytest-asyncio loop scope
+
+`embedded_temporal`, `temporal_client`, and `your_app_worker` are all session-scoped async fixtures. pytest-asyncio schedules a session-scoped async fixture onto a session-scoped event loop; if the *tests* consuming it are still scheduled onto the default function-scoped loop, the fixture and the test run on different loops and the suite fails or hangs rather than reporting a clean error. Set both loop-scope knobs to `"session"` in `pyproject.toml`:
+
+```toml
+[tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+```
+
+`atlan-openapi-app` is the reference (`pyproject.toml:52-53`) and conformance rule **T019** is what checks for the test-loop knob. If you would rather not change the suite-wide default, mark the affected tests individually instead:
+
+```python
+@pytest.mark.asyncio(loop_scope="session")
+async def test_workflow_extracts_tables(...):
+    ...
+```
+
+Either knob alone is not enough — `asyncio_default_fixture_loop_scope` alone still leaves function-scoped *tests* on their own loop; only setting both project-wide (or the per-test marker) puts the fixtures and the tests that consume them on the same loop.
+
 ### Naming the entrypoint on a multi-entrypoint app
 
-`entry_point` is optional on the executor shim, and only `atlan-metabase-app` declares it:
+The canonical shim declares `entry_point`; pass it for explicit-`@entrypoint` apps:
 
 ```python
 async def execute_app(
@@ -348,7 +379,7 @@ The three suites are close enough to copy from, and these are the places where y
 | **State store** | `MockStateStore()` | Same | Same |
 | **Object store** | `create_local_store(store_root)` in the `InfrastructureContext`, plus `AtlanObservability._deployment_store = create_memory_store()` | Same | Same |
 | **Credential resolution** | Bypassed by design (inline) | Production `DaprCredentialVault` over an embedded `daprd` | `MockSecretStore` only |
-| **Executor shim** | `entry_point` present, defaulting to `None` | Parameter absent | Parameter absent |
+| **Executor shim** | `entry_point` present, passed a value | Parameter present (canonical shim), unused | Parameter present (canonical shim), unused |
 | **Env vars** | `ATLAN_APPLICATION_NAME`, `ATLAN_DEPLOYMENT_NAME=ci`, `APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR=false` — all `setdefault`, all pre-import | Both `ATLAN_*` pre-import; cleanup interceptor `setdefault` after the imports | Sets none of the three |
 | **Skips** | One `pytest.skip(…, allow_module_level=True)` when Docker is unreachable | None | None |
 | **Fixture scope** | All session | All session | All session except `large_spec_file` (module) — a ≥100 MiB stress payload for the large-spec tests, not the suite's source |
