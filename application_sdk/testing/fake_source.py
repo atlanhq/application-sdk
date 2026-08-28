@@ -192,7 +192,7 @@ class FakeResponse:
         headers: Mapping[str, str] | None = None,
         **header_kwargs: str,
     ) -> FakeResponse:
-        """A JSON response; ``body`` is serialised with :func:`json.dumps`."""
+        """A JSON response; ``body`` is serialised with :func:`orjson.dumps`."""
         return cls(
             status=status,
             body=body,
@@ -794,16 +794,16 @@ class HttpFakeSourceFactory:
     """The fakes one pytest session built, owned in one place.
 
     Backs the shipped ``http_fake_source_factory`` fixture in
-    :mod:`application_sdk.testing.fixtures`. Routes are the per-connector part and
-    stay in the connector's own session fixture; starting the servers, resetting
-    recordings before every test and stopping everything at the end are the same
-    everywhere and happen here::
+    :mod:`application_sdk.testing.integration.fixtures`. Routes are the
+    per-connector part and stay in the connector's own session fixture; starting
+    the servers, resetting recordings before every test and stopping everything at
+    the end are the same everywhere and happen here::
 
         @pytest.fixture(scope="session")
-        def source_url(http_fake_source_factory) -> str:
+        def integration_source(http_fake_source_factory) -> HttpFakeSource:
             fake = http_fake_source_factory(name="my-source")
             fake.route(r"/api/v1/objects", list_objects)
-            return fake.base_url
+            return fake
     """
 
     def __init__(self) -> None:
