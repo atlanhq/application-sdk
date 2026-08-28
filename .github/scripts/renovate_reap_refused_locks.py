@@ -210,20 +210,53 @@ def find_refusal(token: str, repo: str, fetch: Fetch = _request) -> Optional[dic
     return pr if should_reap(files, lock_text) else None
 
 
+def is_dry_run(renovate_dry_run: str | None, flag: bool) -> bool:
+    """Would this pass be a dry run?
+
+    Renovate's own contract, mirrored rather than reinvented: the workflow sets
+    ``RENOVATE_DRY_RUN`` to the literal string ``null`` for a live run and to a
+    mode name (``full``, ``extract``, ``lookup``) otherwise. Anything that is
+    not ``null`` is a dry run, so an unrecognised mode fails safe rather than
+    deleting branches.
+
+    This matters more here than for the Renovate step it precedes: a dry run
+    that reaped for real would delete lock-maintenance branches across the whole
+    matrix and then skip opening the replacements, which is strictly worse than
+    the freeze this script exists to clear.
+    """
+    if flag:
+        return True
+    value = (renovate_dry_run or "").strip()
+    return value not in ("", "null")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo", required=True, help="owner/name")
+    parser.add_argument(
+        "--repo",
+        default=os.environ.get("TARGET_REPO", ""),
+        help="owner/name; defaults to $TARGET_REPO",
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="report what would be deleted and delete nothing",
+        help=(
+            "report what would be deleted and delete nothing. Also implied by "
+            "$RENOVATE_DRY_RUN being anything other than 'null'."
+        ),
     )
     args = parser.parse_args(argv)
+
+    if not args.repo:
+        print("--repo (or $TARGET_REPO) is required", file=sys.stderr)
+        return 1
 
     token = os.environ.get("GITHUB_TOKEN", "")
     if not token:
         print("GITHUB_TOKEN is not set", file=sys.stderr)
         return 1
+
+    dry_run = is_dry_run(os.environ.get("RENOVATE_DRY_RUN"), args.dry_run)
 
     try:
         pr = find_refusal(token, args.repo)
@@ -243,7 +276,7 @@ def main(argv: list[str] | None = None) -> int:
         f"({BRANCH}, head {pr['head']['sha'][:7]}) — deleting the branch so "
         "this pass rebuilds it"
     )
-    if args.dry_run:
+    if dry_run:
         print("::notice::dry run, branch left in place")
         return 0
 

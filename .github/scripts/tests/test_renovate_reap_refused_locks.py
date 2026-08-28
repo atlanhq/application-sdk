@@ -258,9 +258,84 @@ class TestFindRefusal:
         assert all(reaper.BRANCH in u or "/files?" in u for u in fetch.calls)
 
 
+class TestIsDryRun:
+    """A dry run that reaped for real would delete lock branches across the
+    whole matrix and then skip opening the replacements — worse than the freeze
+    this script clears. So the default direction is 'refuse to delete'."""
+
+    def test_the_literal_null_the_workflow_sends_is_a_live_run(self):
+        # `${{ inputs.dry_run || 'null' }}` on a scheduled pass.
+        assert reaper.is_dry_run("null", False) is False
+
+    @pytest.mark.parametrize("mode", ["full", "extract", "lookup"])
+    def test_every_renovate_dry_run_mode_is_a_dry_run(self, mode):
+        assert reaper.is_dry_run(mode, False) is True
+
+    def test_an_unrecognised_mode_fails_safe(self):
+        assert reaper.is_dry_run("something-new", False) is True
+
+    def test_unset_is_a_live_run(self):
+        # Direct invocation outside the workflow, where --dry-run is the lever.
+        assert reaper.is_dry_run(None, False) is False
+        assert reaper.is_dry_run("", False) is False
+
+    def test_whitespace_around_null_is_still_live(self):
+        assert reaper.is_dry_run("  null  ", False) is False
+
+    def test_the_flag_wins_over_a_live_env(self):
+        assert reaper.is_dry_run("null", True) is True
+
+
 class TestMain:
-    def test_dry_run_deletes_nothing(self, monkeypatch, capsys):
+    def test_a_dry_run_pass_deletes_nothing(self, monkeypatch, capsys):
+        # The regression this guards: without the env check, `workflow_dispatch`
+        # with dry_run=full deleted real branches across the matrix.
         monkeypatch.setenv("GITHUB_TOKEN", "tok")
+        monkeypatch.setenv("RENOVATE_DRY_RUN", "full")
+        monkeypatch.setattr(
+            reaper,
+            "find_refusal",
+            lambda *a, **k: {"number": 7, "head": {"sha": "a" * 8}},
+        )
+        deleted: list[str] = []
+        monkeypatch.setattr(reaper, "_request", lambda *a, **k: deleted.append(a[1]))
+        assert reaper.main(["--repo", "atlanhq/x"]) == 0
+        assert deleted == []
+        assert "dry run" in capsys.readouterr().out
+
+    def test_a_live_pass_with_the_workflows_null_deletes(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_TOKEN", "tok")
+        monkeypatch.setenv("RENOVATE_DRY_RUN", "null")
+        monkeypatch.setattr(
+            reaper,
+            "find_refusal",
+            lambda *a, **k: {"number": 7, "head": {"sha": "a" * 8}},
+        )
+        deleted: list[str] = []
+        monkeypatch.setattr(reaper, "_request", lambda *a, **k: deleted.append(a[1]))
+        assert reaper.main(["--repo", "atlanhq/x"]) == 0
+        assert deleted == [
+            f"{reaper.API_ROOT}/repos/atlanhq/x/git/refs/heads/{reaper.BRANCH}"
+        ]
+
+    def test_repo_comes_from_target_repo_env(self, monkeypatch, capsys):
+        # The workflow passes it as env so no matrix value lands in `run:`.
+        monkeypatch.setenv("GITHUB_TOKEN", "tok")
+        monkeypatch.setenv("TARGET_REPO", "atlanhq/from-env")
+        monkeypatch.setattr(reaper, "find_refusal", lambda *a, **k: None)
+        assert reaper.main([]) == 0
+        assert "atlanhq/from-env" in capsys.readouterr().out
+
+    def test_no_repo_anywhere_fails(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_TOKEN", "tok")
+        monkeypatch.delenv("TARGET_REPO", raising=False)
+        assert reaper.main([]) == 1
+
+    def test_the_flag_alone_stops_a_delete_on_a_live_env(self, monkeypatch, capsys):
+        # The env says live; the flag must still win, so a human can rehearse
+        # against a real repo without deleting anything.
+        monkeypatch.setenv("GITHUB_TOKEN", "tok")
+        monkeypatch.setenv("RENOVATE_DRY_RUN", "null")
         monkeypatch.setattr(
             reaper,
             "find_refusal",
@@ -272,8 +347,9 @@ class TestMain:
         assert deleted == []
         assert "dry run" in capsys.readouterr().out
 
-    def test_a_live_run_deletes_exactly_the_lock_branch_ref(self, monkeypatch):
+    def test_the_delete_is_a_DELETE_on_exactly_the_lock_branch_ref(self, monkeypatch):
         monkeypatch.setenv("GITHUB_TOKEN", "tok")
+        monkeypatch.setenv("RENOVATE_DRY_RUN", "null")
         monkeypatch.setattr(
             reaper,
             "find_refusal",

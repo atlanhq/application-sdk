@@ -185,7 +185,15 @@ jobs:
       - name: Reap self-healing lock refusals
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: python3 .github/scripts/renovate_reap_refused_locks.py --repo "${{ matrix.repo }}"
+          # Both passed as env rather than interpolated into `run:`. TARGET_REPO
+          # keeps a matrix value out of the shell line, and RENOVATE_DRY_RUN is
+          # what stops a dry run deleting real branches: the job-level default
+          # is the literal 'null' for a live run, and the script treats anything
+          # else as --dry-run. Resolving that inside the script keeps the `run:`
+          # line branch-free, per docs/standards/ci.md.
+          TARGET_REPO: ${{ matrix.repo }}
+          RENOVATE_DRY_RUN: ${{ env.RENOVATE_DRY_RUN }}
+        run: python3 .github/scripts/renovate_reap_refused_locks.py
 
       - name: Run Renovate
         env:
