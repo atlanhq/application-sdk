@@ -740,3 +740,128 @@ def test_retry_is_wired_into_the_default_post_fn():
     for fn in (rfs.fetch_all_prs, rfs.fetch_lock_texts):
         default = inspect.signature(fn).parameters["post"].default
         assert default is rfs._post_graphql, f"{fn.__name__} bypasses the retry"
+
+
+# --- query cost + the 1000-result search cap (FND-909) --------------------
+#
+# Two independent faults, both measured against the live fleet on 2026-08-29,
+# both of which failed every scheduled dashboard run:
+#
+#   1. The open-PR query cost too much. PAGE_SIZE=100 -> 502, 50 -> 504 "we
+#      couldn't respond in time", 25 -> OK. Removing files(first:100) let 100
+#      through, so the nested file connection is the dominant term.
+#   2. The combined org-wide search had outgrown the API's ~1000-result cap
+#      (open 1003, merged 1020), so even a cheap-enough query returned a
+#      silently truncated fleet.
+#
+# The retry added earlier could not help with either: both are deterministic.
+
+
+def test_open_page_size_stays_under_the_measured_ceiling():
+    # 50 returned 504 and 100 returned 502 against the real API. Anything above
+    # the measured-good 25 is a regression that only shows up in production.
+    assert rfs.OPEN_PAGE_SIZE <= 25
+
+
+def test_payload_honours_an_explicit_page_size():
+    payload = rfs.build_graphql_payload("q", "number", after=None, page_size=25)
+    assert "first: 25" in payload["query"]
+
+
+def test_payload_falls_back_to_the_module_default():
+    payload = rfs.build_graphql_payload("q", "number", after=None)
+    assert f"first: {rfs.PAGE_SIZE}" in payload["query"]
+
+
+def test_fetch_all_prs_threads_the_page_size_through():
+    # A page size that stopped at build_graphql_payload's signature would leave
+    # the 502 in place while every unit test still passed.
+    seen = []
+
+    def fake_post(token, payload):
+        seen.append(payload["query"])
+        return _page([{"number": 1, "url": "u1"}], has_next=False)
+
+    rfs.fetch_all_prs("tok", "q", "number", post=fake_post, page_size=25)
+    assert "first: 25" in seen[0]
+
+
+def test_fetch_by_author_issues_one_query_per_author():
+    # One combined OR query is what breached the cap; the split is the fix.
+    queries = []
+
+    def fake_post(token, payload):
+        queries.append(payload["query"])
+        return _page([{"number": 1, "url": f"u{len(queries)}"}], has_next=False)
+
+    rfs.fetch_prs_by_author("tok", "org:atlanhq", "is:open", "number", post=fake_post)
+
+    assert len(queries) == len(rfs.RENOVATE_PR_AUTHORS)
+    for author in rfs.RENOVATE_PR_AUTHORS:
+        assert any(f"author:{author}" in q for q in queries), author
+    # Each slice names exactly one author — an OR would defeat the whole point.
+    for q in queries:
+        assert sum(f"author:{a}" in q for a in rfs.RENOVATE_PR_AUTHORS) == 1
+
+
+def test_fetch_by_author_concatenates_every_slice():
+    pages = [
+        _page([{"number": 1, "url": "u1"}], has_next=False),
+        _page([{"number": 2, "url": "u2"}], has_next=False),
+    ]
+
+    def fake_post(token, payload):
+        return pages.pop(0)
+
+    result = rfs.fetch_prs_by_author(
+        "tok", "org:atlanhq", "is:open", "number", post=fake_post
+    )
+    assert [pr["number"] for pr in result] == [1, 2]
+
+
+def test_fetch_by_author_deduplicates_across_slices():
+    # Defensive: GitHub cannot attribute one PR to two authors today, but a
+    # double-counted PR would inflate every number on the dashboard.
+    pages = [
+        _page([{"number": 1, "url": "same"}], has_next=False),
+        _page([{"number": 1, "url": "same"}], has_next=False),
+    ]
+
+    def fake_post(token, payload):
+        return pages.pop(0)
+
+    result = rfs.fetch_prs_by_author(
+        "tok", "org:atlanhq", "is:open", "number", post=fake_post
+    )
+    assert len(result) == 1
+
+
+def test_fetch_by_author_still_raises_when_one_slice_is_truncated():
+    # The fleet keeps growing. When a single author's slice breaches the cap in
+    # turn, that must fail loudly rather than report a partial fleet.
+    def fake_post(token, payload):
+        return _page([{"number": 1, "url": "u1"}], has_next=False, issue_count=1500)
+
+    try:
+        rfs.fetch_prs_by_author(
+            "tok", "org:atlanhq", "is:open", "number", post=fake_post
+        )
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "cap" in str(exc).lower()
+
+
+def test_the_scan_entrypoint_uses_the_sliced_fetch_with_measured_page_sizes():
+    # The wiring pin. A fix that lives in a function the entrypoint never calls
+    # would leave the outage exactly where it was, and every test above would
+    # still pass. Read the source rather than trusting the call site by eye.
+    source = inspect.getsource(rfs.run)
+    assert "fetch_prs_by_author" in source
+    assert "fetch_all_prs(" not in source, "run must not use the unsliced fetch"
+    assert "OPEN_PAGE_SIZE" in source
+    assert "MERGED_PAGE_SIZE" in source
+
+
+def test_main_delegates_to_run():
+    # The pin above reads run(); this is what makes run() the real entrypoint.
+    assert "run(" in inspect.getsource(rfs.main)
