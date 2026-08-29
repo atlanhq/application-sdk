@@ -214,3 +214,17 @@ jobs:
           fi
 
           echo "Renovate dashboard updated: https://k.atlan.dev/${PREFIX}/"
+
+      # Last, and deliberately after the deploy: this step can fail the job, and
+      # a dashboard that stops publishing because it found something to report
+      # would take out the view someone needs to act on the report.
+      #
+      # Full-fleet runs only. Single-repo mode is dispatched per PR-gate
+      # evaluation by renovate-auto-approve-reusable, where a fleet-wide health
+      # verdict does not belong and would red an unrelated repo's workflow.
+      - name: Alarm on refusals the reaper should have cleared
+        if: ${{ !inputs.repo }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/renovate_refusal_alarm.py \
+            --out-dir /tmp/renovate-output
