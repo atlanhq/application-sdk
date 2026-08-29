@@ -39,7 +39,30 @@ from pathlib import Path
 from typing import Callable, Optional
 
 GRAPHQL_URL = "https://api.github.com/graphql"
-PAGE_SIZE = 100
+
+# Page size is per-query, because cost is per-query. GitHub bills a GraphQL
+# request by the total nodes it may return — the product of the page size and
+# every nested connection limit inside each node — and answers a request it
+# cannot serve in time with a 502 or 504 rather than a cost error.
+#
+# Measured against the live fleet on 2026-08-29 with the real _OPEN_PR_FIELDS:
+#
+#     PAGE_SIZE=100  ->  502 Bad Gateway
+#     PAGE_SIZE=50   ->  504 "We couldn't respond to your request in time"
+#     PAGE_SIZE=25   ->  OK
+#
+# and with `files(first: 100)` removed, 100 succeeds — so the nested file
+# connection is the dominant term, not the rollup. The open-PR page size is cut
+# rather than the file limit because a truncated file list would silently
+# misclassify: `_is_uv_lock_only` and the auto-approve allowlist both need the
+# complete set, and "first 20 files happened to be uv.lock" is a wrong answer
+# that looks like a right one.
+OPEN_PAGE_SIZE = 25
+# The merged-PR field set carries no files and no statusCheckRollup, and was
+# measured OK at 100/50/25 — it does not need the cut.
+MERGED_PAGE_SIZE = 100
+# Back-compat alias for callers/tests that predate the split.
+PAGE_SIZE = OPEN_PAGE_SIZE
 # Safety backstop, not a real ceiling: 50 pages x 100 = 5000 PRs in one search window,
 # far beyond any realistic fleet. Trips only if a query is unexpectedly unbounded.
 MAX_PAGES = 50
@@ -133,11 +156,19 @@ def build_search_query(scope: str, extra: str) -> str:
     return f"{scope} is:pr {authors} {extra}".strip()
 
 
-def build_graphql_payload(search_query: str, fields: str, after: Optional[str]) -> dict:
+def build_graphql_payload(
+    search_query: str,
+    fields: str,
+    after: Optional[str],
+    page_size: Optional[int] = None,
+) -> dict:
+    # Defaults to the module-level PAGE_SIZE so existing callers and tests keep
+    # working; fetch_all_prs passes the size matched to its field set.
+    first = PAGE_SIZE if page_size is None else page_size
     after_arg = f", after: {json.dumps(after)}" if after else ""
     query = f"""
     query {{
-      search(query: {json.dumps(search_query)}, type: ISSUE, first: {PAGE_SIZE}{after_arg}) {{
+      search(query: {json.dumps(search_query)}, type: ISSUE, first: {first}{after_arg}) {{
         issueCount
         pageInfo {{ hasNextPage endCursor }}
         nodes {{
@@ -237,6 +268,7 @@ def fetch_all_prs(
     search_query: str,
     fields: str,
     post: PostFn = _post_graphql,
+    page_size: Optional[int] = None,
 ) -> list[dict]:
     """Paginate a GraphQL PR search to completion. Raises on a GraphQL 'errors' response,
     or if the result was silently truncated by the search API's ~1000-item hard cap."""
@@ -244,7 +276,7 @@ def fetch_all_prs(
     issue_count: Optional[int] = None
     after: Optional[str] = None
     for _ in range(MAX_PAGES):
-        payload = build_graphql_payload(search_query, fields, after)
+        payload = build_graphql_payload(search_query, fields, after, page_size)
         data = post(token, payload)
         if "errors" in data:
             raise RuntimeError(
@@ -272,6 +304,54 @@ def fetch_all_prs(
             "than silently reporting incomplete dashboard data."
         )
     return nodes
+
+
+def fetch_prs_by_author(
+    token: str,
+    scope: str,
+    extra: str,
+    fields: str,
+    post: PostFn = _post_graphql,
+    page_size: Optional[int] = None,
+) -> list[dict]:
+    """Run the search once per Renovate author and concatenate the results.
+
+    GitHub's search API returns at most ~1000 results per query, no matter how
+    the caller paginates. Measured 2026-08-29, the combined org-wide query had
+    outgrown that:
+
+        combined open:            1003   (over the cap — truncated)
+          app/renovate:            615
+          app/atlan-app-fleet:     388
+        combined merged (30d):    1020   (over the cap — truncated)
+          app/renovate:            192
+          app/atlan-app-fleet:     828
+
+    One query per author puts every slice comfortably under the cap while
+    covering exactly the same set, because the combined query is a plain OR of
+    the same author qualifiers. It is also the narrowing that costs nothing: the
+    total PR count and page count are unchanged, only their grouping.
+
+    Deduplicated by URL. GitHub cannot attribute one PR to two authors today, so
+    the overlap is empty in practice — but a slice that silently double-counted
+    would inflate every dashboard number, and the guard is one set.
+
+    ``fetch_all_prs`` still raises if any individual slice is truncated. The
+    fleet is growing, so that will eventually fire again; the next narrowing is
+    by date range (or a shorter ``--since`` window for the merged search).
+    """
+    seen: set[str] = set()
+    out: list[dict] = []
+    for author in RENOVATE_PR_AUTHORS:
+        query = f"{scope} is:pr author:{author} {extra}".strip()
+        for node in fetch_all_prs(token, query, fields, post, page_size):
+            url = node.get("url")
+            if url is not None and url in seen:
+                continue
+            if url is not None:
+                seen.add(url)
+            out.append(node)
+    return out
 
 
 def _status_rollup_to_list(pr: dict) -> list[dict]:
@@ -483,14 +563,19 @@ def run(
     token: str,
     post: PostFn = _post_graphql,
 ) -> tuple[dict[str, list[dict]], dict[str, list[dict]]]:
-    open_nodes = fetch_all_prs(
-        token, build_search_query(scope, "is:open"), _OPEN_PR_FIELDS, post
+    # Sliced per author and paged at a size the API can actually serve — see
+    # fetch_prs_by_author for the 1000-result cap and OPEN_PAGE_SIZE for the
+    # query-cost measurements behind each number.
+    open_nodes = fetch_prs_by_author(
+        token, scope, "is:open", _OPEN_PR_FIELDS, post, OPEN_PAGE_SIZE
     )
-    merged_nodes = fetch_all_prs(
+    merged_nodes = fetch_prs_by_author(
         token,
-        build_search_query(scope, f"is:merged merged:>={since}"),
+        scope,
+        f"is:merged merged:>={since}",
         _MERGED_PR_FIELDS,
         post,
+        MERGED_PAGE_SIZE,
     )
 
     # Second pass, deliberately narrow: only the red uv.lock-only PRs, and only
