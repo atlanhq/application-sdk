@@ -29,8 +29,10 @@ import renovate_uv_lock_bounded as bounded  # noqa: E402
 
 try:  # The vocabulary pin's other half — see _classifier() below.
     from conformance.renovate import classify as _conformance_classify
+    from conformance.renovate.models import BlockingReason as _BlockingReason
 except ImportError:  # pragma: no cover - depends on the runner's environment
     _conformance_classify = None  # type: ignore[assignment]
+    _BlockingReason = None  # type: ignore[assignment]
 
 
 def _write_repo_report(out_dir, slug: str, prs: list[dict]) -> None:
@@ -160,9 +162,32 @@ def _classifier():
     return _conformance_classify
 
 
+def _classifier_models():
+    """`BlockingReason`, or a skip when the package is not installed."""
+    if _BlockingReason is None:  # pragma: no cover - depends on runner env
+        pytest.skip("conformance package not installed in this environment")
+    return _BlockingReason
+
+
 def test_self_healing_vocabulary_matches_the_classifier() -> None:
     """The set the driver stamps and the set the reader trusts must be identical."""
     assert bounded.SELF_HEALING_REFUSALS == _classifier().SELF_HEALING_REFUSALS
+
+
+def test_alarm_blocking_reasons_match_the_classifier_enum() -> None:
+    """The alarm's literals must equal the enum values the scanner actually emits.
+
+    Same drift as the self-healing set, one layer down and easier to miss: the
+    alarm matches `blockingReason` as a bare string because it runs outside the
+    uv environment and cannot import BlockingReason. Every other test in this
+    file asserts against `alarm.EXPIRED` itself, so renaming the enum value would
+    leave both suites green while the dashboard run went silent on a real freeze
+    — the alarm would simply match nothing. This is the only assertion that
+    would catch it.
+    """
+    reasons = _classifier_models()
+    assert alarm.EXPIRED == reasons.BOUNDED_LOCK_REFUSAL_EXPIRED.value
+    assert alarm.STANDING == reasons.BOUNDED_LOCK_REFUSAL_STANDING.value
 
 
 def test_every_reason_the_driver_can_write_is_known_to_the_reader() -> None:
@@ -172,15 +197,20 @@ def test_every_reason_the_driver_can_write_is_known_to_the_reader() -> None:
     a machine — but it is only safe because the reader treats "not self-healing"
     as standing rather than ignoring the stamp. Pin the whole writable set so a
     new refusal path cannot land without someone reading this.
+
+    The writable set is collected from the driver module rather than hand-listed:
+    a literal set would silently omit a newly added REFUSAL_* constant, which is
+    precisely the case this test exists to notice.
     """
     classify = _classifier()
     writable = {
-        bounded.REFUSAL_WINDOW_EMPTY,
-        bounded.REFUSAL_NO_PACKAGING,
-        bounded.REFUSAL_UNSATISFIABLE_FLOOR,
-        bounded.REFUSAL_FLOOR_ADMITTED_STILL_FAILED,
-        bounded.REFUSAL_ROLLBACK,
+        getattr(bounded, name)
+        for name in dir(bounded)
+        if name.startswith("REFUSAL_") and isinstance(getattr(bounded, name), str)
     }
+    # Guard the collection itself: a rename of the REFUSAL_* prefix would empty
+    # the set and make every assertion below vacuously true.
+    assert len(writable) == 5, f"unexpected refusal constants: {sorted(writable)}"
     standing = writable - classify.SELF_HEALING_REFUSALS
 
     assert standing == {
