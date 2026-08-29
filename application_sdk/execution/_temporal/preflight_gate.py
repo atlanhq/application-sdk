@@ -37,6 +37,7 @@ from temporalio.common import RetryPolicy
 from temporalio.exceptions import TimeoutType
 
 with workflow.unsafe.imports_passed_through():
+    from application_sdk.contracts.base import SerializableEnum
     from application_sdk.credentials.errors import CredentialNotFoundError
     from application_sdk.credentials.ingress import normalize_agent_json
     from application_sdk.credentials.ref import CredentialRef, CredentialResolvable
@@ -679,12 +680,58 @@ def _build_block_error(result: PreflightOutput, app_name: str) -> Any:
     )
 
 
+class PreflightSurface(SerializableEnum):
+    """Which surface ran ``Handler.preflight_check`` outside a gated run.
+
+    Stamped as ``preflight_surface`` on the interactive outcome row, and the
+    input to the level policy below — so this is an enumerated vocabulary, not
+    free text. Values are the wire strings already shipped in that attribute
+    and must not be reworded: dashboards filter on them.
+    """
+
+    #: The ``/workflows/v1/check`` endpoint behind the setup form.
+    HTTP = "http"
+    #: The ``sdr:preflight_check`` Temporal activity (test-connection).
+    SDR = "sdr"
+
+
+#: Per surface: is the outcome row the customer's *only* sight of the verdict?
+#:
+#: The level policy turns on this, not on how expected the verdict is. HTTP
+#: returns the verdict as the response body the setup form renders, so its row
+#: is a duplicate and stays INFO. An SDR failure travels back through a workflow
+#: whose run log the customer reads at the default ERROR filter, so that row
+#: mirrors the gate's levels or the failure is invisible — the hole FND-901
+#: exists to close.
+#:
+#: A table rather than a branch so the policy is *enumerable*:
+#: ``test_every_surface_has_a_level_policy`` asserts these keys cover
+#: ``PreflightSurface``, which fails CI for a new member nobody routed. An
+#: exhaustive ``if``/``assert_never`` would only warn here — this repo sets
+#: ``reportArgumentType = "warning"``, so pyright flags the gap without failing
+#: on it.
+_LOG_ROW_IS_ONLY_CHANNEL: dict[PreflightSurface, bool] = {
+    PreflightSurface.HTTP: False,
+    PreflightSurface.SDR: True,
+}
+
+
+def _log_row_is_only_channel(surface: PreflightSurface) -> bool:
+    """Look up ``surface``'s level policy, defaulting an unrouted one to loud.
+
+    Never raises on a miss: this is the emit path, and losing the row entirely
+    is strictly worse than logging it one level too loud. The test above is what
+    keeps the miss from happening.
+    """
+    return _LOG_ROW_IS_ONLY_CHANNEL.get(surface, True)
+
+
 def emit_preflight_check_outcome(
     log: AtlanLoggerAdapter,
     app_name: str,
     result: PreflightOutput,
     *,
-    surface: str,
+    surface: PreflightSurface,
     entrypoint: str | None = None,
     request_id: str | None = None,
 ) -> None:
@@ -693,13 +740,12 @@ def emit_preflight_check_outcome(
     One attribute schema for every surface that runs ``Handler.preflight_check``,
     so the setup funnel (HTTP form check, SDR test-connection) is queryable next
     to run-time gate verdicts. The level follows whether the log is the delivery
-    channel. HTTP rows are always INFO: the verdict IS the response body,
-    rendered in the setup form. SDR failures surface through a workflow run log
-    a customer reads at the default ERROR filter, so those rows mirror the
-    gate's map — ``not_ready`` at ERROR, a passed verdict carrying a failed
-    advisory check at WARNING, clean at INFO. Handler crashes are logged at
-    ERROR by each surface's own boundary handler. Callers pass their module
-    logger so the row keeps the surface's source.
+    channel — see :func:`_log_row_is_only_channel`. A surface whose row is the
+    only channel mirrors the gate's map (``not_ready`` at ERROR, a passed
+    verdict carrying a failed advisory check at WARNING, clean at INFO); one
+    that returns the verdict by another route stays INFO throughout. Handler
+    crashes are logged at ERROR by each surface's own boundary handler. Callers
+    pass their module logger so the row keeps the surface's source.
     """
     failed = [c for c in result.checks if not c.passed]
     # The aggregate error wins over check order, mirroring _build_block_error:
@@ -716,7 +762,7 @@ def emit_preflight_check_outcome(
         extra[FAILURE_AUDIENCE_KEY] = primary.audience.value
     if request_id is not None:
         extra["request_id"] = request_id
-    if surface == "http":
+    if not _log_row_is_only_channel(surface):
         emit = log.info
     elif result.status is PreflightStatus.NOT_READY:
         emit = log.error
@@ -733,7 +779,7 @@ def emit_preflight_check_outcome(
         checks=len(result.checks),
         **{
             CHECK_MATRIX_KEY: _check_matrix_json(result.checks),
-            PREFLIGHT_SURFACE_KEY: surface,
+            PREFLIGHT_SURFACE_KEY: surface.value,
         },
         **extra,
     )

@@ -2845,6 +2845,7 @@ def create_app_handler_service(
                 else:
                     result = await handler.preflight_check(preflight_input)
                 from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — handler/__init__ imports this module; a top-level import back into preflight_gate is a cycle
+                    PreflightSurface,
                     emit_preflight_check_outcome,
                 )
 
@@ -2852,7 +2853,7 @@ def create_app_handler_service(
                     logger,
                     app_name,
                     result,
-                    surface="http",
+                    surface=PreflightSurface.HTTP,
                     entrypoint=entrypoint,
                     request_id=context.request_id_str,
                 )

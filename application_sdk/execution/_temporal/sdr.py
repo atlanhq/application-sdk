@@ -42,6 +42,7 @@ with workflow.unsafe.imports_passed_through():
         SourceUnavailableError,
     )
     from application_sdk.execution._temporal.preflight_gate import (
+        PreflightSurface,
         emit_preflight_check_outcome,
     )
     from application_sdk.handler.context import bind_invocation_context
@@ -636,7 +637,7 @@ def build_sdr_activities(
                     logger,
                     binding.app_name,
                     output,
-                    surface="sdr",
+                    surface=PreflightSurface.SDR,
                     entrypoint=input.entrypoint,
                 )
                 return output
@@ -657,7 +658,7 @@ def build_sdr_activities(
             logger,
             binding.app_name,
             output,
-            surface="sdr",
+            surface=PreflightSurface.SDR,
             entrypoint=input.entrypoint,
         )
         return output

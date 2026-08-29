@@ -24,10 +24,12 @@ from application_sdk.errors.leaves import (
     DependencyUnavailableError,
 )
 from application_sdk.execution._temporal.preflight_gate import (
+    _LOG_ROW_IS_ONLY_CHANNEL,
     FAILURE_AUDIENCE_KEY,
     GATE_TIMEOUT_DEFAULT_SECONDS,
     PREFLIGHT_CHECK_EVENT,
     PreflightGateInput,
+    PreflightSurface,
     _config_from_snapshot,
     build_preflight_gate_activity,
     emit_preflight_check_outcome,
@@ -1213,7 +1215,7 @@ class TestPreflightGateMultiCredential:
 
 
 class TestEmitPreflightCheckOutcome:
-    """The interactive-surface sibling row (FND-901): one schema, always INFO."""
+    """The interactive-surface sibling row (FND-901): one schema, per-surface levels."""
 
     def _emit(self, result: PreflightOutput, **kwargs) -> mock.MagicMock:
         log = mock.MagicMock()
@@ -1225,7 +1227,9 @@ class TestEmitPreflightCheckOutcome:
             status=PreflightStatus.READY,
             checks=[PreflightCheck(name="auth", passed=True)],
         )
-        log = self._emit(out, surface="http", entrypoint="crawl", request_id="r-1")
+        log = self._emit(
+            out, surface=PreflightSurface.HTTP, entrypoint="crawl", request_id="r-1"
+        )
         log.info.assert_called_once()
         assert log.error.call_count == 0
         args, kwargs = log.info.call_args
@@ -1249,7 +1253,7 @@ class TestEmitPreflightCheckOutcome:
                 PreflightCheck(name="auth", passed=False, error=AuthError(message="x"))
             ],
         )
-        log = self._emit(out, surface="sdr")
+        log = self._emit(out, surface=PreflightSurface.SDR)
         log.error.assert_called_once()
         log.info.assert_not_called()
         kwargs = log.error.call_args.kwargs
@@ -1267,7 +1271,7 @@ class TestEmitPreflightCheckOutcome:
                 PreflightCheck(name="auth", passed=False, error=AuthError(message="x"))
             ],
         )
-        log = self._emit(out, surface="http")
+        log = self._emit(out, surface=PreflightSurface.HTTP)
         log.info.assert_called_once()
         log.error.assert_not_called()
 
@@ -1279,13 +1283,13 @@ class TestEmitPreflightCheckOutcome:
                 PreflightCheck(name="tables", passed=False, message="advisory"),
             ],
         )
-        log = self._emit(out, surface="sdr")
+        log = self._emit(out, surface=PreflightSurface.SDR)
         log.warning.assert_called_once()
         log.error.assert_not_called()
 
     def test_sdr_clean_stays_info(self) -> None:
         out = PreflightOutput(status=PreflightStatus.READY, checks=[])
-        log = self._emit(out, surface="sdr")
+        log = self._emit(out, surface=PreflightSurface.SDR)
         log.info.assert_called_once()
         log.error.assert_not_called()
 
@@ -1307,7 +1311,7 @@ class TestEmitPreflightCheckOutcome:
                 PreflightCheck(name="auth", passed=False),
             ],
         )
-        kwargs = self._emit(out, surface="sdr").error.call_args.kwargs
+        kwargs = self._emit(out, surface=PreflightSurface.SDR).error.call_args.kwargs
         assert kwargs["reason"] == "AUTH"
         assert kwargs[FAILURE_AUDIENCE_KEY] == "USER"
 
@@ -1316,7 +1320,7 @@ class TestEmitPreflightCheckOutcome:
             status=PreflightStatus.NOT_READY,
             checks=[PreflightCheck(name="auth", passed=False, message="bad creds")],
         )
-        kwargs = self._emit(out, surface="http").info.call_args.kwargs
+        kwargs = self._emit(out, surface=PreflightSurface.HTTP).info.call_args.kwargs
         assert kwargs["reason"] == "PREFLIGHT_CHECK_FAILED"
         assert FAILURE_AUDIENCE_KEY not in kwargs
 
@@ -1330,13 +1334,44 @@ class TestEmitPreflightCheckOutcome:
                 ),
             ],
         )
-        kwargs = self._emit(out, surface="http").info.call_args.kwargs
+        kwargs = self._emit(out, surface=PreflightSurface.HTTP).info.call_args.kwargs
         assert kwargs["outcome"] == "partial"
         assert kwargs["reason"] == "partial"
         assert kwargs[FAILURE_AUDIENCE_KEY] == "USER"
 
     def test_defaults_omit_optional_attrs(self) -> None:
         out = PreflightOutput(status=PreflightStatus.READY, checks=[])
-        kwargs = self._emit(out, surface="sdr").info.call_args.kwargs
+        kwargs = self._emit(out, surface=PreflightSurface.SDR).info.call_args.kwargs
         assert kwargs["entrypoint"] == "<implicit>"
         assert "request_id" not in kwargs
+
+    def test_every_surface_has_a_level_policy(self) -> None:
+        # The enforcing half of the enum: a new PreflightSurface member with no
+        # entry in the policy table fails here. _log_row_is_only_channel
+        # deliberately defaults a miss to loud instead of raising (losing the
+        # row beats logging it loud), so nothing at runtime would otherwise
+        # notice — and pyright only warns, since this repo sets
+        # reportArgumentType = "warning".
+        assert set(_LOG_ROW_IS_ONLY_CHANNEL) == set(PreflightSurface)
+
+    @pytest.mark.parametrize("surface", list(PreflightSurface))
+    def test_every_surface_emits_one_row_carrying_its_wire_string(
+        self, surface: PreflightSurface
+    ) -> None:
+        # Parametrized over the enum so a newly added member is exercised
+        # rather than only routed: exactly one row, and the attribute is the
+        # plain wire string dashboards filter on, not the enum object.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(name="auth", passed=False, error=AuthError(message="x"))
+            ],
+        )
+        log = self._emit(out, surface=surface)
+        calls = log.info.call_count + log.warning.call_count + log.error.call_count
+        assert calls == 1
+        kwargs = (
+            log.info.call_args or log.warning.call_args or log.error.call_args
+        ).kwargs
+        assert kwargs[PREFLIGHT_SURFACE_KEY] == surface.value
+        assert type(kwargs[PREFLIGHT_SURFACE_KEY]) is str
