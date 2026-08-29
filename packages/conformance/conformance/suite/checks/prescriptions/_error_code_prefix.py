@@ -214,9 +214,7 @@ def resolve_ancestor(
     visiting.add(name)
     result: bool = False
     for base in rec.bases:
-        sub = resolve_ancestor(
-            base, target, by_name, cache, visiting, known_ancestors
-        )
+        sub = resolve_ancestor(base, target, by_name, cache, visiting, known_ancestors)
         if sub is True:
             result = True
             break
