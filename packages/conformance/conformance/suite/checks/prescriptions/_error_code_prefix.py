@@ -273,6 +273,7 @@ def resolve_ancestor(
     cache: dict[str, bool | None],
     visiting: set[str],
     known_targets: frozenset[str] = frozenset(),
+    known_ancestors: frozenset[str] = frozenset(),
 ) -> bool | None:
     """Transitively resolve *name*'s base chain looking for *target*.
 
@@ -293,6 +294,8 @@ def resolve_ancestor(
     """
     if name == target or name in known_targets:
         return True
+    if name in known_ancestors and name not in by_name:
+        return name.endswith(target)
     # Provenance is file-local, so do not reuse a cache entry produced without
     # this set of known SDK contract names.
     if not known_targets and name in cache:
@@ -307,7 +310,9 @@ def resolve_ancestor(
     visiting.add(name)
     result: bool = False
     for base in rec.bases:
-        sub = resolve_ancestor(base, target, by_name, cache, visiting, known_targets)
+        sub = resolve_ancestor(
+            base, target, by_name, cache, visiting, known_targets, known_ancestors
+        )
         if sub is True:
             result = True
             break
