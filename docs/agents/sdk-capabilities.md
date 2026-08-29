@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.30.0
-source-sha:    593ec61a0e3696eb29fcaff3704f3ad15b27add8
-source-date:   2026-08-28T19:48:05+01:00
+source-sha:    17caa4a9026ff1093521f9cc70e722c574150e7c
+source-date:   2026-08-29T17:15:36+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -29,7 +29,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
-| `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 28 |
+| `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 29 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
@@ -2625,6 +2625,13 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 
 - **Import:** `from application_sdk.observability.events import OUTCOME_EVENT_NAMES`
 - **Signature:** `OUTCOME_EVENT_NAMES: Final[frozenset[str]]`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/events.py`
+
+#### `PREFLIGHT_CHECK_EVENT`
+
+- **Import:** `from application_sdk.observability.events import PREFLIGHT_CHECK_EVENT`
+- **Signature:** `PREFLIGHT_CHECK_EVENT: Final`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/observability/events.py`
 

@@ -234,6 +234,71 @@ class TestBuildSdrActivities:
         with pytest.raises(AppContextError):
             _ = handler.context
 
+    async def test_preflight_activity_emits_outcome_row(self) -> None:
+        # FND-901: the SDR surface was silent — a failed test-connection left no
+        # log evidence. It now emits the shared "Preflight check outcome" row.
+        handler = _StubHandler()
+        activities = build_sdr_activities(handler, app_name="myapp")
+        by_name = {
+            getattr(a, "__temporal_activity_definition").name: a for a in activities
+        }
+        preflight = by_name[SDR_PREFLIGHT_ACTIVITY]
+        with mock.patch("application_sdk.execution._temporal.sdr.logger") as ml:
+            await preflight(PreflightInput(credentials=[]))
+        event = next(
+            c.kwargs
+            for c in ml.info.call_args_list
+            if c.args and c.args[0] == "Preflight check outcome"
+        )
+        assert event["preflight_surface"] == "sdr"
+        assert event["outcome"] == "ready"
+        assert event["app_name"] == "myapp"
+
+    async def test_preflight_fatal_secret_store_emits_outcome_row(self) -> None:
+        # The fatal short-circuit return path must emit the same row — its
+        # checks are the synthetic secret-store row, so the shape differs.
+        handler = _StubHandler()
+        activities = build_sdr_activities(handler, app_name="myapp")
+        by_name = {
+            getattr(a, "__temporal_activity_definition").name: a for a in activities
+        }
+        preflight = by_name[SDR_PREFLIGHT_ACTIVITY]
+        fatal = SecretStoreCheckResult(
+            passed=False,
+            store_down=True,
+            fatal=True,
+            substituted=0,
+            message="Secret store unreachable",
+        )
+        fake_infra = mock.MagicMock()
+        fake_infra.secret_store = mock.MagicMock(name="SecretStore")
+        with (
+            mock.patch(
+                "application_sdk.execution._temporal.sdr.get_infrastructure",
+                return_value=fake_infra,
+            ),
+            mock.patch(
+                "application_sdk.execution._temporal.sdr.check_secret_store_access",
+                new=mock.AsyncMock(return_value=fatal),
+            ),
+            mock.patch("application_sdk.execution._temporal.sdr.logger") as ml,
+        ):
+            result = await preflight(
+                PreflightInput(agent_json={"agent-name": "acme", "secret-path": "p"})
+            )
+        assert result.status == PreflightStatus.NOT_READY
+        assert handler.preflight_input is None  # short-circuited, handler never ran
+        # A failed SDR test-connection surfaces through a run log read at the
+        # default ERROR filter, so the row mirrors the gate and lands at ERROR.
+        event = next(
+            c.kwargs
+            for c in ml.error.call_args_list
+            if c.args and c.args[0] == "Preflight check outcome"
+        )
+        assert event["preflight_surface"] == "sdr"
+        assert event["outcome"] == "not_ready"
+        assert "Secret store" in event["check_matrix"]
+
     async def test_fetch_metadata_activity_dispatches(self) -> None:
         handler = _StubHandler()
         activities = build_sdr_activities(handler, app_name="myapp")

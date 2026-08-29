@@ -74,6 +74,11 @@ GATE_TIMEOUT_KEY = "gate_timeout_seconds"
 GATE_DURATION_KEY = "gate_duration_ms"
 GATE_ATTEMPTS_KEY = "gate_attempt"
 
+# Which surface ran Handler.preflight_check on a "Preflight check outcome" row:
+# "http" (the setup form endpoint) or "sdr" (the interactive test-connection
+# activity). The gate's own rows use their distinct event body instead.
+PREFLIGHT_SURFACE_KEY = "preflight_surface"
+
 # Transformed-asset validation outcome-event key, shared with the emitter
 # (``application_sdk.app.base._warn_on_invalid_transformed_assets``) so a rename
 # is a single edit that keeps the emit call-site and the allowlist below in sync.
@@ -200,6 +205,7 @@ _KNOWN_EXTRA_KEYS = frozenset(
         GATE_TIMEOUT_KEY,
         GATE_DURATION_KEY,
         GATE_ATTEMPTS_KEY,
+        PREFLIGHT_SURFACE_KEY,
         # ── Transformed-asset validation outcome event ───────────────────
         ASSET_VALIDATION_MATRIX_KEY,
         "assets_total",
