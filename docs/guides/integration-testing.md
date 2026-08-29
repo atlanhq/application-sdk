@@ -19,6 +19,8 @@ The older `BaseIntegrationTest` (HTTP scenario) framework is still shipped for t
 
 ### Step 1: Wire the conftest
 
+The SDK also ships this conftest as importable fixtures — `from application_sdk.testing.integration.fixtures import *` — so a connector overrides `integration_app_cls` and `integration_source` and gets the rest, with the ordering rules below enforced rather than commented. See [Shared Integration Fixtures](./integration-fixtures.md). The canonical shape below stays the reference for what that kit does.
+
 Copy the conftest from any v3 reference connector — they're nearly identical. Below is the canonical shape; the only per-connector knobs are the `_TASK_QUEUE`, the credential-store seed, and the App class import.
 
 ```python
@@ -33,9 +35,11 @@ import orjson
 import pytest
 import pytest_asyncio
 from application_sdk.dev import embedded_runtime
-from application_sdk.execution._temporal.backend import TemporalExecutorBackend
-from application_sdk.execution._temporal.converter import create_data_converter_for_app
-from application_sdk.execution._temporal.worker import create_worker
+from application_sdk.execution import (
+    TemporalExecutorBackend,
+    create_data_converter_for_app,
+    create_worker,
+)
 from application_sdk.infrastructure.context import (
     InfrastructureContext,
     set_infrastructure,
@@ -51,6 +55,11 @@ from app.connector import YourApp  # noqa: F401 — triggers App registration
 # observability flush does not keep retrying and spamming warnings in tests.
 AtlanObservability._deployment_store = create_memory_store()
 
+# A literal here is what the three reference conftests do today, and it is the
+# one line of this listing worth improving on: `task_queue_from_env()` is the
+# same call the worker and the served manifest make, so a literal tests a queue
+# no deployment polls. The shared fixtures derive it — see
+# [Shared Integration Fixtures](./integration-fixtures.md).
 _TASK_QUEUE = "your-app-queue"
 _CREDENTIAL_KEY = "your-app"
 
@@ -61,7 +70,14 @@ class AppExecutor:
     def __init__(self, backend: TemporalExecutorBackend) -> None:
         self._backend = backend
 
-    async def execute_app(self, app_cls, input_data, *, execution_id_prefix: str = ""):
+    async def execute_app(
+        self,
+        app_cls,
+        input_data,
+        *,
+        execution_id_prefix: str = "",
+        entry_point: str | None = None,
+    ):
         from application_sdk.app.context import AppContext
         from application_sdk.execution.retry import RetryPolicy
 
@@ -70,7 +86,11 @@ class AppExecutor:
             app_name=app_name, app_version="0.0.0", run_id=execution_id_prefix or app_name
         )
         return await self._backend.execute(
-            app_cls, input_data, context=context, retry_policy=RetryPolicy()
+            app_cls,
+            input_data,
+            context=context,
+            retry_policy=RetryPolicy(),
+            entry_point=entry_point,
         )
 
 
@@ -187,6 +207,123 @@ uv run pytest tests/integration/ -v
 
 In CI: the `tests` job in your `.github/workflows/tests.yaml` uses [`connector-integration-tests@main`](../standards/connector-ci-e2e.md) which runs exactly this command, with the env vars wired from repo secrets.
 
+## Getting the conftest right
+
+The conftest above encodes a few decisions that are silent when you get them wrong: nothing raises, the suite just proves something other than what you meant. All three reference connectors encode them the same way.
+
+### Env vars before the first `application_sdk` import
+
+`ATLAN_APPLICATION_NAME` and `ATLAN_DEPLOYMENT_NAME` are read into module-level constants the moment `application_sdk.constants` is imported:
+
+```python
+# application_sdk/constants.py
+APPLICATION_NAME = os.getenv("ATLAN_APPLICATION_NAME", "default")
+DEPLOYMENT_NAME = os.getenv("ATLAN_DEPLOYMENT_NAME", LOCAL_ENVIRONMENT)
+```
+
+Eleven other modules re-bind those constants into their own namespace with `from application_sdk.constants import ...`, so an assignment made after the import never reaches them. Set them at the top of `conftest.py`, above every `application_sdk` import:
+
+```python
+import os
+
+os.environ.setdefault("ATLAN_APPLICATION_NAME", "yourapp")
+os.environ.setdefault("ATLAN_DEPLOYMENT_NAME", "ci")
+
+from application_sdk.dev import embedded_runtime  # noqa: E402
+```
+
+The blast radius is narrower than it looks, and worth knowing precisely. Task-queue derivation is **not** affected: `application_name_from_env()` and `deployment_name_from_env()` in `application_sdk/common/task_queue.py` read `os.environ` fresh at call time, deliberately. What you lose is correct tagging — a suite that skips these has its observability output attributed to `default` / `local`, silently. `atlan-openapi-app` sets neither and is mistagged today.
+
+The one behavioural consequence is credential resolution. `DaprCredentialVault._get_secret()` (`application_sdk/infrastructure/_dapr/credential_vault.py`) branches on the snapshotted `DEPLOYMENT_NAME`: at `local` it short-circuits to reading the secrets file directly instead of going through the Dapr API. A suite that means to exercise the production path has to set `ATLAN_DEPLOYMENT_NAME` before the import, not after.
+
+### Infrastructure before the worker
+
+The worker fixture takes `infrastructure` as a parameter it never uses. That is deliberate, and all three reference conftests carry the same comment:
+
+```python
+@pytest_asyncio.fixture(scope="session")
+async def your_app_worker(
+    temporal_client,
+    infrastructure: InfrastructureContext,  # noqa: ARG001 — ensures infra is wired first
+):
+    w = create_worker(temporal_client, task_queue=_TASK_QUEUE)
+    async with w:
+        yield
+```
+
+The parameter *is* the ordering rule. `infrastructure` is the fixture that calls `set_infrastructure(ctx)`, and activities resolve their stores through that context; drop the parameter and the worker is free to start before any store is wired.
+
+### App registration before `create_worker`
+
+`create_worker` snapshots the registries at call time:
+
+```python
+# application_sdk/execution/_temporal/worker.py
+app_workflows = get_all_app_workflows()
+task_activities = get_all_task_activities()
+```
+
+Those snapshots go straight into the Temporal `Worker(...)`. Importing your App class is what populates them — hence the `# noqa: F401 — triggers App registration` on the App import in the canonical conftest. A worker built before that import starts with **zero workflows** and still starts successfully, because the preflight-gate activity is registered unconditionally and the activity list is therefore never empty. It then fails every workflow task it is handed, for as long as it runs, because the workflow *type* is not registered. The task queue is whatever you passed to `create_worker` — the failure is a type mismatch, not a misrouted queue.
+
+### pytest-asyncio loop scope
+
+`embedded_temporal`, `temporal_client`, and `your_app_worker` are all session-scoped async fixtures. pytest-asyncio schedules a session-scoped async fixture onto a session-scoped event loop; if the *tests* consuming it are still scheduled onto the default function-scoped loop, the fixture and the test run on different loops and the suite fails or hangs rather than reporting a clean error. Set both loop-scope knobs to `"session"` in `pyproject.toml`:
+
+```toml
+[tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+```
+
+`atlan-openapi-app` is the reference (`pyproject.toml:52-53`) and conformance rule **T019** is what checks for the test-loop knob. If you would rather not change the suite-wide default, mark the affected tests individually instead:
+
+```python
+@pytest.mark.asyncio(loop_scope="session")
+async def test_workflow_extracts_tables(...):
+    ...
+```
+
+Either knob alone is not enough — `asyncio_default_fixture_loop_scope` alone still leaves function-scoped *tests* on their own loop; only setting both project-wide (or the per-test marker) puts the fixtures and the tests that consume them on the same loop.
+
+### Naming the entrypoint on a multi-entrypoint app
+
+The canonical shim declares `entry_point`; pass it for explicit-`@entrypoint` apps:
+
+```python
+async def execute_app(
+    self,
+    app_cls: Any,
+    input_data: Any,
+    *,
+    execution_id_prefix: str = "",
+    entry_point: str | None = None,
+) -> Any: ...
+```
+
+Pass it when the App declares explicit `@entrypoint` methods and you mean a particular one. Omitting it is safe rather than silent: `TemporalExecutorBackend` resolves the workflow name before it submits anything, and raises
+
+- `UnknownEntryPointError` — you named an entry point the app does not declare;
+- `EntryPointRequiredError` — you named none, and the app declares only explicit entry points, so it registers no bare `{app}` workflow.
+
+Both guards are pre-submission by design. The resolver's docstring says why: *"Temporal accepts a start request for an unregistered type either way — the run opens, nothing claims it, and the caller awaits a listener that never comes."* An App with an implicit `run()` entry point needs no `entry_point=`; the bare `{app}` type is registered and resolution falls through to it.
+
+See [Entry points — Testing each entry point](../concepts/entry-points.md#testing-each-entry-point).
+
+### Keep the artifacts you assert on
+
+`APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR` defaults to `true`. With it on, `App.on_complete()` runs two cleanups after every run, pass or fail, and gates **both** on that single flag:
+
+- `cleanup_files` — the run's local files, including what a `create_local_store` root holds;
+- `cleanup_storage` — object-store objects: every tracked `TRANSIENT`-tier ref plus its `.sha256` sidecar. (The run-scoped prefix sweep is a separate opt-in, `StorageCleanupInput(include_prefix_cleanup=True)`; `on_complete()` does not request it.)
+
+So a suite that opens output files and asserts on their contents — the pattern in Step 2 — has to turn it off, alongside the other env vars:
+
+```python
+os.environ.setdefault("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", "false")
+```
+
+This one is read at run time rather than at import, so its position is not load-bearing: `atlan-metabase-app` sets it pre-import, `atlan-mysql-app` after the imports, and `atlan-openapi-app` not at all.
+
 ## Markers and CI tiering — the directory *is* the boundary
 
 The reusable Tests workflow runs the two tiers as **separate, directory-scoped jobs**: the unit job runs `pytest tests/unit`, and the integration job runs `pytest tests/integration/`. Neither re-selects by marker. Two rules follow from that:
@@ -224,6 +361,52 @@ This keeps a bare local `pytest tests/integration/` green without the service wh
 | Error paths | Misconfigured credentials surface as a typed `AppError` subclass, not a bare `Exception`. |
 
 Refer to the connector adopters' suites for working examples — [`atlan-openapi-app/tests/integration/test_openapi.py`](https://github.com/atlanhq/atlan-openapi-app/blob/main/tests/integration/test_openapi.py), [`atlan-metabase-app/tests/integration/test_metabase_workflow.py`](https://github.com/atlanhq/atlan-metabase-app/blob/main/tests/integration/test_metabase_workflow.py).
+
+## What "the real source" means here
+
+Conformance rule **T011** requires every app to ship this tier and describes it as *connecting to the real source* — at WARN tier today (see [`docs/standards/testing.md`](../standards/testing.md)). Read "real source" as a real **engine**: a containerised, version-pinned, seeded instance of the actual software, which is what the two container-backed references do. It does not mean a customer's instance, and this tier is not where you reach one.
+
+Pointing a suite at a source you control is fine — the canonical conftest seeds its credentials from `E2E_YOURAPP_HOST` for exactly that. What to avoid is a branch that *silently prefers* whatever happens to be at that host over the hermetic engine; see [`MYSQL_HOST`](#how-the-three-reference-connectors-differ) below.
+
+For the layers around the source — secret, state and object stores — **mock them**: `MockSecretStore`, `MockStateStore`, `create_local_store`, plus `create_memory_store` for the observability deployment store. This is the default for new suites, fake-source ones included. The tier's job is to prove the app's workflow executes correctly through Temporal; proving that `DaprCredentialVault` speaks the Dapr HTTP API is SDK-owned coverage, validated once centrally rather than once per connector — and a real sidecar costs subprocess lifecycle, component YAML, port allocation and suite stability.
+
+`atlan-mysql-app` is the standing exception: it boots a real `daprd` subprocess via `embedded_dapr()`, writes `secretstores.local.file` and `bindings.localstorage` components, and routes resolution through the production `DaprCredentialVault` path (which is why it sets `ATLAN_DEPLOYMENT_NAME=ci` pre-import). The argument for keeping it is narrow but real: that suite is currently the fleet's only coverage of the `DEPLOYMENT_NAME` branch in `_get_secret()` that picks between the local-file short-circuit and the full Dapr API — an observable behaviour switch, not pure SDK plumbing, so something has to exercise it. Treat it as retained until the SDK covers that branch centrally, not as a pattern to copy.
+
+## How the three reference connectors differ
+
+The three suites are close enough to copy from, and these are the places where you should decide rather than inherit. Each cell is checked against that repo's `tests/integration/conftest.py`.
+
+| Aspect | `atlan-metabase-app` | `atlan-mysql-app` | `atlan-openapi-app` |
+|---|---|---|---|
+| **Temporal** | `embedded_runtime(log_level="error")`, session-scoped | Same | Same |
+| **Client** | `create_temporal_client(host=…, data_converter=create_data_converter_for_app(MetabaseApp))` | Same, with `MySQLApp` | `create_temporal_client(host=…, enable_prometheus=False)` — **no data converter**; the flag stops three `-n auto --dist=loadfile` processes racing for one fixed Prometheus port |
+| **Worker** | `create_worker(client, task_queue=_TASK_QUEUE)` under `async with`, session-scoped, depends on `infrastructure` | Same | Same |
+| **Source** | `metabase_credentials`, session-scoped: `DockerContainer("metabase/metabase:v0.61.2.3")`, seeded over the real Metabase HTTP API | `mysql_database`, session-scoped `autouse`: `MySqlContainer(image="mysql:8.0", username=…, password=…, root_password=…, dbname="ecommerce")`, seeded from `fixtures/seed.sql` | None — the app's input *is* a spec, generated in-process per test |
+| **Secret store** | `MockSecretStore({})`; credentials passed inline in the workflow input | `MockSecretStore()`, unused — resolution goes through Dapr | `MockSecretStore(secrets)`, seeded from `OPENAPI_AUTH_HEADER` when set |
+| **State store** | `MockStateStore()` | Same | Same |
+| **Object store** | `create_local_store(store_root)` in the `InfrastructureContext`, plus `AtlanObservability._deployment_store = create_memory_store()` | Same | Same |
+| **Credential resolution** | Bypassed by design (inline) | Production `DaprCredentialVault` over an embedded `daprd` | `MockSecretStore` only |
+| **Executor shim** | `entry_point` present, passed a value | Parameter present (canonical shim), unused | Parameter present (canonical shim), unused |
+| **Env vars** | `ATLAN_APPLICATION_NAME`, `ATLAN_DEPLOYMENT_NAME=ci`, `APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR=false` — all `setdefault`, all pre-import | Both `ATLAN_*` pre-import; cleanup interceptor `setdefault` after the imports | Sets none of the three |
+| **Skips** | One `pytest.skip(…, allow_module_level=True)` when Docker is unreachable | None | None |
+| **Fixture scope** | All session | All session | All session except `large_spec_file` (module) — a ≥100 MiB stress payload for the large-spec tests, not the suite's source |
+
+Three of those are worth a decision:
+
+- **`MYSQL_HOST` is a live-source escape hatch — don't copy it.** `mysql_database` consults `_mysql_host_preconfigured()` first, which is nothing but `bool(os.environ.get("MYSQL_HOST"))`, and returns early:
+
+  ```python
+  if _mysql_host_preconfigured():
+      logger.info("Using preconfigured MySQL at %s", os.environ["MYSQL_HOST"])
+      yield
+      return
+  ```
+
+  The variable therefore wins over the testcontainer whenever it happens to be set, with no connectivity probe and nothing to tear down. `atlan-metabase-app` takes the opposite position explicitly in its module docstring — *"Integration tests ALWAYS use a local testcontainer — there's no external-Metabase escape hatch"* — and that is the one to follow.
+
+- **Self-skip when the engine is missing.** Recommended, and only `atlan-metabase-app` does it today: call `pytest.skip(…, allow_module_level=True)` from the fixture that owns the missing dependency. `mysql_database` instead yields anyway when neither `MYSQL_HOST` nor Docker is available, so every downstream test fails on a connection error rather than reporting a skip. Same rule as the `require_minio` pattern above.
+
+- **Pass a data converter unless you know you don't need one.** metabase and mysql both build `create_data_converter_for_app(App)` and hand it to `create_temporal_client`; openapi passes none. The converter is what carries the App's typed inputs and outputs across the workflow boundary, so if your contracts hold types Temporal's default JSON conversion does not round-trip, this divergence is the bug you would otherwise chase.
 
 ---
 

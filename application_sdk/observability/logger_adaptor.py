@@ -541,6 +541,21 @@ class InterceptHandler(logging.Handler):
     would never reach the exporter.
     """
 
+    def handle(self, record: logging.LogRecord) -> bool:
+        # ARUN-1218: forward into loguru WITHOUT holding the stdlib handler lock.
+        # loguru serializes its own writes, so this handler's lock buys nothing
+        # here; holding it is exactly what lets a third-party ``__del__`` /
+        # finalizer log -- emitted while the event loop already holds loguru's
+        # handler lock (e.g. during a GC pass inside an async-sink emit) -- invert
+        # the two locks (ABBA) and deadlock the worker. Not taking it removes that
+        # lock-ordering hazard for every logger routed through this handler.
+        # Filtering is preserved; ``emit`` forwards to loguru, which is itself
+        # thread-safe and non-reentrant (its own guard raises rather than blocks).
+        rv = self.filter(record)
+        if rv:
+            self.emit(record)
+        return bool(rv)
+
     def emit(self, record: logging.LogRecord) -> None:
         # Suppress stdlib/third-party logs emitted from within a replaying
         # workflow so they don't duplicate alongside SDK-adapter logs.
