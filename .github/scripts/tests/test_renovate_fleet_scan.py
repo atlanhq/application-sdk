@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import sys
 from pathlib import Path
@@ -554,7 +555,9 @@ def test_post_graphql_wraps_transport_errors_as_runtime_error(monkeypatch):
 
     monkeypatch.setattr(rfs.urllib.request, "urlopen", boom)
     try:
-        rfs._post_graphql("tok", {"query": "{}"})
+        # _post_graphql_once, not _post_graphql: the wrapping under test lives
+        # there now, and going through the retry wrapper would sleep for real.
+        rfs._post_graphql_once("tok", {"query": "{}"})
         assert False, "expected RuntimeError"
     except RuntimeError as exc:
         assert "name resolution failed" in str(exc)
@@ -568,7 +571,7 @@ def test_post_graphql_wraps_timeouts_as_runtime_error(monkeypatch):
 
     monkeypatch.setattr(rfs.urllib.request, "urlopen", boom)
     try:
-        rfs._post_graphql("tok", {"query": "{}"})
+        rfs._post_graphql_once("tok", {"query": "{}"})
         assert False, "expected RuntimeError"
     except RuntimeError as exc:
         assert "timed out" in str(exc)
@@ -585,3 +588,155 @@ def test_fetch_lock_texts_survives_a_transport_failure(capsys):
     assert rfs.fetch_lock_texts("tok", prs, flaky_post) == 0
     assert "uvLockText" not in prs[0]
     assert "could not read uv.lock" in capsys.readouterr().err
+
+
+# --- transient-failure retry (FND-909) ------------------------------------
+#
+# Every scheduled renovate-dashboard run failed for ten days straight, all with
+# `502 Bad Gateway` out of _post_graphql, because one transient GitHub-side
+# failure aborted the whole fleet pass. A pass issues on the order of a hundred
+# GraphQL calls, so meeting at least one 502 is close to certain.
+
+
+class _ScriptedPost:
+    """Stands in for _post_graphql_once, replaying a scripted list of outcomes.
+
+    Each item is either an exception to raise or a dict to return, so a test can
+    say "fail twice, then succeed" without touching the network.
+    """
+
+    def __init__(self, outcomes):
+        self.outcomes = list(outcomes)
+        self.calls = 0
+
+    def __call__(self, token, payload):
+        self.calls += 1
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+def _wrapped(status: int, reason: str = "Bad Gateway") -> RuntimeError:
+    """A RuntimeError shaped exactly as _post_graphql_once normalises an HTTPError."""
+    return RuntimeError(f"GraphQL request failed: {status} {reason}: <html>")
+
+
+def test_retries_past_a_502_and_succeeds(monkeypatch):
+    # The exact failure that took the dashboard down for ten days.
+    post = _ScriptedPost([_wrapped(502), _wrapped(502), {"data": {"ok": True}}])
+    monkeypatch.setattr(rfs, "_post_graphql_once", post)
+    slept = []
+
+    result = rfs._post_graphql("tok", {}, sleep=slept.append)
+
+    assert result == {"data": {"ok": True}}
+    assert post.calls == 3
+    assert slept == [1.0, 2.0]  # exponential, and it really did back off
+
+
+def test_retry_gives_up_at_the_attempt_cap(monkeypatch):
+    # A sustained outage still fails the run rather than retrying forever.
+    post = _ScriptedPost([_wrapped(502)] * rfs.GRAPHQL_ATTEMPTS)
+    monkeypatch.setattr(rfs, "_post_graphql_once", post)
+
+    try:
+        rfs._post_graphql("tok", {}, sleep=lambda _: None)
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "502" in str(exc)
+    assert post.calls == rfs.GRAPHQL_ATTEMPTS
+
+
+def test_retry_covers_every_transient_status(monkeypatch):
+    # 500/503/504 are the same class of GitHub-side blip as 502.
+    for status in (500, 503, 504):
+        post = _ScriptedPost([_wrapped(status), {"ok": 1}])
+        monkeypatch.setattr(rfs, "_post_graphql_once", post)
+
+        assert rfs._post_graphql("tok", {}, sleep=lambda _: None) == {"ok": 1}
+        assert post.calls == 2, f"{status} should have been retried"
+
+
+def test_does_not_retry_an_auth_failure(monkeypatch):
+    # A 401 fails identically every attempt; retrying only delays the report.
+    post = _ScriptedPost([_wrapped(401, "Unauthorized")])
+    monkeypatch.setattr(rfs, "_post_graphql_once", post)
+
+    try:
+        rfs._post_graphql("tok", {}, sleep=lambda _: None)
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "401" in str(exc)
+    assert post.calls == 1
+
+
+def test_does_not_retry_a_malformed_query(monkeypatch):
+    # 422 means the query is wrong — a human's problem, not the network's.
+    post = _ScriptedPost([_wrapped(422, "Unprocessable Entity")])
+    monkeypatch.setattr(rfs, "_post_graphql_once", post)
+
+    try:
+        rfs._post_graphql("tok", {}, sleep=lambda _: None)
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "422" in str(exc)
+    assert post.calls == 1
+
+
+def test_retries_a_transport_failure(monkeypatch):
+    # Connection reset / DNS blip carries no status but is the same transient.
+    post = _ScriptedPost(
+        [
+            RuntimeError("GraphQL request failed: <urlopen error [Errno 104] reset>"),
+            {"ok": 1},
+        ]
+    )
+    monkeypatch.setattr(rfs, "_post_graphql_once", post)
+
+    assert rfs._post_graphql("tok", {}, sleep=lambda _: None) == {"ok": 1}
+    assert post.calls == 2
+
+
+def test_retries_a_read_timeout(monkeypatch):
+    post = _ScriptedPost(
+        [
+            RuntimeError("GraphQL request failed: The read operation timed out"),
+            {"ok": 1},
+        ]
+    )
+    monkeypatch.setattr(rfs, "_post_graphql_once", post)
+
+    assert rfs._post_graphql("tok", {}, sleep=lambda _: None) == {"ok": 1}
+    assert post.calls == 2
+
+
+def test_a_successful_first_attempt_never_sleeps(monkeypatch):
+    # The happy path must not pay for the retry machinery.
+    post = _ScriptedPost([{"data": {}}])
+    monkeypatch.setattr(rfs, "_post_graphql_once", post)
+    slept = []
+
+    rfs._post_graphql("tok", {}, sleep=slept.append)
+
+    assert post.calls == 1
+    assert slept == []
+
+
+def test_retry_warns_so_a_degraded_run_is_visible(monkeypatch, capsys):
+    # A run that only succeeded after three retries is healthy-but-degraded, and
+    # worth seeing before it becomes a run that fails outright.
+    post = _ScriptedPost([_wrapped(502), {"ok": 1}])
+    monkeypatch.setattr(rfs, "_post_graphql_once", post)
+
+    rfs._post_graphql("tok", {}, sleep=lambda _: None)
+
+    assert "::warning::GraphQL attempt 1/4 failed" in capsys.readouterr().err
+
+
+def test_retry_is_wired_into_the_default_post_fn():
+    # fetch_all_prs and fetch_lock_texts default their `post` argument, so a fix
+    # that retried in a function nothing called would leave the outage in place.
+    for fn in (rfs.fetch_all_prs, rfs.fetch_lock_texts):
+        default = inspect.signature(fn).parameters["post"].default
+        assert default is rfs._post_graphql, f"{fn.__name__} bypasses the retry"
