@@ -32,6 +32,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -48,6 +49,22 @@ MAX_PAGES = 50
 # pre-filter it backs up should leave a handful of candidates fleet-wide, and
 # anything over the cap is reported rather than silently dropped.
 MAX_LOCK_FETCHES = 25
+
+# Transient GitHub-side failures. A fleet pass issues on the order of a hundred
+# GraphQL calls (paginated search plus one lock fetch per candidate), so the
+# chance of meeting at least one 502 approaches certainty — and before FND-909
+# a single one aborted the whole run. Every scheduled dashboard run failed this
+# way for ten days straight, all with `502 Bad Gateway` from _post_graphql.
+#
+# 5xx only. A 401/403 is a token problem and a 422 is a malformed query; both
+# would fail identically on every attempt, so retrying them only delays the
+# report of a fault that needs a human.
+_RETRYABLE_STATUS = frozenset({500, 502, 503, 504})
+GRAPHQL_ATTEMPTS = 4
+# 1s, 2s, 4s between the four attempts. Bounded at ~7s added latency in the worst
+# case, against a job that already runs for minutes — cheap enough that it is not
+# worth making configurable, and short enough not to mask a sustained outage.
+_BACKOFF_BASE_SECONDS = 1.0
 
 _OPEN_PR_FIELDS = """
 number
@@ -134,7 +151,8 @@ def build_graphql_payload(search_query: str, fields: str, after: Optional[str]) 
     return {"query": query}
 
 
-def _post_graphql(token: str, payload: dict) -> dict:
+def _post_graphql_once(token: str, payload: dict) -> dict:
+    """One GraphQL POST. Raises RuntimeError on any failure; see _post_graphql."""
     req = urllib.request.Request(
         GRAPHQL_URL,
         data=json.dumps(payload).encode(),
@@ -162,6 +180,56 @@ def _post_graphql(token: str, payload: dict) -> dict:
         raise RuntimeError(f"GraphQL request failed: {exc}") from exc
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"GraphQL response was not JSON: {exc}") from exc
+
+
+def _is_retryable(exc: RuntimeError) -> bool:
+    """Is this failure worth another attempt?
+
+    Matched on the message because _post_graphql_once has already normalised
+    every failure to RuntimeError — deliberately, so callers that degrade on one
+    need a single handler. Keeping that normalisation and re-deriving the status
+    here beats leaking HTTPError back out to every caller for the sake of retry.
+    """
+    text = str(exc)
+    if any(f"failed: {status} " in text for status in _RETRYABLE_STATUS):
+        return True
+    # Transport-level: connection reset, DNS blip, read timeout. None of these
+    # carry a status, and all are the same kind of transient as a 502.
+    return "failed: <urlopen error" in text or "timed out" in text.lower()
+
+
+def _post_graphql(
+    token: str,
+    payload: dict,
+    *,
+    attempts: int = GRAPHQL_ATTEMPTS,
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict:
+    """POST with bounded exponential backoff on transient GitHub failures.
+
+    ``sleep`` is injected so tests exercise the real retry path without wall-clock
+    delay — patching ``time.sleep`` globally would reach anything else running in
+    the same process.
+    """
+    last: RuntimeError
+    for attempt in range(1, attempts + 1):
+        try:
+            return _post_graphql_once(token, payload)
+        except RuntimeError as exc:
+            last = exc
+            if attempt == attempts or not _is_retryable(exc):
+                raise
+            delay = _BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+            # Visible in the job log: a run that succeeded only after three
+            # retries is healthy-but-degraded, and that is worth seeing before
+            # it becomes a run that fails outright.
+            print(
+                f"::warning::GraphQL attempt {attempt}/{attempts} failed "
+                f"({exc}); retrying in {delay:.0f}s",
+                file=sys.stderr,
+            )
+            sleep(delay)
+    raise last  # unreachable: the loop either returns or raises
 
 
 def fetch_all_prs(

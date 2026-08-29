@@ -40,34 +40,17 @@ from typing import Any
 import orjson
 
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.testing.volatile_fields import (
+    ENVIRONMENT_SCOPED_FIELDS,
+    ENVIRONMENT_SCOPED_NESTED_FIELDS,
+    RUN_VOLATILE_FIELDS,
+)
 
 logger = get_logger(__name__)
 
-# Fields that change between runs and should be ignored by default
-DEFAULT_IGNORED_FIELDS: set[str] = {
-    "qualifiedName",
-    "connectionQualifiedName",
-    "lastSyncWorkflowName",
-    "lastSyncRun",
-    "lastSyncRunAt",
-    "tenantId",
-    "connectionName",
-    "databaseQualifiedName",
-    "schemaQualifiedName",
-    "tableQualifiedName",
-    "viewQualifiedName",
-}
+DEFAULT_IGNORED_FIELDS: set[str] = set(RUN_VOLATILE_FIELDS | ENVIRONMENT_SCOPED_FIELDS)
 
-# Nested reference fields that contain run-specific qualified names
-DEFAULT_IGNORED_NESTED_FIELDS: set[str] = {
-    "atlanSchema",
-    "database",
-    "table",
-    "view",
-    "materialisedView",
-    "parentTable",
-    "tablePartition",
-}
+DEFAULT_IGNORED_NESTED_FIELDS: set[str] = set(ENVIRONMENT_SCOPED_NESTED_FIELDS)
 
 
 @dataclass

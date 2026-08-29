@@ -2181,6 +2181,76 @@ class TestInterceptHandlerStdlibBridge:
     forward those structured fields to loguru so they reach OTLP — without
     them, every ObjectStore success / failure log loses its dimensions."""
 
+    def test_handle_does_not_take_the_handler_lock(self) -> None:
+        """ARUN-1218 regression: ``handle`` must forward into loguru WITHOUT
+        holding the stdlib handler lock. Holding it is exactly what let a
+        third-party ``__del__`` / finalizer log invert against loguru's handler
+        lock (ABBA) and freeze the worker into a Temporal poison poller."""
+        import logging
+
+        from application_sdk.observability.logger_adaptor import InterceptHandler
+
+        handler = InterceptHandler()
+
+        class _BoomLock:  # any acquisition of the handler lock fails the test
+            def acquire(self, *args: Any, **kwargs: Any) -> bool:
+                raise AssertionError("handle() acquired the handler lock")
+
+            def release(self) -> None:
+                pass
+
+            def __enter__(self) -> "_BoomLock":
+                raise AssertionError("handle() entered the handler lock")
+
+            def __exit__(self, *exc: object) -> bool:
+                return False
+
+        handler.lock = _BoomLock()  # type: ignore[assignment]
+        record = logging.LogRecord(
+            name="third_party",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=1,
+            msg="m",
+            args=(),
+            exc_info=None,
+        )
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.logger"
+        ) as mock_log:
+            handler.handle(record)  # must not raise -- the lock is never taken
+
+        # still forwarded to loguru (emit ran)
+        mock_log.opt.return_value.bind.assert_called_once()
+
+    def test_handle_preserves_the_filter_gate(self) -> None:
+        """The reimplemented ``handle`` must still apply handler filters, so a
+        record a filter rejects is never forwarded (the 504-noise filter and
+        the workflow-replay suppression both depend on this)."""
+        import logging
+
+        from application_sdk.observability.logger_adaptor import InterceptHandler
+
+        handler = InterceptHandler()
+        handler.addFilter(lambda record: False)  # reject everything
+
+        record = logging.LogRecord(
+            name="third_party",
+            level=logging.WARNING,
+            pathname=__file__,
+            lineno=1,
+            msg="dropped",
+            args=(),
+            exc_info=None,
+        )
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.logger"
+        ) as mock_log:
+            result = handler.handle(record)
+
+        assert result is False
+        mock_log.opt.assert_not_called()  # filtered out -> never forwarded
+
     def test_reserved_attrs_set_includes_modern_python_fields(self) -> None:
         """Sanity check: the auto-derived reserved set covers all the
         well-known stdlib LogRecord fields, so the bridge doesn't accidentally

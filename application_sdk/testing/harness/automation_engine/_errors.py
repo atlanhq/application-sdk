@@ -205,10 +205,22 @@ class NoWorkerOnTaskQueueError(PreconditionError):
     remediation advice in the message — which queue to check, which agent name
     resolves to it — and that advice is precisely what could not come along into
     a shared primitive.
+
+    Attributes:
+        observed_pollers: What Temporal reports is actually polling the queue,
+            when the harness could ask. A *field* rather than more prose in the
+            message, because the two are different kinds of claim: everything in
+            the message is inferred from three minutes of silence, and this is
+            observed. A report that mixes them cannot tell a reader which half
+            to trust, and ``None`` — the default, and what a connector CI leg
+            with no route to the tenant's frontend always gets — says the
+            inference is all there is. See
+            :meth:`application_sdk.testing.e2e.base.BaseE2ETest._observed_pollers`.
     """
 
     code: ClassVar[str] = "PRECONDITION_NO_WORKER_ON_TASK_QUEUE"
     expected_state: str | None = "a worker polling the extract task queue"
+    observed_pollers: str | None = None
 
 
 @dataclass(kw_only=True)

@@ -125,6 +125,7 @@ def collect_import_provenance(tree: ast.AST) -> ImportProvenance:
             ):
                 for alias in node.names:
                     sdk_contracts.add(alias.asname or alias.name)
+                    sdk_contracts.add(alias.name)
 
         elif isinstance(node, ast.Import):
             for alias in node.names:

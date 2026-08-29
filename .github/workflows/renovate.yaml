@@ -155,7 +155,7 @@ jobs:
       # uv.lock AND by the driver's `uvx ruff` formatting of generated Python.
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.6"
+          version: "0.12.7"
 
       # Version omitted deliberately: this job has no pkl pin of its own, so it
       # tracks the action's fleet-wide default rather than reintroducing a
@@ -172,6 +172,28 @@ jobs:
         # Exact pin for reproducibility; bump deliberately (Renovate releases
         # multiple times a week). Keep in step with the setup-node version above.
         run: npm install -g renovate@43.265.3
+
+      # Reap a lock-maintenance branch whose refusal will clear itself, so this
+      # pass rebuilds it. Ordered immediately before Renovate on purpose: the
+      # branch is deleted and recreated inside one job, so the repo is never
+      # left without a lock PR and the PR timeline shows no delete/recreate
+      # churn. Only refusals stamped `window-empty` are reaped — a yanked pin or
+      # an unsatisfiable floor keeps its tripwire and stays red for a human,
+      # because recycling one of those every four hours would hide it. Never
+      # fails the job: Renovate runs regardless, so a reaper outage costs one
+      # cycle of recovery latency, not the lock refresh (FND-909).
+      - name: Reap self-healing lock refusals
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          # Both passed as env rather than interpolated into `run:`. TARGET_REPO
+          # keeps a matrix value out of the shell line, and RENOVATE_DRY_RUN is
+          # what stops a dry run deleting real branches: the job-level default
+          # is the literal 'null' for a live run, and the script treats anything
+          # else as --dry-run. Resolving that inside the script keeps the `run:`
+          # line branch-free, per docs/standards/ci.md.
+          TARGET_REPO: ${{ matrix.repo }}
+          RENOVATE_DRY_RUN: ${{ env.RENOVATE_DRY_RUN }}
+        run: python3 .github/scripts/renovate_reap_refused_locks.py
 
       - name: Run Renovate
         env:

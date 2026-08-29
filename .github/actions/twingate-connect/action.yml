@@ -1,0 +1,145 @@
+name: 'Twingate Connect'
+description: >
+  Connect the runner to Twingate with a service-account key, then verify the
+  tunnel actually reaches the dispatch target. Drop-in alternative to
+  globalprotect-connect: same mothership-url probe, same `connected` output.
+
+  Why this exists: GlobalProtect authenticates CI as a *human* against a /24
+  DHCP pool capped at ~252 concurrent sessions, shared with every engineer on
+  the VPN. Runs fail with `Assign private IP address failed` when the pool is
+  full, which is unrelated to whether the review itself would have passed.
+  A Twingate service account has no pool - it is a machine identity scoped to
+  the specific resources this workflow needs.
+
+inputs:
+  service-key:
+    description: >
+      Twingate service-account key (the JSON blob shown once at key creation).
+      Store as an Actions secret; never inline it.
+    required: true
+  mothership-url:
+    description: >
+      Host probed once the tunnel is up. The probe is the success criterion:
+      a connected client does not by itself prove the private host is
+      reachable. (Probing an unrelated host is precisely the bug #2577 fixed
+      for globalprotect-connect - kept that lesson here.)
+    required: false
+    default: 'https://mothership.atlan.dev'
+  probe-attempts:
+    description: 'How many times to poll the probe target before giving up.'
+    required: false
+    default: '6'
+
+outputs:
+  connected:
+    description: "'true' when the tunnel is up and the probe returned 200."
+    value: ${{ steps.connect.outputs.connected }}
+
+runs:
+  using: composite
+  steps:
+    # Twingate publish an official GitHub Action (twingate/github-action), but
+    # docs/standards/ci.md requires third-party actions to be SHA-pinned and
+    # this is their documented manual recipe, which is the same three commands
+    # with no extra supply-chain surface. Kept as shell for that reason.
+    - name: Connect to Twingate and verify reachability
+      id: connect
+      shell: bash
+      env:
+        # Passed via env rather than ${{ }} interpolation so the key never
+        # appears in the script as shell source text.
+        TWINGATE_SERVICE_KEY: ${{ inputs.service-key }}
+        MOTHERSHIP_URL: ${{ inputs.mothership-url }}
+        PROBE_ATTEMPTS: ${{ inputs.probe-attempts }}
+      run: |
+        set -uo pipefail
+
+        # An unset repo variable arrives as an EMPTY STRING, which overrides the
+        # action's `default:` (GitHub only applies defaults for omitted inputs).
+        # Without this the probe URL becomes "/health" and every attempt fails,
+        # which reads as "Twingate is broken" when the tunnel is fine.
+        MOTHERSHIP_URL="${MOTHERSHIP_URL:-https://mothership.atlan.dev}"
+
+        if [ -z "${TWINGATE_SERVICE_KEY}" ]; then
+          echo "::error::service-key resolved empty. Add TWINGATE_SERVICE_KEY to this repo's Actions secrets (Settings -> Secrets and variables -> Actions)."
+          exit 1
+        fi
+
+        echo "::group::Install Twingate client"
+        # signed-by, not trusted=yes. This is the install path Twingate's own
+        # Linux docs use; the trusted=yes form in their CI snippet disables
+        # signature verification for a package that then runs as root and
+        # creates network interfaces on the runner.
+        curl -fsSL https://packages.twingate.com/apt/gpg.key \
+          | sudo gpg --dearmor -o /usr/share/keyrings/twingate-client-keyring.gpg || {
+            echo "::error::could not fetch the Twingate signing key."; exit 1; }
+        echo "deb [signed-by=/usr/share/keyrings/twingate-client-keyring.gpg] https://packages.twingate.com/apt/ * *" \
+          | sudo tee /etc/apt/sources.list.d/twingate.list >/dev/null
+        # Refresh only the Twingate list. A full `apt-get update` pulls every
+        # repo the runner image ships and fails the step if any one of them is
+        # having a bad day - unrelated to us.
+        sudo apt-get update -yq \
+          -o Dir::Etc::sourcelist="sources.list.d/twingate.list" \
+          -o Dir::Etc::sourceparts="-" \
+          -o APT::Get::List-Cleanup="0" || {
+            echo "::error::apt-get update failed for the Twingate repo."; exit 1; }
+        sudo apt-get install -yq twingate || {
+            echo "::error::twingate package failed to install."; exit 1; }
+        echo "::endgroup::"
+
+        # Snapshot before the client rewrites resolvers, so the failure path
+        # can put the runner back the way it found it.
+        sudo cp /etc/resolv.conf /tmp/resolv.conf.pre-twingate || true
+
+        # A failed probe must not leave tun0, its routes and its resolvers in
+        # place: openconnect then builds the GlobalProtect tunnel on the same
+        # runner, and two clients fighting over routing and DNS is how a
+        # working fallback becomes a broken one. The failure path has to be
+        # clean, not merely non-zero - otherwise the "cannot make things worse
+        # than main" property this PR claims is not actually true.
+        teardown() {
+          echo "::group::Teardown before GlobalProtect fallback"
+          sudo twingate stop || true
+          sudo cp /tmp/resolv.conf.pre-twingate /etc/resolv.conf || true
+          echo "::endgroup::"
+        }
+
+        echo "::group::Start headless client"
+        # Checked explicitly: the script deliberately does not `set -e`, so an
+        # unchecked failure here would fall through to the probe and be reported
+        # as "reachability failed" - the wrong diagnosis, which is the exact
+        # class of bug #2577 fixed for globalprotect-connect.
+        printf '%s' "${TWINGATE_SERVICE_KEY}" | sudo twingate setup --headless=- || {
+            echo "::error::twingate setup failed - the service key was rejected."; teardown; exit 1; }
+        sudo twingate start || {
+            echo "::error::twingate start failed."; teardown; exit 1; }
+
+        # glibc's resolver sends parallel A/AAAA queries and stalls for 5s when
+        # the server answers out of order. Twingate document this; without the
+        # fix the probe below intermittently looks like a flaky network.
+        grep -q '^options single-request' /etc/resolv.conf \
+          || echo 'options single-request' | sudo tee -a /etc/resolv.conf >/dev/null
+
+        twingate status || true
+        echo "::endgroup::"
+
+        echo "Probing ${MOTHERSHIP_URL}/health"
+        for i in $(seq 1 "${PROBE_ATTEMPTS}"); do
+          code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${MOTHERSHIP_URL}/health" || echo 000)"
+          if [ "${code}" = "200" ]; then
+            echo "connected=true" >> "$GITHUB_OUTPUT"
+            echo "Tunnel up and ${MOTHERSHIP_URL} reachable (attempt ${i})."
+            exit 0
+          fi
+          echo "  attempt ${i}/${PROBE_ATTEMPTS}: HTTP ${code}"
+          sleep 3
+        done
+
+        echo "connected=false" >> "$GITHUB_OUTPUT"
+        echo "::error::Twingate started but ${MOTHERSHIP_URL}/health never returned 200. Falling back to GlobalProtect."
+        echo "::group::Diagnostics"
+        twingate status || true
+        sudo journalctl -u twingate --no-pager -n 50 2>/dev/null || true
+        echo "::endgroup::"
+        teardown
+        exit 1
