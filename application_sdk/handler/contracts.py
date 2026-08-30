@@ -375,8 +375,11 @@ class PreflightCheck(BaseModel):
     / suggested_action and a redacted, capped ``cause_repr``. Takes precedence over
     :attr:`message`. Ignored on a passed check."""
 
-    duration_ms: float = 0.0
-    """How long the check took in milliseconds."""
+    duration_ms: float = -1.0
+    """How long the check took in milliseconds. ``-1.0`` means not measured —
+    the default is a sentinel, not an elapsed time, so an unset value is never
+    mistaken for an instant check. Kept non-optional (not ``None``) so the key
+    survives ``exclude_none`` dumps and stays numeric for ClickHouse readers."""
 
     @field_validator("error", mode="before")
     @classmethod

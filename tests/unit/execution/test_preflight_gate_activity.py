@@ -982,21 +982,24 @@ class TestPreflightGateOutcomeEvent:
             }
         ]
 
-    async def test_check_matrix_nonfinite_duration_coerced(self) -> None:
-        # orjson emits null for nan/inf; we normalize to 0.0 so the ClickHouse
-        # row stays numeric, never raised (a raise here would fail the gate
-        # open and lose the whole event).
+    async def test_check_matrix_implausible_duration_coerced_to_sentinel(self) -> None:
+        # nan/inf (orjson would emit null) and negatives collapse to the -1.0
+        # "not measured" sentinel so the ClickHouse row stays numeric and
+        # garbage never reads as a real duration; never raised (a raise here
+        # would fail the gate open and lose the whole event).
         out = PreflightOutput(
             status=PreflightStatus.PARTIAL,
             checks=[
                 PreflightCheck(name="auth", passed=False, duration_ms=float("nan")),
                 PreflightCheck(name="tables", passed=True, duration_ms=float("inf")),
+                PreflightCheck(name="views", passed=True, duration_ms=-52.0),
+                PreflightCheck(name="perms", passed=True),
             ],
         )
         with mock.patch(_LOGGER) as ml:
             await _verdict_gate(out)(PreflightGateInput())
         matrix = json.loads(_outcome_event(ml)[CHECK_MATRIX_KEY])  # must parse
-        assert [row["duration_ms"] for row in matrix] == [0.0, 0.0]
+        assert [row["duration_ms"] for row in matrix] == [-1.0, -1.0, -1.0, -1.0]
 
     async def test_check_matrix_empty_checks(self) -> None:
         out = PreflightOutput(status=PreflightStatus.READY, checks=[])
