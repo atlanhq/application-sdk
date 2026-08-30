@@ -781,6 +781,7 @@ amends "src/App.pkl"
 
 name = "stream-cfg-app"
 displayName = "Stream Cfg App"
+streamingWorkflowTypeOverride = "stream-cfg-app:cdc-stream"
 icon = "https://example.com/icon.svg"
 hasCredentialConfig = false
 pipeline { publish = null }
@@ -838,6 +839,59 @@ check_streaming_throw \
         batchWaitSeconds = 2.5
       }" \
   "meaningless at batchSize = 1"
+
+# Streaming triggers whose DAG has no streaming workflow type: AE would signal the
+# shard, the shard would dispatch the BATCH workflow with no events in its arguments,
+# and nothing would error. Observed end-to-end on a tenant before this check existed.
+check_streaming_throw_nowftype() {
+  local label="$1" expect="$2"
+  local BAD_CONTRACT OUT_DIR ERR_MSG
+  BAD_CONTRACT="$(mktemp "$REPO_ROOT/test-stream-XXXXXX.pkl")"
+  OUT_DIR="$(mktemp -d "$REPO_ROOT/test-stream-out-XXXXXX")"
+  sed -e 's|^streamingWorkflowTypeOverride.*$||' /dev/null > /dev/null 2>&1 || true
+  cat > "$BAD_CONTRACT" << 'PKLEOF'
+amends "src/App.pkl"
+
+name = "stream-nowftype-app"
+displayName = "Stream NoWfType App"
+icon = "https://example.com/icon.svg"
+hasCredentialConfig = false
+pipeline { publish = null }
+
+uiConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["target"] = new TextInput { title = "Target" }
+      }
+    }
+  }
+}
+
+events {
+  new EventTriggerSpec {
+    name = "cdc"
+    source = new EventSource { name = "atlan-kafka"; topic = "example.cdc" }
+    triggerConfig = new EventTriggerConfig {
+      streaming { enabled = true }
+    }
+  }
+}
+PKLEOF
+  ERR_MSG="$(cd "$REPO_ROOT" && pkl eval -m "$OUT_DIR" "$BAD_CONTRACT" 2>&1 || true)"
+  if echo "$ERR_MSG" | grep -q "$expect"; then
+    echo "  ok: $label"
+  else
+    echo "FAIL: $label"
+    echo "$ERR_MSG" | head -5
+    fail=1
+  fi
+  rm -f "$BAD_CONTRACT"; rm -rf "$OUT_DIR"
+}
+
+check_streaming_throw_nowftype \
+  "streaming without streamingWorkflowTypeOverride should throw" \
+  "no streamingWorkflowTypeOverride"
 
 # ackPaths is an at-least-once durability assertion; the streaming path writes no
 # acks and has no watchdog backstop, so declaring both must be refused rather than

@@ -33,6 +33,12 @@ local function appCfg(app) = triggerCfgAt(app, "app/generated/manifest.json")
 
 local function nativeCfg(app) = triggerCfgAt(app, "manifest.json")
 
+// The DAG's extract node — where the streaming/batch workflow-type split shows up.
+local function dagAt(app, path: String) =
+  parser.parse(app.output.files!![path].text)["dag"]
+
+local function appDag(app) = dagAt(app, "app/generated/manifest.json")
+
 local appUiConfig = new App.UIConfig {
   tasks {
     ["Configuration"] {
@@ -50,6 +56,7 @@ local appUiConfig = new App.UIConfig {
 
 // Real-time streaming: opted in, batching left at the default (one event per DAG run).
 local appStreamingRealtime = (App) {
+  streamingWorkflowTypeOverride = "example-app:cdc-stream"
   name = "app-streaming-realtime"
   displayName = "App Streaming Realtime"
   icon = "https://example.com/icon.svg"
@@ -73,6 +80,7 @@ local appStreamingRealtime = (App) {
 
 // Batched streaming: trades per-event latency for fewer, cheaper DAG walks.
 local appStreamingBatched = (App) {
+  streamingWorkflowTypeOverride = "example-app:cdc-stream"
   name = "app-streaming-batched"
   displayName = "App Streaming Batched"
   icon = "https://example.com/icon.svg"
@@ -130,6 +138,7 @@ local appNoStreamCfg = appCfg(appNoStreaming)
 // ── NativeApp.pkl ─────────────────────────────────────────────────────────
 
 local nativeStreamingRealtime = (NativeApp) {
+  streamingWorkflowTypeOverride = "native-app:cdc-stream"
   name = "native-streaming-realtime"
   displayName = "Native Streaming Realtime"
   connector = Connectors.API
@@ -154,6 +163,7 @@ local nativeStreamingRealtime = (NativeApp) {
 }
 
 local nativeStreamingBatched = (NativeApp) {
+  streamingWorkflowTypeOverride = "native-app:cdc-stream"
   name = "native-streaming-batched"
   displayName = "Native Streaming Batched"
   connector = Connectors.API
@@ -330,6 +340,28 @@ facts {
 
   ["max_retries is still rendered without streaming"] {
     appNoStreamCfg.containsKey("max_retries")
+  }
+
+  // The gap this closes, found end-to-end on a tenant: streaming was on, the DAG
+  // still dispatched the batch workflow type with no events in its arguments, and
+  // nothing errored — the shard ran and applied nothing.
+  ["streaming DAG dispatches the streaming workflow type"] {
+    appDag(appStreamingRealtime)["extract"]["inputs"]["workflow_type"] == "example-app:cdc-stream"
+  }
+
+  ["streaming DAG passes the event batch to the child"] {
+    appDag(appStreamingRealtime)["extract"]["inputs"]["args"]["batch"] == "$.event.batch"
+  }
+
+  ["a non-streaming DAG keeps the batch workflow type and no batch arg"] {
+    appDag(appNoStreaming)["extract"]["inputs"]["workflow_type"] != "example-app:cdc-stream"
+    !appDag(appNoStreaming)["extract"]["inputs"]["args"].containsKey("batch")
+  }
+
+  ["streaming without a streaming workflow type is refused"] {
+    module.catch(() -> appDag((appStreamingRealtime) {
+      streamingWorkflowTypeOverride = null
+    })) != null
   }
 
   ["both schemas render the same streaming shape"] {

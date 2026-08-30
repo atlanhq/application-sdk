@@ -191,7 +191,28 @@ under `streaming` and is meaningless outside AE's current implementation.
 | `streaming.batchWaitSeconds` | `Number` (≥ 0) | `0` | Max wait for a batch to fill before running with whatever accumulated. |
 | `streaming.eventsPerSignal` | `Int` (1–1000) | `500` | How many events the consumer packs into one signal to the shard. |
 
+The entrypoint also needs **`streamingWorkflowTypeOverride`** — the workflow type the
+DAG dispatches when any of its triggers stream:
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `streamingWorkflowTypeOverride` | `String?` | `null` | Workflow type dispatched under streaming. **Required** when any trigger sets `streaming.enabled`. |
+
+Streaming is a different execution, not a faster one: the batch shell's workflow reads
+the entrypoint's Iceberg events table, while the streaming shard hands the DAG its
+events inline and never writes that table. Those are two different workflow types in
+the app, so one `workflowTypeOverride` cannot serve both. When streaming is on, the
+extract node renders this type and gains `args.batch = "$.event.batch"`.
+
+Omitting it is refused at eval time. Without that refusal the failure is silent and
+was observed end to end on a tenant: AE signals the shard, the shard runs the DAG, the
+**batch** workflow starts with no events in its arguments, and nothing reports an
+error — streaming is on in name only.
+
 ```pkl
+// Required whenever any trigger below streams.
+streamingWorkflowTypeOverride = "example-app:cdc-stream"
+
 events {
   // Real-time: one event, one DAG walk.
   new EventTriggerSpec {
@@ -257,6 +278,8 @@ its events inline from the `$.event.*` jsonpath namespace:
   shares one shard and is processed sequentially. Several high-volume topics on one
   entrypoint therefore queue behind each other.
 - There is no watchdog backstop on this path. A dropped signal is not retried.
+- The streaming DAG receives its events at `args.batch` (`$.event.batch`) and must not
+  expect to read the Iceberg events table — the streaming path never writes it.
 
 (Same field/behaviour exists on the legacy `NativeApp.pkl`.)
 

@@ -79,6 +79,31 @@ workflowType: String = ""
 ///     App.pkl:   workflowType = "teradata-app:crawler"
 workflowTypeOverride: String?
 
+/// Workflow type the DAG dispatches when this entrypoint's event triggers use AE's
+/// streaming shell (`EventTriggerConfig.streaming.enabled`).
+///
+/// Streaming is a genuinely different execution: the batch shell's workflow reads the
+/// entrypoint's Iceberg events table, while the streaming shard hands the DAG its
+/// events inline and never writes that table. Those are two different workflow types
+/// in the app, so one `workflowTypeOverride` cannot serve both — and an entrypoint
+/// whose triggers stream while its DAG still dispatches the batch type is the worst
+/// available outcome: AE signals the shard, the shard runs the DAG, the batch
+/// workflow starts with no events in its arguments, and nothing reports an error.
+/// Observed end-to-end on a tenant before this field existed.
+///
+/// When set, and when at least one event trigger has `streaming.enabled`, the extract
+/// node renders this workflow type and gains `args.batch = "$.event.batch"` — the
+/// list of `{id, topic, data}` envelopes the shard delivers.
+streamingWorkflowTypeOverride: String?
+
+/// Refuses the silent mismatch described above: triggers that stream, with no
+/// streaming workflow type for the DAG to dispatch.
+hidden _streamingEntrypointCheck: Any =
+  if (events.toList().any((e) -> e.triggerConfig.streaming.enabled)
+      && (streamingWorkflowTypeOverride == null || streamingWorkflowTypeOverride!! == ""))
+    throw("This entrypoint has event trigger(s) with streaming.enabled = true but no streamingWorkflowTypeOverride. AE would signal the streaming shard, which would then dispatch the batch workflow type with no events in its arguments — silently applying nothing. Set streamingWorkflowTypeOverride to the app's streaming workflow type (e.g. \"my-app:my-entrypoint-stream\").")
+  else null
+
 /// Validation: at least one of workflowType or workflowTypeOverride must be non-empty.
 local _validateWorkflowType =
   if (workflowType == "" && (workflowTypeOverride == null || workflowTypeOverride!! == ""))
@@ -2959,7 +2984,9 @@ local function renderNodeArgs(node: DAGNode): Mapping<String, Any> =
 
 local function generateExtractNode(): Mapping<String, Any> =
   let (_extractEhCheck = validateWorkflowNodeErrorHandling(extractNodeErrorHandling, "extractNodeErrorHandling"))
+  let (_streamingEpCheck = _streamingEntrypointCheck)
   let (topLevelFormFields = manifestTopLevelArgs.toMap().values.toList())
+  let (_isStreaming = events.toList().any((e) -> e.triggerConfig.streaming.enabled))
   new Mapping {
     ["activity_name"] = "execute_workflow"
     ["activity_display_name"] = extractActivityDisplayName ?? "Extract \(displayName) Metadata"
@@ -2970,12 +2997,17 @@ local function generateExtractNode(): Mapping<String, Any> =
     // (#2271); bake it here as App.pkl does, or it stays literal in the DAG.
     ["app_name"] = name
     ["inputs"] = new Mapping {
-      ["workflow_type"] = workflowTypeResolved
+      ["workflow_type"] = if (_isStreaming) streamingWorkflowTypeOverride!! else workflowTypeResolved
       ["app_name"] = name
       ["app_id"] = ""
       ["argo_workflow_slug"] = ""
       ["task_queue"] = "\(taskQueuePrefix)-{deployment_name}"
       ["args"] = new Mapping {
+        // The streaming shard hands the DAG its events inline; nothing else does.
+        // Without this the streaming workflow starts with no events to apply.
+        when (_isStreaming) {
+          ["batch"] = "$.event.batch"
+        }
         // CNCT-93: extract-node app_name is the contract identity (`name`, the
         // same value baked at `app_name` above and into ATLAN_APPLICATION_NAME),
         // and it is authoritative — a tenant-typed form value must not replace it

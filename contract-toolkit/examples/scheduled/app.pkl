@@ -56,6 +56,10 @@ schedules {
 }
 
 // Event triggers on the same entrypoint → one AE workflow carrying both `schedules`
+// Streaming dispatches a different workflow than the batch shell: the shard hands
+// the DAG its events inline, so the app runs its stream variant.
+streamingWorkflowTypeOverride = "example-app:cdc-stream"
+
 // and `events` in a single `triggers` block. Each renders to AE's EventTrigger shape;
 // `name` must be unique within the entrypoint (enforced at eval time). `ackPaths` are
 // JSONPaths against the run's node outputs; AE requires them non-empty — the default
