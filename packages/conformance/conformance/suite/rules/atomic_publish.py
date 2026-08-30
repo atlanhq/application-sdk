@@ -57,7 +57,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="storage-atomicity",
         autofixable=False,
         orthogonal_gate="tests",
-        since="0.24.0",
+        since="0.25.0",
         rationale=(
             "os.open with O_TRUNC truncates the destination at open time and "
             "streams bytes into it in place, so any concurrent reader — another "

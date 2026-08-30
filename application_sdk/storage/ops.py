@@ -69,6 +69,7 @@ if TYPE_CHECKING:
 
     JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 
+from application_sdk._runtime.offload import run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.common._listing import PARTIAL_DIRNAME
 from application_sdk.observability.logger_adaptor import get_logger
@@ -958,56 +959,72 @@ async def download_file(
 
     bytes_written = 0
     tmp_name: str | None = None
+    published = False
     try:
-        staging_dir = path.parent / PARTIAL_DIRNAME
-        os.makedirs(staging_dir, exist_ok=True)
-        fd, tmp_name = tempfile.mkstemp(dir=str(staging_dir), prefix=path.name + ".")
-        from application_sdk.constants import (  # noqa: PLC0415
-            STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
-        )
+        try:
+            staging_dir = path.parent / PARTIAL_DIRNAME
+            # mode hardens only the first creation (ignored when the directory
+            # exists) — it keeps a staging dir under a shared temp root private.
+            os.makedirs(staging_dir, mode=0o700, exist_ok=True)
+            fd, tmp_name = tempfile.mkstemp(
+                dir=str(staging_dir), prefix=path.name + "."
+            )
+            from application_sdk.constants import (  # noqa: PLC0415
+                STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
+            )
 
-        last_progress = started
-        with os.fdopen(fd, "wb") as fh:
-            async for chunk in result.stream(min_chunk_size=min_chunk_size):
-                raw = bytes(chunk)
-                fh.write(raw)
-                bytes_written += len(raw)
-                if h is not None:
-                    h.update(raw)
-                # One streamed chunk landed on disk — see the matching mark in
-                # upload_file for why this is per chunk and ungated.
-                current_progress_tracker().mark_progress("storage.download_chunk")
-                if _progress_interval > 0:
-                    now = time.monotonic()
-                    if now - last_progress >= _progress_interval:
-                        _log_transfer_progress(
-                            "download",
-                            key,
-                            bytes_so_far=bytes_written,
-                            elapsed_ms=(now - started) * 1000.0,
-                        )
-                        last_progress = now
-    # conformance: ignore[E004] file-write error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
-    except Exception as exc:
-        if tmp_name is not None:
+            last_progress = started
+            with os.fdopen(fd, "wb") as fh:
+                async for chunk in result.stream(min_chunk_size=min_chunk_size):
+                    raw = bytes(chunk)
+                    fh.write(raw)
+                    bytes_written += len(raw)
+                    if h is not None:
+                        h.update(raw)
+                    # One streamed chunk landed on disk — see the matching mark in
+                    # upload_file for why this is per chunk and ungated.
+                    current_progress_tracker().mark_progress("storage.download_chunk")
+                    if _progress_interval > 0:
+                        now = time.monotonic()
+                        if now - last_progress >= _progress_interval:
+                            _log_transfer_progress(
+                                "download",
+                                key,
+                                bytes_so_far=bytes_written,
+                                elapsed_ms=(now - started) * 1000.0,
+                            )
+                            last_progress = now
+                # fsync before the publish: on a delayed-allocation filesystem
+                # ENOSPC can surface only at writeback, and without this a
+                # short file would be published as complete (the FND-318
+                # argument). Offloaded so a large flush does not hold the
+                # event loop and the activity heartbeat with it.
+                fh.flush()
+                await run_in_thread(os.fsync, fh.fileno())
+            os.replace(tmp_name, path)
+            published = True
+        # conformance: ignore[E004] file-write error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
+        except Exception as exc:
+            elapsed_ms = (time.monotonic() - started) * 1000.0
+            _log_storage_event(
+                logging.WARNING,
+                "download",
+                key,
+                outcome="failure",
+                elapsed_ms=elapsed_ms,
+                size_bytes=bytes_written,
+                error_class=_exc_class_name(exc),
+            )
+            from application_sdk.storage.errors import StorageError  # noqa: PLC0415
+
+            raise StorageError(
+                f"Failed to write downloaded file to '{local_path}'", key=key, cause=exc
+            ) from exc
+    finally:
+        # BaseException-safe: a Temporal cancel or worker shutdown must not
+        # strand a uniquely-named staging file per attempt.
+        if not published and tmp_name is not None:
             Path(tmp_name).unlink(missing_ok=True)
-        elapsed_ms = (time.monotonic() - started) * 1000.0
-        _log_storage_event(
-            logging.WARNING,
-            "download",
-            key,
-            outcome="failure",
-            elapsed_ms=elapsed_ms,
-            size_bytes=bytes_written,
-            error_class=_exc_class_name(exc),
-        )
-        from application_sdk.storage.errors import StorageError  # noqa: PLC0415
-
-        raise StorageError(
-            f"Failed to write downloaded file to '{local_path}'", key=key, cause=exc
-        ) from exc
-
-    os.replace(tmp_name, path)
 
     elapsed_ms = (time.monotonic() - started) * 1000.0
     _log_storage_event(

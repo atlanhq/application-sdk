@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING
 import obstore
 import orjson
 
+from application_sdk._runtime.offload import run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.common._listing import PARTIAL_DIRNAME
 from application_sdk.observability.logger_adaptor import get_logger
@@ -119,8 +120,13 @@ def _save_transfer_state(state_path: Path, state: dict) -> None:
 
 
 def _discard_transfer_state(path: Path) -> None:
-    """Remove the data file, its in-flight part file and state sidecar (best-effort)."""
-    path.unlink(missing_ok=True)
+    """Remove the in-flight part file and checkpoint sidecar (best-effort).
+
+    The destination itself is left alone: it only ever holds a previously
+    published complete generation, which stays valid — and stays useful to
+    its readers — even when the stored object was rewritten (412) or deleted
+    (404) mid-download (CONNECT-1126).
+    """
     _part_path(path).unlink(missing_ok=True)
     _transfer_state_path(path).unlink(missing_ok=True)
 
@@ -513,9 +519,12 @@ async def download_file_chunked(
 
         # Small files: delegate to the single-stream path so they still use the
         # streaming GET (avoids materialising the whole body via range GETs).
-        # Drop any stale checkpoint from an earlier, larger object generation.
+        # Drop any stale checkpoint and part file from an earlier, larger
+        # object generation — the delegate never opens the part file, so
+        # nothing else would ever remove it.
         if size <= chunk_size_bytes:
             state_path.unlink(missing_ok=True)
+            part.unlink(missing_ok=True)
             return await download_file(
                 key,
                 local_path,
@@ -575,7 +584,7 @@ async def download_file_chunked(
             | (0 if resuming else os.O_TRUNC)
             | getattr(os, "O_BINARY", 0)
         )
-        os.makedirs(part.parent, exist_ok=True)
+        os.makedirs(part.parent, mode=0o700, exist_ok=True)
         fd = os.open(str(part), flags, 0o600)
         try:
             os.ftruncate(fd, size)
@@ -687,11 +696,38 @@ async def download_file_chunked(
             os.close(fd)
             raise
         else:
-            os.close(fd)
-            # Success: the checkpoint's existence means "incomplete" — remove
-            # it, then atomically publish the complete file at the destination.
-            state_path.unlink(missing_ok=True)
-            os.replace(part, path)
+            # Success: fsync so a delayed-allocation ENOSPC surfaces here
+            # rather than publishing a short file (offloaded — a multi-GB
+            # flush must not hold the event loop and the heartbeat with it),
+            # remove the checkpoint (its existence means "incomplete"), then
+            # atomically publish the complete file at the destination.
+            # conformance: ignore[E004] publish error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
+            try:
+                try:
+                    await run_in_thread(os.fsync, fd)
+                finally:
+                    os.close(fd)
+                state_path.unlink(missing_ok=True)
+                os.replace(part, path)
+            except Exception as exc:
+                _log_storage_event(
+                    logging.WARNING,
+                    "download",
+                    key,
+                    outcome="failure",
+                    elapsed_ms=(time.monotonic() - started) * 1000.0,
+                    size_bytes=progress.fetched_bytes,
+                    error_class=_exc_class_name(exc),
+                )
+                from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+                    StorageError,
+                )
+
+                raise StorageError(
+                    f"Failed to publish downloaded file to '{local_path}'",
+                    key=key,
+                    cause=exc,
+                ) from exc
             _log_storage_event(
                 logging.DEBUG,
                 "download",

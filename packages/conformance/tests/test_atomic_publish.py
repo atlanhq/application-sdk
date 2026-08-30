@@ -91,6 +91,53 @@ def test_p048_flags_variable_still_passes_with_a_publish() -> None:
     assert _rule(src) == []
 
 
+def test_p048_is_not_cleared_by_a_lambda_that_publishes() -> None:
+    src = (
+        "import os\n"
+        "def download(path):\n"
+        "    pub = lambda a, b: os.replace(a, b)\n"
+        "    fd = os.open(path, os.O_WRONLY | os.O_TRUNC)\n"
+    )
+    fs = _rule(src)
+    assert len(fs) == 1 and fs[0].line == 4
+
+
+def test_p048_parameter_shadows_an_outer_tainted_name() -> None:
+    """A module-level tainted ``flags`` must not condemn a function whose own
+    ``flags`` parameter is a different binding."""
+    src = (
+        "import os\n"
+        "flags = os.O_WRONLY | os.O_TRUNC\n"
+        "def f(path, flags):\n"
+        "    fd = os.open(path, flags)\n"
+    )
+    assert _rule(src) == []
+
+
+def test_p048_clean_rebinding_shadows_an_outer_tainted_name() -> None:
+    src = (
+        "import os\n"
+        "flags = os.O_WRONLY | os.O_TRUNC\n"
+        "def f(path):\n"
+        "    flags = os.O_WRONLY | os.O_CREAT\n"
+        "    fd = os.open(path, flags)\n"
+    )
+    assert _rule(src) == []
+
+
+def test_p048_own_scope_taint_wins_over_its_own_clean_rebinding() -> None:
+    """Flow-insensitive by design: once a scope taints a name, a later clean
+    rebinding in the same scope does not untaint it."""
+    src = (
+        "import os\n"
+        "def f(path):\n"
+        "    flags = os.O_WRONLY | os.O_TRUNC\n"
+        "    flags = os.O_WRONLY\n"
+        "    fd = os.open(path, flags)\n"
+    )
+    assert len(_rule(src)) == 1
+
+
 def test_p048_fires_at_module_level() -> None:
     src = "import os\nfd = os.open('x', os.O_WRONLY | os.O_TRUNC)\n"
     fs = _rule(src)

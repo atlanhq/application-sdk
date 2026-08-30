@@ -299,7 +299,10 @@ marker, incremental diff metadata, writer chunk output and its statistics
 sidecar, and the local `.sha256` sidecar. Downloads get the same treatment:
 `download_file` and `download_file_chunked` stage in `.sdk-partial/` and
 publish with `os.replace`, so a shared `local_path` never exposes a partial
-file to a concurrent reader (CONNECT-1126). `JsonFileWriter` chunks are the one
+file to a concurrent reader (CONNECT-1126). Two consequences of the rename
+publish: the destination is a fresh inode with mode `0600` on every download
+(previously a pre-existing file kept its inode and mode), and a `local_path`
+that is a symlink is replaced by a regular file rather than written through. `JsonFileWriter` chunks are the one
 exception — successive calls append to the same file, and an append cannot be
 staged and renamed without rewriting it — so those get the typed error below
 without the atomicity.

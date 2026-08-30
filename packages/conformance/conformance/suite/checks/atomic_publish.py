@@ -25,7 +25,8 @@ A call is flagged when **both** hold:
   exactly how the incident's chunked download spelled it);
 * no enclosing scope — the nearest function, any outer function, or the module
   body for a top-level call — contains an ``os.replace`` / ``os.rename`` call
-  **at its own level** (nested function bodies belong to their own scope).  A
+  **at its own level** (nested function and lambda bodies are their own
+  scopes).  A
   scope that publishes via rename is the temp-then-replace pattern this rule
   exists to steer toward, so it passes; requiring dataflow proof that the
   *same* path is renamed would trade a zero-noise heuristic for a solver.
@@ -107,24 +108,32 @@ def _call_mentions_o_trunc(node: ast.Call, tainted: frozenset[str]) -> bool:
     )
 
 
-def _scope_publishes(scope: ast.AST) -> bool:
-    """True if *scope* calls ``os.replace`` / ``os.rename`` at its own level.
+def _own_level_nodes(scope: ast.AST) -> list[ast.AST]:
+    """Every node in *scope*'s subtree, excluding nested function bodies.
 
-    Nested function bodies are their own scopes and are not descended into —
+    Nested ``def`` / ``async def`` / ``lambda`` bodies are their own scopes —
     a checkpoint writer's ``os.replace`` elsewhere in the module must not
-    clear a violating ``os.open`` in a sibling function.
+    clear a violating ``os.open`` in a sibling function, and the own-level
+    invariant is encoded here once for both scope analyses below.
     """
+    nodes: list[ast.AST] = []
     pending = list(ast.iter_child_nodes(scope))
     while pending:
         node = pending.pop()
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
             continue
-        if isinstance(node, ast.Call) and (
-            _is_os_call(node.func, "replace") or _is_os_call(node.func, "rename")
-        ):
-            return True
+        nodes.append(node)
         pending.extend(ast.iter_child_nodes(node))
-    return False
+    return nodes
+
+
+def _scope_publishes(scope: ast.AST) -> bool:
+    """True if *scope* calls ``os.replace`` / ``os.rename`` at its own level."""
+    return any(
+        isinstance(node, ast.Call)
+        and (_is_os_call(node.func, "replace") or _is_os_call(node.func, "rename"))
+        for node in _own_level_nodes(scope)
+    )
 
 
 def _scope_tainted_names(scope: ast.AST) -> frozenset[str]:
@@ -137,11 +146,7 @@ def _scope_tainted_names(scope: ast.AST) -> frozenset[str]:
     toward the finding, where a suppression can record the review.
     """
     tainted: set[str] = set()
-    pending = list(ast.iter_child_nodes(scope))
-    while pending:
-        node = pending.pop()
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
+    for node in _own_level_nodes(scope):
         targets: list[ast.expr] = []
         value: ast.expr | None = None
         if isinstance(node, ast.Assign):
@@ -154,8 +159,42 @@ def _scope_tainted_names(scope: ast.AST) -> frozenset[str]:
             for target in targets:
                 if isinstance(target, ast.Name):
                     tainted.add(target.id)
-        pending.extend(ast.iter_child_nodes(node))
     return frozenset(tainted)
+
+
+def _scope_shadowed_names(scope: ast.AST) -> frozenset[str]:
+    """Names *scope* re-binds cleanly, shedding any outer-scope taint.
+
+    A function's parameters and its own-level bindings to expressions that do
+    NOT mention ``O_TRUNC`` shadow an outer tainted name of the same spelling
+    — ``def f(p, flags)`` under a module-level ``flags = ... | os.O_TRUNC``
+    must not inherit the module's taint.
+    """
+    shadowed: set[str] = set()
+    if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        args = scope.args
+        for arg in [
+            *args.posonlyargs,
+            *args.args,
+            *args.kwonlyargs,
+            *([args.vararg] if args.vararg else []),
+            *([args.kwarg] if args.kwarg else []),
+        ]:
+            shadowed.add(arg.arg)
+    for node in _own_level_nodes(scope):
+        targets: list[ast.expr] = []
+        value: ast.expr | None = None
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+            targets, value = [node.target], node.value
+        elif isinstance(node, ast.NamedExpr):
+            targets, value = [node.target], node.value
+        if value is not None and not _expr_mentions_o_trunc(value, frozenset()):
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    shadowed.add(target.id)
+    return frozenset(shadowed)
 
 
 class _AtomicPublishChecker(ast.NodeVisitor):
@@ -167,6 +206,7 @@ class _AtomicPublishChecker(ast.NodeVisitor):
         self.findings: list[Finding] = []
         self._publish_stack: list[bool] = []
         self._tainted_stack: list[frozenset[str]] = []
+        self._shadow_stack: list[frozenset[str]] = []
 
     def visit_Module(self, node: ast.Module) -> None:
         self._walk_scope(node)
@@ -180,16 +220,23 @@ class _AtomicPublishChecker(ast.NodeVisitor):
     def _walk_scope(self, node: ast.AST) -> None:
         self._publish_stack.append(_scope_publishes(node))
         self._tainted_stack.append(_scope_tainted_names(node))
+        self._shadow_stack.append(_scope_shadowed_names(node))
         self.generic_visit(node)
         self._publish_stack.pop()
         self._tainted_stack.pop()
+        self._shadow_stack.pop()
+
+    def _effective_taint(self) -> frozenset[str]:
+        """Outer-to-inner taint with shadowing: a scope's clean re-binding of a
+        name sheds outer taint; its own taint (applied after) always wins."""
+        effective: set[str] = set()
+        for tainted, shadowed in zip(self._tainted_stack, self._shadow_stack):
+            effective -= shadowed
+            effective |= tainted
+        return frozenset(effective)
 
     def visit_Call(self, node: ast.Call) -> None:
-        tainted = (
-            frozenset().union(*self._tainted_stack)
-            if self._tainted_stack
-            else frozenset()
-        )
+        tainted = self._effective_taint()
         if (
             _is_os_call(node.func, "open")
             and _call_mentions_o_trunc(node, tainted)

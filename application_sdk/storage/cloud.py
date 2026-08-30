@@ -51,6 +51,7 @@ import orjson
 from obstore.store import ObjectStore
 
 from application_sdk._runtime.offload import run_in_thread
+from application_sdk.common._listing import prune_internal_dirs
 from application_sdk.storage.errors import (
     StorageConfigError,
     StorageError,
@@ -482,7 +483,10 @@ class CloudStore:
 
         def _collect_files() -> list[tuple[str, Path]]:
             collected: list[tuple[str, Path]] = []
-            for root, _dirs, filenames in os.walk(local, followlinks=False):
+            for root, dirs, filenames in os.walk(local, followlinks=False):
+                # SDK working directories (.sdk-partial staging, in-flight
+                # download part files) must never ship to a customer bucket.
+                prune_internal_dirs(dirs)
                 for fname in filenames:
                     file_path = Path(root) / fname
                     if file_path.is_symlink():
