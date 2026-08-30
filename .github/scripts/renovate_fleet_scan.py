@@ -57,6 +57,12 @@ GRAPHQL_URL = "https://api.github.com/graphql"
 # misclassify: `_is_uv_lock_only` and the auto-approve allowlist both need the
 # complete set, and "first 20 files happened to be uv.lock" is a wrong answer
 # that looks like a right one.
+# GitHub's search API never returns more than this many results for one query,
+# however the caller paginates. Truncation can therefore only present *at* the
+# cap — which is what separates it from the count drifting under concurrent PR
+# activity. See the shortfall branch in fetch_all_prs.
+SEARCH_RESULT_CAP = 1000
+
 OPEN_PAGE_SIZE = 25
 # The merged-PR field set carries no files and no statusCheckRollup, and was
 # measured OK at 100/50/25 — it does not need the cut.
@@ -297,11 +303,35 @@ def fetch_all_prs(
         )
 
     if issue_count is not None and len(nodes) < issue_count:
-        raise RuntimeError(
-            f"query {search_query!r} matched {issue_count} results but only "
-            f"{len(nodes)} were returned — the search API's result cap likely "
-            "truncated this query. Narrow it (e.g. split by date range) rather "
-            "than silently reporting incomplete dashboard data."
+        # A shortfall has two very different causes, and only one is a fault.
+        #
+        # Truncation: the query matched more than the search API will ever
+        # return, so pagination stops dead at the cap. The dashboard would then
+        # silently omit repos, which is worth failing the run over.
+        #
+        # Drift: `issueCount` is measured once, on the first page, while
+        # pagination takes minutes — this scan walks ~1,400 PRs. Any PR that
+        # merges or closes in between leaves the count one or two ahead of what
+        # comes back. Nothing is missing; the total simply moved.
+        #
+        # The two are distinguishable because truncation can only happen *at*
+        # the cap. Observed 2026-08-30, a scheduled run died on "matched 391
+        # results but only 390 were returned" — a single PR merging mid-walk,
+        # 609 short of any cap. Before the per-author split every slice was over
+        # the cap anyway, so the distinction never came up.
+        if len(nodes) >= SEARCH_RESULT_CAP:
+            raise RuntimeError(
+                f"query {search_query!r} matched {issue_count} results but only "
+                f"{len(nodes)} were returned — the search API's result cap "
+                "truncated this query. Narrow it (e.g. split by date range) "
+                "rather than silently reporting incomplete dashboard data."
+            )
+        print(
+            f"::warning::query {search_query!r} matched {issue_count} results "
+            f"but returned {len(nodes)} — {issue_count - len(nodes)} PR(s) "
+            "changed state during pagination. Well short of the "
+            f"{SEARCH_RESULT_CAP}-result cap, so nothing was truncated.",
+            file=sys.stderr,
         )
     return nodes
 
