@@ -919,6 +919,143 @@ def _unverifiable_result(exc: BaseException, app_name: str) -> PreflightOutput:
     )
 
 
+# Floor below which the gate skips the storage probes rather than starting a
+# check it has no time to finish. Skipping fails open on the storage dimension
+# only — the handler's source verdict stands either way.
+_STORAGE_CHECK_MIN_SECONDS = 3.0
+
+# Contract code stamped on a storage check blocked by a bucket relocation, so
+# the outcome event's ``reason`` names the condition (temporary, platform-side)
+# rather than a generic dependency outage.
+OBJECT_STORE_RELOCATION_CODE = "OBJECT_STORE_RELOCATION_IN_PROGRESS"
+
+# The classifier bucket the relocation code keys off — must match the rule in
+# storage/preflight.py (asserted by test, not by import, to avoid coupling the
+# workflow-sandbox import set to the storage module's internals).
+_RELOCATION_BUCKET = "bucket relocation in progress"
+
+
+def _storage_failure_details(result: Any, *, sdr_mode: bool) -> Any:
+    """Map a failed storage probe onto typed ``FailureDetails`` for a gate check.
+
+    In SDR mode the deployment store is the customer's own bucket, so the
+    role-aware mapper the SDR surface already uses
+    (``_object_store_failure`` in ``sdr.py``) owns attribution. In-cluster,
+    every probed store is Atlan-side infrastructure — a failure there must
+    never read as the customer's source being unready — so it maps to the
+    PLATFORM-audience :class:`DependencyUnavailableError` unconditionally.
+
+    A relocation-bucket failure gets :data:`OBJECT_STORE_RELOCATION_CODE`
+    stamped as its ``code`` in both modes, replacing the leaf's generic code
+    the way ``PREFLIGHT_FALLBACK_CODE`` replaces PRECONDITION.
+    """
+    if sdr_mode:
+        from application_sdk.execution._temporal.sdr import (  # noqa: PLC0415 — sdr imports this module at load; runtime-only reverse import
+            _object_store_failure,
+        )
+
+        details = _object_store_failure(
+            label=result.label,
+            error_class=result.error_class,
+            binding_name=result.binding_name,
+            message=result.message,
+            hint=result.hint,
+        ).to_failure_details()
+    else:
+        details = DependencyUnavailableError(
+            message=result.message,
+            suggested_action=result.hint,
+            service="object_store",
+            target=result.binding_name,
+            network_error=result.error_class or "connectivity / unknown",
+        ).to_failure_details()
+    if result.error_class == _RELOCATION_BUCKET:
+        details = details.model_copy(update={"code": OBJECT_STORE_RELOCATION_CODE})
+    return details
+
+
+async def _append_storage_checks(
+    result: PreflightOutput, budget_seconds: float, started_monotonic: float
+) -> None:
+    """Fold run-path object-store probes into the handler's verdict.
+
+    The handler certifies the *source*; nothing certifies the stores the run
+    will upload its artifacts to — and a run that cannot upload is doomed
+    however healthy the source is (a production RCA traced multi-hour
+    extractions dying at the final upload to a store condition detectable here
+    in under a second). Appends one check per configured store and downgrades a
+    ``READY`` verdict to ``NOT_READY`` when any store fails, so the existing
+    block/emit machinery applies unchanged and the mode decision stays where it
+    lives today.
+
+    Deliberate taxonomy note: the gate fails **open** when its own plumbing
+    *raises* (see ``_is_gate_broken``); this check instead returns a *verdict*
+    that a confirmed storage failure — surviving the activity's retry policy —
+    blocks a hard-mode run. A store that rejects every upload for hours is not
+    the transient blip the fail-open exists to protect.
+
+    Budget-bounded: runs only in the time left of the gate's own budget, so the
+    activity's ``start_to_close`` (budget + headroom) still wins every race.
+    Skipped entirely — storage unverified, verdict untouched — when the handler
+    consumed too much of the budget, or when the handler already returned
+    ``NOT_READY`` (the run is blocked or reported either way; spending more of
+    the slot cannot change that). **Never raises**: any unexpected failure logs
+    and leaves the handler's verdict as it was.
+    """
+    try:
+        if result.status is PreflightStatus.NOT_READY:
+            return
+        remaining = budget_seconds - (time.monotonic() - started_monotonic)
+        if remaining < _STORAGE_CHECK_MIN_SECONDS:
+            logger.debug(
+                "Skipping run-path storage checks: %.1fs of the gate budget "
+                "left (< %.1fs floor)",
+                remaining,
+                _STORAGE_CHECK_MIN_SECONDS,
+            )
+            return
+        from application_sdk.constants import (  # noqa: PLC0415 — read at call time so tests and SDR toggles see the live value
+            ENABLE_ATLAN_UPLOAD,
+        )
+        from application_sdk.storage.preflight import (  # noqa: PLC0415 — activity frame only; keep obstore out of the workflow-sandbox import set
+            check_run_storage_access,
+        )
+
+        probes = await check_run_storage_access(
+            get_infrastructure(), timeout_seconds=remaining - 1.0
+        )
+        if not probes:
+            return
+        any_failed = False
+        for probe in probes:
+            if probe.passed:
+                result.checks.append(
+                    PreflightCheck(
+                        name=f"objectStoreAccess:{probe.label}",
+                        passed=True,
+                        message=probe.message,
+                    )
+                )
+                continue
+            any_failed = True
+            result.checks.append(
+                PreflightCheck(
+                    name=f"objectStoreAccess:{probe.label}",
+                    passed=False,
+                    message=probe.message,
+                    error=_storage_failure_details(probe, sdr_mode=ENABLE_ATLAN_UPLOAD),
+                )
+            )
+        if any_failed and result.status is PreflightStatus.READY:
+            result.status = PreflightStatus.NOT_READY
+    except Exception:
+        logger.warning(
+            "Run-path storage checks could not run; proceeding without "
+            "storage verification",
+            exc_info=True,
+        )
+
+
 def _require_secret_store() -> Any:
     """Return the secret store, or raise so the gate fails open.
 
@@ -1025,8 +1162,13 @@ def build_preflight_gate_activity(
     enforce: bool = False,
     budget_seconds: float = GATE_TIMEOUT_DEFAULT_SECONDS,
     attempts: int = GATE_ATTEMPTS_DEFAULT,
+    verify_storage: bool = False,
 ) -> Callable[..., Awaitable[Any]]:
     """Build the injected preflight-gate activity (``{app}:preflight``).
+
+    ``verify_storage`` is the per-app opt-in (``App.preflight_verify_storage``)
+    to also probe the run's artifact object store(s) after the handler's source
+    verdict — see :func:`_append_storage_checks`.
 
     Registered unconditionally by the worker (independent of the SDR opt-out)
     because the gate is mandatory. Binds the same per-invocation handler context
@@ -1263,6 +1405,13 @@ def build_preflight_gate_activity(
                     retryable=False,
                 )
             )
+        # Per-app opt-in: the handler certified the source; now certify the
+        # stores this run will upload artifacts to, in whatever budget is left.
+        # Appends checks and may downgrade READY → NOT_READY, so it must run
+        # before the verdict evaluation below. Never raises; see its docstring
+        # for the fail-open/verdict taxonomy note.
+        if verify_storage:
+            await _append_storage_checks(result, budget, started)
         # The outcome event is the gate's queryable row (connector-pulse builds the
         # dashboard from it). The activity holds the verdict, so it emits the
         # proceeded/blocked rows; the workflow emits only no_verdict (fail-open).

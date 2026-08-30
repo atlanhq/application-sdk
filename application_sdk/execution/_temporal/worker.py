@@ -722,6 +722,9 @@ def create_worker(
                 enforce=enforce,
                 budget_seconds=budget_seconds,
                 attempts=attempts,
+                verify_storage=bool(
+                    getattr(app_cls, "preflight_verify_storage", False)
+                ),
             )
         )
     task_activities = [*task_activities, *gate_activities]

@@ -486,6 +486,32 @@ reservation** — a handler returning in 3s holds its worker slot for 3s whateve
 A generous budget therefore costs nothing on a healthy run; it only changes the run that would
 otherwise have been cut short.
 
+#### Verifying artifact storage (opt-in)
+
+The handler certifies the *source*; nothing certifies the store the run will upload its
+artifacts to — and a run that cannot upload is doomed however healthy the source is. Setting
+`preflight_verify_storage = True` opts the app into probing every configured artifact store
+inside the gate, in whatever budget the handler left: a plain write, a HEAD, and a
+**multipart-forced** write. The multipart probe matters because artifact uploads stream through
+the multipart writer regardless of file size, and a store can accept plain PUTs while rejecting
+multipart initiation — GCS does exactly this for the whole window of a bucket relocation, a
+condition a production RCA traced under multi-hour extractions dying at their final upload.
+
+```python
+class MyConnector(App):
+    preflight_gate_mode = "hard"
+    preflight_verify_storage = True   # a run that cannot upload should not extract
+```
+
+A failed probe appends a typed, platform-attributed check (`objectStoreAccess:<store>`, with a
+relocation rejection stamped `OBJECT_STORE_RELOCATION_IN_PROGRESS`) and downgrades a `READY`
+verdict to `NOT_READY` — so `preflight_gate_mode` still decides whether it blocks; soft mode
+reports it as `would_block`. The probe is skipped when the handler already returned `NOT_READY`
+or consumed the budget, and a failure of the probe machinery itself fails open. Note the
+deliberate taxonomy choice: gate *plumbing* failures fail open, but a storage failure confirmed
+across the gate's retry attempts blocks in hard mode — a store rejecting every upload for hours
+is not the transient blip fail-open protects.
+
 `PreflightInput.timeout_seconds` carries what is *left* after credential resolution, so a handler
 sizing probes to that field is sizing to the real deadline. Three rules follow:
 
