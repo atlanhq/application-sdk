@@ -132,11 +132,13 @@ def test_fetch_all_prs_trips_safety_backstop():
 
 
 def test_fetch_all_prs_raises_when_search_api_cap_truncates_results():
-    # The search API caps total matches (commonly ~1000) — pageInfo can report
-    # hasNextPage=False while issueCount still exceeds what was actually returned.
-    # This must fail loudly rather than silently reporting an incomplete dashboard.
+    # Real truncation presents *at* the cap: pagination stops dead having
+    # returned exactly SEARCH_RESULT_CAP nodes while issueCount is higher. This
+    # must fail loudly rather than silently reporting an incomplete dashboard.
+    capped = [{"number": n, "url": f"u{n}"} for n in range(rfs.SEARCH_RESULT_CAP)]
+
     def fake_post(token, payload):
-        return _page([{"number": 1}], has_next=False, issue_count=1500)
+        return _page(capped, has_next=False, issue_count=1500)
 
     try:
         rfs.fetch_all_prs("tok", "org:atlanhq is:pr", "number", post=fake_post)
@@ -144,6 +146,36 @@ def test_fetch_all_prs_raises_when_search_api_cap_truncates_results():
     except RuntimeError as exc:
         assert "1500" in str(exc)
         assert "cap" in str(exc).lower()
+
+
+def test_fetch_all_prs_tolerates_a_count_that_drifted_during_pagination(capsys):
+    # issueCount is measured once, on the first page, while the walk takes
+    # minutes. A PR merging in between leaves the count one ahead of what came
+    # back — nothing is missing. Observed live 2026-08-30: a scheduled run died
+    # on "matched 391 but only 390 were returned", 609 short of any cap.
+    nodes = [{"number": n, "url": f"u{n}"} for n in range(390)]
+
+    def fake_post(token, payload):
+        return _page(nodes, has_next=False, issue_count=391)
+
+    result = rfs.fetch_all_prs("tok", "org:atlanhq is:pr", "number", post=fake_post)
+
+    assert len(result) == 390
+    err = capsys.readouterr().err
+    assert "::warning::" in err
+    assert "changed state during pagination" in err
+
+
+def test_drift_tolerance_stops_exactly_at_the_cap():
+    # One node short of the cap is drift; at the cap it is truncation. Pinning
+    # the boundary keeps a future page-size change from sliding it.
+    below = [{"number": n, "url": f"u{n}"} for n in range(rfs.SEARCH_RESULT_CAP - 1)]
+
+    def fake_post(token, payload):
+        return _page(below, has_next=False, issue_count=rfs.SEARCH_RESULT_CAP + 5)
+
+    # Below the cap: tolerated, however large the reported shortfall.
+    assert len(rfs.fetch_all_prs("tok", "q", "number", post=fake_post)) == len(below)
 
 
 def test_fetch_all_prs_no_error_when_issue_count_matches_returned_nodes():
@@ -839,8 +871,10 @@ def test_fetch_by_author_deduplicates_across_slices():
 def test_fetch_by_author_still_raises_when_one_slice_is_truncated():
     # The fleet keeps growing. When a single author's slice breaches the cap in
     # turn, that must fail loudly rather than report a partial fleet.
+    capped = [{"number": n, "url": f"u{n}"} for n in range(rfs.SEARCH_RESULT_CAP)]
+
     def fake_post(token, payload):
-        return _page([{"number": 1, "url": "u1"}], has_next=False, issue_count=1500)
+        return _page(capped, has_next=False, issue_count=1500)
 
     try:
         rfs.fetch_prs_by_author(
