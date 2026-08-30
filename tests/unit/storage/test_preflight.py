@@ -483,3 +483,210 @@ def test_boot_formatter_renders_structured_result() -> None:
     formatted = preflight_mod._format_boot_failure(result)
     assert "write failed [permission denied]" in formatted
     assert "403 Forbidden" in formatted
+
+
+# ---------------------------------------------------------------------------
+# Relocation classification + multipart-forced probe
+# ---------------------------------------------------------------------------
+
+_RELOCATION_MESSAGE = (
+    "Generic GCS error: Server returned non-2xx status code: 400 Bad Request: "
+    "<Error><Code>PreconditionFailed</Code><Message>Invalid precondition during "
+    "a custom dual-region, or multi-region bucket relocation.</Message></Error>"
+)
+
+
+@pytest.mark.parametrize(
+    "message,expected_class",
+    [
+        # The production shape: both tokens present.
+        (_RELOCATION_MESSAGE, "bucket relocation in progress"),
+        # Reversed token order still matches.
+        (
+            "bucket relocation rejected the request: precondition failed",
+            "bucket relocation in progress",
+        ),
+        # An etag/if-match 412 carries "precondition" alone → NOT relocation.
+        (
+            "412 Precondition Failed: at-match condition not met",
+            "connectivity / unknown",
+        ),
+        # "relocation" alone (no precondition) → NOT relocation.
+        ("object relocation pending", "connectivity / unknown"),
+    ],
+)
+def test_classify_relocation(message: str, expected_class: str) -> None:
+    error_class, hint = _classify_access_error(Exception(message))
+    assert error_class == expected_class
+    assert hint
+
+
+async def _run_probe_structured(
+    store: Any,
+    *,
+    include_multipart_probe: bool,
+    put_side_effects=None,
+    head_side_effect=None,
+):
+    """Run ``_probe_store_structured`` with obstore replaced by async fakes.
+
+    ``put_side_effects`` is a list applied across successive ``put_async``
+    calls (plain write first, multipart write second).
+    """
+    from application_sdk.storage.preflight import _probe_store_structured
+
+    fake_obstore = MagicMock()
+    fake_obstore.put_async = AsyncMock(side_effect=put_side_effects)
+    fake_obstore.head_async = AsyncMock(side_effect=head_side_effect)
+
+    with patch.dict("sys.modules", {"obstore": fake_obstore}):
+        result = await _probe_store_structured(
+            store,
+            "deployment",
+            "objectstore",
+            include_multipart_probe=include_multipart_probe,
+        )
+    return result, fake_obstore
+
+
+@pytest.mark.asyncio
+async def test_probe_multipart_disabled_by_default_single_put() -> None:
+    """Without the flag, exactly one plain put runs — boot path unchanged."""
+    result, fake_obstore = await _run_probe_structured(
+        _fake_store(), include_multipart_probe=False
+    )
+    assert result.passed is True
+    assert fake_obstore.put_async.await_count == 1
+    assert not any(
+        c.kwargs.get("use_multipart") for c in fake_obstore.put_async.await_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_probe_multipart_forced_second_write() -> None:
+    """With the flag, a second put runs with use_multipart=True."""
+    result, fake_obstore = await _run_probe_structured(
+        _fake_store(), include_multipart_probe=True
+    )
+    assert result.passed is True
+    assert fake_obstore.put_async.await_count == 2
+    multipart_call = fake_obstore.put_async.await_args_list[1]
+    assert multipart_call.kwargs.get("use_multipart") is True
+    assert multipart_call.kwargs.get("chunk_size") == 5 * 1024 * 1024
+
+
+@pytest.mark.asyncio
+async def test_probe_multipart_relocation_failure_classified() -> None:
+    """Plain put passes, multipart initiate rejected → relocation bucket, write-multipart phase."""
+    result, _ = await _run_probe_structured(
+        _fake_store(),
+        include_multipart_probe=True,
+        put_side_effects=[None, Exception(_RELOCATION_MESSAGE)],
+    )
+    assert result.passed is False
+    assert result.failed_operation == "write-multipart"
+    assert result.error_class == "bucket relocation in progress"
+    assert "relocation" in (result.hint or "")
+
+
+@pytest.mark.asyncio
+async def test_interactive_check_includes_multipart_probe(monkeypatch) -> None:
+    """check_object_store_access catches a store that only rejects multipart."""
+    import application_sdk.constants as constants_mod
+
+    monkeypatch.setattr(constants_mod, "ENABLE_ATLAN_UPLOAD", True)
+
+    fake_obstore = MagicMock()
+    fake_obstore.put_async = AsyncMock(
+        side_effect=[None, Exception(_RELOCATION_MESSAGE)]
+    )
+    fake_obstore.head_async = AsyncMock()
+    infra = _make_infra(storage=_fake_store(), upstream_storage=None)
+
+    with patch.dict("sys.modules", {"obstore": fake_obstore}):
+        results = await check_object_store_access(infra)
+
+    assert results[0].passed is False
+    assert results[0].error_class == "bucket relocation in progress"
+
+
+# ---------------------------------------------------------------------------
+# check_run_storage_access — the run-path (gate) probe
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_check_probes_without_sdr_mode(monkeypatch) -> None:
+    """Unlike the SDR checker, the run-path checker probes in-cluster too."""
+    import application_sdk.constants as constants_mod
+    from application_sdk.storage.preflight import check_run_storage_access
+
+    monkeypatch.setattr(constants_mod, "ENABLE_ATLAN_UPLOAD", False)
+
+    fake_obstore = MagicMock()
+    fake_obstore.put_async = AsyncMock()
+    fake_obstore.head_async = AsyncMock()
+    infra = _make_infra(storage=_fake_store(), upstream_storage=None)
+
+    with patch.dict("sys.modules", {"obstore": fake_obstore}):
+        results = await check_run_storage_access(infra)
+
+    assert len(results) == 1
+    assert results[0].label == "deployment"
+    assert results[0].passed is True
+    # The run-path probe must exercise the multipart API the uploads use.
+    assert any(
+        c.kwargs.get("use_multipart") for c in fake_obstore.put_async.await_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_check_empty_when_nothing_configured() -> None:
+    """No infra, or no stores → [] (local dev is not a failed check)."""
+    from application_sdk.storage.preflight import check_run_storage_access
+
+    assert await check_run_storage_access(None) == []
+    assert (
+        await check_run_storage_access(_make_infra(storage=None, upstream_storage=None))
+        == []
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_check_relocation_failure(monkeypatch) -> None:
+    """A relocating bucket fails the run-path check with the relocation bucket."""
+    fake_obstore = MagicMock()
+    fake_obstore.put_async = AsyncMock(
+        side_effect=[None, Exception(_RELOCATION_MESSAGE)]
+    )
+    fake_obstore.head_async = AsyncMock()
+    infra = _make_infra(storage=_fake_store(), upstream_storage=None)
+
+    from application_sdk.storage.preflight import check_run_storage_access
+
+    with patch.dict("sys.modules", {"obstore": fake_obstore}):
+        results = await check_run_storage_access(infra)
+
+    assert results[0].passed is False
+    assert results[0].error_class == "bucket relocation in progress"
+    assert results[0].failed_operation == "write-multipart"
+
+
+@pytest.mark.asyncio
+async def test_run_check_timeout_bounded_by_budget() -> None:
+    """A stalled probe is cut at the caller's budget and reported as connectivity."""
+    from application_sdk.storage.preflight import check_run_storage_access
+
+    async def _stall(*args, **kwargs):
+        await asyncio.sleep(9999)
+
+    infra = _make_infra(storage=_fake_store(), upstream_storage=None)
+    with patch(
+        "application_sdk.storage.preflight._probe_store_structured",
+        side_effect=_stall,
+    ):
+        results = await check_run_storage_access(infra, timeout_seconds=1.0)
+
+    assert results[0].passed is False
+    assert results[0].error_class == "connectivity / unknown"
+    assert "timed out" in (results[0].cause or "")
