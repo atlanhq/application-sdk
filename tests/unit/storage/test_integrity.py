@@ -803,7 +803,10 @@ class TestChunkedDownloadValidation:
 
         out = tmp_path / "o.bin"
         state = Path(str(out) + ".transfer-state")
-        out.write_bytes(b"\x00" * len(self.CONTENT))
+        from application_sdk.storage.chunked import _part_path
+
+        _part_path(out).parent.mkdir(parents=True, exist_ok=True)
+        _part_path(out).write_bytes(b"\x00" * len(self.CONTENT))
         state.write_bytes(
             orjson.dumps(
                 {

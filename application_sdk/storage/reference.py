@@ -40,6 +40,7 @@ entirely.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import tempfile
 import time
@@ -93,6 +94,25 @@ def _make_storage_prefix(ref: FileReference, *, output_path: str | None = None) 
         run_prefix=output_path or "",
         app_name=APPLICATION_NAME,
     )
+
+
+_materialize_locks: dict[str, asyncio.Lock] = {}
+
+
+def _materialize_lock(local_path: str) -> asyncio.Lock:
+    """Per-``local_path`` mutex for the whole materialise-and-verify step.
+
+    ``local_path`` is a deterministic function of (run, stage, entity), so
+    concurrent activities of one run share the destination by construction
+    (CONNECT-1126). Serialising on it makes the second caller wait, re-check
+    the now-complete file against its sidecar, and skip the duplicate
+    download instead of starting one underneath the first.
+
+    ponytail: asyncio locks are event-loop-bound and this registry never
+    shrinks — both fine while activities share one worker event loop and
+    paths are run-scoped; add loop-keying/eviction only if either changes.
+    """
+    return _materialize_locks.setdefault(local_path, asyncio.Lock())
 
 
 def _write_local_sidecar(local_path: str, sha256: str) -> None:
@@ -378,164 +398,177 @@ async def materialize_file_reference(
     # _build_extra_dict promotes them to top-level OTLP attributes — indexed columns in
     # Grafana+ClickHouse. Do not rewrite to %-style; that would lose the promotion.
     if not data_keys:
-        # ── Single file ────────────────────────────────────────────────────
+        guard = (
+            _materialize_lock(ref.local_path)
+            if ref.local_path is not None
+            else contextlib.nullcontext()
+        )
+        async with guard:
+            # ── Single file ────────────────────────────────────────────────────
 
-        # Fast path: local file exists — validate before deciding to download.
-        stored_hash: str | None = None
-        if ref.local_path is not None and Path(ref.local_path).exists():
-            local_hash = await integrity.sha256_file(Path(ref.local_path))
-            stored_hash = await integrity.read_expected_digest(store, ref.storage_path)
-
-            if stored_hash is not None and local_hash == stored_hash:
-                # File is intact — stamp local sidecar and reuse.
-                _write_local_sidecar(ref.local_path, local_hash)
-                # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
-                logger.debug(
-                    "file_ref.materialize.skipped",
-                    storage_path=ref.storage_path,
-                    local_path=ref.local_path,
-                    is_cache_hit=True,
+            # Fast path: local file exists — validate before deciding to download.
+            stored_hash: str | None = None
+            if ref.local_path is not None and Path(ref.local_path).exists():
+                local_hash = await integrity.sha256_file(Path(ref.local_path))
+                stored_hash = await integrity.read_expected_digest(
+                    store, ref.storage_path
                 )
-                return ref
-            # Otherwise (no stored sidecar OR hash mismatch) fall through
-            # to re-download — conservative since we cannot verify.
 
-        # Determine output path. owns_temp: a fresh mkstemp name per call
-        # means a resume checkpoint could never be reused on retry — disable
-        # resume and clean up the partial + sidecar on failure. A stable
-        # ref.local_path keeps the default (env-driven) resume behaviour so a
-        # Temporal retry on the same pod fetches only the missing ranges.
-        owns_temp = ref.local_path is None
-        if ref.local_path is not None:
-            out_path = ref.local_path
-            Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-        else:
-            suffix = Path(ref.storage_path).suffix or ""
-            if local_dir:
-                Path(local_dir).mkdir(parents=True, exist_ok=True)
-                fd, out_path = tempfile.mkstemp(suffix=suffix, dir=local_dir)
+                if stored_hash is not None and local_hash == stored_hash:
+                    # File is intact — stamp local sidecar and reuse.
+                    _write_local_sidecar(ref.local_path, local_hash)
+                    # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
+                    logger.debug(
+                        "file_ref.materialize.skipped",
+                        storage_path=ref.storage_path,
+                        local_path=ref.local_path,
+                        is_cache_hit=True,
+                    )
+                    return ref
+                # Otherwise (no stored sidecar OR hash mismatch) fall through
+                # to re-download — conservative since we cannot verify.
+
+            # Determine output path. owns_temp: a fresh mkstemp name per call
+            # means a resume checkpoint could never be reused on retry — disable
+            # resume and clean up the partial + sidecar on failure. A stable
+            # ref.local_path keeps the default (env-driven) resume behaviour so a
+            # Temporal retry on the same pod fetches only the missing ranges.
+            owns_temp = ref.local_path is None
+            if ref.local_path is not None:
+                out_path = ref.local_path
+                Path(out_path).parent.mkdir(parents=True, exist_ok=True)
             else:
-                fd, out_path = tempfile.mkstemp(suffix=suffix)
-            os.close(fd)  # close immediately; download_file will overwrite
+                suffix = Path(ref.storage_path).suffix or ""
+                if local_dir:
+                    Path(local_dir).mkdir(parents=True, exist_ok=True)
+                    fd, out_path = tempfile.mkstemp(suffix=suffix, dir=local_dir)
+                else:
+                    fd, out_path = tempfile.mkstemp(suffix=suffix)
+                os.close(fd)  # close immediately; download_file will overwrite
 
-        # Use get_file_size (HEAD) for two purposes: existence check (avoids
-        # the ambiguous empty-listing → misleading 404 from download_file) and
-        # threshold check for chunked vs streaming download.
-        # list_keys() with empty result alone cannot distinguish "single
-        # file at this exact key" from "no objects under this prefix":
-        # list_keys appends a trailing slash so a real single file always
-        # lists empty here, AND some stores (notably GCS with conditional
-        # IAM) silently return an empty listing when the caller lacks
-        # permission.
-        remote_meta = await get_file_meta(ref.storage_path, store, normalize=False)
-        remote_size, remote_etag = (
-            remote_meta if remote_meta is not None else (None, None)
-        )
-        if remote_size is None:
-            raise StorageNotFoundError(
-                f"FileReference path '{ref.storage_path}' resolved to no "
-                f"objects under the prefix and no single file at the exact "
-                f"key. Either the upstream writer has not deposited files "
-                f"yet, the path is wrong, or the store credentials lack "
-                f"list/read permission on this location.",
-                key=ref.storage_path,
+            # Use get_file_size (HEAD) for two purposes: existence check (avoids
+            # the ambiguous empty-listing → misleading 404 from download_file) and
+            # threshold check for chunked vs streaming download.
+            # list_keys() with empty result alone cannot distinguish "single
+            # file at this exact key" from "no objects under this prefix":
+            # list_keys appends a trailing slash so a real single file always
+            # lists empty here, AND some stores (notably GCS with conditional
+            # IAM) silently return an empty listing when the caller lacks
+            # permission.
+            remote_meta = await get_file_meta(ref.storage_path, store, normalize=False)
+            remote_size, remote_etag = (
+                remote_meta if remote_meta is not None else (None, None)
             )
-
-        _is_chunked = remote_size >= FILE_REF_CHUNKED_THRESHOLD_BYTES
-        _chunks_total = (
-            max(
-                1,
-                (remote_size + FILE_REF_CHUNK_SIZE_BYTES - 1)
-                // FILE_REF_CHUNK_SIZE_BYTES,
-            )
-            if _is_chunked
-            else 1
-        )
-        _log = logger.info if remote_size >= _INFO_LOG_THRESHOLD else logger.debug
-        _t0 = time.monotonic()
-        _log(
-            "file_ref.materialize.start",
-            storage_path=ref.storage_path,
-            file_size_bytes=remote_size,
-            is_cache_hit=False,
-            tier=str(ref.tier),
-        )
-
-        try:
-            # Dispatch to chunked (parallel range-GET) or single-stream download.
-            if _is_chunked:
-                sha256 = await download_file_chunked(
-                    ref.storage_path,
-                    out_path,
-                    store,
-                    chunk_size_bytes=FILE_REF_CHUNK_SIZE_BYTES,
-                    max_concurrent_chunks=FILE_REF_CHUNK_CONCURRENCY,
-                    compute_hash=True,
-                    normalize=False,
-                    # remote_size/etag already fetched via get_file_meta (HEAD)
-                    # above; reuse both so the chunked path doesn't HEAD a
-                    # second time and its range GETs are version-pinned.
-                    file_size=remote_size,
-                    etag=remote_etag,
-                    resume=False if owns_temp else None,
-                    # The local-file fast path above may already have fetched
-                    # the producer's digest; hand it down rather than making the
-                    # transfer layer re-read the sidecar. Verification itself
-                    # lives there now, so it fires for every download in the
-                    # SDK rather than only for FileReference (FND-306).
-                    expected_sha256=stored_hash,
-                )
-            else:
-                sha256 = await download_file(
-                    ref.storage_path,
-                    out_path,
-                    store,
-                    compute_hash=True,
-                    normalize=False,
-                    expected_sha256=stored_hash,
-                )
-
-            if sha256 is None:
+            if remote_size is None:
                 raise StorageNotFoundError(
-                    f"FileReference storage path not found in store: {ref.storage_path}",
+                    f"FileReference path '{ref.storage_path}' resolved to no "
+                    f"objects under the prefix and no single file at the exact "
+                    f"key. Either the upstream writer has not deposited files "
+                    f"yet, the path is wrong, or the store credentials lack "
+                    f"list/read permission on this location.",
                     key=ref.storage_path,
                 )
 
-            _write_local_sidecar(out_path, sha256)
-        except Exception as exc:
-            # conformance: ignore[L018,L009] structured failure event; keys promoted to indexed OTLP attributes via _KNOWN_EXTRA_KEYS; distinct transfer-boundary telemetry not re-emitted by caller
-            logger.error(
-                "file_ref.materialize.failed",
-                storage_path=ref.storage_path,
-                error_type=type(exc).__name__,
-                bytes_transferred_before_failure=0,
-                exc_info=True,
+            _is_chunked = remote_size >= FILE_REF_CHUNKED_THRESHOLD_BYTES
+            _chunks_total = (
+                max(
+                    1,
+                    (remote_size + FILE_REF_CHUNK_SIZE_BYTES - 1)
+                    // FILE_REF_CHUNK_SIZE_BYTES,
+                )
+                if _is_chunked
+                else 1
             )
-            if owns_temp:
-                # A fresh-named temp can never be resumed — don't strand the
-                # partial file or its checkpoint sidecar (best-effort).
-                try:
-                    Path(out_path).unlink(missing_ok=True)
-                    Path(str(out_path) + ".transfer-state").unlink(missing_ok=True)
-                except OSError:  # conformance: ignore[E002] best-effort cleanup of an unusable temp; original error re-raised below
-                    pass
-            raise
+            _log = logger.info if remote_size >= _INFO_LOG_THRESHOLD else logger.debug
+            _t0 = time.monotonic()
+            _log(
+                "file_ref.materialize.start",
+                storage_path=ref.storage_path,
+                file_size_bytes=remote_size,
+                is_cache_hit=False,
+                tier=str(ref.tier),
+            )
 
-        _log(
-            "file_ref.materialize.complete",
-            storage_path=ref.storage_path,
-            bytes_downloaded=remote_size,
-            duration_ms=int((time.monotonic() - _t0) * 1000),
-            sha256=sha256,
-            chunks_total=_chunks_total,
-            tier=str(ref.tier),
-        )
-        return FileReference(
-            local_path=out_path,
-            is_durable=True,
-            storage_path=ref.storage_path,
-            tier=ref.tier,
-        )
+            try:
+                # Dispatch to chunked (parallel range-GET) or single-stream download.
+                if _is_chunked:
+                    sha256 = await download_file_chunked(
+                        ref.storage_path,
+                        out_path,
+                        store,
+                        chunk_size_bytes=FILE_REF_CHUNK_SIZE_BYTES,
+                        max_concurrent_chunks=FILE_REF_CHUNK_CONCURRENCY,
+                        compute_hash=True,
+                        normalize=False,
+                        # remote_size/etag already fetched via get_file_meta (HEAD)
+                        # above; reuse both so the chunked path doesn't HEAD a
+                        # second time and its range GETs are version-pinned.
+                        file_size=remote_size,
+                        etag=remote_etag,
+                        resume=False if owns_temp else None,
+                        # The local-file fast path above may already have fetched
+                        # the producer's digest; hand it down rather than making the
+                        # transfer layer re-read the sidecar. Verification itself
+                        # lives there now, so it fires for every download in the
+                        # SDK rather than only for FileReference (FND-306).
+                        expected_sha256=stored_hash,
+                    )
+                else:
+                    sha256 = await download_file(
+                        ref.storage_path,
+                        out_path,
+                        store,
+                        compute_hash=True,
+                        normalize=False,
+                        expected_sha256=stored_hash,
+                    )
+
+                if sha256 is None:
+                    raise StorageNotFoundError(
+                        f"FileReference storage path not found in store: {ref.storage_path}",
+                        key=ref.storage_path,
+                    )
+
+                _write_local_sidecar(out_path, sha256)
+            except Exception as exc:
+                # conformance: ignore[L018,L009] structured failure event; keys promoted to indexed OTLP attributes via _KNOWN_EXTRA_KEYS; distinct transfer-boundary telemetry not re-emitted by caller
+                logger.error(
+                    "file_ref.materialize.failed",
+                    storage_path=ref.storage_path,
+                    error_type=type(exc).__name__,
+                    bytes_transferred_before_failure=0,
+                    exc_info=True,
+                )
+                if owns_temp:
+                    # A fresh-named temp can never be resumed — don't strand the
+                    # partial file or its checkpoint sidecar (best-effort).
+                    try:
+                        from application_sdk.storage.chunked import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+                            _part_path,
+                        )
+
+                        Path(out_path).unlink(missing_ok=True)
+                        _part_path(Path(out_path)).unlink(missing_ok=True)
+                        Path(str(out_path) + ".transfer-state").unlink(missing_ok=True)
+                    except OSError:  # conformance: ignore[E002] best-effort cleanup of an unusable temp; original error re-raised below
+                        pass
+                raise
+
+            _log(
+                "file_ref.materialize.complete",
+                storage_path=ref.storage_path,
+                bytes_downloaded=remote_size,
+                duration_ms=int((time.monotonic() - _t0) * 1000),
+                sha256=sha256,
+                chunks_total=_chunks_total,
+                tier=str(ref.tier),
+            )
+            return FileReference(
+                local_path=out_path,
+                is_durable=True,
+                storage_path=ref.storage_path,
+                tier=ref.tier,
+            )
 
     else:
         # ── Directory / prefix ─────────────────────────────────────────────

@@ -31,6 +31,7 @@ import obstore
 import orjson
 
 from application_sdk._runtime.progress import current_progress_tracker
+from application_sdk.common._listing import PARTIAL_DIRNAME
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage._telemetry import _log_transfer_progress
 
@@ -47,6 +48,22 @@ _TRANSFER_STATE_SUFFIX = ".transfer-state"
 def _transfer_state_path(path: Path) -> Path:
     """Sidecar path holding resumable-download state for *path*."""
     return Path(str(path) + _TRANSFER_STATE_SUFFIX)
+
+
+def _part_path(path: Path) -> Path:
+    """In-flight data file for *path* — published to *path* via ``os.replace``.
+
+    Deterministic (not a random temp name) so a Temporal retry on the same pod
+    can resume it from the checkpoint sidecar. The destination path itself only
+    ever holds a complete file, so concurrent readers of a shared ``local_path``
+    never see preallocated zeros or half-written chunks (CONNECT-1126).
+
+    Staged inside :data:`~application_sdk.common._listing.PARTIAL_DIRNAME` in
+    the destination's own directory: same filesystem (so publish is a rename)
+    and invisible to every SDK tree walk, so a stranded part file can never be
+    adopted by a directory ``FileReference`` or shipped by a prefix upload.
+    """
+    return path.parent / PARTIAL_DIRNAME / (path.name + ".part")
 
 
 def _load_transfer_state(state_path: Path) -> dict | None:
@@ -102,8 +119,9 @@ def _save_transfer_state(state_path: Path, state: dict) -> None:
 
 
 def _discard_transfer_state(path: Path) -> None:
-    """Remove the data file and its state sidecar (best-effort)."""
+    """Remove the data file, its in-flight part file and state sidecar (best-effort)."""
     path.unlink(missing_ok=True)
+    _part_path(path).unlink(missing_ok=True)
     _transfer_state_path(path).unlink(missing_ok=True)
 
 
@@ -295,9 +313,11 @@ def _handle_chunk_failure(
             f"Key not found during chunked download: {key}", key=key
         ) from exc
     if not resume:
-        # Legacy behaviour: no checkpoint, so a partial file is garbage.
-        path.unlink(missing_ok=True)
-    # With resume enabled the partial file + sidecar stay on disk —
+        # Legacy behaviour: no checkpoint, so an in-flight part file is
+        # garbage. The destination itself is untouched — it only ever holds
+        # a previous complete generation.
+        _part_path(path).unlink(missing_ok=True)
+    # With resume enabled the part file + sidecar stay on disk —
     # the next attempt (Temporal retry, same pod) fetches only the
     # missing ranges recorded in the checkpoint.
     from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
@@ -355,13 +375,20 @@ async def download_file_chunked(
 
     **Resume (BLDX-1523):** when *resume* is enabled, completed chunk indices
     are checkpointed to a ``{local_path}.transfer-state`` sidecar after every
-    chunk write, and an interrupted download leaves the partial file + sidecar
-    on disk instead of deleting them. A retry that resolves the same object
-    generation (key / size / chunk size / etag all match) re-fetches only the
-    missing chunks. The sidecar is deleted on success, so a data file without
-    one is always complete. Resume requires the retry to see the same local
-    filesystem (same pod or persistent volume); after node loss the download
-    simply starts fresh.
+    chunk write, and an interrupted download leaves the in-flight part file
+    + sidecar on disk instead of deleting them. A retry that resolves the
+    same object generation (key / size / chunk size / etag all match)
+    re-fetches only the missing chunks. The sidecar is deleted on success, so
+    a data file without one is always complete. Resume requires the retry to
+    see the same local filesystem (same pod or persistent volume); after node
+    loss the download simply starts fresh.
+
+    **Atomic publish (CONNECT-1126):** chunks are written to a deterministic
+    part file inside the ``.sdk-partial`` staging directory beside the
+    destination (see :func:`_part_path`), which lands at *local_path* via
+    ``os.replace`` on success. The destination never holds preallocated zeros
+    or a partial file, so concurrent readers of a shared ``local_path`` see
+    only a complete previous or new generation.
 
     Args:
         key: Source object key.  Normalised by default.
@@ -482,6 +509,7 @@ async def download_file_chunked(
         assert file_size is not None
         size: int = file_size
         state_path = _transfer_state_path(path)
+        part = _part_path(path)
 
         # Small files: delegate to the single-stream path so they still use the
         # streaming GET (avoids materialising the whole body via range GETs).
@@ -525,15 +553,17 @@ async def download_file_chunked(
                 size=size,
                 chunk_size_bytes=chunk_size_bytes,
                 etag=etag,
-                path=path,
+                path=part,
             )
             if can_resume
             else set()
         )
         resuming = bool(done)
 
-        # Pre-allocate the file at the target size so lseek can address any
-        # offset. On resume, open WITHOUT O_TRUNC so completed chunks survive.
+        # Pre-allocate the in-flight ``.part`` file at the target size so lseek
+        # can address any offset; the destination path is only written by the
+        # os.replace publish on success (CONNECT-1126). On resume, open WITHOUT
+        # O_TRUNC so completed chunks survive.
         # 0o600: owner-only — downloaded artifacts can contain extracted customer
         # metadata; don't rely on the process umask to keep them private.
         # O_BINARY: raw os.write on a Windows text-mode fd would rewrite 0x0A
@@ -545,7 +575,8 @@ async def download_file_chunked(
             | (0 if resuming else os.O_TRUNC)
             | getattr(os, "O_BINARY", 0)
         )
-        fd = os.open(str(path), flags, 0o600)
+        os.makedirs(part.parent, exist_ok=True)
+        fd = os.open(str(part), flags, 0o600)
         try:
             os.ftruncate(fd, size)
         # conformance: ignore[E004] cleanup-on-error guard; closes fd then re-raises immediately with no swallow
@@ -658,8 +689,9 @@ async def download_file_chunked(
         else:
             os.close(fd)
             # Success: the checkpoint's existence means "incomplete" — remove
-            # it so the file is observably complete.
+            # it, then atomically publish the complete file at the destination.
             state_path.unlink(missing_ok=True)
+            os.replace(part, path)
             _log_storage_event(
                 logging.DEBUG,
                 "download",

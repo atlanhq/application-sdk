@@ -29,6 +29,12 @@ This ensures that:
    triggers a fresh download.
 2. A crash mid-download (partial file, no sidecar) is detected and recovered.
 3. Once a sidecar exists and matches, re-downloads are skipped entirely.
+4. Concurrent activities sharing one durable ref (``local_path`` is a
+   deterministic function of run, stage and entity) are safe: downloads
+   stream into a temp file and land via ``os.replace``, and the
+   materialise-and-verify step holds a per-path lock, so a second activity
+   waits and reuses the file instead of re-downloading underneath the first
+   (CONNECT-1126).
 """
 
 from __future__ import annotations
