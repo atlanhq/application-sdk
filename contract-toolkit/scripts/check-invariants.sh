@@ -761,7 +761,7 @@ if ! echo "$ERR_MSG" | grep -q "isDistinct"; then
 fi
 
 # --------------------------------------------------------------------------
-# 12. Streaming batch knobs are inert unless streamingEnabled is on, and the wait
+# 12. Streaming batch knobs are inert unless streaming.enabled is on, the wait
 #     is inert at batch size 1 (the shard never waits for a batch of one). Both
 #     are silent no-ops in AE, which is the worst failure mode for a latency knob:
 #     the contract reads as tuned and behaves as default, discoverable only from a
@@ -817,20 +817,36 @@ PKLEOF
 }
 
 check_streaming_throw \
-  "streamingBatchSize without streamingEnabled should throw" \
-  "      streamingBatchSize = 200" \
-  "require streamingEnabled"
+  "batchSize without streaming.enabled should throw" \
+  "      streaming { batchSize = 200 }" \
+  "require enabled = true"
 
 check_streaming_throw \
-  "streamingBatchWaitSeconds without streamingEnabled should throw" \
-  "      streamingBatchWaitSeconds = 2.5" \
-  "require streamingEnabled"
+  "batchWaitSeconds without streaming.enabled should throw" \
+  "      streaming { batchWaitSeconds = 2.5 }" \
+  "require enabled = true"
 
 check_streaming_throw \
-  "streamingBatchWaitSeconds at batch size 1 should throw" \
-  "      streamingEnabled = true
-      streamingBatchWaitSeconds = 2.5" \
-  "meaningless at streamingBatchSize = 1"
+  "eventsPerSignal without streaming.enabled should throw" \
+  "      streaming { eventsPerSignal = 100 }" \
+  "require enabled = true"
+
+check_streaming_throw \
+  "batchWaitSeconds at batch size 1 should throw" \
+  "      streaming {
+        enabled = true
+        batchWaitSeconds = 2.5
+      }" \
+  "meaningless at batchSize = 1"
+
+# ackPaths is an at-least-once durability assertion; the streaming path writes no
+# acks and has no watchdog backstop, so declaring both must be refused rather than
+# silently voided. The batch-knob cases above cost latency; this one costs events.
+check_streaming_throw \
+  "ackPaths declared with streaming.enabled should throw" \
+  "      ackPaths { \"\$.extract.outputs.ack_path\" }
+      streaming { enabled = true }" \
+  "ackPaths is inert when streaming.enabled"
 
 # --------------------------------------------------------------------------
 # Done

@@ -93,7 +93,7 @@ events {
       topic = "example.cdc.user_realtime"
     }
     triggerConfig = new EventTriggerConfig {
-      streamingEnabled = true
+      streaming { enabled = true }
     }
   }
   // The same shell, trading per-event latency for throughput: accumulate up to 200
@@ -106,9 +106,11 @@ events {
       topic = "example.cdc.audit"
     }
     triggerConfig = new EventTriggerConfig {
-      streamingEnabled = true
-      streamingBatchSize = 200
-      streamingBatchWaitSeconds = 2
+      streaming {
+        enabled = true
+        batchSize = 200
+        batchWaitSeconds = 2
+      }
     }
   }
 }

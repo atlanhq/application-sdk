@@ -65,7 +65,7 @@ local appStreamingRealtime = (App) {
         topic = "app.cdc.user_entity"
       }
       triggerConfig = new App.EventTriggerConfig {
-        streamingEnabled = true
+        streaming { enabled = true }
       }
     }
   }
@@ -88,9 +88,11 @@ local appStreamingBatched = (App) {
         topic = "app.cdc.user_entity"
       }
       triggerConfig = new App.EventTriggerConfig {
-        streamingEnabled = true
-        streamingBatchSize = 200
-        streamingBatchWaitSeconds = 2.5
+        streaming {
+          enabled = true
+          batchSize = 200
+          batchWaitSeconds = 2.5
+        }
       }
     }
   }
@@ -145,7 +147,7 @@ local nativeStreamingRealtime = (NativeApp) {
         topic = "app.cdc.user_entity"
       }
       triggerConfig = new NativeApp.EventTriggerConfig {
-        streamingEnabled = true
+        streaming { enabled = true }
       }
     }
   }
@@ -169,9 +171,11 @@ local nativeStreamingBatched = (NativeApp) {
         topic = "app.cdc.user_entity"
       }
       triggerConfig = new NativeApp.EventTriggerConfig {
-        streamingEnabled = true
-        streamingBatchSize = 200
-        streamingBatchWaitSeconds = 2.5
+        streaming {
+          enabled = true
+          batchSize = 200
+          batchWaitSeconds = 2.5
+        }
       }
     }
   }
@@ -208,7 +212,7 @@ local nativeBatchedCfg = nativeCfg(nativeStreamingBatched)
 local nativeNoStreamCfg = nativeCfg(nativeNoStreaming)
 
 facts {
-  ["App.pkl: streamingEnabled renders streaming_enabled = true"] {
+  ["App.pkl: streaming.enabled renders streaming_enabled = true"] {
     appRealtimeCfg["streaming_enabled"] == true
   }
 
@@ -232,10 +236,15 @@ facts {
     appBatchedCfg["streaming_events_per_signal"] == 500
   }
 
-  ["App.pkl: streaming does not disturb max_retries / ack_paths"] {
-    appRealtimeCfg["max_retries"] == 3
+  ["App.pkl: streaming suppresses max_retries, keeps ack_paths well-formed"] {
+    // max_retries is inert on the streaming path — AE's streaming_dispatch.py reads
+    // neither it nor ack_paths — so it is not rendered at all. Shipping a key AE will
+    // not act on leaves a contract author no way to tell which keys are live. AE
+    // defaults it to 3 when absent.
+    !appRealtimeCfg.containsKey("max_retries")
     // ackPaths left empty — AE rejects [], so the toolkit renders fire-and-forget [""].
-    // That stays true on the streaming path, where acks are inert but still validated.
+    // Non-empty ackPaths WITH streaming is refused at eval time, so this is the only
+    // shape the streaming path can produce.
     appRealtimeCfg["ack_paths"].length == 1
     appRealtimeCfg["ack_paths"][0] == ""
   }
@@ -244,7 +253,7 @@ facts {
     appNoStreamCfg.toMap().keys == Set("max_retries", "ack_paths")
   }
 
-  ["NativeApp.pkl: streamingEnabled renders streaming_enabled = true"] {
+  ["NativeApp.pkl: streaming.enabled renders streaming_enabled = true"] {
     nativeRealtimeCfg["streaming_enabled"] == true
   }
 
@@ -263,8 +272,8 @@ facts {
     nativeBatchedCfg["streaming_batch_wait_seconds"] == 2.5
   }
 
-  ["NativeApp.pkl: streaming does not disturb max_retries / ack_paths"] {
-    nativeRealtimeCfg["max_retries"] == 3
+  ["NativeApp.pkl: streaming suppresses max_retries, keeps ack_paths well-formed"] {
+    !nativeRealtimeCfg.containsKey("max_retries")
     nativeRealtimeCfg["ack_paths"].length == 1
     nativeRealtimeCfg["ack_paths"][0] == ""
   }
@@ -280,16 +289,47 @@ facts {
   // author cannot ship it.
   ["batch size above the measured ceiling is rejected at eval time"] {
     module.catch(() -> new App.EventTriggerConfig {
-      streamingEnabled = true
-      streamingBatchSize = 1000
-    }.streamingBatchSize) != null
+      streaming {
+        enabled = true
+        batchSize = 1000
+      }
+    }.streaming.batchSize) != null
   }
 
   ["events-per-signal above one Dapr delivery is rejected at eval time"] {
     module.catch(() -> new App.EventTriggerConfig {
-      streamingEnabled = true
-      streamingEventsPerSignal = 5000
-    }.streamingEventsPerSignal) != null
+      streaming {
+        enabled = true
+        eventsPerSignal = 5000
+      }
+    }.streaming.eventsPerSignal) != null
+  }
+
+  // Review finding: ackPaths is an explicit at-least-once assertion, and the
+  // streaming path writes no acks and has no watchdog backstop. Silently voiding
+  // it is the one outcome that must not be reachable.
+  ["ackPaths declared alongside streaming is refused at eval time"] {
+    module.catch(() -> new App.EventTriggerConfig {
+      ackPaths { "$.extract.outputs.ack_path" }
+      streaming { enabled = true }
+    }._ackShapeCheck) != null
+  }
+
+  ["ackPaths alone (no streaming) is still allowed"] {
+    (new App.EventTriggerConfig {
+      ackPaths { "$.extract.outputs.ack_path" }
+    })._ackShapeCheck == null
+  }
+
+  // max_retries is inert on the streaming path (AE's streaming_dispatch.py reads
+  // neither max_retries nor ack_paths), so it must not be rendered — a contract
+  // author has no other way to tell which manifest keys are live.
+  ["max_retries is suppressed under streaming"] {
+    !appRealtimeCfg.containsKey("max_retries")
+  }
+
+  ["max_retries is still rendered without streaming"] {
+    appNoStreamCfg.containsKey("max_retries")
   }
 
   ["both schemas render the same streaming shape"] {
