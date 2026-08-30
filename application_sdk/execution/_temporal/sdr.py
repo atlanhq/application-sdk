@@ -44,6 +44,7 @@ with workflow.unsafe.imports_passed_through():
     from application_sdk.execution._temporal.preflight_gate import (
         PreflightSurface,
         emit_preflight_check_outcome,
+        emit_preflight_crash_outcome,
     )
     from application_sdk.handler.context import bind_invocation_context
     from application_sdk.handler.contracts import (
@@ -648,7 +649,17 @@ def build_sdr_activities(
             else:
                 input.credentials = await _resolve_agent_credentials(input.agent_json)
         with bind_invocation_context(binding.app_name, input.credentials):
-            output = await binding.handler.preflight_check(input)
+            try:
+                output = await binding.handler.preflight_check(input)
+            except Exception as e:
+                emit_preflight_crash_outcome(
+                    logger,
+                    binding.app_name,
+                    e,
+                    surface=PreflightSurface.SDR,
+                    entrypoint=input.entrypoint,
+                )
+                raise
         # SDR-only: fold the secret-store + object-store access checks into the
         # interactive preflight so they show up as UI check rows. Non-raising.
         if secret_row is not None:

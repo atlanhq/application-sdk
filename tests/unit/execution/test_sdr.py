@@ -299,6 +299,33 @@ class TestBuildSdrActivities:
         assert event["outcome"] == "not_ready"
         assert "Secret store" in event["check_matrix"]
 
+    async def test_preflight_handler_crash_emits_crash_row_and_raises(self) -> None:
+        # CONNECT-1170 gap 6: a raising handler must still produce one
+        # crash-marked row before the raise propagates to the workflow.
+        class _CrashingHandler(_StubHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                raise RuntimeError("boom")
+
+        handler = _CrashingHandler()
+        activities = build_sdr_activities(handler, app_name="myapp")
+        by_name = {
+            getattr(a, "__temporal_activity_definition").name: a for a in activities
+        }
+        preflight = by_name[SDR_PREFLIGHT_ACTIVITY]
+        with (
+            mock.patch("application_sdk.execution._temporal.sdr.logger") as ml,
+            pytest.raises(RuntimeError, match="boom"),
+        ):
+            await preflight(PreflightInput(credentials=[]))
+        event = next(
+            c.kwargs
+            for c in ml.error.call_args_list
+            if c.args and c.args[0] == "Preflight check outcome"
+        )
+        assert event["outcome"] == "crashed"
+        assert event["preflight_surface"] == "sdr"
+        assert event["reason"] == "RuntimeError"
+
     async def test_fetch_metadata_activity_dispatches(self) -> None:
         handler = _StubHandler()
         activities = build_sdr_activities(handler, app_name="myapp")

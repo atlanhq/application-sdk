@@ -747,8 +747,9 @@ def emit_preflight_check_outcome(
     only channel mirrors the gate's map (``not_ready`` at ERROR, a passed
     verdict carrying a failed advisory check at WARNING, clean at INFO); one
     that returns the verdict by another route stays INFO throughout. Handler
-    crashes are logged at ERROR by each surface's own boundary handler. Callers
-    pass their module logger so the row keeps the surface's source.
+    crashes additionally emit a crash-marked row via
+    :func:`emit_preflight_crash_outcome`. Callers pass their module logger so
+    the row keeps the surface's source.
     """
     failed = [c for c in result.checks if not c.passed]
     # The aggregate error wins over check order, mirroring _build_block_error:
@@ -782,6 +783,45 @@ def emit_preflight_check_outcome(
         checks=len(result.checks),
         **{
             CHECK_MATRIX_KEY: _check_matrix_json(result.checks),
+            PREFLIGHT_SURFACE_KEY: surface.value,
+        },
+        **extra,
+    )
+
+
+def emit_preflight_crash_outcome(
+    log: AtlanLoggerAdapter,
+    app_name: str,
+    exc: BaseException,
+    *,
+    surface: PreflightSurface,
+    entrypoint: str | None = None,
+    request_id: str | None = None,
+) -> None:
+    """Emit a crash-marked ``Preflight check outcome`` row.
+
+    A handler that raises on an interactive surface (HTTP form check, SDR test
+    connection) produces no verdict body anywhere, so without this row the
+    crash is invisible to the setup-funnel metrics built on the event — the
+    worst case drops out of the denominator. Emitted at ERROR on every
+    surface, in addition to (never instead of) each surface's own boundary
+    error handling. ``reason`` is the typed wire code for an ``AppError``, the
+    class name otherwise.
+    """
+    extra: dict[str, Any] = {}
+    if isinstance(exc, AppError):
+        extra[FAILURE_AUDIENCE_KEY] = type(exc).audience.value
+    if request_id is not None:
+        extra["request_id"] = request_id
+    log.error(
+        PREFLIGHT_CHECK_EVENT,
+        outcome="crashed",
+        reason=exc.code if isinstance(exc, AppError) else type(exc).__name__,
+        app_name=app_name,
+        entrypoint=entrypoint or "<implicit>",
+        checks=0,
+        **{
+            CHECK_MATRIX_KEY: EMPTY_CHECK_MATRIX,
             PREFLIGHT_SURFACE_KEY: surface.value,
         },
         **extra,

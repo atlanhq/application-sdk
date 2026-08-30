@@ -30,6 +30,7 @@ from application_sdk.errors.leaves import (
 from application_sdk.execution._temporal.preflight_gate import (
     _LOG_ROW_IS_ONLY_CHANNEL,
     CLASSIFICATION_SOURCE_UNVERIFIABLE,
+    EMPTY_CHECK_MATRIX,
     FAILURE_AUDIENCE_KEY,
     GATE_TIMEOUT_DEFAULT_SECONDS,
     PREFLIGHT_CHECK_EVENT,
@@ -38,6 +39,7 @@ from application_sdk.execution._temporal.preflight_gate import (
     _config_from_snapshot,
     build_preflight_gate_activity,
     emit_preflight_check_outcome,
+    emit_preflight_crash_outcome,
     input_type_supports_gate,
     preflight_gate_activity_name,
 )
@@ -1381,6 +1383,43 @@ class TestEmitPreflightCheckOutcome:
         ).kwargs
         assert kwargs[PREFLIGHT_SURFACE_KEY] == surface.value
         assert type(kwargs[PREFLIGHT_SURFACE_KEY]) is str
+
+
+class TestEmitPreflightCrashOutcome:
+    """CONNECT-1170 gap 6: a handler crash still produces a crash-marked row."""
+
+    def test_typed_error_crash_row_attributes(self) -> None:
+        log = mock.MagicMock()
+        exc = AuthError(message="x")
+        emit_preflight_crash_outcome(
+            log,
+            "myapp",
+            exc,
+            surface=PreflightSurface.HTTP,
+            request_id="r-1",
+        )
+        log.error.assert_called_once()
+        kwargs = log.error.call_args.kwargs
+        assert log.error.call_args.args[0] == PREFLIGHT_CHECK_EVENT
+        assert kwargs["outcome"] == "crashed"
+        assert kwargs["reason"] == AuthError.code
+        assert kwargs["checks"] == 0
+        assert kwargs[CHECK_MATRIX_KEY] == EMPTY_CHECK_MATRIX
+        assert kwargs[PREFLIGHT_SURFACE_KEY] == "http"
+        assert kwargs[FAILURE_AUDIENCE_KEY] == AuthError.audience.value
+        assert kwargs["request_id"] == "r-1"
+
+    def test_untyped_error_crash_row_attributes(self) -> None:
+        log = mock.MagicMock()
+        exc = ValueError("boom")
+        emit_preflight_crash_outcome(log, "myapp", exc, surface=PreflightSurface.SDR)
+        log.error.assert_called_once()
+        kwargs = log.error.call_args.kwargs
+        assert kwargs["outcome"] == "crashed"
+        assert kwargs["reason"] == "ValueError"
+        assert kwargs[PREFLIGHT_SURFACE_KEY] == "sdr"
+        assert FAILURE_AUDIENCE_KEY not in kwargs
+        assert "request_id" not in kwargs
 
 
 class TestOrphanedAttemptEmission:

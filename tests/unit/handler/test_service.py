@@ -455,6 +455,35 @@ class TestPreflightEndpoint:
         )
         assert response.status_code == 500
 
+    def test_preflight_handler_crash_emits_outcome_row(self) -> None:
+        client = _make_client(handler=_FailingHandler())
+        with patch("application_sdk.handler.service.logger") as ml:
+            response = client.post("/workflows/v1/check", json={"credentials": []})
+        assert response.status_code == 500
+        rows = [
+            c
+            for c in [
+                *ml.info.call_args_list,
+                *ml.warning.call_args_list,
+                *ml.error.call_args_list,
+            ]
+            if c.args and c.args[0] == "Preflight check outcome"
+        ]
+        assert rows
+
+    def test_malformed_entrypoint_400_emits_no_crash_row(self) -> None:
+        client = _make_client()
+        with patch("application_sdk.handler.service.logger") as ml:
+            response = client.post(
+                "/workflows/v1/check",
+                json={"credentials": [], "entrypoint": "Bad Name!"},
+            )
+        assert response.status_code == 400
+        for level in ("info", "warning", "error"):
+            for c in getattr(ml, level).call_args_list:
+                if c.args:
+                    assert c.args[0] != "Preflight check outcome"
+
     def test_preflight_metadata_forwarded_to_handler(self) -> None:
         """metadata survives _normalize_credentials and reaches the handler.
 

@@ -2917,6 +2917,19 @@ def create_app_handler_service(
                     e,
                     exc_info=True,
                 )
+                from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — handler/__init__ imports this module; a top-level import back into preflight_gate is a cycle
+                    PreflightSurface,
+                    emit_preflight_crash_outcome,
+                )
+
+                emit_preflight_crash_outcome(
+                    logger,
+                    app_name,
+                    e,
+                    surface=PreflightSurface.HTTP,
+                    entrypoint=entrypoint,
+                    request_id=context.request_id_str,
+                )
                 raise HTTPException(status_code=e.http_status, detail=str(e)) from None
             except AppError as e:
                 # Forward-looking: typed AppError leaves from connectors that raise
@@ -2928,6 +2941,19 @@ def create_app_handler_service(
                     context.request_id_str,
                     e,
                     exc_info=True,
+                )
+                from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — handler/__init__ imports this module; a top-level import back into preflight_gate is a cycle
+                    PreflightSurface,
+                    emit_preflight_crash_outcome,
+                )
+
+                emit_preflight_crash_outcome(
+                    logger,
+                    app_name,
+                    e,
+                    surface=PreflightSurface.HTTP,
+                    entrypoint=entrypoint,
+                    request_id=context.request_id_str,
                 )
                 raise HTTPException(
                     status_code=_app_error_to_http_status(e), detail=str(e)
@@ -2945,6 +2971,19 @@ def create_app_handler_service(
                     context.request_id_str,
                     e,
                     exc_info=True,
+                )
+                from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — handler/__init__ imports this module; a top-level import back into preflight_gate is a cycle
+                    PreflightSurface,
+                    emit_preflight_crash_outcome,
+                )
+
+                emit_preflight_crash_outcome(
+                    logger,
+                    app_name,
+                    e,
+                    surface=PreflightSurface.HTTP,
+                    entrypoint=entrypoint,
+                    request_id=context.request_id_str,
                 )
                 raise HTTPException(
                     status_code=500, detail="Internal server error"
