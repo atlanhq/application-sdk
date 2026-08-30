@@ -22,10 +22,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-import conformance.suite.checks.entrypoint as entrypoint
 import conformance.suite.checks.logging as logging_checks
 import conformance.suite.checks.sdr as sdr_checks
-import conformance.suite.checks.sdr_test_checks as sdr_test_checks
 from conformance.suite.checks import (
     actions_pinning,
     app_name_alignment,
@@ -45,6 +43,7 @@ from conformance.suite.checks import (
     e2e_deployment_name,
     e2e_generated_harness,
     e2e_workflow_shape,
+    entrypoint,
     entrypoint_alignment,
     entrypoint_e2e_coverage,
     error_handling,
@@ -58,9 +57,11 @@ from conformance.suite.checks import (
     manifest_contract,
     optimizations,
     orchestration,
+    persistence_seam,
     preflight,
     prescriptions,
     release_contract,
+    sdr_test_checks,
     security,
     test_quality,
     test_structure,
@@ -110,6 +111,11 @@ _CHECKS: list[CheckRegistration] = [
         series=client_seam.SERIES,
         discover=client_seam.discover,
         scan_path=client_seam.scan_path,
+    ),
+    CheckRegistration(
+        series=persistence_seam.SERIES,
+        discover=persistence_seam.discover,
+        scan_path=persistence_seam.scan_path,
     ),
     CheckRegistration(
         series=download_retry.SERIES,
@@ -490,7 +496,7 @@ def parse_rule_ids(raw: str) -> set[str]:
     the exact bug class ``--series L004`` used to cause (a series letter match
     against a full rule id selected zero checks and reported a clean repo).
     """
-    from conformance.suite.rules import CATALOG  # noqa: PLC0415
+    from conformance.suite.rules import CATALOG
 
     ids = {r.strip().upper() for r in raw.split(",") if r.strip()}
     if not ids:
