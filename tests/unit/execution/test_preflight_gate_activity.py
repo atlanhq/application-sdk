@@ -5,9 +5,13 @@ Separate from the SDR activity tests — the gate is its own module/concern.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 import warnings
 from contextlib import ExitStack, contextmanager
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
@@ -25,6 +29,7 @@ from application_sdk.errors.leaves import (
 )
 from application_sdk.execution._temporal.preflight_gate import (
     _LOG_ROW_IS_ONLY_CHANNEL,
+    CLASSIFICATION_SOURCE_UNVERIFIABLE,
     FAILURE_AUDIENCE_KEY,
     GATE_TIMEOUT_DEFAULT_SECONDS,
     PREFLIGHT_CHECK_EVENT,
@@ -52,6 +57,7 @@ from application_sdk.handler.contracts import (
 from application_sdk.infrastructure.credential_vault import CredentialVaultError
 from application_sdk.observability.logger_adaptor import (
     CHECK_MATRIX_KEY,
+    GATE_CLASSIFICATION_KEY,
     GATE_MODE_KEY,
     PREFLIGHT_SURFACE_KEY,
 )
@@ -1375,3 +1381,137 @@ class TestEmitPreflightCheckOutcome:
         ).kwargs
         assert kwargs[PREFLIGHT_SURFACE_KEY] == surface.value
         assert type(kwargs[PREFLIGHT_SURFACE_KEY]) is str
+
+
+class TestOrphanedAttemptEmission:
+    """CONNECT-1170 gap 1: an attempt Temporal already abandoned still emits.
+
+    On a production run, attempt 1 was killed at ``start_to_close`` but kept
+    running (no heartbeat, so cancellation is never delivered) and wrote its
+    ``would_block`` verdict row seconds after the deadline; attempt 2 then
+    wrote ``proceeded``. The documented dedupe key ``(workflow_run_id,
+    outcome)`` keeps both rows, so a consumer records a block for a run that
+    passed — corrupting the series hard mode is decided from.
+    """
+
+    async def test_attempt_past_its_deadline_emits_no_verdict_row(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="connectivity", passed=False)],
+        )
+        gate = _verdict_gate(out, enforce=False)
+        # activity.info() as the abandoned attempt sees it: its start_to_close
+        # deadline passed minutes ago, so Temporal has stopped waiting and may
+        # already be running the next attempt.
+        dead_attempt = SimpleNamespace(
+            attempt=1,
+            start_to_close_timeout=timedelta(seconds=60),
+            started_time=datetime.now(timezone.utc) - timedelta(seconds=300),
+        )
+        with (
+            mock.patch(f"{_GATE}.activity.info", return_value=dead_attempt),
+            mock.patch(_LOGGER) as m,
+        ):
+            await gate(PreflightGateInput())
+        assert _outcome_event(m) is None
+
+
+class TestBudgetCancelCannotStopExecutorWork:
+    """CONNECT-1170 gap 2, part A — pins the limitation; passes today.
+
+    ``check.cancel()`` detaches the awaiting coroutine, but a probe already
+    running in a thread pool (``clients/sql.py`` parks in ``run_in_executor``)
+    cannot be interrupted: the gate classifies the timeout on time, yet the
+    underlying work keeps burning a worker thread. This is the boundary of the
+    "the work actually stops" claim — if the gate ever gains a hard kill, the
+    final assertion here is the one to flip.
+    """
+
+    async def test_gate_classifies_at_deadline_but_executor_thread_survives(
+        self,
+    ) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+        finished = threading.Event()
+
+        class _ExecutorParkedHandler(DefaultHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                def blocking_probe() -> None:
+                    entered.set()
+                    release.wait(10)
+                    finished.set()
+
+                await asyncio.get_running_loop().run_in_executor(None, blocking_probe)
+                return PreflightOutput(status=PreflightStatus.READY, checks=[])
+
+        gate = build_preflight_gate_activity(
+            _ExecutorParkedHandler(),
+            app_name="myapp",
+            enforce=False,
+            budget_seconds=0.3,
+        )
+        try:
+            with mock.patch(_LOGGER) as m:
+                result = await gate(PreflightGateInput())
+
+            # The budget IS enforced at the gate's level: an honest
+            # unverifiable verdict at the deadline.
+            assert result.status is PreflightStatus.NOT_READY
+            event = _outcome_event(m)
+            assert event is not None
+            assert event["outcome"] == "would_block"
+            assert event[GATE_CLASSIFICATION_KEY] == CLASSIFICATION_SOURCE_UNVERIFIABLE
+            # But the probe thread survived the cancel: the work did not stop.
+            assert entered.wait(5)
+            assert not finished.is_set()
+        finally:
+            release.set()
+
+
+class TestLiveAttemptStillEmits:
+    """CONNECT-1170 gap 1: the liveness guard must not over-suppress.
+
+    A live attempt — one inside its start_to_close window — keeps its verdict
+    row; suppression is only for attempts Temporal has already abandoned.
+    """
+
+    async def test_live_attempt_still_emits_verdict_row(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="connectivity", passed=False)],
+        )
+        gate = _verdict_gate(out, enforce=False)
+        live_attempt = SimpleNamespace(
+            attempt=1,
+            start_to_close_timeout=timedelta(seconds=60),
+            started_time=datetime.now(timezone.utc),
+        )
+        with (
+            mock.patch(f"{_GATE}.activity.info", return_value=live_attempt),
+            mock.patch(_LOGGER) as m,
+        ):
+            await gate(PreflightGateInput())
+        event = _outcome_event(m)
+        assert event is not None
+        assert event["outcome"] == "would_block"
+
+
+class TestGateHeartbeat:
+    """CONNECT-1170 gap 3: the activity heartbeats while the handler runs."""
+
+    async def test_heartbeat_sent_while_handler_runs(self) -> None:
+        class _SlowReadyHandler(DefaultHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                await asyncio.sleep(0.05)
+                return PreflightOutput(status=PreflightStatus.READY, checks=[])
+
+        gate = build_preflight_gate_activity(
+            _SlowReadyHandler(), app_name="myapp", enforce=False
+        )
+        with (
+            mock.patch(f"{_GATE}.GATE_HEARTBEAT_INTERVAL_SECONDS", 0.01),
+            mock.patch(f"{_GATE}.activity.heartbeat") as beat,
+        ):
+            result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.READY
+        assert beat.call_count >= 1

@@ -27,7 +27,7 @@ import asyncio
 import math
 import time
 from collections.abc import Awaitable, Callable, Iterable
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 import orjson
@@ -370,6 +370,9 @@ GATE_ATTEMPTS_MAX = 3
 # activity would be killed before its ``except`` ran, losing both the classification
 # and the mode decision — that is the CNCT-99 defect.
 GATE_ACTIVITY_HEADROOM_SECONDS = 5
+
+GATE_HEARTBEAT_TIMEOUT_SECONDS = 30
+GATE_HEARTBEAT_INTERVAL_SECONDS = 10
 
 # Floor on what's left after credential resolution. Below this there is no point
 # calling the handler: resolution has eaten the budget, which is a plumbing
@@ -830,6 +833,38 @@ def _effective_budget(budget_seconds: float) -> float:
         return budget_seconds
 
 
+def _attempt_is_live() -> bool:
+    """Whether this activity attempt is still within its Temporal deadline.
+
+    An attempt whose ``start_to_close`` window has closed is one Temporal has
+    already abandoned (no heartbeat → cancellation was never delivered, so the
+    coroutine keeps running). Emitting a verdict row from it would corrupt the
+    ``(workflow_run_id, outcome)`` series the next attempt also writes to
+    (CONNECT-1170 gap 1). Tolerant of no activity context (direct calls, unit
+    tests) and of a missing/None timeout, mirroring ``_effective_budget``.
+    """
+    try:
+        info = activity.info()
+    except RuntimeError:
+        return True
+    except Exception:
+        logger.debug(
+            "Could not read the activity's start time; treating the attempt as live",
+            exc_info=True,
+        )
+        return True
+    started_time = getattr(info, "started_time", None)
+    start_to_close = getattr(info, "start_to_close_timeout", None)
+    if not isinstance(started_time, datetime) or not isinstance(
+        start_to_close, timedelta
+    ):
+        return True
+    if started_time.tzinfo is None:
+        started_time = started_time.replace(tzinfo=timezone.utc)
+    deadline = started_time + start_to_close
+    return datetime.now(timezone.utc) < deadline
+
+
 def _is_definitive_credential_absence(exc: BaseException) -> bool:
     """Whether ``exc`` proves the credential is genuinely not there.
 
@@ -1091,6 +1126,13 @@ def build_preflight_gate_activity(
             handler abandoned at ``start_to_close`` keeps running and reports a
             duration past the budget.
             """
+            if not _attempt_is_live():
+                logger.debug(
+                    "Attempt %s is past its Temporal deadline; suppressing its "
+                    "outcome row",
+                    _current_attempt(),
+                )
+                return
             if (
                 outcome == "blocked"
                 or classification == CLASSIFICATION_SOURCE_UNVERIFIABLE
@@ -1163,129 +1205,166 @@ def build_preflight_gate_activity(
 
         started = time.monotonic()
         budget = _effective_budget(budget_seconds)
-        # Resolve inside the activity (the workflow forwarded only references).
-        try:
-            credentials, credentials_by_name = await _resolve_gate_credentials(input)
-        except Exception as e:
-            # Resolution is gate plumbing, so the default here is the opposite of
-            # the handler path below: only a *provable* credential absence is a
-            # config fact this run can be blamed for. Everything else — including
-            # the resolver's collapsed "unexpected vault error" not-founds —
-            # propagates and fails open.
-            if not _is_definitive_credential_absence(e):
-                raise
-            return _no_verdict(e)
 
-        remaining = budget - (time.monotonic() - started)
-        if remaining < _min_handler_seconds(budget):
-            # Resolution ate the budget. That is the secret store being slow, not
-            # the source being unready — fail open rather than calling the handler
-            # with no time and blaming it for the timeout.
-            raise DependencyUnavailableError(
-                message=(
-                    "Credential resolution consumed the entire preflight budget "
-                    f"({budget:.0f}s); no time left to verify the source"
-                ),
-                service="secret_store",
+        from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — lazy: preserves the auto_heartbeat_loop patch seam, same idiom as activities.py
+            auto_heartbeat_loop,
+        )
+
+        def _gate_heartbeat() -> None:
+            try:
+                activity.heartbeat()
+            except RuntimeError:
+                pass
+
+        heartbeat_stop = asyncio.Event()
+        heartbeat_task = asyncio.ensure_future(
+            auto_heartbeat_loop(
+                interval_seconds=GATE_HEARTBEAT_INTERVAL_SECONDS,
+                heartbeat_fn=_gate_heartbeat,
+                stop_event=heartbeat_stop,
+                task_name=preflight_gate_activity_name(app_name),
             )
-
-        # Floor of the remaining budget, and the one number the handler is told —
-        # the timeout message quotes it too, so what we enforce, what we report,
-        # and what we blame are all the same value.
-        handler_budget = max(1, int(remaining))
-        # Build form config from the extraction-input snapshot in the activity
-        # frame so app field reads stay outside the deterministic workflow.
-        metadata_dump = _config_from_snapshot(
-            input.extraction_snapshot, input.credential_ref_fields.values()
         )
-        preflight_input = PreflightInput(
-            credentials=credentials,
-            credentials_by_name=credentials_by_name,
-            entrypoint=input.entrypoint,
-            metadata=BaseMetadataConfig(**metadata_dump),
-            connection_config=BaseConnectionConfig(**metadata_dump),
-            # What is actually left, not the nominal budget: resolution above has
-            # already spent part of it. A handler sizing probes to this number is
-            # sizing to the deadline the wait_for below really enforces.
-            timeout_seconds=handler_budget,
-        )
-        # Redact every resolved secret from logs — the single-triple list and
-        # every named group, without assuming which path populated which.
-        all_creds = [
-            *credentials,
-            *(c for group in credentials_by_name.values() for c in group),
-        ]
-        # _no_verdict raises in hard mode, so it must never be called from inside
-        # this try — the raise would be re-caught below and _no_verdict would run
-        # a second time, double-emitting the outcome row and reclassifying the
-        # failure. Hence the flag: the timeout is handled after the try closes.
-        timed_out = False
         try:
-            with bind_invocation_context(app_name, all_creds):
-                # Deliberately not asyncio.wait_for: it cancels the handler and
-                # then *awaits* it, so a handler that swallows CancelledError
-                # either returns a value (wait_for hands it back and the budget
-                # is never enforced) or keeps running past start_to_close (the
-                # activity is killed and the classification is lost — the very
-                # defect this gate exists to fix). Waiting on the task instead
-                # lets us classify *at* the deadline, whatever the handler does.
-                check = asyncio.ensure_future(handler.preflight_check(preflight_input))
-                done, _ = await asyncio.wait({check}, timeout=remaining)
-                if done:
-                    result = check.result()
-                else:
-                    # Ask it to stop, but never await it — an uncooperative
-                    # handler must not be able to hold the activity open.
-                    check.cancel()
-                    # Abandoning a task without awaiting leaves any exception it
-                    # later raises unretrieved, which asyncio logs on GC. Consume
-                    # it (same fire-and-forget idiom as _runtime/offload.py).
-                    check.add_done_callback(
-                        lambda f: None if f.cancelled() else f.exception()
-                    )
-                    timed_out = True
-        except Exception as e:
-            # A handler that raises the deliberate block itself already carries a
-            # verdict and its own emitted row; pass it straight through rather
-            # than re-wrapping it as an unverifiable source.
-            if _is_gate_broken(e) or is_preflight_block(e):
-                raise
-            return _no_verdict(e)
-
-        if timed_out:
-            return _no_verdict(
-                AppTimeoutError(
-                    message=(
-                        "Preflight checks did not finish within the "
-                        f"{handler_budget}s budget"
-                    ),
-                    app_name=app_name,
-                    retryable=False,
+            # Resolve inside the activity (the workflow forwarded only references).
+            try:
+                credentials, credentials_by_name = await _resolve_gate_credentials(
+                    input
                 )
+            except Exception as e:
+                # Resolution is gate plumbing, so the default here is the opposite of
+                # the handler path below: only a *provable* credential absence is a
+                # config fact this run can be blamed for. Everything else — including
+                # the resolver's collapsed "unexpected vault error" not-founds —
+                # propagates and fails open.
+                if not _is_definitive_credential_absence(e):
+                    raise
+                return _no_verdict(e)
+
+            remaining = budget - (time.monotonic() - started)
+            if remaining < _min_handler_seconds(budget):
+                # Resolution ate the budget. That is the secret store being slow, not
+                # the source being unready — fail open rather than calling the handler
+                # with no time and blaming it for the timeout.
+                raise DependencyUnavailableError(
+                    message=(
+                        "Credential resolution consumed the entire preflight budget "
+                        f"({budget:.0f}s); no time left to verify the source"
+                    ),
+                    service="secret_store",
+                )
+
+            # Floor of the remaining budget, and the one number the handler is told —
+            # the timeout message quotes it too, so what we enforce, what we report,
+            # and what we blame are all the same value.
+            handler_budget = max(1, int(remaining))
+            # Build form config from the extraction-input snapshot in the activity
+            # frame so app field reads stay outside the deterministic workflow.
+            metadata_dump = _config_from_snapshot(
+                input.extraction_snapshot, input.credential_ref_fields.values()
             )
-        # The outcome event is the gate's queryable row (connector-pulse builds the
-        # dashboard from it). The activity holds the verdict, so it emits the
-        # proceeded/blocked rows; the workflow emits only no_verdict (fail-open).
-        # ``reason`` is the status on proceed, the primary FailureDetails.code on a
-        # block. Activity execution is at-least-once, so a retry after a lost
-        # completion can re-emit — consumers dedupe on (workflow_run_id, outcome).
-        if result.status is PreflightStatus.NOT_READY:
-            block_error = _build_block_error(result, app_name)
+            preflight_input = PreflightInput(
+                credentials=credentials,
+                credentials_by_name=credentials_by_name,
+                entrypoint=input.entrypoint,
+                metadata=BaseMetadataConfig(**metadata_dump),
+                connection_config=BaseConnectionConfig(**metadata_dump),
+                # What is actually left, not the nominal budget: resolution above has
+                # already spent part of it. A handler sizing probes to this number is
+                # sizing to the deadline the wait_for below really enforces.
+                timeout_seconds=handler_budget,
+            )
+            # Redact every resolved secret from logs — the single-triple list and
+            # every named group, without assuming which path populated which.
+            all_creds = [
+                *credentials,
+                *(c for group in credentials_by_name.values() for c in group),
+            ]
+            # _no_verdict raises in hard mode, so it must never be called from inside
+            # this try — the raise would be re-caught below and _no_verdict would run
+            # a second time, double-emitting the outcome row and reclassifying the
+            # failure. Hence the flag: the timeout is handled after the try closes.
+            timed_out = False
+            try:
+                with bind_invocation_context(app_name, all_creds):
+                    # Deliberately not asyncio.wait_for: it cancels the handler and
+                    # then *awaits* it, so a handler that swallows CancelledError
+                    # either returns a value (wait_for hands it back and the budget
+                    # is never enforced) or keeps running past start_to_close (the
+                    # activity is killed and the classification is lost — the very
+                    # defect this gate exists to fix). Waiting on the task instead
+                    # lets us classify *at* the deadline, whatever the handler does.
+                    check = asyncio.ensure_future(
+                        handler.preflight_check(preflight_input)
+                    )
+                    done, _ = await asyncio.wait({check}, timeout=remaining)
+                    if done:
+                        result = check.result()
+                    else:
+                        # Ask it to stop, but never await it — an uncooperative
+                        # handler must not be able to hold the activity open.
+                        check.cancel()
+                        # Abandoning a task without awaiting leaves any exception it
+                        # later raises unretrieved, which asyncio logs on GC. Consume
+                        # it (same fire-and-forget idiom as _runtime/offload.py).
+                        check.add_done_callback(
+                            lambda f: None if f.cancelled() else f.exception()
+                        )
+                        timed_out = True
+            except Exception as e:
+                # A handler that raises the deliberate block itself already carries a
+                # verdict and its own emitted row; pass it straight through rather
+                # than re-wrapping it as an unverifiable source.
+                if _is_gate_broken(e) or is_preflight_block(e):
+                    raise
+                return _no_verdict(e)
+
+            if timed_out:
+                return _no_verdict(
+                    AppTimeoutError(
+                        message=(
+                            "Preflight checks did not finish within the "
+                            f"{handler_budget}s budget"
+                        ),
+                        app_name=app_name,
+                        retryable=False,
+                    )
+                )
+            # The outcome event is the gate's queryable row (connector-pulse builds the
+            # dashboard from it). The activity holds the verdict, so it emits the
+            # proceeded/blocked rows; the workflow emits only no_verdict (fail-open).
+            # ``reason`` is the status on proceed, the primary FailureDetails.code on a
+            # block. Activity execution is at-least-once, so a retry after a lost
+            # completion can re-emit — consumers dedupe on (workflow_run_id, outcome).
+            if result.status is PreflightStatus.NOT_READY:
+                block_error = _build_block_error(result, app_name)
+                _emit_outcome(
+                    "blocked" if enforce else "would_block",
+                    block_error.details[0].code,
+                    result.checks,
+                    CLASSIFICATION_VERDICT,
+                    audience=block_error.details[0].audience.value,
+                )
+                if enforce:
+                    raise block_error
+                # Soft: the verdict stays honest NOT_READY; the gate just does not
+                # enforce it. The would_block row above is the loud record.
+                return result
             _emit_outcome(
-                "blocked" if enforce else "would_block",
-                block_error.details[0].code,
-                result.checks,
-                CLASSIFICATION_VERDICT,
-                audience=block_error.details[0].audience.value,
+                "proceeded", result.status.value, result.checks, CLASSIFICATION_VERDICT
             )
-            if enforce:
-                raise block_error
-            # Soft: the verdict stays honest NOT_READY; the gate just does not
-            # enforce it. The would_block row above is the loud record.
             return result
-        _emit_outcome(
-            "proceeded", result.status.value, result.checks, CLASSIFICATION_VERDICT
-        )
-        return result
+        finally:
+            heartbeat_stop.set()
+            try:
+                await asyncio.wait_for(heartbeat_task, timeout=1.0)
+            except (TimeoutError, Exception):
+                heartbeat_task.cancel()
+                try:
+                    await heartbeat_task
+                except Exception:
+                    logger.debug(
+                        "Gate heartbeat task did not cancel cleanly", exc_info=True
+                    )
 
     return preflight_gate

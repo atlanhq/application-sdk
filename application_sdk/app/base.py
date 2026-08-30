@@ -2059,6 +2059,7 @@ async def _run_preflight_gate(
             CLASSIFICATION_GATE_BROKEN,
             EMPTY_CHECK_MATRIX,
             FAILURE_AUDIENCE_KEY,
+            GATE_HEARTBEAT_TIMEOUT_SECONDS,
             PREFLIGHT_OUTCOME_EVENT,
             PreflightGateInput,
             gate_retry_policy,
@@ -2100,6 +2101,7 @@ async def _run_preflight_gate(
             gate_input,
             schedule_to_close_timeout=schedule_to_close,
             start_to_close_timeout=start_to_close,
+            heartbeat_timeout=timedelta(seconds=GATE_HEARTBEAT_TIMEOUT_SECONDS),
             retry_policy=gate_retry_policy(max_attempts),
         )
     except Exception as e:
