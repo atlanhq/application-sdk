@@ -93,9 +93,18 @@ def stage(
     fleet_written = 0
     if not single_repo:
         fleet_json = output_dir / "fleet.json"
-        if fleet_json.is_file():
-            shutil.copyfile(fleet_json, stage_dir / "fleet.json")
-            fleet_written = 1
+        if not fleet_json.is_file():
+            # Fail closed, matching publish_fleet_dashboard.py. Staging the
+            # per-repo files without the aggregate would publish a dashboard
+            # whose fleet numbers silently belong to the previous run. The
+            # `aws s3 cp` this replaced got that for free under `set -euo
+            # pipefail`; skipping the file quietly would be a regression.
+            raise RuntimeError(
+                f"{fleet_json} is missing on a full-fleet run — refusing to "
+                "stage per-repo data without the aggregate the dashboard reads"
+            )
+        shutil.copyfile(fleet_json, stage_dir / "fleet.json")
+        fleet_written = 1
         fleet_history = output_dir / f"{HISTORY_PREFIX}{FLEET_SLUG}{HISTORY_SUFFIX}"
         if fleet_history.is_file():
             existing = existing_history_dir / f"{FLEET_SLUG}{HISTORY_SUFFIX}"
@@ -126,12 +135,16 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"scanner output not found: {args.output_dir}", file=sys.stderr)
         return 1
 
-    counts = stage(
-        args.output_dir,
-        args.existing_history_dir,
-        args.stage_dir,
-        args.single_repo,
-    )
+    try:
+        counts = stage(
+            args.output_dir,
+            args.existing_history_dir,
+            args.stage_dir,
+            args.single_repo,
+        )
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     print(
         f"staged {counts['repos']} repo files, {counts['histories']} histories, "
         f"fleet.json={'yes' if counts['fleet_json'] else 'no'}"

@@ -132,6 +132,53 @@ def test_blank_lines_are_dropped(tmp_path):
     )
 
 
+def test_full_fleet_run_refuses_to_stage_without_the_aggregate(tmp_path):
+    """Fail closed: per-repo files without fleet.json publish stale fleet numbers.
+
+    The `aws s3 cp` this replaced got that for free under `set -euo pipefail`.
+    Skipping a missing file quietly would leave the dashboard showing the
+    previous run's aggregate beside this run's per-repo data, with nothing red.
+    """
+    out = _scanner_output(tmp_path, repos=["atlanhq_a"], fleet=False)
+
+    try:
+        stage.stage(out, _existing(tmp_path), tmp_path / "stage", single_repo="")
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "refusing to stage" in str(exc)
+
+
+def test_single_repo_run_tolerates_a_missing_aggregate(tmp_path):
+    # Single-repo mode never publishes fleet.json, so its absence is expected
+    # rather than a fault — the guard above must not fire here.
+    out = _scanner_output(tmp_path, repos=["atlanhq_a"], fleet=False)
+
+    counts = stage.stage(
+        out, _existing(tmp_path), tmp_path / "stage", single_repo="atlanhq/a"
+    )
+
+    assert counts["repos"] == 1
+    assert counts["fleet_json"] == 0
+
+
+def test_main_exits_nonzero_when_the_aggregate_is_missing(tmp_path, capsys):
+    out = _scanner_output(tmp_path, repos=["atlanhq_a"], fleet=False)
+
+    rc = stage.main(
+        [
+            "--output-dir",
+            str(out),
+            "--existing-history-dir",
+            str(_existing(tmp_path)),
+            "--stage-dir",
+            str(tmp_path / "stage"),
+        ]
+    )
+
+    assert rc == 1
+    assert "refusing to stage" in capsys.readouterr().err
+
+
 def test_main_reports_missing_scanner_output(tmp_path, capsys):
     rc = stage.main(
         [
