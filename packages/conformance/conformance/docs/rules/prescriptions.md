@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**46 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046) (all AST-based / cross-artifact)
+**47 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -69,6 +69,7 @@ reassigned.
 | [P045](#p045) | `PrivateErrorClassImport` | `warn` | `app` | `error-seam` | — | 0.21.0 |
 | [P046](#p046) | `LocaleDependentTextIO` | `warn` | `sdk` | `portability` | — | 0.24.0 |
 | [P047](#p047) | `PreflightFailureLoggedAsWarning` | `warn` | `app` | `preflight-gate` | — | 0.24.0 |
+| [P048](#p048) | `NonAtomicDestinationWrite` | `warn` | `sdk` | `storage-atomicity` | — | 0.24.0 |
 
 ---
 
@@ -1870,5 +1871,43 @@ alias are both matched, on any receiver named like a logger (`logger`, `log`,
 `self._log`, `logging`). Only class-method `preflight_check` overrides are scanned:
 module-level per-entrypoint `preflight_check` functions are not resolved, and helper
 functions the method calls are not followed.
+
+---
+
+## P048 — `NonAtomicDestinationWrite` {#p048}
+
+**Tier:** `warn` · **Scope:** `sdk` · **Category:** `storage-atomicity` · **Autofixable:** — · **Since:** 0.24.0
+
+> os.open(..., O_TRUNC) writes a destination in place with no os.replace publish in scope
+
+**Rationale:** os.open with O_TRUNC truncates the destination at open time and streams bytes into it in
+place, so any concurrent reader — another activity materialising the same
+FileReference.local_path, a parser already holding the path — observes a truncated or
+zero-filled file at the artifact's real name. A production RCA traced a JSONL parse
+failure at char 0 to exactly this: two concurrent downloads of one shared local_path,
+both reporting success. Write to a staging file (PARTIAL_DIRNAME, or the common.atomic
+helpers) and publish with os.replace, so the destination only ever holds a complete file
+(CONNECT-1126).
+
+An `os.open` call whose flags include `O_TRUNC`, in a function that never calls
+`os.replace` / `os.rename`.  The destination is truncated the moment the descriptor
+opens and filled in place, so a concurrent reader of the same path sees a partial file
+at the artifact's real name — indistinguishable from a complete one until a parser fails
+on it much later.
+
+`FileReference.local_path` is a deterministic function of (run, stage, entity), so
+concurrent activities of one run share destinations by construction; an in-place write
+at such a path is reader-visible corruption waiting for a schedule to trigger it
+(CONNECT-1126).
+
+The sanctioned pattern is the FND-318 doctrine: write to a staging file — the
+`common.atomic` helpers, or an explicit temp inside `PARTIAL_DIRNAME` — and publish with
+`os.replace`, which is atomic on POSIX and Windows.  An `os.open` + `O_TRUNC` whose
+enclosing function publishes via `os.replace` / `os.rename` is recognised as that
+pattern and passes.
+
+Land as `WARN`: a justified inline `# conformance: ignore[P048] <reason>` records any
+single-consumer exception (e.g. a signal handler's diagnostic dump) and stays visible in
+SARIF.
 
 ---

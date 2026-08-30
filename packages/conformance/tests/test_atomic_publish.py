@@ -1,0 +1,194 @@
+"""Meta-tests for the P-series atomic-publish check (P048, CONNECT-1126).
+
+P048 flags ``os.open`` calls whose flags carry ``O_TRUNC`` when no enclosing
+scope publishes via ``os.replace`` / ``os.rename``.  Two properties of the
+defect drive what is tested here:
+
+* **The publish must be at the enclosing scope's own level.**  One checkpoint
+  writer with its own ``os.replace`` elsewhere in a module must not clear a
+  violating ``os.open`` in a sibling function — the shape that would have
+  hidden the original defect, since the module that carried it also carried an
+  atomic sidecar writer.
+* **The closure pattern passes.**  Chunk workers writing through a descriptor
+  while the outer function publishes is the sanctioned chunked-download shape.
+"""
+
+from __future__ import annotations
+
+from conformance.suite.checks.atomic_publish import RULE_ID, SERIES, scan_text
+from conformance.suite.schema.findings import Finding
+
+_VIOLATION = (
+    "import os\n"
+    "def download(path):\n"
+    "    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)\n"
+    "    os.write(fd, b'x')\n"
+    "    os.close(fd)\n"
+)
+
+
+def _rule(src: str, file: str = "application_sdk/x.py") -> list[Finding]:
+    """P048 findings from a per-file scan of *src* at path *file*."""
+    return [f for f in scan_text(src, file) if f.rule_id == RULE_ID]
+
+
+def test_series_letter() -> None:
+    assert SERIES == "P"
+    assert RULE_ID == "P048"
+
+
+# ── Fires — in-place O_TRUNC write with no publish in scope ──────────────────
+
+
+def test_p048_fires_on_in_place_o_trunc_open() -> None:
+    fs = _rule(_VIOLATION)
+    assert len(fs) == 1 and fs[0].line == 3
+
+
+def test_p048_fires_on_bare_imported_o_trunc() -> None:
+    src = (
+        "import os\n"
+        "from os import O_CREAT, O_TRUNC, O_WRONLY\n"
+        "def write(path):\n"
+        "    fd = os.open(path, O_WRONLY | O_CREAT | O_TRUNC)\n"
+    )
+    assert len(_rule(src)) == 1
+
+
+def test_p048_fires_on_conditional_o_trunc() -> None:
+    """The resuming-download shape: O_TRUNC behind a conditional still counts."""
+    src = (
+        "import os\n"
+        "def download(path, resuming):\n"
+        "    flags = 0\n"
+        "    fd = os.open(path, os.O_WRONLY | (0 if resuming else os.O_TRUNC))\n"
+    )
+    assert len(_rule(src)) == 1
+
+
+def test_p048_fires_when_o_trunc_arrives_through_a_flags_variable() -> None:
+    """The incident's chunked-download spelling: flags built in a local, then
+    ``os.open(path, flags)`` — the call itself never names O_TRUNC."""
+    src = (
+        "import os\n"
+        "def download(path, resuming):\n"
+        "    flags = os.O_WRONLY | os.O_CREAT | (0 if resuming else os.O_TRUNC)\n"
+        "    fd = os.open(path, flags, 0o600)\n"
+    )
+    fs = _rule(src)
+    assert len(fs) == 1 and fs[0].line == 4
+
+
+def test_p048_flags_variable_still_passes_with_a_publish() -> None:
+    src = (
+        "import os\n"
+        "def download(part, path):\n"
+        "    flags = os.O_WRONLY | os.O_TRUNC\n"
+        "    fd = os.open(part, flags)\n"
+        "    os.close(fd)\n"
+        "    os.replace(part, path)\n"
+    )
+    assert _rule(src) == []
+
+
+def test_p048_fires_at_module_level() -> None:
+    src = "import os\nfd = os.open('x', os.O_WRONLY | os.O_TRUNC)\n"
+    fs = _rule(src)
+    assert len(fs) == 1 and fs[0].line == 2
+
+
+def test_p048_is_not_cleared_by_a_sibling_functions_replace() -> None:
+    """The shape that would have hidden the original defect: the module that
+    carried the in-place download also carried an atomic checkpoint writer."""
+    src = (
+        "import os\n"
+        "def save_state(tmp, state_path):\n"
+        "    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)\n"
+        "    os.close(fd)\n"
+        "    os.replace(tmp, state_path)\n"
+        "def download(path):\n"
+        "    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)\n"
+        "    os.close(fd)\n"
+    )
+    fs = _rule(src)
+    assert len(fs) == 1 and fs[0].line == 7
+
+
+# ── Passes — the temp-then-replace pattern, and non-truncating opens ─────────
+
+
+def test_p048_passes_when_same_function_publishes_via_replace() -> None:
+    src = (
+        "import os\n"
+        "def save(tmp, path):\n"
+        "    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)\n"
+        "    os.close(fd)\n"
+        "    os.replace(tmp, path)\n"
+    )
+    assert _rule(src) == []
+
+
+def test_p048_passes_when_same_function_publishes_via_rename() -> None:
+    src = (
+        "import os\n"
+        "def save(tmp, path):\n"
+        "    fd = os.open(tmp, os.O_WRONLY | os.O_TRUNC)\n"
+        "    os.rename(tmp, path)\n"
+    )
+    assert _rule(src) == []
+
+
+def test_p048_passes_on_the_closure_pattern() -> None:
+    """Workers write through a descriptor; the outer function publishes."""
+    src = (
+        "import os\n"
+        "def download(part, path):\n"
+        "    fd = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)\n"
+        "    def worker(chunk):\n"
+        "        os.write(fd, chunk)\n"
+        "    worker(b'x')\n"
+        "    os.close(fd)\n"
+        "    os.replace(part, path)\n"
+    )
+    assert _rule(src) == []
+
+
+def test_p048_passes_without_o_trunc() -> None:
+    src = "import os\nfd = os.open('x', os.O_WRONLY | os.O_CREAT, 0o600)\n"
+    assert _rule(src) == []
+
+
+def test_p048_ignores_the_builtin_open() -> None:
+    """The builtin returns a file object, not a descriptor — different class."""
+    src = "fh = open('x', 'wb')\nfh.write(b'x')\n"
+    assert _rule(src) == []
+
+
+def test_p048_ignores_o_trunc_outside_os_open() -> None:
+    src = "import os\nFLAGS = os.O_WRONLY | os.O_TRUNC\n"
+    assert _rule(src) == []
+
+
+# ── Inline suppression ───────────────────────────────────────────────────────
+
+
+def test_p048_inline_ignore_suppresses() -> None:
+    src = (
+        "import os\n"
+        "def dump(path):\n"
+        "    fd = os.open(path, os.O_WRONLY | os.O_TRUNC)  # conformance: ignore[P048] single-consumer diagnostic\n"
+    )
+    (finding,) = _rule(src)
+    assert finding.suppressed
+    assert finding.suppression_justification == "single-consumer diagnostic"
+
+
+def test_p048_ignore_on_line_above_suppresses() -> None:
+    src = (
+        "import os\n"
+        "def dump(path):\n"
+        "    # conformance: ignore[P048] single-consumer diagnostic\n"
+        "    fd = os.open(path, os.O_WRONLY | os.O_TRUNC)\n"
+    )
+    (finding,) = _rule(src)
+    assert finding.suppressed
