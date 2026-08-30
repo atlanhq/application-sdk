@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.30.0
-source-sha:    17caa4a9026ff1093521f9cc70e722c574150e7c
-source-date:   2026-08-29T17:15:36+01:00
+source-sha:    29deb4a7d2666f4ba8063f13b529a80c5c7378d6
+source-date:   2026-08-31T00:27:28+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -6188,7 +6188,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `passed: bool` `= False` — Whether the check passed.
   - `message: str` `= ''` — Deprecated: prefer :attr:`error`. Human-facing line shown when ``error``
   - `error: FailureDetails | None` — Typed failure for a failed check — set only on failed checks.
-  - `duration_ms: float` `= 0.0` — How long the check took in milliseconds.
+  - `duration_ms: float` `= -1.0` — How long the check took in milliseconds. ``-1.0`` means not measured —
   - `resolved_message: str` — Message under the precedence rule: a failed check's ``error`` wins.
   - `resolved_suggested_action: str` — Suggested action from a failed check's ``error``; empty otherwise.
 - **Defined in:** `application_sdk/handler/contracts.py`
