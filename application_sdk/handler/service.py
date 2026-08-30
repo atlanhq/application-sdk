@@ -2827,6 +2827,23 @@ def create_app_handler_service(
         ]
         context = _create_context(credentials)
         with bind_handler_context(context):
+            from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — handler/__init__ imports this module; a top-level import back into preflight_gate is a cycle
+                PreflightSurface,
+                emit_preflight_check_outcome,
+                emit_preflight_crash_outcome,
+            )
+
+            def _crash_row(e: BaseException) -> None:
+                emit_preflight_crash_outcome(
+                    logger,
+                    app_name,
+                    e,
+                    surface=PreflightSurface.HTTP,
+                    entrypoint=entrypoint,
+                    request_id=context.request_id_str,
+                )
+
+            entrypoint = ""
             try:
                 logger.info(
                     "Preflight check started: app=%s request=%s",
@@ -2844,11 +2861,6 @@ def create_app_handler_service(
                     result = await ep_fn(preflight_input, context)
                 else:
                     result = await handler.preflight_check(preflight_input)
-                from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — handler/__init__ imports this module; a top-level import back into preflight_gate is a cycle
-                    PreflightSurface,
-                    emit_preflight_check_outcome,
-                )
-
                 emit_preflight_check_outcome(
                     logger,
                     app_name,
@@ -2917,19 +2929,7 @@ def create_app_handler_service(
                     e,
                     exc_info=True,
                 )
-                from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — handler/__init__ imports this module; a top-level import back into preflight_gate is a cycle
-                    PreflightSurface,
-                    emit_preflight_crash_outcome,
-                )
-
-                emit_preflight_crash_outcome(
-                    logger,
-                    app_name,
-                    e,
-                    surface=PreflightSurface.HTTP,
-                    entrypoint=entrypoint,
-                    request_id=context.request_id_str,
-                )
+                _crash_row(e)
                 raise HTTPException(status_code=e.http_status, detail=str(e)) from None
             except AppError as e:
                 # Forward-looking: typed AppError leaves from connectors that raise
@@ -2942,19 +2942,7 @@ def create_app_handler_service(
                     e,
                     exc_info=True,
                 )
-                from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — handler/__init__ imports this module; a top-level import back into preflight_gate is a cycle
-                    PreflightSurface,
-                    emit_preflight_crash_outcome,
-                )
-
-                emit_preflight_crash_outcome(
-                    logger,
-                    app_name,
-                    e,
-                    surface=PreflightSurface.HTTP,
-                    entrypoint=entrypoint,
-                    request_id=context.request_id_str,
-                )
+                _crash_row(e)
                 raise HTTPException(
                     status_code=_app_error_to_http_status(e), detail=str(e)
                 ) from None
@@ -2972,19 +2960,7 @@ def create_app_handler_service(
                     e,
                     exc_info=True,
                 )
-                from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — handler/__init__ imports this module; a top-level import back into preflight_gate is a cycle
-                    PreflightSurface,
-                    emit_preflight_crash_outcome,
-                )
-
-                emit_preflight_crash_outcome(
-                    logger,
-                    app_name,
-                    e,
-                    surface=PreflightSurface.HTTP,
-                    entrypoint=entrypoint,
-                    request_id=context.request_id_str,
-                )
+                _crash_row(e)
                 raise HTTPException(
                     status_code=500, detail="Internal server error"
                 ) from None

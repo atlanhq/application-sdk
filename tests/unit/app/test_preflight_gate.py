@@ -421,9 +421,7 @@ class TestGateActivityHeartbeat:
     abandoned attempt keep running and emit an orphan verdict row (gap 1).
     """
 
-    async def test_gate_activity_is_scheduled_with_a_heartbeat_timeout(
-        self, safe_log
-    ) -> None:
+    async def test_gate_activity_is_scheduled_with_a_heartbeat_timeout(self) -> None:
         exec_mock, exec_patch = _exec(
             PreflightOutput(status=PreflightStatus.READY, checks=[])
         )

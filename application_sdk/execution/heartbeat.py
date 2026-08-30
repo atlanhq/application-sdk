@@ -82,6 +82,40 @@ _MEMORY_WARN_HYSTERESIS = (
 )
 
 
+async def stop_heartbeat_task(
+    task: asyncio.Task,
+    stop_event: asyncio.Event,
+    task_name: str,
+) -> None:
+    """Stop an ``auto_heartbeat_loop`` task, letting nothing escape.
+
+    Sets the loop's stop event, bounds the wait for a graceful exit, and
+    cancels if the bound expires — then awaits the cancellation. Cleanup must
+    never outrank the payload it follows: a ``finally`` that raised (a
+    swallowed-then-re-raised ``CancelledError`` is a ``BaseException``) would
+    replace the verdict or result the caller just computed.
+
+    This function deliberately catches ``BaseException``: the task being
+    cleaned up may swallow the cancel and re-raise it on await, and a stuck
+    loop must not turn a completed activity into a failed one.
+    """
+    stop_event.set()
+    try:
+        await asyncio.wait_for(task, timeout=1.0)
+        return
+    # conformance: ignore[E002] cleanup must never outrank the payload; a stuck loop is not the caller's failure
+    except BaseException:  # noqa: S110 — the cancel below is the handling
+        pass
+    task.cancel()
+    try:
+        await task
+    # conformance: ignore[E002] the cancelled task's BaseException is the cleanup ending, not an error to act on
+    except BaseException:
+        logger.debug(
+            "Heartbeat task '%s' did not stop cleanly", task_name, exc_info=True
+        )
+
+
 class HeartbeatController(Protocol):
     """Protocol for heartbeat operations."""
 

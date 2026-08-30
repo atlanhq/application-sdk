@@ -371,7 +371,9 @@ GATE_ATTEMPTS_MAX = 3
 # and the mode decision — that is the CNCT-99 defect.
 GATE_ACTIVITY_HEADROOM_SECONDS = 5
 
-GATE_HEARTBEAT_TIMEOUT_SECONDS = 30
+#: 1:6 with the interval so several slow ticks cannot kill a healthy attempt.
+GATE_HEARTBEAT_TIMEOUT_SECONDS = 60
+#: A sixth of the timeout; both knobs live here so they cannot drift apart.
 GATE_HEARTBEAT_INTERVAL_SECONDS = 10
 
 # Floor on what's left after credential resolution. Below this there is no point
@@ -840,6 +842,32 @@ def _is_gate_broken(exc: BaseException) -> bool:
     return isinstance(exc, AppError) and type(exc).category in _GATE_BROKEN_CATEGORIES
 
 
+def _activity_info() -> Any:
+    """``activity.info()``, or ``None`` when it cannot be read.
+
+    The single tolerant read every gate helper routes through: no activity
+    context (direct call, unit test) is expected and returns ``None``
+    silently; anything unexpected degrades the same way with a DEBUG log —
+    a helper that exists to stop telemetry reads from breaking a run must
+    never become the thing that breaks one.
+    """
+    try:
+        return activity.info()
+    except RuntimeError:
+        return None
+    except Exception:
+        logger.debug("Could not read activity.info()", exc_info=True)
+        return None
+
+
+def _gate_heartbeat() -> None:
+    try:
+        activity.heartbeat()
+    # conformance: ignore[E002] no activity context — nothing to beat and nothing to report
+    except RuntimeError:
+        pass
+
+
 def _effective_budget(budget_seconds: float) -> float:
     """The handler budget, capped by the deadline Temporal actually enforces.
 
@@ -851,26 +879,11 @@ def _effective_budget(budget_seconds: float) -> float:
     the classification would be lost. Reading the real deadline back off
     ``activity.info()`` makes "the gate's own timeout wins" true by construction.
     """
-    try:
-        start_to_close = activity.info().start_to_close_timeout
-        if not isinstance(start_to_close, timedelta):
-            return budget_seconds
-        ceiling = start_to_close.total_seconds() - GATE_ACTIVITY_HEADROOM_SECONDS
-        return min(budget_seconds, ceiling) if ceiling > 0 else budget_seconds
-    except RuntimeError:
-        # No activity context (direct call, unit test) — expected, not notable.
+    start_to_close = getattr(_activity_info(), "start_to_close_timeout", None)
+    if not isinstance(start_to_close, timedelta):
         return budget_seconds
-    # This function exists to stop a budget skew from breaking a run, so it must
-    # never become the thing that breaks one; anything unexpected degrades to the
-    # declared budget.
-    except Exception:
-        logger.debug(
-            "Could not read the activity's start_to_close; using the declared "
-            "preflight budget of %ss",
-            budget_seconds,
-            exc_info=True,
-        )
-        return budget_seconds
+    ceiling = start_to_close.total_seconds() - GATE_ACTIVITY_HEADROOM_SECONDS
+    return min(budget_seconds, ceiling) if ceiling > 0 else budget_seconds
 
 
 def _attempt_is_live() -> bool:
@@ -883,16 +896,7 @@ def _attempt_is_live() -> bool:
     (CONNECT-1170 gap 1). Tolerant of no activity context (direct calls, unit
     tests) and of a missing/None timeout, mirroring ``_effective_budget``.
     """
-    try:
-        info = activity.info()
-    except RuntimeError:
-        return True
-    except Exception:
-        logger.debug(
-            "Could not read the activity's start time; treating the attempt as live",
-            exc_info=True,
-        )
-        return True
+    info = _activity_info()
     started_time = getattr(info, "started_time", None)
     start_to_close = getattr(info, "start_to_close_timeout", None)
     if not isinstance(started_time, datetime) or not isinstance(
@@ -932,10 +936,7 @@ def _is_definitive_credential_absence(exc: BaseException) -> bool:
 
 def _current_attempt() -> int:
     """This activity attempt, or 1 outside an activity context."""
-    try:
-        return activity.info().attempt
-    except RuntimeError:  # not inside an activity context
-        return 1
+    return getattr(_activity_info(), "attempt", 1)
 
 
 def _is_final_attempt(attempts: int) -> bool:
@@ -948,11 +949,8 @@ def _is_final_attempt(attempts: int) -> bool:
     activity context (direct calls, unit tests) the answer is ``True`` —
     enforcement must never be skipped just because the attempt is unknown.
     """
-    try:
-        attempt = activity.info().attempt
-    except RuntimeError:  # not inside an activity context
-        return True
-    return attempt >= max(1, attempts)
+    attempt = getattr(_activity_info(), "attempt", None)
+    return True if attempt is None else attempt >= max(1, attempts)
 
 
 def _unverifiable_result(exc: BaseException, app_name: str) -> PreflightOutput:
@@ -1248,13 +1246,8 @@ def build_preflight_gate_activity(
 
         from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — lazy: preserves the auto_heartbeat_loop patch seam, same idiom as activities.py
             auto_heartbeat_loop,
+            stop_heartbeat_task,
         )
-
-        def _gate_heartbeat() -> None:
-            try:
-                activity.heartbeat()
-            except RuntimeError:
-                pass
 
         heartbeat_stop = asyncio.Event()
         heartbeat_task = asyncio.ensure_future(
@@ -1343,6 +1336,9 @@ def build_preflight_gate_activity(
                     else:
                         # Ask it to stop, but never await it — an uncooperative
                         # handler must not be able to hold the activity open.
+                        # check.cancel() still cannot interrupt a probe parked
+                        # in run_in_executor: the gate classifies at the
+                        # deadline, but the thread runs on until it returns.
                         check.cancel()
                         # Abandoning a task without awaiting leaves any exception it
                         # later raises unretrieved, which asyncio logs on GC. Consume
@@ -1395,16 +1391,8 @@ def build_preflight_gate_activity(
             )
             return result
         finally:
-            heartbeat_stop.set()
-            try:
-                await asyncio.wait_for(heartbeat_task, timeout=1.0)
-            except (TimeoutError, Exception):
-                heartbeat_task.cancel()
-                try:
-                    await heartbeat_task
-                except Exception:
-                    logger.debug(
-                        "Gate heartbeat task did not cancel cleanly", exc_info=True
-                    )
+            await stop_heartbeat_task(
+                heartbeat_task, heartbeat_stop, preflight_gate_activity_name(app_name)
+            )
 
     return preflight_gate

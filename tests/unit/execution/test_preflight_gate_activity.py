@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import threading
 import warnings
 from contextlib import ExitStack, contextmanager
 from datetime import datetime, timedelta, timezone
@@ -29,7 +28,6 @@ from application_sdk.errors.leaves import (
 )
 from application_sdk.execution._temporal.preflight_gate import (
     _LOG_ROW_IS_ONLY_CHANNEL,
-    CLASSIFICATION_SOURCE_UNVERIFIABLE,
     EMPTY_CHECK_MATRIX,
     FAILURE_AUDIENCE_KEY,
     GATE_TIMEOUT_DEFAULT_SECONDS,
@@ -41,6 +39,7 @@ from application_sdk.execution._temporal.preflight_gate import (
     emit_preflight_check_outcome,
     emit_preflight_crash_outcome,
     input_type_supports_gate,
+    is_preflight_block,
     preflight_gate_activity_name,
 )
 from application_sdk.execution.errors import ApplicationError
@@ -59,7 +58,6 @@ from application_sdk.handler.contracts import (
 from application_sdk.infrastructure.credential_vault import CredentialVaultError
 from application_sdk.observability.logger_adaptor import (
     CHECK_MATRIX_KEY,
-    GATE_CLASSIFICATION_KEY,
     GATE_MODE_KEY,
     PREFLIGHT_SURFACE_KEY,
 )
@@ -1455,56 +1453,51 @@ class TestOrphanedAttemptEmission:
         assert _outcome_event(m) is None
 
 
-class TestBudgetCancelCannotStopExecutorWork:
-    """CONNECT-1170 gap 2, part A — pins the limitation; passes today.
+class TestHeartbeatCleanupCannotOutrankTheVerdict:
+    """CONNECT-1170 Round 1 Must fix 1: cleanup must never replace the verdict.
 
-    ``check.cancel()`` detaches the awaiting coroutine, but a probe already
-    running in a thread pool (``clients/sql.py`` parks in ``run_in_executor``)
-    cannot be interrupted: the gate classifies the timeout on time, yet the
-    underlying work keeps burning a worker thread. This is the boundary of the
-    "the work actually stops" claim — if the gate ever gains a hard kill, the
-    final assertion here is the one to flip.
+    A heartbeat task that ignores its stop event and swallows cancellation
+    makes ``finally`` raise ``CancelledError`` — a ``BaseException`` that
+    replaces the block the gate just decided on, turning a hard-mode block
+    into a fail-open proceed.
     """
 
-    async def test_gate_classifies_at_deadline_but_executor_thread_survives(
-        self,
-    ) -> None:
-        entered = threading.Event()
-        release = threading.Event()
-        finished = threading.Event()
+    @staticmethod
+    async def _unstoppable_loop(**kwargs):
+        while True:
+            await asyncio.sleep(60)
 
-        class _ExecutorParkedHandler(DefaultHandler):
-            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-                def blocking_probe() -> None:
-                    entered.set()
-                    release.wait(10)
-                    finished.set()
-
-                await asyncio.get_running_loop().run_in_executor(None, blocking_probe)
-                return PreflightOutput(status=PreflightStatus.READY, checks=[])
-
-        gate = build_preflight_gate_activity(
-            _ExecutorParkedHandler(),
-            app_name="myapp",
-            enforce=False,
-            budget_seconds=0.3,
+    async def test_hard_mode_block_survives_a_stuck_heartbeat_task(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="connectivity", passed=False)],
         )
-        try:
-            with mock.patch(_LOGGER) as m:
-                result = await gate(PreflightGateInput())
+        gate = _verdict_gate(out, enforce=True)
+        with (
+            mock.patch(
+                "application_sdk.execution.heartbeat.auto_heartbeat_loop",
+                self._unstoppable_loop,
+            ),
+            mock.patch(f"{_GATE}.GATE_HEARTBEAT_INTERVAL_SECONDS", 0.01),
+        ):
+            with pytest.raises(BaseException) as excinfo:
+                await gate(PreflightGateInput())
+        assert is_preflight_block(excinfo.value) is True
+        assert not isinstance(excinfo.value, asyncio.CancelledError)
 
-            # The budget IS enforced at the gate's level: an honest
-            # unverifiable verdict at the deadline.
-            assert result.status is PreflightStatus.NOT_READY
-            event = _outcome_event(m)
-            assert event is not None
-            assert event["outcome"] == "would_block"
-            assert event[GATE_CLASSIFICATION_KEY] == CLASSIFICATION_SOURCE_UNVERIFIABLE
-            # But the probe thread survived the cancel: the work did not stop.
-            assert entered.wait(5)
-            assert not finished.is_set()
-        finally:
-            release.set()
+    async def test_soft_mode_ready_survives_a_stuck_heartbeat_task(self) -> None:
+        gate = _verdict_gate(
+            PreflightOutput(status=PreflightStatus.READY, checks=[]), enforce=False
+        )
+        with (
+            mock.patch(
+                "application_sdk.execution.heartbeat.auto_heartbeat_loop",
+                self._unstoppable_loop,
+            ),
+            mock.patch(f"{_GATE}.GATE_HEARTBEAT_INTERVAL_SECONDS", 0.01),
+        ):
+            result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.READY
 
 
 class TestLiveAttemptStillEmits:
@@ -1534,23 +1527,50 @@ class TestLiveAttemptStillEmits:
         assert event is not None
         assert event["outcome"] == "would_block"
 
+    async def test_attempt_near_its_deadline_still_emits_verdict_row(self) -> None:
+        # Production geometry: the gate emits ~5s before the deadline (the
+        # headroom GATE_ACTIVITY_HEADROOM_SECONDS reserves). A guard that
+        # suppresses there is the over-suppression that would actually bite.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="connectivity", passed=False)],
+        )
+        gate = _verdict_gate(out, enforce=False)
+        near_deadline = SimpleNamespace(
+            attempt=1,
+            start_to_close_timeout=timedelta(seconds=60),
+            started_time=datetime.now(timezone.utc) - timedelta(seconds=55),
+        )
+        with (
+            mock.patch(f"{_GATE}.activity.info", return_value=near_deadline),
+            mock.patch(_LOGGER) as m,
+        ):
+            await gate(PreflightGateInput())
+        event = _outcome_event(m)
+        assert event is not None
+        assert event["outcome"] == "would_block"
+
 
 class TestGateHeartbeat:
     """CONNECT-1170 gap 3: the activity heartbeats while the handler runs."""
 
     async def test_heartbeat_sent_while_handler_runs(self) -> None:
-        class _SlowReadyHandler(DefaultHandler):
+        beat = asyncio.Event()
+
+        def _record_beat() -> None:
+            beat.set()
+
+        class _WaitingReadyHandler(DefaultHandler):
             async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-                await asyncio.sleep(0.05)
+                await beat.wait()
                 return PreflightOutput(status=PreflightStatus.READY, checks=[])
 
         gate = build_preflight_gate_activity(
-            _SlowReadyHandler(), app_name="myapp", enforce=False
+            _WaitingReadyHandler(), app_name="myapp", enforce=False
         )
         with (
             mock.patch(f"{_GATE}.GATE_HEARTBEAT_INTERVAL_SECONDS", 0.01),
-            mock.patch(f"{_GATE}.activity.heartbeat") as beat,
+            mock.patch(f"{_GATE}.activity.heartbeat", side_effect=_record_beat),
         ):
             result = await gate(PreflightGateInput())
         assert result.status is PreflightStatus.READY
-        assert beat.call_count >= 1

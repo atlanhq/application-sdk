@@ -462,14 +462,13 @@ class TestPreflightEndpoint:
         assert response.status_code == 500
         rows = [
             c
-            for c in [
-                *ml.info.call_args_list,
-                *ml.warning.call_args_list,
-                *ml.error.call_args_list,
-            ]
+            for c in ml.error.call_args_list
             if c.args and c.args[0] == "Preflight check outcome"
         ]
-        assert rows
+        assert len(rows) == 1
+        kwargs = rows[0].kwargs
+        assert kwargs["outcome"] == "crashed"
+        assert kwargs["preflight_surface"] == "http"
 
     def test_malformed_entrypoint_400_emits_no_crash_row(self) -> None:
         client = _make_client()
