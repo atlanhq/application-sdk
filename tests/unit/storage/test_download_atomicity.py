@@ -126,9 +126,9 @@ class TestDownloadAtomicPublish:
             b_may_write.set()
             await task_b
 
-        assert observed == content, (
-            f"reader-visible corruption after download A completed: {observed!r}"
-        )
+        assert (
+            observed == content
+        ), f"reader-visible corruption after download A completed: {observed!r}"
         assert path.read_bytes() == content
 
     async def test_chunked_download_never_exposes_preallocated_file(
