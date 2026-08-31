@@ -836,12 +836,12 @@ likewise out of scope — CPU, not I/O, and used for small payloads everywhere. 
 them by name would flag the very in-memory parsing `json.loads` is allowed to do.
 
 Across that data-scale inventory, a call the source already marks as async is never
-flagged — the operand of `await`, the iterable of an `async for`, the context expression
-of an `async with`.  An awaited `path.read_text()` is `anyio.Path`; `async for p in
-path.glob(...)` is an async iterator.  The name alone cannot separate those from their
-blocking namesakes; the async syntax can.  A `lambda` body counts as a sync scope, like
-a nested `def`, so the prescribed offload — `await run_in_thread(lambda:
-list(path.rglob('*')))` — is silent rather than a finding in its own right.
+flagged — the operand of `await`, and the iterable of an `async for`.  An awaited
+`path.read_text()` is `anyio.Path`; `async for p in path.glob(...)` is an async
+iterator.  The name alone cannot separate those from their blocking namesakes; the async
+syntax can.  A `lambda` body counts as a sync scope, like a nested `def`, so the
+prescribed offload — `await run_in_thread(lambda: list(path.rglob('*')))` — is silent
+rather than a finding in its own right.
 
 Blocking sync I/O and filesystem work are reported only **outside** workflow context —
 inside workflow methods the same calls are owned by P020 (sleep) and P021 (file/network

@@ -45,14 +45,13 @@ code — the second half of the user's async-correctness ask.  Two patterns:
   matching them by name would flag string parsing, not file work.
 
 Across that whole data-scale inventory, a call the source already marks as
-async is skipped: the direct operand of ``await``, the iterable of an
-``async for``, and the context expression of an ``async with``.  An
-``await``-ed ``path.read_text()`` is ``anyio.Path``, not ``pathlib.Path``;
-``async for p in path.glob("*")`` is an async iterator.  The name alone cannot
-tell those apart, but the ``await`` / ``async for`` / ``async with`` can.  (The
-event-loop bridge and the legacy ``requests`` / ``time.sleep`` patterns are
-*not* skipped this way: awaiting them is meaningless, so an ``await`` there is
-a bug rather than a signal.)
+async is skipped: the direct operand of ``await``, and the iterable of an
+``async for``.  An ``await``-ed ``path.read_text()`` is ``anyio.Path``, not
+``pathlib.Path``; ``async for p in path.glob("*")`` is an async iterator.  The
+name alone cannot tell those apart, but the ``await`` / ``async for`` can.
+(The event-loop bridge and the legacy ``requests`` / ``time.sleep`` patterns
+are *not* skipped this way: awaiting them is meaningless, so an ``await`` there
+is a bug rather than a signal.)
 
 A ``lambda`` body is treated as a sync scope, exactly as a nested ``def`` is.
 Both are the offload shape this rule prescribes — the callable runs in a
@@ -259,13 +258,12 @@ class _Visitor(ast.NodeVisitor):
             self._awaited.add(id(node.iter))
         self.generic_visit(node)
 
-    def visit_AsyncWith(self, node: ast.AsyncWith) -> None:
-        # `async with aiofiles.open(p) as f` — an async context manager, not
-        # the blocking builtin it is named after.
-        for item in node.items:
-            if isinstance(item.context_expr, ast.Call):
-                self._awaited.add(id(item.context_expr))
-        self.generic_visit(node)
+    # No `visit_AsyncWith`: nothing in the inventory is plausible as an async
+    # context expression. The idiom that would need one is
+    # `async with aiofiles.open(p)`, and `.open` is deliberately absent from
+    # _WHOLE_FILE_SUFFIXES (opening is a single syscall; it is the read that
+    # scales). A guard with no matchable witness can only be tested vacuously,
+    # so it is left out until an inventory entry earns it.
 
     def visit_Lambda(self, node: ast.Lambda) -> None:
         # A lambda body is a separate function scope that runs when the lambda

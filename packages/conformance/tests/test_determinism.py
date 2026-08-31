@@ -595,16 +595,20 @@ def test_p023_await_guard_also_covers_the_exact_matches() -> None:
     assert _rule(body, "P023") == []
 
 
-def test_p023_silent_for_async_for_and_async_with() -> None:
-    """An `async for` iterable and an `async with` context expression are never
-    Await operands, so they need marking in their own right."""
+def test_p023_silent_for_async_for_iteration() -> None:
+    """An `async for` iterable is never an Await operand, so it needs marking in
+    its own right — `path.glob` matches `_TRAVERSAL_SUFFIXES`, so without
+    `visit_AsyncFor` an async iterator reads as blocking traversal.
+
+    Deliberately no `async with` case: nothing in the inventory is plausible as
+    an async context expression (`.open` is excluded on purpose), so such an
+    assertion would pass whether or not the visitor handled it.
+    """
     body = (
         "class MyApp(App):\n"
         "    @task\n"
         "    async def read(self, input):\n"
         "        async for entry in path.glob('*'):\n"
-        "            pass\n"
-        "        async with aiofiles.open(path) as f:\n"
         "            pass\n"
     )
     assert _rule(body, "P023") == []
