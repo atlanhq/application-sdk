@@ -427,22 +427,24 @@ def atomic_write(
             value_summary=mode,
         )
 
-    with atomic_path(
-        path, operation=operation, required_bytes=required_bytes
-    ) as staging:
-        with open(
+    with (
+        atomic_path(
+            path, operation=operation, required_bytes=required_bytes
+        ) as staging,
+        open(
             convert_to_extended_path(staging),
             mode=mode,
             encoding=encoding,
             **open_kwargs,
-        ) as handle:
-            yield handle
-            # Inside the handle's context and inside atomic_path's guard, so a
-            # buffer that only fails to reach the filesystem here — the usual
-            # shape of ENOSPC on a buffered write — still fails the write
-            # rather than closing quietly and publishing a short file.
-            handle.flush()
-            os.fsync(handle.fileno())
+        ) as handle,
+    ):
+        yield handle
+        # Inside the handle's context and inside atomic_path's guard, so a
+        # buffer that only fails to reach the filesystem here — the usual
+        # shape of ENOSPC on a buffered write — still fails the write
+        # rather than closing quietly and publishing a short file.
+        handle.flush()
+        os.fsync(handle.fileno())
 
 
 @asynccontextmanager
@@ -467,9 +469,10 @@ async def async_atomic_write(
     if required_bytes is not None:
         ensure_free_space(staging_dir, required_bytes, operation=operation)
 
-    fd, staging_name = tempfile.mkstemp(
-        dir=convert_to_extended_path(staging_dir), prefix=final.name + "."
-    )
+    with disk_full_guard(final, operation=operation, required_bytes=required_bytes):
+        fd, staging_name = tempfile.mkstemp(
+            dir=convert_to_extended_path(staging_dir), prefix=final.name + "."
+        )
     staging = Path(staging_name)
     published = False
     try:

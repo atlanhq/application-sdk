@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.30.0
-source-sha:    17caa4a9026ff1093521f9cc70e722c574150e7c
-source-date:   2026-08-29T17:15:36+01:00
+source-sha:    d5b08d900b964d856a3a18bd14a36a7903523a93
+source-date:   2026-08-31T09:21:35+00:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -20,7 +20,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 |---|---|---|
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 43 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 20 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 21 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 34 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 45 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
@@ -487,6 +487,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Defined in:** `application_sdk/common/models.py`
 
 ### Functions
+
+#### `async_atomic_write`
+
+- **Import:** `from application_sdk.common.atomic import async_atomic_write`
+- **Signature:** `async_atomic_write(path: str | Path, *, operation: str, required_bytes: int | None = None) -> AsyncIterator[IO[bytes]]`
+- **Summary:** Yield a binary staging handle and atomically publish it on clean async exit.
+- **Defined in:** `application_sdk/common/atomic.py`
 
 #### `atomic_copy`
 
