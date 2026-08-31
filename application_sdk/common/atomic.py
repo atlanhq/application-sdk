@@ -61,17 +61,20 @@ from __future__ import annotations
 import errno
 import os
 import shutil
+import tempfile
 import uuid
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import IO, Any, NoReturn
 
+from application_sdk._runtime.offload import run_in_thread
 from application_sdk.common._listing import PARTIAL_DIRNAME
 from application_sdk.common.path import convert_to_extended_path
 
 __all__ = [
     "PARTIAL_DIRNAME",
+    "async_atomic_write",
     "atomic_copy",
     "atomic_path",
     "atomic_write",
@@ -440,6 +443,48 @@ def atomic_write(
             # rather than closing quietly and publishing a short file.
             handle.flush()
             os.fsync(handle.fileno())
+
+
+@asynccontextmanager
+async def async_atomic_write(
+    path: str | Path,
+    *,
+    operation: str,
+    required_bytes: int | None = None,
+) -> AsyncIterator[IO[bytes]]:
+    """Yield a binary staging handle and atomically publish it on clean async exit.
+
+    This is the asynchronous counterpart to :func:`atomic_write` for callers
+    that consume an ``async for`` stream. Its fsync runs through
+    :func:`run_in_thread`, so a large delayed-allocation flush cannot block the
+    event loop or activity heartbeat. The caller keeps transfer-specific work,
+    such as hashing and progress reporting, inside the block.
+    """
+    final = Path(path)
+    staging_dir = final.parent / PARTIAL_DIRNAME
+    with disk_full_guard(final, operation=operation, required_bytes=required_bytes):
+        os.makedirs(convert_to_extended_path(staging_dir), exist_ok=True)
+    if required_bytes is not None:
+        ensure_free_space(staging_dir, required_bytes, operation=operation)
+
+    fd, staging_name = tempfile.mkstemp(
+        dir=convert_to_extended_path(staging_dir), prefix=final.name + "."
+    )
+    staging = Path(staging_name)
+    published = False
+    try:
+        with disk_full_guard(final, operation=operation, required_bytes=required_bytes):
+            with os.fdopen(fd, "wb") as handle:
+                yield handle
+                handle.flush()
+                await run_in_thread(os.fsync, handle.fileno())
+            os.replace(
+                convert_to_extended_path(staging), convert_to_extended_path(final)
+            )
+            published = True
+    finally:
+        if not published:
+            _discard(staging)
 
 
 def atomic_copy(
