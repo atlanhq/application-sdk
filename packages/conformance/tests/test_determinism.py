@@ -575,6 +575,95 @@ def test_p023_silent_for_awaited_lookalikes() -> None:
     assert _rule(body, "P023") == []
 
 
+def test_p023_await_guard_also_covers_the_exact_matches() -> None:
+    """The guard runs before the first match, not just before the suffix half.
+
+    `pandas.read_parquet` and `json.load` are exact-set entries; an awaited one
+    is a wrapper returning a coroutine, and flagging it would contradict the
+    documented exclusion.
+    """
+    body = (
+        "import json\n"
+        "import pandas as pd\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def read(self, input):\n"
+        "        df = await pd.read_parquet(path)\n"
+        "        cfg = await json.load(handle)\n"
+        "        return df, cfg\n"
+    )
+    assert _rule(body, "P023") == []
+
+
+def test_p023_silent_for_async_for_and_async_with() -> None:
+    """An `async for` iterable and an `async with` context expression are never
+    Await operands, so they need marking in their own right."""
+    body = (
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def read(self, input):\n"
+        "        async for entry in path.glob('*'):\n"
+        "            pass\n"
+        "        async with aiofiles.open(path) as f:\n"
+        "            pass\n"
+    )
+    assert _rule(body, "P023") == []
+
+
+def test_p023_prescribed_traversal_offload_is_silent() -> None:
+    """The exact snippet `_TRAVERSAL_HINT` tells a remediator to write.
+
+    A rule whose own prescribed fix is a finding is un-satisfiable, so this
+    pins the lambda form specifically — it is the shape the hint and the
+    remediation program both name, and it is the one that materialises the
+    iterator inside the thread.
+    """
+    body = (
+        "from application_sdk.execution.heartbeat import run_in_thread\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def scan(self, input):\n"
+        "        return await run_in_thread(lambda: list(root.rglob('*')))\n"
+    )
+    assert _rule(body, "P023") == []
+
+
+def test_p023_lambda_body_is_a_sync_scope_like_a_nested_def() -> None:
+    """Both offload shapes must be silent, and for the same reason."""
+    lam = (
+        "import shutil\n"
+        "from application_sdk.execution.heartbeat import run_in_thread\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def clean(self, input):\n"
+        "        return await run_in_thread(lambda: shutil.rmtree(path))\n"
+    )
+    nested = (
+        "import shutil\n"
+        "from application_sdk.execution.heartbeat import run_in_thread\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def clean(self, input):\n"
+        "        def _clean():\n"
+        "            shutil.rmtree(path)\n"
+        "        return await run_in_thread(_clean)\n"
+    )
+    assert _rule(lam, "P023") == []
+    assert _rule(nested, "P023") == []
+
+
+def test_p023_still_flags_the_unoffloaded_traversal_it_prescribes_a_fix_for() -> None:
+    """The negative side of the two tests above: silencing the lambda must not
+    silence the defect the lambda is the fix for."""
+    body = (
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def scan(self, input):\n"
+        "        return list(root.rglob('*'))\n"
+    )
+    assert len(_rule(body, "P023")) == 1
+
+
 def test_p023_silent_when_data_io_is_offloaded() -> None:
     """`run_in_thread(pd.read_parquet, path)` passes the callable, never calls it."""
     body = (

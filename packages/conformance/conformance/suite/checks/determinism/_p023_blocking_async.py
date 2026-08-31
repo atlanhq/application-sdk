@@ -44,10 +44,20 @@ code — the second half of the user's async-correctness ask.  Two patterns:
   absent for that same reason: they have no ``load``/``loads`` split, so
   matching them by name would flag string parsing, not file work.
 
-Calls that are the direct operand of ``await`` are skipped throughout: an
-``await``-ed ``path.read_text()`` is ``anyio.Path``, not ``pathlib.Path``, and
-an ``await``-ed ``cursor.fetchall()`` is an async driver.  The name alone cannot
-tell those apart; the ``await`` can.
+Across that whole data-scale inventory, a call the source already marks as
+async is skipped: the direct operand of ``await``, the iterable of an
+``async for``, and the context expression of an ``async with``.  An
+``await``-ed ``path.read_text()`` is ``anyio.Path``, not ``pathlib.Path``;
+``async for p in path.glob("*")`` is an async iterator.  The name alone cannot
+tell those apart, but the ``await`` / ``async for`` / ``async with`` can.  (The
+event-loop bridge and the legacy ``requests`` / ``time.sleep`` patterns are
+*not* skipped this way: awaiting them is meaningless, so an ``await`` there is
+a bug rather than a signal.)
+
+A ``lambda`` body is treated as a sync scope, exactly as a nested ``def`` is.
+Both are the offload shape this rule prescribes — the callable runs in a
+thread, not on the loop — so flagging inside them would make the prescribed
+fix a finding in its own right.
 
 Remediation is a restructure (await / run_in_thread), so findings route to residue.
 
@@ -236,10 +246,36 @@ class _Visitor(ast.NodeVisitor):
     def visit_Await(self, node: ast.Await) -> None:
         # An awaited call is an async API wearing a sync-looking name:
         # `await path.read_text()` is anyio.Path, `await cur.fetchall()` is an
-        # async driver. Record it so the suffix matches below skip it.
+        # async driver. Record it so the data-scale matches skip it.
         if isinstance(node.value, ast.Call):
             self._awaited.add(id(node.value))
         self.generic_visit(node)
+
+    def visit_AsyncFor(self, node: ast.AsyncFor) -> None:
+        # `async for p in path.glob("*")` is an async iterator, same argument
+        # as `await` — the `async for` is what marks it, since the call itself
+        # is never an Await operand.
+        if isinstance(node.iter, ast.Call):
+            self._awaited.add(id(node.iter))
+        self.generic_visit(node)
+
+    def visit_AsyncWith(self, node: ast.AsyncWith) -> None:
+        # `async with aiofiles.open(p) as f` — an async context manager, not
+        # the blocking builtin it is named after.
+        for item in node.items:
+            if isinstance(item.context_expr, ast.Call):
+                self._awaited.add(id(item.context_expr))
+        self.generic_visit(node)
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        # A lambda body is a separate function scope that runs when the lambda
+        # is called — which, for the offload shape this rule prescribes, is in
+        # a thread. Treating it as sync is the same judgement already made for
+        # a nested `def` (visit_FunctionDef), and without it the fix
+        # _TRAVERSAL_HINT asks for --
+        # `await run_in_thread(lambda: list(path.rglob("*")))` -- is itself
+        # flagged, which would make the rule un-satisfiable.
+        self._visit_func(node, is_async=False)
 
     def _visit_func(self, node: ast.AST, is_async: bool) -> None:
         in_wf = id(node) in self.workflow_ids
@@ -288,6 +324,14 @@ class _Visitor(ast.NodeVisitor):
         # all), so it is reported outside workflow methods only.
         if self._wf_depth != 0:
             return
+        # `await`-ed calls are excluded from the whole data-scale inventory,
+        # not just its suffix half: `await pd.read_parquet(...)` is a wrapper
+        # returning a coroutine, and `async for p in path.glob("*")` is an
+        # async iterator. The name alone cannot separate those from their
+        # blocking namesakes; the await can. Checked here, before the first
+        # match, so the exclusion the docstring promises actually holds.
+        if id(node) in self._awaited:
+            return
         # Tree-scale filesystem work.
         if (
             target in _TREE_FS_EXACT
@@ -310,10 +354,8 @@ class _Visitor(ast.NodeVisitor):
         if target in _TRAVERSAL_EXACT:
             self._add(node, f"{target}()", _TRAVERSAL_HINT)
             return
-        # Instance-method forms. `await`-ed calls are excluded: the name alone
-        # cannot separate pathlib from anyio.Path, but the `await` can.
-        if id(node) in self._awaited:
-            return
+        # Instance-method forms, matched on the trailing segment because the
+        # receiver is a local (`df.to_parquet()`, `path.read_text()`).
         if target.endswith(_DATA_IO_SUFFIXES):
             self._add(node, f"{target}()", _DATA_IO_HINT)
             return

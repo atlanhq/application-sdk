@@ -469,7 +469,10 @@ drafting.
     `await run_in_thread(lambda: list(root.rglob("*")))`.  Offloading the bare
     `root.rglob("*")` returns a lazy generator and moves every syscall straight
     back onto the loop, so the finding disappears while the defect does not.
-    Never propose the bare form.
+    Never propose the bare form.  The detector treats a `lambda` body as a sync
+    scope (as it does a nested `def`), so this proposal verifies clean — check
+    that before proposing any *other* shape, since a fix the rule re-flags is
+    worse than none.
   - *subprocess* — prefer `asyncio.create_subprocess_exec` and `await` it;
     offload only when the sync API is unavoidable.
 
