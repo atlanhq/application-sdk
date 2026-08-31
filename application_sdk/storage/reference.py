@@ -568,11 +568,12 @@ async def _materialize_single_file(
             try:
                 from application_sdk.storage.chunked import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
                     _part_path,
+                    _transfer_state_path,
                 )
 
                 Path(out_path).unlink(missing_ok=True)
                 _part_path(Path(out_path)).unlink(missing_ok=True)
-                Path(str(out_path) + ".transfer-state").unlink(missing_ok=True)
+                _transfer_state_path(Path(out_path)).unlink(missing_ok=True)
             except OSError:  # conformance: ignore[E002] best-effort cleanup of an unusable temp; original error re-raised below
                 pass
         raise

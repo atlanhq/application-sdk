@@ -192,7 +192,7 @@ class TestDiscardKeepsDestination:
         part = _part_path(dest)
         part.parent.mkdir(parents=True, exist_ok=True)
         part.write_bytes(b"half a new generation")
-        state = Path(str(dest) + ".transfer-state")
+        state = _transfer_state_path(dest)
         state.write_bytes(b"{}")
 
         _discard_transfer_state(dest)
@@ -381,3 +381,61 @@ class TestPublishFailureIsResumable:
         assert path.read_bytes() == content
         assert not part.exists()
         assert not state.exists()
+
+    async def test_checkpoint_unlink_failure_does_not_fail_published_download(
+        self, store, tmp_path
+    ) -> None:
+        """Once the publish has succeeded, a failed checkpoint unlink (EPERM,
+        EROFS) must not report the download as failed — the stale checkpoint
+        is discarded by validation on the next attempt because the part file
+        is gone."""
+        content = bytes(range(20))
+        await _put("pub/u.bin", content, store, normalize=False)
+        path = tmp_path / "u.bin"
+        state = _transfer_state_path(path)
+
+        def _download():
+            return download_file_chunked(
+                "pub/u.bin",
+                path,
+                store,
+                chunk_size_bytes=10,
+                max_concurrent_chunks=1,
+                normalize=False,
+                verify=False,
+                resume=True,
+            )
+
+        real_unlink = Path.unlink
+
+        def deny_state_unlink(self, missing_ok=False):
+            if self == state:
+                raise PermissionError(13, "Operation not permitted")
+            return real_unlink(self, missing_ok=missing_ok)
+
+        with patch.object(Path, "unlink", deny_state_unlink):
+            await _download()
+
+        assert path.read_bytes() == content
+        assert state.exists()
+
+        await _download()
+        assert path.read_bytes() == content
+        assert not state.exists()
+
+
+class TestStagingFilesInvisibleToWalks:
+    """Both in-flight files live in ``.sdk-partial/``, so no SDK tree walk —
+    a directory ``FileReference``, a prefix upload — can adopt them."""
+
+    def test_checkpoint_and_part_are_not_listed(self, tmp_path) -> None:
+        artifact = tmp_path / "records.json"
+        artifact.write_bytes(b'{"row": 1}\n')
+        part = _part_path(artifact)
+        part.parent.mkdir(parents=True, exist_ok=True)
+        part.write_bytes(b"half a generation")
+        _transfer_state_path(artifact).write_bytes(b"{}")
+
+        from application_sdk.common._listing import safe_list_directory
+
+        assert safe_list_directory(tmp_path) == [artifact]

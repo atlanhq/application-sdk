@@ -871,7 +871,10 @@ async def download_file(
     tree walk can adopt it) and land at *local_path* via ``os.replace``. The
     destination therefore never holds a partial file — a concurrent reader,
     or a second download of the same shared ``local_path``, sees only the
-    previous complete content or the new complete content.
+    previous complete content or the new complete content. On Windows the
+    publish additionally requires that no other handle holds the destination
+    open: ``os.replace`` raises ``PermissionError`` rather than succeeding,
+    so a concurrent reader turns a corrupt read into a failed write.
 
     Args:
         key: Source object key.  Normalised by default.

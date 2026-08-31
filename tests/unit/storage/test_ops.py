@@ -14,7 +14,7 @@ import pytest
 
 from application_sdk import constants
 from application_sdk.storage.batch import download_prefix, list_keys
-from application_sdk.storage.chunked import _part_path
+from application_sdk.storage.chunked import _part_path, _transfer_state_path
 from application_sdk.storage.errors import StorageError, StorageNotFoundError
 from application_sdk.storage.factory import create_local_store, create_memory_store
 from application_sdk.storage.ops import (
@@ -883,7 +883,9 @@ class TestResumableChunkedDownload:
     CONTENT = bytes(range(38))  # 5 chunks at chunk_size=8 (last chunk 6 bytes)
 
     def _state_path(self, out: Path) -> Path:
-        return Path(str(out) + ".transfer-state")
+        state = _transfer_state_path(out)
+        state.parent.mkdir(parents=True, exist_ok=True)
+        return state
 
     async def test_fresh_download_pins_etag_and_removes_state(
         self, store, tmp_path
