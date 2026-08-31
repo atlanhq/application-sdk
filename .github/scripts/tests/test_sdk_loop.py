@@ -754,11 +754,43 @@ def test_review_and_resolve_run_on_different_models() -> None:
     assert REVIEW_MODEL != RESOLVE_MODEL
 
 
+def test_every_tool_the_playbooks_use_is_permitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Headless opencode auto-REJECTS an ask, and an unlisted tool is an ask.
+
+    A live round died with "The user rejected permission to use this specific
+    tool call" and no indication which tool. `task` was missing: subagents were
+    registered but the primary agent was never allowed to dispatch them, so
+    Phase 2 could not fan out even with the registration in place.
+    """
+    monkeypatch.setenv("LITELLM_BASE_URL", "https://gateway.example")
+    perms = opencode_config(REVIEW_MODEL, with_subagents=True)["permission"]
+    for tool in ("task", "skill", "bash", "read", "edit", "glob", "grep", "lsp"):
+        assert perms[tool] == "allow", f"{tool} would be auto-rejected"
+    # Defaults are not uniform — these two ask unless listed, and the review
+    # playbook legitimately does both.
+    assert perms["external_directory"] == "allow"
+    assert perms["doom_loop"] == "allow"
+
+
+def test_subagents_are_read_only_and_offline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_BASE_URL", "https://gateway.example")
+    for spec in opencode_config(REVIEW_MODEL, with_subagents=True)["agent"].values():
+        assert spec["permission"]["edit"] == "deny"
+        assert spec["permission"]["webfetch"] == "deny"
+
+
 def test_the_agent_cannot_reach_the_web(monkeypatch: pytest.MonkeyPatch) -> None:
     # It reads untrusted PR content; an injected prompt must not meet an
     # outbound channel it can choose freely.
     monkeypatch.setenv("LITELLM_BASE_URL", "https://gateway.example")
-    assert opencode_config(RESOLVE_MODEL)["permission"]["webfetch"] == "deny"
+    perms = opencode_config(RESOLVE_MODEL)["permission"]
+    # Both outbound channels, and they must beat the wildcard: last rule wins.
+    assert perms["webfetch"] == "deny"
+    assert perms["websearch"] == "deny"
 
 
 # ---------------------------------------------------------------------------
