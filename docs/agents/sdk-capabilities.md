@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.30.0
-source-sha:    29deb4a7d2666f4ba8063f13b529a80c5c7378d6
-source-date:   2026-08-31T00:27:28+05:30
+source-sha:    7bf92fa25bf3a3eb057e23fe9b79836ee8a30837
+source-date:   2026-08-31T15:36:00+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -25,7 +25,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 45 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 63 |
-| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 45 |
+| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 46 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
@@ -1953,6 +1953,13 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Signature:** `run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any)`
 - **Summary:** Last-resort escape hatch: run a blocking function in a thread pool.
 - **Defined in:** `application_sdk/_runtime/offload.py`
+
+#### `stop_heartbeat_task`
+
+- **Import:** `from application_sdk.execution.heartbeat import stop_heartbeat_task`
+- **Signature:** `stop_heartbeat_task(task: asyncio.Task, stop_event: asyncio.Event, task_name: str) -> None`
+- **Summary:** Stop an ``auto_heartbeat_loop`` task, letting nothing escape.
+- **Defined in:** `application_sdk/execution/heartbeat.py`
 
 #### `submit_in_thread`
 
