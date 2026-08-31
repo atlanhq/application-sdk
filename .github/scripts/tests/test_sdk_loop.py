@@ -19,6 +19,9 @@ import pathlib
 import re
 import subprocess
 import sys
+import tempfile
+import threading
+import time
 
 import pytest
 import yaml
@@ -27,8 +30,9 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from _gha_expr import evaluate  # noqa: E402
 from sdk_loop_common import (  # noqa: E402
+    AGENT_ENV_PASSTHROUGH,
     ALLOWED_MODELS,
-    DEFAULT_MAX_USD,
+    DEFAULT_MAX_TOKENS,
     MAX_CONSECUTIVE_REAIMS,
     MAX_ROUNDS,
     PHASE2_AGENTS,
@@ -37,15 +41,20 @@ from sdk_loop_common import (  # noqa: E402
     REVIEW_MODEL,
     AgentResult,
     DismissalLedger,
-    budget_exceeded,
+    _follow_opencode_log,
+    format_usage,
     gateway_base,
     head_state,
     opencode_config,
+    parse_opencode_usage,
     parse_reviewed_head,
     parse_verdict,
     reaim_exhausted,
     run_agent,
-    run_budget,
+    token_budget,
+    token_budget_exceeded,
+    usage_total,
+    write_rg_config,
 )
 from sdk_loop_fence import (  # noqa: E402
     MARK_DECLINE,
@@ -59,6 +68,7 @@ from sdk_loop_fence import (  # noqa: E402
 )
 from sdk_loop_finalize import Round, parse_rounds, render  # noqa: E402
 from sdk_loop_phase import (  # noqa: E402
+    LANE_MARKER,
     OUTCOME_CLEAN,
     OUTCOME_FAILED,
     OUTCOME_NO_PROGRESS,
@@ -396,6 +406,32 @@ def test_the_delta_range_never_narrows_the_review() -> None:
     assert "any line of the PR" in prompt
 
 
+def test_the_lane_marker_matches_the_playbook_contract() -> None:
+    """One string, two files — the shape that rots without anyone noticing.
+
+    The playbook's Runtime section skips its sandbox-only Appendix A when the
+    prompt announces `LANE: sdk-loop`. If either side renames the string, the
+    playbook simply waits for a line nobody sends: no exception, no log, just
+    a review quietly walking the other lane's steps and eating 403s from
+    write calls its token cannot make. Nothing else in the system would fail,
+    which is precisely why this assertion exists.
+    """
+    playbook = pathlib.Path(".mothership/pr-review/ORCHESTRATION.md").read_text(
+        encoding="utf-8"
+    )
+    assert LANE_MARKER in playbook, (
+        f"review_prompt() emits {LANE_MARKER!r} but ORCHESTRATION.md does not "
+        "mention it — lane detection is broken and nothing else will say so"
+    )
+    monkey = pytest.MonkeyPatch()
+    monkey.setenv("LITELLM_BASE_URL", "https://gateway.example")
+    try:
+        prompt = review_prompt(1, 1, "a" * 40, DismissalLedger())
+    finally:
+        monkey.undo()
+    assert LANE_MARKER in prompt, "the lane must be announced, never inferred"
+
+
 def test_the_phase_two_agents_are_registered_so_the_fan_out_can_happen() -> None:
     """§2a dispatches domain agents via a delegation tool. Claude Code calls it
     the Agent tool; opencode calls it Task and supports the same parallel
@@ -411,12 +447,24 @@ def test_the_phase_two_agents_are_registered_so_the_fan_out_can_happen() -> None
         assert set(cfg["agent"]) == set(PHASE2_AGENTS)
         for name, spec in cfg["agent"].items():
             assert spec["mode"] == "subagent"
-            # Prompts are the EXISTING files by reference, never copied.
-            assert (
-                spec["prompt"] == f"{{file:./.mothership/pr-review/agents/{name}.md}}"
-            )
+            # Still the EXISTING file and no second copy in the repo — but read
+            # in Python rather than handed over as `{file:./.mothership/...}`.
+            # That template's resolution against a dot-directory was never
+            # verified here, and the same path returns zero matches through the
+            # agent's own Glob; a template that quietly resolved to nothing
+            # would give a domain agent no instructions while it still emitted
+            # a verdict. Asserting against the file's real bytes also proves
+            # the brief exists, which the string form never did.
+            brief = pathlib.Path(f".mothership/pr-review/agents/{name}.md")
+            assert spec["prompt"] == brief.read_text(encoding="utf-8")
+            assert spec["prompt"].strip(), f"{name} brief is empty"
             # Read-only in the agent as well as in the credential.
             assert spec["permission"]["edit"] == "deny"
+            # And every tool the primary enumerates, because an unlisted tool
+            # is an "ask" that headless opencode cannot answer.
+            for tool in ("read", "glob", "grep", "bash"):
+                assert spec["permission"][tool] == "allow"
+            assert spec["maxSteps"] > 0
         # Resolve gets none — it does not run Phase 2.
         assert "agent" not in opencode_config(RESOLVE_MODEL)
     finally:
@@ -550,6 +598,77 @@ def test_an_empty_ledger_adds_nothing_to_the_prompt() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_a_quiet_sub_agent_is_not_killed_while_its_internal_log_moves() -> None:
+    """The failure this nearly shipped: a HEALTHY dispatched sub-agent prints
+    nothing on the parent's stdout for its entire life — measured at 904s —
+    while the idle bound was 300s. Sizing the bound on parent-turn gaps (~29s)
+    measured the wrong thing, because the watchdog does not sit in those gaps;
+    it sits in the dispatch. Internal-log lines are the only progress signal
+    there, so they must refresh the deadline or the watchdog kills every
+    sub-agent that outlives the timeout.
+    """
+    deadline = [time.monotonic() - 10_000]  # far past any bound
+    stop = threading.Event()
+
+    with tempfile.TemporaryDirectory() as home:
+        log_dir = pathlib.Path(home) / "opencode" / "log"
+        log_dir.mkdir(parents=True)
+        (log_dir / "opencode.log").write_text(
+            "timestamp=... message=stream session.id=ses_sub\n", encoding="utf-8"
+        )
+        monkey = pytest.MonkeyPatch()
+        monkey.setenv("XDG_DATA_HOME", home)
+        try:
+            emitted: list[str] = []
+            worker = threading.Thread(
+                target=_follow_opencode_log,
+                args=(stop, emitted.append, 0.0, deadline),
+                daemon=True,
+            )
+            worker.start()
+            for _ in range(100):
+                if deadline[0] > time.monotonic() - 5_000:
+                    break
+                time.sleep(0.05)
+            stop.set()
+            worker.join(timeout=5)
+        finally:
+            monkey.undo()
+
+    assert deadline[0] > time.monotonic() - 5_000, (
+        "an internal-log line must refresh the idle deadline; without this a "
+        "working sub-agent is killed at the timeout"
+    )
+
+
+def test_a_stalled_agent_is_an_abort_not_a_note_in_the_transcript() -> None:
+    """A killed phase must not be able to adopt someone else's verdict.
+
+    `interpret_review` gates on `completed`, and opencode exits 0 even when
+    fatal — so if a stall only left prose in the transcript, the phase would
+    carry on and take whatever verdict comment was newest, which on a re-run
+    can be a prior @sdk-review for the same sha.
+    """
+    stalled = AgentResult(exit_code=0, stdout="some output", stderr="", stalled=True)
+    assert not stalled.completed
+    assert "stalled" in stalled.abort_reason
+
+    fine = AgentResult(exit_code=0, stdout="some output", stderr="", stalled=False)
+    assert fine.completed
+    assert fine.abort_reason == ""
+
+
+def test_the_phase_job_passes_the_triggering_comment_id() -> None:
+    """`newest_verdict` takes an ANSWERS_TRIGGER so it cannot mistake an older
+    comment for this invocation's verdict. The phase script always read
+    COMMENT_ID and the phase workflow never set it, so that filter ran with
+    None on every round."""
+    phase = pathlib.Path(".github/workflows/sdk-loop-phase.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "COMMENT_ID:" in phase, "the phase job must pass the triggering comment id"
+
+
 def test_the_agent_transcript_streams_rather_than_buffering(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
@@ -620,46 +739,48 @@ def test_the_transcript_is_uploaded_even_when_the_phase_died() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_default_ceiling_lets_a_healthy_loop_finish() -> None:
-    """Sized so a converging run completes and only a runaway is stopped.
-
-    61 stamped sdk-review runs: median $8.24. Typical convergence is 2-3
-    rounds, so ~3 reviews is ~$25 of review alone before any resolve. A
-    ceiling at $25 would guillotine a healthy loop at round 2 and teach people
-    to raise it blindly — worse than no ceiling at all.
-    """
-    median_review = 8.24
-    assert DEFAULT_MAX_USD > 3 * median_review, "must clear three reviews"
-    assert DEFAULT_MAX_USD < 130, "must still stop the eight-round runaway"
+def test_the_ceiling_is_a_runaway_guard_and_says_so() -> None:
+    """Deliberately generous and explicitly PROVISIONAL. No complete run has
+    reported a token count yet — the measurement landed in the same change that
+    removed the broken dollar path — and a ceiling that stops healthy runs is
+    worse than none, which the $25 -> $50 correction already demonstrated."""
+    assert DEFAULT_MAX_TOKENS >= 10_000_000
 
 
 def test_the_ceiling_is_tunable_without_a_code_change(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SDK_LOOP_MAX_USD", "40")
-    assert run_budget() == 40.0
+    monkeypatch.setenv("SDK_LOOP_MAX_TOKENS", "750000")
+    assert token_budget() == 750_000
 
 
-@pytest.mark.parametrize("raw", ["", "junk", "0", "-5"])
+@pytest.mark.parametrize("raw", ["", "junk", "0", "-5", "1.5"])
 def test_a_nonsense_ceiling_falls_back_rather_than_disabling_the_guard(
     raw: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A typo'd variable must not read as "unlimited".
-    monkeypatch.setenv("SDK_LOOP_MAX_USD", raw)
-    assert run_budget() == DEFAULT_MAX_USD
+    # A typo'd variable must never read as "unlimited".
+    monkeypatch.setenv("SDK_LOOP_MAX_TOKENS", raw)
+    assert token_budget() == DEFAULT_MAX_TOKENS
 
 
 def test_a_run_at_its_ceiling_is_refused() -> None:
-    assert budget_exceeded(50.0, 50.0)
-    assert budget_exceeded(51.0, 50.0)
-    assert not budget_exceeded(49.99, 50.0)
+    assert token_budget_exceeded(1000, 1000)
+    assert token_budget_exceeded(1001, 1000)
+    assert not token_budget_exceeded(999, 1000)
 
 
-def test_unmeasurable_spend_never_blocks_the_loop() -> None:
-    """A gateway that cannot report spend is a metrics outage, not evidence of
+def test_unmeasurable_usage_never_blocks_the_loop() -> None:
+    """A failed `opencode stats` read is a metrics outage, not evidence of
     overspend. Turning one into a stalled lane is the wrong trade — the round
     cap still bounds the worst case."""
-    assert not budget_exceeded(None, 25.0)
+    assert not token_budget_exceeded(None, 1000)
+
+
+def test_billable_tokens_do_not_double_count_cache_reads() -> None:
+    """Cache reads are already inside `input`; adding them again would inflate
+    exactly the quantity we want to watch shrink."""
+    assert usage_total({"input": 100, "output": 50, "cache_read": 90}) == 150
+    assert usage_total({}) is None
 
 
 def test_the_tally_treats_an_unmeasured_phase_as_a_gap_not_a_zero() -> None:
@@ -1029,6 +1150,68 @@ def test_every_job_has_a_name_a_human_can_read() -> None:
     assert jobs["resolve-8"]["name"] == "Resolve 8"
     assert jobs["fence"]["name"] == "Fence"
     assert jobs["finalize"]["name"] == "Summary"
+
+
+def test_hidden_paths_are_searchable_structurally(tmp_path: pathlib.Path) -> None:
+    """opencode's Glob/Grep are ripgrep-backed and ripgrep skips dot-paths.
+
+    On the first complete run the reviewer got 0 matches TWICE — globbing its
+    own agent definitions, and grepping the reference rules for prior art on
+    the finding it was about to raise. It raised that finding anyway, without
+    the rules that exist to inform it, and said nothing about it.
+
+    ripgrep reads flags from RIPGREP_CONFIG_PATH, so this is fixed in the
+    environment rather than by asking the model to remember a prompt line.
+    """
+    path = write_rg_config(str(tmp_path))
+    assert pathlib.Path(path).read_text().strip() == "--hidden"
+    assert "RIPGREP_CONFIG_PATH" in AGENT_ENV_PASSTHROUGH
+
+
+def test_token_usage_is_parsed_and_a_cache_miss_is_called_out() -> None:
+    """`opencode stats` is the authoritative measurement: attributable to THIS
+    phase, unlike a gateway key several lanes share, and it reports
+    cache_read/cache_write — the one number that says whether the fixed ~90KB
+    playbook prefix is re-paid on every one of a phase's ~24 turns."""
+    usage = parse_opencode_usage(
+        "Input   1,234\nOutput  567\nCache Read  8,900\nCache Write 100"
+    )
+    assert usage == {
+        "input": 1234,
+        "output": 567,
+        "cache_read": 8900,
+        "cache_write": 100,
+    }
+    assert "cache r/w 8,900/100" in format_usage(usage)
+    # Zero cache is the finding, not an absence — say so rather than omit it.
+    assert "cache MISS" in format_usage({"input": 10, "output": 5})
+    assert format_usage({}) == "tokens unavailable"
+
+
+def test_a_failed_summary_post_is_reported(tmp_path: pathlib.Path) -> None:
+    """A live run generated the whole summary, exited 0, and posted nothing.
+    The summary is the only place a reader learns what the run did."""
+    src = (
+        pathlib.Path(__file__).resolve().parents[1] / "sdk_loop_finalize.py"
+    ).read_text(encoding="utf-8")
+    assert "::error::could not post the run summary" in src
+
+
+def test_uv_is_available_to_the_phases() -> None:
+    """The resolve playbook verifies its own fix with `uv run pre-commit` and
+    `uv run pytest`. A live round logged `uv: command not found` for both and
+    pushed the commit regardless — a resolver that cannot check its work is
+    worse than one that does not try, because the output looks the same."""
+    assert "astral-sh/setup-uv@" in PHASE_WF.read_text(encoding="utf-8")
+
+
+def test_the_resolver_commits_as_the_app_not_as_atlan_ci() -> None:
+    """atlan-ci is a CODEOWNER and the identity that mints approvals.
+    Attributing loop commits to it blurs "who wrote this" with "who approved
+    it" — the separation the merge gate rests on."""
+    text = PHASE_WF.read_text(encoding="utf-8")
+    assert 'user.name  "atlan-app-fleet[bot]"' in text
+    assert "atlan-ci@users.noreply.github.com" not in text
 
 
 def test_opencode_is_pinned_to_the_version_that_works() -> None:

@@ -61,7 +61,7 @@ on:
         type: string
         required: false
         default: ''
-        description: 'USD this run has spent already. The phase refuses to start once it reaches the allowance.'
+        description: 'Tokens this run has used already. The phase refuses to start once it reaches the allowance.'
       reaims_so_far:
         type: string
         required: false
@@ -98,6 +98,8 @@ on:
         value: ${{ jobs.phase.outputs.detail }}
       cost:
         value: ${{ jobs.phase.outputs.cost }}
+      usage:
+        value: ${{ jobs.phase.outputs.usage }}
       reaims:
         value: ${{ jobs.phase.outputs.reaims }}
       spent_total:
@@ -127,6 +129,7 @@ jobs:
       ledger: ${{ steps.run.outputs.ledger }}
       detail: ${{ steps.run.outputs.detail }}
       cost: ${{ steps.run.outputs.cost }}
+      usage: ${{ steps.run.outputs.usage }}
       reaims: ${{ steps.run.outputs.reaims }}
       spent_total: ${{ steps.run.outputs.spent_total }}
     steps:
@@ -156,8 +159,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.base_sha }}
-          # Full history: the review playbook diffs against the base branch.
+          # Full history for the base-branch diff, but only the refs this
+          # phase needs. `fetch-depth: 0` alone pulled 540 branches per job —
+          # every ref in the repo, three times a round, for a diff that needs
+          # two.
           fetch-depth: 0
+          filter: blob:none
           token: ${{ steps.app-token.outputs.token }}
           # The resolve phase pushes with this credential; the review phase
           # holds one that cannot.
@@ -192,11 +199,26 @@ jobs:
       - name: Install opencode
         run: npm install -g --prefer-offline opencode-ai@1.18.22
 
+      # uv is how this repo runs everything — `uv run pytest`,
+      # `uv run pre-commit`. Without it the resolve phase's own verification
+      # silently no-ops: a live round logged `uv: command not found` for both
+      # its pre-commit and pytest calls and then pushed the commit anyway.
+      # A resolver that cannot check its work is worse than one that does not
+      # try, because the output looks identical.
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+
       - name: Configure git identity for the resolve phase
         if: inputs.phase == 'resolve'
+        # Commit as the App whose token is doing the pushing, not as atlan-ci.
+        # atlan-ci is a CODEOWNER and the identity that mints approvals, so
+        # attributing loop commits to it blurs "who wrote this" with "who
+        # approved it" — precisely the separation the merge gate depends on.
         run: |
-          git config user.name  "atlan-ci"
-          git config user.email "atlan-ci@users.noreply.github.com"
+          git config user.name  "atlan-app-fleet[bot]"
+          git config user.email "4265590+atlan-app-fleet[bot]@users.noreply.github.com"
 
       - name: Run the phase
         id: run
@@ -218,7 +240,23 @@ jobs:
           PRIOR_SHA: ${{ inputs.prior_sha }}
           SPENT_SO_FAR: ${{ inputs.spent_so_far }}
           REAIMS_SO_FAR: ${{ inputs.reaims_so_far }}
-          SDK_LOOP_MAX_USD: ${{ vars.SDK_LOOP_MAX_USD }}
+          SDK_LOOP_MAX_TOKENS: ${{ vars.SDK_LOOP_MAX_TOKENS }}
+          # $HEAD_SHA is referenced 9 times by the playbook (the
+          # moved-since-dispatch guard, the delta diff range, the commit-status
+          # POST) and was never being set. The agent recovers by running
+          # `git rev-parse HEAD` itself, so this is wasted turns rather than a
+          # wrong result — worth perhaps a minute of Phase 0, NOT the stall.
+          # $GHA_RUN_URL the playbook never references; it is passed only to
+          # save the agent re-fetching the started-comment for its own run URL.
+          HEAD_SHA: ${{ inputs.base_sha }}
+          # The phase already READ this ("answers_trigger") and never received
+          # it, so the ANSWERS_TRIGGER filter in `newest_verdict` silently ran
+          # with None on every round — meaning a verdict comment older than
+          # this invocation could be adopted as this phase's own. `github.event`
+          # is available inside a reusable workflow called from the same run,
+          # so this needs no new input.
+          COMMENT_ID: ${{ github.event.comment.id }}
+          GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
           LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL }}
