@@ -52,9 +52,11 @@ from sdk_loop_common import (
     DismissalLedger,
     budget_exceeded,
     emit_outputs,
+    format_usage,
     gateway_spend,
     head_state,
     is_verdict_comment,
+    opencode_usage,
     parse_answers_trigger,
     parse_reviewed_head,
     parse_verdict,
@@ -495,6 +497,10 @@ def main(argv: list[str] | None = None) -> int:
             state.live,
         )
         cost = spend_delta(spend_before, gateway_spend())
+        usage = format_usage(opencode_usage(workspace))
+        print(f"tokens: {usage}")
+        usage = format_usage(opencode_usage(workspace))
+        print(f"tokens: {usage}")
         emit_outputs(
             outcome=outcome.outcome,
             verdict=outcome.verdict,
@@ -504,6 +510,7 @@ def main(argv: list[str] | None = None) -> int:
             reaims="0",
             new_base_sha=state.live,
             cost="" if cost is None else f"{cost:.4f}",
+            usage=usage,
             spent_total=(
                 ""
                 if running_total(spent_so_far, cost) is None
@@ -547,6 +554,7 @@ def main(argv: list[str] | None = None) -> int:
             ledger=ledger.to_json(),
             detail=outcome.detail,
             cost="" if cost is None else f"{cost:.4f}",
+            usage=usage,
             spent_total=(
                 ""
                 if running_total(spent_so_far, cost) is None

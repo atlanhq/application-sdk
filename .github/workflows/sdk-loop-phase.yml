@@ -98,6 +98,8 @@ on:
         value: ${{ jobs.phase.outputs.detail }}
       cost:
         value: ${{ jobs.phase.outputs.cost }}
+      usage:
+        value: ${{ jobs.phase.outputs.usage }}
       reaims:
         value: ${{ jobs.phase.outputs.reaims }}
       spent_total:
@@ -127,6 +129,7 @@ jobs:
       ledger: ${{ steps.run.outputs.ledger }}
       detail: ${{ steps.run.outputs.detail }}
       cost: ${{ steps.run.outputs.cost }}
+      usage: ${{ steps.run.outputs.usage }}
       reaims: ${{ steps.run.outputs.reaims }}
       spent_total: ${{ steps.run.outputs.spent_total }}
     steps:
@@ -156,8 +159,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.base_sha }}
-          # Full history: the review playbook diffs against the base branch.
+          # Full history for the base-branch diff, but only the refs this
+          # phase needs. `fetch-depth: 0` alone pulled 540 branches per job —
+          # every ref in the repo, three times a round, for a diff that needs
+          # two.
           fetch-depth: 0
+          filter: blob:none
           token: ${{ steps.app-token.outputs.token }}
           # The resolve phase pushes with this credential; the review phase
           # holds one that cannot.

@@ -448,6 +448,64 @@ def opencode_config(model: str, with_subagents: bool = False) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 
 
+def parse_opencode_usage(text: str) -> dict[str, int]:
+    """Token counts from `opencode stats`, which is the authoritative source.
+
+    Preferred over the gateway's /key/info spend for two reasons. It is
+    attributable to THIS phase rather than to a key several lanes share, and
+    it reports cache_read/cache_write — the one measurement that decides
+    whether the fixed ~90KB playbook prefix is being re-paid for on every one
+    of a phase's ~24 turns, which is where this lane's cost actually lives.
+
+    Dollars are deliberately NOT taken from here: the model entries declare
+    zero cost (see `opencode_config`), so opencode's own total is $0.00 by
+    construction. Tokens are unaffected by that and are exact.
+    """
+    fields = {
+        "input": r"Input\s+([\d,]+)",
+        "output": r"Output\s+([\d,]+)",
+        "cache_read": r"Cache Read\s+([\d,]+)",
+        "cache_write": r"Cache Write\s+([\d,]+)",
+    }
+    out: dict[str, int] = {}
+    for key, pattern in fields.items():
+        match = re.search(pattern, text or "")
+        if match:
+            out[key] = int(match.group(1).replace(",", ""))
+    return out
+
+
+def opencode_usage(cwd: str, runner: Any = subprocess.run) -> dict[str, int]:
+    """Run `opencode stats` for today and parse it. Never raises."""
+    try:
+        proc = runner(
+            ["opencode", "stats", "--days", "1"],
+            cwd=cwd,
+            env=agent_env(),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except Exception:
+        return {}
+    return parse_opencode_usage(proc.stdout or "")
+
+
+def format_usage(usage: dict[str, int]) -> str:
+    """One-line token summary, with the cache signal made explicit."""
+    if not usage:
+        return "tokens unavailable"
+    parts = [f"in {usage.get('input', 0):,}", f"out {usage.get('output', 0):,}"]
+    read, write = usage.get("cache_read", 0), usage.get("cache_write", 0)
+    if read or write:
+        parts.append(f"cache r/w {read:,}/{write:,}")
+    else:
+        # Worth flagging rather than omitting: no cache activity at all means
+        # the fixed playbook prefix is being re-sent every turn.
+        parts.append("cache MISS (no reuse)")
+    return " · ".join(parts)
+
+
 def parse_key_spend(payload: dict[str, Any]) -> float | None:
     """Cumulative USD on the key, from a LiteLLM ``/key/info`` body."""
     info = payload.get("info") or {}
@@ -457,6 +515,10 @@ def parse_key_spend(payload: dict[str, Any]) -> float | None:
 
 def gateway_spend() -> float | None:
     """Cumulative USD spend on this gateway key, or None if unreadable.
+
+    Observed returning None on a live run, hence `opencode_usage` above as the
+    primary measurement. Kept because it is the only source of DOLLARS; the
+    failure reason is now surfaced instead of swallowed.
 
     None means exactly that — endpoint disabled, key lacks permission, gateway
     unreachable. Callers must report "unavailable" rather than substitute a
@@ -471,7 +533,8 @@ def gateway_spend() -> float | None:
     try:
         with urllib.request.urlopen(request, timeout=20) as response:
             return parse_key_spend(json.loads(response.read()))
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - reason matters more than type
+        print(f"::warning::/key/info unreadable, cost will be blank: {exc}")
         return None
 
 

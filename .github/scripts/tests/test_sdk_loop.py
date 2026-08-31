@@ -38,9 +38,11 @@ from sdk_loop_common import (  # noqa: E402
     AgentResult,
     DismissalLedger,
     budget_exceeded,
+    format_usage,
     gateway_base,
     head_state,
     opencode_config,
+    parse_opencode_usage,
     parse_reviewed_head,
     parse_verdict,
     reaim_exhausted,
@@ -1029,6 +1031,35 @@ def test_every_job_has_a_name_a_human_can_read() -> None:
     assert jobs["resolve-8"]["name"] == "Resolve 8"
     assert jobs["fence"]["name"] == "Fence"
     assert jobs["finalize"]["name"] == "Summary"
+
+
+def test_token_usage_is_parsed_and_a_cache_miss_is_called_out() -> None:
+    """`opencode stats` is the authoritative measurement: attributable to THIS
+    phase, unlike a gateway key several lanes share, and it reports
+    cache_read/cache_write — the one number that says whether the fixed ~90KB
+    playbook prefix is re-paid on every one of a phase's ~24 turns."""
+    usage = parse_opencode_usage(
+        "Input   1,234\nOutput  567\nCache Read  8,900\nCache Write 100"
+    )
+    assert usage == {
+        "input": 1234,
+        "output": 567,
+        "cache_read": 8900,
+        "cache_write": 100,
+    }
+    assert "cache r/w 8,900/100" in format_usage(usage)
+    # Zero cache is the finding, not an absence — say so rather than omit it.
+    assert "cache MISS" in format_usage({"input": 10, "output": 5})
+    assert format_usage({}) == "tokens unavailable"
+
+
+def test_a_failed_summary_post_is_reported(tmp_path: pathlib.Path) -> None:
+    """A live run generated the whole summary, exited 0, and posted nothing.
+    The summary is the only place a reader learns what the run did."""
+    src = (
+        pathlib.Path(__file__).resolve().parents[1] / "sdk_loop_finalize.py"
+    ).read_text(encoding="utf-8")
+    assert "::error::could not post the run summary" in src
 
 
 def test_uv_is_available_to_the_phases() -> None:
