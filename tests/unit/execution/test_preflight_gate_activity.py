@@ -1592,7 +1592,9 @@ class TestPreflightGateStorageChecks:
             with pytest.raises(ApplicationError) as excinfo:
                 await gate(PreflightGateInput())
         assert excinfo.value.type == "PreflightFailed"
-        assert excinfo.value.details[0].code == "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
+        assert (
+            excinfo.value.details[0].code == "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
+        )
 
     def test_every_classifier_bucket_maps_to_a_typed_leaf(self) -> None:
         """The gate mapper covers every bucket the storage classifier can emit.
