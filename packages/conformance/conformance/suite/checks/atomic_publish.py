@@ -135,6 +135,35 @@ _OWN_SCOPE_NODES: tuple[type[ast.AST], ...] = (
 )
 
 
+#: The four comprehension forms, which share an evaluation quirk the helpers
+#: below all have to respect.
+_COMPREHENSION_NODES: tuple[type[ast.AST], ...] = (
+    ast.ListComp,
+    ast.SetComp,
+    ast.DictComp,
+    ast.GeneratorExp,
+)
+
+
+def _comprehension_outer_iter(node: ast.AST) -> ast.expr | None:
+    """The one sub-expression of a comprehension evaluated in the ENCLOSING scope.
+
+    Python evaluates the first generator's iterable eagerly, in the scope that
+    contains the comprehension and *before* any comprehension target is bound
+    — which is why ``[x for f in g(f)]`` reads the outer ``f``.  Every later
+    iterable, the ``if`` clauses and the element expression evaluate inside the
+    comprehension, with the targets bound.
+
+    So the first iterable has to be analysed with the enclosing scope's taint
+    and publish state rather than the comprehension's.  Folding it into the
+    comprehension lets a colliding target name shadow a genuinely tainted outer
+    name, and the violation is missed.
+    """
+    if isinstance(node, _COMPREHENSION_NODES) and node.generators:
+        return node.generators[0].iter
+    return None
+
+
 def _own_level_nodes(scope: ast.AST) -> list[ast.AST]:
     """Every node in *scope*'s subtree, excluding nested scopes.
 
@@ -145,10 +174,21 @@ def _own_level_nodes(scope: ast.AST) -> list[ast.AST]:
     is encoded here once for both scope analyses below.
     """
     nodes: list[ast.AST] = []
+    # When *scope* is itself a comprehension, its first iterable evaluates one
+    # level out and is not part of this scope's own level.
+    escaping = _comprehension_outer_iter(scope)
     pending = list(ast.iter_child_nodes(scope))
     while pending:
         node = pending.pop()
+        if node is escaping:
+            continue
         if isinstance(node, _OWN_SCOPE_NODES):
+            # ...and by the same rule, a *nested* comprehension's first
+            # iterable evaluates here, so it stays part of this scope even
+            # though the comprehension body does not.
+            inner = _comprehension_outer_iter(node)
+            if inner is not None:
+                pending.append(inner)
             continue
         nodes.append(node)
         pending.extend(ast.iter_child_nodes(node))
@@ -199,9 +239,12 @@ def _scope_shadowed_names(scope: ast.AST) -> frozenset[str]:
     must not inherit the module's taint.
     """
     shadowed: set[str] = set()
-    if isinstance(scope, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+    if isinstance(scope, _COMPREHENSION_NODES):
         # `[os.open(p, flags) for flags in candidates]` binds `flags` here, so
         # a module-level tainted `flags` of the same spelling does not reach in.
+        # These bindings do NOT cover the first generator's iterable, which is
+        # evaluated before any of them exist — the visitor walks that sub-tree
+        # under the enclosing frame instead (see _comprehension_outer_iter).
         for generator in scope.generators:
             for sub in ast.walk(generator.target):
                 if isinstance(sub, ast.Name):
@@ -263,16 +306,47 @@ class _AtomicPublishChecker(ast.NodeVisitor):
     # must shadow an outer tainted name of the same spelling rather than
     # inherit its taint.
     def visit_ListComp(self, node: ast.ListComp) -> None:
-        self._walk_scope(node)
+        self._walk_comprehension(node)
 
     def visit_SetComp(self, node: ast.SetComp) -> None:
-        self._walk_scope(node)
+        self._walk_comprehension(node)
 
     def visit_DictComp(self, node: ast.DictComp) -> None:
-        self._walk_scope(node)
+        self._walk_comprehension(node)
 
     def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
-        self._walk_scope(node)
+        self._walk_comprehension(node)
+
+    def _walk_comprehension(self, node: ast.AST) -> None:
+        """Walk a comprehension, splitting off the sub-expression that isn't in it.
+
+        The first generator's iterable is evaluated in the *enclosing* scope,
+        before any target is bound (see :func:`_comprehension_outer_iter`), so
+        it is visited with the current frame still on top. Everything else —
+        later iterables, the ``if`` clauses, the element — is visited under
+        the comprehension's own frame, where the targets shadow.
+
+        Without the split, ``[x for flags in [os.open(p, flags)] for x in y]``
+        under a tainted outer ``flags`` reads as shadowed and the violation is
+        silently dropped.
+        """
+        escaping = _comprehension_outer_iter(node)
+        if escaping is not None:
+            self.visit(escaping)
+
+        self._publish_stack.append(_scope_publishes(node))
+        self._tainted_stack.append(_scope_tainted_names(node))
+        self._shadow_stack.append(_scope_shadowed_names(node))
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.comprehension):
+                for sub in ast.iter_child_nodes(child):
+                    if sub is not escaping:
+                        self.visit(sub)
+            else:
+                self.visit(child)
+        self._publish_stack.pop()
+        self._tainted_stack.pop()
+        self._shadow_stack.pop()
 
     def _walk_scope(self, node: ast.AST) -> None:
         self._publish_stack.append(_scope_publishes(node))

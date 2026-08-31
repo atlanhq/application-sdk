@@ -315,6 +315,58 @@ def test_p048_comprehension_target_shadows_an_outer_tainted_name() -> None:
     assert _rule(src) == []
 
 
+def test_p048_first_iterable_is_not_shadowed_by_its_own_target() -> None:
+    """Python evaluates a comprehension's FIRST iterable in the enclosing scope,
+    before any target is bound — so a colliding target name must not shadow the
+    outer taint there.
+
+    Regression: adding comprehension targets to the shadow frame wholesale made
+    this a false negative. The `os.open` reads the module's tainted `flags`,
+    not the `flags` the comprehension goes on to bind.
+    """
+    src = (
+        "import os\n"
+        "flags = os.O_WRONLY | os.O_TRUNC\n"
+        "r = [x for flags in [os.open('artifact.json', flags)] for x in [0]]\n"
+    )
+    findings = _rule(src)
+    assert [f.line for f in findings] == [3], findings
+
+
+def test_p048_later_iterable_is_shadowed_by_an_earlier_target() -> None:
+    """The mirror case: a *second* generator's iterable evaluates inside the
+    comprehension, with earlier targets bound, so the shadow does apply."""
+    src = (
+        "import os\n"
+        "flags = os.O_WRONLY | os.O_TRUNC\n"
+        "r = [x for flags in candidates for x in [os.open('a', flags)]]\n"
+    )
+    assert _rule(src) == []
+
+
+def test_p048_publish_in_a_first_iterable_clears_an_enclosing_violator() -> None:
+    """Own-level follows the same split: a rename in the first iterable runs in
+    the enclosing function, so it is that function's publish."""
+    src = (
+        "import os\n"
+        "def f(target, tmp, path, xs):\n"
+        "    os.open(target, os.O_WRONLY | os.O_TRUNC)\n"
+        "    return [x for x in [os.replace(tmp, path)]]\n"
+    )
+    assert _rule(src) == []
+
+
+def test_p048_genexp_first_iterable_behaves_like_a_listcomp() -> None:
+    """All four forms share the helper, so the fix must not be ListComp-only."""
+    src = (
+        "import os\n"
+        "flags = os.O_WRONLY | os.O_TRUNC\n"
+        "g = (x for flags in [os.open('artifact.json', flags)] for x in [0])\n"
+    )
+    findings = _rule(src)
+    assert [f.line for f in findings] == [3], findings
+
+
 def test_p048_passes_without_o_trunc() -> None:
     src = "import os\nfd = os.open('x', os.O_WRONLY | os.O_CREAT, 0o600)\n"
     assert _rule(src) == []
