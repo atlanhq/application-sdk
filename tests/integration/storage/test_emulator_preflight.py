@@ -211,6 +211,9 @@ async def test_run_storage_access_check_against_real_store(tmp_path) -> None:
     bad = _s3_store(
         "run-check-bad", _CUSTOMER_BUCKET, tmp_path, secret_key="wrong-secret"
     )
-    infra.storage = bad
-    results = await check_run_storage_access(infra, timeout_seconds=30)
+    # InfrastructureContext is a frozen dataclass — build a second one rather
+    # than mutating the first (the MagicMock this replaced absorbed the
+    # reassignment; the typed context correctly rejects it).
+    bad_infra = InfrastructureContext(storage=bad, upstream_storage=None)
+    results = await check_run_storage_access(bad_infra, timeout_seconds=30)
     assert results[0].passed is False
