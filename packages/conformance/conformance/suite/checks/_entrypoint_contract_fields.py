@@ -269,6 +269,8 @@ def resolve_contract_fields(
     classdef: ast.ClassDef,
     aliases: dict[str, str],
     by_name: dict[str, ClassRecord],
+    *,
+    by_name_all: dict[str, list[ClassRecord]] | None = None,
 ) -> list[_FieldInfo]:
     """Return field info for *classdef*, resolved across its full base-class chain.
 
@@ -287,6 +289,15 @@ def resolve_contract_fields(
     ``B`` and ``C`` derive from ``A``) would be re-merged once per path,
     re-applying its fields and clobbering an override a higher-precedence
     sibling already established for the same field name.
+
+    *by_name_all* is optional and opt-in: when a base-class NAME is declared
+    more than once in the scanned repo (two entrypoints that both declare
+    ``AppInputContract``, say), ``by_name`` keeps only the first and the
+    resolved field set silently becomes whichever declaration happened to be
+    parsed first. Passing the full multimap makes such an ambiguous ancestor
+    contribute the UNION of its declarations instead — the honest reading when
+    a bare class name cannot identify one of them. Callers that need today's
+    first-wins behaviour simply omit it.
 
     ``ClassRecord.bases`` (not ``rec.node.bases``) is used once recursion
     reaches a registered ancestor: ``collect_classes`` already de-aliases base
@@ -309,14 +320,19 @@ def resolve_contract_fields(
             return  # cycle — treat as unknown, same as resolve_ancestor
         visiting.add(name)
 
-        rec = by_name.get(name)
-        if rec is not None:
-            # Reversed so the leftmost grand-ancestor (highest MRO precedence)
-            # is merged last and therefore wins the dict overwrite below.
-            for base_name in reversed(rec.bases):
-                merge_ancestor(base_name, visiting)
-            for fi in _iter_fields(rec.node):
-                fields_by_name[fi.name] = fi._replace(node=None)
+        recs = (by_name_all or {}).get(name)
+        if not recs:
+            rec_one = by_name.get(name)
+            recs = [rec_one] if rec_one is not None else []
+        if recs:
+            for rec in recs:
+                # Reversed so the leftmost grand-ancestor (highest MRO
+                # precedence) is merged last and therefore wins the dict
+                # overwrite below.
+                for base_name in reversed(rec.bases):
+                    merge_ancestor(base_name, visiting)
+                for fi in _iter_fields(rec.node):
+                    fields_by_name[fi.name] = fi._replace(node=None)
         else:
             for sdk_field in SDK_CONTRACT_BASE_FIELDS.get(name, ()):
                 fields_by_name[sdk_field.name] = _FieldInfo(
