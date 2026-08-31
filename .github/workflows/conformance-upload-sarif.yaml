@@ -45,6 +45,55 @@ jobs:
           - slug: contract-toolkit
             name: "Upload Contract-toolkit SARIF"
     steps:
+      # Code scanning is a GitHub Advanced Security feature: free on public
+      # repos, licensed on private ones. GHAS is disabled across the atlanhq
+      # private fleet, so `upload-sarif` fails the whole job with "Advanced
+      # Security must be enabled for this repository to use code scanning" —
+      # on 77 of the 82 repos carrying this workflow, once per matrix leg, on
+      # every push to main (FND-1149).
+      #
+      # Gate on the repository's actual eligibility rather than on visibility
+      # alone, so a private repo starts uploading the moment GHAS is licensed
+      # with no edit here. Public repos never carry an `advanced_security` key
+      # (the feature is inherent to them), hence the two-branch test.
+      #
+      # Caveat, deliberately accepted: `security_and_analysis` is admin-only on
+      # the repos endpoint, so a non-admin GITHUB_TOKEN may read `visibility`
+      # but see `advanced_security` as absent even on a licensed private repo —
+      # which would skip the upload. That direction is the safe one (it is
+      # today's behaviour minus the failing job) and it is not silent: the
+      # notice below prints both values into the job log on every run, so the
+      # first licensed private repo shows up as `advanced_security=absent`
+      # rather than as a mystery. Querying code-scanning/analyses instead was
+      # rejected — it 404s on a repo with no analyses yet, which is exactly a
+      # newly-licensed repo, so the check would lock itself off permanently.
+      #
+      # Nothing downstream depends on this upload: connector-pulse ingests the
+      # k.atlan.dev mirror published by `update-dashboard.yml`, not the Security
+      # tab, so a skipped leg costs no fleet visibility.
+      - name: "Check code scanning availability"
+        id: probe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          info=$(gh api "repos/$GITHUB_REPOSITORY" \
+            --jq '"\(.visibility) \(.security_and_analysis.advanced_security.status // "absent")"')
+          vis=${info% *}
+          ghas=${info#* }
+          if [ "$vis" = "public" ] || [ "$ghas" = "enabled" ]; then
+            available=true
+          else
+            available=false
+            echo "::notice::Code scanning unavailable (visibility=$vis, advanced_security=$ghas) — skipping SARIF upload. The conformance gate result and the connector-pulse dashboard are unaffected."
+          fi
+          # The redirect carries no preceding space on purpose: this file is
+          # rendered by the bootstrap jinja2 pass, whose placeholder guard
+          # rejects a space followed by the jinja2 close delimiter anywhere in
+          # the rendered output (test_no_jinja2_placeholders_in_rendered_output).
+          # Hence also the single write here rather than one per branch.
+          echo "available=$available">>"$GITHUB_OUTPUT"
+
       - name: "Download SARIF artifact"
         id: download
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -63,7 +112,7 @@ jobs:
             "$SARIF_SLUG.sarif" > "$SARIF_SLUG-upload.sarif"
 
       - name: "Upload SARIF to Security tab"
-        if: steps.download.outcome == 'success'
+        if: steps.download.outcome == 'success' && steps.probe.outputs.available == 'true'
         uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
         with:
           sarif_file: ${{ matrix.slug }}-upload.sarif
