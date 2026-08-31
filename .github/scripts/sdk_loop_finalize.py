@@ -53,6 +53,11 @@ STOP_TEXT = {
         "starting a phase it could not afford. Raise `vars.SDK_LOOP_MAX_USD` and "
         "re-invoke to continue from where it stopped."
     ),
+    "reaim": (
+        "**Kept re-aiming.** Every round found the branch somewhere other than "
+        "where it had just reviewed, so no round ever got a clean pass at one "
+        "commit. Re-invoke once the branch settles."
+    ),
     "failed": (
         "**A phase failed.** The run stopped rather than guessing at a result — "
         "see the round table for which phase and why."
@@ -89,6 +94,12 @@ def parse_rounds(raw: str | None) -> list[Round]:
     rounds: list[Round] = []
     for item in payload:
         if not isinstance(item, dict) or not item.get("phase"):
+            continue
+        # A skipped job still emits a row, with every field empty. Counting
+        # those produced "8 review · 8 resolve" for a run where three reviews
+        # ran and nothing else did — the table then printed five blank rows
+        # implying work that never happened.
+        if not str(item.get("outcome", "")).strip():
             continue
         rounds.append(
             Round(

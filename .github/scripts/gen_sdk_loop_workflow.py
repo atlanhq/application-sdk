@@ -33,7 +33,7 @@ HEADER = """# @sdk-loop — drive a PR to merge-ready without supervision.
 #   fence -> review 1 -> resolve 1 -> review 2 -> ... -> review 8 -> finalize
 #
 # One workflow run, one job per phase, up to 8 review/resolve pairs. The review
-# phase runs on xai/grok-4.6 — the same model the existing lanes review with
+# phase runs on xai/grok-4-6 — the same model the existing lanes review with
 # — and the resolve phase on gpt-5.6-luna via opencode, both
 # through the Atlan AI gateway — a public edge, so no VPN and no mothership
 # sandbox. Its URL is a secret and is deliberately not written anywhere in
@@ -69,7 +69,7 @@ HEADER = """# @sdk-loop — drive a PR to merge-ready without supervision.
 # CI staleness: python3 .github/scripts/gen_sdk_loop_workflow.py --check
 #
 # Required configuration:
-#   secrets.LITELLM_API_KEY           gateway key entitled to BOTH xai/grok-4.6
+#   secrets.LITELLM_API_KEY           gateway key entitled to BOTH xai/grok-4-6
 #                                     and gpt-5.6-luna. An unentitled model is a
 #                                     fast 400 with real cost, so check first.
 #   secrets.FLEET_APP_ID              atlan-app-fleet — already configured for
@@ -183,6 +183,7 @@ def review_job(n: int) -> str:
         ledger = "''"
         prior_sha = "''"
         spent = "''"
+        reaims = "''"
     else:
         prev_res, prev_rev = f"resolve-{n - 1}", f"review-{n - 1}"
         # Continue when the previous resolve made progress, or when either
@@ -206,6 +207,7 @@ def review_job(n: int) -> str:
             "${{ needs.%s.outputs.spent_total || needs.%s.outputs.spent_total }}"
             % (prev_res, prev_rev)
         )
+        reaims = "${{ needs.%s.outputs.reaims }}" % prev_rev
     return f"""
   review-{n}:
     needs: {needs}
@@ -223,6 +225,7 @@ def review_job(n: int) -> str:
       ledger: {ledger}
       prior_sha: {prior_sha}
       spent_so_far: {spent}
+      reaims_so_far: {reaims}
 """
 
 
