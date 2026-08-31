@@ -176,7 +176,13 @@ class GoldenLayout:
                 value_summary=", ".join(self.stages),
             )
         for stage in self.stages:
-            if not stage or "/" in stage or stage in {".", ".."}:
+            if (
+                not stage
+                or "/" in stage
+                or "\\" in stage
+                or ".." in stage
+                or stage == "."
+            ):
                 raise GoldenLayoutError(
                     message=(f"Stage name {stage!r} is not a single directory name."),
                     field="stages",
@@ -231,6 +237,18 @@ class GoldenCorpus:
 
         layout = layout or GoldenLayout()
         override = os.environ.get(GOLDEN_ROOT_ENV)
+        if override is not None and not override.strip():
+            raise _layout_error(
+                path=Path("."),
+                message=(
+                    f"{GOLDEN_ROOT_ENV} is set but empty — likely an unresolved "
+                    "template variable, not an intentional default."
+                ),
+                suggested_action=(
+                    f"Point {GOLDEN_ROOT_ENV} at the corpus root, or unset it "
+                    "to fall back to the in-repo default."
+                ),
+            )
         if override:
             root = Path(override).expanduser()
             if not root.is_dir():
@@ -337,10 +355,15 @@ class GoldenCorpus:
             )
         candidate = self.root / tenant
         if not candidate.is_dir():
+            known = sorted(
+                entry.name for entry in self.root.iterdir() if entry.is_dir()
+            )
             raise _layout_error(
                 path=candidate,
                 message=f"Tenant directory for {tenant!r} does not exist.",
-                suggested_action=(f"Known tenants: {', '.join(self.tenants())}."),
+                suggested_action=(
+                    f"Known tenants: {', '.join(known) or '(none captured yet)'}."
+                ),
             )
         return replace(self, tenant=tenant)
 
@@ -573,24 +596,25 @@ def _read_json(path: Path) -> list[dict[str, Any]]:
 
 def _read_ndjson(path: Path) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
-    for lineno, line in enumerate(path.read_text().splitlines(), start=1):
-        if not line.strip():
-            continue
-        try:
-            payload = orjson.loads(line)
-        except orjson.JSONDecodeError as exc:
-            raise _format_error(
-                path,
-                f"Line {lineno} is not valid JSON.",
-                "Fix or re-capture the file.",
-            ) from exc
-        if not isinstance(payload, dict):
-            raise _format_error(
-                path,
-                f"Line {lineno} is a {type(payload).__name__}, not a record.",
-                "Every NDJSON line must be one record object.",
-            )
-        records.append(payload)
+    with path.open(encoding="utf-8") as handle:
+        for lineno, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            try:
+                payload = orjson.loads(line)
+            except orjson.JSONDecodeError as exc:
+                raise _format_error(
+                    path,
+                    f"Line {lineno} is not valid JSON.",
+                    "Fix or re-capture the file.",
+                ) from exc
+            if not isinstance(payload, dict):
+                raise _format_error(
+                    path,
+                    f"Line {lineno} is a {type(payload).__name__}, not a record.",
+                    "Every NDJSON line must be one record object.",
+                )
+            records.append(payload)
     return records
 
 

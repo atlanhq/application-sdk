@@ -491,7 +491,9 @@ def _group_by_typename(
         if not asset_key:
             skipped += 1
             continue
-        typename = group_by(record) if group_by else record.get("typeName", "Unknown")
+        typename = (
+            group_by(record) if group_by else (record.get("typeName") or "Unknown")
+        )
         bucket = grouped.setdefault(typename, {})
         if asset_key in bucket:
             duplicates.setdefault(typename, []).append(asset_key)

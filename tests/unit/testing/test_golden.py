@@ -516,3 +516,21 @@ class TestConsumerCallSignatures:
             ignore=frozenset({"loaded_at"}),
         )
         assert not report.has_failures
+
+
+class TestFalsyTypenameGrouping:
+    def test_none_and_missing_typename_share_the_unknown_bucket(self) -> None:
+        produced = [
+            {"attributes": {"qualifiedName": "a"}, "typeName": None},
+            {"attributes": {"qualifiedName": "b"}},
+        ]
+        golden = [
+            {"attributes": {"qualifiedName": "a"}},
+            {"attributes": {"qualifiedName": "b"}, "typeName": ""},
+        ]
+        assert_matches_golden(
+            produced,
+            golden,
+            key=lambda r: r["attributes"]["qualifiedName"],
+            ignore=frozenset({"typeName"}),
+        )

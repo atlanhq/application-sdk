@@ -392,3 +392,12 @@ class TestRequireGoldenCorpus:
             tenant="tenant-a",
         )
         assert corpus.tenant == "tenant-a"
+
+
+class TestEmptyGoldenRootEnv:
+    def test_empty_env_var_is_an_error_not_a_silent_default(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(GOLDEN_ROOT_ENV, "   ")
+        with pytest.raises(GoldenCorpusLayoutError, match="set but empty"):
+            GoldenCorpus.from_env(default_root=tmp_path)

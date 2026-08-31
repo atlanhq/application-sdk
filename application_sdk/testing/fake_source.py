@@ -77,6 +77,7 @@ from application_sdk.testing._errors import (
 
 __all__ = [
     "Authorizer",
+    "CursorPage",
     "FakeRequest",
     "FakeResponse",
     "FakeSourceNotRunningError",
@@ -85,6 +86,7 @@ __all__ = [
     "HandlerResult",
     "HttpFakeSource",
     "HttpFakeSourceFactory",
+    "cursor_page",
 ]
 
 logger = get_logger(__name__)
