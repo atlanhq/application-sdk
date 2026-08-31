@@ -60,17 +60,22 @@ MAX_ROUNDS = 8
 #: (`.mothership/pr-resolve/ORCHESTRATION.md` §3d, "Fix every finding (or prove
 #: it false)"), so a separate adversarial reviewer would pay twice for one job.
 #:
-#: Written `grok-4-6`, not `grok-4.6`. Two live rounds died 11ms in with
+#: `grok-4.6`, dotted — that is the alias the gateway serves. The undotted
+#: form was tried and rejected: "Invalid model name passed in
+#: model=xai/grok-4-6", and `/v1/models` lists `xai/grok-4.6` and no variant.
+#:
+#: Superseded note, kept because it recorded a real finding: two live rounds
+#: died 11ms in with
 #: `Error: [DecimalError] Invalid argument: [object Object]` — decimal.js
 #: refusing a non-numeric argument — before the agent read anything. The
-#: dotted form is the one shape this lane has that connector-pulse's working
-#: config does not: its aliases (`gpt-5.6-luna`, `kimi-k3`) carry no dot in a
-#: position a decimal parser would try to consume.
+#: dot was blamed. It was the wrong culprit — swapping it merely moved the
+#: failure from a crash to a 400. The real cause was an unpriced model; see
+#: `opencode_config`.
 #:
 #: The alias also contains a slash. opencode splits `--model` on the FIRST
-#: slash only, so `gateway/xai/grok-4-6` resolves to provider `gateway`, model
-#: `xai/grok-4-6` — the key in the config's `models` map is the full alias.
-REVIEW_MODEL = "xai/grok-4-6"
+#: slash only, so `gateway/xai/grok-4.6` resolves to provider `gateway`, model
+#: `xai/grok-4.6` — the key in the config's `models` map is the full alias.
+REVIEW_MODEL = "xai/grok-4.6"
 
 #: Resolve runs on the mechanical model — the same role split connector-pulse
 #: uses for its mechanical lane.
@@ -296,7 +301,41 @@ def opencode_config(model: str) -> dict[str, Any]:
                     "baseURL": f"{base}/v1",
                     "apiKey": "{env:LITELLM_API_KEY}",
                 },
-                "models": {name: {} for name in ALLOWED_MODELS},
+                # Cost is DECLARED rather than left empty. This is a
+                # HYPOTHESIS under test, not a diagnosis, for the crash that
+                # killed the first three live runs:
+                #
+                #   Error: [DecimalError] Invalid argument: [object Object]
+                #
+                # What is PROVEN: it dies 11ms in, before any network call —
+                # the undotted alias got as far as a real 400 from the
+                # gateway, so the crash is local to opencode's model
+                # resolution. `[object Object]` reaching decimal.js means an
+                # OBJECT was passed where a number was wanted, and an
+                # unpopulated cost table is the obvious candidate for that
+                # object. connector-pulse's aliases resolve in opencode's
+                # bundled registry; a gateway-only alias like `xai/grok-4.6`
+                # does not, which fits.
+                #
+                # What is NOT proven: that cost is the object in question. If
+                # this run still crashes, the next suspects are opencode
+                # parsing `4.6` out of the id as a version, and the nested
+                # slash in `gateway/xai/grok-4.6`.
+                #
+                # Zeroes rather than real prices: this lane bills through the
+                # gateway key and reads spend from /key/info, so opencode's own
+                # accounting is unused. Declaring it only stops it guessing.
+                "models": {
+                    name: {
+                        "cost": {
+                            "input": 0,
+                            "output": 0,
+                            "cache_read": 0,
+                            "cache_write": 0,
+                        }
+                    }
+                    for name in ALLOWED_MODELS
+                },
             }
         },
         "model": f"{PROVIDER}/{model}",
