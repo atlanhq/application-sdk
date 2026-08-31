@@ -128,6 +128,7 @@ jobs:
       pr: ${{ needs.fence.outputs.pr }}
       head_ref: ${{ needs.fence.outputs.head_ref }}
       base_sha: ${{ needs.review-1.outputs.new_base_sha }}
+      verdict_url: ${{ needs.review-1.outputs.verdict_url }}
       ledger: ''
 
   review-2:
@@ -157,6 +158,7 @@ jobs:
       pr: ${{ needs.fence.outputs.pr }}
       head_ref: ${{ needs.fence.outputs.head_ref }}
       base_sha: ${{ needs.review-2.outputs.new_base_sha }}
+      verdict_url: ${{ needs.review-2.outputs.verdict_url }}
       ledger: ${{ needs.resolve-1.outputs.ledger }}
 
   review-3:
@@ -186,6 +188,7 @@ jobs:
       pr: ${{ needs.fence.outputs.pr }}
       head_ref: ${{ needs.fence.outputs.head_ref }}
       base_sha: ${{ needs.review-3.outputs.new_base_sha }}
+      verdict_url: ${{ needs.review-3.outputs.verdict_url }}
       ledger: ${{ needs.resolve-2.outputs.ledger }}
 
   review-4:
@@ -215,6 +218,7 @@ jobs:
       pr: ${{ needs.fence.outputs.pr }}
       head_ref: ${{ needs.fence.outputs.head_ref }}
       base_sha: ${{ needs.review-4.outputs.new_base_sha }}
+      verdict_url: ${{ needs.review-4.outputs.verdict_url }}
       ledger: ${{ needs.resolve-3.outputs.ledger }}
 
   review-5:
@@ -244,6 +248,7 @@ jobs:
       pr: ${{ needs.fence.outputs.pr }}
       head_ref: ${{ needs.fence.outputs.head_ref }}
       base_sha: ${{ needs.review-5.outputs.new_base_sha }}
+      verdict_url: ${{ needs.review-5.outputs.verdict_url }}
       ledger: ${{ needs.resolve-4.outputs.ledger }}
 
   review-6:
@@ -273,6 +278,7 @@ jobs:
       pr: ${{ needs.fence.outputs.pr }}
       head_ref: ${{ needs.fence.outputs.head_ref }}
       base_sha: ${{ needs.review-6.outputs.new_base_sha }}
+      verdict_url: ${{ needs.review-6.outputs.verdict_url }}
       ledger: ${{ needs.resolve-5.outputs.ledger }}
 
   review-7:
@@ -302,6 +308,7 @@ jobs:
       pr: ${{ needs.fence.outputs.pr }}
       head_ref: ${{ needs.fence.outputs.head_ref }}
       base_sha: ${{ needs.review-7.outputs.new_base_sha }}
+      verdict_url: ${{ needs.review-7.outputs.verdict_url }}
       ledger: ${{ needs.resolve-6.outputs.ledger }}
 
   review-8:
@@ -331,6 +338,7 @@ jobs:
       pr: ${{ needs.fence.outputs.pr }}
       head_ref: ${{ needs.fence.outputs.head_ref }}
       base_sha: ${{ needs.review-8.outputs.new_base_sha }}
+      verdict_url: ${{ needs.review-8.outputs.verdict_url }}
       ledger: ${{ needs.resolve-7.outputs.ledger }}
 
   finalize:

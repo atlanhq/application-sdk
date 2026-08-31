@@ -142,6 +142,9 @@ class ReviewOutcome:
     verdict: str = ""
     reviewed_head: str = ""
     detail: str = ""
+    #: Where the verdict landed. The resolve phase is pointed at this; without
+    #: it the resolver is told "the review is at " and has to go hunting.
+    verdict_url: str = ""
 
 
 def interpret_review(
@@ -182,16 +185,18 @@ def interpret_review(
             detail=f"verdict stamps {stamped[:8]}, round expected {expected_sha[:8]}",
         )
 
+    url = str(verdict_comment.get("html_url") or "")
     if verdict in ("READY_TO_MERGE",):
-        return ReviewOutcome(OUTCOME_CLEAN, verdict, stamped)
+        return ReviewOutcome(OUTCOME_CLEAN, verdict, stamped, verdict_url=url)
     if verdict in ("BLOCKED", "NEEDS_HUMAN", "NEEDS_REBASE"):
         return ReviewOutcome(
             OUTCOME_TERMINAL_VERDICT,
             verdict,
             stamped,
             detail=f"{verdict} is not something a resolve phase can fix",
+            verdict_url=url,
         )
-    return ReviewOutcome(OUTCOME_OK, verdict, stamped)
+    return ReviewOutcome(OUTCOME_OK, verdict, stamped, verdict_url=url)
 
 
 # --------------------------------------------------------------------------
@@ -212,6 +217,11 @@ def resolve_prompt(pr: int, round_no: int, sha: str, verdict_url: str) -> str:
         "1. Do NOT trigger @sdk-review and do NOT wait for one. The loop runs",
         "   the next review itself, as a separate job, once you finish. Phase",
         "   3a/3b of the playbook is handled by the harness.",
+        "   Because of that, SKIP sdk_resolve_push_guard.py. The guard blocks",
+        "   until an in-flight review answers YOUR trigger; you never send one,",
+        "   so there is no trigger→verdict window to respect and the guard has",
+        "   nothing to wait for. The harness fences the push instead, by",
+        "   comparing the live head against the sha that was reviewed.",
         "2. Begin with §3d. Contest the findings BEFORE fixing anything: for",
         "   each one, either fix it or prove it false with a concrete rationale.",
         "   There is no separate adversarial reviewer in this lane — you are it,",
@@ -352,6 +362,7 @@ def main(argv: list[str] | None = None) -> int:
             outcome=outcome.outcome,
             verdict=outcome.verdict,
             reviewed_head=outcome.reviewed_head,
+            verdict_url=outcome.verdict_url,
             detail=outcome.detail,
             new_base_sha=state.live,
         )

@@ -50,6 +50,7 @@ from sdk_loop_phase import (  # noqa: E402
     interpret_review,
     newest_verdict,
     parse_dismissals,
+    resolve_prompt,
     review_prompt,
 )
 
@@ -227,6 +228,32 @@ def test_newest_verdict_wins_over_an_older_one() -> None:
         {"id": 10, "body": "just a chat comment"},
     ]
     assert parse_verdict(newest_verdict(comments)["body"]) == "READY_TO_MERGE"
+
+
+def test_the_review_url_is_carried_to_the_resolve_phase() -> None:
+    # Declared-but-unpassed is the failure this pins: the resolver would be
+    # told "the review is at " and have to hunt for its own verdict.
+    sha = "a" * 40
+    comment = _verdict_comment("NEEDS_FIXES", sha)
+    comment["html_url"] = "https://github.com/o/r/pull/1#issuecomment-9"
+    assert interpret_review(_ok(), comment, sha).verdict_url.endswith("issuecomment-9")
+
+
+def test_the_resolver_is_told_to_skip_the_push_guard_and_why() -> None:
+    # The playbook mandates the guard before every push, but the guard waits
+    # for a review to answer the resolver's OWN trigger — which this lane never
+    # sends. Left in, it would burn its wait budget and refuse the push, so
+    # every round would report no_progress with nothing to show for it.
+    prompt = resolve_prompt(42, 1, "a" * 40, "http://verdict")
+    assert "sdk_resolve_push_guard.py" in prompt
+    assert "SKIP" in prompt
+    assert "never send one" in prompt
+
+
+def test_the_resolver_is_told_not_to_trigger_a_review() -> None:
+    prompt = resolve_prompt(42, 1, "a" * 40, "http://verdict")
+    assert "Do NOT trigger @sdk-review" in prompt
+    assert "SDK_LOOP_DISMISSED:" in prompt
 
 
 def test_the_review_prompt_references_the_playbook_and_never_restates_it() -> None:

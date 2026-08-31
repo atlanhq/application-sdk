@@ -64,6 +64,8 @@ on:
         value: ${{ jobs.phase.outputs.outcome }}
       verdict:
         value: ${{ jobs.phase.outputs.verdict }}
+      verdict_url:
+        value: ${{ jobs.phase.outputs.verdict_url }}
       new_base_sha:
         value: ${{ jobs.phase.outputs.new_base_sha }}
       pushed_sha:
@@ -86,6 +88,7 @@ jobs:
     outputs:
       outcome: ${{ steps.run.outputs.outcome }}
       verdict: ${{ steps.run.outputs.verdict }}
+      verdict_url: ${{ steps.run.outputs.verdict_url }}
       new_base_sha: ${{ steps.run.outputs.new_base_sha }}
       pushed_sha: ${{ steps.run.outputs.pushed_sha }}
       ledger: ${{ steps.run.outputs.ledger }}

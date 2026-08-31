@@ -226,6 +226,7 @@ def resolve_job(n: int) -> str:
       pr: ${{{{ needs.fence.outputs.pr }}}}
       head_ref: ${{{{ needs.fence.outputs.head_ref }}}}
       base_sha: ${{{{ needs.{prev}.outputs.new_base_sha }}}}
+      verdict_url: ${{{{ needs.{prev}.outputs.verdict_url }}}}
       ledger: {"${{ needs.%s.outputs.ledger }}" % prev_res if prev_res else "''"}
 """
 
