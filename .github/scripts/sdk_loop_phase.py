@@ -50,10 +50,8 @@ from sdk_loop_common import (
     REVIEW_MODEL,
     AgentResult,
     DismissalLedger,
-    budget_exceeded,
     emit_outputs,
     format_usage,
-    gateway_spend,
     head_state,
     is_verdict_comment,
     opencode_usage,
@@ -62,8 +60,9 @@ from sdk_loop_common import (
     parse_verdict,
     reaim_exhausted,
     run_agent,
-    run_budget,
-    spend_delta,
+    token_budget,
+    token_budget_exceeded,
+    usage_total,
 )
 
 #: Wall-clock per phase. Review is the slower of the two: it walks the whole
@@ -86,21 +85,21 @@ OUTCOME_BUDGET = "budget_exhausted"
 OUTCOME_REAIM_EXHAUSTED = "reaim_exhausted"
 
 
-def _as_float(raw: str | None) -> float | None:
+def _as_int(raw: str | None) -> int | None:
     """Cumulative spend handed down the chain; empty means not measured."""
     if not (raw or "").strip():
         return None
     try:
-        return float(raw)  # type: ignore[arg-type]
+        return int(raw)  # type: ignore[arg-type]
     except ValueError:
         return None
 
 
-def running_total(spent_so_far: float | None, phase_cost: float | None) -> float | None:
+def running_total(spent_so_far: int | None, phase_cost: int | None) -> int | None:
     """Carry the tally forward, treating an unmeasured phase as a gap not a zero."""
     if spent_so_far is None and phase_cost is None:
         return None
-    return (spent_so_far or 0.0) + (phase_cost or 0.0)
+    return (spent_so_far or 0) + (phase_cost or 0)
 
 
 def _sh(args: list[str], runner: Callable[..., Any] = subprocess.run, **kw: Any) -> Any:
@@ -455,22 +454,19 @@ def main(argv: list[str] | None = None) -> int:
 
     # Budget before work: a phase refused at the boundary costs nothing, while
     # one killed mid-flight is money spent for no verdict and no fix.
-    spent_so_far = _as_float(os.environ.get("SPENT_SO_FAR"))
-    budget = run_budget()
-    if budget_exceeded(spent_so_far, budget):
+    spent_so_far = _as_int(os.environ.get("SPENT_SO_FAR"))
+    budget = token_budget()
+    if token_budget_exceeded(spent_so_far, budget):
         emit_outputs(
             outcome=OUTCOME_BUDGET,
-            spent_total=f"{spent_so_far:.4f}",
+            spent_total=str(spent_so_far),
             new_base_sha=state.live,
-            detail=f"run has spent ${spent_so_far:,.2f} of its ${budget:,.2f} allowance",
+            detail=f"used {spent_so_far:,} of its {budget:,} token allowance",
         )
-        print(f"budget: ${spent_so_far:.2f} of ${budget:.2f} spent — refusing round")
+        print(f"budget: {spent_so_far:,} of {budget:,} tokens used — refusing round")
         return 0
 
     workspace = os.environ.get("GITHUB_WORKSPACE", ".")
-    # Bracket the agent call, not the whole job: checkout and token minting
-    # cost nothing and would only widen the window other traffic can leak into.
-    spend_before = gateway_spend()
     transcript = os.path.join(workspace, f"sdk-loop-{phase}-{round_no}.log")
     if phase == "review":
         print(f"::group::review round {round_no} — agent transcript")
@@ -496,10 +492,11 @@ def main(argv: list[str] | None = None) -> int:
             newest_verdict(comments, answers_trigger=os.environ.get("COMMENT_ID")),
             state.live,
         )
-        cost = spend_delta(spend_before, gateway_spend())
-        usage = format_usage(opencode_usage(workspace))
+        counts = opencode_usage(workspace)
+        usage, cost = format_usage(counts), usage_total(counts)
         print(f"tokens: {usage}")
-        usage = format_usage(opencode_usage(workspace))
+        counts = opencode_usage(workspace)
+        usage, cost = format_usage(counts), usage_total(counts)
         print(f"tokens: {usage}")
         emit_outputs(
             outcome=outcome.outcome,
@@ -509,12 +506,12 @@ def main(argv: list[str] | None = None) -> int:
             detail=outcome.detail,
             reaims="0",
             new_base_sha=state.live,
-            cost="" if cost is None else f"{cost:.4f}",
+            cost="" if cost is None else str(cost),
             usage=usage,
             spent_total=(
                 ""
                 if running_total(spent_so_far, cost) is None
-                else f"{running_total(spent_so_far, cost):.4f}"
+                else str(running_total(spent_so_far, cost))
             ),
         )
         print(f"review round {round_no}: {outcome.outcome} {outcome.verdict}")
@@ -543,7 +540,6 @@ def main(argv: list[str] | None = None) -> int:
         after = live_head(repo, head_ref)
         dismissals = parse_dismissals(f"{result.stdout}\n{result.stderr}")
         outcome = interpret_resolve(result, bool(dirty), before, after, dismissals)
-        cost = spend_delta(spend_before, gateway_spend())
         for entry in outcome.dismissals:
             ledger.add(entry["id"], entry["rationale"], round_no)
         emit_outputs(
@@ -553,12 +549,12 @@ def main(argv: list[str] | None = None) -> int:
             new_base_sha=after,
             ledger=ledger.to_json(),
             detail=outcome.detail,
-            cost="" if cost is None else f"{cost:.4f}",
+            cost="" if cost is None else str(cost),
             usage=usage,
             spent_total=(
                 ""
                 if running_total(spent_so_far, cost) is None
-                else f"{running_total(spent_so_far, cost):.4f}"
+                else str(running_total(spent_so_far, cost))
             ),
         )
         print(f"resolve round {round_no}: {outcome.outcome}")

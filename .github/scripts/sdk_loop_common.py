@@ -38,7 +38,6 @@ import re
 import shutil
 import subprocess
 import threading
-import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
@@ -491,6 +490,21 @@ def opencode_usage(cwd: str, runner: Any = subprocess.run) -> dict[str, int]:
     return parse_opencode_usage(proc.stdout or "")
 
 
+def usage_total(usage: dict[str, int]) -> int | None:
+    """Billable tokens for a phase: input + output.
+
+    Cache reads are already counted inside `input` by the provider, so adding
+    them again would double-count the very quantity we want to watch shrink.
+    """
+    if not usage:
+        return None
+    return usage.get("input", 0) + usage.get("output", 0)
+
+
+def format_tokens(total: int | None) -> str:
+    return "unavailable" if total is None else f"{total:,}"
+
+
 def format_usage(usage: dict[str, int]) -> str:
     """One-line token summary, with the cache signal made explicit."""
     if not usage:
@@ -506,81 +520,6 @@ def format_usage(usage: dict[str, int]) -> str:
     return " · ".join(parts)
 
 
-def parse_key_spend(payload: dict[str, Any]) -> float | None:
-    """Cumulative USD on the key, from a LiteLLM ``/key/info`` body."""
-    info = payload.get("info") or {}
-    spend = info.get("spend")
-    return float(spend) if isinstance(spend, (int, float)) else None
-
-
-def gateway_spend() -> float | None:
-    """Cumulative USD spend on this gateway key, or None if unreadable.
-
-    Observed returning None on a live run, hence `opencode_usage` above as the
-    primary measurement. Kept because it is the only source of DOLLARS; the
-    failure reason is now surfaced instead of swallowed.
-
-    None means exactly that — endpoint disabled, key lacks permission, gateway
-    unreachable. Callers must report "unavailable" rather than substitute a
-    zero: a run that silently claims $0.00 is worse than one that admits it
-    could not measure.
-    """
-    key = os.environ.get("LITELLM_API_KEY", "")
-    if not key:
-        return None
-    request = urllib.request.Request(f"{gateway_base()}/key/info")
-    request.add_header("Authorization", f"Bearer {key}")
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            return parse_key_spend(json.loads(response.read()))
-    except Exception as exc:  # noqa: BLE001 - reason matters more than type
-        print(f"::warning::/key/info unreadable, cost will be blank: {exc}")
-        return None
-
-
-def spend_delta(before: float | None, after: float | None) -> float | None:
-    """Cost of a phase, as the movement in key spend across it.
-
-    The key is the billing unit, not the run — so this is only the phase's own
-    cost when nothing else billed to the same key during the window. This lane
-    runs PRs fully in parallel and shares its key with other automation, so
-    treat the figure as an UPPER BOUND on the phase and say so wherever it is
-    shown. Attributing precisely would need per-request tagging the gateway
-    does not currently give us.
-
-    A negative delta is not possible from our own usage; it means the counter
-    reset or rolled over, so the measurement is discarded rather than reported
-    as a saving.
-    """
-    if before is None or after is None:
-        return None
-    delta = after - before
-    return delta if delta >= 0 else None
-
-
-#: Default ceiling on what one loop may spend, in USD.
-#:
-#: Sized to let a HEALTHY loop finish and stop a runaway — not the other way
-#: round. A ceiling that cuts off a converging run makes the lane look broken
-#: and teaches people to raise it blindly, which is worse than no ceiling.
-#:
-#: From 61 stamped sdk-review runs in this repo: median $8.24 a review, mean
-#: $11.59. Cost is almost uncorrelated with PR size (r=0.20) — a 12-line PR
-#: cost $7.95, an 8033-line PR $2.64, a 31-line PR $27.29 — because the fixed
-#: ~200KB playbook, the Phase 2 sub-agents and the per-finding Phase 4
-#: verification dominate. Findings drive cost, not lines.
-#:
-#: The playbook puts typical convergence at 2-3 rounds, so a healthy loop is
-#: ~3 reviews + 2 resolves. At the median that is ~$25 of review alone, and
-#: 50 leaves room for the resolves plus a PR on the expensive tail. Eight
-#: unbounded round-pairs would be ~$130+.
-#:
-#: The resolve half of that arithmetic is INFERRED: there are no stamped
-#: @sdk-resolve costs in this repo to measure, because the lane has barely
-#: run. Re-tune this from the first real loops rather than trusting it.
-DEFAULT_MAX_USD = 50.0
-
-
 #: Consecutive re-aims before the loop gives up. A re-aim is not progress —
 #: it discards the round's work and starts over — so it needs a budget of its
 #: own. Without one, a branch that keeps moving (or a harness that keeps
@@ -594,39 +533,51 @@ def reaim_exhausted(consecutive: int) -> bool:
     """Whether a further re-aim should stop the run instead of costing a round.
 
     Consecutive, not cumulative: a branch legitimately edited twice over a long
-    drive is normal, whereas two re-aims back to back with no round in between
-    means the loop is not converging on any one commit.
+    drive is normal, whereas two back to back with no completed round between
+    them means the loop is not converging on any one commit.
     """
     return consecutive >= MAX_CONSECUTIVE_REAIMS
 
 
-def run_budget() -> float:
-    raw = (os.environ.get("SDK_LOOP_MAX_USD") or "").strip()
+#: Default ceiling on what one loop may spend, in TOKENS.
+#:
+#: Tokens rather than dollars, for three reasons found the hard way. The
+#: gateway's /key/info returns 403 for this key — reading account-wide spend
+#: needs an admin-scoped key, and a review lane has no business holding one. A
+#: spend delta on a shared key was only ever an upper bound anyway, since other
+#: lanes bill to it concurrently. And `opencode stats` already reports tokens
+#: per phase, exactly.
+#:
+#: PROVISIONAL — a runaway guard, not a tuned value. No complete run has yet
+#: reported a token count, because the measurement landed in the same change
+#: that removed the broken dollar path. Re-tune from the first run that reports
+#: real numbers. Sized generously on purpose: a ceiling that stops healthy runs
+#: is worse than none, as the $25 -> $50 correction already showed.
+DEFAULT_MAX_TOKENS = 20_000_000
+
+
+def token_budget() -> int:
+    raw = (os.environ.get("SDK_LOOP_MAX_TOKENS") or "").strip()
     try:
-        value = float(raw)
+        value = int(raw)
     except ValueError:
-        return DEFAULT_MAX_USD
-    return value if value > 0 else DEFAULT_MAX_USD
+        return DEFAULT_MAX_TOKENS
+    return value if value > 0 else DEFAULT_MAX_TOKENS
 
 
-def budget_exceeded(spent: float | None, budget: float) -> bool:
+def token_budget_exceeded(spent: int | None, budget: int) -> bool:
     """Whether the NEXT phase should be refused.
 
     Checked before a phase starts, never mid-flight: a half-finished review is
-    money spent for nothing, so the loop stops on a round boundary where the
-    work so far is still worth something.
+    spend with nothing to show for it, so the loop stops on a round boundary
+    where the work so far still counts.
 
-    Unmeasurable spend (None) never blocks. The gateway failing to report is
-    not evidence of overspend, and turning a metrics outage into a stalled lane
-    would be the wrong trade — the round cap still bounds the worst case.
+    An unmeasured total (None) never blocks — a failed stats read is not
+    evidence of overspend, and the round cap still bounds the worst case.
     """
     if spent is None:
         return False
     return spent >= budget
-
-
-def format_usd(amount: float | None) -> str:
-    return "unavailable" if amount is None else f"${amount:,.4f}"
 
 
 #: A ripgrep config that makes hidden paths searchable.

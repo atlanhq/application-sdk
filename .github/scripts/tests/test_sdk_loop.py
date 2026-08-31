@@ -29,7 +29,7 @@ from _gha_expr import evaluate  # noqa: E402
 from sdk_loop_common import (  # noqa: E402
     AGENT_ENV_PASSTHROUGH,
     ALLOWED_MODELS,
-    DEFAULT_MAX_USD,
+    DEFAULT_MAX_TOKENS,
     MAX_CONSECUTIVE_REAIMS,
     MAX_ROUNDS,
     PHASE2_AGENTS,
@@ -38,7 +38,6 @@ from sdk_loop_common import (  # noqa: E402
     REVIEW_MODEL,
     AgentResult,
     DismissalLedger,
-    budget_exceeded,
     format_usage,
     gateway_base,
     head_state,
@@ -48,7 +47,9 @@ from sdk_loop_common import (  # noqa: E402
     parse_verdict,
     reaim_exhausted,
     run_agent,
-    run_budget,
+    token_budget,
+    token_budget_exceeded,
+    usage_total,
     write_rg_config,
 )
 from sdk_loop_fence import (  # noqa: E402
@@ -624,46 +625,48 @@ def test_the_transcript_is_uploaded_even_when_the_phase_died() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_default_ceiling_lets_a_healthy_loop_finish() -> None:
-    """Sized so a converging run completes and only a runaway is stopped.
-
-    61 stamped sdk-review runs: median $8.24. Typical convergence is 2-3
-    rounds, so ~3 reviews is ~$25 of review alone before any resolve. A
-    ceiling at $25 would guillotine a healthy loop at round 2 and teach people
-    to raise it blindly — worse than no ceiling at all.
-    """
-    median_review = 8.24
-    assert DEFAULT_MAX_USD > 3 * median_review, "must clear three reviews"
-    assert DEFAULT_MAX_USD < 130, "must still stop the eight-round runaway"
+def test_the_ceiling_is_a_runaway_guard_and_says_so() -> None:
+    """Deliberately generous and explicitly PROVISIONAL. No complete run has
+    reported a token count yet — the measurement landed in the same change that
+    removed the broken dollar path — and a ceiling that stops healthy runs is
+    worse than none, which the $25 -> $50 correction already demonstrated."""
+    assert DEFAULT_MAX_TOKENS >= 10_000_000
 
 
 def test_the_ceiling_is_tunable_without_a_code_change(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SDK_LOOP_MAX_USD", "40")
-    assert run_budget() == 40.0
+    monkeypatch.setenv("SDK_LOOP_MAX_TOKENS", "750000")
+    assert token_budget() == 750_000
 
 
-@pytest.mark.parametrize("raw", ["", "junk", "0", "-5"])
+@pytest.mark.parametrize("raw", ["", "junk", "0", "-5", "1.5"])
 def test_a_nonsense_ceiling_falls_back_rather_than_disabling_the_guard(
     raw: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A typo'd variable must not read as "unlimited".
-    monkeypatch.setenv("SDK_LOOP_MAX_USD", raw)
-    assert run_budget() == DEFAULT_MAX_USD
+    # A typo'd variable must never read as "unlimited".
+    monkeypatch.setenv("SDK_LOOP_MAX_TOKENS", raw)
+    assert token_budget() == DEFAULT_MAX_TOKENS
 
 
 def test_a_run_at_its_ceiling_is_refused() -> None:
-    assert budget_exceeded(50.0, 50.0)
-    assert budget_exceeded(51.0, 50.0)
-    assert not budget_exceeded(49.99, 50.0)
+    assert token_budget_exceeded(1000, 1000)
+    assert token_budget_exceeded(1001, 1000)
+    assert not token_budget_exceeded(999, 1000)
 
 
-def test_unmeasurable_spend_never_blocks_the_loop() -> None:
-    """A gateway that cannot report spend is a metrics outage, not evidence of
+def test_unmeasurable_usage_never_blocks_the_loop() -> None:
+    """A failed `opencode stats` read is a metrics outage, not evidence of
     overspend. Turning one into a stalled lane is the wrong trade — the round
     cap still bounds the worst case."""
-    assert not budget_exceeded(None, 25.0)
+    assert not token_budget_exceeded(None, 1000)
+
+
+def test_billable_tokens_do_not_double_count_cache_reads() -> None:
+    """Cache reads are already inside `input`; adding them again would inflate
+    exactly the quantity we want to watch shrink."""
+    assert usage_total({"input": 100, "output": 50, "cache_read": 90}) == 150
+    assert usage_total({}) is None
 
 
 def test_the_tally_treats_an_unmeasured_phase_as_a_gap_not_a_zero() -> None:

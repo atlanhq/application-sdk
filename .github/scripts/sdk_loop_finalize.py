@@ -50,7 +50,7 @@ STOP_TEXT = {
     ),
     "budget_exhausted": (
         "**Allowance spent.** The run stopped at a round boundary rather than "
-        "starting a phase it could not afford. Raise `vars.SDK_LOOP_MAX_USD` and "
+        "starting a phase it could not afford. Raise `vars.SDK_LOOP_MAX_TOKENS` and "
         "re-invoke to continue from where it stopped."
     ),
     "reaim": (
@@ -150,11 +150,11 @@ def render_rounds(rounds: list[Round]) -> str:
     if not rounds:
         return "_No round completed._\n"
     lines = [
-        "| Round | Phase | Outcome | Verdict | Head | Cost | Tokens | Detail |",
+        "| Round | Phase | Outcome | Verdict | Head | Tokens | Breakdown | Detail |",
         "|---|---|---|---|---|--:|---|---|",
     ]
     for r in rounds:
-        cost = "—" if r.cost is None else f"${r.cost:,.4f}"
+        cost = "—" if r.cost is None else f"{int(r.cost):,}"
         lines.append(
             f"| {r.number} | {r.phase} | `{r.outcome}` | {_cell(r.verdict)} "
             f"| `{r.sha[:8] or '—'}` | {cost} | {_cell(r.usage)} | {_cell(r.detail)} |"

@@ -61,7 +61,7 @@ on:
         type: string
         required: false
         default: ''
-        description: 'USD this run has spent already. The phase refuses to start once it reaches the allowance.'
+        description: 'Tokens this run has used already. The phase refuses to start once it reaches the allowance.'
       reaims_so_far:
         type: string
         required: false
@@ -240,7 +240,7 @@ jobs:
           PRIOR_SHA: ${{ inputs.prior_sha }}
           SPENT_SO_FAR: ${{ inputs.spent_so_far }}
           REAIMS_SO_FAR: ${{ inputs.reaims_so_far }}
-          SDK_LOOP_MAX_USD: ${{ vars.SDK_LOOP_MAX_USD }}
+          SDK_LOOP_MAX_TOKENS: ${{ vars.SDK_LOOP_MAX_TOKENS }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
           LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL }}
