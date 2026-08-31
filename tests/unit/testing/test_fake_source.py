@@ -28,12 +28,15 @@ import pytest
 
 from application_sdk.testing import fake_source
 from application_sdk.testing.fake_source import (
+    CursorPage,
+    CursorPageLimitError,
     FakeRequest,
     FakeResponse,
     FakeSourceNotRunningError,
     FakeSourceRouteError,
     HttpFakeSource,
     HttpFakeSourceFactory,
+    cursor_page,
 )
 
 pytestmark = pytest.mark.allow_hosts(["127.0.0.1"])
@@ -944,3 +947,160 @@ class TestRaisingAuthorizeAnswers:
             conn.close()
         assert status == 500
         assert b"authorize" in body
+
+
+class TestCursorPagination:
+    def _page(self, params: dict[str, str], **kwargs: Any) -> CursorPage:
+        request = FakeRequest(
+            method="GET",
+            path="/api/objects",
+            params=params,
+            query={},
+            path_params={},
+            headers={},
+            body=b"",
+        )
+        return cursor_page(OBJECTS, request, **kwargs)
+
+    def test_absent_cursor_is_the_first_page(self) -> None:
+        page = self._page({"limit": "3"})
+        assert [item["id"] for item in page.items] == ["obj-01", "obj-02", "obj-03"]
+        assert page.has_more is True
+
+    def test_token_is_opaque_not_a_bare_offset(self) -> None:
+        token = self._page({"limit": "3"}).next_cursor
+        assert token is not None
+        assert token != "3"
+        assert not token.isdigit()
+
+    def test_full_traversal_visits_every_item_exactly_once(self) -> None:
+        seen: list[str] = []
+        params = {"limit": "2"}
+        while True:
+            page = self._page(params)
+            seen.extend(item["id"] for item in page.items)
+            if page.next_cursor is None:
+                break
+            params = {"limit": "2", "cursor": page.next_cursor}
+        assert seen == [item["id"] for item in OBJECTS]
+
+    def test_last_page_has_no_next_cursor(self) -> None:
+        page = self._page({"limit": "100"})
+        assert page.next_cursor is None
+        assert page.has_more is False
+        assert len(page.items) == 7
+
+    def test_unparseable_cursor_serves_the_first_page_terminally(self) -> None:
+        page = self._page({"cursor": "!!!not-a-token!!!", "limit": "2"})
+        assert [item["id"] for item in page.items] == ["obj-01", "obj-02"]
+        assert page.next_cursor is None
+
+    def test_cursor_past_the_end_is_an_empty_terminal_page(self) -> None:
+        far = cursor_page(
+            OBJECTS[:1],
+            FakeRequest(
+                method="GET",
+                path="/a",
+                params={"cursor": fake_source._encode_cursor(999), "limit": "5"},
+                query={},
+                path_params={},
+                headers={},
+                body=b"",
+            ),
+        )
+        assert far.items == []
+        assert far.next_cursor is None
+
+    def test_custom_encode_decode_reproduces_a_solr_style_mark(self) -> None:
+        page = self._page(
+            {"limit": "2"},
+            encode=lambda offset: f"off:{offset}",
+            decode=lambda token: int(token.split(":", 1)[1]),
+        )
+        assert page.next_cursor == "off:2"
+        second = self._page(
+            {"limit": "2", "cursor": "off:2"},
+            encode=lambda offset: f"off:{offset}",
+            decode=lambda token: int(token.split(":", 1)[1]),
+        )
+        assert [item["id"] for item in second.items] == ["obj-03", "obj-04"]
+
+    def test_a_raising_custom_decode_serves_the_first_page_terminally(self) -> None:
+        page = self._page(
+            {"cursor": "garbage", "limit": "2"},
+            decode=lambda token: int(token.split(":", 1)[1]),
+        )
+        assert [item["id"] for item in page.items] == ["obj-01", "obj-02"]
+        assert page.next_cursor is None
+
+    def test_bad_limit_and_max_limit(self) -> None:
+        assert self._page({"limit": "abc"}, default_limit=3).limit == 3
+        assert self._page({"limit": "-1"}, default_limit=3).limit == 3
+        assert self._page({"limit": "50"}, max_limit=2).limit == 2
+
+
+class TestCursorDecodeFailureIsTerminal:
+    """A broken cursor token must fail an assertion, never hang a loop."""
+
+    def _page(self, params: dict, **kwargs) -> CursorPage:
+        request = FakeRequest(
+            method="GET",
+            path="/a",
+            params=params,
+            query={},
+            path_params={},
+            headers={},
+            body=b"",
+        )
+        return cursor_page(OBJECTS, request, **kwargs)
+
+    def test_an_undecodable_token_serves_a_terminal_page(self) -> None:
+        page = self._page({"cursor": "!!!not-a-token!!!", "limit": "2"})
+        assert [item["id"] for item in page.items] == ["obj-01", "obj-02"]
+        assert page.next_cursor is None
+
+    def test_a_client_loop_resending_a_bad_token_terminates(self) -> None:
+        def bad_decode(token: str) -> int:
+            raise ValueError(token)
+
+        pages = 0
+        params = {"cursor": "bzoz", "limit": "2"}
+        while True:
+            page = self._page(params, decode=bad_decode)
+            pages += 1
+            assert pages < 10, "cursor_page allowed an infinite pagination loop"
+            if page.next_cursor is None:
+                break
+            params = {"cursor": page.next_cursor, "limit": "2"}
+        assert pages == 1
+
+
+class TestCursorPageLimitValidation:
+    """Non-positive limits are fixture misconfiguration, rejected up front."""
+
+    def _request(self, params: dict) -> FakeRequest:
+        return FakeRequest(
+            method="GET",
+            path="/a",
+            params=params,
+            query={},
+            path_params={},
+            headers={},
+            body=b"",
+        )
+
+    def test_zero_max_limit_is_rejected(self) -> None:
+        with pytest.raises(CursorPageLimitError, match="max_limit"):
+            cursor_page(OBJECTS, self._request({"limit": "2"}), max_limit=0)
+
+    def test_negative_max_limit_is_rejected(self) -> None:
+        with pytest.raises(CursorPageLimitError, match="max_limit"):
+            cursor_page(OBJECTS, self._request({"limit": "10"}), max_limit=-3)
+
+    def test_non_positive_default_limit_is_rejected(self) -> None:
+        with pytest.raises(CursorPageLimitError, match="default_limit"):
+            cursor_page(OBJECTS, self._request({}), default_limit=0)
+
+    def test_non_positive_request_limit_still_falls_back(self) -> None:
+        page = cursor_page(OBJECTS, self._request({"limit": "-1"}), default_limit=3)
+        assert page.limit == 3

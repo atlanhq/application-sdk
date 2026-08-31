@@ -16,8 +16,20 @@ name: Tests
 #                 services-script below only if that pattern doesn't fit.
 #   e2e         — full-DAG tests against a real tenant via e2e-full-reusable.
 #                 Triggered by the 'e2e' PR label or workflow_dispatch.
-#   Tests Gate  — aggregator gate; the single required check for branch
-#                 protection.  tests must pass; e2e can be skipped.
+#   Tests Gate  — aggregator gate; the check INTENDED to be the required one
+#                 for branch protection.  tests must pass; e2e can be skipped.
+#
+#                 It is NOT required just because this file exists. Bootstrap
+#                 cannot change branch protection, so adopting this workflow
+#                 makes the check RUN, not BLOCK. Do not assume — read it
+#                 (FND-981, FND-1150):
+#                   gh api repos/<owner>/<repo>/branches/main \
+#                     --jq '.protection.required_status_checks.contexts'
+#                 The admin-only .../branches/main/protection endpoint 404s for
+#                 non-admins, but /branches/main exposes required_status_checks
+#                 to any pusher. Several connector repos today require only
+#                 `scan / Security Gate`, so no test check blocks their merges.
+#
 #                 Make it required as soon as this file is merged — it does not
 #                 wait on a coverage target or on every tier being wired up.
 #                 The exact context string to require is:
