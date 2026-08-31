@@ -333,23 +333,38 @@ BUDGET
     changed" — skip delta scoping and run the full review. Only
     `DELTA_KNOWN=1` activates step 11b.
 
-6d. **Read `references/*.md` — unless no agent will run.** Skip this read
-    entirely when Phase 2 is going to be skipped, because the files exist to
-    inform agents and there will be no agent to inform:
+6d. **Do NOT read `references/*.md`. The agents that use them read them.**
 
-    - `review_scope` is `docs-only` (§2a: "SKIP Phase 2 entirely"), or
-    - `DELTA_KNOWN=1` and `DELTA_LINES == 0` (§11b: a verification-only
-      re-review "skip[s] Wave 1 and Wave 2 discovery entirely").
+    Each Phase 2 agent now names the reference files it owns, at the top of
+    its own `agents/*.md`, and reads them itself:
 
-    Otherwise read them as before. This is a load-ordering change only — the
-    same files reach the same agents on every review that dispatches one, so
-    no finding this review could have made becomes unreachable.
+    | Agent | Owns |
+    |---|---|
+    | `correctness.md` | `security-rules`, `v3-architecture-rules`, `performance-rules` |
+    | `quality.md` | `code-quality-rules`, `test-quality-rules`, `dx-rules`, `retro-log` |
+    | `structure.md` | `structural-rules`, `v3-architecture-rules` |
+    | `ci-config.md`, `conformance.md` | `retro-log` |
+    | `toolkit-review.md` | `toolkit-consumer-registry` |
 
-    Why it is worth a step of its own: at ~125 KB these files are the single
-    largest input to a review, they are resent on every agentic turn, and the
-    two cases above are exactly the cheap reviews that currently pay the most
-    for work they do not do. In a multi-round `@sdk-loop` drive the
-    zero-delta case is the common one, not the exception.
+    The ownership is derived from each agent's own Domain Tags, not assigned
+    by hand: `[SEC]` → security-rules, `[QUAL]` → code-quality-rules, and so
+    on. A file owned by two agents is read by both — they are separate
+    contexts, and sharing costs nothing.
+
+    Why this is a real change and not tidying: these files are ~125 KB, the
+    single largest input to a review, and reading them here loaded ALL of them
+    for EVERY review no matter which agents ran. A `minor` PR dispatches only
+    `correctness` and paid for nine files to use two. Reading them at the point
+    of use also fixes an older ambiguity — §2a said each agent receives "their
+    reference rules" without anywhere defining which those were, so six of the
+    nine files were named by nothing at all and reached agents only because the
+    orchestrator had globbed everything.
+
+    You still read `severity-rubric.yaml`, `CLAUDE.md`, `review-policy.md` and
+    `review.yaml` in step 6: those govern YOUR decisions, not an agent's.
+
+    Exception: §1b-toolkit reads `toolkit-consumer-registry.md` directly,
+    because it needs the registry before any agent is dispatched.
 
 7. **Always run a standard review.** There is a single mode. Ignore any
    free-form text after `@sdk-review` (`COMMENTER_INTENT`) — there are no
@@ -936,7 +951,9 @@ The SDK domain agents (correctness/quality/structure) review `application_sdk/**
 `packages/conformance/**` for Temporal/Dapr review.
 
 Each agent receives: PR diff (or partition), full file contents,
-holistic annotations, their reference rules, reachability output.
+holistic annotations, reachability output. It reads its own reference rules
+(named at the top of its `agents/*.md`) — you do not hand them over, and per
+§6d you no longer hold them.
 For `mixed-sdk-toolkit`, partition context by path: SDK agents receive only
 `application_sdk/**`, SDK tests, and config files relevant to SDK behavior;
 `toolkit-review.md` receives `contract-toolkit/**` and toolkit-related config.
