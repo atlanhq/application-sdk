@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 316 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 317 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3334,6 +3334,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class CursorPage(items: Sequence[T], limit: int, total: int, next_cursor: str | None)`
 - **Summary:** One page of a cursor scheme; ``next_cursor`` is opaque, as a real one is.
 - **Defined in:** `application_sdk/testing/fake_source.py`
+
+#### `CursorPageLimitError`
+
+- **Import:** `from application_sdk.testing.fake_source import CursorPageLimitError`
+- **Signature:** `class CursorPageLimitError(*, ...)`
+- **Summary:** ``cursor_page`` was configured with a non-positive page limit.
+- **Defined in:** `application_sdk/testing/_errors.py`
 
 #### `CustomObjectReads`
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -428,3 +429,43 @@ class TestDefaultRootExpansion:
         _write_corpus(tmp_path / "corpus")
         corpus = GoldenCorpus.from_env(default_root="~/corpus")
         assert corpus.root == tmp_path / "corpus"
+
+
+class TestTenantNameConfinement:
+    """A tenant value is a directory name, never a path."""
+
+    def test_path_shaped_tenants_are_rejected(self, tmp_path: Path) -> None:
+        root = _write_corpus(tmp_path / "corpus", tenant="tenant-a")
+        corpus = GoldenCorpus(root=root, layout=GoldenLayout(tenant_level=True))
+        for bad in ("../outside", "a/b", "a\\b", "..", ".", ""):
+            with pytest.raises(GoldenCorpusLayoutError):
+                corpus.for_tenant(bad)
+
+    def test_direct_construction_is_held_to_the_same_rule(self, tmp_path: Path) -> None:
+        root = _write_corpus(tmp_path / "corpus", tenant="tenant-a")
+        with pytest.raises(GoldenCorpusLayoutError):
+            GoldenCorpus(
+                root=root,
+                layout=GoldenLayout(tenant_level=True),
+                tenant="../outside",
+            )
+
+    @pytest.mark.skipif(os.name == "nt", reason="symlink creation needs privileges")
+    def test_a_symlinked_tenant_escaping_the_root_is_rejected(
+        self, tmp_path: Path
+    ) -> None:
+        root = _write_corpus(tmp_path / "corpus", tenant="tenant-a")
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (root / "sneaky").symlink_to(outside, target_is_directory=True)
+        corpus = GoldenCorpus(root=root, layout=GoldenLayout(tenant_level=True))
+        with pytest.raises(GoldenCorpusLayoutError, match="outside the corpus root"):
+            corpus.for_tenant("sneaky")
+
+
+class TestPatternConfinement:
+    def test_a_dotdot_pattern_cannot_read_a_sibling_stage(self, tmp_path: Path) -> None:
+        root = _write_corpus(tmp_path / "corpus")
+        corpus = GoldenCorpus(root=root)
+        with pytest.raises(GoldenCorpusLayoutError, match="holds no"):
+            corpus.files("raw", pattern="../transformed/*")

@@ -29,6 +29,7 @@ import pytest
 from application_sdk.testing import fake_source
 from application_sdk.testing.fake_source import (
     CursorPage,
+    CursorPageLimitError,
     FakeRequest,
     FakeResponse,
     FakeSourceNotRunningError,
@@ -1000,13 +1001,14 @@ class TestCursorPagination:
             FakeRequest(
                 method="GET",
                 path="/a",
-                params={"limit": "5"},
+                params={"cursor": fake_source._encode_cursor(999), "limit": "5"},
                 query={},
                 path_params={},
                 headers={},
                 body=b"",
             ),
         )
+        assert far.items == []
         assert far.next_cursor is None
 
     def test_custom_encode_decode_reproduces_a_solr_style_mark(self) -> None:
@@ -1071,3 +1073,34 @@ class TestCursorDecodeFailureIsTerminal:
                 break
             params = {"cursor": page.next_cursor, "limit": "2"}
         assert pages == 1
+
+
+class TestCursorPageLimitValidation:
+    """Non-positive limits are fixture misconfiguration, rejected up front."""
+
+    def _request(self, params: dict) -> FakeRequest:
+        return FakeRequest(
+            method="GET",
+            path="/a",
+            params=params,
+            query={},
+            path_params={},
+            headers={},
+            body=b"",
+        )
+
+    def test_zero_max_limit_is_rejected(self) -> None:
+        with pytest.raises(CursorPageLimitError, match="max_limit"):
+            cursor_page(OBJECTS, self._request({"limit": "2"}), max_limit=0)
+
+    def test_negative_max_limit_is_rejected(self) -> None:
+        with pytest.raises(CursorPageLimitError, match="max_limit"):
+            cursor_page(OBJECTS, self._request({"limit": "10"}), max_limit=-3)
+
+    def test_non_positive_default_limit_is_rejected(self) -> None:
+        with pytest.raises(CursorPageLimitError, match="default_limit"):
+            cursor_page(OBJECTS, self._request({}), default_limit=0)
+
+    def test_non_positive_request_limit_still_falls_back(self) -> None:
+        page = cursor_page(OBJECTS, self._request({"limit": "-1"}), default_limit=3)
+        assert page.limit == 3

@@ -71,6 +71,7 @@ import orjson
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing._errors import (
+    CursorPageLimitError,
     FakeSourceNotRunningError,
     FakeSourceRouteError,
 )
@@ -78,6 +79,7 @@ from application_sdk.testing._errors import (
 __all__ = [
     "Authorizer",
     "CursorPage",
+    "CursorPageLimitError",
     "FakeRequest",
     "FakeResponse",
     "FakeSourceNotRunningError",
@@ -912,7 +914,26 @@ def cursor_page(
     depends on the shape the real source emits — a Solr-style ``off:<n>`` mark,
     say. They are position-in/position-out; a ``decode`` that raises gets the
     terminal-first-page treatment above.
+
+    ``default_limit`` and ``max_limit`` must be positive — a non-positive value
+    would slice an empty (or negatively-sliced) page that still carries a next
+    cursor, handing a well-behaved client loop the exact hang the terminal-page
+    rule exists to prevent — so both raise :class:`CursorPageLimitError` up
+    front. A non-positive *request* limit stays a fallback to ``default_limit``:
+    that one is client input, not fixture configuration.
     """
+    if default_limit <= 0:
+        raise CursorPageLimitError(
+            message=f"cursor_page default_limit must be > 0, got {default_limit}.",
+            field="default_limit",
+            constraint="positive",
+        )
+    if max_limit is not None and max_limit <= 0:
+        raise CursorPageLimitError(
+            message=f"cursor_page max_limit must be > 0, got {max_limit}.",
+            field="max_limit",
+            constraint="positive",
+        )
     encode_token = _encode_cursor if encode is None else encode
     decode_token = _decode_cursor if decode is None else decode
     total = len(items)

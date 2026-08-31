@@ -214,6 +214,10 @@ class GoldenCorpus:
     layout: GoldenLayout = field(default_factory=GoldenLayout)
     tenant: str | None = None
 
+    def __post_init__(self) -> None:
+        if self.tenant is not None:
+            _validate_tenant_name(self.root, self.tenant)
+
     @classmethod
     def from_env(
         cls,
@@ -345,9 +349,11 @@ class GoldenCorpus:
         """Return this corpus scoped to *tenant*.
 
         Raises:
-            GoldenCorpusLayoutError: The layout has no tenant level, or the
-                directory is absent.
+            GoldenCorpusLayoutError: The layout has no tenant level, the
+                directory is absent, or *tenant* is path-shaped rather than a
+                single directory name (stage names are held to the same rule).
         """
+        _validate_tenant_name(self.root, tenant)
         if not self.layout.tenant_level:
             raise _layout_error(
                 path=self.root,
@@ -429,11 +435,14 @@ class GoldenCorpus:
                 holds nothing is a broken corpus, not an empty result.
         """
         directory = self.stage_dir(stage)
+        stage_root = directory.resolve()
         found = tuple(
             sorted(
                 p
                 for p in directory.rglob(pattern)
-                if p.is_file() and p.suffix.lower() in SUPPORTED_SUFFIXES
+                if p.is_file()
+                and p.suffix.lower() in SUPPORTED_SUFFIXES
+                and p.resolve().is_relative_to(stage_root)
             )
         )
         if not found:
@@ -498,6 +507,31 @@ class GoldenCorpus:
         for corpus in bases:
             for stage in corpus.layout.stages:
                 corpus.files(stage)
+
+
+def _validate_tenant_name(root: Path, tenant: str) -> None:
+    """Reject a tenant value that is not a single directory name under *root*.
+
+    Stage names are held to a single-path-segment rule in
+    :meth:`GoldenLayout.__post_init__`; tenant names get the same rule, plus a
+    resolve-containment check so a symlink cannot walk out of the corpus root
+    either.
+    """
+    if not tenant or "/" in tenant or "\\" in tenant or ".." in tenant or tenant == ".":
+        raise _layout_error(
+            path=root,
+            message=f"Tenant name {tenant!r} is not a single directory name.",
+            suggested_action="Pass a directory name from .tenants(), not a path.",
+        )
+    candidate = root / tenant
+    try:
+        candidate.resolve().relative_to(root.resolve())
+    except ValueError:
+        raise _layout_error(
+            path=candidate,
+            message=f"Tenant {tenant!r} resolves outside the corpus root.",
+            suggested_action="Pass a directory name from .tenants().",
+        ) from None
 
 
 def _layout_error(*, path: Path, message: str, suggested_action: str) -> Exception:
