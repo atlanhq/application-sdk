@@ -96,6 +96,15 @@ class AtlanObservability(Generic[T], ABC):
 
     _last_cleanup_key = "last_cleanup_time"
     _instances: ClassVar[list[Any]] = []
+    # Resolved once for the whole hierarchy. Both getters below read and write
+    # these through ``AtlanObservability`` explicitly rather than through
+    # ``cls``: a ``cls.<attr> = ...`` from a classmethod called on a *subclass*
+    # binds a subclass attribute that shadows the base one, so the cache would
+    # be per-subclass and anything swapping the base (test fixtures,
+    # ``_reset_for_testing``) would be silently ignored. Nothing here varies by
+    # subclass — the binding names are module constants and ``_components_dir``
+    # is defined only here — so one shared entry is also one resolution instead
+    # of one per adapter. Same reason ``_instances`` is appended via the base.
     _deployment_store: ClassVar["BoundStore | None"] = None
     _upstream_store: ClassVar["BoundStore | None"] = None
 
@@ -107,7 +116,7 @@ class AtlanObservability(Generic[T], ABC):
 
     @classmethod
     def _get_deployment_store(cls) -> "BoundStore":
-        if cls._deployment_store is None:
+        if AtlanObservability._deployment_store is None:
             from application_sdk.storage.binding import (  # noqa: PLC0415
                 create_store_from_binding_with_put_attrs,
             )
@@ -117,12 +126,12 @@ class AtlanObservability(Generic[T], ABC):
                 DEPLOYMENT_OBJECT_STORE_NAME,
                 components_dir=cls._components_dir(),
             )
-            cls._deployment_store = BoundStore(store, put_attrs)
-        return cls._deployment_store
+            AtlanObservability._deployment_store = BoundStore(store, put_attrs)
+        return AtlanObservability._deployment_store
 
     @classmethod
     def _get_upstream_store(cls) -> "BoundStore":
-        if cls._upstream_store is None:
+        if AtlanObservability._upstream_store is None:
             from application_sdk.storage.binding import (  # noqa: PLC0415 — deferred to break the observability→storage circular import
                 create_store_from_binding_with_put_attrs,
             )
@@ -132,8 +141,8 @@ class AtlanObservability(Generic[T], ABC):
                 UPSTREAM_OBJECT_STORE_NAME,
                 components_dir=cls._components_dir(),
             )
-            cls._upstream_store = BoundStore(store, put_attrs)
-        return cls._upstream_store
+            AtlanObservability._upstream_store = BoundStore(store, put_attrs)
+        return AtlanObservability._upstream_store
 
     def __init__(
         self,
@@ -183,9 +192,9 @@ class AtlanObservability(Generic[T], ABC):
         This method should only be used in tests to allow fresh initialization
         for each test case.
         """
-        cls._instances.clear()
-        cls._deployment_store = None
-        cls._upstream_store = None
+        AtlanObservability._instances.clear()
+        AtlanObservability._deployment_store = None
+        AtlanObservability._upstream_store = None
 
     def _get_signal_type(self) -> str:
         """Map file_name to signal type (logs, metrics, traces, sizing).

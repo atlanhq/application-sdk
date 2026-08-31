@@ -49,6 +49,14 @@ from application_sdk.testing.harness.teardown import PurgeReport
 
 pytest_plugins = ["pytester"]
 
+# These tests run pytest inside pytest (``pytest.Pytester``). Under xdist, the
+# unit lane's ``--disable-socket`` leaves the inner run unable to emit any output
+# at all, so ``assert_outcomes`` reads an empty summary and all of them fail. It
+# is the three-way combination that breaks: the file is green under xdist without
+# the flag, and green with the flag when run serially. The generated suites are
+# hermetic — they never open a real connection. See FND-961.
+pytestmark = pytest.mark.enable_socket
+
 #: Written into every generated project: the fixtures reach pytest's hooks only
 #: when the module is registered as a plugin, and ``asyncio_mode`` is what lets
 #: an ``async def`` fixture work with no decorator.

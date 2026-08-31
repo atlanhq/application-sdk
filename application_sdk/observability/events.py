@@ -39,6 +39,14 @@ PREFLIGHT_OUTCOME_EVENT: Final = "Preflight gate outcome"
 #: unchanged from ``preflight_gate.PREFLIGHT_POSTURE_EVENT``.
 PREFLIGHT_POSTURE_EVENT: Final = "Preflight gate posture"
 
+#: The interactive-surface sibling of the gate's outcome row (FND-901): one row
+#: per ``Handler.preflight_check`` verdict reached outside a gated run — the
+#: HTTP setup form and the SDR test-connection activity, distinguished by the
+#: ``preflight_surface`` attribute. Deliberately a distinct body from
+#: ``PREFLIGHT_OUTCOME_EVENT`` so gate dashboards (run counts, posture
+#: denominators) are not polluted by setup-time checks.
+PREFLIGHT_CHECK_EVENT: Final = "Preflight check outcome"
+
 # ── Validation (validation/, app/base.py) ───────────────────────────────────
 
 #: Transformed-asset (NDJSON x pyatlan_v9 model) validation outcome, emitted from
@@ -68,6 +76,7 @@ OUTCOME_EVENT_NAMES: Final[frozenset[str]] = frozenset(
     {
         PREFLIGHT_OUTCOME_EVENT,
         PREFLIGHT_POSTURE_EVENT,
+        PREFLIGHT_CHECK_EVENT,
         ASSET_VALIDATION_EVENT,
         ARTIFACT_VALIDATION_EVENT,
         ARTIFACT_VALIDATION_POSTURE_EVENT,
@@ -79,6 +88,7 @@ __all__ = [
     "ARTIFACT_VALIDATION_POSTURE_EVENT",
     "ASSET_VALIDATION_EVENT",
     "OUTCOME_EVENT_NAMES",
+    "PREFLIGHT_CHECK_EVENT",
     "PREFLIGHT_OUTCOME_EVENT",
     "PREFLIGHT_POSTURE_EVENT",
 ]

@@ -37,6 +37,7 @@ from temporalio.common import RetryPolicy
 from temporalio.exceptions import TimeoutType
 
 with workflow.unsafe.imports_passed_through():
+    from application_sdk.contracts.base import SerializableEnum
     from application_sdk.credentials.errors import CredentialNotFoundError
     from application_sdk.credentials.ingress import normalize_agent_json
     from application_sdk.credentials.ref import CredentialRef, CredentialResolvable
@@ -72,6 +73,7 @@ with workflow.unsafe.imports_passed_through():
     # unanswerable from outcomes alone, and that is exactly the app whose broken
     # guarantee we most need to find.
     from application_sdk.observability.events import (
+        PREFLIGHT_CHECK_EVENT,
         PREFLIGHT_OUTCOME_EVENT,
         PREFLIGHT_POSTURE_EVENT,
     )
@@ -82,6 +84,8 @@ with workflow.unsafe.imports_passed_through():
         GATE_DURATION_KEY,
         GATE_MODE_KEY,
         GATE_TIMEOUT_KEY,
+        PREFLIGHT_SURFACE_KEY,
+        AtlanLoggerAdapter,
         get_logger,
     )
 
@@ -396,6 +400,12 @@ CLASSIFICATION_GATE_BROKEN = "gate_broken"
 # "this was a genuine verdict" and "this row predates the classification".
 CLASSIFICATION_VERDICT = "verdict"
 
+# Who must act, stamped on the outcome row (FND-901). Same key and values the log
+# interceptor projects from raised AppErrors, riding the OTel ``failure.``
+# passthrough — but stamped here explicitly, because the row is emitted before
+# the block is raised and would otherwise carry no audience.
+FAILURE_AUDIENCE_KEY = "failure.audience"
+
 # Synthetic check name for a no-verdict outcome, so the check matrix and the red
 # activity pane carry a row rather than showing zero checks.
 UNVERIFIABLE_CHECK_NAME = "preflightVerdict"
@@ -620,19 +630,26 @@ def _check_matrix_json(checks: list[PreflightCheck]) -> str:
 def _build_block_error(result: PreflightOutput, app_name: str) -> Any:
     """Build the ``PreflightFailed`` ApplicationError for a NOT_READY verdict.
 
-    ``details[0]`` is the primary failure's ``FailureDetails``: the first failed
-    check's typed ``error`` when present, else the first failed check's message
-    wrapped in ``PreconditionError`` and stamped with the ``PREFLIGHT_FALLBACK_CODE``
-    sentinel ``code`` (so the outcome event's ``reason`` marks an un-migrated block).
-    ``details[1]`` carries every check so the red activity pane shows them — a failed
-    activity has no result payload.
+    ``details[0]`` is the primary failure's ``FailureDetails``: the handler's typed
+    aggregate ``result.error`` when present, else the first failed check's typed
+    ``error``, else the first failed check's message wrapped in ``PreconditionError``
+    and stamped with the ``PREFLIGHT_FALLBACK_CODE`` sentinel ``code`` (so the
+    outcome event's ``reason`` marks an un-migrated block). ``details[1]`` carries
+    every check so the red activity pane shows them — a failed activity has no
+    result payload.
     """
     from application_sdk.execution.errors import ApplicationError  # noqa: PLC0415
 
     failed = [c for c in result.checks if not c.passed]
-    primary = next((c for c in failed if c.error is not None), None)
-    if primary is not None and primary.error is not None:
-        details = primary.error
+    # Prefer the handler's typed aggregate error. It is the reason the verdict is
+    # NOT_READY and stays pinned to the real cause even when a non-fatal row is
+    # inserted ahead of it in ``checks``; the per-check scan is the fallback for
+    # handlers that set only ``checks``.
+    primary_error = result.error or next(
+        (c.error for c in failed if c.error is not None), None
+    )
+    if primary_error is not None:
+        details = primary_error
         if details.app_name is None:
             details = details.model_copy(update={"app_name": app_name})
     else:
@@ -649,7 +666,9 @@ def _build_block_error(result: PreflightOutput, app_name: str) -> Any:
 
     joined = "; ".join(m for m in (c.resolved_message for c in failed) if m)
     reason = (
-        result.message or joined or "Preflight check failed; aborting before extraction"
+        result.resolved_message
+        or joined
+        or "Preflight check failed; aborting before extraction"
     )
     checks_payload = {"checks": [_dump_check(c) for c in result.checks]}
     return ApplicationError(
@@ -658,6 +677,111 @@ def _build_block_error(result: PreflightOutput, app_name: str) -> Any:
         checks_payload,
         type=PREFLIGHT_FAILED_ERROR_TYPE,
         non_retryable=True,
+    )
+
+
+class PreflightSurface(SerializableEnum):
+    """Which surface ran ``Handler.preflight_check`` outside a gated run.
+
+    Stamped as ``preflight_surface`` on the interactive outcome row, and the
+    input to the level policy below — so this is an enumerated vocabulary, not
+    free text. Values are the wire strings already shipped in that attribute
+    and must not be reworded: dashboards filter on them.
+    """
+
+    #: The ``/workflows/v1/check`` endpoint behind the setup form.
+    HTTP = "http"
+    #: The ``sdr:preflight_check`` Temporal activity (test-connection).
+    SDR = "sdr"
+
+
+#: Per surface: is the outcome row the customer's *only* sight of the verdict?
+#:
+#: The level policy turns on this, not on how expected the verdict is. HTTP
+#: returns the verdict as the response body the setup form renders, so its row
+#: is a duplicate and stays INFO. An SDR failure travels back through a workflow
+#: whose run log the customer reads at the default ERROR filter, so that row
+#: mirrors the gate's levels or the failure is invisible — the hole FND-901
+#: exists to close.
+#:
+#: A table rather than a branch so the policy is *enumerable*:
+#: ``test_every_surface_has_a_level_policy`` asserts these keys cover
+#: ``PreflightSurface``, which fails CI for a new member nobody routed. An
+#: exhaustive ``if``/``assert_never`` would only warn here — this repo sets
+#: ``reportArgumentType = "warning"``, so pyright flags the gap without failing
+#: on it.
+_LOG_ROW_IS_ONLY_CHANNEL: dict[PreflightSurface, bool] = {
+    PreflightSurface.HTTP: False,
+    PreflightSurface.SDR: True,
+}
+
+
+def _log_row_is_only_channel(surface: PreflightSurface) -> bool:
+    """Look up ``surface``'s level policy, defaulting an unrouted one to loud.
+
+    Never raises on a miss: this is the emit path, and losing the row entirely
+    is strictly worse than logging it one level too loud. The test above is what
+    keeps the miss from happening.
+    """
+    return _LOG_ROW_IS_ONLY_CHANNEL.get(surface, True)
+
+
+def emit_preflight_check_outcome(
+    log: AtlanLoggerAdapter,
+    app_name: str,
+    result: PreflightOutput,
+    *,
+    surface: PreflightSurface,
+    entrypoint: str | None = None,
+    request_id: str | None = None,
+) -> None:
+    """Emit the interactive-surface sibling of the gate's outcome row (FND-901).
+
+    One attribute schema for every surface that runs ``Handler.preflight_check``,
+    so the setup funnel (HTTP form check, SDR test-connection) is queryable next
+    to run-time gate verdicts. The level follows whether the log is the delivery
+    channel — see :func:`_log_row_is_only_channel`. A surface whose row is the
+    only channel mirrors the gate's map (``not_ready`` at ERROR, a passed
+    verdict carrying a failed advisory check at WARNING, clean at INFO); one
+    that returns the verdict by another route stays INFO throughout. Handler
+    crashes are logged at ERROR by each surface's own boundary handler. Callers
+    pass their module logger so the row keeps the surface's source.
+    """
+    failed = [c for c in result.checks if not c.passed]
+    # The aggregate error wins over check order, mirroring _build_block_error:
+    # SDR inserts a non-fatal secret-store row ahead of the real failure and
+    # pins the real one on result.error — first-failed would steal the banner.
+    primary = result.error or next(
+        (c.error for c in failed if c.error is not None), None
+    )
+    reason = result.status.value
+    if result.status is PreflightStatus.NOT_READY:
+        reason = primary.code if primary is not None else PREFLIGHT_FALLBACK_CODE
+    extra: dict[str, Any] = {}
+    if primary is not None:
+        extra[FAILURE_AUDIENCE_KEY] = primary.audience.value
+    if request_id is not None:
+        extra["request_id"] = request_id
+    if not _log_row_is_only_channel(surface):
+        emit = log.info
+    elif result.status is PreflightStatus.NOT_READY:
+        emit = log.error
+    elif failed:
+        emit = log.warning
+    else:
+        emit = log.info
+    emit(
+        PREFLIGHT_CHECK_EVENT,
+        outcome=result.status.value,
+        reason=reason,
+        app_name=app_name,
+        entrypoint=entrypoint or "<implicit>",
+        checks=len(result.checks),
+        **{
+            CHECK_MATRIX_KEY: _check_matrix_json(result.checks),
+            PREFLIGHT_SURFACE_KEY: surface.value,
+        },
+        **extra,
     )
 
 
@@ -941,6 +1065,8 @@ def build_preflight_gate_activity(
             reason: str,
             checks: list[PreflightCheck],
             classification: str,
+            audience: str | None = None,
+            exc_info: BaseException | None = None,
         ) -> None:
             """Emit the gate's one queryable row.
 
@@ -949,12 +1075,37 @@ def build_preflight_gate_activity(
             on ``proceeded`` but not on ``would_block`` cannot compute headroom
             for the runs that need it most.
 
+            The row is also the level carrier (FND-901): the customer-facing log
+            view filters at ERROR, so a ``blocked`` run — and an unverifiable
+            source, whose failure is real in both modes — must be the ERROR
+            record itself, not a WARN beside one. A ``proceeded`` run carrying a
+            failed check is the advisory case WARNING is semantically for
+            (P047 bans the handler from logging it, so the gate must). Keyed on
+            the checks rather than ``PreflightStatus.PARTIAL`` because PARTIAL
+            is documented display-only — a handler may return READY with a
+            failed advisory row. Clean proceeds, skips and soft-mode verdict
+            ``would_block`` stay INFO.
+
             ``gate_duration_ms`` is measured here rather than summed from
             ``check_matrix``: per-check durations are handler-authored and a
             handler abandoned at ``start_to_close`` keeps running and reports a
             duration past the budget.
             """
-            logger.info(
+            if (
+                outcome == "blocked"
+                or classification == CLASSIFICATION_SOURCE_UNVERIFIABLE
+            ):
+                emit = logger.error
+            elif outcome == "proceeded" and any(not c.passed for c in checks):
+                emit = logger.warning
+            else:
+                emit = logger.info
+            extra: dict[str, Any] = {}
+            if audience is not None:
+                extra[FAILURE_AUDIENCE_KEY] = audience
+            if exc_info is not None:
+                extra["exc_info"] = exc_info
+            emit(
                 PREFLIGHT_OUTCOME_EVENT,
                 outcome=outcome,
                 reason=reason,
@@ -969,6 +1120,7 @@ def build_preflight_gate_activity(
                     GATE_TIMEOUT_KEY: int(budget_seconds),
                     GATE_ATTEMPTS_KEY: _current_attempt(),
                 },
+                **extra,
             )
 
         def _no_verdict(exc: BaseException) -> PreflightOutput:
@@ -993,23 +1145,17 @@ def build_preflight_gate_activity(
                 )
             unverifiable = _unverifiable_result(exc, app_name)
             block_error = _build_block_error(unverifiable, app_name)
-            logger.error(
-                "Preflight gate could not verify the source (gate_mode=%s): %s",
-                gate_mode,
-                "blocking the run before extraction"
-                if enforce
-                else "proceeding without source verification",
-                # The exception, not exc_info=True: on the budget-overrun path this
-                # runs outside any ``except`` (the AppTimeoutError is constructed,
-                # not caught), so sys.exc_info() is empty and True would attach
-                # nothing — on the one path where the cause is the whole diagnostic.
-                exc_info=exc,
-            )
             _emit_outcome(
                 "blocked" if enforce else "would_block",
                 block_error.details[0].code,
                 unverifiable.checks,
                 CLASSIFICATION_SOURCE_UNVERIFIABLE,
+                audience=block_error.details[0].audience.value,
+                # The exception, not exc_info=True: on the budget-overrun path this
+                # runs outside any ``except`` (the AppTimeoutError is constructed,
+                # not caught), so sys.exc_info() is empty and True would attach
+                # nothing — on the one path where the cause is the whole diagnostic.
+                exc_info=exc,
             )
             if enforce:
                 raise block_error
@@ -1130,6 +1276,7 @@ def build_preflight_gate_activity(
                 block_error.details[0].code,
                 result.checks,
                 CLASSIFICATION_VERDICT,
+                audience=block_error.details[0].audience.value,
             )
             if enforce:
                 raise block_error

@@ -130,7 +130,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.6"
+          version: "0.12.7"
 
       - name: Run Renovate scanner
         run: |
@@ -157,11 +157,30 @@ jobs:
           set -euo pipefail
           PREFIX="renovate-dashboard"
 
-          # Per-repo summaries — upload every file the scanner emitted.
-          for f in /tmp/renovate-output/repos/*.json; do
-            [ -e "$f" ] || continue
-            aws s3 cp "$f" "s3://kryptonite-store/${PREFIX}/repos/$(basename "$f")"
-          done
+          # Two syncs and a local merge, rather than a cp per file. The previous
+          # loops issued ~1,644 sequential aws invocations at 548 repos (one
+          # upload per repo, plus a download and an upload per history file) and
+          # took 39m18s — overrunning the job's 45-minute ceiling and killing the
+          # run after a successful scan, so nothing published. `aws s3 sync`
+          # parallelises internally and transfers only what changed.
+
+          # Existing history down, so the merge is a local operation.
+          mkdir -p /tmp/existing-history
+          aws s3 sync "s3://kryptonite-store/${PREFIX}/history/" \
+            /tmp/existing-history/
+
+          # Build the exact tree to upload: repo summaries, merged histories, and
+          # fleet.json on full-fleet runs only. All branching lives in the script
+          # (docs/standards/ci.md), which is covered by .github/scripts/tests/.
+          python3 .github/scripts/renovate_dashboard_stage.py \
+            --output-dir /tmp/renovate-output \
+            --existing-history-dir /tmp/existing-history \
+            --stage-dir /tmp/renovate-stage \
+            --single-repo "${SINGLE_REPO:-}"
+
+          # Up in one pass. No --delete: this prefix is additive, and a partial
+          # run must never remove another run's repo files.
+          aws s3 sync /tmp/renovate-stage/ "s3://kryptonite-store/${PREFIX}/"
 
           # Regenerate manifest of all repo files present in S3.
           aws s3 ls "s3://kryptonite-store/${PREFIX}/repos/" \
@@ -171,46 +190,18 @@ jobs:
           aws s3 cp /tmp/renovate-output/repos.json \
             "s3://kryptonite-store/${PREFIX}/repos.json"
 
-          # Append per-repo history (download existing → merge → re-upload;
-          # sort -u deduplicates same-day reruns).
-          for f in /tmp/renovate-output/history_*.jsonl; do
-            [ -e "$f" ] || continue
-            base=$(basename "$f")          # history_<slug>.jsonl
-            slug=${base#history_}
-            slug=${slug%.jsonl}
-            # Fleet-wide history is only written on full-fleet runs (see below).
-            [ "$slug" = "fleet" ] && continue
-            HISTORY_FILE="history/${slug}.jsonl"
-            aws s3 cp \
-              "s3://kryptonite-store/${PREFIX}/${HISTORY_FILE}" \
-              /tmp/existing_renovate_history.jsonl 2>/dev/null || true
-            touch /tmp/existing_renovate_history.jsonl
-            cat /tmp/existing_renovate_history.jsonl "$f" 2>/dev/null \
-              | sort -u \
-              > /tmp/merged_renovate_history.jsonl
-            aws s3 cp /tmp/merged_renovate_history.jsonl \
-              "s3://kryptonite-store/${PREFIX}/${HISTORY_FILE}"
-          done
-
-          # Fleet-wide aggregate and history — only meaningful for full-fleet runs.
-          # In single-repo mode the scanner only has data for one repo, so writing
-          # fleet.json would overwrite the real fleet aggregate with a partial view.
-          if [ -z "${SINGLE_REPO:-}" ]; then
-            aws s3 cp /tmp/renovate-output/fleet.json \
-              "s3://kryptonite-store/${PREFIX}/fleet.json"
-
-            if [ -e /tmp/renovate-output/history_fleet.jsonl ]; then
-              aws s3 cp \
-                "s3://kryptonite-store/${PREFIX}/history/fleet.jsonl" \
-                /tmp/existing_fleet_history.jsonl 2>/dev/null || true
-              touch /tmp/existing_fleet_history.jsonl
-              cat /tmp/existing_fleet_history.jsonl \
-                /tmp/renovate-output/history_fleet.jsonl 2>/dev/null \
-                | sort -u \
-                > /tmp/merged_fleet_history.jsonl
-              aws s3 cp /tmp/merged_fleet_history.jsonl \
-                "s3://kryptonite-store/${PREFIX}/history/fleet.jsonl"
-            fi
-          fi
-
           echo "Renovate dashboard updated: https://k.atlan.dev/${PREFIX}/"
+
+      # Last, and deliberately after the deploy: this step can fail the job, and
+      # a dashboard that stops publishing because it found something to report
+      # would take out the view someone needs to act on the report.
+      #
+      # Full-fleet runs only. Single-repo mode is dispatched per PR-gate
+      # evaluation by renovate-auto-approve-reusable, where a fleet-wide health
+      # verdict does not belong and would red an unrelated repo's workflow.
+      - name: Alarm on refusals the reaper should have cleared
+        if: ${{ !inputs.repo }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/renovate_refusal_alarm.py \
+            --out-dir /tmp/renovate-output

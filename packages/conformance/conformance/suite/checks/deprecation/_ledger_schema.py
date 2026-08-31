@@ -155,3 +155,26 @@ def load_ledger(
         )
         return ContractLedger(version=LEDGER_VERSION, fields=[])
     return _parse(payload)
+
+
+def load_ledger_baseline(outfile: Path) -> ContractLedger:
+    """The ledger to build a *write* on top of — empty when *outfile* is absent.
+
+    Every writer (``gen-contract-ledger`` and the ``bootstrap`` scaffold) must
+    start a first ledger from EMPTY, never from :func:`load_ledger` with no
+    path.  That call falls through to resolution step 4, the SDK's own packaged
+    ledger, and ``build_ledger`` is append-only — so all six SDK template
+    contracts (``QueryExtractionInput``, ``ExtractionInput``, …) get copied into
+    the consumer's brand-new ledger and can never be removed again.  Any app
+    class sharing one of those names then draws B005 "field removed" for every
+    SDK field it does not have, permanently.
+
+    Reading a ledger to *check* against is a different question and stays with
+    :func:`load_ledger`, fallback and all.  This helper exists so the
+    empty-start invariant has one definition that both writers share.
+    """
+    return (
+        load_ledger(outfile)
+        if outfile.exists()
+        else ContractLedger(version=LEDGER_VERSION, fields=[])
+    )

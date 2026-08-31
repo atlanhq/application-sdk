@@ -91,6 +91,99 @@ def _extract_code(cls_node: ast.ClassDef) -> tuple[str | None, ast.AST | None]:
     return None, None
 
 
+def module_code_constants(tree: ast.AST) -> dict[str, str]:
+    """Map module-level code constants to their string value.
+
+    Two shapes, both used by connector apps to keep their codes in one
+    module and reference them from the exception classes:
+
+    * ``NAME = "literal"``            -> ``{"NAME": "literal"}``
+    * ``NAME = Code(code="literal")`` -> ``{"NAME.code": "literal"}``
+
+    Only module-level assignments with a literal ``str`` are recorded, so a
+    value the scanner cannot prove stays unresolved (and P003 keeps firing
+    conservatively).
+    """
+    consts: dict[str, str] = {}
+    if not isinstance(tree, ast.Module):
+        return consts
+    for stmt in tree.body:
+        target: ast.expr | None = None
+        value: ast.expr | None = None
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+            target, value = stmt.targets[0], stmt.value
+        elif isinstance(stmt, ast.AnnAssign) and stmt.value is not None:
+            target, value = stmt.target, stmt.value
+        if not isinstance(target, ast.Name) or value is None:
+            continue
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            consts.setdefault(target.id, value.value)
+        elif isinstance(value, ast.Call):
+            for kw in value.keywords:
+                if (
+                    kw.arg == "code"
+                    and isinstance(kw.value, ast.Constant)
+                    and isinstance(kw.value.value, str)
+                ):
+                    consts.setdefault(f"{target.id}.code", kw.value.value)
+    return consts
+
+
+def _indirect_code_key(value: ast.expr) -> str | None:
+    """Lookup key for a non-literal ``code`` value, or None if unsupported.
+
+    ``codes.FT_AUTH_NO_TOKEN.code`` and ``FT_AUTH_NO_TOKEN.code`` both key on
+    ``FT_AUTH_NO_TOKEN.code``; a bare ``CODE`` keys on ``CODE``. The module
+    path in front is ignored on purpose: the constant map is app-wide, and
+    the constant name alone is what identifies it.
+    """
+    if isinstance(value, ast.Name):
+        return value.id
+    if isinstance(value, ast.Attribute):
+        owner = value.value
+        if isinstance(owner, ast.Name):
+            return f"{owner.id}.{value.attr}"
+        if isinstance(owner, ast.Attribute):
+            return f"{owner.attr}.{value.attr}"
+    return None
+
+
+def resolve_indirect_codes(records: list[ClassRecord], consts: dict[str, str]) -> None:
+    """Fill in ``code_value`` for classes whose ``code`` is an indirection.
+
+    A class that writes ``code: ClassVar[str] = codes.X.code`` DOES declare
+    its code — the scanner simply could not read it, so P003 reported "does
+    not declare" and, worse, would keep firing after the app fixed the string.
+    Resolving the indirection turns those into an accurate wrong-prefix
+    finding, or silence when the prefix is right. Values that stay
+    unresolvable are left alone and keep firing conservatively.
+    """
+    for rec in records:
+        if rec.code_value is not None:
+            continue
+        for stmt in rec.node.body:
+            value: ast.expr | None = None
+            if (
+                isinstance(stmt, ast.AnnAssign)
+                and isinstance(stmt.target, ast.Name)
+                and stmt.target.id == "code"
+                and _is_classvar_annotation(stmt.annotation)
+            ):
+                value = stmt.value
+            elif isinstance(stmt, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == "code" for t in stmt.targets
+            ):
+                value = stmt.value
+            if value is None or isinstance(value, ast.Constant):
+                continue
+            key = _indirect_code_key(value)
+            resolved = consts.get(key) if key else None
+            if resolved is not None:
+                rec.code_value = resolved
+                rec.code_node = stmt
+            break
+
+
 def collect_import_aliases(tree: ast.Module) -> dict[str, str]:
     """Return per-file ``{local_name: original_name}`` for ``from X import Y [as Z]``.
 
@@ -179,6 +272,8 @@ def resolve_ancestor(
     by_name: dict[str, ClassRecord],
     cache: dict[str, bool | None],
     visiting: set[str],
+    known_targets: frozenset[str] = frozenset(),
+    known_ancestors: frozenset[str] = frozenset(),
 ) -> bool | None:
     """Transitively resolve *name*'s base chain looking for *target*.
 
@@ -197,9 +292,13 @@ def resolve_ancestor(
         *name* is not in the scanned universe (unknown / third-party /
         generated — assumed OK to avoid false positives).
     """
-    if name == target:
+    if name == target or name in known_targets:
         return True
-    if name in cache:
+    if name in known_ancestors and name not in by_name:
+        return name.endswith(target)
+    # Provenance is file-local, so do not reuse a cache entry produced without
+    # this set of known SDK contract names.
+    if not known_targets and name in cache:
         return cache[name]
     if name in visiting:
         # Cycle — treat as unknown to avoid false positives.
@@ -211,13 +310,16 @@ def resolve_ancestor(
     visiting.add(name)
     result: bool = False
     for base in rec.bases:
-        sub = resolve_ancestor(base, target, by_name, cache, visiting)
+        sub = resolve_ancestor(
+            base, target, by_name, cache, visiting, known_targets, known_ancestors
+        )
         if sub is True:
             result = True
             break
         # sub is None (external base) or False — keep looking.
     visiting.discard(name)
-    cache[name] = result
+    if not known_targets:
+        cache[name] = result
     return result
 
 

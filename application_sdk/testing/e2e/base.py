@@ -28,23 +28,65 @@ To skip the whole class when the harness env isn't configured::
 
     if not os.environ.get("ATLAN_BASE_URL"):
         pytest.skip("ATLAN_BASE_URL not set", allow_module_level=True)
+
+**Re-expressed over the harness, in place (child H on FND-224).** Every name,
+import path and class attribute here is unchanged — the contract toolkit's
+generator is untouched, no ``_e2e_base.py`` moves, and conformance's
+``_SDK_HARNESS_BASES`` still names this class — but nothing below implements
+plumbing of its own any more. What is left is the *connector policy*: which
+queue the extract node goes to, what the seed DAG says, which expectations the
+run is graded against. The plumbing it composes is
+:mod:`application_sdk.testing.harness`:
+
+* :mod:`~application_sdk.testing.harness.identity` mints the run id and the
+  ephemeral connection name — including the qualified name teardown purges,
+  which used to come back from ``Connection.creator`` at one-second resolution
+  and could collide between two matrix legs;
+* :mod:`~application_sdk.testing.harness.starters` publishes the seed version;
+* :mod:`~application_sdk.testing.harness.automation_engine` submits and polls;
+* :mod:`~application_sdk.testing.harness.atlas` reads Atlas and creates the
+  seeded connection;
+* :mod:`~application_sdk.testing.harness.expectations` grades the counts and the
+  qualified-name depths;
+* :mod:`~application_sdk.testing.harness.preconditions` is the worker-health
+  probe behind :meth:`BaseE2ETest.assert_worker_up`;
+* :mod:`~application_sdk.testing.harness.teardown` purges;
+* :mod:`~application_sdk.testing.harness.budgets` carries every timing this
+  class' ``ClassVar`` declarations carry.
+
+**Everything below the pytest boundary is async** (FND-224's decision D1). Each
+public method here is a one-line
+:func:`~application_sdk.testing.harness.bridge.run_sync` shim over an ``_async``
+twin that carries the real signature, which is what moves the sync boundary up
+to exactly the four methods pytest calls and leaves no synchronous
+implementation anywhere underneath. A subclass overriding a public method still
+works: the shim is the method it overrides.
+
+**One behaviour changes, deliberately.** An Atlas search that could not be read
+used to arrive here as zeros — so an Atlas outage was graded as "the connector
+landed no assets" and sent the reader to the wrong team. The harness readers
+answer :class:`~application_sdk.testing.harness.outcome.Indeterminate` for that,
+and this class now keeps it: an unreadable count raises
+:class:`~application_sdk.testing.e2e._errors.AtlasReadIndeterminateError`, which
+is not an ``AssertionError``, so pytest reports it as an *error* rather than as a
+failure of the thing under test.
 """
 
 from __future__ import annotations
 
 import os
-import secrets
-import time
-import urllib.error
-import urllib.request
 import warnings
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
+from datetime import timedelta
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
+import httpx
 import orjson
 import pytest
+from typing_extensions import deprecated
 
 from application_sdk.common.task_queue import (
     QUEUE_PREFIX,
@@ -56,6 +98,7 @@ from application_sdk.contracts.types import ConnectionRef
 from application_sdk.errors.base import safe_traceback
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.e2e._errors import (
+    AtlasReadIndeterminateError,
     DAGProgressStalledError,
     DeployedManifestMismatchError,
     HarnessMethodNotImplementedError,
@@ -63,9 +106,9 @@ from application_sdk.testing.e2e._errors import (
     ManifestFileNotFoundError,
     MissingHarnessClassAttrError,
     MissingHarnessEnvError,
+    NoWorkerOnTaskQueueError,
     ProgressWatchdogUnreachableError,
     SeededConnectionNotSearchableError,
-    UnknownConnectorTypeError,
     WorkerNotHealthyError,
 )
 from application_sdk.testing.e2e._manifest_identity import (
@@ -89,13 +132,54 @@ from application_sdk.testing.e2e.payload import (
     build_ae_payload,
 )
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
-from application_sdk.testing.harness._poll import until_deadline
+from application_sdk.testing.harness import atlas
+from application_sdk.testing.harness._errors import MissingTenantEnvError
+from application_sdk.testing.harness.automation_engine import AEClient
+from application_sdk.testing.harness.bridge import run_sync
+from application_sdk.testing.harness.budgets import Budget
 from application_sdk.testing.harness.evidence import (
     EvidenceBundle,
     secrets_from_environment,
     write_bundle,
 )
-from application_sdk.testing.harness.expectations import Finding
+from application_sdk.testing.harness.expectations import (
+    UNREADABLE,
+    AssetExpectations,
+    CountRead,
+    Finding,
+    SampleRead,
+    Unreadable,
+    evaluate_counts,
+    evaluate_locations,
+)
+from application_sdk.testing.harness.identity import (
+    Minter,
+    TenantAuth,
+    read_tenant_auth,
+)
+from application_sdk.testing.harness.outcome import (
+    Indeterminate,
+    Outcome,
+    Settled,
+    as_count,
+    as_counts,
+    as_samples,
+)
+from application_sdk.testing.harness.preconditions import (
+    HealthReading,
+    check_worker_health,
+    run_preconditions,
+)
+from application_sdk.testing.harness.starters import (
+    AEWorkflowSpec,
+    SubmitRetry,
+    publish_seed_version,
+)
+from application_sdk.testing.harness.teardown import purge_connection
+from application_sdk.testing.harness.waiting import poll_until
+
+if TYPE_CHECKING:  # pragma: no cover - typing only; pyatlan is a lazy import
+    from pyatlan.client.aio.client import AsyncAtlanClient
 
 logger = get_logger(__name__)
 
@@ -127,14 +211,47 @@ _PROGRESS_STALL_MIN_SECONDS = 300
 # DAG is frozen.
 _PROGRESS_STALL_MAX_SECONDS = 1800
 
-# Teardown purges assets in batches of this size. pyatlan's purge_by_guid puts
-# one ``guid=`` query param per asset into a single DELETE, and httpx refuses to
-# build a URL whose query exceeds MAX_URL_LENGTH (65536) — at ~42 bytes per GUID
-# that is a hard ceiling near 1,550 assets, raised client-side so *nothing* is
-# deleted. A crawl routinely produces more than that, so the list has to be
-# chunked. Kept well under the ceiling: purge is expensive server-side, and a
-# smaller batch means a single failing chunk orphans less.
-_PURGE_BATCH_SIZE = 50
+# How each kind of finding from
+# :mod:`application_sdk.testing.harness.expectations` is rendered back into the
+# assertion text a connector suite has always seen. Three shapes, because the
+# lines were written for three different readers and normalising them would
+# change every connector's red-leg output to buy nothing: a count names its type
+# with a colon, a location statement reads as a sentence about one asset, and the
+# zero-asset backstop is about the run rather than about a type.
+#: Consecutive unproductive Atlas probes the Connection poll tolerates. Lifted
+#: verbatim from ``poll_atlas_for_connection``'s ``max_not_found_attempts``
+#: default, and split by :meth:`BaseE2ETest._atlas_connection_budget` into the
+#: two things it was doing at once: the start-grace window (empty searches, which
+#: mean the connection never materialised) and the transient-failure streak
+#: (unreadable searches, which mean Atlas could not be asked). Same total
+#: tolerance, two diagnoses.
+_ATLAS_NOT_FOUND_ATTEMPTS = 10
+
+_FINDING_TEMPLATES = {
+    "floor": "  - {subject}: {detail}",
+    "exact": "  - {subject}: {detail}",
+    "nonempty": "  - {detail}",
+    "depth": "  - {subject} {detail}",
+    "nesting": "  - {subject} {detail}",
+    UNREADABLE: "  - {subject}: {detail}",
+}
+
+
+def _render_finding(finding: Finding) -> str:
+    """Render one finding as the assertion line connector suites already read.
+
+    Args:
+        finding: What was not met, or could not be graded.
+
+    Returns:
+        The line, indented to sit under the summary sentence the caller writes.
+        An unrecognised expectation falls back to the subject-and-colon shape
+        rather than raising: a new expectation kind added to the harness must
+        degrade to a readable line here, not take a red leg's message down with
+        it.
+    """
+    template = _FINDING_TEMPLATES.get(finding.expectation, "  - {subject}: {detail}")
+    return template.format(subject=finding.subject, detail=finding.detail)
 
 
 def _derive_progress_stall_seconds(timeout_seconds: int) -> int:
@@ -190,6 +307,36 @@ def _supersedes(published: int | None, seed: int | None) -> bool:
     return published is not None and published != seed
 
 
+@dataclass(frozen=True, slots=True)
+class _SeedProbeReading:
+    """One attempt at the representative child write under a seeded connection.
+
+    A reading rather than an exception, which is the load-bearing choice in
+    :meth:`BaseE2ETest._retry_seed_probe_async`: while a fresh Connection's
+    access policies are still provisioning, a refused write is the *expected*
+    answer, not a failed read. Modelling it as a probe error would spend the
+    wait's transient-failure streak on the normal case and end the loop long
+    before the policies could go live.
+
+    Attributes:
+        error: What the write raised, or ``None`` when it succeeded. Retained
+            rather than stringified because it is what the caller re-raises when
+            the wait never settles — the suite has to see the 403 itself, not a
+            harness paraphrase of it.
+    """
+
+    error: Exception | None = None
+
+    @property
+    def permitted(self) -> bool:
+        """Whether the write went through.
+
+        Returns:
+            True when the probe did not raise.
+        """
+        return self.error is None
+
+
 @dataclass(frozen=True)
 class NodeDispatch:
     """Where the seed DAG asked AE to dispatch one node.
@@ -243,6 +390,40 @@ class FullDAGOutcome:
     total_assets: int = 0
     lineage_present: bool = False
     asset_qn_samples: dict[str, list[str]] = field(default_factory=dict)
+    asset_count_reads: Mapping[str, CountRead] = field(default_factory=dict)
+    """Per-type counts as the reader answered them, so a type whose search could
+    not be read is an
+    :class:`~application_sdk.testing.harness.expectations.Unreadable` here rather
+    than a zero. This is what the assertion ladder grades; :attr:`asset_counts`
+    is the settled-only projection of it, kept at ``dict[str, int]`` because
+    connector suites index it and compare the values."""
+    total_asset_read: CountRead | None = None
+    """The all-types total as the reader answered it, or ``None`` when it was not
+    read. :attr:`total_assets` is its settled projection, ``0`` otherwise."""
+    asset_qn_reads: Mapping[str, SampleRead] = field(default_factory=dict)
+    """Sampled qualified names as the reader answered them. The location check
+    used to fail *open* — a failed sample read arrived as an empty list, which is
+    also how "this type landed nothing" is spelled, and an empty list is skipped.
+    Keeping the distinction here is what closes finding C4 on FND-224."""
+    connection_read: Outcome[bool] | None = None
+    """The Connection poll's verdict, or ``None`` when it never ran.
+
+    :attr:`connection_in_atlas` is its settled projection, and on its own it
+    cannot say *why* it is False. Three verdicts collapse into that boolean and
+    they are not the same finding:
+    :class:`~application_sdk.testing.harness.outcome.NeverStarted` and
+    :class:`~application_sdk.testing.harness.outcome.Expired` mean the
+    Connection never materialised — a real claim about the publish path — while
+    :class:`~application_sdk.testing.harness.outcome.Indeterminate` means Atlas
+    could not be read, which is a claim about Atlas. Keeping the verdict is what
+    lets the ladder tell them apart."""
+    lineage_read: bool | Unreadable | None = None
+    """Whether any lineage asset was observed, or the fact that it could not be
+    read; ``None`` when the probe never ran.
+
+    :attr:`lineage_present` is the settled projection, and ``False`` there means
+    both "no Process exists" and "the count could not be read" — the same
+    fail-closed-but-misattributed shape the asset counts had."""
     connection_expected: bool = True
     """Mirror of the suite's ``expect_connection``, carried here so
     :attr:`succeeded` can tell "the connection is missing" apart from "this
@@ -339,6 +520,16 @@ class BaseE2ETest:
     # reusing a pre-existing ae_workflow_slug), and the check self-skips. Plain
     # instance field, same reason as source_available above.
     _expected_node_identities: dict[str, DagNodeIdentity] = {}
+    # The deprecated sync AE/Atlas client, built on first access rather than in
+    # setup_method — see the `client` property for why lazily. Plain instance
+    # field with a class-level default, same reason as source_available above,
+    # and the default is what lets the property answer on an instance whose
+    # setup_method never ran (or ran on the worker-up-only tier).
+    _client: AEWorkflowClient | None = None
+    # This run's `$admin` reading, taken at most once — see _admin_identity.
+    # Plain instance field with a class-level default, same reason as
+    # source_available above.
+    _admin_reading: "atlas.Reading[atlas.AdminIdentity] | None" = None
     # AE's version number for the seed version this harness published, or None
     # when the harness published none. _assert_deployed_manifest_matches waits
     # for the published version to differ from this before comparing: while AE
@@ -396,6 +587,23 @@ class BaseE2ETest:
     # the 5 min headline.
     app_ready_timeout_seconds: ClassVar[int] = 300
     app_ready_poll_interval_seconds: ClassVar[int] = 5
+
+    # --- Temporal poller read (opt-in) ---------------------------------
+    # The stall guard's NoWorkerOnTaskQueueError is an *inference*: nothing
+    # started inside the grace, so probably nothing is polling the extract
+    # queue. Temporal can answer that directly, and an empty poller list is the
+    # observed form of the same finding — available on the first probe instead
+    # of after three minutes of silence. See _observed_pollers.
+    #
+    # Off by default because the connector CI leg has no route to a tenant's
+    # Temporal frontend: the runner cannot reach the tenant vcluster, the same
+    # constraint that makes the AE submit the only tenant-facing probe of the
+    # installed app pod. Set this (or export E2E_TEMPORAL_ADDRESS) on a suite
+    # that does have a route — a local cluster, an in-cluster driver — and the
+    # observation is *appended* to the inference rather than replacing it. A
+    # read that fails changes nothing: the original diagnostic still stands.
+    temporal_address: ClassVar[str] = ""
+    temporal_namespace: ClassVar[str] = "default"
 
     # --- deployed-manifest identity check (FND-129) --------------------
     # Whether to assert, right after submit, that the DAG AE published is the
@@ -613,7 +821,27 @@ class BaseE2ETest:
     # ------------------------------------------------------------------
 
     def setup_method(self) -> None:
-        """Resolve env + build the per-test identity."""
+        """Resolve env + build the per-test identity.
+
+        One line, like every other public method on this class: pytest calls
+        this synchronously and never awaits it, so the xunit shape has to stay —
+        but nothing under it is synchronous, because resolving the admin ACL is
+        an Atlas read (FND-224's decision D1). The same lifecycle is also
+        published as async fixtures for a suite that inherits nothing; see
+        :mod:`application_sdk.testing.harness.fixtures`.
+        """
+        run_sync(self._setup_method_async())
+
+    async def _setup_method_async(self) -> None:
+        """Validate the declaration, mint this run's identity, open the clients.
+
+        Raises:
+            MissingHarnessClassAttrError: A required class attribute is unset.
+            ProgressWatchdogUnreachableError: The pinned progress-stall window is
+                not strictly below the poll ceiling, so the watchdog could never
+                fire.
+            MissingHarnessEnvError: The environment carries no tenant.
+        """
         for required in (
             "connector_short_name",
             "argo_package_name",
@@ -628,6 +856,7 @@ class BaseE2ETest:
         self._node_dispatch = {}
         self._expected_node_identities = {}
         self._seed_version = None
+        self._admin_reading = None
 
         # A pinned progress-stall window that is not strictly below the poll
         # ceiling is a disabled watchdog (see ProgressWatchdogUnreachableError).
@@ -715,96 +944,246 @@ class BaseE2ETest:
                 self.ae_stall_grace_seconds,
             )
 
-        tenant_url = os.environ.get("ATLAN_BASE_URL", "").rstrip("/")
-        api_token = os.environ.get("ATLAN_API_KEY", "")
-        if not tenant_url or not api_token:
-            raise MissingHarnessEnvError(
-                message=(
-                    "Full-DAG e2e harness requires ATLAN_BASE_URL + ATLAN_API_KEY. "
-                    "ATLAN_API_KEY is mandatory because /automation/api/v1/* (AE "
-                    "workflow management) requires the realm-admin resource_access "
-                    "role that only the API-key's service account carries."
-                )
-            )
+        auth = self._read_tenant_auth()
+        self._minter = Minter.from_environment(os.environ)
+        self.run_id = self._minter.run_id()
 
-        oauth_client_id = os.environ.get("SDR_CLIENT_ID", "")
-        oauth_client_secret = os.environ.get("SDR_CLIENT_SECRET", "")
+        self._ae = AEClient(auth.base_url, auth.api_key)
+        self._client: AEWorkflowClient | None = None
 
-        gh_run_id = os.environ.get("GITHUB_RUN_ID")
-        self.run_id = (
-            int(gh_run_id) if gh_run_id and gh_run_id.isdigit() else int(time.time())
-        )
-        self.client = AEWorkflowClient(
-            tenant_url,
-            api_token,
-            oauth_client_id=oauth_client_id or None,
-            oauth_client_secret=oauth_client_secret or None,
-        )
         # connection_type overrides connector_short_name when the Atlan
         # catalog type segment differs from the connector's app name (e.g.
         # OpenAPI: connector_short_name="openapi", connection_type="api").
         #
-        # The trailing segment must be unique per test *instance*: with the e2e
-        # matrix, each suite runs as a separate parallel job whose setup_method
-        # can land in the same wall-clock second as another leg's, and rapid
-        # same-ref pushes can overlap too. A shared connection QN would let one
-        # leg's teardown purge another's assets and mix Atlas counts. epoch
-        # alone (1-second resolution) can't guarantee that, so append random
-        # digits. Kept PURE NUMERIC so Atlas never rejects the name for hyphens
-        # or alpha characters (agent queue + AE slug are already run-id-scoped
-        # and unique per run; this closes the connection-QN gap).
-        _conn_type = self.connection_type or self.connector_short_name
-        _unique = f"{int(time.time())}{secrets.randbelow(1_000_000):06d}"
-        self.connection_qualified_name = f"default/{_conn_type}/{_unique}"
-        self.connection_display_name = f"{_conn_type}-{_unique}"
+        # The name is minted rather than derived inline, and the trailing segment
+        # is unique per test *instance*: with the e2e matrix each suite runs as a
+        # separate parallel job whose setup can land in the same wall-clock
+        # second as another leg's, and rapid same-ref pushes overlap too. A
+        # shared connection QN would let one leg's teardown purge another's
+        # assets and mix Atlas counts. See
+        # :meth:`~application_sdk.testing.harness.identity.Minter.connection_identity`.
+        identity = self._minter.connection_identity(
+            self.connection_type or self.connector_short_name
+        )
+        self.connection_qualified_name = identity.qualified_name
+        self.connection_display_name = identity.display_name
 
         # Atlas requires at least one non-empty admin list on a Connection
         # (ATLAS-400-00-114). When the subclass leaves all three admin attrs
         # unset, resolve the built-in $admin role GUID so any tenant admin
         # can manage the test connection — not just the token under which
-        # the workflow runs.
-        self._auto_admin_roles: tuple[str, ...] = ()
-        self._auto_admin_users: tuple[str, ...] = ()
-        if not any(
+        # the workflow runs — plus the current user, so teardown can purge it.
+        #
+        # Read through the harness' own Atlas client, which prefers the OAuth
+        # identity when one is configured. That is the identity every other
+        # Atlas call in this run uses, teardown's purge included, so the user
+        # written onto the ACL is the user that later has to delete it.
+        #
+        # The client is opened whether or not the fallback is needed, because
+        # _resolve_run_identity is also where a subclass puts its own tenant
+        # lookup. Costless when nothing reads through it: pyatlan's async client
+        # connects on its first request, not on __aenter__.
+        self._auto_admin_roles = ()
+        self._auto_admin_users = ()
+        async with self._atlas_client() as client:
+            await self._resolve_run_identity(client)
+
+    async def _resolve_run_identity(self, client: AsyncAtlanClient) -> None:
+        """Resolve whatever tenant-side identity this suite needs before it runs.
+
+        The extension point for a subclass that needs its own tenant lookup:
+        ``SQLAppE2ETest`` overrides it to resolve the ``$admin`` role its
+        ``connection_spec`` puts on the ACL, so that lookup shares this client
+        and this moment instead of firing lazily from inside a synchronous
+        method. Override it, call ``super()``, and read the result off ``self``.
+
+        Never raises here. An unresolvable ``$admin`` is reported and then
+        surfaces as the Connection create being rejected, which is where an
+        operator can see what the ACL actually was — the behaviour before child
+        H, kept deliberately. A subclass whose lookup is load-bearing may raise;
+        that is its policy to choose, which is why
+        :func:`~application_sdk.testing.harness.atlas.admin_identity` returns a
+        reading rather than deciding for both.
+
+        Args:
+            client: The open Atlas client, with this run's identity.
+        """
+        if any(
             [
                 self.connection_admin_users,
                 self.connection_admin_groups,
                 self.connection_admin_roles,
             ]
         ):
-            try:
-                from pyatlan.client.atlan import (  # noqa: PLC0415; type: ignore[import]
-                    AtlanClient,
-                )
+            return
+        reading = await self._admin_identity(client)
+        if isinstance(reading, Settled):
+            self._auto_admin_roles = reading.value.roles
+            self._auto_admin_users = reading.value.users
+            logger.info(
+                "resolved connection admin fallback: roles=%s users=%s",
+                self._auto_admin_roles,
+                self._auto_admin_users,
+            )
+            return
+        logger.warning(
+            "could not resolve the $admin role GUID or the current user, so the "
+            "connection will be created with whatever admin ACL the suite "
+            "declared (none, here) and Atlas may reject it with "
+            "ATLAS-400-00-114. Set connection_admin_roles on the test class.",
+            exc_info=reading.cause,
+        )
 
-                # conformance: ignore[P024] e2e harness admin-role lookup runs outside the async execution path; sync pyatlan is intentional
-                _pc = AtlanClient(base_url=tenant_url, api_key=api_token)
-                _guid = _pc.role_cache.get_id_for_name("$admin")
-                if _guid:
-                    self._auto_admin_roles = (_guid,)
-                    logger.info("Resolved $admin role GUID for connection: %s", _guid)
-                else:
-                    logger.warning(
-                        "$admin role not found on tenant; connection may fail ATLAS-400-00-114"
-                    )
-                # Also add the current API token's user to adminUsers so the
-                # teardown can purge the connection (the $admin role alone is
-                # insufficient when the service account doesn't hold that role).
-                _me = _pc.user.get_current()
-                if _me and _me.username:
-                    self._auto_admin_users = (_me.username,)
-                    logger.info(
-                        "Resolved current user for connection adminUsers: %s",
-                        _me.username,
-                    )
-            except Exception as _exc:
-                logger.warning(
-                    "Could not resolve $admin role GUID or current user (%s). "
-                    "Set connection_admin_roles on the test class to avoid "
-                    "ATLAS-400-00-114 errors.",
-                    _exc,
-                    exc_info=True,
+    async def _admin_identity(
+        self, client: AsyncAtlanClient
+    ) -> atlas.Reading[atlas.AdminIdentity]:
+        """This run's ``$admin`` reading, taken once and reused.
+
+        Memoised because two callers want the same answer under *different*
+        policies: this class degrades to an empty ACL fallback, and
+        ``SQLAppE2ETest`` raises. Taking two readings would let the second fail
+        after the first succeeded — a transient blip between them turning a
+        healthy run into ``AdminRoleNotResolvedError`` — and would double a
+        network call whose answer cannot change within one test.
+
+        Args:
+            client: The open Atlas client.
+
+        Returns:
+            The reading, settled or indeterminate. Not unwrapped: deciding what
+            an absent role means is the caller's, which is why
+            :func:`~application_sdk.testing.harness.atlas.admin_identity`
+            reports rather than decides.
+        """
+        if self._admin_reading is None:
+            self._admin_reading = await atlas.admin_identity(client)
+        return self._admin_reading
+
+    def _read_tenant_auth(self) -> TenantAuth:
+        """Read the tenant credentials this run uses, and remember them.
+
+        Delegates to
+        :func:`~application_sdk.testing.harness.identity.read_tenant_auth` and
+        re-raises its leaf as this package's own. The translation is not
+        cosmetic: ``MissingHarnessEnvError`` is the error contract connector
+        suites and their CI already match on, and a lift is not the place to
+        change what a suite catches.
+
+        Returns:
+            The credentials.
+
+        Raises:
+            MissingHarnessEnvError: ``ATLAN_BASE_URL`` or ``ATLAN_API_KEY`` is
+                absent or blank.
+        """
+        try:
+            auth = read_tenant_auth(os.environ)
+        except MissingTenantEnvError as missing:
+            raise MissingHarnessEnvError(
+                message=(
+                    "Full-DAG e2e harness requires ATLAN_BASE_URL + "
+                    "ATLAN_API_KEY. ATLAN_API_KEY is mandatory because "
+                    "/automation/api/v1/* (AE workflow management) requires "
+                    "the realm-admin resource_access role that only the "
+                    "API-key's service account carries."
+                ),
+                field=missing.field,
+                cause=missing,
+            ) from missing
+        self._auth = auth
+        return auth
+
+    @property
+    @deprecated(
+        "BaseE2ETest.client is deprecated and will be removed in v4.0. Use "
+        "application_sdk.testing.harness.automation_engine.AEClient and "
+        "application_sdk.testing.harness.atlas directly, reaching them from "
+        "synchronous code through application_sdk.testing.harness.run_sync."
+    )
+    def client(self) -> AEWorkflowClient:
+        """The deprecated synchronous AE/Atlas client, built on first use.
+
+        .. deprecated:: 3.31
+            Removed in v4.0. Nothing in this class routes through it any more —
+            ``BaseE2ETest`` talks to
+            :class:`~application_sdk.testing.harness.automation_engine.AEClient`
+            and :mod:`application_sdk.testing.harness.atlas` directly. It is here
+            for the connector suites that reach for it themselves, and it shares
+            this run's AE pool rather than opening a second one.
+
+        Built lazily, and that is the point rather than an optimisation: the
+        class emits a ``DeprecationWarning`` when it is constructed, so eager
+        construction would warn on every connector run about a symbol most of
+        them never touch — a notice nobody can act on is a notice everybody
+        learns to ignore.
+
+        Returns:
+            The client, the same instance on every access.
+
+        Raises:
+            MissingHarnessEnvError: The run has no tenant. That is the
+                worker-up-only tier, where ``setup_method`` deliberately wires
+                nothing: there is no AE client because there is nothing to talk
+                to. The tier is reachable *with* a tenant configured
+                (``E2E_SOURCE_AVAILABLE=false`` on a leg that has credentials),
+                so the absent ``_ae`` is what this checks — reading the
+                environment would find a perfectly good tenant and then fail on
+                a missing attribute instead.
+        """
+        if self._client is None:
+            ae = getattr(self, "_ae", None)
+            if ae is None:
+                raise MissingHarnessEnvError(
+                    message=(
+                        f"{type(self).__name__} has no AE client: setup_method "
+                        "wired none, which is the worker-up-only tier "
+                        "(source_available=False). There is nothing for "
+                        "`self.client` to talk to on that tier — it verifies "
+                        "the worker's health endpoint and exercises no DAG."
+                    ),
+                    field="E2E_SOURCE_AVAILABLE",
                 )
+            auth = (
+                self._auth if getattr(self, "_auth", None) else self._read_tenant_auth()
+            )
+            self._client = AEWorkflowClient(
+                auth.base_url,
+                auth.api_key,
+                oauth_client_id=auth.oauth_client_id,
+                oauth_client_secret=auth.oauth_client_secret,
+                ae=ae,
+            )
+        return self._client
+
+    @client.setter
+    def client(self, value: AEWorkflowClient) -> None:
+        """Adopt a caller-supplied client.
+
+        Kept writable because the attribute was one for as long as it existed,
+        and a suite that assigns its own double is entitled to keep working
+        through a refactor whose whole premise is that the public surface does
+        not move.
+
+        Args:
+            value: The client to use from here on.
+        """
+        self._client = value
+
+    def _atlas_client(self) -> AbstractAsyncContextManager[AsyncAtlanClient]:
+        """Open one Atlas client for a batch of reads, with this run's identity.
+
+        Returns:
+            The context manager. One client per phase rather than per call is the
+            point: the implementation this replaced stood up a fresh client, and
+            therefore a fresh TLS handshake, on every poll iteration.
+        """
+        auth = getattr(self, "_auth", None) or self._read_tenant_auth()
+        return atlas.atlas_client(
+            auth.base_url,
+            auth.api_key,
+            oauth_client_id=auth.oauth_client_id,
+            oauth_client_secret=auth.oauth_client_secret,
+        )
 
     def teardown_method(self, method: Any) -> None:
         """Purge all assets created by this test run, regardless of outcome.
@@ -815,168 +1194,168 @@ class BaseE2ETest:
 
         Failures here are logged as warnings, not re-raised, so they never
         mask the real test result.
-        """
-        conn_qn = getattr(self, "connection_qualified_name", None)
-        if not conn_qn:
-            return
-
-        client = self._teardown_client()
-        if client is None:
-            return
-
-        # Two independently-guarded phases. Sharing one guard is what let a
-        # single child-purge failure orphan the connection as well: the raise
-        # jumped past the connection purge entirely, and the teardown warning
-        # is post-verdict, so the leg still went green while leaking everything.
-        self._purge_child_assets(client, conn_qn)
-        self._purge_connection(client, conn_qn)
-
-    @staticmethod
-    def _teardown_client() -> Any | None:
-        """Sync pyatlan client for teardown, or ``None`` when unavailable.
-
-        Returns:
-            An ``AtlanClient``, or ``None`` if the harness env isn't configured
-            (nothing to clean up) or the client couldn't be built.
-        """
-        tenant_url = os.environ.get("ATLAN_BASE_URL", "")
-        api_token = os.environ.get("ATLAN_API_KEY", "")
-        if not tenant_url or not api_token:
-            return None
-        try:
-            from pyatlan.client.atlan import (  # noqa: PLC0415; type: ignore[import]
-                AtlanClient,
-            )
-
-            # conformance: ignore[P024] e2e harness asset lookup runs outside the async execution path; sync pyatlan is intentional
-            return AtlanClient(base_url=tenant_url, api_key=api_token)
-        except Exception:
-            logger.warning(
-                "e2e cleanup: could not build a tenant client — manual purge "
-                "may be needed",
-                exc_info=True,
-            )
-            return None
-
-    @staticmethod
-    def _purge_child_assets(client: Any, conn_qn: str) -> None:
-        """Purge every descendant of ``conn_qn`` in bounded batches.
-
-        Every GUID is collected *before* the first delete on purpose. pyatlan's
-        default search pagination is offset-based (``from``/``size``), so
-        purging between pages shifts the result window and silently skips
-        assets; a list of 36-char strings is cheap even at six figures.
 
         Args:
-            client: Sync pyatlan client.
-            conn_qn: Qualified name of the connection being torn down.
+            method: The test method pytest just ran. Unused; part of the xunit
+                signature.
+        """
+        run_sync(self._teardown_method_async(method))
+
+    async def _teardown_method_async(self, method: Any) -> None:
+        """Purge this run's connection, then close the clients it opened.
+
+        The purge itself is
+        :func:`~application_sdk.testing.harness.teardown.purge_connection`, which
+        reports rather than raises: the batching that is a correctness bound
+        (``purge_by_guid`` puts one ``guid=`` parameter per asset into one
+        DELETE, and httpx refuses a URL whose query exceeds 64 KiB, so an
+        unbatched purge deletes *nothing*), the read-everything-before-deleting
+        order that offset pagination makes mandatory, and the two independently
+        guarded phases all live there now.
+
+        Args:
+            method: The test method pytest just ran. Unused; part of the xunit
+                signature.
         """
         try:
-            from pyatlan.model.assets import (  # noqa: PLC0415; type: ignore[import]
-                Asset,
-            )
-            from pyatlan.model.fluent_search import (  # noqa: PLC0415; type: ignore[import]
-                FluentSearch,
-            )
+            await self._purge_this_run()
+        finally:
+            await self._close_clients()
 
-            child_request = (
-                FluentSearch()
-                .where(Asset.QUALIFIED_NAME.startswith(conn_qn + "/"))
-                .include_on_results(Asset.GUID)
-            ).to_request()
-            child_request.dsl.size = 200
-            child_guids: list[str] = [
-                asset.guid for asset in client.asset.search(child_request) if asset.guid
-            ]
+    async def _purge_this_run(self) -> None:
+        """Delete the ephemeral connection this run minted, if there is one."""
+        conn_qn = getattr(self, "connection_qualified_name", "")
+        if not conn_qn:
+            return
+        try:
+            async with self._atlas_client() as client:
+                await purge_connection(client, conn_qn)
+        # conformance: ignore[E004] teardown boundary — this runs after the assertions have decided the verdict, so a cleanup failure must never replace a real one; it is logged at WARNING with exc_info
         except Exception:
             logger.warning(
-                "e2e cleanup: could not list child assets under %s — manual "
+                "e2e cleanup: could not reach the tenant to purge %s — manual "
                 "purge may be needed",
                 conn_qn,
                 exc_info=True,
             )
-            return
 
-        if not child_guids:
-            return
+    async def _close_clients(self) -> None:
+        """Release the AE pool this test opened, on the loop that opened it.
 
-        # Batch failures are counted and reported once after the loop rather
-        # than logged per batch: a large crawl is hundreds of batches, and a
-        # tenant-wide outage would otherwise emit one warning per batch.
-        purged = 0
-        failed_batches = 0
-        last_error: Exception | None = None
-        for offset in range(0, len(child_guids), _PURGE_BATCH_SIZE):
-            batch = child_guids[offset : offset + _PURGE_BATCH_SIZE]
-            try:
-                client.asset.purge_by_guid(batch)
-            # conformance: ignore[E004] teardown boundary — a batch failure must never propagate and mask the test verdict; the aggregate is logged at WARNING with exc_info below
-            except Exception as exc:
-                # DEBUG per batch, WARNING for the summary below: a tenant-wide
-                # outage is hundreds of failing batches, and one line each would
-                # bury the count that actually says how much leaked.
-                logger.debug(
-                    "e2e cleanup: purge batch at offset %d failed",
-                    offset,
-                    exc_info=True,
-                )
-                failed_batches += 1
-                last_error = exc
-            else:
-                purged += len(batch)
-
-        if last_error is not None:
-            logger.warning(
-                "e2e cleanup: purged %d of %d child assets under %s; %d batch(es) "
-                "of %d failed — manual purge may be needed",
-                purged,
-                len(child_guids),
-                conn_qn,
-                failed_batches,
-                _PURGE_BATCH_SIZE,
-                exc_info=last_error,
-            )
-        else:
-            logger.info(
-                "e2e cleanup: purged %d child assets under %s",
-                purged,
-                conn_qn,
-            )
-
-    @staticmethod
-    def _purge_connection(client: Any, conn_qn: str) -> None:
-        """Purge the connection asset itself.
-
-        Args:
-            client: Sync pyatlan client.
-            conn_qn: Qualified name of the connection being torn down.
+        The Atlas reads open and close their own client per phase, so there is
+        nothing to close for that half.
         """
+        ae = getattr(self, "_ae", None)
+        if ae is None:
+            return
         try:
-            from pyatlan.model.assets import (  # noqa: PLC0415; type: ignore[import]
-                Asset,
-            )
-            from pyatlan.model.fluent_search import (  # noqa: PLC0415; type: ignore[import]
-                FluentSearch,
-            )
-
-            conn_request = (
-                FluentSearch()
-                .where(Asset.QUALIFIED_NAME.eq(conn_qn))
-                .where(Asset.TYPE_NAME.eq("Connection"))
-                .include_on_results(Asset.GUID)
-            ).to_request()
-            conn_request.dsl.size = 1
-            for asset in client.asset.search(conn_request):
-                if asset.guid:
-                    client.asset.purge_by_guid(asset.guid)
-                    # conformance: ignore[L006] loop bounded to a single result via dsl.size=1; one purge event per connection
-                    logger.info("e2e cleanup: purged connection %s", conn_qn)
+            await ae.aclose()
+        # conformance: ignore[E004] teardown boundary — the same rule as the purge above; a pool that will not close must not become the test's verdict
         except Exception:
             logger.warning(
-                "e2e cleanup failed for connection %s — manual purge may be needed",
-                conn_qn,
+                "e2e cleanup: the AE connection pool did not close cleanly",
                 exc_info=True,
             )
+
+    # ------------------------------------------------------------------
+    # Budgets
+    # ------------------------------------------------------------------
+    #
+    # The ten timing ClassVars above are unchanged and stay the place a
+    # connector declares its timings. What changed is that they are no longer
+    # read at the call site: each of these builds the
+    # :class:`~application_sdk.testing.harness.budgets.Budget` for one wait, so
+    # a suite that overrides a ClassVar gets the same effect it always did and
+    # the wait itself takes a single typed allowance.
+
+    def _atlas_connection_budget(self) -> Budget:
+        """Allowance for the Connection becoming searchable in Atlas.
+
+        Returns:
+            The budget. ``start_grace`` is the ten-consecutive-empty-searches cap
+            the lifted implementation carried as ``max_not_found_attempts``,
+            expressed as the duration it already was — every probe that reached
+            that check was an empty search, so it fired on attempt ten, at nine
+            intervals elapsed.
+        """
+        return Budget(
+            timeout=timedelta(seconds=self.atlas_poll_timeout_seconds),
+            poll_interval=timedelta(seconds=self.atlas_poll_interval_seconds),
+            start_grace=timedelta(
+                seconds=(_ATLAS_NOT_FOUND_ATTEMPTS - 1)
+                * self.atlas_poll_interval_seconds
+            ),
+            max_transient_failures=_ATLAS_NOT_FOUND_ATTEMPTS,
+            # The reader logs its own per-probe line; a heartbeat would double it.
+            heartbeat=None,
+        )
+
+    def _atlas_counts_budget(self) -> Budget:
+        """Allowance for per-type asset counts to settle after publish.
+
+        Returns:
+            The budget. Deliberately short: Elasticsearch is eventually
+            consistent, but assets that will appear do so within seconds of
+            publish completing.
+        """
+        return Budget(
+            timeout=timedelta(seconds=self.atlas_asset_poll_timeout_seconds),
+            poll_interval=timedelta(seconds=self.atlas_asset_poll_interval_seconds),
+            # The per-poll inventory line already reports progress every
+            # iteration; a heartbeat would duplicate it.
+            heartbeat=None,
+        )
+
+    def _deployed_manifest_budget(self) -> Budget:
+        """Allowance for AE to serve a version that supersedes the harness' seed.
+
+        Returns:
+            The budget. Seconds rather than minutes: AE's own create-and-publish
+            is server-side and already done by the time the submit answers, so
+            this waits for read-after-write visibility rather than for work.
+        """
+        return Budget(
+            timeout=timedelta(seconds=self.deployed_manifest_timeout_seconds),
+            poll_interval=timedelta(
+                seconds=self.deployed_manifest_poll_interval_seconds
+            ),
+            heartbeat=None,
+        )
+
+    def _worker_health_budget(self) -> Budget:
+        """Allowance for the local CI worker container to serve ``/server/health``.
+
+        Returns:
+            The budget. No ``start_grace``: a refused connection *is* a reading
+            here (see
+            :class:`~application_sdk.testing.harness.preconditions.HealthReading`),
+            so the two diagnoses the grace would split are already distinguished
+            by the reading itself.
+        """
+        return Budget(
+            timeout=timedelta(seconds=self.worker_health_timeout_seconds),
+            poll_interval=timedelta(seconds=self.worker_health_poll_interval_seconds),
+        )
+
+    def _seed_probe_budget(self) -> Budget:
+        """Allowance for a freshly seeded connection to accept a child write.
+
+        Returns:
+            The budget, on the Atlas poll's own timings — a fresh Connection
+            403s child writes until its access policies go live, and there is no
+            API that reports when that has happened.
+        """
+        return Budget(
+            timeout=timedelta(seconds=self.atlas_poll_timeout_seconds),
+            poll_interval=timedelta(seconds=self.atlas_poll_interval_seconds),
+            # No transient allowance, and that is not the loop being strict: the
+            # probe never raises at the primitive. A refused write is the
+            # *reading* it returns, the same shape ``check_worker_health`` uses,
+            # because "not permitted yet" is the expected answer here rather than
+            # a failed read — spending an error streak on it would end the wait
+            # long before the policies could go live.
+            heartbeat=None,
+        )
 
     # ------------------------------------------------------------------
     # Pre-run seeding
@@ -1007,13 +1386,11 @@ class BaseE2ETest:
 
         Three steps, all of which a seeding suite would otherwise hand-roll:
 
-        1. Create the Connection with ``Connection.creator`` under the
-           connector type and admin ACL this suite already resolved in
-           ``setup_method``. ``creator`` assigns the ``qualifiedName``
-           client-side, so the result is adopted onto
-           ``self.connection_qualified_name`` — which is what the AE payload,
-           the Atlas polls, and the ``teardown_method`` purge all key off.
-           The connection therefore stays ephemeral and still gets torn down.
+        1. Create the Connection at **this run's own minted qualified name**,
+           under the connector type and admin ACL ``setup_method`` resolved. That
+           name is what the AE payload, the Atlas polls and the
+           ``teardown_method`` purge all key off, so the connection stays
+           ephemeral and still gets torn down.
         2. Poll until the Connection is searchable, so policy provisioning has
            started before anything tries to write beneath it.
         3. If *probe* is given, retry it until it succeeds. A freshly created
@@ -1023,6 +1400,16 @@ class BaseE2ETest:
            writes the asset your entrypoint needs; asset-type knowledge stays
            in the suite, the retry loop stays here.
 
+        .. note::
+           Step 1 used to let ``Connection.creator`` derive the qualified name
+           and then *adopt* whatever came back — ``default/<type>/<epoch>``, at
+           one-second resolution. Two matrix legs starting in the same second
+           therefore shared a connection, and the first to finish purged the
+           other's assets. The name now comes from
+           :meth:`~application_sdk.testing.harness.identity.Minter.connection_identity`
+           and does not move, which is also what makes it predictable enough to
+           assert on.
+
         Args:
             probe: Optional zero-arg callable performing a representative child
                 write. Retried until it stops raising, bounded by
@@ -1031,170 +1418,170 @@ class BaseE2ETest:
                 ``ValueError``) are re-raised immediately: they indicate a
                 deterministic bug in the probe itself, which no retry can heal,
                 so probe authors should raise only transient errors (permission
-                / not-yet-provisioned) from the callable.
+                / not-yet-provisioned) from the callable. An ``async`` callable
+                is awaited.
 
         Returns:
-            The Connection's qualified name (also now on
+            The Connection's qualified name (also on
             ``self.connection_qualified_name``).
 
         Raises:
+            UnknownConnectorTypeError: ``connection_type`` is not a pyatlan
+                ``AtlanConnectorType``.
+            SeededConnectionNotSearchableError: Atlas never returned the
+                Connection inside ``atlas_poll_timeout_seconds``.
             Exception: whatever *probe* last raised, if it never succeeded
                 within the timeout. Propagated rather than swallowed — a suite
                 whose seed never became writable must fail, not run against a
                 connection it cannot populate.
         """
-        # pyatlan is a heavy import and testing-time only; mirrors setup_method
-        # and teardown_method, which import it the same way.
-        from pyatlan.client.atlan import (  # noqa: PLC0415; type: ignore[import]
-            AtlanClient,
-        )
-        from pyatlan.model.assets import (  # noqa: PLC0415; type: ignore[import]
-            Connection,
-        )
-        from pyatlan.model.enums import (  # noqa: PLC0415; type: ignore[import]
-            AtlanConnectorType,
-        )
+        return run_sync(self._seed_connection_async(probe))
 
-        conn_type = self.connection_type or self.connector_short_name
-        try:
-            connector_type = AtlanConnectorType(conn_type)
-        except ValueError as exc:
-            raise UnknownConnectorTypeError(
-                message=(
-                    f"{type(self).__name__}: cannot seed a Connection because "
-                    f"'{conn_type}' is not a pyatlan AtlanConnectorType. Set "
-                    "`connection_type` on the test class to the Atlan catalog "
-                    "type segment (e.g. 'api' for the OpenAPI connector, whose "
-                    "connector_short_name is 'openapi')."
-                ),
-                value_summary=conn_type,
-            ) from exc
+    async def _seed_connection_async(
+        self, probe: Callable[[], object] | None = None
+    ) -> str:
+        """Create the connection, wait for it to be searchable, then run *probe*.
 
-        # conformance: ignore[P024] e2e harness connection seeding runs outside the async execution path; sync pyatlan is intentional
-        client = AtlanClient(
-            base_url=os.environ["ATLAN_BASE_URL"],
-            api_key=os.environ["ATLAN_API_KEY"],
-        )
-        admin_roles = list(self.connection_admin_roles or self._auto_admin_roles)
-        admin_users = list(self.connection_admin_users or self._auto_admin_users)
-        connection = Connection.creator(
-            client=client,
-            name=self.connection_display_name,
-            connector_type=connector_type,
-            admin_roles=admin_roles or None,
-            admin_users=admin_users or None,
-            admin_groups=list(self.connection_admin_groups) or None,
-        )
-        client.asset.save(connection)
-        # creator assigns the qualifiedName client-side. Adopt it so the AE
-        # payload, the Atlas polls and the teardown purge all agree.
-        self.connection_qualified_name = connection.qualified_name or ""
-        logger.info("e2e seed: created connection %s", self.connection_qualified_name)
+        Args:
+            probe: See :meth:`seed_connection`.
 
-        if not self.client.poll_atlas_for_connection(
-            self.connection_qualified_name,
-            interval_seconds=self.atlas_poll_interval_seconds,
-            timeout_seconds=self.atlas_poll_timeout_seconds,
-        ):
-            raise SeededConnectionNotSearchableError(
-                message=(
-                    f"Seeded connection {self.connection_qualified_name} never "
-                    f"became searchable within {self.atlas_poll_timeout_seconds}s. "
-                    "The DAG would run against a connection Atlas cannot see."
-                ),
-                resource=self.connection_qualified_name,
-                actual_state="not returned by Atlas search",
+        Returns:
+            The Connection's qualified name.
+
+        Raises:
+            SeededConnectionNotSearchableError: See :meth:`seed_connection`.
+        """
+        qualified_name = self.connection_qualified_name
+        async with self._atlas_client() as client:
+            await atlas.create_connection(
+                client,
+                qualified_name=qualified_name,
+                display_name=self.connection_display_name,
+                connector_type=self.connection_type or self.connector_short_name,
+                admin_users=list(self.connection_admin_users or self._auto_admin_users),
+                admin_groups=list(self.connection_admin_groups),
+                admin_roles=list(self.connection_admin_roles or self._auto_admin_roles),
             )
+            logger.info("e2e seed: created connection %s", qualified_name)
+
+            searchable = await atlas.poll_for_connection(
+                client, qualified_name, budget=self._atlas_connection_budget()
+            )
+            if not (isinstance(searchable, Settled) and searchable.value):
+                raise SeededConnectionNotSearchableError(
+                    message=(
+                        f"Seeded connection {qualified_name} never became "
+                        f"searchable within {self.atlas_poll_timeout_seconds}s "
+                        f"({type(searchable).__name__}). The DAG would run "
+                        "against a connection Atlas cannot see."
+                    ),
+                    resource=qualified_name,
+                    actual_state=f"not returned by Atlas search ({searchable.label})",
+                    cause=getattr(searchable, "cause", None),
+                )
 
         if probe is not None:
-            self._retry_seed_probe(probe)
+            await self._retry_seed_probe_async(probe)
 
-        return self.connection_qualified_name
+        return qualified_name
 
-    def _retry_seed_probe(self, probe: Callable[[], object]) -> None:
+    async def _retry_seed_probe_async(self, probe: Callable[[], object]) -> None:
         """Retry *probe* until it stops raising, or the Atlas budget runs out.
 
         The loop is
-        :func:`~application_sdk.testing.harness._poll.until_deadline` (FND-240),
-        which is what removes the last hand-rolled ``time.monotonic() +
-        timeout`` deadline in this file — and with it the off-by-one every one of
-        them shared: the budget check sat *after* the probe, so the loop slept a
-        whole ``atlas_poll_interval_seconds`` past its stated timeout before
-        noticing. ``attempt.is_last`` makes that decision before the sleep.
+        :func:`~application_sdk.testing.harness.waiting.poll_until` — the shared
+        primitive, reachable now that this method runs on the harness' own event
+        loop. Before child H it could not be: ``probe`` is a *synchronous*
+        callable a connector suite supplies, the primitive is async by
+        construction (decision D1), and reaching it from a synchronous method
+        would have meant either blocking the bridge's loop inside a
+        suite-supplied write or offloading it to a thread. Moving the sync
+        boundary up to :meth:`seed_connection` removed the choice: the probe is
+        called on the loop the wait already owns, and nothing else is scheduled
+        on it.
 
-        Not :func:`~application_sdk.testing.harness.waiting.poll_until`, for one
-        reason: ``probe`` is a *synchronous* callable a connector suite supplies,
-        and the primitive is async by construction (decision D1). Reaching it
-        from here would mean either blocking the bridge's loop inside a
-        suite-supplied write or offloading it to a thread — both workarounds
-        built to be deleted when child H moves the sync boundary up to this
-        class's public methods. Its three sibling loops in this file take the
-        same shape for the same reason.
+        A refused write is a *reading*, not a probe error — the same shape
+        :func:`~application_sdk.testing.harness.preconditions.check_worker_health`
+        uses, and for the same reason: "not permitted yet" is the expected answer
+        here until the connection's policies go live, so spending a
+        transient-failure streak on it would end the wait long before it could
+        succeed.
 
         Args:
             probe: The representative child write. Its return value is ignored;
-                only whether it raises matters.
+                only whether it raises matters. An ``async`` callable is awaited.
 
         Raises:
             Exception: Whatever *probe* last raised — immediately for a
-                non-transient error, or on the final attempt otherwise.
-                Propagated rather than swallowed: a suite whose seed never
-                became writable must fail, not run against a connection it
-                cannot populate.
+                non-transient error, or at the deadline otherwise. Propagated
+                rather than swallowed: a suite whose seed never became writable
+                must fail, not run against a connection it cannot populate.
         """
-        for attempt in until_deadline(
-            self.atlas_poll_timeout_seconds,
-            self.atlas_poll_interval_seconds,
-            label=f"a permitted child write under {self.connection_qualified_name}",
-            # The per-attempt line below already reports progress; a generic
-            # "still waiting" heartbeat would duplicate it.
-            heartbeat_seconds=0,
-        ):
+        qualified_name = self.connection_qualified_name
+
+        async def _attempt() -> _SeedProbeReading:
             try:
-                probe()
-            except Exception as exc:
-                if isinstance(exc, self._PROBE_NON_TRANSIENT_ERRORS):
-                    # A deterministic probe bug (a TypeError from a wrong
-                    # call signature, a config ValueError) will fail every
-                    # retry identically — burning the whole timeout before
-                    # surfacing. Re-raise immediately instead.
-                    logger.error(
-                        "e2e seed: probe write under %s raised %s, a "
-                        "non-transient error — failing fast rather than "
-                        "retrying until the %ds timeout",
-                        self.connection_qualified_name,
-                        type(exc).__name__,
-                        self.atlas_poll_timeout_seconds,
-                        exc_info=True,
-                    )
-                    raise
-                if attempt.is_last:
-                    logger.error(
-                        "e2e seed: probe write under %s still failing after "
-                        "%d attempt(s) / %ds — a fresh connection 403s child "
-                        "writes until its access policies go live, so this "
-                        "means provisioning never completed",
-                        self.connection_qualified_name,
-                        attempt.number,
-                        self.atlas_poll_timeout_seconds,
-                        exc_info=True,
-                    )
-                    raise
-                # conformance: ignore[L006] one line per poll of an atlas_poll_interval_seconds loop (30s by default), not a hot loop; a seed that never becomes writable is diagnosed from how many attempts were refused and for how long
-                logger.info(
-                    "e2e seed: probe write under %s not yet permitted "
-                    "(attempt %d) — connection policies not live; retrying",
-                    self.connection_qualified_name,
-                    attempt.number,
+                result = probe()
+                if isinstance(result, Awaitable):
+                    await result
+            except self._PROBE_NON_TRANSIENT_ERRORS:
+                # A deterministic probe bug (a TypeError from a wrong call
+                # signature, a config ValueError) will fail every retry
+                # identically — burning the whole timeout before surfacing.
+                # Raising here leaves the wait unclassified, so it propagates.
+                logger.error(
+                    "e2e seed: probe write under %s raised a non-transient "
+                    "error — failing fast rather than retrying until the %ds "
+                    "timeout",
+                    qualified_name,
+                    self.atlas_poll_timeout_seconds,
+                    exc_info=True,
                 )
-                continue
+                raise
+            # conformance: ignore[E004] the probe is a suite-supplied write and can raise anything; narrowing it would let one connector's exception type escape the retry the loop exists to perform
+            except Exception as error:
+                # conformance: ignore[E007] the refusal IS the reading — carried out as _SeedProbeReading(error=...) and re-raised by the caller when the wait never settles, so nothing is hidden; a fresh connection 403s child writes until its policies are live, which is the normal case here
+                return _SeedProbeReading(error=error)
+            return _SeedProbeReading()
+
+        outcome = await poll_until(
+            _attempt,
+            settled=lambda reading: reading.permitted,
+            budget=self._seed_probe_budget(),
+            label=f"a permitted child write under {qualified_name}",
+        )
+        if isinstance(outcome, Settled):
             logger.info(
-                "e2e seed: probe write under %s succeeded after %d "
-                "attempt(s) — connection policies are live",
-                self.connection_qualified_name,
-                attempt.number,
+                "e2e seed: probe write under %s succeeded after %d attempt(s) — "
+                "connection policies are live",
+                qualified_name,
+                outcome.attempts,
             )
             return
+        last = getattr(outcome, "last", None)
+        logger.error(
+            "e2e seed: probe write under %s still failing after %d attempt(s) / "
+            "%ds — a fresh connection 403s child writes until its access "
+            "policies go live, so this means provisioning never completed",
+            qualified_name,
+            outcome.attempts,
+            self.atlas_poll_timeout_seconds,
+        )
+        if last is not None and last.error is not None:
+            raise last.error
+        # No reading at all: the wait could not even run the probe, which
+        # ``poll_until`` reports as Indeterminate carrying the cause.
+        cause = getattr(outcome, "cause", None)
+        raise SeededConnectionNotSearchableError(
+            message=(
+                f"The seed probe under {qualified_name} never ran to a verdict "
+                f"({type(outcome).__name__}), so whether the connection's "
+                "policies went live is unknown."
+            ),
+            resource=qualified_name,
+            actual_state="seed probe reached no verdict",
+            cause=cause,
+        )
 
     # ------------------------------------------------------------------
     # Subclass hooks — override these
@@ -1693,54 +2080,75 @@ class BaseE2ETest:
             seed_dag, app_name=self.connector_short_name
         )
 
-    def _bootstrap_workflow(self) -> str:
-        """Ensure an AE workflow exists with a published version.
+    def _build_seed_dag(self) -> dict[str, Any]:
+        """Build this run's seed DAG and record what it says about each node.
 
-        Returns the slug to use for the subsequent submit.
+        Returns:
+            The graph to publish as the workflow's seed version — the manifest's
+            own ``dag`` when the suite ships one, else the hand-crafted fallback.
+
+        Raises:
+            HarnessMethodNotImplementedError: ``manifest_path`` is empty and the
+                suite is not a SQL connector (the only one with a legacy
+                fallback).
         """
-        if self.ae_workflow_slug:
-            logger.info(
-                "Using pre-existing AE workflow slug: %s", self.ae_workflow_slug
-            )
-            return self.ae_workflow_slug
-
-        name = (
-            self.ae_workflow_name_override
-            or f"{self.connector_short_name}-{self.connection_name_prefix}-{self.run_id}"
-        )
-        slug = self.client.create_workflow(
-            name=name,
-            description=f"Full-DAG e2e harness — {self.connector_short_name}",
-        )
-        logger.info("Created (or reused) AE workflow: name=%s slug=%s", name, slug)
-        # AE has a brief indexing window before a fresh slug is queryable by
-        # /versions. This used to be an unconditional ``time.sleep(3)``, which is
-        # wrong in both directions — it charged every run three seconds it
-        # usually did not need, and was no help at all on the run where indexing
-        # took four. Now a real readiness read, advisory rather than a gate:
-        # ``create_version`` retries on 404 for exactly this reason, and that
-        # retry is what makes the sequence safe either way.
-        self.client.wait_for_slug(slug)
-
         extract_queue = self._extract_task_queue()
-
         if self.manifest_path:
             seed_dag = self._seed_dag_from_manifest(extract_queue)
         else:
             logger.info("manifest_path empty — falling back to _build_legacy_seed_dag")
             seed_dag = self._build_legacy_seed_dag(extract_queue)
-
         self._capture_node_dispatch(seed_dag)
         self._capture_expected_node_identities(seed_dag)
+        return seed_dag
 
-        version = self.client.create_version(
-            slug,
-            {"version": int(time.time()), "dag": seed_dag},
+    def _ae_workflow_spec(self) -> AEWorkflowSpec:
+        """Describe the AE workflow this run seeds and submits against.
+
+        The connector policy, as one value the shared starter takes: what to
+        call the workflow, what graph to seed it with, and — for a suite pointed
+        at a workflow someone else maintains — which existing slug to submit
+        against instead, in which case nothing is seeded over it.
+
+        Returns:
+            The spec. :attr:`~application_sdk.testing.harness.starters.AEWorkflowSpec.payload`
+            is deliberately left empty: the submit body carries the slug
+            (``metadata.ae_workflow_slug``), and AE mints that slug on the
+            create, so the payload cannot exist until the publish has answered.
+            That is why this run publishes through
+            :func:`~application_sdk.testing.harness.starters.publish_seed_version`
+            and submits separately, rather than through the all-in-one
+            ``start_via_automation_engine``.
+        """
+        return AEWorkflowSpec(
+            name=(
+                self.ae_workflow_name_override
+                or f"{self.connector_short_name}-{self.connection_name_prefix}-{self.run_id}"
+            ),
+            description=f"Full-DAG e2e harness — {self.connector_short_name}",
+            slug=self.ae_workflow_slug,
+            seed_dag=self._build_seed_dag() if not self.ae_workflow_slug else {},
         )
-        logger.info("Created seed version %d under slug %s", version, slug)
-        self.client.publish_version(slug, version)
-        self._seed_version = version
-        return slug
+
+    async def _bootstrap_workflow(self) -> str:
+        """Ensure an AE workflow exists with a published version.
+
+        Three of the four AE writes, and none of them lives here any more: the
+        create, the slug-index read and the create-then-publish pair are
+        :func:`~application_sdk.testing.harness.starters.publish_seed_version`.
+        What this method still owns is the *policy* — the workflow's name, the
+        seed graph, and whether to reuse a slug the suite pinned.
+
+        Returns:
+            The slug to submit against. The seed version this published, if any,
+            lands on ``self._seed_version``, where the deployed-manifest check
+            reads it.
+        """
+        seeded = await publish_seed_version(
+            self._ae_workflow_spec(), client=self._ae, minter=self._minter
+        )
+        self._seed_version = seeded.seed_version
+        return seeded.slug
 
     # ------------------------------------------------------------------
     # Failure diagnostics
@@ -1906,9 +2314,13 @@ class BaseE2ETest:
         """Re-size ``submit_workflow``'s retry to the tenant-app cold-start budget.
 
         Thin binding of this harness' ``app_ready_*`` class attrs onto
-        :func:`~application_sdk.testing.e2e.client.cold_start_submit_kwargs`,
+        :func:`~application_sdk.testing.harness.automation_engine.cold_start_submit_kwargs`,
         which carries the rationale and the validation. See
         ``app_ready_timeout_seconds`` for the budget rationale.
+
+        Returns:
+            The ``retries`` / ``retry_sleep_seconds`` pair, or an empty mapping
+            when the cold-start budget is disabled.
 
         Raises:
             MissingHarnessClassAttrError: when ``app_ready_timeout_seconds`` is
@@ -1919,11 +2331,34 @@ class BaseE2ETest:
             self.app_ready_poll_interval_seconds,
         )
 
+    def _submit_retry(self) -> SubmitRetry | None:
+        """The same sizing as a typed value, for the submit call.
+
+        Returns:
+            The retry sizing, or ``None`` to leave ``submit_workflow``'s own
+            defaults in place. Derived through
+            :meth:`SubmitRetry.for_cold_start
+            <application_sdk.testing.harness.starters.SubmitRetry.for_cold_start>`,
+            which calls the same arithmetic
+            :meth:`_submit_retry_kwargs` returns — one derivation, two
+            spellings, and the mapping stays because connector suites assert on
+            it.
+
+        Raises:
+            MissingHarnessClassAttrError: See :meth:`_submit_retry_kwargs`.
+        """
+        return SubmitRetry.for_cold_start(
+            timeout_seconds=self.app_ready_timeout_seconds,
+            poll_interval_seconds=self.app_ready_poll_interval_seconds,
+        )
+
     # ------------------------------------------------------------------
     # Deployed-manifest identity check
     # ------------------------------------------------------------------
 
-    def _read_superseding_published_version(self, slug: str) -> PublishedVersion | None:
+    async def _read_superseding_published_version(
+        self, slug: str
+    ) -> PublishedVersion | None:
         """Wait briefly for AE to serve a published version past the seed.
 
         Args:
@@ -1940,19 +2375,24 @@ class BaseE2ETest:
         # blip after a good read must not make the diagnostic claim AE was never
         # readable, which is a different (and wronger) thing to tell an operator.
         published: PublishedVersion | None = None
-        for attempt in until_deadline(
-            self.deployed_manifest_timeout_seconds,
-            self.deployed_manifest_poll_interval_seconds,
-            label=f"the DAG AE published for slug {slug}",
-            heartbeat_seconds=0,
-        ):
-            read = self.client.get_published_version(slug)
+
+        async def _read() -> PublishedVersion | None:
+            nonlocal published
+            read = await self._ae.get_published_version(slug)
             if read is not None:
                 published = read
-                if read.dag and _supersedes(read.version, seed):
-                    return read
-            if attempt.is_last:
-                break
+            return read
+
+        outcome = await poll_until(
+            _read,
+            settled=lambda read: read is not None
+            and bool(read.dag)
+            and _supersedes(read.version, seed),
+            budget=self._deployed_manifest_budget(),
+            label=f"the DAG AE published for slug {slug}",
+        )
+        if isinstance(outcome, Settled) and outcome.value is not None:
+            return outcome.value
         if published is None:
             # get_published_version already logged why each read failed.
             logger.warning(
@@ -1979,19 +2419,22 @@ class BaseE2ETest:
         )
         return None
 
-    def _assert_deployed_manifest_matches(self, slug: str) -> None:
+    async def _assert_deployed_manifest_matches(self, slug: str) -> None:
         """Assert the DAG AE published is the DAG this repo's manifest declares.
 
         Runs immediately after submit and before the poll loop. Post-submit is
         the one thing lost versus the preflight this replaces (which AE does not
         offer — see
-        :meth:`~application_sdk.testing.e2e.client.AEWorkflowClient.get_published_version`),
+        :meth:`~application_sdk.testing.harness.automation_engine.AEClient.get_published_version`),
         but it still fails within seconds of submit and long before any
         assertion, with a node-level diff instead of a confusing downstream
         failure.
 
         Compares node identity, not the DAG blob: template variables are
         substituted at submit, so a byte comparison would fail on every run.
+
+        Args:
+            slug: The AE workflow slug the harness submitted against.
 
         Raises:
             DeployedManifestMismatchError: The read got through, AE's published
@@ -2013,7 +2456,7 @@ class BaseE2ETest:
                 slug,
             )
             return
-        published = self._read_superseding_published_version(slug)
+        published = await self._read_superseding_published_version(slug)
         if published is None:
             return
         actual = node_identities(published.dag, app_name=self.connector_short_name)
@@ -2049,8 +2492,29 @@ class BaseE2ETest:
         )
 
     def run_full_dag(self) -> FullDAGOutcome:
-        """Submit, poll AE, poll Atlas, return the combined outcome."""
-        slug = self._bootstrap_workflow()
+        """Submit, poll AE, poll Atlas, return the combined outcome.
+
+        Returns:
+            What the run produced. Subclasses build their own assertions on it —
+            see :meth:`_assert_full_dag_outcome` for the default ladder.
+        """
+        return run_sync(self._run_full_dag_async())
+
+    async def _run_full_dag_async(self) -> FullDAGOutcome:
+        """Seed, submit, poll, then read Atlas.
+
+        Returns:
+            The combined outcome.
+
+        Raises:
+            DAGProgressStalledError: The progress watchdog closed on a wedged
+                node. Re-raised with the per-node breakdown attached.
+            NoWorkerOnTaskQueueError: Nothing picked the extract node up inside
+                the stall grace. When a Temporal address is configured, the
+                message carries who *is* polling the queue rather than only the
+                inference.
+        """
+        slug = await self._bootstrap_workflow()
         payload = self._build_ae_payload(slug)
 
         # Override-proof app-entrypoint injection. Per-app subclasses commonly
@@ -2070,21 +2534,66 @@ class BaseE2ETest:
             self.mode.value,
             self.connection_qualified_name,
         )
-        # slug= lets an ambiguous submit timeout be resolved by reading AE's own
-        # run list under this slug instead of failing the leg outright.
-        run_id = self.client.submit_workflow(
-            payload, slug=slug, **self._submit_retry_kwargs()
-        )
+        run_id = await self._submit(payload, slug=slug)
         logger.info("AE submit returned run_id=%s", run_id)
 
         # Before the poll: submit is what makes Heracles fetch the tenant pod's
         # manifest and publish it over our seed, so this is the earliest point
         # the executed graph is knowable — and still seconds in, long before any
         # assertion could pass against the wrong app.
-        self._assert_deployed_manifest_matches(slug)
+        await self._assert_deployed_manifest_matches(slug)
 
+        ae_result = await self._poll_dag(run_id)
+
+        # Log-only, outcome-neutral. Placed after the poll so Elasticsearch
+        # indexing lag cannot masquerade as an absence. See
+        # probe_run_is_listed — this is what settles FND-676's gate.
+        await self._ae.probe_run_is_listed(slug, run_id)
+
+        return await self._read_atlas(ae_result)
+
+    async def _submit(self, payload: dict[str, Any], *, slug: str) -> str:
+        """POST the run to AE, with the tenant-app cold-start budget applied.
+
+        Args:
+            payload: The submit body.
+            slug: The AE slug the run belongs to. Passed on so an ambiguous
+                submit timeout can be resolved by reading AE's own run list
+                under this slug instead of failing the leg outright.
+
+        Returns:
+            AE's run id.
+        """
+        retry = self._submit_retry()
+        if retry is None:
+            return await self._ae.submit_workflow(payload, slug=slug)
+        return await self._ae.submit_workflow(
+            payload,
+            slug=slug,
+            retries=retry.retries,
+            retry_sleep_seconds=retry.sleep_seconds,
+        )
+
+    async def _poll_dag(self, run_id: str) -> DAGRunResult:
+        """Poll ``native-status`` until the DAG settles, with this suite's guards.
+
+        Args:
+            run_id: AE's run id.
+
+        Returns:
+            The final (or last-observed) DAG snapshot.
+
+        Raises:
+            DAGProgressStalledError: Re-raised carrying the per-node breakdown.
+                The watchdog is the exit that fires first on any suite whose
+                ceiling is at or below 1800s — i.e. the FND-708 shape reaches
+                the operator here, not through the ceiling return — and raising
+                it bare skipped the per-node diagnosis entirely.
+            NoWorkerOnTaskQueueError: Re-raised carrying the observed pollers,
+                when a Temporal address is configured.
+        """
         try:
-            ae_result = self.client.poll_native_status(
+            return await self._ae.poll_native_status(
                 run_id,
                 interval_seconds=self.ae_poll_interval_seconds,
                 timeout_seconds=self.ae_poll_timeout_seconds,
@@ -2093,11 +2602,6 @@ class BaseE2ETest:
                 progress_stall_seconds=self._resolved_progress_stall_seconds(),
             )
         except DAGProgressStalledError as stalled:
-            # The watchdog is the exit that fires first on any suite whose
-            # ceiling is at or below 1800s — i.e. the FND-708 shape reaches the
-            # operator here, not through the ceiling return. Raising it bare
-            # skipped the per-node diagnosis entirely, so re-raise the same
-            # typed error with the breakdown the ceiling path already prints.
             if stalled.result is None:
                 raise
             raise DAGProgressStalledError(
@@ -2113,16 +2617,126 @@ class BaseE2ETest:
                 # envelope, not only in the traceback.
                 cause=stalled,
             ) from stalled
+        except NoWorkerOnTaskQueueError as unpolled:
+            observed = await self._observed_pollers()
+            if observed is None:
+                raise
+            # The same error, carrying what was observed — not a new one wrapping
+            # it. Two reasons, and the second is the one that matters: rebuilding
+            # the leaf would put Temporal's answer and the stall grace's
+            # *inference* into one message with nothing to tell a reader which
+            # half was measured; and a caller matching on this leaf is entitled
+            # to the identity it caught. The field is the machine-readable half,
+            # the note is what a red CI leg actually prints.
+            unpolled.observed_pollers = observed
+            unpolled.add_note(f"Temporal was asked directly: {observed}")
+            raise
 
-        # Log-only, outcome-neutral. Placed after the poll so Elasticsearch
-        # indexing lag cannot masquerade as an absence. See
-        # probe_run_is_listed — this is what settles FND-676's gate.
-        self.client.probe_run_is_listed(slug, run_id)
+    async def _observed_pollers(self) -> str | None:
+        """Read who is actually polling the extract queue, when that is possible.
 
-        asset_counts: dict[str, int] = {}
-        asset_qn_samples: dict[str, list[str]] = {}
-        total_assets = 0
-        lineage_present = False
+        The stall guard's verdict is an *inference*: nothing started inside the
+        grace, so probably nothing is polling. Temporal can answer the question
+        directly — see
+        :mod:`application_sdk.testing.harness.temporal` — and an empty poller
+        list is the observed form of the same finding, available on the first
+        probe rather than after three minutes of silence.
+
+        Opt-in, because the connector CI leg cannot reach a tenant's Temporal
+        frontend: the runner has no route into the tenant vcluster, which is the
+        same constraint that makes the AE submit the only tenant-facing probe of
+        the installed app pod. A suite that *does* have a route (a local cluster,
+        an in-cluster driver) sets :attr:`temporal_address` or exports
+        ``E2E_TEMPORAL_ADDRESS``, and gets the observation appended to the
+        inference rather than replacing it — the inference is still what fired.
+
+        Returns:
+            A line naming the pollers Temporal reports, or ``None`` when no
+            address is configured or the read itself failed. ``None`` leaves the
+            original diagnostic exactly as it was: a Temporal that cannot be
+            read must never turn a real finding into a harness error.
+        """
+        address = self._resolved_temporal_address()
+        if not address:
+            return None
+        queue = self._extract_task_queue()
+        namespace = self._resolved_temporal_namespace()
+        try:
+            from application_sdk.testing.harness.temporal import (  # noqa: PLC0415
+                TemporalServiceReader,
+                frontend_connection,
+            )
+
+            async def _connect() -> Any:
+                return await frontend_connection(address=address, namespace=namespace)
+
+            async with TemporalServiceReader(connect=_connect) as reader:
+                pollers = await reader.task_queue_pollers(queue, namespace=namespace)
+        except Exception:
+            logger.warning(
+                "could not read Temporal at %s for task queue %s, so the "
+                "no-worker diagnosis stays an inference from the stall grace",
+                address,
+                queue,
+                exc_info=True,
+            )
+            return None
+        if not pollers:
+            return (
+                f"Temporal confirms it: {queue!r} in namespace {namespace!r} has "
+                "NO pollers at all. Nothing is holding that queue, so the "
+                "agent_spec().agent_name and the deployed worker's queue do not "
+                "match (or the worker is not running)."
+            )
+        identities = ", ".join(
+            f"{poller.identity} ({poller.task_queue_type.value}"
+            + (f", build {poller.build_id}" if poller.build_id else "")
+            + ")"
+            for poller in pollers
+        )
+        return (
+            f"Temporal reports {len(pollers)} poller(s) on {queue!r} in namespace "
+            f"{namespace!r}: {identities}. Something IS holding that queue, so "
+            "the node was not picked up for another reason — read the child "
+            "workflow's history rather than hunting a queue-name mismatch."
+        )
+
+    def _resolved_temporal_address(self) -> str:
+        """Temporal frontend to read pollers from, or ``""`` to stay inferential.
+
+        Returns:
+            ``E2E_TEMPORAL_ADDRESS`` when the ambient environment sets it, else
+            the :attr:`temporal_address` class attribute. Blank is treated as
+            unset: an unset GitHub Actions env var arrives as an empty string.
+        """
+        return (
+            os.environ.get("E2E_TEMPORAL_ADDRESS", "").strip() or self.temporal_address
+        )
+
+    def _resolved_temporal_namespace(self) -> str:
+        """Temporal namespace the poller read is scoped to.
+
+        Returns:
+            ``E2E_TEMPORAL_NAMESPACE`` when set, else the
+            :attr:`temporal_namespace` class attribute.
+        """
+        return (
+            os.environ.get("E2E_TEMPORAL_NAMESPACE", "").strip()
+            or self.temporal_namespace
+        )
+
+    async def _read_atlas(self, ae_result: DAGRunResult) -> FullDAGOutcome:
+        """Read what the run landed in Atlas, and assemble the outcome.
+
+        Args:
+            ae_result: The DAG snapshot the poll returned.
+
+        Returns:
+            The combined outcome. Every Atlas reading is carried in *both*
+            shapes: the settled projection connector suites index, and the raw
+            reading the assertion ladder grades — so an unreadable search stays
+            distinguishable from a zero all the way to the verdict.
+        """
         if not self.expect_connection:
             # This entrypoint publishes no connection inventory, so every Atlas
             # probe below would assert against something it never produces. Skip
@@ -2137,103 +2751,9 @@ class BaseE2ETest:
                 "asset-count and lineage probes; the DAG outcome is the verdict",
                 type(self).__name__,
             )
-            connection_in_atlas = False
-        elif self._core_dag_ok(ae_result):
-            connection_in_atlas = self.client.poll_atlas_for_connection(
-                self.connection_qualified_name,
-                interval_seconds=self.atlas_poll_interval_seconds,
-                timeout_seconds=self.atlas_poll_timeout_seconds,
-            )
-            if connection_in_atlas:
-                # Probe the union of types referenced by floors, exact-count
-                # parity, AND location-depth checks, so all three kinds of
-                # expectation get real Atlas counts and the post-loop location
-                # sample reads populated data once those types have indexed.
-                # NOTE: adding a location type here does NOT by itself make the
-                # poll WAIT for that type — the loop only stays alive via a
-                # per-type floor or the non-empty backstop (total == 0), so a
-                # location-only type with no floor can still be zero when the
-                # loop exits (the moment any other type makes total > 0). The
-                # real wait-for-this-type safeguard is pairing each
-                # expected_asset_qn_depth type with an expected_min_asset_counts
-                # floor — see that attr's docstring.
-                probe_types = tuple(
-                    {
-                        *self.expected_min_asset_counts,
-                        *self.expected_exact_counts,
-                        *self.expected_asset_qn_depth,
-                    }
-                )
-                if probe_types:
-                    # Poll for asset counts — Elasticsearch is eventually
-                    # consistent but assets appear within seconds if publish
-                    # succeeded. Use a short dedicated timeout rather than the
-                    # full atlas_poll_timeout_seconds used for the connection.
-                    for _attempt in until_deadline(
-                        self.atlas_asset_poll_timeout_seconds,
-                        self.atlas_asset_poll_interval_seconds,
-                        label=f"Atlas asset counts under {self.connection_qualified_name}",
-                        # The per-poll inventory line below already reports
-                        # progress every iteration; a heartbeat would duplicate it.
-                        heartbeat_seconds=0,
-                    ):
-                        asset_counts = self.client.count_assets_under_connection(
-                            self.connection_qualified_name,
-                            type_names=probe_types,
-                        )
-                        # conformance: ignore[L006] short, bounded poll (atlas_asset_poll_timeout_seconds) with modest iteration count, not a hot loop; the per-iteration asset counts are the primary diagnostic signal when an E2E run fails to converge
-                        logger.info(
-                            "Atlas inventory under %s: %s",
-                            self.connection_qualified_name,
-                            asset_counts,
-                        )
-                        # Single source of truth: the polling exit reuses the
-                        # same evaluator as the final assertion, so the two can
-                        # never drift to different definitions of "met".
-                        met = not self._evaluate_asset_expectations(asset_counts)
-                        # Floors/non-empty can exit as soon as they're satisfied.
-                        # Exact-count parity must NOT: ES indexing is eventually
-                        # consistent, so a transient match could end polling
-                        # before late-arriving over-extracted assets land. Keep
-                        # polling to the deadline so over-extraction surfaces —
-                        # `until_deadline` ends the loop on its own last attempt.
-                        if met and not self.expected_exact_counts:
-                            break
-                # True total across ALL asset types (not just the probed ones).
-                # The non-empty backstop uses this so it also protects connectors
-                # that declare no per-type expectations — precisely the ones most
-                # likely to silently regress to a zero-asset run.
-                total_assets = self.client.count_total_assets_under_connection(
-                    self.connection_qualified_name
-                )
-                if self.expect_lineage:
-                    lineage_counts = self.client.count_lineage_under_connection(
-                        self.connection_qualified_name,
-                        type_names=probe_types,
-                    )
-                    lineage_present = any(c > 0 for c in lineage_counts.values())
-                    logger.info(
-                        "Lineage inventory under %s: %s lineage_present=%s",
-                        self.connection_qualified_name,
-                        lineage_counts,
-                        lineage_present,
-                    )
-                # Sample qualifiedNames for the location/hierarchy assertion
-                # (opt-in). Only the declared types are probed, so connectors
-                # that don't set expected_asset_qn_depth pay no extra Atlas call.
-                if self.expected_asset_qn_depth:
-                    asset_qn_samples = (
-                        self.client.sample_asset_qualified_names_under_connection(
-                            self.connection_qualified_name,
-                            type_names=tuple(self.expected_asset_qn_depth),
-                        )
-                    )
-                    logger.info(
-                        "Atlas qualifiedName samples under %s: %s",
-                        self.connection_qualified_name,
-                        asset_qn_samples,
-                    )
-        else:
+            return self._outcome(ae_result, connection_in_atlas=False)
+
+        if not self._core_dag_ok(ae_result):
             # Deliberately not "failed: <names>": a Pending node at the poll
             # ceiling never ran, and calling that a failure sent the reader
             # looking for a bug in code that was never dispatched.
@@ -2244,16 +2764,235 @@ class BaseE2ETest:
                 self._dag_outcome_headline(ae_result),
                 self._describe_dag_nodes(ae_result),
             )
-            connection_in_atlas = False
+            return self._outcome(ae_result, connection_in_atlas=False)
 
+        async with self._atlas_client() as client:
+            found = await atlas.poll_for_connection(
+                client,
+                self.connection_qualified_name,
+                budget=self._atlas_connection_budget(),
+            )
+            connection_in_atlas = isinstance(found, Settled) and found.value
+            if not connection_in_atlas:
+                # The verdict goes with it. Flattening to False here is what made
+                # an unreadable Atlas report as "the Connection just did not
+                # land" — a claim about the publish path, made by a run that
+                # never got an answer.
+                return self._outcome(
+                    ae_result, connection_in_atlas=False, connection_read=found
+                )
+            return await self._read_inventory(client, ae_result, connection_read=found)
+
+    async def _read_inventory(
+        self,
+        client: AsyncAtlanClient,
+        ae_result: DAGRunResult,
+        *,
+        connection_read: Outcome[bool] | None = None,
+    ) -> FullDAGOutcome:
+        """Read counts, the all-types total, lineage and location samples.
+
+        Args:
+            client: The already-open Atlas client the connection poll used.
+            ae_result: The DAG snapshot, carried onto the outcome.
+            connection_read: The Connection poll's verdict, carried through.
+
+        Returns:
+            The outcome with every Atlas reading attached.
+        """
+        # Probe the union of types referenced by floors, exact-count parity,
+        # AND location-depth checks, so all three kinds of expectation get real
+        # Atlas counts and the post-loop location sample reads populated data
+        # once those types have indexed.
+        #
+        # NOTE: adding a location type here does NOT by itself make the poll
+        # WAIT for that type — the loop only stays alive via a per-type floor or
+        # the non-empty backstop (total == 0), so a location-only type with no
+        # floor can still be zero when the loop exits (the moment any other type
+        # makes total > 0). The real wait-for-this-type safeguard is pairing each
+        # expected_asset_qn_depth type with an expected_min_asset_counts floor —
+        # see that attr's docstring.
+        probe_types = tuple(
+            {
+                *self.expected_min_asset_counts,
+                *self.expected_exact_counts,
+                *self.expected_asset_qn_depth,
+            }
+        )
+        count_reads: Mapping[str, CountRead] = {}
+        if probe_types:
+            count_reads = await self._poll_asset_counts(client, probe_types)
+
+        # True total across ALL asset types (not just the probed ones). The
+        # non-empty backstop uses this so it also protects connectors that
+        # declare no per-type expectations — precisely the ones most likely to
+        # silently regress to a zero-asset run.
+        total_read = as_count(
+            await atlas.count_total_assets(client, self.connection_qualified_name)
+        )
+
+        # Three answers, not two. ``expect_lineage`` is graded on "at least one
+        # Process exists", so an unreadable count folded into False fails the run
+        # with "no lineage rows reached Atlas" — the connector's fault, asserted
+        # by a run that never looked. It is the same C4 shape as the counts, and
+        # it gets the same treatment: a settled zero stays an assertion failure,
+        # an unreadable read is ungraded.
+        lineage_read: bool | Unreadable | None = None
+        if self.expect_lineage:
+            lineage = await atlas.count_lineage(
+                client, self.connection_qualified_name, probe_types
+            )
+            if isinstance(lineage, Settled):
+                lineage_read = any(count > 0 for count in lineage.value.values())
+                logger.info(
+                    "Lineage inventory under %s: %s lineage_present=%s",
+                    self.connection_qualified_name,
+                    dict(lineage.value),
+                    lineage_read,
+                )
+            else:
+                lineage_read = Unreadable(cause=lineage.cause)
+                logger.warning(
+                    "Lineage counts under %s could not be read, so the lineage "
+                    "assertion is not graded",
+                    self.connection_qualified_name,
+                    exc_info=lineage.cause,
+                )
+
+        # Sample qualifiedNames for the location/hierarchy assertion (opt-in).
+        # Only the declared types are probed, so connectors that don't set
+        # expected_asset_qn_depth pay no extra Atlas call.
+        sample_reads: Mapping[str, SampleRead] = {}
+        if self.expected_asset_qn_depth:
+            sample_reads = as_samples(
+                await atlas.sample_qualified_names(
+                    client,
+                    self.connection_qualified_name,
+                    tuple(self.expected_asset_qn_depth),
+                ),
+                tuple(self.expected_asset_qn_depth),
+            )
+            logger.info(
+                "Atlas qualifiedName samples under %s: %s",
+                self.connection_qualified_name,
+                dict(sample_reads),
+            )
+
+        return self._outcome(
+            ae_result,
+            connection_in_atlas=True,
+            connection_read=connection_read,
+            count_reads=count_reads,
+            total_read=total_read,
+            lineage_read=lineage_read,
+            sample_reads=sample_reads,
+        )
+
+    async def _poll_asset_counts(
+        self, client: AsyncAtlanClient, probe_types: tuple[str, ...]
+    ) -> Mapping[str, CountRead]:
+        """Poll per-type counts until the declared expectations are met.
+
+        Elasticsearch is eventually consistent but assets appear within seconds
+        if publish succeeded, so this uses the short dedicated budget rather than
+        the wide one the connection poll gets.
+
+        Args:
+            client: The open Atlas client.
+            probe_types: Types to count.
+
+        Returns:
+            The last reading, per type — an
+            :class:`~application_sdk.testing.harness.expectations.Unreadable` for
+            a search that could not be read.
+        """
+        last: Mapping[str, CountRead] = dict.fromkeys(probe_types, 0)
+
+        async def _probe() -> Mapping[str, CountRead]:
+            nonlocal last
+            last = as_counts(
+                await atlas.count_assets(
+                    client, self.connection_qualified_name, probe_types
+                ),
+                probe_types,
+            )
+            # conformance: ignore[L006] short, bounded poll (atlas_asset_poll_timeout_seconds) with modest iteration count, not a hot loop; the per-iteration asset counts are the primary diagnostic signal when an E2E run fails to converge
+            logger.info(
+                "Atlas inventory under %s: %s",
+                self.connection_qualified_name,
+                dict(last),
+            )
+            return last
+
+        def _met(counts: Mapping[str, CountRead]) -> bool:
+            # Single source of truth: the polling exit reuses the same evaluator
+            # as the final assertion, so the two can never drift to different
+            # definitions of "met". Floors and the non-empty backstop can exit as
+            # soon as they're satisfied; exact-count parity must NOT, because ES
+            # indexing is eventually consistent and a transient match could end
+            # polling before late-arriving over-extracted assets land. Keeping
+            # the loop alive to the deadline is what surfaces over-extraction.
+            if self.expected_exact_counts:
+                return False
+            return not self._asset_findings(counts)
+
+        await poll_until(
+            _probe,
+            settled=_met,
+            budget=self._atlas_counts_budget(),
+            label=f"Atlas asset counts under {self.connection_qualified_name}",
+        )
+        return last
+
+    def _outcome(
+        self,
+        ae_result: DAGRunResult,
+        *,
+        connection_in_atlas: bool,
+        connection_read: Outcome[bool] | None = None,
+        count_reads: Mapping[str, CountRead] | None = None,
+        total_read: CountRead | None = None,
+        lineage_read: bool | Unreadable | None = None,
+        sample_reads: Mapping[str, SampleRead] | None = None,
+    ) -> FullDAGOutcome:
+        """Assemble the outcome, projecting each reading into its settled half.
+
+        Args:
+            ae_result: The DAG snapshot.
+            connection_in_atlas: Whether the Connection was observed.
+            connection_read: The Connection poll's verdict, when it ran.
+            count_reads: Per-type counts as read.
+            total_read: All-types total as read.
+            lineage_read: Whether any lineage asset was observed, or the fact
+                that the count could not be read.
+            sample_reads: Sampled qualified names as read.
+
+        Returns:
+            The outcome. Every reading is carried in both shapes: the settled
+            projection a connector suite indexes, and the reading the assertion
+            ladder grades.
+        """
+        counts = dict(count_reads or {})
+        samples = dict(sample_reads or {})
         return FullDAGOutcome(
             ae_result=ae_result,
             connection_qualified_name=self.connection_qualified_name,
             connection_in_atlas=connection_in_atlas,
-            asset_counts=asset_counts,
-            total_assets=total_assets,
-            lineage_present=lineage_present,
-            asset_qn_samples=asset_qn_samples,
+            asset_counts={
+                name: value for name, value in counts.items() if isinstance(value, int)
+            },
+            total_assets=total_read if isinstance(total_read, int) else 0,
+            lineage_present=lineage_read is True,
+            connection_read=connection_read,
+            lineage_read=lineage_read,
+            asset_qn_samples={
+                name: list(value)
+                for name, value in samples.items()
+                if not isinstance(value, Unreadable)
+            },
+            asset_count_reads=counts,
+            total_asset_read=total_read,
+            asset_qn_reads=samples,
             connection_expected=self.expect_connection,
         )
 
@@ -2261,14 +3000,78 @@ class BaseE2ETest:
     # Asset-output expectations (floors + exact parity + non-empty)
     # ------------------------------------------------------------------
 
+    def _asset_expectations(self) -> AssetExpectations:
+        """This suite's declarations, as the shared evaluators take them.
+
+        Returns:
+            The floors, exacts, depths and backstop this class declares. Turning
+            the ``ClassVar``\\s into a value is the whole of what generalising
+            these two checks required — a composer that is not a subclass can
+            then grade the same expectations.
+        """
+        return AssetExpectations(
+            floors=dict(self.expected_min_asset_counts),
+            exacts=dict(self.expected_exact_counts),
+            depths=dict(self.expected_asset_qn_depth),
+            require_nonempty=self.require_nonempty_assets,
+            # getattr, because the count half of this is a pure function of the
+            # class attributes and is unit-tested on an instance that never ran
+            # setup_method. An empty prefix makes the location half a no-op,
+            # which is exactly what "there is no connection to measure depth
+            # from" should do.
+            connection_qualified_name=getattr(self, "connection_qualified_name", ""),
+        )
+
+    def _asset_findings(
+        self,
+        counts: Mapping[str, CountRead],
+        *,
+        total_assets: CountRead | None = None,
+    ) -> Sequence[Finding]:
+        """Grade the counts, keeping "could not read" apart from "read zero".
+
+        Args:
+            counts: Per-type counts as read.
+            total_assets: The all-types total as read, or ``None`` to fall back
+                to the sum of the per-type counts.
+
+        Returns:
+            One finding per unmet expectation. A finding whose
+            :attr:`~application_sdk.testing.harness.expectations.Finding.expectation`
+            is
+            :data:`~application_sdk.testing.harness.expectations.UNREADABLE` says
+            the check could not be graded — never that the connector regressed.
+        """
+        return evaluate_counts(
+            counts, self._asset_expectations(), total_assets=total_assets
+        )
+
+    def _location_findings(
+        self, samples: Mapping[str, SampleRead]
+    ) -> Sequence[Finding]:
+        """Grade the sampled qualified names against the declared depths.
+
+        Args:
+            samples: Sampled names per type, as read.
+
+        Returns:
+            One finding per sample that is not nested under the connection, or is
+            nested at the wrong depth.
+        """
+        return evaluate_locations(samples, self._asset_expectations())
+
     def _evaluate_asset_expectations(
-        self, asset_counts: dict[str, int], *, total_assets: int | None = None
+        self,
+        asset_counts: Mapping[str, CountRead],
+        *,
+        total_assets: CountRead | None = None,
     ) -> list[str]:
         """Evaluate per-type asset expectations against the Atlas counts.
 
-        Pure function of ``asset_counts`` + the class attrs, so it is
-        unit-testable without a tenant. Returns a list of human-readable
-        failure lines (empty list = all expectations met). Covers:
+        Kept on this class, with this name and this return type, because
+        connector suites call it. The logic itself is
+        :func:`~application_sdk.testing.harness.expectations.evaluate_counts`,
+        which is a pure function of its inputs and needs no tenant to test:
 
           * ``expected_min_asset_counts`` — floors (``>=``).
           * ``expected_exact_counts`` — exact parity (``==``) vs the
@@ -2276,95 +3079,66 @@ class BaseE2ETest:
           * ``require_nonempty_assets`` — a COMPLETED run that lands zero
             assets fails (the "completed but extracted nothing" backstop).
 
-        *total_assets* is the true count across ALL asset types (from
-        ``count_total_assets_under_connection``); when omitted it falls back to
-        ``sum(asset_counts.values())`` so unit tests can drive the pure logic.
-        The backstop uses it so it fires even for connectors that declare no
-        per-type expectations — the ones most likely to silently regress —
-        UNLESS the connector opts out (``require_nonempty_assets = False``) or
-        its declared expectations themselves assert zero (only non-positive
-        floors/exacts, e.g. "exactly 0 of X").
+        Args:
+            asset_counts: Per-type counts. Plain ints are the ordinary case; an
+                :class:`~application_sdk.testing.harness.expectations.Unreadable`
+                marks a type whose search could not be read, which produces a
+                finding saying the check went ungraded rather than one claiming
+                the count was low.
+            total_assets: The true count across ALL asset types (from
+                ``count_total_assets``). When omitted it falls back to
+                ``sum(asset_counts.values())`` so unit tests can drive the pure
+                logic. The backstop uses it so it fires even for connectors that
+                declare no per-type expectations — the ones most likely to
+                silently regress — UNLESS the connector opts out
+                (``require_nonempty_assets = False``) or its declared
+                expectations themselves assert zero.
+
+        Returns:
+            Human-readable failure lines, empty when every expectation was met.
         """
-        failures: list[str] = []
-
-        for type_name, floor in self.expected_min_asset_counts.items():
-            got = asset_counts.get(type_name, 0)
-            if got < floor:
-                failures.append(f"  - {type_name}: got {got}, expected >= {floor}")
-
-        for type_name, want in self.expected_exact_counts.items():
-            got = asset_counts.get(type_name, 0)
-            if got != want:
-                failures.append(
-                    f"  - {type_name}: got {got}, expected exactly {want} "
-                    f"(count parity vs. direct-run baseline)"
-                )
-
-        floors = self.expected_min_asset_counts
-        exacts = self.expected_exact_counts
-        has_positive_expectation = any(v > 0 for v in floors.values()) or any(
-            v > 0 for v in exacts.values()
-        )
-        # A connector whose only declared expectations are zero (e.g.
-        # exact {"X": 0}) is asserting "produces zero of X" — the backstop must
-        # not override that into a failure.
-        asserting_zero = bool(floors or exacts) and not has_positive_expectation
-        total = total_assets if total_assets is not None else sum(asset_counts.values())
-        if self.require_nonempty_assets and not asserting_zero and total == 0:
-            failures.append(
-                "  - run produced ZERO assets in Atlas (workflow completed but "
-                "extracted nothing)"
-            )
-
-        return failures
+        return [
+            _render_finding(finding)
+            for finding in self._asset_findings(asset_counts, total_assets=total_assets)
+        ]
 
     def _validate_asset_locations(
-        self, asset_qn_samples: dict[str, list[str]]
+        self, asset_qn_samples: Mapping[str, SampleRead]
     ) -> list[str]:
-        """Validate sampled assets are nested under the connection at the
-        expected hierarchy depth.
+        """Validate sampled assets sit under the connection at the declared depth.
 
-        Pure function of the samples + ``expected_asset_qn_depth`` + the
-        connection QN, so it is unit-testable without a tenant. For each
-        declared type, every sampled qualifiedName must (a) be nested under the
-        connection prefix and (b) have exactly the declared number of segments
-        below it — catching assets that landed at the wrong hierarchy level
-        (mis-parented / flattened / a dropped path segment) even when the COUNT
-        is correct. Types with no sampled assets are skipped: "too few / none"
-        is already covered by the count floors + the non-empty backstop, so this
-        check is purely about the *shape* of assets that did land.
+        Kept on this class for the reason :meth:`_evaluate_asset_expectations`
+        is; the logic is
+        :func:`~application_sdk.testing.harness.expectations.evaluate_locations`.
+        For each declared type, every sampled qualifiedName must (a) be nested
+        under the connection prefix and (b) have exactly the declared number of
+        path segments below it — catching a whole type that published to the
+        wrong hierarchy level (mis-parented / flattened / a dropped path-template
+        segment), which the counts alone can't see.
 
-        NOTE - fails open: the sampling read path
-        (``sample_asset_qualified_names_under_connection``) returns ``[]`` on any
-        search error, which lands here as "no samples -> skip". So an auth / API
-        fault degrades to a silent pass, not a failure. The ``run_full_dag``
-        "Atlas qualifiedName samples under ..." log line is how you confirm
-        samples were actually non-empty - which is why first-run validation
-        against a real tenant is required, not optional.
+        .. note::
+           This used to fail **open**. The sampling read returned ``[]`` on any
+           search error, a type with an empty sample is skipped, and so an auth
+           or API fault was graded as a pass. It cannot any more: an unreadable
+           sample arrives here as
+           :class:`~application_sdk.testing.harness.expectations.Unreadable` and
+           produces a finding of its own. That is finding C4 on FND-224, and the
+           fix is structural — "I could not read" no longer has the same
+           spelling as "nothing to check".
+
+        Args:
+            asset_qn_samples: Sampled qualified names per type, as read.
+
+        Returns:
+            Human-readable failure lines, empty when every sample was fine.
+            Types with no sampled assets are still skipped: "too few / none" is
+            the COUNT check's job, so this check is only about the *shape* of
+            assets that did land.
         """
-        failures: list[str] = []
-        prefix = f"{self.connection_qualified_name}/"
-        for type_name, depth in self.expected_asset_qn_depth.items():
-            for qn in asset_qn_samples.get(type_name, []):
-                if not qn.startswith(prefix):
-                    failures.append(
-                        f"  - {type_name} {qn!r} is not nested under the "
-                        f"connection {self.connection_qualified_name}"
-                    )
-                    continue
-                # rstrip a trailing "/" first: a QN that ends in "/" would
-                # otherwise split into an empty tail segment and over-count the
-                # depth by one. (Atlan QNs conventionally don't end in "/", so
-                # this is defensive.)
-                tail = qn[len(prefix) :].rstrip("/")
-                below = tail.split("/") if tail else []
-                if len(below) != depth:
-                    failures.append(
-                        f"  - {type_name} {qn!r} has {len(below)} segment(s) "
-                        f"below the connection, expected {depth} "
-                        "(wrong hierarchy level)"
-                    )
-        return failures
+        return [
+            _render_finding(finding)
+            for finding in self._location_findings(asset_qn_samples)
+        ]
 
     # ------------------------------------------------------------------
     # Worker-up-only tier (no source provisioned)
@@ -2385,48 +3159,78 @@ class BaseE2ETest:
 
         Raises:
             WorkerNotHealthyError: The worker never answered 2xx inside
-                ``worker_health_timeout_seconds``. Typed since FND-240, which
-                names the bare ``AssertionError`` this used to raise: the last
-                failure seen is now a *field* rather than a fragment of a
-                sentence, and a refused connection and a 503 point at different
-                halves of a deployment. It **is** an ``AssertionError`` as well,
-                so a connector suite's existing ``except AssertionError`` — a
-                clause this method's own docstring invited — still catches it.
+                ``worker_health_timeout_seconds``. The last failure seen is a
+                *field* rather than a fragment of a sentence, so a refused
+                connection and a 503 — which point at different halves of a
+                deployment — are told apart without parsing prose. It **is** an
+                ``AssertionError`` as well, so a connector suite's existing
+                ``except AssertionError`` still catches it.
+        """
+        run_sync(self._assert_worker_up_async())
+
+    def _worker_health_transport(self) -> httpx.AsyncBaseTransport | None:
+        """HTTP transport the worker-health probe runs on.
+
+        Returns:
+            ``None`` — the real network. Overridden by a suite that drives the
+            probe against a scripted transport, which is the seam
+            :func:`~application_sdk.testing.harness.preconditions.check_worker_health`
+            offers so the poll's own behaviour is exercised through a real
+            :class:`httpx.AsyncClient` rather than against a patched module
+            global.
+        """
+        return None
+
+    async def _assert_worker_up_async(self) -> None:
+        """Run the worker-health precondition and raise this package's leaf for it.
+
+        The probe is
+        :func:`~application_sdk.testing.harness.preconditions.check_worker_health`,
+        run through the same gate a composing suite uses — so the connector tier
+        and the runtime tier poll the same endpoint the same way and report the
+        same reading. What stays here is the *leaf*: a
+        ``WorkerNotHealthyError`` naming the URL, the attempts and the last
+        transport error is remediation advice a generic
+        ``PreconditionsFailedError`` carrying a label cannot give, and losing it
+        would be a behaviour change dressed as a lift.
+
+        Raises:
+            WorkerNotHealthyError: The endpoint never answered 2xx in budget.
         """
         url = os.environ.get("E2E_WORKER_HEALTH_URL", self.worker_health_url)
         logger.info("Worker-up-only tier: probing %s", url)
-        last_error = ""
-        for attempt in until_deadline(
-            self.worker_health_timeout_seconds,
-            self.worker_health_poll_interval_seconds,
-            label=f"{self.connector_short_name} worker health at {url}",
-        ):
-            try:
-                with urllib.request.urlopen(url, timeout=10) as resp:  # noqa: S310 — fixed health URL, not user input
-                    status = resp.status
-                if 200 <= status < 300:
-                    # conformance: ignore[L006] fires at most once per call — the immediately-following return exits the loop on first success; not per-iteration log volume
-                    logger.info("App worker healthy: %s -> HTTP %s", url, status)
-                    return
-                last_error = f"HTTP {status}"
-            except (urllib.error.URLError, OSError) as exc:
-                last_error = str(exc)
-            if attempt.is_last:
-                raise WorkerNotHealthyError(
-                    message=(
-                        f"App worker for {self.connector_short_name} did not "
-                        f"become healthy at {url} within "
-                        f"{self.worker_health_timeout_seconds}s "
-                        f"({attempt.number} attempts, {attempt.elapsed:.0f}s "
-                        f"elapsed; last: {last_error}). No source is "
-                        "provisioned, so this run only checks that the worker "
-                        "deploys and serves /server/health."
-                    ),
-                    url=url,
-                    attempts=attempt.number,
-                    elapsed_seconds=attempt.elapsed,
-                    last_error=last_error,
+        report = await run_preconditions(
+            [
+                check_worker_health(
+                    url,
+                    budget=self._worker_health_budget(),
+                    label=f"{self.connector_short_name} worker health at {url}",
+                    transport=self._worker_health_transport(),
                 )
+            ]
+        )
+        outcome = report.outcomes[0]
+        if isinstance(outcome, Settled):
+            logger.info("App worker healthy: %s -> %s", url, outcome.value)
+            return
+        last: HealthReading | None = getattr(outcome, "last", None)
+        last_error = str(last) if last is not None else ""
+        raise WorkerNotHealthyError(
+            message=(
+                f"App worker for {self.connector_short_name} did not "
+                f"become healthy at {url} within "
+                f"{self.worker_health_timeout_seconds}s "
+                f"({outcome.attempts} attempts, "
+                f"{outcome.elapsed.total_seconds():.0f}s elapsed; "
+                f"last: {last_error}). No source is provisioned, so this run "
+                "only checks that the worker deploys and serves /server/health."
+            ),
+            url=url,
+            attempts=outcome.attempts,
+            elapsed_seconds=outcome.elapsed.total_seconds(),
+            last_error=last_error,
+            cause=getattr(outcome, "cause", None),
+        )
 
     # ------------------------------------------------------------------
     # Default test method
@@ -2511,6 +3315,11 @@ class BaseE2ETest:
                 the evidence wrapper there has one body to guard; the sequence
                 and the messages are unchanged.
         """
+        # Ungraded before unmet, and before the Connection gate below. A poll
+        # that could not be read is not the Connection failing to land, and the
+        # gate cannot tell the two apart from a boolean.
+        self._raise_if_ungraded(self._unreadable_probe_findings(outcome))
+
         # The Connection clause only applies to an entrypoint that publishes
         # inventory. With expect_connection False the Atlas probes never ran, so
         # consulting connection_in_atlas here would fail every such run.
@@ -2551,9 +3360,25 @@ class BaseE2ETest:
             )
             return
 
-        asset_failures = self._evaluate_asset_expectations(
-            outcome.asset_counts, total_assets=outcome.total_assets
+        count_findings = self._asset_findings(
+            outcome.asset_count_reads or outcome.asset_counts,
+            total_assets=(
+                outcome.total_asset_read
+                if outcome.total_asset_read is not None
+                else outcome.total_assets
+            ),
         )
+        location_findings = self._location_findings(
+            outcome.asset_qn_reads or outcome.asset_qn_samples
+        )
+        # Ungraded before unmet, always. A finding that exists because a search
+        # could not be READ is not evidence about the connector, and reporting it
+        # as one is what sent an Atlas outage to the connector team as "the
+        # floors were not met". It is raised first, and as a leaf that is not an
+        # AssertionError, so pytest marks the leg an error rather than a failure.
+        self._raise_if_ungraded([*count_findings, *location_findings])
+
+        asset_failures = [_render_finding(finding) for finding in count_findings]
         if asset_failures:
             raise AssertionError(
                 "Atlas inventory under "
@@ -2562,7 +3387,7 @@ class BaseE2ETest:
                 + f"\nFull counts: {outcome.asset_counts}"
             )
 
-        location_failures = self._validate_asset_locations(outcome.asset_qn_samples)
+        location_failures = [_render_finding(finding) for finding in location_findings]
         if location_failures:
             raise AssertionError(
                 "Published assets are at the wrong location under "
@@ -2571,6 +3396,9 @@ class BaseE2ETest:
                 "wrong):\n" + "\n".join(location_failures)
             )
 
+        # `lineage_present` is False for both "no Process exists" and "never
+        # probed"; an unreadable read can no longer reach here, because
+        # _unreadable_probe_findings raised on it above.
         if self.expect_lineage and not outcome.lineage_present:
             raise AssertionError(
                 "No lineage Process/ColumnProcess assets found under "
@@ -2578,6 +3406,88 @@ class BaseE2ETest:
                 "lineage-app + lineage-publish nodes reported success but "
                 "no lineage rows reached Atlas."
             )
+
+    def _unreadable_probe_findings(self, outcome: FullDAGOutcome) -> Sequence[Finding]:
+        """Findings for the two probes whose verdict is not a per-type count.
+
+        The Connection poll and the lineage count are graded as booleans, so
+        neither has a place in :meth:`_asset_findings` — and both used to lose
+        the difference between "it is not there" and "I could not look".
+
+        Only :class:`~application_sdk.testing.harness.outcome.Indeterminate` is
+        ungraded here, which is narrower than "every non-settled verdict".
+        :class:`~application_sdk.testing.harness.outcome.NeverStarted` and
+        :class:`~application_sdk.testing.harness.outcome.Expired` on the
+        Connection poll mean the Connection never materialised inside the budget
+        — a real finding about the publish path, and one the existing
+        ``AssertionError`` states well. Widening the ungraded set to include them
+        would turn a genuine regression into "could not tell".
+
+        Args:
+            outcome: What the run produced.
+
+        Returns:
+            Zero, one or two findings carrying
+            :data:`~application_sdk.testing.harness.expectations.UNREADABLE`.
+        """
+        findings: list[Finding] = []
+        connection = outcome.connection_read
+        if isinstance(connection, Indeterminate):
+            findings.append(
+                Finding(
+                    subject="Connection",
+                    detail=(
+                        f"could not be read, so whether "
+                        f"{outcome.connection_qualified_name} landed was not "
+                        f"graded: {type(connection.cause).__name__}: "
+                        f"{connection.cause}"
+                    ),
+                    expectation=UNREADABLE,
+                )
+            )
+        lineage = outcome.lineage_read
+        if isinstance(lineage, Unreadable):
+            findings.append(
+                Finding(
+                    subject="lineage",
+                    detail=(
+                        "could not be read, so the lineage expectation was not "
+                        f"graded: {type(lineage.cause).__name__}: {lineage.cause}"
+                    ),
+                    expectation=UNREADABLE,
+                )
+            )
+        return findings
+
+    def _raise_if_ungraded(self, findings: Sequence[Finding]) -> None:
+        """Fail as a dependency fault when an expectation could not be graded.
+
+        Args:
+            findings: Every finding the two evaluators produced.
+
+        Raises:
+            AtlasReadIndeterminateError: At least one finding carries
+                :data:`~application_sdk.testing.harness.expectations.UNREADABLE`,
+                meaning the reading behind it was never taken. Deliberately not
+                an ``AssertionError``: the run has no observation to make a claim
+                about the connector with, and pytest reports an error rather than
+                a failure so the leg cannot be read as a regression.
+        """
+        ungraded = [
+            finding for finding in findings if finding.expectation == UNREADABLE
+        ]
+        if not ungraded:
+            return
+        raise AtlasReadIndeterminateError(
+            message=(
+                "Atlas could not be read under "
+                f"{self.connection_qualified_name}, so "
+                f"{len(ungraded)} expectation(s) went ungraded. This is not a "
+                "verdict on the connector — the run never saw what it landed:\n"
+                + "\n".join(_render_finding(finding) for finding in ungraded)
+            ),
+            checks=",".join(sorted({finding.subject for finding in ungraded})),
+        )
 
     # ------------------------------------------------------------------
     # Evidence

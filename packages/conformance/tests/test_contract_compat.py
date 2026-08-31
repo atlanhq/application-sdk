@@ -739,3 +739,63 @@ def test_b005_block_violation_fails_gate(tmp_path: Path) -> None:
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
     assert "B005" in result.stdout + result.stderr
+
+
+# ── B005: ledger identity is a BARE class name ───────────────────────────────
+# Two live false-positive families, both from the ledger keying fields by bare
+# class name. Findings from atlanhq/atlan-clickhouse-app (25 B005, all noise).
+
+_TWO_ENTRYPOINTS_SAME_NAME_A = """\
+from application_sdk.app import App
+
+class AppInputContract:
+    crawler_only: str = ""
+
+class CrawlerApp(App):
+    async def run(self, input: AppInputContract) -> None:
+        pass
+"""
+
+_TWO_ENTRYPOINTS_SAME_NAME_B = """\
+from application_sdk.app import App
+
+class AppInputContract:
+    miner_only: str = ""
+
+class MinerApp(App):
+    async def run(self, input: AppInputContract) -> None:
+        pass
+"""
+
+
+def test_b005_same_named_contracts_in_two_modules_silent(tmp_path: Path) -> None:
+    """An app whose crawler and miner entrypoints BOTH declare
+    `AppInputContract` gets one merged ledger bucket — the entry cannot be
+    attributed to either declaration, so a field living on the sibling was
+    not "removed". Live: 11 of clickhouse's 25 B005 findings."""
+    ledger = _make_ledger(
+        ContractField("AppInputContract", "crawler_only", "str", "active"),
+        ContractField("AppInputContract", "miner_only", "str", "active"),
+    )
+    findings = _scan(
+        tmp_path,
+        {
+            "crawler/_input.py": _TWO_ENTRYPOINTS_SAME_NAME_A,
+            "miner/_input.py": _TWO_ENTRYPOINTS_SAME_NAME_B,
+        },
+        ledger,
+    )
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_still_fires_when_the_name_is_unambiguous(tmp_path: Path) -> None:
+    """The narrowing is scoped to ambiguity: one declaration, one bucket, a
+    genuinely removed field still fires."""
+    ledger = _make_ledger(
+        ContractField("AppInputContract", "crawler_only", "str", "active"),
+        ContractField("AppInputContract", "gone", "str", "active"),
+    )
+    findings = _scan(
+        tmp_path, {"crawler/_input.py": _TWO_ENTRYPOINTS_SAME_NAME_A}, ledger
+    )
+    assert "B005" in _ids(findings)

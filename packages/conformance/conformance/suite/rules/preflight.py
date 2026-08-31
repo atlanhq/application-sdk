@@ -3,11 +3,12 @@
 The SDK injects a mandatory ``{app_name}:preflight`` activity as the first step
 of every extraction workflow; it runs the app's ``Handler.preflight_check`` and
 blocks the run on a ``NOT_READY`` verdict (application-sdk PRs #2361, #2626).
-These four rules make the gate pattern statically enforceable across the fleet:
+These rules make the gate pattern statically enforceable across the fleet:
 they surface a boot-time collision at review time (P032), the app-owned duplicate
 that drifts from the gate (P033), untyped failure results that lose their wire
-metadata (P034), and the silent metadata/contract drift that no runtime signal
-can catch (P035).
+metadata (P034), the silent metadata/contract drift that no runtime signal
+can catch (P035), and preflight failures logged below the customer's default
+ERROR filter (P047, FND-901).
 
 The detector lives in ``suite.checks.preflight``; these rules reuse the ``P``
 series so they run on the existing P leg of the fleet CI matrix with no workflow
@@ -176,5 +177,45 @@ RULES: tuple[RuleDefinition, ...] = (
             '``ConfigDict(extra="allow")`` or ``{"extra": "allow"}``.'
         ),
         help_uri=f"{_HELP_BASE}#p035",
+    ),
+    RuleDefinition(
+        id="P047",
+        scope=RuleScope.APP,
+        name="PreflightFailureLoggedAsWarning",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="preflight-gate",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.24.0",
+        rationale=(
+            "The customer-facing run-log view filters at ERROR by default, so a "
+            "preflight failure a handler logs at WARNING is invisible on exactly the "
+            "runs where the customer needs to see why the source was not ready "
+            "(FND-901). The SDK gate emits the single 'Preflight gate outcome' row "
+            "and levels it from the verdict — a handler-authored WARNING is both the "
+            "wrong level and a duplicate record."
+        ),
+        short_description=(
+            "logger.warning() inside preflight_check — failure invisible under the default ERROR filter"
+        ),
+        full_description=(
+            "A ``logger.warning(...)`` call inside a ``Handler.preflight_check`` "
+            "override logs below the customer log view's default ERROR filter, so a "
+            "failed probe reported this way never reaches the customer. The gate owns "
+            "preflight outcome logging: it emits one ``Preflight gate outcome`` row "
+            "per run and logs it at ERROR when the run is blocked or the source is "
+            "unverifiable, stamped with ``failure.audience`` from the typed error.\n"
+            "\n"
+            "Remediation: express the failure through the typed check result — "
+            "``PreflightCheck(passed=False, error=<AppError>.to_failure_details())`` — "
+            "and delete the warning; use INFO/DEBUG for non-failure progress. "
+            "``warning`` and the deprecated ``warn`` alias are both matched, on any "
+            "receiver named like a logger (``logger``, ``log``, ``self._log``, "
+            "``logging``). Only class-method ``preflight_check`` overrides are "
+            "scanned: module-level per-entrypoint ``preflight_check`` functions are "
+            "not resolved, and helper functions the method calls are not followed."
+        ),
+        help_uri=f"{_HELP_BASE}#p047",
     ),
 )

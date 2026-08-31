@@ -24,10 +24,15 @@ from application_sdk.errors.leaves import (
     DependencyUnavailableError,
 )
 from application_sdk.execution._temporal.preflight_gate import (
+    _LOG_ROW_IS_ONLY_CHANNEL,
+    FAILURE_AUDIENCE_KEY,
     GATE_TIMEOUT_DEFAULT_SECONDS,
+    PREFLIGHT_CHECK_EVENT,
     PreflightGateInput,
+    PreflightSurface,
     _config_from_snapshot,
     build_preflight_gate_activity,
+    emit_preflight_check_outcome,
     input_type_supports_gate,
     preflight_gate_activity_name,
 )
@@ -45,7 +50,11 @@ from application_sdk.handler.contracts import (
     SqlMetadataOutput,
 )
 from application_sdk.infrastructure.credential_vault import CredentialVaultError
-from application_sdk.observability.logger_adaptor import CHECK_MATRIX_KEY, GATE_MODE_KEY
+from application_sdk.observability.logger_adaptor import (
+    CHECK_MATRIX_KEY,
+    GATE_MODE_KEY,
+    PREFLIGHT_SURFACE_KEY,
+)
 
 _UNSET = object()
 
@@ -91,10 +100,27 @@ def _verdict_gate(output: PreflightOutput, *, enforce: bool = True):
 
 
 def _outcome_event(mock_logger) -> dict | None:
-    """Return the kwargs of the single 'Preflight gate outcome' info call, if any."""
-    for c in mock_logger.info.call_args_list:
+    """Return the kwargs of the single 'Preflight gate outcome' call, if any.
+
+    Scans info, warning and error: the outcome row is the level carrier
+    (FND-901) — blocks at error, advisory-failure proceeds at warning,
+    healthy rows at info.
+    """
+    for c in [
+        *mock_logger.info.call_args_list,
+        *mock_logger.warning.call_args_list,
+        *mock_logger.error.call_args_list,
+    ]:
         if c.args and c.args[0] == "Preflight gate outcome":
             return c.kwargs
+    return None
+
+
+def _outcome_level(mock_logger) -> str | None:
+    for level in ("info", "warning", "error"):
+        for c in getattr(mock_logger, level).call_args_list:
+            if c.args and c.args[0] == "Preflight gate outcome":
+                return level
     return None
 
 
@@ -269,6 +295,41 @@ class TestPreflightGateActivity:
         names = [c["name"] for c in err.details[1]["checks"]]
         assert names == ["conn", "auth"]
         assert "Auth failed" in err.message
+
+    async def test_not_ready_prefers_aggregate_output_error(self) -> None:
+        # A non-fatal row sits ahead of the real cause in ``checks``. The handler
+        # pinned the real cause on ``result.error``, so the block's primary detail
+        # must come from there — not the first failed check with an error.
+        from application_sdk.errors.leaves import SourceUnavailableError
+
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            error=SourceUnavailableError(
+                message="Configured object store is not accessible.",
+                suggested_action="Grant read and write access.",
+            ),
+            checks=[
+                PreflightCheck(
+                    name="secret",
+                    passed=False,
+                    error=AuthError(message="a soft secret-store row"),
+                ),
+                PreflightCheck(
+                    name="objstore",
+                    passed=False,
+                    error=SourceUnavailableError(
+                        message="Configured object store is not accessible."
+                    ),
+                ),
+            ],
+        )
+        with pytest.raises(ApplicationError) as excinfo:
+            await _verdict_gate(out)(PreflightGateInput())
+        details = excinfo.value.details[0]
+        # From result.error (SOURCE_UNAVAILABLE), not the first check's AuthError.
+        assert details.category is FailureCategory.SOURCE_UNAVAILABLE
+        assert details.suggested_action == "Grant read and write access."
+        assert "Configured object store is not accessible." in excinfo.value.message
 
     async def test_not_ready_without_error_falls_back_to_precondition(self) -> None:
         out = PreflightOutput(
@@ -703,6 +764,25 @@ class TestPreflightGateOutcomeEvent:
         ev = _outcome_event(ml)
         assert ev["outcome"] == "proceeded" and ev["reason"] == "partial"
         assert ev["entrypoint"] == "<implicit>"
+        # Advisory failure: WARNING is the one level semantically for it, and
+        # P047 bans the handler from emitting it — so the gate must.
+        assert _outcome_level(ml) == "warning"
+
+    async def test_ready_with_failed_advisory_check_warns(self) -> None:
+        # Keyed on the checks, not PreflightStatus.PARTIAL: PARTIAL is
+        # documented display-only, so READY with a failed advisory row is the
+        # same advisory case and must not silently flatten to INFO.
+        out = PreflightOutput(
+            status=PreflightStatus.READY,
+            checks=[
+                PreflightCheck(name="auth", passed=True),
+                PreflightCheck(name="tables", passed=False, message="advisory"),
+            ],
+        )
+        with mock.patch(_LOGGER) as ml:
+            await _verdict_gate(out)(PreflightGateInput())
+        assert _outcome_level(ml) == "warning"
+        ml.error.assert_not_called()
 
     async def test_blocked_typed_reason_is_error_code(self) -> None:
         out = PreflightOutput(
@@ -769,6 +849,46 @@ class TestPreflightGateOutcomeEvent:
                 "duration_ms": 312.0,
             }
         ]
+
+    async def test_hard_block_logs_at_error_with_user_audience(self) -> None:
+        # FND-901: a block aborts the customer's run, and the customer-facing log
+        # view filters at ERROR — so the outcome row itself is the ERROR record,
+        # stamped with who must act (the primary check's typed audience).
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(name="auth", passed=False, error=AuthError(message="x"))
+            ],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(out)(PreflightGateInput())
+        assert _outcome_level(ml) == "error"
+        ev = _outcome_event(ml)
+        assert ev[FAILURE_AUDIENCE_KEY] == "USER"
+        # An expected typed outcome, not a crash: no stack on the verdict path.
+        assert "exc_info" not in ev
+        assert ml.error.call_count == 1
+
+    async def test_soft_would_block_stays_info_with_audience(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(name="auth", passed=False, error=AuthError(message="x"))
+            ],
+        )
+        with mock.patch(_LOGGER) as ml:
+            await _verdict_gate(out, enforce=False)(PreflightGateInput())
+        assert _outcome_level(ml) == "info"
+        assert _outcome_event(ml)[FAILURE_AUDIENCE_KEY] == "USER"
+        ml.error.assert_not_called()
+
+    async def test_proceeded_stays_info_without_audience(self) -> None:
+        out = PreflightOutput(status=PreflightStatus.READY, checks=[])
+        with mock.patch(_LOGGER) as ml:
+            await _verdict_gate(out)(PreflightGateInput())
+        assert _outcome_level(ml) == "info"
+        assert FAILURE_AUDIENCE_KEY not in _outcome_event(ml)
+        ml.error.assert_not_called()
 
     async def test_hard_block_emits_gate_mode_hard(self) -> None:
         out = PreflightOutput(
@@ -1092,3 +1212,166 @@ class TestPreflightGateMultiCredential:
         assert mock_logger.warning.call_args.kwargs["missing_refs"] == {
             "object_store": "object_store_credential_guid"
         }
+
+
+class TestEmitPreflightCheckOutcome:
+    """The interactive-surface sibling row (FND-901): one schema, per-surface levels."""
+
+    def _emit(self, result: PreflightOutput, **kwargs) -> mock.MagicMock:
+        log = mock.MagicMock()
+        emit_preflight_check_outcome(log, "myapp", result, **kwargs)
+        return log
+
+    def test_ready_row_shape(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.READY,
+            checks=[PreflightCheck(name="auth", passed=True)],
+        )
+        log = self._emit(
+            out, surface=PreflightSurface.HTTP, entrypoint="crawl", request_id="r-1"
+        )
+        log.info.assert_called_once()
+        assert log.error.call_count == 0
+        args, kwargs = log.info.call_args
+        assert args[0] == PREFLIGHT_CHECK_EVENT
+        assert kwargs["outcome"] == "ready"
+        assert kwargs["reason"] == "ready"
+        assert kwargs["app_name"] == "myapp"
+        assert kwargs["entrypoint"] == "crawl"
+        assert kwargs["checks"] == 1
+        assert kwargs[PREFLIGHT_SURFACE_KEY] == "http"
+        assert kwargs["request_id"] == "r-1"
+        assert json.loads(kwargs[CHECK_MATRIX_KEY])[0]["name"] == "auth"
+        assert FAILURE_AUDIENCE_KEY not in kwargs
+
+    def test_sdr_not_ready_is_error_with_reason_and_audience(self) -> None:
+        # SDR mirrors the gate: the failure surfaces through a workflow run log
+        # read at the default ERROR filter, so the row must be the ERROR record.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(name="auth", passed=False, error=AuthError(message="x"))
+            ],
+        )
+        log = self._emit(out, surface=PreflightSurface.SDR)
+        log.error.assert_called_once()
+        log.info.assert_not_called()
+        kwargs = log.error.call_args.kwargs
+        assert kwargs["outcome"] == "not_ready"
+        assert kwargs["reason"] == "AUTH"
+        assert kwargs[FAILURE_AUDIENCE_KEY] == "USER"
+        assert kwargs[PREFLIGHT_SURFACE_KEY] == "sdr"
+
+    def test_http_not_ready_stays_info(self) -> None:
+        # HTTP: the verdict IS the response body rendered in the setup form —
+        # the log is not the delivery channel, so no level escalation.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(name="auth", passed=False, error=AuthError(message="x"))
+            ],
+        )
+        log = self._emit(out, surface=PreflightSurface.HTTP)
+        log.info.assert_called_once()
+        log.error.assert_not_called()
+
+    def test_sdr_advisory_failure_warns(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.PARTIAL,
+            checks=[
+                PreflightCheck(name="auth", passed=True),
+                PreflightCheck(name="tables", passed=False, message="advisory"),
+            ],
+        )
+        log = self._emit(out, surface=PreflightSurface.SDR)
+        log.warning.assert_called_once()
+        log.error.assert_not_called()
+
+    def test_sdr_clean_stays_info(self) -> None:
+        out = PreflightOutput(status=PreflightStatus.READY, checks=[])
+        log = self._emit(out, surface=PreflightSurface.SDR)
+        log.info.assert_called_once()
+        log.error.assert_not_called()
+
+    def test_aggregate_error_outranks_first_failed_check(self) -> None:
+        # Mirrors _build_block_error: SDR inserts a non-fatal secret-store row
+        # ahead of the real failure and pins the real one on result.error, so
+        # first-failed must not steal the row's reason or audience.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            error=AuthError(message="real failure").to_failure_details(),
+            checks=[
+                PreflightCheck(
+                    name="Secret store",
+                    passed=False,
+                    error=DependencyUnavailableError(
+                        message="store degraded", service="secret_store"
+                    ).to_failure_details(),
+                ),
+                PreflightCheck(name="auth", passed=False),
+            ],
+        )
+        kwargs = self._emit(out, surface=PreflightSurface.SDR).error.call_args.kwargs
+        assert kwargs["reason"] == "AUTH"
+        assert kwargs[FAILURE_AUDIENCE_KEY] == "USER"
+
+    def test_not_ready_untyped_reason_is_sentinel(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="auth", passed=False, message="bad creds")],
+        )
+        kwargs = self._emit(out, surface=PreflightSurface.HTTP).info.call_args.kwargs
+        assert kwargs["reason"] == "PREFLIGHT_CHECK_FAILED"
+        assert FAILURE_AUDIENCE_KEY not in kwargs
+
+    def test_partial_keeps_status_reason_but_stamps_audience(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.PARTIAL,
+            checks=[
+                PreflightCheck(name="auth", passed=True),
+                PreflightCheck(
+                    name="tables", passed=False, error=AuthError(message="advisory")
+                ),
+            ],
+        )
+        kwargs = self._emit(out, surface=PreflightSurface.HTTP).info.call_args.kwargs
+        assert kwargs["outcome"] == "partial"
+        assert kwargs["reason"] == "partial"
+        assert kwargs[FAILURE_AUDIENCE_KEY] == "USER"
+
+    def test_defaults_omit_optional_attrs(self) -> None:
+        out = PreflightOutput(status=PreflightStatus.READY, checks=[])
+        kwargs = self._emit(out, surface=PreflightSurface.SDR).info.call_args.kwargs
+        assert kwargs["entrypoint"] == "<implicit>"
+        assert "request_id" not in kwargs
+
+    def test_every_surface_has_a_level_policy(self) -> None:
+        # The enforcing half of the enum: a new PreflightSurface member with no
+        # entry in the policy table fails here. _log_row_is_only_channel
+        # deliberately defaults a miss to loud instead of raising (losing the
+        # row beats logging it loud), so nothing at runtime would otherwise
+        # notice — and pyright only warns, since this repo sets
+        # reportArgumentType = "warning".
+        assert set(_LOG_ROW_IS_ONLY_CHANNEL) == set(PreflightSurface)
+
+    @pytest.mark.parametrize("surface", list(PreflightSurface))
+    def test_every_surface_emits_one_row_carrying_its_wire_string(
+        self, surface: PreflightSurface
+    ) -> None:
+        # Parametrized over the enum so a newly added member is exercised
+        # rather than only routed: exactly one row, and the attribute is the
+        # plain wire string dashboards filter on, not the enum object.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(name="auth", passed=False, error=AuthError(message="x"))
+            ],
+        )
+        log = self._emit(out, surface=surface)
+        calls = log.info.call_count + log.warning.call_count + log.error.call_count
+        assert calls == 1
+        kwargs = (
+            log.info.call_args or log.warning.call_args or log.error.call_args
+        ).kwargs
+        assert kwargs[PREFLIGHT_SURFACE_KEY] == surface.value
+        assert type(kwargs[PREFLIGHT_SURFACE_KEY]) is str

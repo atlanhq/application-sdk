@@ -16,15 +16,21 @@ implied:
   surviving connection would let a half-set-up left-over green a later run, and
   ``TestSeededConnectionIsTornDown`` is the test that catches it.
 
-No tenant needed: the AE client and pyatlan are both stubbed.
+No tenant needed. What is stubbed is the *seam*, not pyatlan: since child H the
+base class calls the harness' own Atlas functions, so these tests replace those
+functions and assert the wiring — which qualified name is created, which budget
+the poll gets, whether the purge runs. What those functions do with pyatlan is
+pinned in ``tests/unit/testing/harness/atlas/``, against one shared double, so
+the two halves cannot drift into disagreeing about the seam between them.
 """
 
 from __future__ import annotations
 
-import sys
-import types
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -39,7 +45,10 @@ from application_sdk.testing.e2e.client import (
     DAGRunResult,
     DAGRunStatus,
 )
+from application_sdk.testing.harness import atlas as atlas_api
 from application_sdk.testing.harness._poll import fake_clock
+from application_sdk.testing.harness.budgets import Budget
+from application_sdk.testing.harness.outcome import Settled
 
 
 def _node(name: str, status: DAGNodeStatus) -> DAGNodeResult:
@@ -162,47 +171,166 @@ class TestOutcomeSucceeded:
 # ---------------------------------------------------------------------------
 
 
-def _stub_run(harness: BaseE2ETest, ae_result: DAGRunResult) -> MagicMock:
+class _FakeAE:
+    """Async stand-in for the AE client the base holds."""
+
+    def __init__(self, ae_result: DAGRunResult) -> None:
+        self._ae_result = ae_result
+
+    async def submit_workflow(self, payload: dict[str, Any], **_kwargs: Any) -> str:
+        return "run-1"
+
+    async def poll_native_status(self, run_id: str, **_kwargs: Any) -> DAGRunResult:
+        return self._ae_result
+
+    async def get_published_version(self, slug: str) -> None:
+        return None
+
+    async def probe_run_is_listed(self, slug: str, run_id: str) -> None:
+        return None
+
+    async def aclose(self) -> None:
+        return None
+
+
+@dataclass
+class _AtlasCalls:
+    """Which Atlas reads the run actually made, and what they were told to say.
+
+    A recorder rather than a mock so the assertions read as claims about the
+    run ("the connection was never probed") instead of as claims about a
+    library ("assert_not_called").
+    """
+
+    connection_found: bool = True
+    total: int = 0
+    lineage: dict[str, int] = field(default_factory=dict)
+    counts: dict[str, int] = field(default_factory=dict)
+    polled_connection: list[str] = field(default_factory=list)
+    counted: list[Sequence[str]] = field(default_factory=list)
+    counted_total: list[str] = field(default_factory=list)
+    counted_lineage: list[str] = field(default_factory=list)
+    sampled: list[Sequence[str]] = field(default_factory=list)
+    created: list[dict[str, Any]] = field(default_factory=list)
+    purged: list[str] = field(default_factory=list)
+
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Replace the Atlas seam ``BaseE2ETest`` calls, for one test."""
+
+        def _settled(value: Any) -> Settled[Any]:
+            return Settled(label="fake", attempts=1, elapsed=timedelta(0), value=value)
+
+        async def _poll_for_connection(
+            _client: object, qualified_name: str, *, budget: Budget
+        ) -> Any:
+            self.polled_connection.append(qualified_name)
+            return _settled(self.connection_found)
+
+        async def _count_assets(
+            _client: object, _qn: str, type_names: Sequence[str]
+        ) -> Any:
+            self.counted.append(tuple(type_names))
+            return _settled({name: self.counts.get(name, 0) for name in type_names})
+
+        async def _count_total(_client: object, qn: str) -> Any:
+            self.counted_total.append(qn)
+            return _settled(self.total)
+
+        async def _count_lineage(
+            _client: object, qn: str, _type_names: Sequence[str]
+        ) -> Any:
+            self.counted_lineage.append(qn)
+            return _settled(dict(self.lineage))
+
+        async def _sample(
+            _client: object, _qn: str, type_names: Sequence[str], **_kwargs: Any
+        ) -> Any:
+            self.sampled.append(tuple(type_names))
+            return _settled({name: [] for name in type_names})
+
+        async def _create_connection(_client: object, **kwargs: Any) -> str:
+            self.created.append(kwargs)
+            return str(kwargs["qualified_name"])
+
+        async def _purge(_client: object, qualified_name: str) -> Any:
+            self.purged.append(qualified_name)
+            return None
+
+        monkeypatch.setattr(atlas_api, "poll_for_connection", _poll_for_connection)
+        monkeypatch.setattr(atlas_api, "count_assets", _count_assets)
+        monkeypatch.setattr(atlas_api, "count_total_assets", _count_total)
+        monkeypatch.setattr(atlas_api, "count_lineage", _count_lineage)
+        monkeypatch.setattr(atlas_api, "sample_qualified_names", _sample)
+        monkeypatch.setattr(atlas_api, "create_connection", _create_connection)
+        monkeypatch.setattr("application_sdk.testing.e2e.base.purge_connection", _purge)
+        monkeypatch.setattr(
+            BaseE2ETest, "_atlas_client", lambda _self: _null_atlas_client()
+        )
+
+
+@asynccontextmanager
+async def _null_atlas_client() -> AsyncIterator[object]:
+    """The client the replaced Atlas functions never look at."""
+    yield object()
+
+
+def _stub_run(
+    harness: BaseE2ETest,
+    ae_result: DAGRunResult,
+    monkeypatch: pytest.MonkeyPatch,
+    **atlas_overrides: Any,
+) -> _AtlasCalls:
     """Wire a harness so run_full_dag reaches the Atlas branch without a tenant."""
-    client = MagicMock()
-    client.submit_workflow.return_value = "run-1"
-    client.poll_native_status.return_value = ae_result
-    harness.client = client  # type: ignore[attr-defined]
+    calls = _AtlasCalls(**atlas_overrides)
+    calls.install(monkeypatch)
+    harness._ae = _FakeAE(ae_result)  # type: ignore[attr-defined]
     harness.run_id = 1  # type: ignore[attr-defined]
     harness.connection_qualified_name = "default/bundle/1"  # type: ignore[attr-defined]
-    harness._bootstrap_workflow = lambda: "slug"  # type: ignore[method-assign]
+
+    async def _bootstrap() -> str:
+        return "slug"
+
+    harness._bootstrap_workflow = _bootstrap  # type: ignore[method-assign]
     harness._build_ae_payload = lambda slug: {}  # type: ignore[method-assign]
     harness._extract_task_queue = lambda: "atlan-bundle-default"  # type: ignore[method-assign]
-    return client
+    return calls
 
 
 class TestRunFullDagSkipsAtlasProbes:
-    def test_no_atlas_call_when_connection_not_expected(self) -> None:
+    def test_no_atlas_call_when_connection_not_expected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         harness = _Miner()
-        client = _stub_run(harness, _succeeded("extract"))
+        calls = _stub_run(harness, _succeeded("extract"), monkeypatch)
 
         outcome = harness.run_full_dag()
 
-        client.poll_atlas_for_connection.assert_not_called()
-        client.count_assets_under_connection.assert_not_called()
-        client.count_total_assets_under_connection.assert_not_called()
-        client.count_lineage_under_connection.assert_not_called()
+        assert calls.polled_connection == []
+        assert calls.counted == []
+        assert calls.counted_total == []
+        assert calls.counted_lineage == []
         # Not observed, so reported as not observed — never invented as True.
         assert outcome.connection_in_atlas is False
         assert outcome.connection_expected is False
         assert outcome.succeeded is True
 
-    def test_atlas_is_still_polled_for_a_crawler(self) -> None:
+    def test_atlas_is_still_polled_for_a_crawler(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The control: the probe path is untouched when nothing is declared."""
         harness = _Crawler()
-        client = _stub_run(harness, _succeeded("extract", "publish"))
-        client.poll_atlas_for_connection.return_value = True
-        client.count_total_assets_under_connection.return_value = 7
-        client.count_lineage_under_connection.return_value = {"Process": 1}
+        calls = _stub_run(
+            harness,
+            _succeeded("extract", "publish"),
+            monkeypatch,
+            connection_found=True,
+            total=7,
+            lineage={"Process": 1},
+        )
 
         outcome = harness.run_full_dag()
 
-        client.poll_atlas_for_connection.assert_called_once()
+        assert calls.polled_connection == ["default/bundle/1"]
         assert outcome.connection_in_atlas is True
         assert outcome.connection_expected is True
         assert outcome.total_assets == 7
@@ -214,18 +342,22 @@ class TestRunFullDagSkipsAtlasProbes:
 
 
 class TestAssertionLadder:
-    def test_miner_passes_on_the_dag_alone(self) -> None:
+    def test_miner_passes_on_the_dag_alone(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         harness = _Miner()
         harness.source_available = True  # type: ignore[attr-defined]
-        _stub_run(harness, _succeeded("extract"))
+        _stub_run(harness, _succeeded("extract"), monkeypatch)
 
         # Would raise on the zero-asset backstop if the inventory assertions ran.
         harness.test_full_dag_runs_end_to_end()
 
-    def test_miner_still_fails_on_a_failed_dag(self) -> None:
+    def test_miner_still_fails_on_a_failed_dag(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         harness = _Miner()
         harness.source_available = True  # type: ignore[attr-defined]
-        _stub_run(harness, _failed("extract"))
+        _stub_run(harness, _failed("extract"), monkeypatch)
 
         with pytest.raises(AssertionError) as exc:
             harness.test_full_dag_runs_end_to_end()
@@ -233,7 +365,9 @@ class TestAssertionLadder:
         # was never meant to exist.
         assert "not applicable (expect_connection=False)" in str(exc.value)
 
-    def test_seed_prerequisites_runs_before_the_dag(self) -> None:
+    def test_seed_prerequisites_runs_before_the_dag(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         calls: list[str] = []
 
         class _Seeding(_Miner):
@@ -242,7 +376,7 @@ class TestAssertionLadder:
 
         harness = _Seeding()
         harness.source_available = True  # type: ignore[attr-defined]
-        _stub_run(harness, _succeeded("extract"))
+        _stub_run(harness, _succeeded("extract"), monkeypatch)
         original = harness.run_full_dag
 
         def _tracked() -> FullDAGOutcome:
@@ -257,12 +391,18 @@ class TestAssertionLadder:
             "state seeded after the DAG starts is state the DAG cannot see"
         )
 
-    def test_crawler_still_fails_without_a_connection(self) -> None:
+    def test_crawler_still_fails_without_a_connection(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The control: the Atlas clause still gates a publishing entrypoint."""
         harness = _Crawler()
         harness.source_available = True  # type: ignore[attr-defined]
-        client = _stub_run(harness, _succeeded("extract", "publish"))
-        client.poll_atlas_for_connection.return_value = False
+        _stub_run(
+            harness,
+            _succeeded("extract", "publish"),
+            monkeypatch,
+            connection_found=False,
+        )
 
         with pytest.raises(AssertionError) as exc:
             harness.test_full_dag_runs_end_to_end()
@@ -274,128 +414,92 @@ class TestAssertionLadder:
 # ---------------------------------------------------------------------------
 
 
-class _FakeConnection:
-    """Stand-in for pyatlan's Connection, which assigns the QN client-side."""
-
-    def __init__(self, qualified_name: str) -> None:
-        self.qualified_name = qualified_name
-
-    @classmethod
-    def creator(cls, **kwargs: Any) -> _FakeConnection:
-        cls.last_kwargs = kwargs  # type: ignore[attr-defined]
-        return cls("default/miner-source/9999")
-
-
-@pytest.fixture
-def fake_pyatlan(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
-    """Install stub pyatlan modules so seed_connection's lazy imports resolve.
-
-    seed_connection imports pyatlan inside the method body (it is a heavy,
-    testing-time-only dependency), so the stubs must be in ``sys.modules``.
-    """
-    saved_client = MagicMock()
-
-    client_mod = types.ModuleType("pyatlan.client.atlan")
-    client_mod.AtlanClient = MagicMock(return_value=saved_client)  # type: ignore[attr-defined]
-
-    assets_mod = types.ModuleType("pyatlan.model.assets")
-    assets_mod.Connection = _FakeConnection  # type: ignore[attr-defined]
-    # teardown_method imports Asset + FluentSearch from the same package. They
-    # belong in this fixture rather than a per-test injection: without them the
-    # import fails, teardown's broad except swallows it as a warning, and the
-    # isolation test below would report "not purged" for the wrong reason.
-    assets_mod.Asset = MagicMock()  # type: ignore[attr-defined]
-
-    search_mod = types.ModuleType("pyatlan.model.fluent_search")
-    search_mod.FluentSearch = MagicMock()  # type: ignore[attr-defined]
-
-    class _ConnectorType:
-        def __init__(self, value: str) -> None:
-            if value not in ("miner-source", "api"):
-                raise ValueError(value)
-            self.value = value
-
-    enums_mod = types.ModuleType("pyatlan.model.enums")
-    enums_mod.AtlanConnectorType = _ConnectorType  # type: ignore[attr-defined]
-
-    for name, mod in (
-        ("pyatlan.client.atlan", client_mod),
-        ("pyatlan.model.assets", assets_mod),
-        ("pyatlan.model.enums", enums_mod),
-        ("pyatlan.model.fluent_search", search_mod),
-    ):
-        monkeypatch.setitem(sys.modules, name, mod)
-
-    monkeypatch.setenv("ATLAN_BASE_URL", "https://tenant.example.com")
-    monkeypatch.setenv("ATLAN_API_KEY", "token")
-    return saved_client
-
-
 class _SeedingMiner(_Miner):
     connection_type = "miner-source"
     atlas_poll_interval_seconds = 0
     atlas_poll_timeout_seconds = 1
 
 
-def _seeding_harness() -> _SeedingMiner:
+def _seeding_harness(
+    monkeypatch: pytest.MonkeyPatch, **overrides: Any
+) -> tuple[_SeedingMiner, _AtlasCalls]:
+    """A harness with the identity ``setup_method`` would have minted."""
+    calls = _AtlasCalls(**overrides)
+    calls.install(monkeypatch)
     harness = _SeedingMiner()
     harness.connection_qualified_name = "default/miner-source/minted"  # type: ignore[attr-defined]
     harness.connection_display_name = "miner-source-minted"  # type: ignore[attr-defined]
     harness._auto_admin_roles = ("role-guid",)  # type: ignore[attr-defined]
     harness._auto_admin_users = ("svc",)  # type: ignore[attr-defined]
-    harness.client = MagicMock()  # type: ignore[attr-defined]
-    harness.client.poll_atlas_for_connection.return_value = True
-    return harness
+    return harness, calls
 
 
 class TestSeedConnection:
-    def test_adopts_the_creator_assigned_qualified_name(
-        self, fake_pyatlan: MagicMock
+    def test_keeps_this_runs_own_minted_qualified_name(
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        harness = _seeding_harness()
+        """The name is an input to the create, not something adopted back from it.
+
+        ``Connection.creator`` derived ``default/<type>/<epoch>`` and the lifted
+        code adopted whatever came back — one second of resolution, so two legs
+        of one e2e matrix starting in the same second shared a connection and the
+        first to finish purged the other's assets. The minted name does not move.
+        """
+        harness, calls = _seeding_harness(monkeypatch)
 
         returned = harness.seed_connection()
 
-        assert returned == "default/miner-source/9999"
-        # Adopted onto the instance, because that is what the AE payload, the
-        # Atlas polls, and the teardown purge all read.
-        assert harness.connection_qualified_name == "default/miner-source/9999"
-        fake_pyatlan.asset.save.assert_called_once()
+        assert returned == "default/miner-source/minted"
+        assert harness.connection_qualified_name == "default/miner-source/minted"
+        assert calls.created[0]["qualified_name"] == "default/miner-source/minted"
+        assert calls.created[0]["display_name"] == "miner-source-minted"
 
-    def test_passes_the_resolved_admin_acl(self, fake_pyatlan: MagicMock) -> None:
-        harness = _seeding_harness()
+    def test_passes_the_resolved_admin_acl(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness, calls = _seeding_harness(monkeypatch)
         harness.seed_connection()
 
-        kwargs = _FakeConnection.last_kwargs  # type: ignore[attr-defined]
-        assert kwargs["admin_roles"] == ["role-guid"]
-        assert kwargs["admin_users"] == ["svc"]
+        assert calls.created[0]["admin_roles"] == ["role-guid"]
+        assert calls.created[0]["admin_users"] == ["svc"]
+
+    def test_the_connector_type_is_the_catalog_segment(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``connection_type`` wins over the app's short name where they differ."""
+        harness, calls = _seeding_harness(monkeypatch)
+        harness.seed_connection()
+
+        assert calls.created[0]["connector_type"] == "miner-source"
 
     def test_unknown_connector_type_names_the_fix(
-        self, fake_pyatlan: MagicMock
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        class _BadType(_SeedingMiner):
-            connection_type = "not-a-real-connector"
+        """The leaf comes from the create itself, which is where the type is used."""
+        harness, _ = _seeding_harness(monkeypatch)
 
-        harness = _BadType()
-        harness.connection_display_name = "x"  # type: ignore[attr-defined]
-        harness._auto_admin_roles = ()  # type: ignore[attr-defined]
-        harness._auto_admin_users = ()  # type: ignore[attr-defined]
+        async def _refuse(_client: object, **kwargs: Any) -> str:
+            raise UnknownConnectorTypeError(
+                message="not a real connector type", value_summary="nope"
+            )
 
+        monkeypatch.setattr(atlas_api, "create_connection", _refuse)
         with pytest.raises(UnknownConnectorTypeError) as exc:
             harness.seed_connection()
-        assert "connection_type" in str(exc.value)
+        assert exc.value.field == "connection_type"
 
-    def test_unsearchable_seed_fails_fast(self, fake_pyatlan: MagicMock) -> None:
-        harness = _seeding_harness()
-        harness.client.poll_atlas_for_connection.return_value = False
+    def test_unsearchable_seed_fails_fast(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness, _ = _seeding_harness(monkeypatch, connection_found=False)
 
         with pytest.raises(SeededConnectionNotSearchableError):
             harness.seed_connection()
 
     def test_probe_is_retried_until_policies_go_live(
-        self, fake_pyatlan: MagicMock
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        harness = _seeding_harness()
+        harness, _ = _seeding_harness(monkeypatch)
         harness.atlas_poll_timeout_seconds = 30  # type: ignore[misc]
         attempts: list[int] = []
 
@@ -404,15 +508,16 @@ class TestSeedConnection:
             if len(attempts) < 3:
                 raise PermissionError("403 — connection policies not live yet")
 
-        harness.seed_connection(probe=_probe)
+        with fake_clock():
+            harness.seed_connection(probe=_probe)
 
         assert len(attempts) == 3
 
     def test_probe_that_never_succeeds_propagates(
-        self, fake_pyatlan: MagicMock
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A seed that never became writable must fail, not run anyway."""
-        harness = _seeding_harness()
+        harness, _ = _seeding_harness(monkeypatch)
         harness.atlas_poll_timeout_seconds = 0  # type: ignore[misc]
 
         def _probe() -> None:
@@ -422,17 +527,17 @@ class TestSeedConnection:
             harness.seed_connection(probe=_probe)
 
     def test_the_probe_retry_stops_inside_its_stated_budget(
-        self, fake_pyatlan: MagicMock
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The off-by-one FND-240 removed along with the hand-rolled deadline.
 
         The old loop checked ``time.monotonic() >= deadline`` *after* the probe,
         so a 30s budget at a 10s interval probed at 0, 10, 20 **and 30** — it
         slept a whole interval past its own timeout to find out it had expired.
-        ``attempt.is_last`` moves that decision before the sleep: three probes,
+        The shared primitive makes that decision before the sleep: three probes,
         20s of sleeping, and the failure raised at 20s rather than at 30s.
         """
-        harness = _seeding_harness()
+        harness, _ = _seeding_harness(monkeypatch)
         harness.atlas_poll_timeout_seconds = 30  # type: ignore[misc]
         harness.atlas_poll_interval_seconds = 10  # type: ignore[misc]
         attempts: list[int] = []
@@ -449,7 +554,7 @@ class TestSeedConnection:
 
     @pytest.mark.parametrize("exc_type", [TypeError, ValueError])
     def test_a_non_transient_probe_error_fails_fast(
-        self, fake_pyatlan: MagicMock, exc_type: type[Exception]
+        self, monkeypatch: pytest.MonkeyPatch, exc_type: type[Exception]
     ) -> None:
         """A deterministic probe bug must not burn the whole timeout retrying.
 
@@ -457,7 +562,7 @@ class TestSeedConnection:
         every attempt, so the retry loop re-raises it on first sight rather
         than waiting out ``atlas_poll_timeout_seconds``.
         """
-        harness = _seeding_harness()
+        harness, _ = _seeding_harness(monkeypatch)
         harness.atlas_poll_timeout_seconds = 1500  # would hang if retried
         attempts: list[int] = []
 
@@ -470,6 +575,22 @@ class TestSeedConnection:
 
         assert len(attempts) == 1
 
+    def test_an_async_probe_is_awaited(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The seam only exists because the retry loop runs on the harness' loop.
+
+        A suite whose representative write is itself async no longer has to
+        bridge back to sync to be retried.
+        """
+        harness, _ = _seeding_harness(monkeypatch)
+        attempts: list[int] = []
+
+        async def _probe() -> None:
+            attempts.append(1)
+
+        harness.seed_connection(probe=_probe)  # type: ignore[arg-type]
+
+        assert attempts == [1]
+
 
 class TestSeededConnectionIsTornDown:
     """The isolation guarantee.
@@ -480,23 +601,14 @@ class TestSeededConnectionIsTornDown:
     """
 
     def test_teardown_purges_the_seeded_connection(
-        self, fake_pyatlan: MagicMock
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        harness = _seeding_harness()
+        harness, calls = _seeding_harness(monkeypatch)
         seeded_qn = harness.seed_connection()
-
-        # teardown_method resolves its own client; give it the same stub and a
-        # searchable connection to purge.
-        connection_asset = MagicMock()
-        connection_asset.guid = "conn-guid"
-        fake_pyatlan.asset.search.return_value = [connection_asset]
 
         harness.teardown_method(None)
 
-        purged = [
-            call.args[0] for call in fake_pyatlan.asset.purge_by_guid.call_args_list
-        ]
-        assert "conn-guid" in purged, (
+        assert calls.purged == [seeded_qn], (
             f"seeded connection {seeded_qn} was not purged — a surviving "
             "connection breaks run isolation"
         )

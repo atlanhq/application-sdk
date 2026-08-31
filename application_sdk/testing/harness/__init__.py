@@ -3,9 +3,9 @@
 Not ``testing.e2e``, because this surface serves runtime scaling scenarios,
 cluster reads and chaos injection as well as end-to-end connector runs — none of
 which are end-to-end connector runs. ``testing.e2e`` keeps its name, its import
-paths and its public surface; it is re-expressed *over* this package in place
-(child H on FND-224), so no connector, no generated ``_e2e_base.py`` and no
-conformance rule sees a diff.
+paths and its public surface; it **is** re-expressed over this package in place
+(child H on FND-224, landed), so no connector, no generated ``_e2e_base.py`` and
+no conformance rule saw a diff.
 
 Three consumers, one core:
 
@@ -73,25 +73,44 @@ Module map:
 ``temporal``
     Read-only Temporal Protocol — pollers and workflow status — and the
     ``temporalio`` backend behind it. The poller read makes an *observation*
-    available where ``NoWorkerOnTaskQueueError`` currently reasons from three
-    minutes of silence; it does not yet replace it. Nothing in ``testing/e2e``
-    calls this module, and it was not lifted from code in this repo — the poller
-    half re-expresses ``suite/ports/temporal.py`` in
-    ``atlanhq/app-runtime-test-suite``, so its unit tests are a golden table for
-    the plain reason that there is no local original to run a differential
-    against. Not the only module here whose pin is a captured table, and not a
-    claim that it is: see the provenance paragraph below. Adopting it in
-    ``poll_native_status`` is child H's, with the rest of the re-expression.
-    No extra to install: ``temporalio`` has been a core dependency since v3.1.
+    available where ``NoWorkerOnTaskQueueError`` reasons from three minutes of
+    silence. Child H adopted it, and adopted it as an **addition**: the leaf
+    still fires on the inference, and where a suite has a route to a frontend
+    (``BaseE2ETest.temporal_address`` / ``E2E_TEMPORAL_ADDRESS``, off by default)
+    it now carries what Temporal reported alongside it. Off by default because
+    the connector CI runner has no route into a tenant's vcluster — the same
+    constraint that makes the AE submit the only tenant-facing probe of the
+    installed app pod — so replacing the inference outright would have replaced
+    a working diagnosis with an unreachable one.
+
+    It was not lifted from code in this repo — the poller half re-expresses
+    ``suite/ports/temporal.py`` in ``atlanhq/app-runtime-test-suite``, so its
+    unit tests are a golden table for the plain reason that there is no local
+    original to run a differential against. Not the only module here whose pin
+    is a captured table, and not a claim that it is: see the provenance
+    paragraph below. No extra to install: ``temporalio`` has been a core
+    dependency since v3.1.
 ``atlas``
     Atlas reads, split out of ``testing/e2e/client.py`` — async, one client per
     batch, and an unreadable search reported as a verdict rather than as zero.
+    Plus the two calls child H moved off the *second*, synchronous pyatlan
+    client ``BaseE2ETest`` used to build for itself: the ``$admin`` ACL lookup
+    (``admin_identity``, which reports rather than decides, because its two
+    callers disagree about whether an absent role is fatal) and the one write in
+    this package, ``create_connection`` — which takes the qualified name as an
+    *input* rather than adopting one derived from a one-second clock, so two
+    matrix legs starting in the same second can no longer share a connection and
+    purge each other's assets.
 ``automation_engine``
     The async AE reader and the non-idempotent submit's retry, from the same
     split, plus the ``native-status`` wire types and the leaves they raise.
 ``starters``
     Three ways to start a workflow; deliberately no shared signature. Two of the
-    three are real, and they are real in different ways. ``start_on_task_queue``
+    three are real, and they are real in different ways. The AE one is also the
+    one place the sequence is split: ``publish_seed_version`` is public because
+    AE mints the slug on the create and a submit body that has to *carry* that
+    slug cannot be built before it — which is exactly ``BaseE2ETest``'s case.
+    ``start_on_task_queue``
     (FND-246) dispatches onto a Temporal task queue — the runtime suite's first
     scenario, and unbuilt on both sides: the Slack thread that scoped this
     project recorded it as already existing, and
@@ -113,18 +132,28 @@ Module map:
 are real, and so are two of ``starters``' three functions; the rest are typed
 stubs, each naming the child issue that fills it in.
 
-``atlas`` and ``automation_engine`` are the first two that ``testing/e2e``
-actually calls: since child F, ``AEWorkflowClient`` is a set of one-line
-``run_sync`` shims over them and holds no logic of its own. ``waiting`` joined
-them in child D (FND-240) — ``poll_native_status``, ``atlas.poll_for_connection``,
+**Every module here is now called from ``testing/e2e``**, which is what child H
+did. ``BaseE2ETest`` holds an ``AEClient`` and calls ``atlas``, ``starters``,
+``teardown``, ``expectations``, ``preconditions``, ``identity``, ``budgets``,
+``waiting`` and ``evidence`` directly; each of its four public methods is a
+one-line :func:`~application_sdk.testing.harness.bridge.run_sync` shim over an
+``_async`` twin, so the sync boundary sits at exactly the methods pytest calls
+and there is no synchronous implementation underneath. ``AEWorkflowClient``
+survives as a deprecated compatibility surface for the one connector suite that
+calls it directly; nothing in this package or in ``BaseE2ETest`` routes through
+it any more.
+
+``atlas`` and ``automation_engine`` were the first two ``testing/e2e`` called:
+since child F, ``AEWorkflowClient`` is a set of one-line ``run_sync`` shims over
+them and holds no logic of its own. ``waiting`` joined them in child D
+(FND-240) — ``poll_native_status``, ``atlas.poll_for_connection``,
 ``workflows.wait_for_workflow`` and ``AEClient.wait_for_slug`` are all expressed
 over :func:`~application_sdk.testing.harness.waiting.poll_until`, and the loops
 whose probe is synchronous read ``_poll``'s deadline arithmetic directly. No
 bounded loop in the harness owns a deadline any more.
 
-The rest are pinned by their unit tests rather than by being called from
-``testing/e2e``, which is child H's change. What that pin *is* differs by
-provenance, and the difference is worth knowing before trusting one: a module
+Being called is not the same as being pinned, and what a pin *is* differs by
+provenance — worth knowing before trusting one. A module
 lifted from code in this repo can be tested **differentially**, against the
 implementation it replaced on identical inputs, while one that was not has to be
 pinned against **captured numbers** instead. ``cluster`` is the first kind — it

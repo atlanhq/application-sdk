@@ -113,7 +113,9 @@ class SilentSwallowMixin:
                 continue
             if func.attr == "exception":
                 return
-            if func.attr in ("warning", "error", "critical") and _has_exc_info(call):
+            if func.attr in ("warning", "error", "critical") and _has_exc_info(
+                call, node.name
+            ):
                 return
             # A log call that formats the exception through a redaction helper
             # marks a deliberate no-traceback boundary (see _sanitizers.py) —
@@ -152,7 +154,7 @@ class SilentSwallowMixin:
                 # raw exception past the sanitizer and can leak credentials.
                 continue
             if func.attr in ("warning", "error", "critical") and not _has_exc_info(
-                call
+                call, node.name
             ):
                 self._add(
                     "E005",

@@ -1193,7 +1193,10 @@ class TestWithholds:
         # and writing a bare [options] table would be a lock nobody can recover.
         target = tmp_path / "uv.lock"
         target.write_text("")
-        assert bounded.withhold(target, "", "P3D") is False
+        assert (
+            bounded.withhold(target, "", "P3D", reason=bounded.REFUSAL_WINDOW_EMPTY)
+            is False
+        )
         assert target.read_text() == ""
 
     def test_withhold_does_not_stack_options_tables(self, tmp_path):
@@ -1202,7 +1205,9 @@ class TestWithholds:
         # a recoverable lock.
         target = tmp_path / "uv.lock"
         target.write_text(LOCK_WITH_OPTIONS)
-        assert bounded.withhold(target, "", "P3D") is True
+        assert (
+            bounded.withhold(target, "", "P3D", reason=bounded.REFUSAL_ROLLBACK) is True
+        )
         written = target.read_text()
         assert written.count("[options]") == 1
         assert 'exclude-newer-span = "P3D"' in written
@@ -1214,7 +1219,12 @@ class TestWithholds:
         baseline = lock(boto3="1.43.72")
         target = tmp_path / "uv.lock"
         target.write_text(lock(boto3="1.43.99"))
-        assert bounded.withhold(target, baseline, "P3D") is True
+        assert (
+            bounded.withhold(
+                target, baseline, "P3D", reason=bounded.REFUSAL_WINDOW_EMPTY
+            )
+            is True
+        )
         written = target.read_text()
         assert 'exclude-newer-span = "P3D"' in written
         # Recoverable: a human, or the next run, gets the baseline back exactly.

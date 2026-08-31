@@ -67,6 +67,11 @@ What generation-time baking cannot reach, and what this module is for:
 
 So this is a reconciliation point for writers the toolkit does not own, not a
 second mechanism competing with it. Retire it when those writers are retired.
+
+**The resolved value this module stamps is consumed outside this repo** — see
+``docs/standards/cross-repo-contracts.md``. Renaming the ``task_queue`` key,
+relocating it, or reverting to token substitution reds another repo's suite
+with no signal here, so read that entry before changing either.
 """
 
 from __future__ import annotations

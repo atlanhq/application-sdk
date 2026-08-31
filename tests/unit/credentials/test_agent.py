@@ -1553,7 +1553,10 @@ class TestCheckSecretStoreAccess:
         # The store itself is the failure: a fatal DEPENDENCY_UNAVAILABLE outage.
         assert r.store_down is True
         assert r.fatal is True
-        assert "not reachable" in r.message
+        assert "not accessible" in r.message
+        assert r.suggested_action == (
+            "Check that the secret store is running and reachable from the SDR worker."
+        )
 
     async def test_fails_when_nothing_resolves(self) -> None:
         class EmptyStore:
@@ -1568,12 +1571,20 @@ class TestCheckSecretStoreAccess:
         assert r.fatal is False
         assert r.substituted == 0
         assert r.resolved is not None
+        assert r.suggested_action == (
+            "Check that the configured secret keys and secret-path exist in "
+            "the store."
+        )
 
     async def test_fails_when_no_store_configured(self) -> None:
+        # No secret store configured is a permanent config gap, not a transient
+        # outage: store_down is False so the row is a (non-retryable)
+        # PreconditionError, not a retryable SourceUnavailableError.
         r = await check_secret_store_access(self._spec(), None)
         assert r.passed is False
-        assert r.store_down is True
+        assert r.store_down is False
         assert r.fatal is True
+        assert r.suggested_action == "Configure a secret store on the SDR deployment."
 
     async def test_fails_when_multi_key_has_no_secret_path(self) -> None:
         # Multi-key (non single-key) with no secret-path: the ref-keys have
@@ -1591,6 +1602,7 @@ class TestCheckSecretStoreAccess:
         assert r.store_down is False
         assert r.fatal is True
         assert "secret-path" in r.message
+        assert r.suggested_action == "Set secret-path on the connection's credentials."
 
 
 class TestSingleKeyProbeConcurrency:

@@ -68,9 +68,12 @@ class PreflightInput(BaseModel):
 class PreflightOutput(BaseModel):
     status: PreflightStatus           # READY, NOT_READY, or PARTIAL
     checks: list[PreflightCheck] = [] # individual check results
-    message: str = ""                 # human-readable summary
+    message: str = ""                 # human-readable summary (used when error is unset)
+    error: FailureDetails | None = None  # typed aggregate failure; wins over message
     total_duration_ms: float = 0.0    # total time for all checks
 ```
+
+`PreflightOutput.error` is additive (`None` by default). Handlers that only set `message` keep working. When `error` is set, `resolved_message` prefers it over `message` — the same precedence `PreflightCheck.error` already uses. Pass a `FailureDetails` (or a bare `AppError`, which is coerced).
 
 #### Multi-credential preflight
 

@@ -297,6 +297,52 @@ class TestPreflightOutput:
     def test_no_should_block_attribute(self):
         assert not hasattr(PreflightOutput, "should_block")
 
+    def test_error_coerced_from_app_error(self):
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            error=AuthError(message="x", cause=ValueError("y")),
+        )
+        assert isinstance(out.error, FailureDetails)
+        assert out.error.category == FailureCategory.AUTH
+        assert out.error.cause_repr.startswith("ValueError: y")
+
+    def test_error_instance_overrides_flow_through(self):
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            error=AuthError(message="m", suggested_action="s"),
+        )
+        assert out.error is not None
+        assert out.error.message == "m"
+        assert out.error.suggested_action == "s"
+        assert out.error.code == "AUTH"
+        assert out.error.audience == Audience.USER
+
+    def test_error_accepts_ready_failure_details_and_none(self):
+        details = AuthError(message="boom").to_failure_details()
+        out = PreflightOutput(status=PreflightStatus.NOT_READY, error=details)
+        assert out.error == details
+        assert PreflightOutput(status=PreflightStatus.READY, error=None).error is None
+
+    def test_error_json_round_trip(self):
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            error=AuthError(message="boom", suggested_action="fix it"),
+        )
+        restored = PreflightOutput.model_validate_json(out.model_dump_json())
+        assert restored.error == out.error
+
+    def test_resolved_prefers_error(self):
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            message="fallback",
+            error=AuthError(message="from error", suggested_action="do x"),
+        )
+        assert out.resolved_message == "from error"
+
+    def test_resolved_uses_message_when_no_error(self):
+        out = PreflightOutput(status=PreflightStatus.NOT_READY, message="fallback")
+        assert out.resolved_message == "fallback"
+
 
 class TestMetadataOutput:
     """Tests for the MetadataOutput hierarchy."""

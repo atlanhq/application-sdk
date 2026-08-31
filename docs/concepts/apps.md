@@ -326,6 +326,17 @@ Object-store access check failed (1 store(s) with errors):
 | `invalid credentials` | HTTP 401, `InvalidAccessKeyId`, `SignatureDoesNotMatch`, `unauthenticated` | Wrong/expired access key or secret |
 | `connectivity / unknown` | Timeout, network error, bucket not found | Endpoint URL, bucket name, or network unreachable from this pod/host |
 
+Interactive SDR preflight (`sdr:preflight_check`) maps those buckets onto existing taxonomy leaves so routing and retry match the cause, not a single retryable outage:
+
+| Role + bucket | Leaf | Audience | Retryable |
+|---|---|---|---|
+| Either role, `permission denied` | `AppPermissionDeniedError` | USER | no |
+| Either role, `invalid credentials` | `AuthError` | USER | no |
+| Deployment store, `connectivity / unknown` | `SourceUnavailableError` | USER | yes |
+| Upstream Atlan upload proxy, `connectivity / unknown` | `DependencyUnavailableError` | PLATFORM | yes |
+
+Customer-facing `suggested_action` is kept on every leaf. When a READY handler is downgraded because an object-store probe failed, the aggregate `PreflightOutput.error` / `message` banner is pinned to that object-store row — not the first failed check overall, which can be a non-fatal secret-store row.
+
 **Timeout override:**
 
 ```bash

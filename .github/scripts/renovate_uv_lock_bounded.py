@@ -120,6 +120,37 @@ except ImportError:  # pragma: no cover - packaging is effectively universal
     Version = None  # type: ignore[assignment]
     InvalidVersion = ValueError  # type: ignore[assignment]
 
+# Why a refusal says *why* (FND-909)
+# ----------------------------------
+# Every `withhold()` path writes a byte-identical tripwire, so nothing downstream
+# can tell them apart — and only one of them heals on its own. `WINDOW_EMPTY`
+# means the bound admitted nothing on this pass while Renovate's unbounded
+# resolve moved; the next pass that sees a package cross the window resolves
+# green with no intervention. The other four are standing faults (a broken
+# interpreter, an unsatisfiable floor, a yanked pin) that no amount of waiting
+# fixes.
+#
+# The distinction is what lets the fleet reap the self-healing case on sight
+# while leaving a real wedge red for a human. Reaping on a clock instead —
+# "refuse, then recover once head age exceeds the window" — is safe but costs up
+# to a full window of delay on top of the bound, which defeats the point of
+# running the lane every four hours.
+#
+# The stamp rides as a comment on the tripwire's own line. That placement is
+# load-bearing: `strip_options()` drops the whole `[options]` table line-based,
+# so the stamp cannot survive onto a green lock, and every existing reader of
+# the window already splits on `#` before parsing the value.
+REFUSAL_WINDOW_EMPTY = "window-empty"
+REFUSAL_NO_PACKAGING = "no-packaging"
+REFUSAL_UNSATISFIABLE_FLOOR = "unsatisfiable-floor"
+REFUSAL_FLOOR_ADMITTED_STILL_FAILED = "floor-admitted-still-failed"
+REFUSAL_ROLLBACK = "rollback"
+
+# The one reason a machine may clear without a human. Kept as a set of one
+# rather than an equality check so adding a second self-healing path is a
+# one-line change here instead of an edit at every reader.
+SELF_HEALING_REFUSALS = frozenset({REFUSAL_WINDOW_EMPTY})
+
 # ISO 8601 durations, restricted to the forms a release-age window sensibly takes.
 # Calendar units are rejected rather than approximated — uv refuses months and
 # years for the same reason, and a window that silently means something other
@@ -237,7 +268,7 @@ def retention_ceilings(
     return ceilings
 
 
-def withhold(lock_path: Path, baseline: str, window: str) -> bool:
+def withhold(lock_path: Path, baseline: str, window: str, *, reason: str) -> bool:
     """Refuse in a way a REQUIRED check can see. Returns whether it wrote.
 
     The driver cannot stop Renovate committing, and it cannot abstain either.
@@ -267,6 +298,12 @@ def withhold(lock_path: Path, baseline: str, window: str) -> bool:
     required age check that fails on its own evidence rather than on a lock the
     build cannot install (FND-379).
 
+    ``reason`` is keyword-only and has no default on purpose. Every caller has to
+    say which of the five refusal paths it is, because the fleet reaps
+    ``REFUSAL_WINDOW_EMPTY`` automatically and must not reap the rest — a default
+    would let a new standing fault inherit the self-healing label silently
+    (FND-909).
+
     A branch that *adds* a brand-new ``uv.lock`` has no committed baseline to
     write back. The tripwire still goes on, over whatever the resolve left: there
     is no safer content to choose, and leaving a valid-but-unbounded lock in place
@@ -277,7 +314,7 @@ def withhold(lock_path: Path, baseline: str, window: str) -> bool:
     if not base:
         return False
     base = strip_options(base)
-    tripwire = f'\n[options]\nexclude-newer-span = "{window}"\n'
+    tripwire = f'\n[options]\nexclude-newer-span = "{window}"  # refusal: {reason}\n'
     anchor = base.find("\n[[package]]")
     lock_path.write_text(
         base[:anchor] + tripwire + base[anchor:] if anchor != -1 else base + tripwire
@@ -687,7 +724,7 @@ def main(argv: list[str] | None = None) -> int:
         # accuses every ordinary upgrade of moving backwards — a wedged lane whose
         # message blames the dependency data. Say the true cause instead, and say
         # it before uv spends a minute resolving.
-        withhold(lock_path, baseline, args.window)
+        withhold(lock_path, baseline, args.window, reason=REFUSAL_NO_PACKAGING)
         print(
             "`packaging` is not importable, so no version can be compared and the "
             "rollback gate cannot do its job. Refusing rather than bounding "
@@ -717,7 +754,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         admitted_early = blocked_by_floor(result.stderr, floors)
         if not admitted_early:
-            withhold(lock_path, baseline, args.window)
+            withhold(
+                lock_path,
+                baseline,
+                args.window,
+                reason=REFUSAL_UNSATISFIABLE_FLOOR,
+            )
             print(
                 "Bounded `uv lock` failed and no deliberately-floored package was "
                 "named in the error, so there is nothing safe to admit early. "
@@ -733,7 +775,12 @@ def main(argv: list[str] | None = None) -> int:
             project_dir,
         )
         if result.returncode != 0:
-            withhold(lock_path, baseline, args.window)
+            withhold(
+                lock_path,
+                baseline,
+                args.window,
+                reason=REFUSAL_FLOOR_ADMITTED_STILL_FAILED,
+            )
             print(
                 "Bounded `uv lock` still failed after admitting "
                 f"{', '.join(admitted_early)}. The lock is left deliberately "
@@ -750,7 +797,7 @@ def main(argv: list[str] | None = None) -> int:
         detail = ", ".join(
             f"{n} {old} -> {new}" for n, (old, new) in sorted(regressed.items())
         )
-        withhold(lock_path, baseline, args.window)
+        withhold(lock_path, baseline, args.window, reason=REFUSAL_ROLLBACK)
         print(
             f"Bounded resolve moved {len(regressed)} package(s) BACKWARDS from the "
             f"last committed lock: {detail}. Retention ceilings make an age-driven "
@@ -786,7 +833,7 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
         else:
-            withhold(lock_path, baseline, args.window)
+            withhold(lock_path, baseline, args.window, reason=REFUSAL_WINDOW_EMPTY)
             print(
                 f"The bound admits nothing today, but Renovate's own unbounded "
                 f"resolve moved: {moved}. Leaving the tree matching HEAD would "

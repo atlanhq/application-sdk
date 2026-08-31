@@ -30,6 +30,7 @@ from application_sdk.testing.harness.starters._errors import UnusableTaskQueueEr
 __all__ = [
     "AERunHandle",
     "AEWorkflowSpec",
+    "SeededWorkflow",
     "HttpRunHandle",
     "HttpWorkflowSpec",
     "QueueWorkflowSpec",
@@ -71,6 +72,29 @@ class AERunHandle:
 
     workflow_slug: str
     run_id: str
+    seed_version: int | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SeededWorkflow:
+    """An AE workflow with a published version, ready to be submitted against.
+
+    What :func:`~application_sdk.testing.harness.starters.publish_seed_version`
+    hands back — the half of :class:`AERunHandle` that exists before there is a
+    run. A pair rather than a bare slug because the two fields are only
+    meaningful together: comparing what AE later serves against
+    :attr:`seed_version` is the whole deployed-manifest identity check, and a
+    caller that kept only the slug could not tell the harness' own seed apart
+    from the manifest the tenant published over it.
+
+    Attributes:
+        slug: AE's slug for the workflow.
+        seed_version: The version number this publish created, or ``None`` when
+            nothing was published — which is the pre-existing-slug path, where
+            there is no seed for the tenant to have superseded.
+    """
+
+    slug: str
     seed_version: int | None = None
 
 

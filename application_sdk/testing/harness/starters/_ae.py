@@ -58,11 +58,15 @@ import os
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.harness.automation_engine.client import AEClient
 from application_sdk.testing.harness.identity import Minter
-from application_sdk.testing.harness.starters._specs import AERunHandle, AEWorkflowSpec
+from application_sdk.testing.harness.starters._specs import (
+    AERunHandle,
+    AEWorkflowSpec,
+    SeededWorkflow,
+)
 
 logger = get_logger(__name__)
 
-__all__ = ["start_via_automation_engine"]
+__all__ = ["publish_seed_version", "start_via_automation_engine"]
 
 
 async def start_via_automation_engine(
@@ -116,7 +120,8 @@ async def start_via_automation_engine(
         ...     client=ae_client,
         ... )
     """
-    slug, seed_version = await _published_slug(spec, client=client, minter=minter)
+    seeded = await publish_seed_version(spec, client=client, minter=minter)
+    slug, seed_version = seeded.slug, seeded.seed_version
 
     logger.info("submitting AE run against slug %s", slug)
     # ``slug=`` is what lets an ambiguous submit timeout be resolved by reading
@@ -136,10 +141,24 @@ async def start_via_automation_engine(
     return AERunHandle(workflow_slug=slug, run_id=run_id, seed_version=seed_version)
 
 
-async def _published_slug(
-    spec: AEWorkflowSpec, *, client: AEClient, minter: Minter | None
-) -> tuple[str, int | None]:
+async def publish_seed_version(
+    spec: AEWorkflowSpec, *, client: AEClient, minter: Minter | None = None
+) -> SeededWorkflow:
     """Return a slug with a published version, creating and seeding one if needed.
+
+    The first three of :func:`start_via_automation_engine`'s four writes, public
+    because the fourth cannot always be handed a payload built in advance. AE
+    mints the slug on the create, and a submit body that has to *carry* that
+    slug — ``metadata.ae_workflow_slug`` in
+    :func:`application_sdk.testing.e2e.payload.build_ae_payload` — therefore
+    cannot exist until this call has answered. ``BaseE2ETest`` is that caller:
+    it publishes here, builds its payload around the slug, and submits through
+    :meth:`~application_sdk.testing.harness.automation_engine.AEClient.submit_workflow`.
+
+    Splitting the sequence in two does not weaken the rule the module docstring
+    states — nothing may re-enter the submit's own retry. The submit is still one
+    call, still the only non-idempotent write, and still nothing wraps a second
+    loop around it. What is split is only *where the payload comes from*.
 
     A pre-existing ``spec.slug`` returns immediately and *nothing is seeded over
     it*. That is the point of the field rather than an optimisation: the workflow
@@ -147,14 +166,25 @@ async def _published_slug(
     a DAG this run does not own — on a tenant where the next run to submit
     against that slug is not necessarily this one.
 
+    Args:
+        spec: What to create and what to seed it with. :attr:`AEWorkflowSpec.payload`
+            and :attr:`AEWorkflowSpec.submit_retry` are not read here — they
+            belong to the submit.
+        client: An open AE client, on *this* event loop. Not closed here.
+        minter: Supplies the seed version number when ``spec.version`` is
+            ``None``. ``None`` builds one over the real clock.
+
     Returns:
-        The slug, and the version this call published under it — ``None`` on the
-        pre-existing-slug path, where nothing was published and there is
-        therefore nothing for the tenant's manifest to have superseded.
+        The slug, and the version this call published under it.
+
+    Raises:
+        AtlanApiHttpError: If any of the three writes was rejected.
+        AtlanApiResponseInvariantError: If a write succeeded but its response
+            named no slug or version.
     """
     if spec.slug:
         logger.info("using the pre-existing AE workflow slug %s", spec.slug)
-        return spec.slug, None
+        return SeededWorkflow(slug=spec.slug, seed_version=None)
 
     slug = await client.create_workflow(name=spec.name, description=spec.description)
     logger.info("created (or reused) AE workflow name=%s slug=%s", spec.name, slug)
@@ -173,7 +203,7 @@ async def _published_slug(
     # comparing its seed against a version it never published.
     logger.info("created seed version %d under slug %s", published, slug)
     await client.publish_version(slug, published)
-    return slug, published
+    return SeededWorkflow(slug=slug, seed_version=published)
 
 
 def _minted_version(minter: Minter | None) -> int:
