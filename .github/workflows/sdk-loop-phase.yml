@@ -62,6 +62,11 @@ on:
         required: false
         default: ''
         description: 'USD this run has spent already. The phase refuses to start once it reaches the allowance.'
+      reaims_so_far:
+        type: string
+        required: false
+        default: ''
+        description: 'Consecutive re-aims so far. A re-aim is not progress, so it gets a budget of its own.'
     secrets:
       LITELLM_API_KEY:
         required: true
@@ -93,6 +98,10 @@ on:
         value: ${{ jobs.phase.outputs.detail }}
       cost:
         value: ${{ jobs.phase.outputs.cost }}
+      usage:
+        value: ${{ jobs.phase.outputs.usage }}
+      reaims:
+        value: ${{ jobs.phase.outputs.reaims }}
       spent_total:
         value: ${{ jobs.phase.outputs.spent_total }}
 
@@ -101,6 +110,10 @@ permissions:
 
 jobs:
   phase:
+    # GitHub renders a reusable-workflow job as "<caller job> / <inner job>".
+    # The caller already says "Review 3"; repeating "phase" after it only adds
+    # noise to a 18-row job list, so the inner name echoes the phase instead.
+    name: ${{ inputs.phase }}
     runs-on: ubuntu-latest
     # Review is the slower phase: it walks the whole playbook, sub-agents
     # included. The headroom is for checkout and token minting, not the agent —
@@ -116,6 +129,8 @@ jobs:
       ledger: ${{ steps.run.outputs.ledger }}
       detail: ${{ steps.run.outputs.detail }}
       cost: ${{ steps.run.outputs.cost }}
+      usage: ${{ steps.run.outputs.usage }}
+      reaims: ${{ steps.run.outputs.reaims }}
       spent_total: ${{ steps.run.outputs.spent_total }}
     steps:
       - name: Mint a scoped App token
@@ -144,8 +159,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.base_sha }}
-          # Full history: the review playbook diffs against the base branch.
+          # Full history for the base-branch diff, but only the refs this
+          # phase needs. `fetch-depth: 0` alone pulled 540 branches per job —
+          # every ref in the repo, three times a round, for a diff that needs
+          # two.
           fetch-depth: 0
+          filter: blob:none
           token: ${{ steps.app-token.outputs.token }}
           # The resolve phase pushes with this credential; the review phase
           # holds one that cannot.
@@ -153,25 +172,53 @@ jobs:
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: '3.14'
 
       # A loop is up to 17 phase jobs, each on a fresh runner, so anything
       # installed per job is paid for 17 times. Cache the global npm store so
       # only the first job of a run pays the download.
+      # 1.18.22, matching connector-pulse — the only lane with this pattern
+      # working in production. The first pin here was 0.6.3, an ancient release
+      # picked without checking, and it crashed before every single request:
+      #
+      #   Error: [DecimalError] Invalid argument: [object Object]
+      #
+      # Three theories were chased through three PRs — the dot in grok-4.6, the
+      # slash, an unpopulated cost table — before running the exact CI config
+      # against 1.18.22 locally, where it works untouched. The version was the
+      # whole bug.
+      #
+      # Installed from npm rather than opencode.ai's install script, which is
+      # `curl | bash` and barred by the org baseline.
       - name: Cache the opencode install
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.npm
-          key: opencode-${{ runner.os }}-0.6.3
+          key: opencode-${{ runner.os }}-1.18.22
 
       - name: Install opencode
-        run: npm install -g --prefer-offline opencode-ai@0.6.3
+        run: npm install -g --prefer-offline opencode-ai@1.18.22
+
+      # uv is how this repo runs everything — `uv run pytest`,
+      # `uv run pre-commit`. Without it the resolve phase's own verification
+      # silently no-ops: a live round logged `uv: command not found` for both
+      # its pre-commit and pytest calls and then pushed the commit anyway.
+      # A resolver that cannot check its work is worse than one that does not
+      # try, because the output looks identical.
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          enable-cache: true
 
       - name: Configure git identity for the resolve phase
         if: inputs.phase == 'resolve'
+        # Commit as the App whose token is doing the pushing, not as atlan-ci.
+        # atlan-ci is a CODEOWNER and the identity that mints approvals, so
+        # attributing loop commits to it blurs "who wrote this" with "who
+        # approved it" — precisely the separation the merge gate depends on.
         run: |
-          git config user.name  "atlan-ci"
-          git config user.email "atlan-ci@users.noreply.github.com"
+          git config user.name  "atlan-app-fleet[bot]"
+          git config user.email "4265590+atlan-app-fleet[bot]@users.noreply.github.com"
 
       - name: Run the phase
         id: run
@@ -192,6 +239,7 @@ jobs:
           VERDICT_URL: ${{ inputs.verdict_url }}
           PRIOR_SHA: ${{ inputs.prior_sha }}
           SPENT_SO_FAR: ${{ inputs.spent_so_far }}
+          REAIMS_SO_FAR: ${{ inputs.reaims_so_far }}
           SDK_LOOP_MAX_USD: ${{ vars.SDK_LOOP_MAX_USD }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}

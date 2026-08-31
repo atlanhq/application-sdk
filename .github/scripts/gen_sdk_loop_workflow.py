@@ -110,9 +110,15 @@ permissions:
   # this the duplicate check 403s, the fence raises before it can post, and
   # the lane goes silent — the failure mode it exists to prevent.
   actions: read
+  # Reactions are an Issues-scope resource, so the acknowledgement 403s
+  # without this. Caught by test_react_to_comment.py, which asserts every
+  # workflow calling the helper grants it — the same Issues-vs-PR distinction
+  # the fleet App token needed for posting the verdict comment.
+  issues: write
 
 jobs:
   fence:
+    name: Fence
     runs-on: ubuntu-latest
     timeout-minutes: 6
     if: >-
@@ -142,10 +148,25 @@ jobs:
           GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           WORKFLOW_FILE: sdk-loop.yml
         run: python3 .github/scripts/sdk_loop_fence.py
+
+      # The same acknowledgement the other two lanes give: an emoji within
+      # seconds, long before any verdict exists, so whoever typed @sdk-loop
+      # knows it registered. Runs after the fence so it can reflect the
+      # decision, and always() because the script exits 0 by design — a
+      # missing emoji must never take down the run it is decorating.
+      - name: React to the trigger comment
+        if: always() && github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          REACTION: ${{ steps.fence.outputs.proceed == 'true' && 'eyes' || 'confused' }}
+        run: python3 .github/scripts/react_to_comment.py
 """
 
 FOOTER = """
   finalize:
+    name: Summary
     needs: [fence, {all_phases}]
     if: always() && needs.fence.outputs.proceed == 'true'
     runs-on: ubuntu-latest
@@ -183,6 +204,7 @@ def review_job(n: int) -> str:
         ledger = "''"
         prior_sha = "''"
         spent = "''"
+        reaims = "''"
     else:
         prev_res, prev_rev = f"resolve-{n - 1}", f"review-{n - 1}"
         # Continue when the previous resolve made progress, or when either
@@ -206,8 +228,10 @@ def review_job(n: int) -> str:
             "${{ needs.%s.outputs.spent_total || needs.%s.outputs.spent_total }}"
             % (prev_res, prev_rev)
         )
+        reaims = "${{ needs.%s.outputs.reaims }}" % prev_rev
     return f"""
   review-{n}:
+    name: Review {n}
     needs: {needs}
     if: >-
       {gate}
@@ -223,6 +247,7 @@ def review_job(n: int) -> str:
       ledger: {ledger}
       prior_sha: {prior_sha}
       spent_so_far: {spent}
+      reaims_so_far: {reaims}
 """
 
 
@@ -243,6 +268,7 @@ def resolve_job(n: int) -> str:
     needs = f"[fence, {prev}]" if prev_res is None else f"[fence, {prev}, {prev_res}]"
     return f"""
   resolve-{n}:
+    name: Resolve {n}
     needs: {needs}
     if: >-
       !cancelled() && needs.{prev}.outputs.outcome == 'ok'
@@ -283,8 +309,9 @@ def _rounds_expr() -> str:
                 '"verdict":"${{ needs.%s.outputs.verdict }}",'
                 '"sha":"${{ needs.%s.outputs.new_base_sha }}",'
                 '"detail":"${{ needs.%s.outputs.detail }}",'
-                '"cost":"${{ needs.%s.outputs.cost }}"}'
-                % (n, phase, job, job, job, job, job)
+                '"cost":"${{ needs.%s.outputs.cost }}",'
+                '"usage":"${{ needs.%s.outputs.usage }}"}'
+                % (n, phase, job, job, job, job, job, job)
             )
     return "'[" + ",".join(rows) + "]'"
 

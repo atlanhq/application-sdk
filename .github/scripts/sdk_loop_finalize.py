@@ -53,6 +53,11 @@ STOP_TEXT = {
         "starting a phase it could not afford. Raise `vars.SDK_LOOP_MAX_USD` and "
         "re-invoke to continue from where it stopped."
     ),
+    "reaim": (
+        "**Kept re-aiming.** Every round found the branch somewhere other than "
+        "where it had just reviewed, so no round ever got a clean pass at one "
+        "commit. Re-invoke once the branch settles."
+    ),
     "failed": (
         "**A phase failed.** The run stopped rather than guessing at a result — "
         "see the round table for which phase and why."
@@ -75,6 +80,9 @@ class Round:
     detail: str = ""
     #: Gateway spend across this phase, or None when it could not be read.
     cost: float | None = None
+    #: Token counts from opencode itself — exact, and per-phase unlike the
+    #: shared gateway key. Carries the cache-hit signal.
+    usage: str = ""
 
 
 def parse_rounds(raw: str | None) -> list[Round]:
@@ -90,6 +98,12 @@ def parse_rounds(raw: str | None) -> list[Round]:
     for item in payload:
         if not isinstance(item, dict) or not item.get("phase"):
             continue
+        # A skipped job still emits a row, with every field empty. Counting
+        # those produced "8 review · 8 resolve" for a run where three reviews
+        # ran and nothing else did — the table then printed five blank rows
+        # implying work that never happened.
+        if not str(item.get("outcome", "")).strip():
+            continue
         rounds.append(
             Round(
                 number=int(item.get("number", 0) or 0),
@@ -99,6 +113,7 @@ def parse_rounds(raw: str | None) -> list[Round]:
                 sha=str(item.get("sha", "")),
                 detail=str(item.get("detail", "")),
                 cost=_as_cost(item.get("cost")),
+                usage=str(item.get("usage", "")),
             )
         )
     return rounds
@@ -135,14 +150,14 @@ def render_rounds(rounds: list[Round]) -> str:
     if not rounds:
         return "_No round completed._\n"
     lines = [
-        "| Round | Phase | Outcome | Verdict | Head | Cost | Detail |",
-        "|---|---|---|---|---|--:|---|",
+        "| Round | Phase | Outcome | Verdict | Head | Cost | Tokens | Detail |",
+        "|---|---|---|---|---|--:|---|---|",
     ]
     for r in rounds:
         cost = "—" if r.cost is None else f"${r.cost:,.4f}"
         lines.append(
             f"| {r.number} | {r.phase} | `{r.outcome}` | {_cell(r.verdict)} "
-            f"| `{r.sha[:8] or '—'}` | {cost} | {_cell(r.detail)} |"
+            f"| `{r.sha[:8] or '—'}` | {cost} | {_cell(r.usage)} | {_cell(r.detail)} |"
         )
     return "\n".join(lines) + "\n"
 
@@ -214,12 +229,22 @@ def main(argv: list[str] | None = None) -> int:
 
     repo, pr = os.environ.get("REPO"), os.environ.get("PR_NUMBER")
     if repo and pr:
-        subprocess.run(
+        # NOT check=False-and-forget: a live run generated this whole summary,
+        # exited 0, and posted nothing — the failure was indistinguishable
+        # from success. The summary is the only place a reader learns what the
+        # run did, so a failed post is surfaced loudly even though it must not
+        # fail the job (the verdicts are already on the PR either way).
+        proc = subprocess.run(
             ["gh", "pr", "comment", pr, "--repo", repo, "--body", text],
             check=False,
             capture_output=True,
             text=True,
         )
+        if proc.returncode != 0:
+            print(
+                f"::error::could not post the run summary to #{pr}: "
+                f"{(proc.stderr or '').strip()[:300]}"
+            )
     print(text)
     return 0
 

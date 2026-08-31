@@ -60,10 +60,21 @@ MAX_ROUNDS = 8
 #: (`.mothership/pr-resolve/ORCHESTRATION.md` §3d, "Fix every finding (or prove
 #: it false)"), so a separate adversarial reviewer would pay twice for one job.
 #:
-#: The alias contains a slash. opencode splits `--model` on the FIRST slash
-#: only, so `gateway/xai/grok-4.6` resolves to provider `gateway`, model
-#: `xai/grok-4.6` — and the key in the config's `models` map has to be the
-#: full alias, slash included.
+#: `grok-4.6`, dotted — that is the alias the gateway serves. The undotted
+#: form was tried and rejected: "Invalid model name passed in
+#: model=xai/grok-4-6", and `/v1/models` lists `xai/grok-4.6` and no variant.
+#:
+#: Superseded note, kept because it recorded a real finding: two live rounds
+#: died 11ms in with
+#: `Error: [DecimalError] Invalid argument: [object Object]` — decimal.js
+#: refusing a non-numeric argument — before the agent read anything. The
+#: dot was blamed. It was the wrong culprit — swapping it merely moved the
+#: failure from a crash to a 400. The real cause was an unpriced model; see
+#: `opencode_config`.
+#:
+#: The alias also contains a slash. opencode splits `--model` on the FIRST
+#: slash only, so `gateway/xai/grok-4.6` resolves to provider `gateway`, model
+#: `xai/grok-4.6` — the key in the config's `models` map is the full alias.
 REVIEW_MODEL = "xai/grok-4.6"
 
 #: Resolve runs on the mechanical model — the same role split connector-pulse
@@ -266,7 +277,68 @@ def gateway_base() -> str:
     return base.rstrip("/")
 
 
-def opencode_config(model: str) -> dict[str, Any]:
+#: The playbook's Phase 2 agents, registered so opencode's Task tool can
+#: dispatch them. §2a says "dispatch agents via the Agent tool" — Claude Code's
+#: name for it; opencode calls the same mechanism `Task`, and it runs them in
+#: parallel just the same. Without registering them the primary agent has
+#: nothing to delegate TO, and Phase 2's whole fan-out silently collapses into
+#: one agent doing everything: a review that still produces a verdict, just a
+#: worse one, with nothing in the output to say so.
+#:
+#: The prompts are the EXISTING files, loaded by reference. Nothing is copied,
+#: so the agents stay owned by `.mothership/pr-review/agents/` and keep the
+#: reference rules #3530 gave them.
+#: Audited against both playbooks on 2026-08-31: `Agent tool` (ORCHESTRATION
+#: lines 556 and 918) is the ONLY harness-specific capability either one names.
+#: No Skills, no MCP, no glean, no WebFetch, no TodoWrite — everything else is
+#: bash, gh, git and file reads, all of which opencode has. So subagent
+#: registration was the whole gap, and the resolve playbook needs nothing: it
+#: has no agents directory and dispatches none.
+#:
+#: `adversarial.md` is deliberately absent from this list — Wave 2 is skipped
+#: in this lane (see the review prompt), so registering it would advertise a
+#: capability the phase is told not to use.
+PHASE2_AGENTS = (
+    "correctness",
+    "quality",
+    "structure",
+    "reachability",
+    "conformance",
+    "ci-config",
+    "toolkit-review",
+)
+
+
+def review_subagents(model: str) -> dict[str, Any]:
+    """opencode subagent entries for the playbook's Phase 2 agents.
+
+    Each is read-only by construction: the review lane holds a token with no
+    write scope, and denying `edit` here makes that true of the agent as well
+    as the credential rather than relying on either alone.
+    """
+    return {
+        name: {
+            "description": f"SDK review — {name} domain agent (Phase 2 Wave 1).",
+            "mode": "subagent",
+            "model": f"{PROVIDER}/{model}",
+            "prompt": f"{{file:./.mothership/pr-review/agents/{name}.md}}",
+            # Same auto-reject trap as the primary agent: headless opencode
+            # has nobody to answer an "ask", and an unlisted tool IS an ask.
+            # `edit` stays denied so read-only holds in the agent as well as
+            # in its token; the outbound channels stay denied for the same
+            # injection reason.
+            "permission": {
+                "*": "allow",
+                "edit": "deny",
+                "webfetch": "deny",
+                "websearch": "deny",
+            },
+        }
+        for name in PHASE2_AGENTS
+    }
+
+
+def opencode_config(model: str, with_subagents: bool = False) -> dict[str, Any]:
     """`opencode.json` pinning the only provider and models this lane may use.
 
     Shell and network stay ALLOWED here, unlike the conformance fast lane which
@@ -290,7 +362,41 @@ def opencode_config(model: str) -> dict[str, Any]:
                     "baseURL": f"{base}/v1",
                     "apiKey": "{env:LITELLM_API_KEY}",
                 },
-                "models": {name: {} for name in ALLOWED_MODELS},
+                # Cost is DECLARED rather than left empty. This is a
+                # HYPOTHESIS under test, not a diagnosis, for the crash that
+                # killed the first three live runs:
+                #
+                #   Error: [DecimalError] Invalid argument: [object Object]
+                #
+                # What is PROVEN: it dies 11ms in, before any network call —
+                # the undotted alias got as far as a real 400 from the
+                # gateway, so the crash is local to opencode's model
+                # resolution. `[object Object]` reaching decimal.js means an
+                # OBJECT was passed where a number was wanted, and an
+                # unpopulated cost table is the obvious candidate for that
+                # object. connector-pulse's aliases resolve in opencode's
+                # bundled registry; a gateway-only alias like `xai/grok-4.6`
+                # does not, which fits.
+                #
+                # What is NOT proven: that cost is the object in question. If
+                # this run still crashes, the next suspects are opencode
+                # parsing `4.6` out of the id as a version, and the nested
+                # slash in `gateway/xai/grok-4.6`.
+                #
+                # Zeroes rather than real prices: this lane bills through the
+                # gateway key and reads spend from /key/info, so opencode's own
+                # accounting is unused. Declaring it only stops it guessing.
+                "models": {
+                    name: {
+                        "cost": {
+                            "input": 0,
+                            "output": 0,
+                            "cache_read": 0,
+                            "cache_write": 0,
+                        }
+                    }
+                    for name in ALLOWED_MODELS
+                },
             }
         },
         "model": f"{PROVIDER}/{model}",
@@ -298,13 +404,41 @@ def opencode_config(model: str) -> dict[str, Any]:
         # unanswered ask as a rejection — a connector-pulse run starved exactly
         # that way when its skill reads were auto-rejected. So everything a
         # phase legitimately does is allowed outright.
+        **({"agent": review_subagents(model)} if with_subagents else {}),
+        # Every permission the playbooks can reach, in one place.
+        #
+        # Headless opencode has nobody to answer an "ask", so it auto-REJECTS
+        # one — and an unlisted tool is an ask. A live round died after
+        # checkout with "The user rejected permission to use this specific
+        # tool call", naming no tool. `task` was the one that mattered: the
+        # subagents were registered but the primary agent was never allowed to
+        # DISPATCH them, so Phase 2 could not fan out even once registered.
+        #
+        # Enumerated rather than left to defaults because the defaults are not
+        # uniform: `external_directory` and `doom_loop` ask unless listed, and
+        # the review playbook legitimately does both — it reads /tmp scratch
+        # files and re-runs similar greps across a large diff.
+        #
+        # `webfetch` and `websearch` stay DENIED, and listing everything else
+        # is what makes that denial deliberate rather than incidental. The
+        # agent reads untrusted PR content, so an injected prompt must not
+        # reach an outbound channel it picks itself. Last matching rule wins,
+        # so both override the wildcard.
         "permission": {
+            "*": "allow",
             "read": "allow",
+            "edit": "allow",
             "glob": "allow",
             "grep": "allow",
-            "edit": "allow",
             "bash": "allow",
+            "task": "allow",
+            "skill": "allow",
+            "lsp": "allow",
+            "question": "allow",
+            "external_directory": "allow",
+            "doom_loop": "allow",
             "webfetch": "deny",
+            "websearch": "deny",
         },
     }
 
@@ -312,6 +446,64 @@ def opencode_config(model: str) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 # Cost
 # --------------------------------------------------------------------------
+
+
+def parse_opencode_usage(text: str) -> dict[str, int]:
+    """Token counts from `opencode stats`, which is the authoritative source.
+
+    Preferred over the gateway's /key/info spend for two reasons. It is
+    attributable to THIS phase rather than to a key several lanes share, and
+    it reports cache_read/cache_write — the one measurement that decides
+    whether the fixed ~90KB playbook prefix is being re-paid for on every one
+    of a phase's ~24 turns, which is where this lane's cost actually lives.
+
+    Dollars are deliberately NOT taken from here: the model entries declare
+    zero cost (see `opencode_config`), so opencode's own total is $0.00 by
+    construction. Tokens are unaffected by that and are exact.
+    """
+    fields = {
+        "input": r"Input\s+([\d,]+)",
+        "output": r"Output\s+([\d,]+)",
+        "cache_read": r"Cache Read\s+([\d,]+)",
+        "cache_write": r"Cache Write\s+([\d,]+)",
+    }
+    out: dict[str, int] = {}
+    for key, pattern in fields.items():
+        match = re.search(pattern, text or "")
+        if match:
+            out[key] = int(match.group(1).replace(",", ""))
+    return out
+
+
+def opencode_usage(cwd: str, runner: Any = subprocess.run) -> dict[str, int]:
+    """Run `opencode stats` for today and parse it. Never raises."""
+    try:
+        proc = runner(
+            ["opencode", "stats", "--days", "1"],
+            cwd=cwd,
+            env=agent_env(),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except Exception:
+        return {}
+    return parse_opencode_usage(proc.stdout or "")
+
+
+def format_usage(usage: dict[str, int]) -> str:
+    """One-line token summary, with the cache signal made explicit."""
+    if not usage:
+        return "tokens unavailable"
+    parts = [f"in {usage.get('input', 0):,}", f"out {usage.get('output', 0):,}"]
+    read, write = usage.get("cache_read", 0), usage.get("cache_write", 0)
+    if read or write:
+        parts.append(f"cache r/w {read:,}/{write:,}")
+    else:
+        # Worth flagging rather than omitting: no cache activity at all means
+        # the fixed playbook prefix is being re-sent every turn.
+        parts.append("cache MISS (no reuse)")
+    return " · ".join(parts)
 
 
 def parse_key_spend(payload: dict[str, Any]) -> float | None:
@@ -323,6 +515,10 @@ def parse_key_spend(payload: dict[str, Any]) -> float | None:
 
 def gateway_spend() -> float | None:
     """Cumulative USD spend on this gateway key, or None if unreadable.
+
+    Observed returning None on a live run, hence `opencode_usage` above as the
+    primary measurement. Kept because it is the only source of DOLLARS; the
+    failure reason is now surfaced instead of swallowed.
 
     None means exactly that — endpoint disabled, key lacks permission, gateway
     unreachable. Callers must report "unavailable" rather than substitute a
@@ -337,7 +533,8 @@ def gateway_spend() -> float | None:
     try:
         with urllib.request.urlopen(request, timeout=20) as response:
             return parse_key_spend(json.loads(response.read()))
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - reason matters more than type
+        print(f"::warning::/key/info unreadable, cost will be blank: {exc}")
         return None
 
 
@@ -384,6 +581,25 @@ def spend_delta(before: float | None, after: float | None) -> float | None:
 DEFAULT_MAX_USD = 50.0
 
 
+#: Consecutive re-aims before the loop gives up. A re-aim is not progress —
+#: it discards the round's work and starts over — so it needs a budget of its
+#: own. Without one, a branch that keeps moving (or a harness that keeps
+#: MISREADING the head as moved) silently eats the whole round cap: a live run
+#: burned three rounds on the identical mismatch, each reporting `reaim` and
+#: advancing as though something had changed.
+MAX_CONSECUTIVE_REAIMS = 2
+
+
+def reaim_exhausted(consecutive: int) -> bool:
+    """Whether a further re-aim should stop the run instead of costing a round.
+
+    Consecutive, not cumulative: a branch legitimately edited twice over a long
+    drive is normal, whereas two re-aims back to back with no round in between
+    means the loop is not converging on any one commit.
+    """
+    return consecutive >= MAX_CONSECUTIVE_REAIMS
+
+
 def run_budget() -> float:
     raw = (os.environ.get("SDK_LOOP_MAX_USD") or "").strip()
     try:
@@ -413,6 +629,28 @@ def format_usd(amount: float | None) -> str:
     return "unavailable" if amount is None else f"${amount:,.4f}"
 
 
+#: A ripgrep config that makes hidden paths searchable.
+#:
+#: opencode's Glob and Grep are ripgrep-backed, and ripgrep skips dot-paths.
+#: The whole playbook lives under `.mothership/`, so on the first complete run
+#: the reviewer got 0 matches TWICE: once globbing its own agent definitions,
+#: and once grepping the reference rules for prior art on the finding it was
+#: about to raise. It then raised that finding without the rules that exist to
+#: inform it — no error, no mention in the verdict.
+#:
+#: ripgrep reads flags from the file named by RIPGREP_CONFIG_PATH, so this is
+#: a structural fix rather than a prompt asking the model to remember.
+RG_CONFIG_NAME = ".sdk-loop-rgcfg"
+
+
+def write_rg_config(cwd: str) -> str:
+    """Write the ripgrep config and return its path."""
+    path = os.path.join(cwd, RG_CONFIG_NAME)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("--hidden\n")
+    return path
+
+
 #: Env the agent process inherits. An allowlist, not the runner's whole
 #: environment: every other GitHub Actions secret stays out of a process that
 #: is reading untrusted PR content.
@@ -424,6 +662,7 @@ AGENT_ENV_PASSTHROUGH = (
     "LC_ALL",
     "LITELLM_API_KEY",
     "LITELLM_BASE_URL",
+    "RIPGREP_CONFIG_PATH",
     "GH_TOKEN",
     "GITHUB_REPOSITORY",
 )
@@ -435,11 +674,35 @@ def agent_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     return env
 
 
+#: opencode prints a fatal error as a line starting `Error:` and then exits 0.
+#: Seen live: `Error: [DecimalError] Invalid argument: [object Object]`, 11ms
+#: into round 1, after which the phase did nothing for four rounds while the
+#: harness read a stale third-party verdict as its own output.
+_ABORT_RE = re.compile(r"^\s*(?:\x1b\[[0-9;]*m)*Error:\s*(.+)$", re.MULTILINE)
+
+
 @dataclass(frozen=True)
 class AgentResult:
     exit_code: int
     stdout: str
     stderr: str
+
+    @property
+    def abort_reason(self) -> str:
+        """The agent's own fatal error, if it printed one."""
+        match = _ABORT_RE.search(f"{self.stdout}\n{self.stderr}")
+        return match.group(1).strip() if match else ""
+
+    @property
+    def completed(self) -> bool:
+        """Whether the agent ran to completion rather than aborting.
+
+        The exit code is useless here — opencode returns 0 on fatal errors — so
+        this reads the transcript for the error it prints on the way out. A
+        phase that aborted must be reported as failed, never left for the
+        caller to infer from whatever side effects are lying around.
+        """
+        return not self.abort_reason
 
     @property
     def looks_authenticated(self) -> bool:
@@ -473,6 +736,7 @@ def run_agent(
     timeout_s: int,
     transcript_path: str | None = None,
     sink: Any = None,
+    subagents: bool = False,
 ) -> AgentResult:
     """Invoke one agent phase, STREAMING its output to the job log.
 
@@ -493,9 +757,10 @@ def run_agent(
     if shutil.which("opencode") is None:
         raise RuntimeError("opencode is not installed on this runner")
     emit = sink or (lambda line: print(line, flush=True))
+    os.environ["RIPGREP_CONFIG_PATH"] = write_rg_config(cwd)
     config_path = os.path.join(cwd, "opencode.json")
     with open(config_path, "w", encoding="utf-8") as handle:
-        json.dump(opencode_config(model), handle, indent=2)
+        json.dump(opencode_config(model, with_subagents=subagents), handle, indent=2)
 
     lines: list[str] = []
     try:
@@ -527,10 +792,11 @@ def run_agent(
             timer.cancel()
     finally:
         # Never leave the pinned config in a tree the resolve phase might commit.
-        try:
-            os.unlink(config_path)
-        except FileNotFoundError:
-            pass
+        for stray in (config_path, os.path.join(cwd, RG_CONFIG_NAME)):
+            try:
+                os.unlink(stray)
+            except FileNotFoundError:
+                pass
 
     transcript = "\n".join(lines)
     if transcript_path:
