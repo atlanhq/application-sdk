@@ -57,8 +57,9 @@ from sdk_loop_common import (
     run_agent,
 )
 
-#: Wall-clock per phase. Review is the slower of the two on kimi-k3, which
-#: thinks at its API-default maximum; resolve on luna is comparatively brisk.
+#: Wall-clock per phase. Review is the slower of the two: it walks the whole
+#: five-phase playbook including sub-agents, where a resolve round is mostly
+#: targeted edits.
 TIMEOUT_REVIEW_S = 45 * 60
 TIMEOUT_RESOLVE_S = 30 * 60
 

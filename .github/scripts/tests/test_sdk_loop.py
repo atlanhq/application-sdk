@@ -191,7 +191,9 @@ def test_a_review_that_posted_no_verdict_failed_whatever_it_exited() -> None:
 def test_an_auth_rejection_is_reported_as_such_not_as_a_clean_pass() -> None:
     # The most dangerous false success in a review lane: a gateway rejection
     # that reads as "the model found nothing".
-    result = AgentResult(exit_code=0, stdout="", stderr="Invalid model name: kimi-k4")
+    result = AgentResult(
+        exit_code=0, stdout="", stderr="Invalid model name: xai/grok-9"
+    )
     outcome = interpret_review(result, None, "aaa")
     assert outcome.outcome == OUTCOME_FAILED
     assert "gateway rejected" in outcome.detail
@@ -386,6 +388,25 @@ def test_no_gateway_hostname_is_committed_in_this_lane() -> None:
         assert "atlan.dev" not in text, f"{name} hardcodes a gateway hostname"
     wf = WORKFLOW.read_text(encoding="utf-8")
     assert "atlan.dev" not in wf
+
+
+def test_the_review_model_matches_what_the_existing_lanes_use() -> None:
+    # All three lanes reviewing on one model means a finding difference between
+    # them is about the harness, not the model.
+    assert REVIEW_MODEL == "xai/grok-4.6"
+
+
+def test_a_slash_bearing_alias_composes_into_provider_and_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`xai/grok-4.6` has a slash, and opencode splits `--model` on the FIRST
+    one — so `gateway/xai/grok-4.6` must read as provider `gateway`, model
+    `xai/grok-4.6`, and the config's `models` key must carry the full alias."""
+    monkeypatch.setenv("LITELLM_BASE_URL", "https://gateway.example")
+    cfg = opencode_config(REVIEW_MODEL)
+    assert cfg["model"] == "gateway/xai/grok-4.6"
+    assert cfg["model"].split("/", 1) == [PROVIDER, REVIEW_MODEL]
+    assert REVIEW_MODEL in cfg["provider"][PROVIDER]["models"]
 
 
 def test_an_unknown_model_fails_at_config_time_not_as_a_paid_400() -> None:

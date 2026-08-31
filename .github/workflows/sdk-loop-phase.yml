@@ -86,8 +86,8 @@ permissions:
 jobs:
   phase:
     runs-on: ubuntu-latest
-    # Review is the slower phase: kimi-k3 thinks at its API-default maximum.
-    # The +10 is headroom for checkout and token minting, not for the agent —
+    # Review is the slower phase: it walks the whole playbook, sub-agents
+    # included. The headroom is for checkout and token minting, not the agent —
     # the agent's own budget is enforced inside sdk_loop_phase.py.
     timeout-minutes: ${{ inputs.phase == 'review' && 55 || 40 }}
     outputs:

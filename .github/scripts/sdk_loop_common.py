@@ -49,15 +49,23 @@ from typing import Any, Sequence
 #: nothing, so this bounds only the worst case.
 MAX_ROUNDS = 8
 
-#: Review runs on the judgment model. There is deliberately NO ladder and no
-#: adversarial second pass: the resolve phase opens by contesting the findings
-#: it was handed (`.mothership/pr-resolve/ORCHESTRATION.md` §3d, "Fix every
-#: finding (or prove it false)"), so a separate adversarial reviewer would be
-#: paying twice for one job.
-REVIEW_MODEL = "kimi-k3"
+#: Review runs on the same model the existing lanes review with — their
+#: `MAIN_MODEL`, so all three lanes agree on what "a review" means and a
+#: finding difference between them is about the harness, not the model.
+#:
+#: There is deliberately NO ladder and no adversarial second pass: the resolve
+#: phase opens by contesting the findings it was handed
+#: (`.mothership/pr-resolve/ORCHESTRATION.md` §3d, "Fix every finding (or prove
+#: it false)"), so a separate adversarial reviewer would pay twice for one job.
+#:
+#: The alias contains a slash. opencode splits `--model` on the FIRST slash
+#: only, so `gateway/xai/grok-4.6` resolves to provider `gateway`, model
+#: `xai/grok-4.6` — and the key in the config's `models` map has to be the
+#: full alias, slash included.
+REVIEW_MODEL = "xai/grok-4.6"
 
 #: Resolve runs on the mechanical model — the same role split connector-pulse
-#: uses, where luna is first-line and kimi is escalation.
+#: uses for its mechanical lane.
 RESOLVE_MODEL = "gpt-5.6-luna"
 
 #: The provider key inside `opencode.json`. A local alias only — the real
