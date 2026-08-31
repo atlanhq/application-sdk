@@ -105,6 +105,11 @@ concurrency:
 permissions:
   contents: read
   pull-requests: write
+  # The fence runs `gh run list` to find a loop already working this PR. An
+  # explicit permissions block makes everything unlisted `none`, so without
+  # this the duplicate check 403s, the fence raises before it can post, and
+  # the lane goes silent — the failure mode it exists to prevent.
+  actions: read
 
 jobs:
   fence:
@@ -124,7 +129,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: '3.14'
       - name: Authorize, dismiss duplicates, pin the baseline
         id: fence
         env:
@@ -149,7 +154,7 @@ FOOTER = """
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: '3.14'
       - name: Post the run summary
         env:
           GH_TOKEN: ${{{{ secrets.GITHUB_TOKEN }}}}

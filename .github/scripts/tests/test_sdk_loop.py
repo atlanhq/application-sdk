@@ -703,6 +703,95 @@ def test_a_dismissed_run_starts_no_rounds() -> None:
 # ---------------------------------------------------------------------------
 
 
+class _StrictLoader(yaml.SafeLoader):
+    """`yaml.safe_load` accepts duplicate keys and keeps the last.
+
+    That is precisely why a duplicate `description:` shipped: every test here
+    parsed the file happily while GitHub rejected it outright with
+    "'description' is already defined" — and a workflow GitHub will not parse
+    runs NO jobs, so the lane answered with silence.
+    """
+
+
+def _no_duplicate_keys(loader, node, deep=False):
+    seen, out = set(), {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in seen:
+            raise yaml.constructor.ConstructorError(
+                None,
+                None,
+                f"duplicate key {key!r} at line {key_node.start_mark.line + 1}",
+                key_node.start_mark,
+            )
+        seen.add(key)
+        out[key] = loader.construct_object(value_node, deep=deep)
+    return out
+
+
+_StrictLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_duplicate_keys
+)
+
+
+@pytest.mark.parametrize("wf", ["sdk-loop.yml", "sdk-loop-phase.yml"])
+def test_the_workflow_has_no_duplicate_keys(wf: str) -> None:
+    """GitHub rejects a duplicate key and runs nothing. Shipped once already."""
+    yaml.load((WORKFLOW.parent / wf).read_text(encoding="utf-8"), _StrictLoader)
+
+
+def _call_spec() -> dict:
+    return yaml.safe_load(PHASE_WF.read_text(encoding="utf-8"))[True]["workflow_call"]
+
+
+def _phase_callers() -> dict:
+    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    return {
+        n: j
+        for n, j in jobs.items()
+        if str(j.get("uses", "")).endswith("sdk-loop-phase.yml")
+    }
+
+
+def test_no_caller_passes_an_input_the_phase_does_not_declare() -> None:
+    declared = set(_call_spec().get("inputs") or {})
+    passed = set()
+    for job in _phase_callers().values():
+        passed |= set(job.get("with") or {})
+    assert not (passed - declared), f"undeclared inputs: {sorted(passed - declared)}"
+
+
+def test_every_output_the_chain_reads_is_actually_exported() -> None:
+    """A phase output added in the script but not surfaced by the reusable
+    workflow resolves to empty, which silently degrades the round rather than
+    failing it — the ledger would stop carrying, or the budget stop counting."""
+    exported = set(_call_spec().get("outputs") or {})
+    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    read = set()
+    for job in jobs.values():
+        read |= set(
+            re.findall(
+                r"needs\.(?:review|resolve)-\d+\.outputs\.([a-z_]+)", yaml.dump(job)
+            )
+        )
+    assert not (read - exported), f"not exported: {sorted(read - exported)}"
+
+
+def test_the_workflow_grants_every_scope_its_own_gh_calls_need() -> None:
+    """An explicit `permissions:` block makes everything unlisted `none`, and a
+    403 in the fence raises before it can post — so a missing scope shows up as
+    silence, not as an error. `gh run list` needs actions:read; `gh pr comment`
+    needs pull-requests:write."""
+    perms = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["permissions"]
+    fence = (
+        pathlib.Path(__file__).resolve().parents[1] / "sdk_loop_fence.py"
+    ).read_text(encoding="utf-8")
+    if '"run",' in fence and '"list",' in fence:
+        assert perms.get("actions") == "read", "gh run list needs actions: read"
+    if '"gh", "pr", "comment"' in fence:
+        assert perms.get("pull-requests") == "write"
+
+
 def test_no_job_reads_outputs_from_a_job_it_does_not_need() -> None:
     """GitHub rejects the WHOLE workflow at parse time for this, so no job runs
     and the fence never gets to say why — the user sees total silence from a
@@ -731,10 +820,16 @@ def test_the_action_pins_in_the_generator_match_the_generated_file() -> None:
     gen = (
         pathlib.Path(__file__).resolve().parents[1] / "gen_sdk_loop_workflow.py"
     ).read_text(encoding="utf-8")
-    pin = re.compile(r"uses: (actions/[a-z-]+@[0-9a-f]{40})")
-    assert set(pin.findall(gen)) <= set(
-        pin.findall(WORKFLOW.read_text(encoding="utf-8"))
-    )
+    wf = WORKFLOW.read_text(encoding="utf-8")
+    # Guard everything Renovate can bump in the OUTPUT, not just action SHAs:
+    # after the SHA drift it bumped python-version next, and a pins-only guard
+    # missed that exactly the way it had missed the SHAs.
+    for label, pattern in (
+        ("action pin", r"uses: (actions/[a-z-]+@[0-9a-f]{40})"),
+        ("python-version", r"python-version: ('[0-9.]+')"),
+    ):
+        drift = set(re.findall(pattern, gen)) - set(re.findall(pattern, wf))
+        assert not drift, f"{label} in generator but not in output: {sorted(drift)}"
 
 
 def test_the_committed_workflow_matches_its_generator() -> None:
