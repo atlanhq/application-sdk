@@ -619,6 +619,99 @@ def test_b005_sdk_template_inherited_fields_silent(tmp_path: Path) -> None:
     assert "B005" not in _ids(findings)
 
 
+_SDK_TEMPLATE_INPUT = """\
+from application_sdk.app import App, entrypoint
+from application_sdk.templates.contracts.sql_metadata import (
+    ExtractionInput,
+    ExtractionOutput,
+)
+
+class DbtExtractInput(ExtractionInput):
+    pass
+
+class MyApp(App):
+    @entrypoint
+    async def extract(self, input: DbtExtractInput) -> ExtractionOutput:
+        pass
+"""
+
+
+def test_b005_sdk_template_input_inherited_field_type_change_fires(
+    tmp_path: Path,
+) -> None:
+    """Retyping a field inherited from SDK ExtractionInput stays B005-visible."""
+    source = _SDK_TEMPLATE_INPUT.replace(
+        "    pass\n\nclass MyApp", "    credential_guid: int\n\nclass MyApp"
+    )
+    ledger = _make_ledger(
+        ContractField("DbtExtractInput", "credential_guid", "str", "active")
+    )
+    findings = _scan(tmp_path, {"app.py": source}, ledger)
+    assert "B005" in _ids(findings)
+
+
+def test_b005_sdk_template_input_inherited_fields_silent(tmp_path: Path) -> None:
+    """Fields inherited from SDK ExtractionInput are not reported as removed."""
+    ledger = _make_ledger(
+        ContractField("DbtExtractInput", "credential_guid", "str", "active"),
+        ContractField("DbtExtractInput", "include_filter", "FilterMap | str", "active"),
+        ContractField("DbtExtractInput", "app_name", "str", "active"),
+    )
+    findings = _scan(tmp_path, {"app.py": _SDK_TEMPLATE_INPUT}, ledger)
+    assert "B005" not in _ids(findings)
+
+
+_SDK_TEMPLATE_NESTED_OUTPUT = """\
+from application_sdk.app import App, entrypoint
+from application_sdk.templates.contracts.incremental_sql import (
+    IncrementalExtractionInput,
+    IncrementalExtractionOutput,
+)
+
+class DbtIncrementalOutput(IncrementalExtractionOutput):
+    pass
+
+class MyApp(App):
+    @entrypoint
+    async def extract(
+        self, input: IncrementalExtractionInput
+    ) -> DbtIncrementalOutput:
+        pass
+"""
+
+
+def test_b005_sdk_template_chain_inherited_field_type_change_fires(
+    tmp_path: Path,
+) -> None:
+    """Retyping a field inherited two template levels up stays B005-visible."""
+    source = _SDK_TEMPLATE_NESTED_OUTPUT.replace(
+        "    pass\n\nclass MyApp", "    records_uploaded: str\n\nclass MyApp"
+    )
+    ledger = _make_ledger(
+        ContractField("DbtIncrementalOutput", "records_uploaded", "int", "active")
+    )
+    findings = _scan(tmp_path, {"app.py": source}, ledger)
+    assert "B005" in _ids(findings)
+
+
+def test_b005_sdk_template_chain_inherited_fields_silent(tmp_path: Path) -> None:
+    """Fields reached through a template-to-template base chain stay silent.
+
+    ``IncrementalExtractionOutput`` declares ``marker_updated`` itself,
+    inherits ``records_uploaded`` from ``ExtractionOutput`` and ``status`` from
+    ``Output`` beyond that. Registry lookup is by the immediate unresolved base
+    name and does not recurse, so this only holds because the registry entry is
+    flattened across the whole chain.
+    """
+    ledger = _make_ledger(
+        ContractField("DbtIncrementalOutput", "marker_updated", "bool", "active"),
+        ContractField("DbtIncrementalOutput", "records_uploaded", "int", "active"),
+        ContractField("DbtIncrementalOutput", "status", "OutputStatus", "active"),
+    )
+    findings = _scan(tmp_path, {"app.py": _SDK_TEMPLATE_NESTED_OUTPUT}, ledger)
+    assert "B005" not in _ids(findings)
+
+
 def test_b006_sdk_mixin_field_not_yet_in_ledger_fires_and_notes_inherited(
     tmp_path: Path,
 ) -> None:
