@@ -1412,23 +1412,32 @@ class TestEmitPreflightCrashOutcome:
         assert kwargs[FAILURE_AUDIENCE_KEY] == DependencyUnavailableError.audience.value
         assert kwargs["request_id"] == "r-1"
 
-    def test_client_fault_errors_emit_no_crash_row(self) -> None:
+    def test_client_fault_is_counted_but_not_a_crash(self) -> None:
         # A wrong password (AUTH -> 401) is the response working as designed,
-        # not a handler crash; counting it would let setup-form typos dominate
-        # the crash series. Same for an explicit sub-500 http_status.
+        # not a handler crash; in the crash series it would let setup-form
+        # typos dominate, but dropping it entirely would re-open the
+        # denominator hole. So it gets its own outcome, at the surface's
+        # level policy: INFO on HTTP (the response carries the failure),
+        # ERROR on SDR (the row is the only channel).
         log = mock.MagicMock()
         emit_preflight_crash_outcome(
             log, "myapp", AuthError(message="x"), surface=PreflightSurface.HTTP
         )
+        log.error.assert_not_called()
+        row = log.info.call_args.kwargs
+        assert row["outcome"] == "client_fault"
+        assert row["reason"] == AuthError.code
+        assert row[FAILURE_AUDIENCE_KEY] == AuthError.audience.value
+
+        log = mock.MagicMock()
         emit_preflight_crash_outcome(
             log,
             "myapp",
             HandlerError("bad request", http_status=400),
-            surface=PreflightSurface.HTTP,
+            surface=PreflightSurface.SDR,
         )
-        log.error.assert_not_called()
-        log.warning.assert_not_called()
         log.info.assert_not_called()
+        assert log.error.call_args.kwargs["outcome"] == "client_fault"
 
     def test_untyped_error_crash_row_attributes(self) -> None:
         log = mock.MagicMock()
@@ -1658,3 +1667,24 @@ class TestCancelledAttemptSuppression:
             ):
                 await gate(PreflightGateInput())
             assert (_outcome_event(m) is not None) is expect_row
+
+    async def test_incident_geometry_is_suppressed(self) -> None:
+        # The row that motivated gap 1 landed 3.2s past its deadline. The
+        # 2s skew grace must not wave it through — a 5s grace did, which is
+        # why the grace is tighter than the 5s emit headroom.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="connectivity", passed=False)],
+        )
+        gate = _verdict_gate(out, enforce=False)
+        incident = SimpleNamespace(
+            attempt=1,
+            start_to_close_timeout=timedelta(seconds=155),
+            started_time=datetime.now(timezone.utc) - timedelta(seconds=158.2),
+        )
+        with (
+            mock.patch(f"{_GATE}.activity.info", return_value=incident),
+            mock.patch(_LOGGER) as m,
+        ):
+            await gate(PreflightGateInput())
+        assert _outcome_event(m) is None

@@ -518,7 +518,13 @@ class PreflightOutput(BaseModel):
     own error, then to ``message``."""
 
     total_duration_ms: float = 0.0
-    """Total time for all checks in milliseconds."""
+    """Total time for all checks in milliseconds.
+
+    Deliberately NOT the ``-1.0`` sentinel its per-check sibling uses: this
+    field is an accumulator (the SDR surface does ``+= elapsed_ms`` on it), so
+    its default must be the additive identity. ``0.0`` here means "nothing
+    added yet", which is a different statement from a per-check duration that
+    was never measured."""
 
     @field_validator("error", mode="before")
     @classmethod

@@ -381,9 +381,13 @@ GATE_HEARTBEAT_TIMEOUT_SECONDS = 60
 
 #: Skew allowance for the liveness deadline check: ``started_time`` is stamped
 #: by the Temporal server, ``now`` by the worker, and the two clocks are not
-#: guaranteed to agree to the second. Within the grace, cancellation delivery
-#: (no clocks involved) is the signal that catches an abandoned attempt.
-GATE_LIVENESS_CLOCK_GRACE_SECONDS = 5
+#: guaranteed to agree to the second. Kept tighter than
+#: ``GATE_ACTIVITY_HEADROOM_SECONDS`` on purpose: a healthy verdict emits
+#: *before* the deadline (the headroom already reserves 5s for that), so the
+#: grace only needs to absorb clock skew — and the incident that motivated the
+#: guard emitted 3.2s past its deadline, which a 5s grace would have waved
+#: through. 2s suppresses that geometry while tolerating realistic NTP drift.
+GATE_LIVENESS_CLOCK_GRACE_SECONDS = 2
 
 # Floor on what's left after credential resolution. Below this there is no point
 # calling the handler: resolution has eaten the budget, which is a plumbing
@@ -727,6 +731,7 @@ class PreflightRowOutcome(SerializableEnum):
     NO_VERDICT = "no_verdict"
     SKIPPED = "skipped"
     CRASHED = "crashed"
+    CLIENT_FAULT = "client_fault"
 
 
 class PreflightSurface(SerializableEnum):
@@ -878,31 +883,46 @@ def emit_preflight_crash_outcome(
     entrypoint: str | None = None,
     request_id: str | None = None,
 ) -> None:
-    """Emit a crash-marked ``Preflight check outcome`` row.
+    """Emit the outcome row for a raise on an interactive surface.
 
-    A handler that raises on an interactive surface (HTTP form check, SDR test
-    connection) produces no verdict body anywhere, so without this row the
-    crash is invisible to the setup-funnel metrics built on the event — the
-    worst case drops out of the denominator. Emitted at ERROR on every
-    surface, in addition to (never instead of) each surface's own boundary
+    A raise (HTTP form check, SDR test connection) produces no verdict body
+    anywhere, so without this row the failure is invisible to the setup-funnel
+    metrics built on the event — the case drops out of the denominator. Every
+    raise is therefore *counted*, but attribution is split so the crash series
+    keeps measuring handler health:
+
+    - a real crash (untyped, or a 5xx-class typed error) emits
+      ``outcome="crashed"`` at ERROR on every surface;
+    - a client-input error (:func:`_is_client_fault` — an explicit sub-500
+      ``http_status`` or a typed 4xx-class category, e.g. a wrong password)
+      emits ``outcome="client_fault"`` instead, at the surface's level policy:
+      ERROR where the row is the only channel (SDR), INFO where the response
+      already carries the failure (HTTP). Dropping these entirely would
+      re-open the denominator hole for the boundary steps (secret-store probe,
+      credential resolution) the SDR surface wraps.
+
+    Emitted in addition to (never instead of) each surface's own boundary
     error handling. ``reason`` is the typed wire code for an ``AppError``, the
-    class name otherwise.
-
-    Declines client-input errors (:func:`_is_client_fault`): a typed 4xx-class
-    failure already reaches the user as the response, and attributing it as a
-    crash would poison the series. The guard lives here, at the single emit
-    site, so every surface applies the same judgement.
+    class name otherwise. The split lives here, at the single emit site, so
+    every surface applies the same judgement.
     """
-    if _is_client_fault(exc):
-        return
+    client_fault = _is_client_fault(exc)
+    if not client_fault:
+        emit = log.error
+    elif _log_row_is_only_channel(surface):
+        emit = log.error
+    else:
+        emit = log.info
     extra: dict[str, Any] = {}
     if isinstance(exc, AppError):
         extra[FAILURE_AUDIENCE_KEY] = type(exc).audience.value
     if request_id is not None:
         extra["request_id"] = request_id
-    log.error(
+    emit(
         PREFLIGHT_CHECK_EVENT,
-        outcome=PreflightRowOutcome.CRASHED.value,
+        outcome=PreflightRowOutcome.CLIENT_FAULT.value
+        if client_fault
+        else PreflightRowOutcome.CRASHED.value,
         reason=exc.code if isinstance(exc, AppError) else type(exc).__name__,
         app_name=app_name,
         entrypoint=entrypoint or "<implicit>",
@@ -1490,7 +1510,11 @@ def build_preflight_gate_activity(
             # proceeded/blocked rows; the workflow emits only no_verdict (fail-open).
             # ``reason`` is the status on proceed, the primary FailureDetails.code on a
             # block. Activity execution is at-least-once, so a retry after a lost
-            # completion can re-emit — consumers dedupe on (workflow_run_id, outcome).
+            # completion can re-emit — consumers dedupe on
+            # (workflow_run_id, gate_attempt), highest attempt wins. Every row
+            # carries gate_attempt (GATE_ATTEMPTS_KEY below); the old
+            # (workflow_run_id, outcome) key kept both rows of an orphaned
+            # attempt-1 + attempt-2 pair, which is CONNECT-1170 gap 1.
             if result.status is PreflightStatus.NOT_READY:
                 block_error = _build_block_error(result, app_name)
                 _emit_outcome(

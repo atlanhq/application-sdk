@@ -326,10 +326,10 @@ class TestBuildSdrActivities:
         assert event["preflight_surface"] == "sdr"
         assert event["reason"] == "RuntimeError"
 
-    async def test_client_fault_from_handler_emits_no_crash_row(self) -> None:
-        # A typed 4xx-class error (wrong password) is a client-facing outcome,
-        # not a handler crash — it must still raise, but never enter the
-        # crash series.
+    async def test_client_fault_from_handler_is_counted_not_crashed(self) -> None:
+        # A typed 4xx-class error (wrong password) must still raise and must
+        # not enter the crash series — but on SDR the row is the only channel,
+        # so it is counted as its own outcome at ERROR.
         from application_sdk.errors.leaves import AuthError
 
         class _WrongPasswordHandler(_StubHandler):
@@ -345,12 +345,13 @@ class TestBuildSdrActivities:
             pytest.raises(AuthError),
         ):
             await by_name[SDR_PREFLIGHT_ACTIVITY](PreflightInput(credentials=[]))
-        rows = [
-            c
+        event = next(
+            c.kwargs
             for c in ml.error.call_args_list
             if c.args and c.args[0] == "Preflight check outcome"
-        ]
-        assert rows == []
+        )
+        assert event["outcome"] == "client_fault"
+        assert event["reason"] == AuthError.code
 
     async def test_crash_outside_the_handler_still_emits_crash_row(self) -> None:
         # The crash boundary covers the whole surface, not only the handler

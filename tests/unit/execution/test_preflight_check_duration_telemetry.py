@@ -141,4 +141,12 @@ class TestUnsetDurationDefault:
     """
 
     def test_unset_duration_is_distinguishable_from_an_instant_check(self) -> None:
-        assert PreflightCheck(name="tablesCheck", passed=True).duration_ms == -1.0
+        # Behavioural form: what matters is that an unset duration and a
+        # genuinely instant check produce different wire values, and that the
+        # unset one can never read as elapsed time.
+        unset = PreflightCheck(name="tablesCheck", passed=True).duration_ms
+        instant = PreflightCheck(
+            name="tablesCheck", passed=True, duration_ms=0.0
+        ).duration_ms
+        assert unset != instant
+        assert unset < 0

@@ -482,16 +482,19 @@ class TestPreflightEndpoint:
         with patch("application_sdk.handler.service.logger") as ml:
             response = client.post("/workflows/v1/check", json={"credentials": []})
         assert response.status_code == 401
-        rows = [
+        crashed = [
             c
-            for c in [
-                *ml.info.call_args_list,
-                *ml.warning.call_args_list,
-                *ml.error.call_args_list,
-            ]
+            for c in ml.error.call_args_list
             if c.args and c.args[0] == "Preflight check outcome"
         ]
-        assert rows == []
+        assert crashed == []
+        counted = [
+            c.kwargs
+            for c in ml.info.call_args_list
+            if c.args and c.args[0] == "Preflight check outcome"
+        ]
+        assert len(counted) == 1
+        assert counted[0]["outcome"] == "client_fault"
 
     def test_client_fault_set_matches_the_http_mapping(self) -> None:
         # The crash-row guard and the HTTP status mapping encode the same
