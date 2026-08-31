@@ -63,6 +63,7 @@ from sdk_loop_fence import (  # noqa: E402
 )
 from sdk_loop_finalize import Round, parse_rounds, render  # noqa: E402
 from sdk_loop_phase import (  # noqa: E402
+    LANE_MARKER,
     OUTCOME_CLEAN,
     OUTCOME_FAILED,
     OUTCOME_NO_PROGRESS,
@@ -398,6 +399,32 @@ def test_the_delta_range_never_narrows_the_review() -> None:
     prompt = review_prompt(42, 3, "b" * 40, DismissalLedger(), prior_sha="a" * 40)
     assert "Do NOT narrow the review to it" in prompt
     assert "any line of the PR" in prompt
+
+
+def test_the_lane_marker_matches_the_playbook_contract() -> None:
+    """One string, two files — the shape that rots without anyone noticing.
+
+    The playbook's Runtime section skips its sandbox-only Appendix A when the
+    prompt announces `LANE: sdk-loop`. If either side renames the string, the
+    playbook simply waits for a line nobody sends: no exception, no log, just
+    a review quietly walking the other lane's steps and eating 403s from
+    write calls its token cannot make. Nothing else in the system would fail,
+    which is precisely why this assertion exists.
+    """
+    playbook = pathlib.Path(".mothership/pr-review/ORCHESTRATION.md").read_text(
+        encoding="utf-8"
+    )
+    assert LANE_MARKER in playbook, (
+        f"review_prompt() emits {LANE_MARKER!r} but ORCHESTRATION.md does not "
+        "mention it — lane detection is broken and nothing else will say so"
+    )
+    monkey = pytest.MonkeyPatch()
+    monkey.setenv("LITELLM_BASE_URL", "https://gateway.example")
+    try:
+        prompt = review_prompt(1, 1, "a" * 40, DismissalLedger())
+    finally:
+        monkey.undo()
+    assert LANE_MARKER in prompt, "the lane must be announced, never inferred"
 
 
 def test_the_phase_two_agents_are_registered_so_the_fan_out_can_happen() -> None:
