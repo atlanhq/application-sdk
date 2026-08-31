@@ -197,10 +197,31 @@ def test_string_helpers_are_case_insensitive() -> None:
     assert _eval("endsWith(github.ref, 'MAIN')", github={"ref": "refs/heads/main"})
 
 
-def test_always_is_modelled_but_runtime_status_functions_are_not() -> None:
+def test_always_is_modelled_but_success_is_not() -> None:
     assert _eval("always()")
+    # `success()` reflects real upstream job results. Modelling it would let a
+    # gate scenario pass without ever exercising the condition under test.
     with pytest.raises(UnsupportedExpression, match="success"):
         _eval("success()")
+    with pytest.raises(UnsupportedExpression, match="failure"):
+        _eval("failure()")
+
+
+def test_cancelled_is_modelled_because_it_carries_no_gate_meaning() -> None:
+    """`!cancelled()` only keeps a job alive past a skipped `needs`.
+
+    Unlike `success()`, it says nothing about whether the gate's real condition
+    holds, so fixing it at False lets a test reach the clause that matters.
+    """
+    assert _eval("cancelled()") is False
+    assert _eval(
+        "!cancelled() && needs.a.outputs.x == 'ok'",
+        needs={"a": {"outputs": {"x": "ok"}}},
+    )
+    assert not _eval(
+        "!cancelled() && needs.a.outputs.x == 'ok'",
+        needs={"a": {"outputs": {"x": "no"}}},
+    )
 
 
 def test_format_and_join() -> None:

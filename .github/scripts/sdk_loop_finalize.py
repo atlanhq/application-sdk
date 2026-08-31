@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""Close out an `@sdk-loop` run: one summary comment, one step summary.
+
+Runs with `always()`, so it is also the reporter for a run that died. A loop
+that stopped without saying why is worse than one that failed loudly — the
+whole point of the lane is that nobody has to watch it.
+
+The summary is additive to the existing vocabulary, never a replacement: the
+per-round verdict comments the review phase posts are the artifacts the merge
+gate consumes, and this comment only narrates the run around them.
+
+Environment:
+    REPO, PR_NUMBER
+    ROUNDS_JSON     per-round records emitted by the phase jobs
+    STOP_REASON     why the loop ended
+    GH_TOKEN
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+from dataclasses import dataclass
+
+MARKER = "<!-- SDK_LOOP_SUMMARY -->"
+
+#: Every way a run can end, and the one-line explanation a reader gets. Keys
+#: are the outcomes the phase jobs emit plus the harness-level stops.
+STOP_TEXT = {
+    "clean": (
+        "**Merge-ready.** The review returned `READY_TO_MERGE` with an empty "
+        "`### Findings` — no findings of any tier, nits included."
+    ),
+    "no_progress": (
+        "**Stalled.** A resolve round changed nothing and contested nothing, so "
+        "another identical round could not do better."
+    ),
+    "terminal_verdict": (
+        "**Handed back.** The review returned a verdict a resolve phase cannot "
+        "fix by changing code."
+    ),
+    "exhausted": (
+        "**Round budget spent.** The loop used all its rounds without reaching an "
+        "empty `### Findings`."
+    ),
+    "reaim_exhausted": (
+        "**Kept losing the branch.** Every remaining round was spent re-aiming at "
+        "a new commit, so the loop never got a clean pass at one sha."
+    ),
+    "failed": (
+        "**A phase failed.** The run stopped rather than guessing at a result — "
+        "see the round table for which phase and why."
+    ),
+    "dismissed": (
+        "**Stood down.** A loop was already running on this PR; the first one "
+        "keeps the branch."
+    ),
+    "unauthorized": "**Declined.** `@sdk-loop` is restricted to repository collaborators.",
+}
+
+
+@dataclass(frozen=True)
+class Round:
+    number: int
+    phase: str
+    outcome: str
+    verdict: str = ""
+    sha: str = ""
+    detail: str = ""
+
+
+def parse_rounds(raw: str | None) -> list[Round]:
+    if not raw or not raw.strip():
+        return []
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, list):
+        return []
+    rounds: list[Round] = []
+    for item in payload:
+        if not isinstance(item, dict) or not item.get("phase"):
+            continue
+        rounds.append(
+            Round(
+                number=int(item.get("number", 0) or 0),
+                phase=str(item["phase"]),
+                outcome=str(item.get("outcome", "")),
+                verdict=str(item.get("verdict", "")),
+                sha=str(item.get("sha", "")),
+                detail=str(item.get("detail", "")),
+            )
+        )
+    return rounds
+
+
+def _cell(text: str) -> str:
+    """Table-safe: a detail string can carry a pipe and break the row."""
+    return (text or "—").replace("|", "\\|").replace("\n", " ")
+
+
+def render_rounds(rounds: list[Round]) -> str:
+    if not rounds:
+        return "_No round completed._\n"
+    lines = [
+        "| Round | Phase | Outcome | Verdict | Head | Detail |",
+        "|---|---|---|---|---|---|",
+    ]
+    for r in rounds:
+        lines.append(
+            f"| {r.number} | {r.phase} | `{r.outcome}` | {_cell(r.verdict)} "
+            f"| `{r.sha[:8] or '—'}` | {_cell(r.detail)} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def render(rounds: list[Round], stop_reason: str, run_url: str) -> str:
+    headline = STOP_TEXT.get(stop_reason, f"**Stopped** — `{stop_reason}`.")
+    reviews = sum(1 for r in rounds if r.phase == "review")
+    resolves = sum(1 for r in rounds if r.phase == "resolve")
+    reaims = sum(1 for r in rounds if r.outcome == "reaim")
+
+    body = [
+        MARKER,
+        "## `@sdk-loop`",
+        "",
+        headline,
+        "",
+        f"{reviews} review · {resolves} resolve"
+        + (f" · {reaims} re-aimed onto a new commit" if reaims else ""),
+        "",
+        render_rounds(rounds),
+    ]
+    if reaims:
+        body.append(
+            "\nA re-aim means someone pushed while the loop was working. The loop "
+            "discarded that round's work and went back to review on the new "
+            "commit — nothing was fixed against a review of a different sha.\n"
+        )
+    body.append(f"\n[Run log]({run_url})\n")
+    return "\n".join(body)
+
+
+def main(argv: list[str] | None = None) -> int:
+    rounds = parse_rounds(os.environ.get("ROUNDS_JSON"))
+    stop_reason = os.environ.get("STOP_REASON", "failed")
+    run_url = os.environ.get("GHA_RUN_URL", "")
+    text = render(rounds, stop_reason, run_url)
+
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        with open(summary_path, "a", encoding="utf-8") as handle:
+            handle.write(text)
+
+    repo, pr = os.environ.get("REPO"), os.environ.get("PR_NUMBER")
+    if repo and pr:
+        subprocess.run(
+            ["gh", "pr", "comment", pr, "--repo", repo, "--body", text],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    print(text)
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())
