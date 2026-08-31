@@ -94,7 +94,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.14'
+          python-version: '3.12'
       - name: Authorize, dismiss duplicates, pin the baseline
         id: fence
         env:
@@ -159,7 +159,7 @@ jobs:
       spent_so_far: ${{ needs.resolve-1.outputs.spent_total || needs.review-1.outputs.spent_total }}
 
   resolve-2:
-    needs: [fence, review-2]
+    needs: [fence, review-2, resolve-1]
     if: >-
       !cancelled() && needs.review-2.outputs.outcome == 'ok'
     uses: ./.github/workflows/sdk-loop-phase.yml
@@ -192,7 +192,7 @@ jobs:
       spent_so_far: ${{ needs.resolve-2.outputs.spent_total || needs.review-2.outputs.spent_total }}
 
   resolve-3:
-    needs: [fence, review-3]
+    needs: [fence, review-3, resolve-2]
     if: >-
       !cancelled() && needs.review-3.outputs.outcome == 'ok'
     uses: ./.github/workflows/sdk-loop-phase.yml
@@ -225,7 +225,7 @@ jobs:
       spent_so_far: ${{ needs.resolve-3.outputs.spent_total || needs.review-3.outputs.spent_total }}
 
   resolve-4:
-    needs: [fence, review-4]
+    needs: [fence, review-4, resolve-3]
     if: >-
       !cancelled() && needs.review-4.outputs.outcome == 'ok'
     uses: ./.github/workflows/sdk-loop-phase.yml
@@ -258,7 +258,7 @@ jobs:
       spent_so_far: ${{ needs.resolve-4.outputs.spent_total || needs.review-4.outputs.spent_total }}
 
   resolve-5:
-    needs: [fence, review-5]
+    needs: [fence, review-5, resolve-4]
     if: >-
       !cancelled() && needs.review-5.outputs.outcome == 'ok'
     uses: ./.github/workflows/sdk-loop-phase.yml
@@ -291,7 +291,7 @@ jobs:
       spent_so_far: ${{ needs.resolve-5.outputs.spent_total || needs.review-5.outputs.spent_total }}
 
   resolve-6:
-    needs: [fence, review-6]
+    needs: [fence, review-6, resolve-5]
     if: >-
       !cancelled() && needs.review-6.outputs.outcome == 'ok'
     uses: ./.github/workflows/sdk-loop-phase.yml
@@ -324,7 +324,7 @@ jobs:
       spent_so_far: ${{ needs.resolve-6.outputs.spent_total || needs.review-6.outputs.spent_total }}
 
   resolve-7:
-    needs: [fence, review-7]
+    needs: [fence, review-7, resolve-6]
     if: >-
       !cancelled() && needs.review-7.outputs.outcome == 'ok'
     uses: ./.github/workflows/sdk-loop-phase.yml
@@ -357,7 +357,7 @@ jobs:
       spent_so_far: ${{ needs.resolve-7.outputs.spent_total || needs.review-7.outputs.spent_total }}
 
   resolve-8:
-    needs: [fence, review-8]
+    needs: [fence, review-8, resolve-7]
     if: >-
       !cancelled() && needs.review-8.outputs.outcome == 'ok'
     uses: ./.github/workflows/sdk-loop-phase.yml
@@ -381,7 +381,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.14'
+          python-version: '3.12'
       - name: Post the run summary
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
