@@ -1568,9 +1568,9 @@ class TestPreflightGateStorageChecks:
             self._storage_patches([self._reloc_result()]),
             mock.patch(f"{_GATE}.activity.info", return_value=info),
         ):
-            with pytest.raises(Exception) as excinfo:
+            with pytest.raises(ApplicationError) as excinfo:
                 await gate(PreflightGateInput())
-        assert getattr(excinfo.value, "type", None) == PREFLIGHT_NO_VERDICT_ERROR_TYPE
+        assert excinfo.value.type == PREFLIGHT_NO_VERDICT_ERROR_TYPE
         assert excinfo.value.non_retryable is False
 
     async def test_storage_failure_on_final_attempt_blocks(self) -> None:

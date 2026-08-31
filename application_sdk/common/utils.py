@@ -65,11 +65,9 @@ async def download_file_from_upload_response(
 
     local_path = os.path.join(TEMPORARY_PATH, key)
 
-    # Lazy: storage.ops imports obstore at module load, and this module sits on
-    # the workflow-sandbox import chain (credentials → here) — a top-level
-    # import would pull the heavy Rust extension into every sandboxed module's
-    # import set (the preflight gate pins that invariant with a test).
-    from application_sdk.storage.ops import download_file_chunked  # noqa: PLC0415
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — lazy: storage.ops imports obstore (heavy Rust ext) at module load, and this module sits on the workflow-sandbox import chain (credentials → here); pinned by the preflight gate's import-hygiene test
+        download_file_chunked,
+    )
 
     # Chunk large uploads (user-supplied files are uncapped) so a big artifact
     # survives slow egress; small files still stream in a single GET. (BLDX-1513)

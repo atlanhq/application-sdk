@@ -741,8 +741,18 @@ async def test_probe_writes_with_binding_put_attributes() -> None:
 
 
 def test_relocation_error_exported_from_package_root() -> None:
-    """StorageBucketRelocationError is importable like its eight siblings."""
-    from application_sdk.storage import StorageBucketRelocationError  # noqa: F401
+    """StorageBucketRelocationError is importable like its eight siblings.
+
+    Asserts the symbol rather than suppressing an unused import: the package
+    root must re-export the class, list it in ``__all__`` beside its siblings
+    (what the capability manifest reads), and it must stay catchable as a
+    ``StorageError`` so existing domain catch sites keep working.
+    """
+    import application_sdk.storage as storage_pkg
+    from application_sdk.storage import StorageBucketRelocationError, StorageError
+
+    assert issubclass(StorageBucketRelocationError, StorageError)
+    assert "StorageBucketRelocationError" in storage_pkg.__all__
 
 
 # ---------------------------------------------------------------------------
