@@ -30,6 +30,17 @@ description: >
   schema its own writer contradicts) are the artifact-schema pair: K016 is fixed by
   declaring the shape in contract/app.pkl and regenerating; K017 is fixed on
   whichever side is wrong -- the declaration or the writer.
+  K018 (the extract node sends an arg the entrypoint's Input contract cannot
+  receive) and K019 (a uiConfig form key with no matching {{...}} placeholder) are
+  the inbound-config pair, and both are **detect-only: they route to residue and
+  carry no prescription.**  Neither has a single mechanical fix.  K018 offers three
+  (declare the field, set extra="allow", or add a mode="before" validator) and
+  choosing between them -- plus the field's type and default, plus the
+  nested-wins-over-flat ordering that keeps re-validation idempotent -- is design
+  judgment.  K019's fix is either wiring the key into contract/app.pkl or deleting
+  a control the product deliberately shows; the loop cannot tell which is wanted.
+  Both also sit on surfaces the loop must not write blind: an entrypoint contract
+  and a generated-artifact source.
   K009, K011, K012, and K015 are
   BLOCK-tier (they fail the gate in default mode); the rest of the K-series is WARN.
 ---
@@ -51,10 +62,11 @@ K009 (unresolved scaffold placeholder), K011 (missing `app_id`), K012
 finding is present — those are FAILING results
 that fail the gate and must be remediated in default mode.  In **strict** mode
 the fingerprint-set also includes the unsuppressed WARNING results
-(K004/K005/K007/K008/K010/K014/K016/K017), which is where the rest of K-series
-remediation runs.
+(K004/K005/K007/K008/K010/K014/K016/K017/K018/K019), which is where the rest of
+K-series remediation runs — K018 and K019 surface there but route straight to
+residue rather than to a prescription.
 
-The active scope decides which rules can appear: K001–K017 are all `scope=APP`,
+The active scope decides which rules can appear: K001–K019 are all `scope=APP`,
 so they surface only on consumer app repos.  The runner auto-detects scope, so
 the SDK repo sees 0 findings.
 
@@ -753,6 +765,31 @@ If `pkl` is unavailable and the correct fix is the contract side, route to resid
 with the proposed change in the note rather than hand-editing the generated file.
 
 ---
+
+**K018 ManifestArgNotDeclaredOnInputContract** and
+**K019 FormKeyMissingFromManifestArgs** — **detect-only. Do not propose a fix;
+route every finding straight to residue with the rule's message.**
+
+These are reported for a human because neither has one mechanical answer, and a
+wrong guess is worse than the finding. K018 has three valid remedies — declare
+the field on the `Input` contract, set `model_config = ConfigDict(extra="allow")`,
+or add a `@model_validator(mode="before")` folding flat keys into `metadata` —
+and picking between them is an app-design decision, as are the field's type and
+default. The validator route additionally has to let nested win over flat, so
+pre-0.9.0 workflow specs that are still persisted and in flight keep validating
+and re-validation stays idempotent; that ordering is easy to get backwards and
+impossible to verify from the finding alone. K019's two remedies point opposite
+ways: wire the key into the `extract` node's args in `contract/app.pkl` and
+regenerate, *or* delete a control the product deliberately shows. Nothing in the
+finding says which the team wants.
+
+Both also sit on surfaces the loop must not write blind — a live entrypoint
+contract and a generated-artifact source — and K019's anchor is
+`contract/app.pkl`, where the only sanctioned change is a regenerate.
+
+A justified inline suppression is still allowed in strict mode (`# conformance:
+ignore[K018]` on the `Input` class, `// conformance: ignore[K019]` on the
+widget), and like every suppression it routes to residue for human audit.
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**: the model may
 propose an inline suppression comment — `// conformance: ignore[Kxxx]

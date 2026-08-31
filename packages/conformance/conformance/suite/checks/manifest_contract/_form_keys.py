@@ -49,8 +49,24 @@ _CONTRACT_PKL = "contract/app.pkl"
 
 # ["some-form-key"] = new Config.<Widget>
 _FORM_KEY_RE = re.compile(
-    r'\[\s*"(?P<key>[A-Za-z0-9][A-Za-z0-9_-]*)"\s*\]\s*=\s*new\s+Config\.'
+    r'\[\s*"(?P<key>[A-Za-z0-9][A-Za-z0-9_-]*)"\s*\]\s*=\s*new\s+Config\.(?P<widget>\w+)'
 )
+
+# Widgets that carry no value for the workflow, so having no ``{{...}}`` arg is
+# correct rather than a defect. Derived by cross-tabulating every widget type in
+# the fleet against whether its key is wired (34 apps, 2026-08-31):
+#
+# * ``InfoBanner`` — presentational (title/content/bannerType), 0 wired of 1.
+# * ``Sage`` / ``SageV2`` — the preflight-check runner. Its checks execute in the
+#   UI and the DAG carries a single canonical ``preflight_check`` arg, so apps
+#   legitimately declare several UIRule-selected variants
+#   (``preflight-check-with-tags``, ``preflight-check-account-usage``, …) that
+#   share it. Counting each variant as unwired reported 7 findings across two
+#   apps, all of them by-design.
+#
+# Every other widget type in the fleet is either always wired or mixed with a
+# real defect behind the unwired cases, so none of them are excluded.
+_NON_VALUE_WIDGETS = frozenset({"InfoBanner", "Sage", "SageV2"})
 
 _PLACEHOLDER_RE = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
 
@@ -82,10 +98,12 @@ def _ui_config_span(source: str) -> tuple[int, int] | None:
 
 
 def _declared_form_keys(source: str) -> dict[str, int]:
-    """Return ``{form-key: 1-based line}`` for every widget in ``uiConfig``.
+    """Return ``{form-key: 1-based line}`` for every value-bearing ``uiConfig`` widget.
 
     Only the *first* declaration of a key is recorded — a key repeated across
-    two wizard tasks is one form field and should yield one finding.
+    two wizard tasks is one form field and should yield one finding. Widgets in
+    :data:`_NON_VALUE_WIDGETS` are skipped: they hold nothing the workflow needs,
+    so an absent placeholder is correct.
     """
     span = _ui_config_span(source)
     if span is None:
@@ -93,6 +111,8 @@ def _declared_form_keys(source: str) -> dict[str, int]:
     start, end = span
     keys: dict[str, int] = {}
     for m in _FORM_KEY_RE.finditer(source, start, end):
+        if m.group("widget") in _NON_VALUE_WIDGETS:
+            continue
         key = m.group("key")
         if key not in keys:
             keys[key] = source.count("\n", 0, m.start()) + 1

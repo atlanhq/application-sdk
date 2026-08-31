@@ -690,6 +690,54 @@ def test_k019_ignores_ui_rule_references(tmp_path: Path) -> None:
     assert _only(scan_all(paths, tmp_path), "K019") == []
 
 
+def test_k019_ignores_non_value_widgets(tmp_path: Path) -> None:
+    """Presentational and preflight widgets hold nothing the workflow needs.
+
+    ``InfoBanner`` is pure display. ``Sage``/``SageV2`` run preflight checks in
+    the UI against a single canonical ``preflight_check`` arg, so apps declare
+    several UIRule-selected variants that share it. Counting either as unwired
+    produced 8 by-design findings across the fleet.
+    """
+    paths = _write_py(tmp_path, {"app.py": _MINIMAL_APP})
+    _write_pkl(
+        tmp_path,
+        '        ["sql-connection-info-note"] = new Config.InfoBanner {\n'
+        '          content = "**Note**"\n'
+        "        }\n"
+        '        ["preflight-check-with-tags"] = new Config.SageV2 {\n'
+        '          title = ""\n'
+        "        }\n"
+        '        ["preflight-check"] = new Config.Sage {\n'
+        '          title = ""\n'
+        "        }\n",
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {"extract": _extract_node({})},
+    )
+    assert _only(scan_all(paths, tmp_path), "K019") == []
+
+
+def test_k019_still_fires_for_real_value_widgets(tmp_path: Path) -> None:
+    """The exclusion must not swallow ordinary config controls beside them."""
+    paths = _write_py(tmp_path, {"app.py": _MINIMAL_APP})
+    _write_pkl(
+        tmp_path,
+        '        ["sql-connection-info-note"] = new Config.InfoBanner {\n'
+        '          content = "**Note**"\n'
+        "        }\n"
+        '        ["use-source-schema-filtering"] = new Config.Radio {\n'
+        '          title = "Schema filtering"\n'
+        "        }\n",
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {"extract": _extract_node({})},
+    )
+    findings = _only(scan_all(paths, tmp_path), "K019")
+    assert [f.discriminator for f in findings] == ["use-source-schema-filtering"]
+
+
 def test_k019_silent_without_ui_config(tmp_path: Path) -> None:
     paths = _write_py(tmp_path, {"app.py": _MINIMAL_APP})
     p = tmp_path / "contract" / "app.pkl"
