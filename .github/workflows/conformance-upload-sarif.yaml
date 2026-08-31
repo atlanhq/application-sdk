@@ -11,7 +11,13 @@ on:
     types: [completed]
     branches: [main]
 
+# A `permissions:` block is exhaustive, not additive: every scope it omits
+# is `none`, whatever the repository default is. `contents: read` is
+# therefore load-bearing — without it `actions/checkout` cannot read a
+# private repo, the probe script is absent, and the job this workflow
+# exists to keep green fails on exactly the 77 repos FND-1149 is about.
 permissions:
+  contents: read  # required to check out the availability probe script
   security-events: write
   actions: read  # required to download artifacts from the triggering run
 

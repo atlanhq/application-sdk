@@ -68,10 +68,25 @@ _BRANCHING_KEYWORDS = frozenset(
 )
 
 
+def _job(source: str) -> dict:  # type: ignore[type-arg]
+    """The `upload` job, as GitHub reads it."""
+    return yaml.safe_load(source)["jobs"]["upload"]
+
+
 def _steps(source: str) -> list[dict]:  # type: ignore[type-arg]
     """The `upload` job's steps, as GitHub reads them."""
+    return _job(source)["steps"]
+
+
+def _permissions(source: str) -> dict[str, str]:
+    """The scopes in force for the `upload` job.
+
+    A job-level block replaces the workflow-level one outright rather than
+    merging with it, so the job's own block wins where it exists.
+    """
     workflow = yaml.safe_load(source)
-    return workflow["jobs"]["upload"]["steps"]
+    job_level = _job(source).get("permissions")
+    return dict(job_level or workflow.get("permissions") or {})
 
 
 def _step_by_id(steps: list[dict], step_id: str) -> dict:  # type: ignore[type-arg]
@@ -198,4 +213,28 @@ def test_probe_script_is_checked_out_before_it_runs(label: str, source: str) -> 
     assert any(not pattern or _PROBE_SCRIPT in pattern for pattern in patterns), (
         f"[{label}] the checkout before the probe is sparse and its patterns "
         f"{patterns} exclude {_PROBE_SCRIPT}, so the file is still absent."
+    )
+
+
+@pytest.mark.parametrize("label,source", _COPIES, ids=lambda v: v)
+def test_token_can_read_contents(label: str, source: str) -> None:
+    """The checkout needs a grant, not just a step, to reach a private repo.
+
+    A `permissions:` block is exhaustive, not additive: every scope it
+    omits is `none` regardless of the repository's
+    `default_workflow_permissions`. This workflow declares one for
+    `security-events` and `actions`, so omitting `contents` leaves
+    `actions/checkout` unable to read the repo — and 77 of the 82 repos
+    carrying this file are private, which is the whole population
+    FND-1149 is about. The failure would land on the job that must never
+    fail, so asserting the checkout step exists is a hollow gate without
+    this: the step would be present, correctly configured, and still
+    exit non-zero.
+    """
+    permissions = _permissions(source)
+    assert permissions.get("contents") == "read", (
+        f"[{label}] the upload job's permissions are {permissions}, which "
+        f"leaves `contents` at `none`. `actions/checkout` then cannot read a "
+        f"private repo and the probe script never lands, so the workflow "
+        f"fails where it is most needed. Add `contents: read`."
     )
