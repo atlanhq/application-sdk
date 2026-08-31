@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**46 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046) (all AST-based / cross-artifact)
+**48 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -69,6 +69,8 @@ reassigned.
 | [P045](#p045) | `PrivateErrorClassImport` | `warn` | `app` | `error-seam` | — | 0.21.0 |
 | [P046](#p046) | `LocaleDependentTextIO` | `warn` | `sdk` | `portability` | — | 0.24.0 |
 | [P047](#p047) | `PreflightFailureLoggedAsWarning` | `warn` | `app` | `preflight-gate` | — | 0.24.0 |
+| [P048](#p048) | `AppDerivedPersistentArtifactPrefix` | `warn` | `app` | `persistence-seam` | — | 0.24.0 |
+| [P049](#p049) | `StrictConnectionQualifiedNameParse` | `block` | `app` | `persistence-seam` | — | 0.24.0 |
 
 ---
 
@@ -1870,5 +1872,131 @@ alias are both matched, on any receiver named like a logger (`logger`, `log`,
 `self._log`, `logging`). Only class-method `preflight_check` overrides are scanned:
 module-level per-entrypoint `preflight_check` functions are not resolved, and helper
 functions the method calls are not followed.
+
+---
+
+## P048 — `AppDerivedPersistentArtifactPrefix` {#p048}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `persistence-seam` · **Autofixable:** — · **Since:** 0.24.0
+
+> App builds the connection-scoped persistent-artifacts layout itself instead of deriving it from the SDK's get_persistent_s3_prefix
+
+**Rationale:** The persistent-artifacts object-store layout for a connection is owned by
+application_sdk.common.incremental.helpers.get_persistent_s3_prefix. An app that
+assembles the prefix itself forks the answer to 'where does this connection's state
+live?', and the copies drift on inputs the app's own fixtures never cover — most
+dangerously on strictness, where the SDK warns and proceeds but the app raises.
+CONNECT-1136 is that failure: a miner hard-failed on name-based connection qualified
+names that the crawler accepted, breaking a tenant that provisions connections
+programmatically.
+
+App code assembles the connection-scoped layout
+`persistent-artifacts/apps/<app>/connection/…` itself rather than asking the SDK where a
+connection's persistent state lives.
+
+Use the SDK seam instead:
+
+* `get_persistent_s3_prefix(connection_qualified_name, app_name)` —   the
+connection-scoped prefix
+(`persistent-artifacts/apps/{app}/connection/{connection_id}`); *
+`fetch_marker_from_storage` / `persist_marker_to_storage`
+(`application_sdk.common.incremental.marker`) — the incremental   marker read/write
+built on that prefix.
+
+Deriving the prefix locally is not merely duplication: the two copies agree on the
+inputs the app author thought of and diverge on the ones they did not.  In CONNECT-1136
+an app's miner took the first numeric segment of the qualified name where the SDK takes
+the last, and **raised** where the SDK warns and proceeds.  Connections whose qualified
+name ends in a word rather than an epoch crawled fine and mined not at all, in one
+tenant, with every test passing.
+
+The match is the segment *sequence* the helper produces, not the `persistent-artifacts`
+root: a path that diverges at the fourth segment (`state/`, `workflows/`, `skills`) or
+the second (the Argo `{cqn}/parquet/...` layout) is one the helper cannot produce and
+does not own, so flagging it would prescribe a remedy that does not apply.
+
+The path is assembled across the whole expression — `str.join`, f-strings and `+`
+concatenation — with runtime pieces standing in as a wildcard segment.  That matters:
+the CONNECT-1136 defect built its key from six separate constants joined by `/`, and the
+only literal in that file carrying the whole layout was its *docstring*.  A check
+testing one literal at a time would have missed the defect it exists for.  Segments are
+matched exactly (`persistent-artifacts-backup` does not match), and docstrings, comments
+and bare string statements are never flagged.
+
+Unlike `P049` there is no seam-import gate: a module that imports the seam and *still*
+hand-rolls the connection layout is exactly a finding worth making, and four of the five
+fleet sites are in such a module.
+
+Land as `WARN`: apps that write under this prefix on paths the SDK helper does not model
+(Argo-layout compatibility, e.g. `persistent-artifacts/{cqn}/parquet/markers/{phase}`)
+record that with a justified `# conformance: ignore[P048] <reason>`, which stays visible
+in SARIF and turns a silent fork into a reviewed decision.
+
+---
+
+## P049 — `StrictConnectionQualifiedNameParse` {#p049}
+
+**Tier:** `block` · **Scope:** `app` · **Category:** `persistence-seam` · **Autofixable:** — · **Since:** 0.24.0
+
+> App parses connection_qualified_name itself and raises, where the SDK warns and proceeds
+
+**Rationale:** extract_epoch_id_from_qualified_name deliberately warns and proceeds when a connection
+qualified name's last segment is not an epoch, because such connections crawl fine and
+must not be failed on. An app that parses the same value itself and raises is strictly
+more brittle than the SDK on input the SDK accepts, and the divergence is invisible to
+the app's own tests — every fixture uses an epoch, because the author had no reason to
+write down the case they did not know about. This is the precise CONNECT-1136 failure: a
+miner rejected name-based connection qualified names that the crawler accepted, so one
+tenant's connections crawled and never mined, with the whole suite green. Customer
+impact: the customer's workflow fails at its first step with a parse error naming a
+connection qualified name they never chose and cannot change, on every run, while the
+same connection crawls normally — so the failure looks arbitrary, no watermark is ever
+written, and query-based lineage and popularity go silently missing for as long as it
+takes someone to notice.
+
+A function takes a `connection_qualified_name`, calls `.split(...)` on a value derived
+from it, and can `raise` out of its own body — while that function does not itself reach
+the SDK seam.
+
+The app has taken over a decision the SDK already makes, and made it stricter.
+`extract_epoch_id_from_qualified_name` logs a warning and returns the segment when it is
+not numeric; the connection is usable and the crawler proceeds.  An app that raises on
+the same input fails only for connections named rather than epoch-stamped — which is a
+property of how a given tenant provisions connections, not of anything under test.
+
+Derive the value through the SDK instead and let it decide what is fatal:
+
+```python
+from application_sdk.common.incremental.helpers import (
+    get_persistent_s3_prefix,
+)
+
+prefix = get_persistent_s3_prefix(connection_qualified_name, app_name)
+```
+
+Raising a typed app error *around* the SDK call is correct and not flagged: a function
+that calls a seam symbol is delegating, so one that catches the SDK's error and
+re-raises its own stays silent.
+
+Delegation is judged **per function**, not per module.  A module-level gate reads as
+delegation today, when almost no app module imports the seam — but the point of P048 and
+the published seam is that they all should, so such a gate would go blind exactly as
+adoption succeeds, and 'module imports the seam and one function still hand-rolls a
+strict parse' is the likeliest shape of the next recurrence.
+
+This rule is a **heuristic**.  The `.split` receiver must trace syntactically to the
+parameter (through `str()`, `.strip()`, subscripting), so a function that splits some
+other string is not caught; a name rebound through an intermediate local is an accepted
+false-negative.  `raise` inside a nested `def` or `lambda` belongs to that scope, not
+the enclosing one.  Only `connection_qualified_name` is matched — table, column and
+asset qualified names have different owners and different segment semantics.
+
+Lands at `BLOCK` rather than `WARN`, against the usual convention for a new rule.  The
+convention exists so a new rule does not turn the fleet red overnight; this one finds
+**zero** violations across all connector apps today (the one historical instance is
+fixed), so there is no fleet to redden and nothing to grandfather.  It is a recurrence
+guard for a production incident, and blocking is what the RCA asked for.  A deliberate
+stricter contract is still expressible with a justified `# conformance: ignore[P049]
+<reason>`.
 
 ---
