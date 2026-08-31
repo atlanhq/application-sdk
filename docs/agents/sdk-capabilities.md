@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.30.0
-source-sha:    17caa4a9026ff1093521f9cc70e722c574150e7c
-source-date:   2026-08-29T17:15:36+01:00
+source-sha:    22d2095e1a789aad013fab5fb9c773f41685bed4
+source-date:   2026-08-29T16:59:01Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 297 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 298 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3142,7 +3142,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `AppExecutor`
 
 - **Import:** `from application_sdk.testing.integration.fixtures import AppExecutor`
-- **Signature:** `class AppExecutor(backend: TemporalExecutorBackend) -> None`
+- **Signature:** `class AppExecutor(backend: TemporalExecutorBackend, expected_infrastructure: object | None = None) -> None`
 - **Summary:** Thin shim over :class:`TemporalExecutorBackend` for integration suites.
 - **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
@@ -4348,7 +4348,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `executor`
 
 - **Import:** `from application_sdk.testing.integration.fixtures import executor`
-- **Signature:** `executor(temporal_client: Client, worker: None, integration_task_queue: str) -> AppExecutor`
+- **Signature:** `executor(temporal_client: Client, ...)`
 - **Summary:** Executor submitting to the running worker's task queue.
 - **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
@@ -5025,6 +5025,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Import:** `from application_sdk.testing.integration.fixtures import temporal_client`
 - **Signature:** `temporal_client(embedded_temporal: EmbeddedRuntime, ...)`
 - **Summary:** Connect to the embedded dev server, in its namespace.
+- **Defined in:** `application_sdk/testing/integration/fixtures.py`
+
+#### `temporary_path`
+
+- **Import:** `from application_sdk.testing.integration.fixtures import temporary_path`
+- **Signature:** `temporary_path(tmp_path_factory: pytest.TempPathFactory, integration_options: KitOptions) -> Iterator[Path]`
+- **Summary:** Point ``constants.TEMPORARY_PATH`` at a session temp dir, and yield it.
 - **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
 #### `validate_asset`

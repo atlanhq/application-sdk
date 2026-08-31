@@ -31,7 +31,7 @@ def integration_source():
     ...
 ```
 
-The star-import brings in the six kit fixtures (`store_root`, `infrastructure`, `embedded_temporal`, `temporal_client`, `worker`, `executor`) and the five `integration_*` override points. A connector overrides what it needs and gets the rest. There is no binding boilerplate and no names to get right; a suite whose tests already use a different name aliases in the ordinary way:
+The star-import brings in the seven kit fixtures (`store_root`, `temporary_path`, `infrastructure`, `embedded_temporal`, `temporal_client`, `worker`, `executor`) and the five `integration_*` override points. A connector overrides what it needs and gets the rest. There is no binding boilerplate and no names to get right; a suite whose tests already use a different name aliases in the ordinary way:
 
 ```python
 @pytest.fixture(scope="session")
@@ -67,6 +67,7 @@ def infrastructure(store_root, integration_secrets):
 | `integration_source` | `None` | The connector has a source to bring up: a testcontainer, an in-process HTTP fake, a credential dict. Whatever it yields is handed to `integration_secrets` and otherwise untouched. |
 | `integration_secrets` | `{}` | Credentials are read from the secret store rather than passed inline. Receives `integration_source`; returns a `{key: json}` mapping seeded into `MockSecretStore`. |
 | `integration_options` | `KitOptions()` | Any knob in the table below needs changing. |
+| `temporary_path` | Not requested — the SDK default `./local/tmp/` stands | The suite asserts on a run's **local** files. Requesting it points `constants.TEMPORARY_PATH` at a session temp dir, so run files leave the working tree and two runs of the same suite cannot read each other's artifacts. Undone on teardown. |
 | `infrastructure` | Mocked stores + `LocalStore` under `store_root` | The suite needs a real store. It receives `store_root`, `integration_source` and `integration_secrets`, so it can point at whatever the source fixture brought up. Must be a generator fixture so teardown still runs. |
 
 `integration_secrets` serves `credential_ref` named-path and agent-spec resolution only. An input routed by legacy `credential_guid` resolves through `DaprCredentialVault` over a live daprd and never reads this store.
