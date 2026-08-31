@@ -1168,7 +1168,10 @@ jobs:
     # successfully ran with its own override.
     if: ${{ !failure() && !cancelled() && needs.prepare.result == 'success' }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    # TEMPORARY, scratch branch only: bumped from 30 to give QI's PR #554 room
+    # for its one-time cold sqlglotc compile (first-ever build of a new
+    # sqlglot-for-lorien pin, no cache anywhere yet). Not for merge to main.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
