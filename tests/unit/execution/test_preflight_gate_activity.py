@@ -1538,3 +1538,141 @@ class TestPreflightGateStorageChecks:
         assert failed.error.code == "OBJECT_STORE_RELOCATION_IN_PROGRESS"
         # Role-aware: an SDR deployment store is the customer's own bucket.
         assert failed.error.audience is Audience.USER
+
+    async def test_storage_failure_on_non_final_attempt_retries(self) -> None:
+        """A failed probe defers to the gate's retry policy before blocking.
+
+        One flaky probe must not abort a hard-mode run on the first attempt —
+        the block is only a verdict once the app's declared attempts are
+        exhausted (mirrors the handler no-verdict path).
+        """
+        from datetime import timedelta
+
+        from application_sdk.execution._temporal.preflight_gate import (
+            PREFLIGHT_NO_VERDICT_ERROR_TYPE,
+        )
+
+        gate = build_preflight_gate_activity(
+            _StubHandler(),
+            app_name="myapp",
+            enforce=True,
+            attempts=2,
+            verify_storage=True,
+        )
+        info = mock.MagicMock()
+        info.attempt = 1
+        info.start_to_close_timeout = timedelta(seconds=155)
+        with (
+            self._storage_patches([self._reloc_result()]),
+            mock.patch(f"{_GATE}.activity.info", return_value=info),
+        ):
+            with pytest.raises(Exception) as excinfo:
+                await gate(PreflightGateInput())
+        assert getattr(excinfo.value, "type", None) == PREFLIGHT_NO_VERDICT_ERROR_TYPE
+        assert excinfo.value.non_retryable is False
+
+    async def test_storage_failure_on_final_attempt_blocks(self) -> None:
+        """Retries exhausted → the storage failure becomes the blocking verdict."""
+        from datetime import timedelta
+
+        gate = build_preflight_gate_activity(
+            _StubHandler(),
+            app_name="myapp",
+            enforce=True,
+            attempts=2,
+            verify_storage=True,
+        )
+        info = mock.MagicMock()
+        info.attempt = 2
+        info.start_to_close_timeout = timedelta(seconds=155)
+        with (
+            self._storage_patches([self._reloc_result()]),
+            mock.patch(f"{_GATE}.activity.info", return_value=info),
+        ):
+            with pytest.raises(ApplicationError) as excinfo:
+                await gate(PreflightGateInput())
+        assert excinfo.value.type == "PreflightFailed"
+        assert excinfo.value.details[0].code == "OBJECT_STORE_RELOCATION_IN_PROGRESS"
+
+    def test_every_classifier_bucket_maps_to_a_typed_leaf(self) -> None:
+        """The gate mapper covers every bucket the storage classifier can emit.
+
+        Iterates the classifier's own enumerable bucket set (the coupling the
+        storage module documents for exactly this purpose) so a rule added or
+        renamed there without gate handling fails here instead of silently
+        taking a default branch. Also pins the relocation stamp to the
+        *imported* bucket constant — the gate holds no copied literal.
+        """
+        from application_sdk.execution._temporal.preflight_gate import (
+            OBJECT_STORE_RELOCATION_CODE,
+            _storage_failure_details,
+        )
+        from application_sdk.storage.preflight import (
+            _OBJECT_STORE_ERROR_CLASSES,
+            RELOCATION_BUCKET,
+            ObjectStoreCheckResult,
+        )
+
+        assert RELOCATION_BUCKET in _OBJECT_STORE_ERROR_CLASSES
+        for label in ("deployment", "upstream"):
+            for bucket in _OBJECT_STORE_ERROR_CLASSES:
+                probe = ObjectStoreCheckResult(
+                    label=label,
+                    binding_name="objectstore",
+                    passed=False,
+                    error_class=bucket,
+                    cause="probe failed",
+                    hint="fix it",
+                    failed_operation="write-multipart",
+                )
+                for sdr_mode in (False, True):
+                    details = _storage_failure_details(probe, sdr_mode=sdr_mode)
+                    assert details.code, (label, bucket, sdr_mode)
+                    assert details.audience is not None, (label, bucket, sdr_mode)
+                    if bucket == RELOCATION_BUCKET:
+                        assert details.code == OBJECT_STORE_RELOCATION_CODE
+
+    async def test_relocation_code_not_shadowed_by_failed_advisory_check(self) -> None:
+        """Reviewer repro: READY-with-failed-advisory must not steal the banner.
+
+        ``_build_block_error`` prefers ``result.error`` over the first failed
+        check's error; the storage downgrade pins ``result.error`` so the block
+        is attributed to storage, not to the handler's advisory row.
+        """
+        import time as _time
+
+        from application_sdk.errors.leaves import PreconditionError
+        from application_sdk.execution._temporal.preflight_gate import (
+            _append_storage_checks,
+            _build_block_error,
+        )
+        from application_sdk.handler.contracts import PreflightOutput
+
+        advisory = PreflightCheck(
+            name="sourceAdvisory",
+            passed=False,
+            message="advisory",
+            error=PreconditionError(message="advisory").to_failure_details(),
+        )
+        result = PreflightOutput(status=PreflightStatus.READY, checks=[advisory])
+        with self._storage_patches([self._reloc_result()]):
+            failed = await _append_storage_checks(result, 150.0, _time.monotonic())
+        assert failed is True
+        assert result.status is PreflightStatus.NOT_READY
+        block = _build_block_error(result, "myapp")
+        assert block.details[0].code == "OBJECT_STORE_RELOCATION_IN_PROGRESS"
+
+    async def test_partial_verdict_is_downgraded(self) -> None:
+        """Reviewer repro: PARTIAL proceeds today, so it must downgrade too."""
+        import time as _time
+
+        from application_sdk.execution._temporal.preflight_gate import (
+            _append_storage_checks,
+        )
+        from application_sdk.handler.contracts import PreflightOutput
+
+        result = PreflightOutput(status=PreflightStatus.PARTIAL, checks=[])
+        with self._storage_patches([self._reloc_result()]):
+            failed = await _append_storage_checks(result, 150.0, _time.monotonic())
+        assert failed is True
+        assert result.status is PreflightStatus.NOT_READY

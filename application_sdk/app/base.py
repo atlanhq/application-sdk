@@ -832,18 +832,22 @@ class App(ABC):
 
     ``False`` (default) keeps the gate source-only. ``True`` opts in to probing
     every store the run will upload artifacts to — a write, a HEAD, and a
-    **multipart-forced** write, since artifact uploads stream through the
-    multipart writer and a store can accept plain PUTs while rejecting multipart
-    initiation (GCS does exactly this for the whole window of a bucket
-    relocation; a production RCA traced multi-hour extractions dying at the
-    final upload to that condition). A failed probe appends a typed
-    platform-attributed check and downgrades a ``READY`` verdict to
-    ``NOT_READY``, so :attr:`preflight_gate_mode` decides whether it blocks —
-    soft mode only reports it as ``would_block``.
+    **multipart-forced** write. The multipart probe matters because uploads
+    above the writer's part size (8 MiB default,
+    ``ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES``) go out as multipart, and a store
+    can accept plain PUTs while rejecting multipart initiation (GCS does
+    exactly this for the whole window of a bucket relocation; a production RCA
+    traced multi-hour extractions dying at the final upload to that
+    condition). A failed probe — after the gate's retry attempts are exhausted
+    — appends a typed platform-attributed check and downgrades a ``READY`` or
+    ``PARTIAL`` verdict to ``NOT_READY``, so :attr:`preflight_gate_mode`
+    decides whether it blocks; soft mode only reports it as ``would_block``.
 
     Deliberately opt-in while the fleet's probe precision is measured: the probe
     costs under a second per run against healthy storage, but a hard-mode app
-    turning this on is trusting a storage canary to abort real runs."""
+    turning this on is trusting a storage canary to abort real runs — and the
+    probe is stricter than a small-artifact-only workload's real writes, which
+    never touch multipart at all."""
 
     artifact_validation_mode: ClassVar[Literal["hard", "soft"]] = "soft"
     """Artifact-validation posture (ADR-0020). ``"soft"`` (default) never blocks.

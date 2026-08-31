@@ -921,18 +921,19 @@ def _unverifiable_result(exc: BaseException, app_name: str) -> PreflightOutput:
 
 # Floor below which the gate skips the storage probes rather than starting a
 # check it has no time to finish. Skipping fails open on the storage dimension
-# only — the handler's source verdict stands either way.
-_STORAGE_CHECK_MIN_SECONDS = 3.0
+# only — the handler's source verdict stands either way. 15s, not lower: a
+# real cloud round-trip of write + HEAD + multipart initiate/part/complete
+# against a cold pool can take several seconds per store, and a probe started
+# with a sliver of budget would time out and report a healthy store as a
+# connectivity failure — blocking a hard-mode run for its own starvation.
+_STORAGE_CHECK_MIN_SECONDS = 15.0
 
 # Contract code stamped on a storage check blocked by a bucket relocation, so
 # the outcome event's ``reason`` names the condition (temporary, platform-side)
-# rather than a generic dependency outage.
+# rather than a generic dependency outage. Same string as
+# ``StorageBucketRelocationError.code`` (storage/errors.py) so the gate block
+# and a mid-run upload failure land in one analytics bucket.
 OBJECT_STORE_RELOCATION_CODE = "OBJECT_STORE_RELOCATION_IN_PROGRESS"
-
-# The classifier bucket the relocation code keys off — must match the rule in
-# storage/preflight.py (asserted by test, not by import, to avoid coupling the
-# workflow-sandbox import set to the storage module's internals).
-_RELOCATION_BUCKET = "bucket relocation in progress"
 
 
 def _storage_failure_details(result: Any, *, sdr_mode: bool) -> Any:
@@ -949,6 +950,14 @@ def _storage_failure_details(result: Any, *, sdr_mode: bool) -> Any:
     stamped as its ``code`` in both modes, replacing the leaf's generic code
     the way ``PREFLIGHT_FALLBACK_CODE`` replaces PRECONDITION.
     """
+    # Imported lazily (activity frame only) so the workflow-sandbox import set
+    # never pulls the storage module; the bucket name comes from its single
+    # definition rather than a copied literal, so a rename breaks loudly here
+    # instead of silently dropping the code stamp.
+    from application_sdk.storage.preflight import (  # noqa: PLC0415 — activity frame only
+        RELOCATION_BUCKET,
+    )
+
     if sdr_mode:
         from application_sdk.execution._temporal.sdr import (  # noqa: PLC0415 — sdr imports this module at load; runtime-only reverse import
             _object_store_failure,
@@ -969,14 +978,14 @@ def _storage_failure_details(result: Any, *, sdr_mode: bool) -> Any:
             target=result.binding_name,
             network_error=result.error_class or "connectivity / unknown",
         ).to_failure_details()
-    if result.error_class == _RELOCATION_BUCKET:
+    if result.error_class == RELOCATION_BUCKET:
         details = details.model_copy(update={"code": OBJECT_STORE_RELOCATION_CODE})
     return details
 
 
 async def _append_storage_checks(
     result: PreflightOutput, budget_seconds: float, started_monotonic: float
-) -> None:
+) -> bool:
     """Fold run-path object-store probes into the handler's verdict.
 
     The handler certifies the *source*; nothing certifies the stores the run
@@ -1001,10 +1010,16 @@ async def _append_storage_checks(
     ``NOT_READY`` (the run is blocked or reported either way; spending more of
     the slot cannot change that). **Never raises**: any unexpected failure logs
     and leaves the handler's verdict as it was.
+
+    Returns:
+        ``True`` when at least one storage probe failed (the verdict was
+        downgraded), so the caller can defer the block to the gate's retry
+        policy on a non-final attempt — one flaky probe must not abort a
+        hard-mode run on its first attempt.
     """
     try:
         if result.status is PreflightStatus.NOT_READY:
-            return
+            return False
         remaining = budget_seconds - (time.monotonic() - started_monotonic)
         if remaining < _STORAGE_CHECK_MIN_SECONDS:
             logger.debug(
@@ -1013,7 +1028,7 @@ async def _append_storage_checks(
                 remaining,
                 _STORAGE_CHECK_MIN_SECONDS,
             )
-            return
+            return False
         from application_sdk.constants import (  # noqa: PLC0415 — read at call time so tests and SDR toggles see the live value
             ENABLE_ATLAN_UPLOAD,
         )
@@ -1025,8 +1040,8 @@ async def _append_storage_checks(
             get_infrastructure(), timeout_seconds=remaining - 1.0
         )
         if not probes:
-            return
-        any_failed = False
+            return False
+        first_failed_details = None
         for probe in probes:
             if probe.passed:
                 result.checks.append(
@@ -1037,23 +1052,38 @@ async def _append_storage_checks(
                     )
                 )
                 continue
-            any_failed = True
+            details = _storage_failure_details(probe, sdr_mode=ENABLE_ATLAN_UPLOAD)
+            if first_failed_details is None:
+                first_failed_details = details
             result.checks.append(
                 PreflightCheck(
                     name=f"objectStoreAccess:{probe.label}",
                     passed=False,
                     message=probe.message,
-                    error=_storage_failure_details(probe, sdr_mode=ENABLE_ATLAN_UPLOAD),
+                    error=details,
                 )
             )
-        if any_failed and result.status is PreflightStatus.READY:
-            result.status = PreflightStatus.NOT_READY
+        # READY *and* PARTIAL downgrade: both proceed today, and a run that
+        # cannot upload its artifacts is doomed whichever of the two the
+        # handler returned. Pin the aggregate ``result.error`` to the first
+        # failed store (the same pinning the SDR downgrade does) — without it
+        # ``_build_block_error`` would prefer a failed *advisory* handler
+        # check's error, and the block would be attributed to the source
+        # instead of storage.
+        if first_failed_details is not None:
+            if result.status is not PreflightStatus.NOT_READY:
+                result.status = PreflightStatus.NOT_READY
+            if result.error is None:
+                result.error = first_failed_details
+            return True
+        return False
     except Exception:
         logger.warning(
             "Run-path storage checks could not run; proceeding without "
             "storage verification",
             exc_info=True,
         )
+        return False
 
 
 def _require_secret_store() -> Any:
@@ -1410,8 +1440,22 @@ def build_preflight_gate_activity(
         # Appends checks and may downgrade READY → NOT_READY, so it must run
         # before the verdict evaluation below. Never raises; see its docstring
         # for the fail-open/verdict taxonomy note.
-        if verify_storage:
-            await _append_storage_checks(result, budget, started)
+        if verify_storage and await _append_storage_checks(result, budget, started):
+            # A failed probe only becomes a verdict once the app's retry
+            # attempts are exhausted — one flaky probe must not block a
+            # hard-mode run on its first attempt. Same deferral the handler
+            # no-verdict path uses; the retried attempt re-runs everything.
+            if not _is_final_attempt(attempts):
+                from application_sdk.execution.errors import (  # noqa: PLC0415 — avoid import cycle at module load
+                    ApplicationError,
+                )
+
+                failed_stores = ", ".join(c.name for c in result.checks if not c.passed)
+                raise ApplicationError(
+                    "Preflight storage checks failed; deferring to the gate's "
+                    f"retry policy ({failed_stores})",
+                    type=PREFLIGHT_NO_VERDICT_ERROR_TYPE,
+                )
         # The outcome event is the gate's queryable row (connector-pulse builds the
         # dashboard from it). The activity holds the verdict, so it emits the
         # proceeded/blocked rows; the workflow emits only no_verdict (fail-open).
