@@ -173,3 +173,47 @@ async def test_preflight_fails_with_bad_credentials(tmp_path, monkeypatch):
     assert "invalid credentials" in msg or "permission denied" in msg
     # Upstream store (valid credentials) should not appear as a failure
     assert "upstream" not in msg or "not configured" not in msg
+
+
+@pytest.mark.asyncio
+async def test_multipart_forced_probe_round_trips_against_real_store(
+    tmp_path,
+) -> None:
+    """The multipart-forced probe completes against a real S3-compatible store.
+
+    Covers the real obstore ``use_multipart=True`` path — initiate, one part,
+    complete — that the unit tests only mock, so a probe change that breaks the
+    real multipart API surface fails here rather than in production gates.
+    """
+    from application_sdk.storage.preflight import _probe_store_structured
+
+    store = _s3_store("preflight-mpu-probe", _CUSTOMER_BUCKET, tmp_path)
+    result = await _probe_store_structured(
+        store, "deployment", "preflight-mpu-probe", include_multipart_probe=True
+    )
+    assert result.passed is True, result.message
+
+
+@pytest.mark.asyncio
+async def test_run_storage_access_check_against_real_store(tmp_path) -> None:
+    """check_run_storage_access passes against a healthy real store and fails
+    against one with rejected credentials."""
+    from application_sdk.infrastructure.context import InfrastructureContext
+    from application_sdk.storage.preflight import check_run_storage_access
+
+    good = _s3_store("run-check-good", _CUSTOMER_BUCKET, tmp_path)
+    # Typed context, not a MagicMock: an attribute rename on
+    # InfrastructureContext must fail here, not be silently absorbed.
+    infra = InfrastructureContext(storage=good, upstream_storage=None)
+    results = await check_run_storage_access(infra)
+    assert [r.passed for r in results] == [True]
+
+    bad = _s3_store(
+        "run-check-bad", _CUSTOMER_BUCKET, tmp_path, secret_key="wrong-secret"
+    )
+    # InfrastructureContext is a frozen dataclass — build a second one rather
+    # than mutating the first (the MagicMock this replaced absorbed the
+    # reassignment; the typed context correctly rejects it).
+    bad_infra = InfrastructureContext(storage=bad, upstream_storage=None)
+    results = await check_run_storage_access(bad_infra, timeout_seconds=30)
+    assert results[0].passed is False

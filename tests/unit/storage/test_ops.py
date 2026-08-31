@@ -2250,3 +2250,57 @@ class TestUploadPartSizeConfiguration:
             await upload_file("k", f, store, normalize=False, verify=False)
 
         assert writer.call_args.kwargs["max_concurrency"] == 4
+
+
+class TestUploadFileRelocationClassification:
+    """A mid-run bucket relocation must surface typed, not as a generic StorageError.
+
+    Defence in depth for the preflight storage probe: a relocation that starts
+    *after* the gate passed still hits the upload path, and the failure must
+    carry the platform-attributed relocation code and remediation hint instead
+    of the generic DEPENDENCY_UNAVAILABLE_STORAGE.
+    """
+
+    _RELOCATION_MESSAGE = (
+        "Generic GCS error: Server returned non-2xx status code: 400 Bad "
+        "Request: <Error><Code>PreconditionFailed</Code><Message>Invalid "
+        "precondition during a custom dual-region, or multi-region bucket "
+        "relocation.</Message></Error>"
+    )
+
+    async def test_relocation_raises_typed_error(self, store, tmp_path) -> None:
+        from unittest import mock
+
+        from application_sdk.storage.errors import StorageBucketRelocationError
+
+        f = tmp_path / "column.json"
+        f.write_bytes(b"{}")
+        with mock.patch(
+            "application_sdk.storage.ops.obstore.open_writer_async",
+            side_effect=Exception(self._RELOCATION_MESSAGE),
+        ):
+            with pytest.raises(StorageBucketRelocationError) as excinfo:
+                await upload_file("test/column.json", f, store)
+        err = excinfo.value
+        assert err.code == "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
+        assert err.suggested_action and "relocation" in err.suggested_action
+        assert err.key == "test/column.json"
+        # The human-readable log line must carry the dedicated AAF code too —
+        # dashboards keyed on AAF-STR-* must be able to tell a relocation from
+        # the generic AAF-STR-004 the original incident was chased under.
+        assert "[AAF-STR-008]" in str(err)
+
+    async def test_ordinary_failure_still_generic(self, store, tmp_path) -> None:
+        from unittest import mock
+
+        from application_sdk.storage.errors import StorageError
+
+        f = tmp_path / "column.json"
+        f.write_bytes(b"{}")
+        with mock.patch(
+            "application_sdk.storage.ops.obstore.open_writer_async",
+            side_effect=Exception("connection reset by peer"),
+        ):
+            with pytest.raises(StorageError) as excinfo:
+                await upload_file("test/column.json", f, store)
+        assert excinfo.value.code == "DEPENDENCY_UNAVAILABLE_STORAGE"
