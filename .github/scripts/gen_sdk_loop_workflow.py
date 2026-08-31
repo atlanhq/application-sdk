@@ -183,6 +183,7 @@ def review_job(n: int) -> str:
         ledger = "''"
         prior_sha = "''"
         spent = "''"
+        reaims = "''"
     else:
         prev_res, prev_rev = f"resolve-{n - 1}", f"review-{n - 1}"
         # Continue when the previous resolve made progress, or when either
@@ -206,6 +207,7 @@ def review_job(n: int) -> str:
             "${{ needs.%s.outputs.spent_total || needs.%s.outputs.spent_total }}"
             % (prev_res, prev_rev)
         )
+        reaims = "${{ needs.%s.outputs.reaims }}" % prev_rev
     return f"""
   review-{n}:
     needs: {needs}
@@ -223,6 +225,7 @@ def review_job(n: int) -> str:
       ledger: {ledger}
       prior_sha: {prior_sha}
       spent_so_far: {spent}
+      reaims_so_far: {reaims}
 """
 
 

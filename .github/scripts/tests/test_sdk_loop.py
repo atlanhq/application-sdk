@@ -29,6 +29,7 @@ from _gha_expr import evaluate  # noqa: E402
 from sdk_loop_common import (  # noqa: E402
     ALLOWED_MODELS,
     DEFAULT_MAX_USD,
+    MAX_CONSECUTIVE_REAIMS,
     MAX_ROUNDS,
     PROVIDER,
     RESOLVE_MODEL,
@@ -41,6 +42,7 @@ from sdk_loop_common import (  # noqa: E402
     opencode_config,
     parse_reviewed_head,
     parse_verdict,
+    reaim_exhausted,
     run_agent,
     run_budget,
 )
@@ -60,7 +62,6 @@ from sdk_loop_phase import (  # noqa: E402
     OUTCOME_FAILED,
     OUTCOME_NO_PROGRESS,
     OUTCOME_OK,
-    OUTCOME_REAIM,
     OUTCOME_TERMINAL_VERDICT,
     interpret_resolve,
     interpret_review,
@@ -275,11 +276,57 @@ def test_a_verdict_no_resolve_can_fix_stops_the_loop(verdict: str) -> None:
     assert outcome.outcome == OUTCOME_TERMINAL_VERDICT
 
 
-def test_a_verdict_stamped_against_another_sha_triggers_a_reaim() -> None:
+def test_a_verdict_stamped_against_another_sha_is_a_failure_not_a_reaim() -> None:
+    """Only this run's own verdict is accepted, and main() already fences the
+    head against the remote — so a stamp mismatch means the reviewer disobeyed,
+    not that the branch moved. Reporting it as a re-aim let a broken round
+    masquerade as progress: four rounds ran and none reviewed anything."""
     outcome = interpret_review(
         _ok(), _verdict_comment("NEEDS_FIXES", "b" * 40), "a" * 40
     )
-    assert outcome.outcome == OUTCOME_REAIM
+    assert outcome.outcome == OUTCOME_FAILED
+
+
+def test_an_aborted_agent_is_a_failure_whatever_it_left_behind() -> None:
+    """Live on the first run: `Error: [DecimalError] Invalid argument:
+    [object Object]` 11ms into round 1. opencode exited 0, the harness found an
+    unrelated verdict already on the PR, and called the round a re-aim."""
+    crashed = AgentResult(
+        exit_code=0,
+        stdout="I'll read the orchestration instructions.\n"
+        "Error: [DecimalError] Invalid argument: [object Object]\n",
+        stderr="",
+    )
+    assert not crashed.completed
+    assert "DecimalError" in crashed.abort_reason
+    outcome = interpret_review(
+        crashed, _verdict_comment("READY_TO_MERGE", "a" * 40), "a" * 40
+    )
+    assert outcome.outcome == OUTCOME_FAILED
+    assert "aborted" in outcome.detail
+
+
+def test_a_clean_transcript_is_not_read_as_an_abort() -> None:
+    # "Error" inside ordinary prose must not fail a round that worked.
+    fine = AgentResult(
+        exit_code=0,
+        stdout="Considered an ErrorHandler finding; dropped it.\n",
+        stderr="",
+    )
+    assert fine.completed
+
+
+def test_a_verdict_answering_someone_elses_trigger_is_not_ours() -> None:
+    """PRs carry old verdicts — from @sdk-review, from an earlier loop. Taking
+    the newest makes a phase that produced nothing look like it produced
+    whatever was lying there."""
+    mine = _verdict_comment("NEEDS_FIXES", "a" * 40, cid=9)
+    mine["body"] += "<!-- ANSWERS_TRIGGER: 555 -->\n"
+    theirs = _verdict_comment("READY_TO_MERGE", "b" * 40, cid=20)
+    theirs["body"] += "<!-- ANSWERS_TRIGGER: 111 -->\n"
+    picked = newest_verdict([mine, theirs], answers_trigger="555")
+    assert picked is not None and parse_verdict(picked["body"]) == "NEEDS_FIXES"
+    assert newest_verdict([theirs], answers_trigger="555") is None
 
 
 def test_newest_verdict_wins_over_an_older_one() -> None:
@@ -638,6 +685,20 @@ def test_an_unknown_model_fails_at_config_time_not_as_a_paid_400() -> None:
         opencode_config("gpt-nonexistent")
 
 
+def test_the_lane_reaches_exactly_two_models_and_has_no_fallback() -> None:
+    """Owner's decision: xai/grok-4.6 for review, gpt-5.6-luna for resolve,
+    nothing else.
+
+    Both existing lanes carry RETRY_MAIN_MODEL = claude-opus-5 as a second
+    attempt. This one deliberately does not: a failed phase is a failed phase,
+    and a silent retry on a different model makes cost and behaviour harder to
+    reason about across rounds. Pinned so a future edit adding a ladder has to
+    change this test and say why.
+    """
+    assert ALLOWED_MODELS == ("xai/grok-4.6", "gpt-5.6-luna")
+    assert len(set(ALLOWED_MODELS)) == 2
+
+
 def test_review_and_resolve_run_on_different_models() -> None:
     assert REVIEW_MODEL != RESOLVE_MODEL
 
@@ -926,10 +987,22 @@ def test_a_detail_containing_a_pipe_cannot_break_the_table() -> None:
     assert "a \\| b" in render(rounds, "failed", "http://run")
 
 
-def test_rounds_json_from_a_skipped_job_is_tolerated() -> None:
-    # Skipped jobs emit empty outputs; the summary must still render.
-    raw = json.dumps(
-        [{"number": 1, "phase": "review", "outcome": "", "verdict": "", "sha": ""}]
-    )
-    assert len(parse_rounds(raw)) == 1
+def test_a_skipped_round_is_not_reported_as_a_round() -> None:
+    """A skipped job still emits a row with every field empty. Counting them
+    produced "8 review · 8 resolve" for a run where three reviews ran and
+    nothing else did, then printed five blank rows implying work that never
+    happened."""
+    ran = {"number": 1, "phase": "review", "outcome": "reaim", "sha": "a" * 40}
+    skipped = {"number": 2, "phase": "resolve", "outcome": "", "verdict": "", "sha": ""}
+    assert len(parse_rounds(json.dumps([ran, skipped]))) == 1
     assert parse_rounds("not json") == []
+
+
+def test_a_reaim_streak_stops_the_run_before_it_eats_the_round_cap() -> None:
+    """A re-aim discards the round's work, so it is not progress and needs its
+    own budget. A live run burned three rounds on the identical mismatch, each
+    reporting `reaim` and advancing as though something had changed."""
+    assert not reaim_exhausted(0)
+    assert not reaim_exhausted(1)
+    assert reaim_exhausted(MAX_CONSECUTIVE_REAIMS)
+    assert MAX_CONSECUTIVE_REAIMS < MAX_ROUNDS, "must bite before the round cap"

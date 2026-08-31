@@ -62,6 +62,11 @@ on:
         required: false
         default: ''
         description: 'USD this run has spent already. The phase refuses to start once it reaches the allowance.'
+      reaims_so_far:
+        type: string
+        required: false
+        default: ''
+        description: 'Consecutive re-aims so far. A re-aim is not progress, so it gets a budget of its own.'
     secrets:
       LITELLM_API_KEY:
         required: true
@@ -93,6 +98,8 @@ on:
         value: ${{ jobs.phase.outputs.detail }}
       cost:
         value: ${{ jobs.phase.outputs.cost }}
+      reaims:
+        value: ${{ jobs.phase.outputs.reaims }}
       spent_total:
         value: ${{ jobs.phase.outputs.spent_total }}
 
@@ -116,6 +123,7 @@ jobs:
       ledger: ${{ steps.run.outputs.ledger }}
       detail: ${{ steps.run.outputs.detail }}
       cost: ${{ steps.run.outputs.cost }}
+      reaims: ${{ steps.run.outputs.reaims }}
       spent_total: ${{ steps.run.outputs.spent_total }}
     steps:
       - name: Mint a scoped App token
@@ -192,6 +200,7 @@ jobs:
           VERDICT_URL: ${{ inputs.verdict_url }}
           PRIOR_SHA: ${{ inputs.prior_sha }}
           SPENT_SO_FAR: ${{ inputs.spent_so_far }}
+          REAIMS_SO_FAR: ${{ inputs.reaims_so_far }}
           SDK_LOOP_MAX_USD: ${{ vars.SDK_LOOP_MAX_USD }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
