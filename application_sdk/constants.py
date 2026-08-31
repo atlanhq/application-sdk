@@ -286,6 +286,23 @@ STORAGE_PROGRESS_LOG_INTERVAL_SECONDS = float(
     os.getenv("ATLAN_STORAGE_PROGRESS_LOG_INTERVAL_SECONDS", "30")
 )
 
+#: Interval (seconds) between progress marks while an activity waits on a
+#: per-destination storage lock (materialise dedupe, chunked-transfer
+#: exclusion). Must stay under the stall watchdog's no-progress budget, or a
+#: waiter queued behind another activity's multi-GB download is killed as
+#: stalled — so the value is capped at a quarter of the budget the operator
+#: configured via ``ATLAN_MAX_NO_PROGRESS_SECONDS`` (a per-``@task``
+#: ``max_no_progress_seconds`` below that cap is the operator's explicit
+#: exception and is not defended here). Floored at 1s so a zero cannot turn
+#: the wait into a busy spin. (CONNECT-1126)
+STORAGE_LOCK_WAIT_PROGRESS_SECONDS = max(
+    1.0,
+    min(
+        float(os.getenv("ATLAN_STORAGE_LOCK_WAIT_PROGRESS_SECONDS", "30")),
+        float(os.getenv("ATLAN_MAX_NO_PROGRESS_SECONDS", "900")) / 4.0,
+    ),
+)
+
 #: Multipart part size for uploads (default 8 MiB). Raise this per deployment
 #: when the destination makes *part count* expensive rather than part size.
 #: An S3 proxy fronting GCS is the motivating case (DISTR-899): GCS has no

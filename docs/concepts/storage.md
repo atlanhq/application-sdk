@@ -312,6 +312,15 @@ a `.tmp` suffix next to it, so it is never picked up by a directory listing, a
 directory `FileReference`, or a prefix upload. `safe_list_directory` and
 `upload_prefix` read one shared definition of what to skip.
 
+The chunked staging file (`.sdk-partial/{name}.part`) and its resume checkpoint
+are deterministic functions of the destination, so `download_file_chunked`
+itself holds a per-destination lock for the whole transfer — two concurrent
+downloads to one `local_path` serialise no matter which entry point they came
+through (`materialize_file_reference`, `download_prefix`, batch, or a direct
+call). A queued waiter marks activity progress on a short interval
+(`ATLAN_STORAGE_LOCK_WAIT_PROGRESS_SECONDS`) so it is never killed as stalled
+behind another activity's multi-GB download.
+
 An app that opens its own file handle bypasses all of this. The guarantee covers
 the writers the SDK owns, which is where app artifacts actually come from.
 

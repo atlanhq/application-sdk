@@ -40,20 +40,17 @@ entirely.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import os
 import tempfile
 import time
-import weakref
-from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from application_sdk._runtime.offload import run_in_thread
-from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.common._listing import safe_list_directory
 from application_sdk.common.atomic import atomic_write
 from application_sdk.contracts.types import FileReference
+from application_sdk.storage._locks import PathLockRegistry
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
@@ -101,64 +98,20 @@ def _make_storage_prefix(ref: FileReference, *, output_path: str | None = None) 
     )
 
 
-_lock_registries: weakref.WeakKeyDictionary[
-    asyncio.AbstractEventLoop, weakref.WeakValueDictionary[str, asyncio.Lock]
-] = weakref.WeakKeyDictionary()
+#: Per-destination mutex for the whole materialise-and-verify step.
+#:
+#: ``local_path`` is a deterministic function of (run, stage, entity), so
+#: concurrent activities of one run share the destination by construction
+#: (CONNECT-1126). Serialising on it is the dedupe mechanism, not the safety
+#: mechanism — the transfer layer's atomic publish is what keeps concurrent
+#: readers safe; the lock makes the second caller wait, re-check the
+#: now-complete file against its sidecar, and skip the duplicate download.
+#: A separate registry from the transfer layer's, so holding this guard and
+#: calling into ``download_file_chunked`` never self-deadlocks.
+_MATERIALIZE_LOCKS = PathLockRegistry("file_ref.materialize.lock_wait")
 
-#: How long a waiter blocks on the materialise lock before emitting a
-#: progress mark. Well under the stall watchdog's no-progress budget, so an
-#: activity queued behind another's multi-GB download is never killed as
-#: stalled while it waits.
-_LOCK_WAIT_PROGRESS_SECONDS = 30.0
-
-
-def _materialize_lock(local_path: str) -> asyncio.Lock:
-    """Per-destination mutex for the whole materialise-and-verify step.
-
-    ``local_path`` is a deterministic function of (run, stage, entity), so
-    concurrent activities of one run share the destination by construction
-    (CONNECT-1126). Serialising on it is the dedupe mechanism, not the safety
-    mechanism — the transfer layer's atomic publish is what keeps concurrent
-    readers safe; the lock makes the second caller wait, re-check the
-    now-complete file against its sidecar, and skip the duplicate download.
-
-    Locks are registered per running event loop (an ``asyncio.Lock`` bound to
-    one loop raises on a contended acquire from another), keyed by the
-    destination's real path, and held only weakly — an entry evicts as soon
-    as no materialise call is using it, and a loop's whole registry evicts
-    with the loop.
-    """
-    registry = _lock_registries.setdefault(
-        asyncio.get_running_loop(), weakref.WeakValueDictionary()
-    )
-    key = os.path.realpath(local_path)
-    lock = registry.get(key)
-    if lock is None:
-        lock = asyncio.Lock()
-        registry[key] = lock
-    return lock
-
-
-@contextlib.asynccontextmanager
-async def _materialize_guard(local_path: str) -> AsyncIterator[None]:
-    """Hold the per-destination materialise lock, marking progress while queued.
-
-    A waiter makes no transfer progress of its own, so a first download
-    longer than the stall watchdog's no-progress budget would get the queued
-    activity killed as stalled. Marking progress on a short interval while
-    blocked keeps the waiter visibly alive.
-    """
-    lock = _materialize_lock(local_path)
-    while True:
-        try:
-            await asyncio.wait_for(lock.acquire(), timeout=_LOCK_WAIT_PROGRESS_SECONDS)
-            break
-        except TimeoutError:
-            current_progress_tracker().mark_progress("file_ref.materialize.lock_wait")
-    try:
-        yield
-    finally:
-        lock.release()
+_materialize_lock = _MATERIALIZE_LOCKS.lock
+_materialize_guard = _MATERIALIZE_LOCKS.guard
 
 
 def _write_local_sidecar(local_path: str, sha256: str) -> None:

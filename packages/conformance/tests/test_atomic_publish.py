@@ -102,6 +102,11 @@ def test_p048_is_not_cleared_by_a_lambda_that_publishes() -> None:
     assert len(fs) == 1 and fs[0].line == 4
 
 
+def test_p048_fires_inside_a_lambda_with_no_enclosing_publish() -> None:
+    src = "import os\nf = lambda p: os.open(p, os.O_WRONLY | os.O_TRUNC)\n"
+    assert len(_rule(src)) == 1
+
+
 def test_p048_parameter_shadows_an_outer_tainted_name() -> None:
     """A module-level tainted ``flags`` must not condemn a function whose own
     ``flags`` parameter is a different binding."""
@@ -196,6 +201,43 @@ def test_p048_passes_on_the_closure_pattern() -> None:
         "    worker(b'x')\n"
         "    os.close(fd)\n"
         "    os.replace(part, path)\n"
+    )
+    assert _rule(src) == []
+
+
+def test_p048_lambda_parameter_shadows_an_outer_tainted_name() -> None:
+    """A lambda's parameters are a fresh binding, exactly like a def's."""
+    src = (
+        "import os\n"
+        "flags = os.O_WRONLY | os.O_TRUNC\n"
+        "f = lambda path, flags: os.open(path, flags)\n"
+    )
+    assert _rule(src) == []
+
+
+def test_p048_enclosing_publish_clears_a_nested_def_violator() -> None:
+    """The documented closure allowance: clearance is inherited inward, so a
+    publish in the outer function clears an ``O_TRUNC`` open in a nested def
+    — the deliberate no-solver ceiling, not a gap."""
+    src = (
+        "import os\n"
+        "def f(tmp, path, target):\n"
+        "    def g():\n"
+        "        os.open(target, os.O_WRONLY | os.O_TRUNC)\n"
+        "    g()\n"
+        "    os.replace(tmp, path)\n"
+    )
+    assert _rule(src) == []
+
+
+def test_p048_enclosing_publish_clears_a_lambda_violator() -> None:
+    """Same allowance, lambda spelling — uniform with the nested-def case."""
+    src = (
+        "import os\n"
+        "def f(tmp, path, target):\n"
+        "    write = lambda: os.open(target, os.O_WRONLY | os.O_TRUNC)\n"
+        "    write()\n"
+        "    os.replace(tmp, path)\n"
     )
     assert _rule(src) == []
 

@@ -9,6 +9,7 @@ file.
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,7 +17,13 @@ import obstore
 import pytest
 
 from application_sdk.common._listing import PARTIAL_DIRNAME
-from application_sdk.storage.chunked import _discard_transfer_state, _part_path
+from application_sdk.storage.chunked import (
+    _TRANSFER_LOCKS,
+    _discard_transfer_state,
+    _part_path,
+    _transfer_state_path,
+)
+from application_sdk.storage.errors import StorageError
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.ops import _put, download_file, download_file_chunked
 from application_sdk.storage.reference import _materialize_lock
@@ -245,3 +252,132 @@ class TestMaterializeLockRegistry:
 
         asyncio.run(contend())
         asyncio.run(contend())
+
+
+class TestTransferLockRegistry:
+    """The transfer-layer lock guards the resource, not just the materialise path."""
+
+    async def test_transfer_and_materialize_locks_are_distinct(self, tmp_path) -> None:
+        """Materialise holds its guard and then calls into the transfer layer,
+        so the two registries must hand out different lock objects for one
+        destination — same object would be a self-deadlock."""
+        target = str(tmp_path / "records.json")
+        assert _TRANSFER_LOCKS.lock(target) is not _materialize_lock(target)
+
+    async def test_guard_releases_on_exception(self, tmp_path) -> None:
+        target = str(tmp_path / "records.json")
+        with pytest.raises(RuntimeError):
+            async with _TRANSFER_LOCKS.guard(target):
+                raise RuntimeError("boom")
+        assert not _TRANSFER_LOCKS.lock(target).locked()
+
+    async def test_concurrent_chunked_downloads_serialise_on_destination(
+        self, store, tmp_path
+    ) -> None:
+        """Two concurrent ``download_file_chunked`` calls on one destination
+        share the deterministic ``.part`` + checkpoint, so the second must not
+        touch the store (or the staging files) until the first has published.
+        Every public entry point — ``download_prefix``, ``batch``, the
+        ``common.utils`` helper — reaches this code path unlocked, so the
+        exclusion has to live in the primitive itself."""
+        content = bytes(range(20))
+        await _put("lock/c.bin", content, store, normalize=False)
+        path = tmp_path / "c.bin"
+
+        real_get = obstore.get_async
+        gets: list[object] = []
+        second_chunk_requested = asyncio.Event()
+        may_serve = asyncio.Event()
+
+        async def gated_get(st, key, **kw):
+            gets.append(kw.get("options"))
+            rng = (kw.get("options") or {}).get("range")
+            if rng and rng[0] == 10:
+                second_chunk_requested.set()
+                await may_serve.wait()
+            return await real_get(st, key, **kw)
+
+        def _download():
+            return download_file_chunked(
+                "lock/c.bin",
+                path,
+                store,
+                chunk_size_bytes=10,
+                max_concurrent_chunks=1,
+                normalize=False,
+                verify=False,
+            )
+
+        with patch("application_sdk.storage.ops.obstore.get_async", new=gated_get):
+            task_a = asyncio.create_task(_download())
+            await second_chunk_requested.wait()
+            gets_before_b = len(gets)
+            task_b = asyncio.create_task(_download())
+            await asyncio.sleep(0.05)
+            assert len(gets) == gets_before_b, (
+                "second download reached the store while the first still "
+                "held the shared staging file"
+            )
+            may_serve.set()
+            await task_a
+            await task_b
+
+        assert path.read_bytes() == content
+        assert not _part_path(path).exists()
+        assert not _transfer_state_path(path).exists()
+
+
+class TestPublishFailureIsResumable:
+    """A failed ``os.replace`` publish must leave part + checkpoint as a valid
+    resume state, so the retry re-runs only the publish — never the fetch."""
+
+    async def test_replace_failure_keeps_part_and_checkpoint(
+        self, store, tmp_path
+    ) -> None:
+        content = bytes(range(20))
+        await _put("pub/c.bin", content, store, normalize=False)
+        path = tmp_path / "c.bin"
+
+        def _download():
+            return download_file_chunked(
+                "pub/c.bin",
+                path,
+                store,
+                chunk_size_bytes=10,
+                max_concurrent_chunks=1,
+                normalize=False,
+                verify=False,
+                resume=True,
+            )
+
+        part = _part_path(path)
+        state = _transfer_state_path(path)
+        real_replace = os.replace
+
+        def failing_publish(src, dst, *args, **kwargs):
+            if Path(src) == part:
+                raise OSError("transient rename failure")
+            return real_replace(src, dst, *args, **kwargs)
+
+        with patch("application_sdk.storage.chunked.os.replace", new=failing_publish):
+            with pytest.raises(StorageError, match="Failed to publish"):
+                await _download()
+        assert not path.exists()
+        assert part.exists() and part.stat().st_size == len(content)
+        assert state.exists()
+
+        real_get = obstore.get_async
+        range_gets: list[object] = []
+
+        async def counting_get(st, key, **kw):
+            if (kw.get("options") or {}).get("range"):
+                range_gets.append(kw["options"]["range"])
+            return await real_get(st, key, **kw)
+
+        with patch("application_sdk.storage.ops.obstore.get_async", new=counting_get):
+            await _download()
+
+        assert range_gets == [], "retry re-fetched chunks a valid checkpoint covers"
+        assert path.read_bytes() == content
+        assert not part.exists()
+        assert not state.exists()

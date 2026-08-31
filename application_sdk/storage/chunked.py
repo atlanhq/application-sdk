@@ -11,10 +11,14 @@ Resumable chunked-download state
 A chunked download writes ranges at fixed offsets into a pre-allocated file.
 The sidecar records which chunk indices have landed on disk, plus the identity
 of the remote object they came from (key / size / chunk size / etag). Its
-*existence* is the "incomplete" marker: it is deleted on success, so a data
-file without a state sidecar is always complete. On retry after a crash the
-download resumes by fetching only the missing chunk indices — valid only while
-the remote object is unchanged, which is what the etag match enforces.
+*existence* is the "incomplete" marker: it is deleted only after the
+``os.replace`` publish, so an unpublished part file always has its checkpoint
+and a failed publish resumes without re-fetching a single chunk. A stale
+checkpoint that outlives its part file (publish succeeded, unlink did not) is
+discarded by validation, which requires the part to exist at the preallocated
+size. On retry after a crash the download resumes by fetching only the missing
+chunk indices — valid only while the remote object is unchanged, which is what
+the etag match enforces.
 """
 
 from __future__ import annotations
@@ -34,6 +38,7 @@ from application_sdk._runtime.offload import run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.common._listing import PARTIAL_DIRNAME
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.storage._locks import PathLockRegistry
 from application_sdk.storage._telemetry import _log_transfer_progress
 
 if TYPE_CHECKING:
@@ -42,6 +47,19 @@ if TYPE_CHECKING:
     from application_sdk.storage.ops import BoundStore
 
 logger = get_logger(__name__)
+
+#: Per-destination writer exclusion for the chunked transfer primitive.
+#:
+#: ``_part_path`` and ``_transfer_state_path`` are deterministic functions of
+#: the destination, so every caller of the public ``download_file_chunked``
+#: shares one staging file and one checkpoint per ``local_path`` — not just
+#: callers routed through ``materialize_file_reference``. The lock lives here,
+#: on the resource, so two concurrent downloads to one destination cannot
+#: interleave offset writes into one ``.part`` or corrupt each other's
+#: checkpoint (CONNECT-1126 review). A separate registry from the materialise
+#: guard's, so a materialise caller already holding its per-path lock nests
+#: into this one without self-deadlock.
+_TRANSFER_LOCKS = PathLockRegistry("storage.download.lock_wait")
 
 _TRANSFER_STATE_SUFFIX = ".transfer-state"
 
@@ -448,11 +466,7 @@ async def download_file_chunked(
         ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
     """
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: ops re-exports download_file_chunked for back-compat
-        _exc_class_name,
-        _is_not_found,
-        _log_storage_event,
         _resolve_store,
-        download_file,
         normalize_key,
     )
 
@@ -462,6 +476,52 @@ async def download_file_chunked(
 
     path = Path(local_path)
     path.parent.mkdir(parents=True, exist_ok=True)
+
+    async with _TRANSFER_LOCKS.guard(str(path)):
+        return await _download_chunked_locked(
+            resolved,
+            key,
+            path,
+            chunk_size_bytes=chunk_size_bytes,
+            max_concurrent_chunks=max_concurrent_chunks,
+            compute_hash=compute_hash,
+            file_size=file_size,
+            etag=etag,
+            resume=resume,
+            verify=verify,
+            expected_sha256=expected_sha256,
+            sidecar_present=sidecar_present,
+        )
+
+
+async def _download_chunked_locked(
+    resolved: "ObjectStore",
+    key: str,
+    path: Path,
+    *,
+    chunk_size_bytes: int,
+    max_concurrent_chunks: int,
+    compute_hash: bool,
+    file_size: int | None,
+    etag: str | None,
+    resume: bool | None,
+    verify: bool | None,
+    expected_sha256: str | None,
+    sidecar_present: bool | None,
+) -> str | None:
+    """Body of :func:`download_file_chunked`, run under the destination lock.
+
+    The caller holds ``_TRANSFER_LOCKS`` for *path* across everything here —
+    checkpoint load, part-file preallocation, chunk writes, and the
+    ``os.replace`` publish — so the deterministic staging files are only ever
+    touched by one writer at a time.
+    """
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: ops re-exports download_file_chunked for back-compat
+        _exc_class_name,
+        _is_not_found,
+        _log_storage_event,
+        download_file,
+    )
 
     if resume is None:
         from application_sdk.constants import STORAGE_RESUME_DOWNLOADS  # noqa: PLC0415
@@ -527,7 +587,7 @@ async def download_file_chunked(
             part.unlink(missing_ok=True)
             return await download_file(
                 key,
-                local_path,
+                path,
                 resolved,
                 compute_hash=compute_hash,
                 normalize=False,
@@ -699,16 +759,22 @@ async def download_file_chunked(
             # Success: fsync so a delayed-allocation ENOSPC surfaces here
             # rather than publishing a short file (offloaded — a multi-GB
             # flush must not hold the event loop and the heartbeat with it),
-            # remove the checkpoint (its existence means "incomplete"), then
-            # atomically publish the complete file at the destination.
+            # atomically publish the complete file at the destination, and
+            # only then drop the checkpoint. Publish-first, so any failure
+            # here — fsync or rename — leaves part + checkpoint intact as a
+            # valid resume state: the retry finds every chunk done and only
+            # re-runs this publish, instead of re-fetching a multi-GB object.
+            # If the unlink itself fails after a successful publish, the next
+            # download discards the stale checkpoint because the part file no
+            # longer exists at the preallocated size.
             # conformance: ignore[E004] publish error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
             try:
                 try:
                     await run_in_thread(os.fsync, fd)
                 finally:
                     os.close(fd)
-                state_path.unlink(missing_ok=True)
                 os.replace(part, path)
+                state_path.unlink(missing_ok=True)
             except Exception as exc:
                 _log_storage_event(
                     logging.WARNING,
@@ -724,7 +790,7 @@ async def download_file_chunked(
                 )
 
                 raise StorageError(
-                    f"Failed to publish downloaded file to '{local_path}'",
+                    f"Failed to publish downloaded file to '{path}'",
                     key=key,
                     cause=exc,
                 ) from exc

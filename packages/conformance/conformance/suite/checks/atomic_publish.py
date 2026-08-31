@@ -25,17 +25,21 @@ A call is flagged when **both** hold:
   exactly how the incident's chunked download spelled it);
 * no enclosing scope — the nearest function, any outer function, or the module
   body for a top-level call — contains an ``os.replace`` / ``os.rename`` call
-  **at its own level** (nested function and lambda bodies are their own
-  scopes).  A
-  scope that publishes via rename is the temp-then-replace pattern this rule
-  exists to steer toward, so it passes; requiring dataflow proof that the
-  *same* path is renamed would trade a zero-noise heuristic for a solver.
+  **at its own level**.  A scope that publishes via rename is the
+  temp-then-replace pattern this rule exists to steer toward, so it passes;
+  requiring dataflow proof that the *same* path is renamed would trade a
+  zero-noise heuristic for a solver.
 
-Own-level matters: counting a whole subtree would let one atomic helper
-elsewhere in a module (a checkpoint writer with its own ``os.replace``) clear
-every violating ``os.open`` in the file.  Counting enclosing scopes still
-clears the closure pattern, where workers write through a descriptor and the
-outer function publishes.
+"Own level" governs only what counts as a scope *publishing*: nested ``def``
+/ ``async def`` / ``lambda`` bodies are excluded from it, so one atomic
+helper elsewhere in a module (a checkpoint writer with its own
+``os.replace``) cannot clear a violating ``os.open`` in a sibling function.
+Clearance, by contrast, is inherited *inward*: a publish in any enclosing
+scope clears calls in nested defs and lambdas alike.  That is the closure
+allowance — workers writing through a descriptor while the outer function
+publishes — and it applies uniformly, so an ``O_TRUNC`` open inside a nested
+def or lambda whose outer function publishes is deliberately not flagged
+(the same no-solver ceiling as above).
 
 Ceiling: ``open(path, "wb")`` and ``Path.write_bytes`` also write in place but
 are dominated by sanctioned uses (atomic-staging internals, append writers,
@@ -171,7 +175,7 @@ def _scope_shadowed_names(scope: ast.AST) -> frozenset[str]:
     must not inherit the module's taint.
     """
     shadowed: set[str] = set()
-    if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
+    if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
         args = scope.args
         for arg in [
             *args.posonlyargs,
@@ -215,6 +219,9 @@ class _AtomicPublishChecker(ast.NodeVisitor):
         self._walk_scope(node)
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._walk_scope(node)
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
         self._walk_scope(node)
 
     def _walk_scope(self, node: ast.AST) -> None:
