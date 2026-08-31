@@ -440,6 +440,20 @@ def test_every_agent_the_playbook_dispatches_is_registered() -> None:
     assert "reachability" in PHASE2_AGENTS, "line 556 dispatches it by name"
 
 
+def test_the_prompt_warns_that_globbing_dot_mothership_finds_nothing() -> None:
+    """opencode's Glob/Grep are ripgrep-backed and ripgrep skips hidden paths.
+
+    Verified: `rg --files -g '.mothership/...'` returns 0, `--hidden` returns 1.
+    A live round hit this — `Glob ".mothership/pr-review/agents/*.md"` → 0
+    matches — and an agent that believes an empty glob concludes its playbook
+    assets are missing and reviews without them, silently.
+    """
+    prompt = review_prompt(42, 1, "a" * 40, DismissalLedger())
+    assert "DOT-directory" in prompt
+    assert "0 matches" in prompt
+    assert "EXPLICIT PATH" in prompt
+
+
 def test_the_review_prompt_names_the_delegation_tool_for_this_runtime() -> None:
     prompt = review_prompt(42, 1, "a" * 40, DismissalLedger())
     assert "`Task`" in prompt
