@@ -43,27 +43,35 @@ from typing import Any, Callable
 
 from sdk_loop_common import (
     MAX_ROUNDS,
+    PHASE2_AGENTS,
     PLAYBOOK_RESOLVE,
     PLAYBOOK_REVIEW,
     RESOLVE_MODEL,
     REVIEW_MODEL,
     AgentResult,
     DismissalLedger,
-    budget_exceeded,
     emit_outputs,
-    gateway_spend,
+    format_usage,
     head_state,
     is_verdict_comment,
+    opencode_usage,
+    parse_answers_trigger,
     parse_reviewed_head,
     parse_verdict,
+    reaim_exhausted,
     run_agent,
-    run_budget,
-    spend_delta,
+    token_budget,
+    token_budget_exceeded,
+    usage_total,
 )
 
 #: Wall-clock per phase. Review is the slower of the two: it walks the whole
 #: five-phase playbook including sub-agents, where a resolve round is mostly
 #: targeted edits.
+# Outer backstops, deliberately left generous. The idle watchdog in
+# `run_agent` is what actually catches a dead agent, and it fires on silence
+# rather than on elapsed time — so these only ever cap a phase that is still
+# talking. Cutting them would trade a real (if slow) review for no review.
 TIMEOUT_REVIEW_S = 45 * 60
 TIMEOUT_RESOLVE_S = 30 * 60
 
@@ -77,23 +85,25 @@ OUTCOME_TERMINAL_VERDICT = "terminal_verdict"
 OUTCOME_FAILED = "failed"
 #: Refused before starting, because the run has spent its allowance.
 OUTCOME_BUDGET = "budget_exhausted"
+#: Gave up re-aiming: the loop never got a clean pass at one commit.
+OUTCOME_REAIM_EXHAUSTED = "reaim_exhausted"
 
 
-def _as_float(raw: str | None) -> float | None:
+def _as_int(raw: str | None) -> int | None:
     """Cumulative spend handed down the chain; empty means not measured."""
     if not (raw or "").strip():
         return None
     try:
-        return float(raw)  # type: ignore[arg-type]
+        return int(raw)  # type: ignore[arg-type]
     except ValueError:
         return None
 
 
-def running_total(spent_so_far: float | None, phase_cost: float | None) -> float | None:
+def running_total(spent_so_far: int | None, phase_cost: int | None) -> int | None:
     """Carry the tally forward, treating an unmeasured phase as a gap not a zero."""
     if spent_so_far is None and phase_cost is None:
         return None
-    return (spent_so_far or 0.0) + (phase_cost or 0.0)
+    return (spent_so_far or 0) + (phase_cost or 0)
 
 
 def _sh(args: list[str], runner: Callable[..., Any] = subprocess.run, **kw: Any) -> Any:
@@ -118,6 +128,12 @@ def live_head(
 # --------------------------------------------------------------------------
 
 
+#: Announces the lane to the review playbook. See the CONTRACT comment beside
+#: it in .mothership/pr-review/ORCHESTRATION.md — the string is shared with
+#: that file and a test asserts they still match.
+LANE_MARKER = "LANE: sdk-loop"
+
+
 def review_prompt(
     pr: int,
     round_no: int,
@@ -136,12 +152,29 @@ def review_prompt(
     parts = [
         f"Read {PLAYBOOK_REVIEW} and follow it exactly for PR #{pr}.",
         "",
+        # CONTRACT: the playbook's "Runtime" section keys its lane table on
+        # this exact string, and skips its sandbox-only Appendix A when it is
+        # present. Emitting it beats letting the agent infer the lane: a live
+        # transcript shows one spending a turn on
+        # `ls /workspace/application-sdk || echo NO` before reviewing
+        # anything, and an inference that goes the wrong way sends it into
+        # steps whose write calls 403 against this phase's read-only token.
+        # test_the_lane_marker_matches_the_playbook_contract pins both halves.
+        LANE_MARKER,
+        "",
         f"You are reviewing sha {sha}. Stamp that sha as REVIEWED_HEAD.",
         f"This is round {round_no} of {MAX_ROUNDS} of an @sdk-loop run;",
         f"stamp the footer line `Round {round_no} of {MAX_ROUNDS} · @sdk-loop`.",
         "",
         "You are READ-ONLY. Your token carries no write scope — do not attempt",
         "to push, and do not treat a push failure as something to work around.",
+        "",
+        "§2a says to dispatch the domain agents via the Agent tool. On this runtime",
+        "that tool is called `Task`, and the agents are already registered —",
+        f"{', '.join(PHASE2_AGENTS)}. Dispatch them in parallel exactly as §2a",
+        "routes them by review_scope. Do NOT do their work yourself in one pass:",
+        "a single agent covering every domain still produces a verdict, just a",
+        "worse one, and nothing in the output would say so.",
         "",
         "SKIP §2b (the Wave 2 cross-model adversarial). Two reasons, and either",
         "alone is sufficient:",
@@ -183,13 +216,28 @@ def review_prompt(
 
 
 def newest_verdict(
-    comments: list[dict[str, Any]], since_id: str | None = None
+    comments: list[dict[str, Any]],
+    since_id: str | None = None,
+    answers_trigger: str | None = None,
 ) -> dict[str, Any] | None:
-    """The most recent verdict comment, optionally newer than a given id."""
+    """The verdict THIS phase produced — not merely the newest one present.
+
+    A PR usually already carries verdicts: from `@sdk-review`, from an earlier
+    loop, from a re-review days ago. Accepting the newest of those makes a
+    phase that produced nothing look like it produced whatever was lying
+    around. Not hypothetical — it is exactly how a crashed agent got reported
+    as a re-aim, four rounds running, with the stale verdict's older
+    REVIEWED_HEAD supplying the "the head moved" signal.
+
+    So the match is on `ANSWERS_TRIGGER` when this run's trigger id is known.
+    A verdict answering someone else's request is someone else's verdict.
+    """
     best: dict[str, Any] | None = None
     for comment in comments:
         body = comment.get("body") or ""
         if not is_verdict_comment(body) or parse_verdict(body) is None:
+            continue
+        if answers_trigger and parse_answers_trigger(body) != str(answers_trigger):
             continue
         if since_id and int(comment.get("id", 0)) <= int(since_id):
             continue
@@ -221,6 +269,11 @@ def interpret_review(
     silent findings-free pass unless it is caught here, which is the most
     dangerous false success this lane can produce.
     """
+    if not result.completed:
+        return ReviewOutcome(
+            outcome=OUTCOME_FAILED,
+            detail=f"the agent aborted: {result.abort_reason}",
+        )
     if verdict_comment is None:
         detail = (
             "the gateway rejected the request (auth or model)"
@@ -238,10 +291,12 @@ def interpret_review(
         and not expected_sha.startswith(stamped)
         and not stamped.startswith(expected_sha[:7])
     ):
-        # The reviewer stamped a different sha than the one it was pointed at.
-        # Treat as a re-aim rather than trusting it: something moved.
+        # Now that only THIS run's verdict is accepted, a stamp mismatch is the
+        # reviewer disobeying, not evidence the branch moved — main() already
+        # fences the head against the remote before we get here. Reporting it
+        # as a re-aim let a broken round masquerade as progress.
         return ReviewOutcome(
-            outcome=OUTCOME_REAIM,
+            outcome=OUTCOME_FAILED,
             verdict=verdict,
             reviewed_head=stamped,
             detail=f"verdict stamps {stamped[:8]}, round expected {expected_sha[:8]}",
@@ -394,12 +449,24 @@ def main(argv: list[str] | None = None) -> int:
     ledger = DismissalLedger.from_json(os.environ.get("LEDGER"))
 
     state = head_state(live_head(repo, head_ref), baseline, ours)
+    reaims = int(os.environ.get("REAIMS_SO_FAR") or 0)
+    if state.moved_by_other and reaim_exhausted(reaims):
+        # Stop rather than spend another round on a target that keeps moving.
+        emit_outputs(
+            outcome=OUTCOME_REAIM_EXHAUSTED,
+            new_base_sha=state.live,
+            reaims=str(reaims),
+            detail=f"{reaims} consecutive re-aims without a clean pass at one commit",
+        )
+        print(f"giving up after {reaims} consecutive re-aims")
+        return 0
     if state.moved_by_other:
         # Re-aim: discard whatever this round would have done and send the loop
         # back to review on the new head. Never resolve against a stale review.
         emit_outputs(
             outcome=OUTCOME_REAIM,
             new_base_sha=state.live,
+            reaims=str(reaims + 1),
             detail=f"head moved to {state.live[:8]} outside this run",
         )
         print(f"re-aim: head is {state.live[:8]}, expected {baseline[:8]}")
@@ -407,22 +474,19 @@ def main(argv: list[str] | None = None) -> int:
 
     # Budget before work: a phase refused at the boundary costs nothing, while
     # one killed mid-flight is money spent for no verdict and no fix.
-    spent_so_far = _as_float(os.environ.get("SPENT_SO_FAR"))
-    budget = run_budget()
-    if budget_exceeded(spent_so_far, budget):
+    spent_so_far = _as_int(os.environ.get("SPENT_SO_FAR"))
+    budget = token_budget()
+    if token_budget_exceeded(spent_so_far, budget):
         emit_outputs(
             outcome=OUTCOME_BUDGET,
-            spent_total=f"{spent_so_far:.4f}",
+            spent_total=str(spent_so_far),
             new_base_sha=state.live,
-            detail=f"run has spent ${spent_so_far:,.2f} of its ${budget:,.2f} allowance",
+            detail=f"used {spent_so_far:,} of its {budget:,} token allowance",
         )
-        print(f"budget: ${spent_so_far:.2f} of ${budget:.2f} spent — refusing round")
+        print(f"budget: {spent_so_far:,} of {budget:,} tokens used — refusing round")
         return 0
 
     workspace = os.environ.get("GITHUB_WORKSPACE", ".")
-    # Bracket the agent call, not the whole job: checkout and token minting
-    # cost nothing and would only widen the window other traffic can leak into.
-    spend_before = gateway_spend()
     transcript = os.path.join(workspace, f"sdk-loop-{phase}-{round_no}.log")
     if phase == "review":
         print(f"::group::review round {round_no} — agent transcript")
@@ -434,6 +498,7 @@ def main(argv: list[str] | None = None) -> int:
             workspace,
             TIMEOUT_REVIEW_S,
             transcript_path=transcript,
+            subagents=True,
         )
         print("::endgroup::")
         comments = json.loads(
@@ -442,20 +507,28 @@ def main(argv: list[str] | None = None) -> int:
             ).stdout
             or "[]"
         )
-        outcome = interpret_review(result, newest_verdict(comments), state.live)
-        cost = spend_delta(spend_before, gateway_spend())
+        outcome = interpret_review(
+            result,
+            newest_verdict(comments, answers_trigger=os.environ.get("COMMENT_ID")),
+            state.live,
+        )
+        counts = opencode_usage(workspace)
+        usage, cost = format_usage(counts), usage_total(counts)
+        print(f"tokens: {usage}")
         emit_outputs(
             outcome=outcome.outcome,
             verdict=outcome.verdict,
             reviewed_head=outcome.reviewed_head,
             verdict_url=outcome.verdict_url,
             detail=outcome.detail,
+            reaims="0",
             new_base_sha=state.live,
-            cost="" if cost is None else f"{cost:.4f}",
+            cost="" if cost is None else str(cost),
+            usage=usage,
             spent_total=(
                 ""
                 if running_total(spent_so_far, cost) is None
-                else f"{running_total(spent_so_far, cost):.4f}"
+                else str(running_total(spent_so_far, cost))
             ),
         )
         print(f"review round {round_no}: {outcome.outcome} {outcome.verdict}")
@@ -479,25 +552,34 @@ def main(argv: list[str] | None = None) -> int:
             for line in _sh(
                 ["git", "status", "--porcelain"], cwd=workspace
             ).stdout.splitlines()
-            if "sdk-loop-" not in line
+            if "sdk-loop-" not in line and ".sdk-loop-rgcfg" not in line
         ).strip()
         after = live_head(repo, head_ref)
         dismissals = parse_dismissals(f"{result.stdout}\n{result.stderr}")
         outcome = interpret_resolve(result, bool(dirty), before, after, dismissals)
-        cost = spend_delta(spend_before, gateway_spend())
+        # Measured here rather than inherited: `cost` and `usage` were only
+        # ever assigned inside the review branch, so every resolve phase
+        # reached `emit_outputs` with both names unbound and died on a
+        # NameError AFTER the resolver had already pushed its fix — the work
+        # landed, the round was reported as failed, and the loop stopped.
+        counts = opencode_usage(workspace)
+        usage, cost = format_usage(counts), usage_total(counts)
+        print(f"tokens: {usage}")
         for entry in outcome.dismissals:
             ledger.add(entry["id"], entry["rationale"], round_no)
         emit_outputs(
             outcome=outcome.outcome,
             pushed_sha=outcome.pushed_sha,
+            reaims="0",
             new_base_sha=after,
             ledger=ledger.to_json(),
             detail=outcome.detail,
-            cost="" if cost is None else f"{cost:.4f}",
+            cost="" if cost is None else str(cost),
+            usage=usage,
             spent_total=(
                 ""
                 if running_total(spent_so_far, cost) is None
-                else f"{running_total(spent_so_far, cost):.4f}"
+                else str(running_total(spent_so_far, cost))
             ),
         )
         print(f"resolve round {round_no}: {outcome.outcome}")
