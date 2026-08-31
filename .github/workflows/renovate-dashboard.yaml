@@ -150,7 +150,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.7"
+          version: "0.12.8"
 
       - name: Run Renovate scanner
         run: |
@@ -165,7 +165,7 @@ jobs:
             --out /tmp/renovate-output
 
       - name: Setup AWS Credentials
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6
         with:
           aws-region: ap-south-1
           role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
