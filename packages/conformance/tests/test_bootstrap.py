@@ -506,22 +506,52 @@ def test_cmd_bootstrap_writes_contract_ledger(
     assert (tmp_path / "contract_schema.lock.json").exists()
 
 
-def test_cmd_bootstrap_contract_ledger_seeded_from_sdk_bundle(
+def test_cmd_bootstrap_contract_ledger_holds_only_consumer_contracts(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A freshly scaffolded ledger must not be empty — it inherits the SDK's own
-    bundled contract fields (e.g. ExtractionInput) so apps that already extend
-    those base contracts don't get flagged as stale the moment enforcement
-    goes live."""
+    """A freshly scaffolded ledger records what bootstrap found in the app's own
+    source and nothing else. It must NOT be seeded from the SDK's packaged
+    ledger: build_ledger is append-only, so every SDK template contract copied
+    in would be permanent, and any app class sharing one of those names would
+    draw B005 "field removed" for every SDK field it does not have, forever.
+    Same invariant as `gen-contract-ledger`, via the shared baseline helper."""
     import json
 
     from conformance.suite.checks.deprecation._ledger_schema import load_ledger
 
+    (tmp_path / "app.py").write_text(
+        "from application_sdk.app import App\n\n"
+        "class MyInput:\n    only_mine: str = ''\n\n"
+        "class MyApp(App):\n"
+        "    async def run(self, input: MyInput) -> None:\n        pass\n",
+        encoding="utf-8",
+    )
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap([])
     payload = json.loads((tmp_path / "contract_schema.lock.json").read_text())
-    bundled = load_ledger(None)
-    assert len(payload["fields"]) >= len(bundled.fields) > 0
+    contracts = {f["contract"] for f in payload["fields"]}
+    assert contracts == {"MyInput"}
+
+    # Nothing from the SDK's own bundled ledger leaked in.
+    bundled = {f.contract for f in load_ledger(None).fields}
+    assert (
+        bundled
+    ), "the packaged SDK ledger should be non-empty for this to mean anything"
+    assert not (contracts & bundled)
+
+
+def test_cmd_bootstrap_contract_ledger_is_empty_without_consumer_contracts(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An app with no entrypoint contracts yet scaffolds an EMPTY ledger, not
+    the SDK's. B006 has nothing to be stale against, which is the correct
+    day-one state."""
+    import json
+
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    payload = json.loads((tmp_path / "contract_schema.lock.json").read_text())
+    assert payload["fields"] == []
 
 
 def test_cmd_bootstrap_contract_ledger_is_write_if_absent(
