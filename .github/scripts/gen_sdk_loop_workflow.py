@@ -134,6 +134,7 @@ jobs:
           COMMENT_ID: ${{ github.event.comment.id }}
           AUTHOR_ASSOCIATION: ${{ github.event_name == 'workflow_dispatch' && 'OWNER' || github.event.comment.author_association }}
           RUN_ID: ${{ github.run_id }}
+          GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           WORKFLOW_FILE: sdk-loop.yml
         run: python3 .github/scripts/sdk_loop_fence.py
 """

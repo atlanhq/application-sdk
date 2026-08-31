@@ -43,7 +43,16 @@ from sdk_loop_common import (  # noqa: E402
     run_agent,
     run_budget,
 )
-from sdk_loop_fence import decide, find_live_run, is_authorized  # noqa: E402
+from sdk_loop_fence import (  # noqa: E402
+    MARK_DECLINE,
+    MARK_START,
+    decide,
+    decline_comment,
+    find_live_run,
+    is_authorized,
+    post_comment,
+    start_comment,
+)
 from sdk_loop_finalize import Round, parse_rounds, render  # noqa: E402
 from sdk_loop_phase import (  # noqa: E402
     OUTCOME_CLEAN,
@@ -146,6 +155,48 @@ def test_pr_number_matching_is_not_a_substring_match() -> None:
         {"databaseId": 111, "status": "in_progress", "displayTitle": "SDK Loop #420"}
     ]
     assert find_live_run(runs, "42", "222") == ""
+
+
+# ---------------------------------------------------------------------------
+# The lane always says what it decided
+# ---------------------------------------------------------------------------
+
+
+def test_a_declined_invocation_is_not_met_with_silence() -> None:
+    """Silence is indistinguishable from a broken lane, and the person who
+    typed the comment cannot tell which. finalize is gated on proceed=='true',
+    so if the fence says nothing here, nothing else will."""
+    body = decline_comment("`mallory` is not a collaborator", "http://x/runs/9")
+    assert MARK_DECLINE in body
+    assert "did not start" in body
+    assert "not a collaborator" in body
+
+
+def test_a_dismissed_duplicate_points_at_the_run_that_has_the_branch() -> None:
+    body = decline_comment("a loop is already running", "http://x/runs/9", "7")
+    assert "http://x/runs/7" in body
+
+
+def test_starting_is_announced_before_the_first_verdict() -> None:
+    # The first verdict can be 45 minutes away; until then this is the only
+    # sign on the PR that anything is happening.
+    body = start_comment("42", "http://x/runs/9", "a" * 40)
+    assert MARK_START in body
+    assert "aaaaaaaa" in body
+    assert "http://x/runs/9" in body
+
+
+def test_failing_to_narrate_never_fails_the_decision() -> None:
+    calls: list[list[str]] = []
+
+    def _boom(args, **_kw):
+        calls.append(args)
+        raise RuntimeError("gh is having a day")
+
+    # The decision is the product; the comment is commentary on it.
+    with pytest.raises(RuntimeError):
+        post_comment("o/r", "42", "hi", runner=_boom)
+    assert calls and calls[0][:3] == ["gh", "pr", "comment"]
 
 
 # ---------------------------------------------------------------------------

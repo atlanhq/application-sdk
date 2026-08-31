@@ -10,6 +10,11 @@ Three jobs, in order, because each is cheaper than the next:
    queued run would be answering a stale request. First run wins.
 3. **Pin the baseline.** Record the head sha every later phase fences against.
 
+Whatever it decides, it SAYS SO on the PR. A lane that answers `@sdk-loop`
+with silence is indistinguishable from one that is broken, and the person who
+typed it has no way to tell which — so both the stand-down and the start are
+posted, with a link to the run.
+
 Environment:
     GH_TOKEN            App installation token
     REPO                owner/name
@@ -17,6 +22,7 @@ Environment:
     COMMENT_ID          the triggering comment (for ANSWERS_TRIGGER)
     AUTHOR_ASSOCIATION  from the comment payload
     RUN_ID              this workflow run, so it can exclude itself
+    GHA_RUN_URL         link included in whatever it posts
     WORKFLOW_FILE       e.g. sdk-loop.yml
 """
 
@@ -105,6 +111,39 @@ def decide(
     return FenceDecision(proceed=True, reason="ok")
 
 
+MARK_START = "<!-- SDK_LOOP_STARTED -->"
+MARK_DECLINE = "<!-- SDK_LOOP_DECLINED -->"
+
+
+def start_comment(pr: str, run_url: str, sha: str) -> str:
+    return (
+        f"{MARK_START}\n"
+        f"🔁 **`@sdk-loop`** started on `{sha[:8]}`.\n\n"
+        "It will review, fix what the review finds, and re-review until the "
+        "findings are empty or it runs out of rounds or allowance. Each round "
+        "posts its own verdict; a summary follows at the end.\n\n"
+        f"[Watch it run]({run_url})"
+    )
+
+
+def decline_comment(reason: str, run_url: str, live_run_id: str = "") -> str:
+    body = f"{MARK_DECLINE}\n🚫 **`@sdk-loop`** did not start — {reason}"
+    if live_run_id:
+        base = run_url.rsplit("/", 1)[0] if run_url else ""
+        body += f"\n\nThe run that has the branch: {base}/{live_run_id}"
+    return body
+
+
+def post_comment(repo: str, pr: str, body: str, runner: Any = subprocess.run) -> None:
+    """Best-effort. Failing to narrate must never fail the decision itself."""
+    runner(
+        ["gh", "pr", "comment", pr, "--repo", repo, "--body", body],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 def _gh_json(args: list[str], runner: Callable[..., Any] = subprocess.run) -> Any:
     proc = runner(["gh", *args], capture_output=True, text=True, check=False)
     if proc.returncode != 0:
@@ -117,6 +156,7 @@ def main(argv: list[str] | None = None) -> int:
     pr_number = os.environ["PR_NUMBER"]
     self_run_id = os.environ.get("RUN_ID", "")
     workflow = os.environ.get("WORKFLOW_FILE", "sdk-loop.yml")
+    run_url = os.environ.get("GHA_RUN_URL", "")
 
     runs = (
         _gh_json(
@@ -145,6 +185,11 @@ def main(argv: list[str] | None = None) -> int:
             reason=decision.reason,
             live_run_id=decision.live_run_id,
         )
+        post_comment(
+            repo,
+            pr_number,
+            decline_comment(decision.reason, run_url, decision.live_run_id),
+        )
         print(f"stand down: {decision.reason}", file=sys.stderr)
         # Exit 0: declining is a correct outcome, not a broken workflow. A red
         # run here would train people to ignore the lane's failures.
@@ -162,7 +207,9 @@ def main(argv: list[str] | None = None) -> int:
         ]
     )
     if pr.get("state") != "OPEN":
-        emit_outputs(proceed="false", reason=f"PR is {pr.get('state')}, not open.")
+        reason = f"the PR is {str(pr.get('state')).lower()}, not open."
+        emit_outputs(proceed="false", reason=reason)
+        post_comment(repo, pr_number, decline_comment(reason, run_url))
         return 0
 
     emit_outputs(
@@ -174,6 +221,7 @@ def main(argv: list[str] | None = None) -> int:
         base_ref=pr["baseRefName"],
         comment_id=os.environ.get("COMMENT_ID", ""),
     )
+    post_comment(repo, pr_number, start_comment(pr_number, run_url, pr["headRefOid"]))
     print(f"baseline {pr['headRefOid'][:8]} on {pr['headRefName']}")
     return 0
 
