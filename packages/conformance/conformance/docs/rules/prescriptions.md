@@ -804,9 +804,13 @@ other coroutine on it. Tree-scale filesystem work (shutil.rmtree / copytree / mo
 the SafeFileOps rmtree / move wrappers) blocks for as long as the tree takes to walk,
 which starves a @task's auto-heartbeat and makes Temporal retry an activity that is
 still making progress — App.cleanup_files shipped with exactly that bug while this
-rule's inventory was network/sleep-only. The correct pattern is to await an async
-equivalent, or offload blocking work via App.run_in_thread() inside a @task — not to
-bridge async with a sync workaround.
+rule's inventory was network/sleep-only. The same property — duration scales with the
+data, not with a fixed syscall cost — covers tree traversal (os.walk / glob /
+Path.rglob), pandas and pyarrow readers and writers, whole-file pathlib accessors,
+file-handle (de)serialization, and subprocess calls; an AST sweep of the connector fleet
+found every one of those blocking a loop in production code. The correct pattern is to
+await an async equivalent, or offload blocking work via App.run_in_thread() inside a
+@task — not to bridge async with a sync workaround.
 
 Inside an `async def`, code either re-enters the event loop (`asyncio.run(...)` or
 `*.run_until_complete(...)`, including `loop.run_until_complete` /
@@ -816,10 +820,22 @@ Inside an `async def`, code either re-enters the event loop (`asyncio.run(...)` 
 `SafeFileOps.move` wrappers).  Await the coroutine directly, or offload genuinely
 blocking work with `App.run_in_thread()` inside a `@task`.
 
+The same data-scale property extends the inventory to tree traversal (`os.walk` /
+`os.scandir` / `glob.glob` / `Path.glob` / `Path.rglob`), pandas and pyarrow readers and
+writers (`pandas.read_sql` / `read_parquet` / `DataFrame.to_parquet` / `pq.read_table` /
+…), whole-file `pathlib` accessors (`Path.read_text` / `write_bytes` / …), file-handle
+(de)serialization (`json.load` / `json.dump` / `pickle` / `yaml`), and `subprocess.*` /
+`os.system`.
+
 Single-syscall filesystem operations (`os.remove`, `os.unlink`, `os.rmdir`) are **not**
 flagged: one inode operation does not earn a thread hop, and flagging them would bury
-the tree-scale findings.  Tree *traversal* (`os.walk`, `os.scandir`) is likewise out of
-scope for now.
+the tree-scale findings.  The in-memory string forms `json.loads` / `json.dumps` are
+likewise out of scope — CPU, not I/O, and used for small payloads everywhere.
+
+A call that is the direct operand of `await` is never flagged: an awaited
+`path.read_text()` is `anyio.Path` and an awaited `cursor.fetchall()` is an async
+driver.  The name alone cannot separate those from their blocking namesakes; the `await`
+can.
 
 Blocking sync I/O and filesystem work are reported only **outside** workflow context —
 inside workflow methods the same calls are owned by P020 (sleep) and P021 (file/network

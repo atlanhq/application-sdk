@@ -397,6 +397,177 @@ def test_p023_dedup_workflow_rmtree_is_p021_not_p023() -> None:
     assert _rule(src, "P023") == []
 
 
+# ── P023 data-scale inventory ────────────────────────────────────────────────
+#
+# Every pattern below was found blocking a loop in a real connector during the
+# fleet sweep that motivated the extension; the app is named in each docstring
+# so a future reader can check the finding is still worth having.
+
+
+def test_p023_flags_pandas_read_sql() -> None:
+    """atlan-mssql-app: the sequential fallback ran pd.read_sql per database."""
+    body = (
+        "import pandas as pd\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def dbs(self, input):\n"
+        "        return pd.read_sql(query, engine)\n"
+    )
+    assert len(_rule(body, "P023")) == 1
+
+
+def test_p023_flags_pandas_read_parquet_and_frame_writer() -> None:
+    """atlan-netsuite-app read parquet on the loop; the writer half is a method."""
+    body = (
+        "import pandas as pd\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def out(self, input):\n"
+        "        df = pd.read_parquet(path)\n"
+        "        df.to_parquet(other)\n"
+    )
+    assert len(_rule(body, "P023")) == 2
+
+
+def test_p023_flags_pyarrow_parquet_read_table() -> None:
+    """atlan-snowflake-app: pq.read_table in the enrichment activities."""
+    body = (
+        "from pyarrow import parquet as pq\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def enrich(self, input):\n"
+        "        return pq.read_table(path)\n"
+    )
+    assert len(_rule(body, "P023")) == 1
+
+
+def test_p023_flags_tree_traversal() -> None:
+    """The sweep the module docstring deferred: os.walk (athena), glob (dbt),
+    Path.glob / Path.rglob (netsuite, oracle, snowflake)."""
+    body = (
+        "import glob\n"
+        "import os\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def scan(self, input):\n"
+        "        a = os.walk(root)\n"
+        "        b = glob.glob(pattern)\n"
+        "        c = root.glob('*.json')\n"
+        "        d = root.rglob('*')\n"
+    )
+    assert len(_rule(body, "P023")) == 4
+
+
+def test_p023_traversal_reports_glob_glob_once() -> None:
+    """`glob.glob` matches the exact set AND the `.glob` suffix — exact wins,
+    and the early return keeps it a single finding."""
+    body = (
+        "import glob\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def scan(self, input):\n"
+        "        return glob.glob(pattern)\n"
+    )
+    assert len(_rule(body, "P023")) == 1
+
+
+def test_p023_flags_whole_file_pathlib_accessors() -> None:
+    """atlan-netsuite-app rewrote each JSON file with read_text/write_text."""
+    body = (
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def fix(self, input):\n"
+        "        text = path.read_text()\n"
+        "        path.write_text(text)\n"
+    )
+    assert len(_rule(body, "P023")) == 2
+
+
+def test_p023_flags_file_handle_serialization() -> None:
+    """atlan-netsuite-app: json.dump/json.load against an open handle."""
+    body = (
+        "import json\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def write(self, input):\n"
+        "        json.dump(payload, handle)\n"
+        "        return json.load(handle)\n"
+    )
+    assert len(_rule(body, "P023")) == 2
+
+
+def test_p023_silent_for_in_memory_json_string_forms() -> None:
+    """`loads`/`dumps` are CPU on a small payload, not file-scale I/O."""
+    body = (
+        "import json\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def write(self, input):\n"
+        "        blob = json.dumps(payload)\n"
+        "        return json.loads(blob)\n"
+    )
+    assert _rule(body, "P023") == []
+
+
+def test_p023_flags_subprocess() -> None:
+    body = (
+        "import subprocess\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def build(self, input):\n"
+        "        subprocess.run(['ls'])\n"
+    )
+    assert len(_rule(body, "P023")) == 1
+
+
+def test_p023_silent_for_awaited_lookalikes() -> None:
+    """An awaited `read_text`/`glob`/`to_sql` is an async API (anyio.Path, an
+    async ORM) wearing a blocking name. The name cannot tell them apart; the
+    `await` can, so an awaited call is never flagged."""
+    body = (
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def read(self, input):\n"
+        "        text = await path.read_text()\n"
+        "        rows = await path.glob('*')\n"
+        "        return text, rows\n"
+    )
+    assert _rule(body, "P023") == []
+
+
+def test_p023_silent_when_data_io_is_offloaded() -> None:
+    """`run_in_thread(pd.read_parquet, path)` passes the callable, never calls it."""
+    body = (
+        "import pandas as pd\n"
+        "from application_sdk.execution.heartbeat import run_in_thread\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def read(self, input):\n"
+        "        return await run_in_thread(pd.read_parquet, path)\n"
+    )
+    assert _rule(body, "P023") == []
+
+
+def test_p023_data_io_silent_in_sync_def() -> None:
+    """The offload closure itself is a sync def — flagging it would flag the fix."""
+    body = (
+        "import pandas as pd\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def read(self, input):\n"
+        "        def _read():\n"
+        "            return pd.read_parquet(path)\n"
+        "        return await self.task_context.run_in_thread(_read)\n"
+    )
+    assert _rule(body, "P023") == []
+
+
+def test_p023_dedup_workflow_data_io_is_p021_not_p023() -> None:
+    """Data-scale I/O in workflow context stays P021's, like the FS work."""
+    src = "import pandas as pd\n" + _wrap_run("pd.read_parquet('/tmp/f')")
+    assert _rule(src, "P023") == []
+
+
 # ── P024 SyncAtlanClientInApp ────────────────────────────────────────────────
 
 
