@@ -989,9 +989,10 @@ class TestCursorPagination:
         assert page.has_more is False
         assert len(page.items) == 7
 
-    def test_unparseable_cursor_restarts_rather_than_erroring(self) -> None:
+    def test_unparseable_cursor_serves_the_first_page_terminally(self) -> None:
         page = self._page({"cursor": "!!!not-a-token!!!", "limit": "2"})
         assert [item["id"] for item in page.items] == ["obj-01", "obj-02"]
+        assert page.next_cursor is None
 
     def test_cursor_past_the_end_is_an_empty_terminal_page(self) -> None:
         far = cursor_page(
@@ -1022,14 +1023,51 @@ class TestCursorPagination:
         )
         assert [item["id"] for item in second.items] == ["obj-03", "obj-04"]
 
-    def test_a_raising_custom_decode_falls_back_to_the_first_page(self) -> None:
+    def test_a_raising_custom_decode_serves_the_first_page_terminally(self) -> None:
         page = self._page(
             {"cursor": "garbage", "limit": "2"},
             decode=lambda token: int(token.split(":", 1)[1]),
         )
         assert [item["id"] for item in page.items] == ["obj-01", "obj-02"]
+        assert page.next_cursor is None
 
     def test_bad_limit_and_max_limit(self) -> None:
         assert self._page({"limit": "abc"}, default_limit=3).limit == 3
         assert self._page({"limit": "-1"}, default_limit=3).limit == 3
         assert self._page({"limit": "50"}, max_limit=2).limit == 2
+
+
+class TestCursorDecodeFailureIsTerminal:
+    """A broken cursor token must fail an assertion, never hang a loop."""
+
+    def _page(self, params: dict, **kwargs) -> CursorPage:
+        request = FakeRequest(
+            method="GET",
+            path="/a",
+            params=params,
+            query={},
+            path_params={},
+            headers={},
+            body=b"",
+        )
+        return cursor_page(OBJECTS, request, **kwargs)
+
+    def test_an_undecodable_token_serves_a_terminal_page(self) -> None:
+        page = self._page({"cursor": "!!!not-a-token!!!", "limit": "2"})
+        assert [item["id"] for item in page.items] == ["obj-01", "obj-02"]
+        assert page.next_cursor is None
+
+    def test_a_client_loop_resending_a_bad_token_terminates(self) -> None:
+        def bad_decode(token: str) -> int:
+            raise ValueError(token)
+
+        pages = 0
+        params = {"cursor": "bzoz", "limit": "2"}
+        while True:
+            page = self._page(params, decode=bad_decode)
+            pages += 1
+            assert pages < 10, "cursor_page allowed an infinite pagination loop"
+            if page.next_cursor is None:
+                break
+            params = {"cursor": page.next_cursor, "limit": "2"}
+        assert pages == 1

@@ -98,3 +98,17 @@ class GoldenCorpusUnavailableError(DependencyUnavailableError):
     """No golden corpus is configured — the skip case, not a failure."""
 
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_GOLDEN_CORPUS"
+
+
+@dataclass(kw_only=True)
+class GoldenDuplicateKeyError(InvalidInputError):
+    """A golden-diff join key is not unique on one side — a wrong test, not a diff."""
+
+    code: ClassVar[str] = "INVALID_INPUT_GOLDEN_DUPLICATE_KEY"
+
+
+@dataclass(kw_only=True)
+class GoldenRuleError(InvalidInputError):
+    """A TypenameRule combines settings that contradict each other."""
+
+    code: ClassVar[str] = "INVALID_INPUT_GOLDEN_RULE"

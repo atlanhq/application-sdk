@@ -54,3 +54,9 @@ JSON (one record object or an array of them), NDJSON (`.ndjson` / `.jsonl`), CSV
 Parquet needs `pyarrow`, which ships in the `[sql]` and `[incremental]` extras rather than the SDK core, so it is imported lazily and its absence raises `GoldenParquetSupportError` naming the extra to install.
 
 Comparing a run's output against the corpus's expected records is a separate concern with its own helpers; this module declares the tree and reads it.
+
+## Comparing against the corpus
+
+`assert_matches_golden` strips only the three `RUN_VOLATILE_FIELDS` (`lastSyncRun`, `lastSyncRunAt`, `lastSyncWorkflowName`) by default — deliberately not `guid`, `updateTime`, `createTime`, or `__timestamp`-suffixed keys, because whether those vary depends on the connector. If your first golden run fails on fields like these, that is the dial to reach for: pass `extra_ignore={"guid", "updateTime", ...}` (which adds to the canonical three) rather than `ignore=` (which replaces them).
+
+The diff is keyed and order-independent **across records**; **within** a field it is order-sensitive — a reordered list (relationship arrays, `attributes.columns`) reports as a mismatch. Sort unordered arrays before capture and comparison, or ignore that one field; do not downgrade the typename's `DiffPolicy` for ordering noise.

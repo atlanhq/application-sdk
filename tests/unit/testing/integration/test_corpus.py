@@ -401,3 +401,29 @@ class TestEmptyGoldenRootEnv:
         monkeypatch.setenv(GOLDEN_ROOT_ENV, "   ")
         with pytest.raises(GoldenCorpusLayoutError, match="set but empty"):
             GoldenCorpus.from_env(default_root=tmp_path)
+
+
+class TestTenantDotDirectories:
+    def test_a_dot_directory_is_not_a_tenant(self, tmp_path: Path) -> None:
+        root = _write_corpus(tmp_path / "corpus", tenant="tenant-a")
+        (root / ".DS_Store_dir").mkdir()
+        corpus = GoldenCorpus(root=root, layout=GoldenLayout(tenant_level=True))
+        assert corpus.tenants() == ("tenant-a",)
+
+    def test_validate_skips_dot_directories(self, tmp_path: Path) -> None:
+        root = _write_corpus(tmp_path / "corpus", tenant="tenant-a")
+        (root / ".git").mkdir()
+        corpus = GoldenCorpus(root=root, layout=GoldenLayout(tenant_level=True))
+        corpus.validate()
+        assert corpus.tenants() == ("tenant-a",)
+
+
+class TestDefaultRootExpansion:
+    def test_default_root_expands_a_tilde(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv(GOLDEN_ROOT_ENV, raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        _write_corpus(tmp_path / "corpus")
+        corpus = GoldenCorpus.from_env(default_root="~/corpus")
+        assert corpus.root == tmp_path / "corpus"

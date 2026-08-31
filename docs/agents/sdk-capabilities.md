@@ -3330,7 +3330,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `CursorPage`
 
 - **Import:** `from application_sdk.testing import CursorPage`
-- **Signature:** `class CursorPage(items: Sequence[Any], limit: int, total: int, next_cursor: str | None)`
+- **Signature:** `class CursorPage(Generic[T])(items: Sequence[T], limit: int, total: int, next_cursor: str | None)`
 - **Summary:** One page of a cursor scheme; ``next_cursor`` is opaque, as a real one is.
 - **Defined in:** `application_sdk/testing/fake_source.py`
 
@@ -3416,6 +3416,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** How strictly a typename's diff is gated.
 - **Defined in:** `application_sdk/testing/golden.py`
 
+#### `DuplicateKeyPolicy`
+
+- **Import:** `from application_sdk.testing import DuplicateKeyPolicy`
+- **Also importable from:** `application_sdk.testing.golden`
+- **Signature:** `class DuplicateKeyPolicy`
+- **Summary:** What a non-unique join key on either side does to the comparison.
+- **Defined in:** `application_sdk/testing/golden.py`
+
 #### `EvidenceBundle`
 
 - **Import:** `from application_sdk.testing.harness.evidence import EvidenceBundle`
@@ -3468,7 +3476,15 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** A route was registered with no HTTP methods.
 - **Defined in:** `application_sdk/testing/_errors.py`
 
-#### `FieldDiff`
+#### `FieldDiff` (golden)
+
+- **Import:** `from application_sdk.testing import FieldDiff`
+- **Also importable from:** `application_sdk.testing.golden`
+- **Signature:** `class FieldDiff(field_path: str, golden_value: Any, ours_value: Any)`
+- **Summary:** One field whose value differs between the golden fixture and ours.
+- **Defined in:** `application_sdk/testing/golden.py`
+
+#### `FieldDiff` (parity)
 
 - **Import:** `from application_sdk.testing.parity import FieldDiff`
 - **Signature:** `class FieldDiff(field_path: str, baseline_value: Any, candidate_value: Any)`
@@ -3519,6 +3535,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** A resolved golden corpus rooted at an existing directory.
 - **Defined in:** `application_sdk/testing/integration/corpus.py`
 
+#### `GoldenDuplicateKeyError`
+
+- **Import:** `from application_sdk.testing import GoldenDuplicateKeyError`
+- **Also importable from:** `application_sdk.testing.golden`
+- **Signature:** `class GoldenDuplicateKeyError(*, ...)`
+- **Summary:** A golden-diff join key is not unique on one side — a wrong test, not a diff.
+- **Defined in:** `application_sdk/testing/integration/_errors.py`
+
 #### `GoldenLayout`
 
 - **Import:** `from application_sdk.testing.integration import GoldenLayout`
@@ -3534,6 +3558,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class GoldenReport(diffs: tuple[TypenameDiff, ...] = (), produced_skipped: int = 0, golden_skipped: int = 0)`
 - **Summary:** The full golden comparison across every typename.
 - **Defined in:** `application_sdk/testing/golden.py`
+
+#### `GoldenRuleError`
+
+- **Import:** `from application_sdk.testing import GoldenRuleError`
+- **Also importable from:** `application_sdk.testing.golden`
+- **Signature:** `class GoldenRuleError(*, ...)`
+- **Summary:** A TypenameRule combines settings that contradict each other.
+- **Defined in:** `application_sdk/testing/integration/_errors.py`
 
 #### `HarnessNotBuiltError`
 
@@ -4363,7 +4395,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `cursor_page`
 
 - **Import:** `from application_sdk.testing import cursor_page`
-- **Signature:** `cursor_page(items: Sequence[Any], *, ...)`
+- **Signature:** `cursor_page(items: Sequence[T], *, ...)`
 - **Summary:** Slice ``items`` per the request's cursor/limit parameters.
 - **Defined in:** `application_sdk/testing/fake_source.py`
 
@@ -5315,6 +5347,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `Reading: TypeAlias`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
+#### `NO_TYPENAME`
+
+- **Import:** `from application_sdk.testing import NO_TYPENAME`
+- **Also importable from:** `application_sdk.testing.golden`
+- **Signature:** `NO_TYPENAME: str`
+- **Summary:** Fallback bucket for records without a ``typeName``.
+- **Defined in:** `application_sdk/testing/golden.py`
 
 #### `RUN_VOLATILE_FIELDS`
 

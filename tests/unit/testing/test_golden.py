@@ -3,11 +3,17 @@
 import pytest
 
 from application_sdk.testing.golden import (
+    NO_TYPENAME,
     DiffPolicy,
+    DuplicateKeyPolicy,
     GoldenReport,
     TypenameRule,
     assert_matches_golden,
     diff_golden,
+)
+from application_sdk.testing.integration._errors import (
+    GoldenDuplicateKeyError,
+    GoldenRuleError,
 )
 
 
@@ -54,8 +60,8 @@ class TestDiffGolden:
         assert mismatch.key == "default/db/s/t1"
         (field_diff,) = mismatch.field_diffs
         assert field_diff.field_path == "attributes.rowCount"
-        assert field_diff.baseline_value == 5
-        assert field_diff.candidate_value == 10
+        assert field_diff.golden_value == 5
+        assert field_diff.ours_value == 10
 
     def test_run_volatile_fields_stripped_by_default(self):
         report = diff_golden(
@@ -107,7 +113,7 @@ class TestDiffGolden:
             [{"attributes": {"qualifiedName": "q1"}}],
             [{"attributes": {"qualifiedName": "q1"}}],
         )
-        assert report.diffs[0].typename == "Unknown"
+        assert report.diffs[0].typename == NO_TYPENAME
 
 
 class TestPolicies:
@@ -370,16 +376,16 @@ class TestVacuousPass:
 
 class TestDuplicateJoinKeys:
     def test_duplicate_golden_key_raises_value_error_naming_the_key(self):
-        with pytest.raises(ValueError, match="golden side") as exc:
+        with pytest.raises(GoldenDuplicateKeyError, match="golden side") as exc:
             diff_golden([asset("q1")], [asset("q1"), asset("q1", rowCount=2)])
         assert "q1" in str(exc.value)
 
     def test_duplicate_produced_key_raises_value_error(self):
-        with pytest.raises(ValueError, match="produced side"):
+        with pytest.raises(GoldenDuplicateKeyError, match="produced side"):
             diff_golden([asset("q1"), asset("q1", rowCount=2)], [asset("q1")])
 
     def test_assert_matches_golden_also_rejects_duplicates_by_default(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(GoldenDuplicateKeyError):
             assert_matches_golden([asset("q1")], [asset("q1"), asset("q1")])
 
     def test_last_wins_keeps_old_behaviour_and_reports_the_duplicates(self):
@@ -482,7 +488,7 @@ class TestGroupBy:
             {"record_type": "reports", "id": "r1"},
         ]
         report = diff_golden(records, records, key=lambda r: r["id"])
-        assert [d.typename for d in report.diffs] == ["Unknown"]
+        assert [d.typename for d in report.diffs] == [NO_TYPENAME]
         assert report.diffs[0].produced_count == 2
 
     def test_group_by_overrides_typename_when_both_are_present(self):
@@ -534,3 +540,41 @@ class TestFalsyTypenameGrouping:
             key=lambda r: r["attributes"]["qualifiedName"],
             ignore=frozenset({"typeName"}),
         )
+
+
+class TestDuplicateKeyPolicyEnum:
+    def test_enum_and_string_spellings_are_interchangeable(self):
+        produced = [asset("q1", rowCount=2)]
+        golden = [asset("q1", rowCount=1), asset("q1", rowCount=2)]
+        by_enum = diff_golden(
+            produced, golden, on_duplicate_key=DuplicateKeyPolicy.LAST_WINS
+        )
+        by_string = diff_golden(produced, golden, on_duplicate_key="last-wins")
+        assert by_enum.diffs[0].duplicate_keys_golden == ("q1",)
+        assert by_string.diffs[0].duplicate_keys_golden == ("q1",)
+
+    def test_an_unknown_spelling_is_rejected_up_front(self):
+        with pytest.raises(ValueError):
+            diff_golden([], [], on_duplicate_key="first-wins")  # type: ignore[arg-type]
+
+
+class TestTypenameRuleValidation:
+    def test_tolerate_missing_with_a_non_strict_policy_is_rejected(self):
+        with pytest.raises(GoldenRuleError, match="no-op"):
+            TypenameRule(policy=DiffPolicy.NO_EXTRAS, tolerate_missing=True)
+        with pytest.raises(GoldenRuleError):
+            TypenameRule(policy=DiffPolicy.INFO_ONLY, tolerate_missing=True)
+
+    def test_tolerate_missing_with_strict_is_the_supported_shape(self):
+        rule = TypenameRule(policy=DiffPolicy.STRICT, tolerate_missing=True)
+        assert rule.tolerate_missing is True
+
+
+class TestLazyTestingExports:
+    def test_golden_symbols_resolve_through_the_package_lazily(self):
+        import application_sdk.testing as testing
+
+        assert testing.DuplicateKeyPolicy is DuplicateKeyPolicy
+        assert testing.assert_matches_golden is assert_matches_golden
+        with pytest.raises(AttributeError):
+            _ = testing.does_not_exist

@@ -263,8 +263,8 @@ class GoldenCorpus:
                         "to fall back to the in-repo default."
                     ),
                 )
-        elif default_root is not None and Path(default_root).is_dir():
-            root = Path(default_root)
+        elif default_root is not None and Path(default_root).expanduser().is_dir():
+            root = Path(default_root).expanduser()
         else:
             raise GoldenCorpusUnavailableError(
                 message=(
@@ -305,7 +305,7 @@ class GoldenCorpus:
         return self.root / self.tenant
 
     def tenants(self) -> tuple[str, ...]:
-        """Tenant directory names, sorted.
+        """Tenant directory names, sorted. Dot-directories are not tenants.
 
         Raises:
             GoldenCorpusLayoutError: The layout has no tenant level, or the root
@@ -323,7 +323,13 @@ class GoldenCorpus:
                     "really has a tenant level."
                 ),
             )
-        found = tuple(sorted(p.name for p in self.root.iterdir() if p.is_dir()))
+        found = tuple(
+            sorted(
+                p.name
+                for p in self.root.iterdir()
+                if p.is_dir() and not p.name.startswith(".")
+            )
+        )
         if not found:
             raise _layout_error(
                 path=self.root,
@@ -356,7 +362,9 @@ class GoldenCorpus:
         candidate = self.root / tenant
         if not candidate.is_dir():
             known = sorted(
-                entry.name for entry in self.root.iterdir() if entry.is_dir()
+                entry.name
+                for entry in self.root.iterdir()
+                if entry.is_dir() and not entry.name.startswith(".")
             )
             raise _layout_error(
                 path=candidate,
@@ -633,7 +641,7 @@ def _read_csv(path: Path) -> list[dict[str, Any]]:
 def _read_parquet(path: Path) -> list[dict[str, Any]]:
     try:
         import pyarrow.parquet as pq  # noqa: PLC0415
-    except ImportError as exc:
+    except ImportError as exc:  # conformance: ignore[E008] re-raised as a typed error naming the missing extra
         from application_sdk.testing.integration._errors import (  # noqa: PLC0415
             GoldenParquetSupportError,
         )

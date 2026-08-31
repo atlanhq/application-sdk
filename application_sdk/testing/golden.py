@@ -20,14 +20,26 @@ qualified-name construction, not noise. Only
 :data:`~application_sdk.testing.volatile_fields.RUN_VOLATILE_FIELDS` is
 stripped by default.
 
+What "order-independent" covers
+-------------------------------
+
+The diff is keyed, so it is order-independent *across records*: produced and
+golden files may hold the same records in any order. *Within* a record it is
+order-sensitive: nested dicts are recursed, but a list field compares
+positionally, so a reordered ``attributes.columns`` reports as a field
+mismatch. When a relationship array has no guaranteed ordering, sort it before
+capture and before comparison (or ignore that one field) — do not downgrade
+the whole typename to ``NO_EXTRAS`` for ordering noise, because that silences
+every other mismatch on the typename with it.
+
 Grouping: what a "typename" is here
 -----------------------------------
 
 Records are bucketed by ``record["typeName"]`` by default, which fits Atlas
 transformed records. Raw/extract-tier records usually have no ``typeName``, so
-every one of them lands in a single ``"Unknown"`` bucket and ``rules=`` becomes
-inert — there is no typename for a rule to key on. Two legitimate patterns for
-that tier:
+every one of them lands in a single ``"<no typeName>"`` bucket (a sentinel no
+real typename can collide with) and ``rules=`` becomes inert — there is no
+typename for a rule to key on. Two legitimate patterns for that tier:
 
 * pass ``group_by=`` with the record shape's own discriminator, which restores
   per-group rules::
@@ -89,12 +101,15 @@ from enum import StrEnum
 from typing import Any, Literal
 
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.testing.integration._errors import (
+    GoldenDuplicateKeyError,
+    GoldenRuleError,
+)
 from application_sdk.testing.parity.comparator import (
     diff_dicts,
     get_qualified_name,
     strip_volatile,
 )
-from application_sdk.testing.parity.models import FieldDiff
 from application_sdk.testing.volatile_fields import RUN_VOLATILE_FIELDS
 
 logger = get_logger(__name__)
@@ -103,6 +118,14 @@ _MAX_KEYS_SHOWN = 10
 _MAX_MISMATCHES_SHOWN = 5
 _MAX_FIELDS_SHOWN = 10
 _MAX_VALUE_CHARS = 200
+
+NO_TYPENAME = "<no typeName>"
+"""Fallback bucket for records without a ``typeName``.
+
+A sentinel rather than ``"Unknown"`` because a record whose ``typeName``
+genuinely is ``"Unknown"`` must not share a bucket — and a ``rules`` entry —
+with the untyped records.
+"""
 
 
 class DiffPolicy(StrEnum):
@@ -128,6 +151,24 @@ class DiffPolicy(StrEnum):
     """
 
 
+class DuplicateKeyPolicy(StrEnum):
+    """What a non-unique join key on either side does to the comparison."""
+
+    ERROR = "error"
+    """Raise :class:`GoldenDuplicateKeyError` — the default.
+
+    Two records sharing a join key silently shadow each other, so the
+    comparison is not the one the caller thinks it is.
+    """
+
+    LAST_WINS = "last-wins"
+    """Keep the last record per key and surface the collisions on the report.
+
+    The escape hatch, named as an enum so its uses stay greppable across
+    consumer suites.
+    """
+
+
 @dataclass(frozen=True)
 class TypenameRule:
     """The gating decision for one typename.
@@ -139,15 +180,40 @@ class TypenameRule:
             cannot match a golden fixture.
         tolerate_missing: When True, assets present in golden but absent from
             produced output do not fail. Set this when the golden capture is
-            known to be a superset of what the produced run covers.
+            known to be a superset of what the produced run covers. Only
+            meaningful with ``policy=STRICT`` — the weaker policies never gate
+            on missing assets, so combining them with this flag raises
+            :class:`GoldenRuleError` rather than reading as stricter than it is.
     """
 
     policy: DiffPolicy = DiffPolicy.STRICT
     ignore_fields: frozenset[str] = frozenset()
     tolerate_missing: bool = False
 
+    def __post_init__(self) -> None:
+        if self.tolerate_missing and self.policy is not DiffPolicy.STRICT:
+            raise GoldenRuleError(
+                message=(
+                    f"TypenameRule(policy={self.policy}, tolerate_missing=True) "
+                    "is a no-op: only STRICT gates on missing assets, so this "
+                    "rule is not stricter than the policy alone. Drop "
+                    "tolerate_missing, or use policy=STRICT."
+                ),
+                field="tolerate_missing",
+                constraint="strict_policy_only",
+            )
+
 
 DEFAULT_RULE = TypenameRule()
+
+
+@dataclass(frozen=True)
+class FieldDiff:
+    """One field whose value differs between the golden fixture and ours."""
+
+    field_path: str
+    golden_value: Any
+    ours_value: Any
 
 
 @dataclass(frozen=True)
@@ -302,7 +368,9 @@ def diff_golden(
     default_rule: TypenameRule = DEFAULT_RULE,
     ignore: Collection[str] = RUN_VOLATILE_FIELDS,
     extra_ignore: Collection[str] = (),
-    on_duplicate_key: Literal["error", "last-wins"] = "error",
+    on_duplicate_key: DuplicateKeyPolicy | Literal["error", "last-wins"] = (
+        DuplicateKeyPolicy.ERROR
+    ),
     group_by: Callable[[Mapping[str, Any]], str] | None = None,
     expect_typenames: Collection[str] | None = None,
 ) -> GoldenReport:
@@ -310,8 +378,12 @@ def diff_golden(
 
     "Without asserting" means the *diff* is never asserted: a report is
     returned however badly the two sides differ. Malformed input still raises —
-    a non-unique join key (``on_duplicate_key="error"``) and an unmet
+    a non-unique join key (``DuplicateKeyPolicy.ERROR``) and an unmet
     ``expect_typenames`` floor are both wrong-test conditions, not diffs.
+
+    The diff is keyed and order-independent across records, and order-sensitive
+    within a field — see the module docstring before reaching for a weaker
+    ``DiffPolicy`` over list-ordering noise.
 
     Args:
         produced: Records the connector just produced.
@@ -326,17 +398,22 @@ def diff_golden(
             run-volatile fields only — environment-scoped fields are kept
             because the golden fixture comes from the same environment. Passing
             ``ignore=`` REPLACES the default ``RUN_VOLATILE_FIELDS``; to add
-            fields on top of the canonical three, use ``extra_ignore=``.
+            fields on top of the canonical three, use ``extra_ignore=``. The
+            replace-shape is deliberate: it is the pinned contract the piloted
+            consumer suites already call, and an additive ``ignore=`` would
+            silently widen what those suites strip.
         extra_ignore: Fields stripped in addition to ``ignore``, so the
             canonical run-volatile set is kept.
-        on_duplicate_key: ``"error"`` (default) raises ``ValueError`` when two
-            records on the same side share a join key, because a non-unique key
-            means the comparison is not the one the caller thinks it is.
-            ``"last-wins"`` keeps the last record per key and surfaces the
-            collisions on the report instead.
+        on_duplicate_key: :attr:`DuplicateKeyPolicy.ERROR` (default) raises
+            :class:`GoldenDuplicateKeyError` when two records on the same side
+            share a join key, because a non-unique key means the comparison is
+            not the one the caller thinks it is.
+            :attr:`DuplicateKeyPolicy.LAST_WINS` keeps the last record per key
+            and surfaces the collisions on the report instead. The equivalent
+            string literals are accepted.
         group_by: Buckets records for ``rules=`` lookup. ``None`` uses
-            ``record["typeName"]``, falling back to ``"Unknown"`` — see the
-            module docstring for the raw/extract-tier case.
+            ``record["typeName"]``, falling back to :data:`NO_TYPENAME` — see
+            the module docstring for the raw/extract-tier case.
         expect_typenames: Coverage floor. When given, every named typename must
             appear in the report with at least one golden record, else
             ``AssertionError``.
@@ -345,19 +422,21 @@ def diff_golden(
         GoldenReport: The diff for every typename seen on either side.
 
     Raises:
-        ValueError: If ``on_duplicate_key="error"`` and either side has two
-            records sharing a join key.
+        GoldenDuplicateKeyError: If ``on_duplicate_key`` is
+            :attr:`DuplicateKeyPolicy.ERROR` and either side has two records
+            sharing a join key.
         AssertionError: If ``expect_typenames`` names a typename with no golden
             records.
     """
     rules = rules or {}
+    duplicate_key_policy = DuplicateKeyPolicy(on_duplicate_key)
     produced_by_type, produced_skipped, produced_dupes = _group_by_typename(
         produced, key, "produced", group_by
     )
     golden_by_type, golden_skipped, golden_dupes = _group_by_typename(
         golden, key, "golden", group_by
     )
-    if on_duplicate_key == "error":
+    if duplicate_key_policy is DuplicateKeyPolicy.ERROR:
         _raise_on_duplicates(produced_dupes, golden_dupes)
 
     ignore_all = frozenset(ignore) | frozenset(extra_ignore)
@@ -377,7 +456,17 @@ def diff_golden(
             )
             if field_diffs:
                 mismatches.append(
-                    AssetMismatch(key=asset_key, field_diffs=tuple(field_diffs))
+                    AssetMismatch(
+                        key=asset_key,
+                        field_diffs=tuple(
+                            FieldDiff(
+                                field_path=d.field_path,
+                                golden_value=d.baseline_value,
+                                ours_value=d.candidate_value,
+                            )
+                            for d in field_diffs
+                        ),
+                    )
                 )
 
         diffs.append(
@@ -413,11 +502,17 @@ def assert_matches_golden(
     default_rule: TypenameRule = DEFAULT_RULE,
     ignore: Collection[str] = RUN_VOLATILE_FIELDS,
     extra_ignore: Collection[str] = (),
-    on_duplicate_key: Literal["error", "last-wins"] = "error",
+    on_duplicate_key: DuplicateKeyPolicy | Literal["error", "last-wins"] = (
+        DuplicateKeyPolicy.ERROR
+    ),
     group_by: Callable[[Mapping[str, Any]], str] | None = None,
     expect_typenames: Collection[str] | None = None,
 ) -> GoldenReport:
     """Assert produced records match a golden fixture, per typename rules.
+
+    The diff is keyed and order-independent across records, and order-sensitive
+    within a field — a reordered list value reports as a mismatch (see the
+    module docstring).
 
     Args:
         produced: Records the connector just produced.
@@ -427,7 +522,8 @@ def assert_matches_golden(
         default_rule: Rule applied to typenames not named in ``rules``.
         ignore: Fields stripped at every depth before comparison. Passing
             ``ignore=`` REPLACES the default ``RUN_VOLATILE_FIELDS``; to add
-            fields on top of the canonical three, use ``extra_ignore=``.
+            fields on top of the canonical three, use ``extra_ignore=``. See
+            :func:`diff_golden` for why the replace-shape is deliberate.
         extra_ignore: Fields stripped in addition to ``ignore``.
         on_duplicate_key: See :func:`diff_golden`.
         group_by: See :func:`diff_golden`.
@@ -442,7 +538,8 @@ def assert_matches_golden(
         AssertionError: If nothing was compared at all, if ``expect_typenames``
             is not met, or if any typename's rule is violated. The message is
             the formatted field-level report.
-        ValueError: If a join key is not unique — see ``on_duplicate_key``.
+        GoldenDuplicateKeyError: If a join key is not unique — see
+            ``on_duplicate_key``.
     """
     report = diff_golden(
         produced,
@@ -492,7 +589,7 @@ def _group_by_typename(
             skipped += 1
             continue
         typename = (
-            group_by(record) if group_by else (record.get("typeName") or "Unknown")
+            group_by(record) if group_by else (record.get("typeName") or NO_TYPENAME)
         )
         bucket = grouped.setdefault(typename, {})
         if asset_key in bucket:
@@ -516,12 +613,21 @@ def _raise_on_duplicates(
             f"{typename}: {', '.join(sorted(set(keys))[:_MAX_KEYS_SHOWN])}"
             for typename, keys in sorted(dupes.items())
         )
-        raise ValueError(
-            f"Duplicate join key(s) on the {side} side — {details}. "
-            "The key= callable must be unique per record, otherwise records "
-            "silently shadow each other and the comparison is not the one you "
-            'think it is. Pass on_duplicate_key="last-wins" to keep the old '
-            "last-write-wins behaviour."
+        raise GoldenDuplicateKeyError(
+            message=(
+                f"Duplicate join key(s) on the {side} side — {details}. "
+                "The key= callable must be unique per record, otherwise records "
+                "silently shadow each other and the comparison is not the one "
+                "you think it is."
+            ),
+            field="key",
+            constraint="unique_per_record",
+            value_summary=details,
+            suggested_action=(
+                "Fix the key= callable, or pass "
+                "on_duplicate_key=DuplicateKeyPolicy.LAST_WINS to keep the old "
+                "last-write-wins behaviour."
+            ),
         )
 
 
@@ -575,8 +681,8 @@ def _format_typename_detail(diff: TypenameDiff) -> list[str]:
             for field_diff in mismatch.field_diffs[:_MAX_FIELDS_SHOWN]:
                 lines.append(
                     f"      {field_diff.field_path}: "
-                    f"golden={_truncate(field_diff.baseline_value)} "
-                    f"ours={_truncate(field_diff.candidate_value)}"
+                    f"golden={_truncate(field_diff.golden_value)} "
+                    f"ours={_truncate(field_diff.ours_value)}"
                 )
             remaining = len(mismatch.field_diffs) - _MAX_FIELDS_SHOWN
             if remaining > 0:
@@ -592,9 +698,14 @@ def _format_typename_detail(diff: TypenameDiff) -> list[str]:
 
 
 __all__ = [
+    "NO_TYPENAME",
     "AssetMismatch",
     "DiffPolicy",
+    "DuplicateKeyPolicy",
+    "FieldDiff",
+    "GoldenDuplicateKeyError",
     "GoldenReport",
+    "GoldenRuleError",
     "TypenameDiff",
     "TypenameRule",
     "assert_matches_golden",

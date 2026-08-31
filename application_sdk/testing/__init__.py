@@ -33,6 +33,24 @@ Fixtures (import into conftest.py or test files)::
     )
 """
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from application_sdk.testing.golden import (
+        NO_TYPENAME,
+        AssetMismatch,
+        DiffPolicy,
+        DuplicateKeyPolicy,
+        FieldDiff,
+        GoldenDuplicateKeyError,
+        GoldenReport,
+        GoldenRuleError,
+        TypenameDiff,
+        TypenameRule,
+        assert_matches_golden,
+        diff_golden,
+    )
+
 from application_sdk.testing.fake_source import (
     Authorizer,
     CursorPage,
@@ -56,15 +74,6 @@ from application_sdk.testing.fixtures import (
     mock_state_store,
     restore_logger_init_flags,
 )
-from application_sdk.testing.golden import (
-    AssetMismatch,
-    DiffPolicy,
-    GoldenReport,
-    TypenameDiff,
-    TypenameRule,
-    assert_matches_golden,
-    diff_golden,
-)
 from application_sdk.testing.mocks import (
     MockBinding,
     MockCredentialStore,
@@ -79,15 +88,53 @@ from application_sdk.testing.volatile_fields import (
     RUN_VOLATILE_FIELDS,
 )
 
+_GOLDEN_EXPORTS = frozenset(
+    {
+        "NO_TYPENAME",
+        "AssetMismatch",
+        "DiffPolicy",
+        "DuplicateKeyPolicy",
+        "FieldDiff",
+        "GoldenDuplicateKeyError",
+        "GoldenReport",
+        "GoldenRuleError",
+        "TypenameDiff",
+        "TypenameRule",
+        "assert_matches_golden",
+        "diff_golden",
+    }
+)
+
+
+def __getattr__(name: str) -> object:
+    """Resolve the golden-diff symbols lazily (PEP 562).
+
+    :mod:`application_sdk.testing.golden` imports the parity comparator, which
+    nothing else in this package needs — loading it eagerly would tax every
+    ``import application_sdk.testing`` for the one workflow that diffs against
+    a golden corpus.
+    """
+    if name in _GOLDEN_EXPORTS:
+        from application_sdk.testing import golden  # noqa: PLC0415
+
+        return getattr(golden, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
     "ENVIRONMENT_SCOPED_FIELDS",
     "ENVIRONMENT_SCOPED_NESTED_FIELDS",
+    "NO_TYPENAME",
     "RUN_VOLATILE_FIELDS",
     "AssetMismatch",
     "Authorizer",
     "CursorPage",
     "DiffPolicy",
+    "DuplicateKeyPolicy",
     "FakeRequest",
+    "FieldDiff",
+    "GoldenDuplicateKeyError",
+    "GoldenRuleError",
     "FakeResponse",
     "GoldenReport",
     "Handler",
