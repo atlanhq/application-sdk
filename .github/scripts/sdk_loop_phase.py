@@ -143,6 +143,22 @@ def review_prompt(
         "You are READ-ONLY. Your token carries no write scope — do not attempt",
         "to push, and do not treat a push failure as something to work around.",
         "",
+        "SKIP §2b (the Wave 2 cross-model adversarial). Two reasons, and either",
+        "alone is sufficient:",
+        "",
+        "  * It cannot run here. §2b curls `$PROXY_BASE/proxy/litellm/...` with",
+        "    `$PROXY_JWT`; both are mothership sandbox variables and neither",
+        "    exists on this runner. Attempting it wastes the run's most",
+        "    expensive optional step on a call that cannot succeed, and logs",
+        "    'adversarial: unavailable' as though something were broken.",
+        "  * It would be redundant. In this lane the resolve phase opens by",
+        "    contesting every finding you raise (pr-resolve §3d, 'Fix every",
+        "    finding or prove it false'), so the challenge happens either way —",
+        "    by an agent that can also act on the answer.",
+        "",
+        "Record it as `Cross-model adversarial: skipped (@sdk-loop — resolve",
+        "phase contests findings)`, NOT as unavailable.",
+        "",
     ]
     if prior_sha:
         # Handed over so §2e labelling and the §2e′ nit rules do not have to

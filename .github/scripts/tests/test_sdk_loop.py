@@ -316,6 +316,18 @@ def test_the_resolver_is_told_not_to_trigger_a_review() -> None:
     assert "SDK_LOOP_DISMISSED:" in prompt
 
 
+def test_wave_two_is_skipped_deliberately_not_left_to_fail() -> None:
+    """§2b curls $PROXY_BASE with $PROXY_JWT — mothership sandbox variables
+    that do not exist on a runner. Left alone it burns the run's most
+    expensive optional step on a doomed call and reports 'unavailable', which
+    reads as an outage rather than the design decision it is."""
+    prompt = review_prompt(42, 1, "a" * 40, DismissalLedger())
+    assert "SKIP §2b" in prompt
+    assert "PROXY_JWT" in prompt
+    assert "skipped (@sdk-loop" in prompt
+    assert "NOT as unavailable" in prompt
+
+
 def test_round_one_gets_no_delta_range() -> None:
     assert "git diff" not in review_prompt(42, 1, "a" * 40, DismissalLedger())
 
@@ -336,11 +348,23 @@ def test_the_delta_range_never_narrows_the_review() -> None:
 
 
 def test_the_review_prompt_references_the_playbook_and_never_restates_it() -> None:
+    """The prompt may say what is DIFFERENT about this lane; it must not carry
+    a copy of the review rules, which would be a second thing to keep in sync
+    and would drift silently from the playbook it contradicts."""
     prompt = review_prompt(42, 3, "a" * 40, DismissalLedger())
     assert ".mothership/pr-review/ORCHESTRATION.md" in prompt
     assert f"round 3 of {MAX_ROUNDS}" in prompt
-    # A copy of the review rules here would be a second thing to keep in sync.
-    assert len(prompt) < 1200
+    # Review policy lives in the playbook. Naming a section to skip is lane
+    # wiring; restating what a finding is, or how to tier one, is not.
+    for restatement in (
+        "Critical",
+        "Important",
+        "READY_TO_MERGE",
+        "NEEDS_FIXES",
+        "### Findings",
+        "severity",
+    ):
+        assert restatement not in prompt, f"prompt restates policy: {restatement}"
 
 
 # ---------------------------------------------------------------------------

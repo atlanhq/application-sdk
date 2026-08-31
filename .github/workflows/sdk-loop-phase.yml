@@ -201,11 +201,30 @@ jobs:
       # GitHub truncates long job logs, and the interesting part of a failed
       # review is usually the middle. `always()` because a phase that died is
       # exactly the one whose transcript someone will want.
+      # Uploaded twice on purpose. The artifact service returns a
+      # non-retryable-looking 403 on finalize even when the bytes landed, and
+      # upload-artifact fails the step on it — which on a gating path ejects
+      # the whole run for a flake a second attempt absorbs. The repo enforces
+      # this pairing in test_artifact_upload_retry.py.
       - name: Keep the agent transcript
+        id: transcript
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sdk-loop-${{ inputs.phase }}-${{ inputs.round }}
           path: sdk-loop-*.log
           if-no-files-found: ignore
           retention-days: 14
+
+      - name: Keep the agent transcript (retry)
+        if: always() && steps.transcript.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sdk-loop-${{ inputs.phase }}-${{ inputs.round }}
+          path: sdk-loop-*.log
+          if-no-files-found: ignore
+          retention-days: 14
+          # A finalize that failed can still leave the artifact behind, and
+          # without this the retry 409s on its own first attempt.
+          overwrite: true
