@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.30.0
-source-sha:    c58f38345cc8f898ceda3a0405d9efc7a151486c
-source-date:   2026-08-31T17:22:13+05:30
+source-sha:    f20444b4c9af11bdee7faa271902947d342aa996
+source-date:   2026-08-31T18:23:52+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -20,7 +20,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 |---|---|---|
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 43 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 20 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 27 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 34 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 45 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
@@ -509,6 +509,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Yield an open handle whose contents land at *path* only if the block succeeds.
 - **Defined in:** `application_sdk/common/atomic.py`
 
+#### `create_next_marker`
+
+- **Import:** `from application_sdk.common.incremental import create_next_marker`
+- **Signature:** `create_next_marker()`
+- **Summary:** Generate next marker timestamp for the current extraction run.
+- **Defined in:** `application_sdk/common/incremental/marker.py`
+
 #### `disk_full_guard`
 
 - **Import:** `from application_sdk.common.atomic import disk_full_guard`
@@ -522,6 +529,20 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `ensure_free_space(path: str | Path, required_bytes: int, *, operation: str) -> None`
 - **Summary:** Fail before a large write that the filesystem plainly cannot hold.
 - **Defined in:** `application_sdk/common/atomic.py`
+
+#### `extract_epoch_id_from_qualified_name`
+
+- **Import:** `from application_sdk.common.incremental import extract_epoch_id_from_qualified_name`
+- **Signature:** `extract_epoch_id_from_qualified_name(connection_qualified_name: str)`
+- **Summary:** Extract the connection ID (epoch) from a connection qualified name.
+- **Defined in:** `application_sdk/common/incremental/helpers.py`
+
+#### `fetch_marker_from_storage`
+
+- **Import:** `from application_sdk.common.incremental import fetch_marker_from_storage`
+- **Signature:** `fetch_marker_from_storage(connection_qualified_name: str, ...)`
+- **Summary:** Fetch and process the incremental marker from storage.
+- **Defined in:** `application_sdk/common/incremental/marker.py`
 
 #### `filter_matches`
 
@@ -544,6 +565,20 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `get_backfill_tables(current_transformed_dir: Path, previous_current_state_dir: Path | None)`
 - **Summary:** Use DuckDB to compare current tables vs previous current-state.
 - **Defined in:** `application_sdk/common/incremental/column_extraction/backfill.py`
+
+#### `get_persistent_artifacts_path`
+
+- **Import:** `from application_sdk.common.incremental import get_persistent_artifacts_path`
+- **Signature:** `get_persistent_artifacts_path(connection_qualified_name: str, artifact_subpath: str, application_name: str = '')`
+- **Summary:** Get local filesystem path for connection-scoped persistent artifacts.
+- **Defined in:** `application_sdk/common/incremental/helpers.py`
+
+#### `get_persistent_s3_prefix`
+
+- **Import:** `from application_sdk.common.incremental import get_persistent_s3_prefix`
+- **Signature:** `get_persistent_s3_prefix(connection_qualified_name: str, application_name: str = '')`
+- **Summary:** Get the S3 key prefix for connection-scoped persistent artifacts.
+- **Defined in:** `application_sdk/common/incremental/helpers.py`
 
 #### `get_safe_num_threads`
 
@@ -573,6 +608,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Normalize filter dict to fully-anchored ``db.schema`` regex patterns.
 - **Defined in:** `application_sdk/common/sql_filters.py`
 
+#### `persist_marker_to_storage`
+
+- **Import:** `from application_sdk.common.incremental import persist_marker_to_storage`
+- **Signature:** `persist_marker_to_storage(connection_qualified_name: str, marker_value: str, application_name: str = '')`
+- **Summary:** Persist marker timestamp to S3 storage.
+- **Defined in:** `application_sdk/common/incremental/marker.py`
+
 #### `prepare_filters`
 
 - **Import:** `from application_sdk.common import prepare_filters`
@@ -586,6 +628,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `prepare_query(query: str | None, ...)`
 - **Summary:** Prepare a SQL query by applying include/exclude filters.
 - **Defined in:** `application_sdk/common/sql_filters.py`
+
+#### `process_marker_timestamp`
+
+- **Import:** `from application_sdk.common.incremental import process_marker_timestamp`
+- **Signature:** `process_marker_timestamp(marker: str, prepone_enabled: bool = False, prepone_hours: float = 0)`
+- **Summary:** Process and optionally prepone a marker timestamp.
+- **Defined in:** `application_sdk/common/incremental/marker.py`
 
 #### `read_sql_files`
 
