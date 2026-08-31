@@ -893,6 +893,69 @@ def test_the_action_pins_in_the_generator_match_the_generated_file() -> None:
         assert not drift, f"{label} in generator but not in output: {sorted(drift)}"
 
 
+APPROVE_WF = WORKFLOW.parent / "sdk-review-approve-on-verdict.yml"
+
+
+def test_a_loop_verdict_can_become_an_atlan_ci_approval() -> None:
+    """The gate is on identity, and the loop posts as a different bot.
+
+    Its review phase emits the identical marker set using a token minted from
+    the fleet App, so without its login here a READY_TO_MERGE from the loop
+    never became an approval — the PR stayed blocked with nothing saying why.
+    """
+    jobs = yaml.safe_load(APPROVE_WF.read_text(encoding="utf-8"))["jobs"]
+    gate = next(j["if"] for j in jobs.values() if "if" in j)
+
+    def ctx(login: str) -> dict:
+        return {
+            "github": {
+                "event": {
+                    "issue": {"pull_request": {"n": 1}},
+                    "comment": {
+                        "user": {"login": login},
+                        "body": "<!-- SDK_REVIEW -->",
+                    },
+                }
+            }
+        }
+
+    assert evaluate(gate, ctx("atlan-app-fleet[bot]")) is True
+    # The existing lane must keep working.
+    assert evaluate(gate, ctx("mothership-ai[bot]")) is True
+    # Identity is still the gate — this widened who, not what.
+    assert evaluate(gate, ctx("some-random[bot]")) is False
+
+
+def test_the_trigger_comment_gets_an_acknowledgement() -> None:
+    """An emoji within seconds, before any verdict exists. The other two lanes
+    do this and its absence made the loop feel dead on invocation."""
+    fence = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["fence"]
+    react = next(
+        s for s in fence["steps"] if s.get("name") == "React to the trigger comment"
+    )
+    assert react["run"].endswith("react_to_comment.py")
+    # always(): the helper exits 0 by design, and a missing emoji must not take
+    # down the run it decorates.
+    assert "always()" in react["if"]
+
+
+def test_every_job_has_a_name_a_human_can_read() -> None:
+    """18 rows of `review-1 / phase` is not a progress display."""
+    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    assert jobs["review-1"]["name"] == "Review 1"
+    assert jobs["resolve-8"]["name"] == "Resolve 8"
+    assert jobs["fence"]["name"] == "Fence"
+    assert jobs["finalize"]["name"] == "Summary"
+
+
+def test_opencode_is_pinned_to_the_version_that_works() -> None:
+    """0.6.3 crashed before every request with a DecimalError. 1.18.22 is what
+    connector-pulse runs in production, and the exact CI config works against
+    it locally. Three PRs chased the model name before the version was checked.
+    """
+    assert "opencode-ai@1.18.22" in PHASE_WF.read_text(encoding="utf-8")
+
+
 def test_the_committed_workflow_matches_its_generator() -> None:
     proc = subprocess.run(
         [sys.executable, ".github/scripts/gen_sdk_loop_workflow.py", "--check"],

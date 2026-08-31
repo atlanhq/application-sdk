@@ -113,6 +113,7 @@ permissions:
 
 jobs:
   fence:
+    name: Fence
     runs-on: ubuntu-latest
     timeout-minutes: 6
     if: >-
@@ -142,10 +143,25 @@ jobs:
           GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           WORKFLOW_FILE: sdk-loop.yml
         run: python3 .github/scripts/sdk_loop_fence.py
+
+      # The same acknowledgement the other two lanes give: an emoji within
+      # seconds, long before any verdict exists, so whoever typed @sdk-loop
+      # knows it registered. Runs after the fence so it can reflect the
+      # decision, and always() because the script exits 0 by design — a
+      # missing emoji must never take down the run it is decorating.
+      - name: React to the trigger comment
+        if: always() && github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          REACTION: ${{ steps.fence.outputs.proceed == 'true' && 'eyes' || 'confused' }}
+        run: python3 .github/scripts/react_to_comment.py
 """
 
 FOOTER = """
   finalize:
+    name: Summary
     needs: [fence, {all_phases}]
     if: always() && needs.fence.outputs.proceed == 'true'
     runs-on: ubuntu-latest
@@ -210,6 +226,7 @@ def review_job(n: int) -> str:
         reaims = "${{ needs.%s.outputs.reaims }}" % prev_rev
     return f"""
   review-{n}:
+    name: Review {n}
     needs: {needs}
     if: >-
       {gate}
@@ -246,6 +263,7 @@ def resolve_job(n: int) -> str:
     needs = f"[fence, {prev}]" if prev_res is None else f"[fence, {prev}, {prev_res}]"
     return f"""
   resolve-{n}:
+    name: Resolve {n}
     needs: {needs}
     if: >-
       !cancelled() && needs.{prev}.outputs.outcome == 'ok'
