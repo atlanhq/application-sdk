@@ -189,7 +189,12 @@ The generated base already carries this entrypoint's `manifest_path`,
 crawler-shaped assertions. If the entrypoint *consumes* state rather than
 creating it (a miner enriches a connection it does not create), override
 `seed_prerequisites()` and call `self.seed_connection(...)` — under the harness's
-own ephemeral QN, so teardown purges it and runs stay isolated.
+own ephemeral QN, so teardown purges it and runs stay isolated. If what it
+consumes is an artifact only another entrypoint's DAG *produces* (a miner
+resolving lineage against the entity cache a crawl writes to object storage),
+pyatlan cannot seed it: declare that crawl in `dag_runs` and it runs against the
+same connection first — see
+[`connector-ci-e2e.md`](../../../docs/standards/connector-ci-e2e.md#when-the-state-is-an-artifact-only-another-dag-produces).
 
 Conformance rule `T025 EntrypointWithoutE2ECoverage` reports a bundle entrypoint
 with no e2e suite, so skipping this will surface in the repo's own scan.

@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.30.0
-source-sha:    49b56d16093c3c738c93f926e2aa36364f2570db
-source-date:   2026-08-31T19:21:55+01:00
+source-sha:    a57bfceb669bc59667ae66948b6e8de3dd9959e2
+source-date:   2026-08-31T19:14:25Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 44 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 317 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 319 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3472,6 +3472,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Top-level status of an AE workflow run.
 - **Defined in:** `application_sdk/testing/harness/automation_engine/wire.py`
 
+#### `DAGSpec`
+
+- **Import:** `from application_sdk.testing.e2e import DAGSpec`
+- **Signature:** `class DAGSpec(entrypoint: str | None = None, ...)`
+- **Summary:** One entrypoint DAG run, as a suite *declares* it.
+- **Defined in:** `application_sdk/testing/e2e/base.py`
+
 #### `DataForgeSource`
 
 - **Import:** `from application_sdk.testing.integration import DataForgeSource`
@@ -3943,6 +3950,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class RequestDelivery`
 - **Summary:** Whether a failed HTTP request can have taken effect at the origin.
 - **Defined in:** `application_sdk/testing/harness/automation_engine/_errors.py`
+
+#### `ResolvedDAG`
+
+- **Import:** `from application_sdk.testing.e2e import ResolvedDAG`
+- **Signature:** `class ResolvedDAG(label: str, ...)`
+- **Summary:** A :class:`DAGSpec` with every field settled against the class attributes.
+- **Defined in:** `application_sdk/testing/e2e/base.py`
 
 #### `ResourceRef`
 
