@@ -494,8 +494,8 @@ public interface, so a missing declaration there is a finding against the app; t
 internal `@task` contract is informational. The set of boundary contract classes is resolved once at
 worker build, so the attribute costs nothing per hand-off.
 
-The event body and its attribute keys are a pinned contract, like the two preflight-gate events and
-the asset-validation one; all five names live in `application_sdk/observability/events.py`.
+The event body and its attribute keys are a pinned contract, like the three preflight events and
+the asset-validation one; all six names live in `application_sdk/observability/events.py`.
 
 ### Artifact-validation posture
 

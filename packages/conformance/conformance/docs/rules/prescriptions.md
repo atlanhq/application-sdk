@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**45 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046) (all AST-based / cross-artifact)
+**46 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -68,6 +68,7 @@ reassigned.
 | [P044](#p044) | `DirectStoragePrefixTransfer` | `warn` | `app` | `storage-seam` | — | 0.21.0 |
 | [P045](#p045) | `PrivateErrorClassImport` | `warn` | `app` | `error-seam` | — | 0.21.0 |
 | [P046](#p046) | `LocaleDependentTextIO` | `warn` | `sdk` | `portability` | — | 0.24.0 |
+| [P047](#p047) | `PreflightFailureLoggedAsWarning` | `warn` | `app` | `preflight-gate` | — | 0.24.0 |
 
 ---
 
@@ -1841,5 +1842,33 @@ callers, so a call site passing no encoding is already correct.
 
 Suppress a reviewed exception with a justification: `# conformance: ignore[P046]
 <reason>`.
+
+---
+
+## P047 — `PreflightFailureLoggedAsWarning` {#p047}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.24.0
+
+> logger.warning() inside preflight_check — failure invisible under the default ERROR filter
+
+**Rationale:** The customer-facing run-log view filters at ERROR by default, so a preflight failure a
+handler logs at WARNING is invisible on exactly the runs where the customer needs to see
+why the source was not ready (FND-901). The SDK gate emits the single 'Preflight gate
+outcome' row and levels it from the verdict — a handler-authored WARNING is both the
+wrong level and a duplicate record.
+
+A `logger.warning(...)` call inside a `Handler.preflight_check` override logs below the
+customer log view's default ERROR filter, so a failed probe reported this way never
+reaches the customer. The gate owns preflight outcome logging: it emits one `Preflight
+gate outcome` row per run and logs it at ERROR when the run is blocked or the source is
+unverifiable, stamped with `failure.audience` from the typed error.
+
+Remediation: express the failure through the typed check result —
+`PreflightCheck(passed=False, error=<AppError>.to_failure_details())` — and delete the
+warning; use INFO/DEBUG for non-failure progress. `warning` and the deprecated `warn`
+alias are both matched, on any receiver named like a logger (`logger`, `log`,
+`self._log`, `logging`). Only class-method `preflight_check` overrides are scanned:
+module-level per-entrypoint `preflight_check` functions are not resolved, and helper
+functions the method calls are not followed.
 
 ---

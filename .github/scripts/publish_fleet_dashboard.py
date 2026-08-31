@@ -5,6 +5,12 @@ The upload half of the fleet-dashboard pattern: per-repo documents, a manifest
 of every repo present in the bucket, append-only per-repo history, and — on
 full-fleet runs only — the fleet aggregate and its history.
 
+The manifest is rebuilt by LISTING the bucket, which has no deletion path, so a
+repo that left the fleet stayed enumerated on every dashboard forever. On a
+full-fleet run the scan itself is authoritative about membership, and stored
+objects it did not produce are omitted from the manifest (never deleted — see
+``refresh_manifest``). FND-960.
+
 Extracted from an inlined ``run:`` block per docs/standards/ci.md. The shell
 version carried a loop, an if, and a download → merge → re-upload sequence whose
 failure mode is silent: without a ``touch`` of the not-yet-existing history file,
@@ -47,6 +53,17 @@ BUCKET = "s3://kryptonite-store"
 RunFn = Callable[[list], tuple]
 
 FLEET_SLUG = "fleet"
+
+# Ceiling on how much of a stored manifest one full-fleet publish may drop.
+#
+# Orphan detection is inference from absence: an object the scan did not produce
+# is assumed to belong to a repo that left the fleet. That is only as good as the
+# scan — a partial one (rate limit, a failed discovery page, a crash midway)
+# makes most of the fleet look departed. Above this fraction we keep everything
+# and say so, because a manifest that still lists a dead repo is a cosmetic
+# problem while a manifest missing 80% of the fleet reads as a catastrophic
+# regression on every dashboard at once.
+MAX_ORPHAN_FRACTION = 0.2
 
 
 def _run_aws(args: list) -> tuple:
@@ -140,12 +157,41 @@ def merge_history(
     upload(merged, prefix, "history", f"{slug}.jsonl", run=run)
 
 
-def refresh_manifest(prefix: str, tmp_dir: Path, run: RunFn = _run_aws) -> list:
+def orphans(stored: list, scanned: set) -> list:
+    """Stored objects this full-fleet scan did not produce, sorted.
+
+    These are repos that have left the fleet. The scanners already exclude
+    archived repos (``gh repo list --no-archived``), so an archived repo simply
+    stops being scanned — and because the manifest is rebuilt by LISTING the
+    bucket, which has no deletion path, its object kept it on every dashboard
+    forever, padding the rollout-coverage denominator (FND-960).
+    """
+    return sorted(name for name in stored if name not in scanned)
+
+
+def refresh_manifest(
+    prefix: str,
+    tmp_dir: Path,
+    run: RunFn = _run_aws,
+    *,
+    scanned: Optional[set] = None,
+) -> list:
     """Rewrite ``repos.json`` from what is actually in the bucket.
 
     Listing the bucket rather than the local scan output on purpose: in
     single-repo mode the local directory holds one file, and a manifest built
     from it would hide every other repo from the dashboard.
+
+    On a full-fleet run the caller passes ``scanned`` — the object names this
+    scan produced — which IS authoritative about fleet membership. Stored
+    objects absent from it are omitted from the manifest, so a departed repo
+    stops being enumerated by every consumer.
+
+    Omitted, not deleted. Excluding is idempotent (recomputed from ``scanned``
+    on every run) and costs nothing if the judgement is wrong, whereas an
+    automated delete of dashboard history cannot be undone. Reclaiming the
+    objects themselves stays a deliberate, human-triggered act —
+    ``prune-dashboard-repo.yaml``.
     """
     code, stdout, _ = run(["s3", "ls", _key(prefix, "repos", "")])
     if code != 0:
@@ -155,6 +201,28 @@ def refresh_manifest(prefix: str, tmp_dir: Path, run: RunFn = _run_aws) -> list:
         for line in stdout.splitlines()
         if line.strip().endswith(".json")
     )
+
+    dropped: list = []
+    if scanned is not None:
+        candidates = orphans(names, scanned)
+        cap = max(1, int(len(names) * MAX_ORPHAN_FRACTION))
+        if len(candidates) > cap:
+            print(
+                f"::warning::{len(candidates)} of {len(names)} stored repos are absent "
+                f"from this scan (cap {cap}) — keeping all of them; the scan looks "
+                "partial, not the fleet shrunk",
+                file=sys.stderr,
+            )
+        elif candidates:
+            dropped = candidates
+            names = [n for n in names if n not in set(dropped)]
+            for name in dropped:
+                print(
+                    f"::notice::omitting {name} from {prefix}/repos.json — no longer "
+                    "in the fleet scan",
+                    file=sys.stderr,
+                )
+
     manifest = tmp_dir / "repos.json"
     manifest.write_text(json.dumps(names))
     upload(manifest, prefix, "repos.json", run=run)
@@ -176,7 +244,15 @@ def publish(
     for doc in repo_docs:
         upload(doc, prefix, "repos", doc.name, run=run)
 
-    manifest = refresh_manifest(prefix, tmp_dir, run=run)
+    # A full-fleet scan is authoritative about membership, so it can retire
+    # departed repos from the manifest. A single-repo scan is not — passing its
+    # one document would omit the entire rest of the fleet.
+    manifest = refresh_manifest(
+        prefix,
+        tmp_dir,
+        run=run,
+        scanned=None if single_repo else {doc.name for doc in repo_docs},
+    )
 
     histories = 0
     for history in sorted(scan_dir.glob("history_*.jsonl")):

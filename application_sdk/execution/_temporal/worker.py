@@ -265,6 +265,14 @@ class AppWorker:
     ``PROMETHEUS_PUSHGATEWAY_URL``. Combined-mode deployments (FastAPI server
     in the same process) leave this off — ``/metrics`` already exposes the
     same series and pushing would double-count.
+
+    ``shutdown_drain_delay_seconds`` is the pre-teardown yield in
+    :meth:`__aexit__`, defaulting to :data:`SHUTDOWN_DRAIN_DELAY_SECONDS`. It is
+    a constructor parameter rather than a module constant read at the call site
+    so a test can set it to zero: three shutdown tests otherwise spent five real
+    seconds each asleep proving something about the *drain*, not about the
+    delay. The delay's own behaviour is asserted separately, by driving a worker
+    built with a non-zero value (FND-962).
     """
 
     def __init__(
@@ -275,12 +283,14 @@ class AppWorker:
         enable_pushgateway: bool = False,
         primary_app_name: str = "",
         task_queue: str = "",
+        shutdown_drain_delay_seconds: float = SHUTDOWN_DRAIN_DELAY_SECONDS,
     ) -> None:
         self._worker = worker
         self._start_event_params = start_event_params
         self._enable_pushgateway = enable_pushgateway
         self._primary_app_name = primary_app_name
         self._task_queue = task_queue
+        self._shutdown_drain_delay_seconds = shutdown_drain_delay_seconds
         self._pusher: PushGatewayClient | None = None
 
     async def _start_metrics_push(self) -> None:
@@ -386,7 +396,7 @@ class AppWorker:
             # the transport. Without this, a race between SIGTERM and
             # activity completion can leave orphaned task slots that block
             # shutdown for the entire graceful_shutdown_timeout.
-            await asyncio.sleep(SHUTDOWN_DRAIN_DELAY_SECONDS)
+            await asyncio.sleep(self._shutdown_drain_delay_seconds)
             await self._worker.__aexit__(exc_type, *args)
         finally:
             await self._drain_sizing()

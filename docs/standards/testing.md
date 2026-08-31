@@ -33,7 +33,10 @@
     only (no system apps). Required for every app; covers most scenario
     variations (auth modes, schema shapes, include/exclude filters) since
     the SDK provides hermetic paths for it (embedded Temporal, testcontainers,
-    mocked infra) (T011).
+    mocked infra) (T011). For how to write one — the canonical `conftest.py`,
+    the ordering rules it encodes, what's normative for credential handling,
+    and how the three reference suites differ — see
+    [`docs/guides/integration-testing.md`](../guides/integration-testing.md).
   - **End-to-end** — the full pipeline including system apps, in SDR mode
     against a real tenant. Needs only one representative *scenario*, not
     scenario-level coverage (T012) — but that scenario runs against one

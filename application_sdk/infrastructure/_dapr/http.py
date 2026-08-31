@@ -64,6 +64,12 @@ _DEFAULT_TIMEOUT = 30.0
 # wider than the credential fix it shipped with — see
 # https://github.com/atlanhq/application-sdk/issues/2995.
 _DEFAULT_RETRY_TOTAL = 3
+#: Base of the ladder above. A constructor parameter rather than a literal so a
+#: test can collapse the ladder to zero and still drive all
+#: ``_DEFAULT_RETRY_TOTAL + 1`` requests: the alternative is a unit test that
+#: sleeps out the real 2+4+8s budget to prove something about *propagation*
+#: (FND-962). Production never passes it.
+_DEFAULT_BACKOFF_FACTOR = 1.0
 
 # ---------------------------------------------------------------------------
 # Metrics
@@ -436,13 +442,14 @@ class AsyncDaprClient:
         base_url: str | None = None,
         timeout: float = _DEFAULT_TIMEOUT,
         retries: int = _DEFAULT_RETRY_TOTAL,
+        backoff_factor: float = _DEFAULT_BACKOFF_FACTOR,
     ):
         self._base_url = base_url or _dapr_base_url()
         transport = RetryTransport(
             transport=httpx.AsyncHTTPTransport(limits=_HTTP_POOL_LIMITS),
             retry=Retry(
                 total=retries,
-                backoff_factor=1.0,
+                backoff_factor=backoff_factor,
                 status_forcelist=[500, 502, 503, 504],
                 # Pin the retried transport errors to httpx-retries' own default
                 # set, stated explicitly so it can't silently narrow/widen if the

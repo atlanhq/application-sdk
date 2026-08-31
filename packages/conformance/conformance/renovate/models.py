@@ -49,8 +49,22 @@ class BlockingReason(str, Enum):
         # so Renovate reuses it without re-running postUpgradeTasks, and the marker
         # committed into uv.lock carries no clock. Recovery is to delete the branch
         # and let the next Renovate pass rebuild it (recreateClosed: true in the
-        # shared preset makes that safe). FND-782; mechanism in FND-695.
+        # shared preset makes that safe) — which is what the reaper step in
+        # renovate.yaml now does automatically, so reaching this state at all
+        # means the reaper did not run. FND-782; mechanism in FND-695.
         "bounded_lock_refusal_expired"
+    )
+    BOUNDED_LOCK_REFUSAL_STANDING = (
+        # The other half of a bounded-lock refusal: the driver stamped a reason
+        # that waiting does not fix — a broken interpreter, an unsatisfiable
+        # floor, a floor that was admitted and still failed, a yanked-pin
+        # rollback. The reaper deliberately leaves these alone, because recycling
+        # a real wedge every four hours would hide it behind a lane that looks
+        # busy. A human owns the branch. Distinct from
+        # BOUNDED_LOCK_REFUSAL_EXPIRED so an alarm can fire on a reaper outage
+        # without also firing on every fault a human is legitimately still
+        # working through. FND-909.
+        "bounded_lock_refusal_standing"
     )
     MERGE_CONFLICT = "merge_conflict"  # mergeable=CONFLICTING
     NON_DEP_FILES = "non_dep_files"  # changed files outside auto-approve allowlist
@@ -130,6 +144,11 @@ class RenovatePR:
     # branch's uv.lock ("P3D"), or "" when the lock has no tripwire. Parsed out by
     # scan._parse_pr so the multi-hundred-KB lock text itself is never retained.
     lock_refusal_window: str = ""
+    # Raw: why the driver refused, per the stamp on the tripwire line
+    # ("window-empty"), or "" for an unstamped tripwire — one written before
+    # FND-909, or no tripwire at all. Empty is deliberately not self-healing:
+    # classify falls back to the window clock rather than assuming a reason.
+    lock_refusal_reason: str = ""
     # populated by classify()
     category: Category = Category.UNKNOWN
     update_type: UpdateType = UpdateType.UNKNOWN
