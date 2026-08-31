@@ -365,12 +365,96 @@ def test_p003_silent_on_non_string_code_constant(tmp_path: Path) -> None:
 
 
 def test_p003_silent_on_dynamic_code_value(tmp_path: Path) -> None:
-    """``code = SOME_VAR`` (non-Constant) is not extracted — must not crash."""
+    """``code = SOME_VAR`` resolves through the module-level constant.
+
+    The class DOES declare a code; it just isn't inline. With ``CODE`` set to
+    a correctly-prefixed literal there is nothing to report."""
     src = "CODE = 'INTERNAL_X'\nclass DynCode(InternalError):\n    code = CODE\n"
     findings = _scan_one(tmp_path, src)
-    # Treated as missing code declaration; still fires P003 but must not crash.
+    assert [f.rule_id for f in findings] == []
+
+
+def test_p003_fires_on_dynamic_code_value_with_wrong_prefix(tmp_path: Path) -> None:
+    """Resolving the indirection makes the finding accurate: the code exists
+    and its PREFIX is wrong — not "does not declare"."""
+    src = "CODE = 'Atlan-X-500-01'\nclass DynCode(InternalError):\n    code = CODE\n"
+    findings = _scan_one(tmp_path, src)
+    assert [f.rule_id for f in findings] == ["P003"]
+    assert "Atlan-X-500-01" in findings[0].message
+    assert "does not declare" not in findings[0].message
+
+
+def test_p003_unresolvable_code_still_fires(tmp_path: Path) -> None:
+    """A value the scanner cannot prove (a call result) keeps today's
+    conservative behaviour — resolution narrows nothing it cannot read."""
+    src = (
+        "def build() -> str:\n    return 'INTERNAL_X'\n\n"
+        "class DynCode(InternalError):\n    code = build()\n"
+    )
+    findings = _scan_one(tmp_path, src)
     assert [f.rule_id for f in findings] == ["P003"]
     assert "does not declare" in findings[0].message
+
+
+_CODES_MODULE_OK = """\
+class AppErrorCode:
+    def __init__(self, code: str) -> None:
+        self.code = code
+
+FT_INTERNAL_DUCKDB_INIT = AppErrorCode(code="INTERNAL_FT_DUCKDB_INIT")
+"""
+
+_CODES_MODULE_LEGACY = """\
+class AppErrorCode:
+    def __init__(self, code: str) -> None:
+        self.code = code
+
+FT_INTERNAL_DUCKDB_INIT = AppErrorCode(code="Atlan-FT-INTERNAL-500-01")
+"""
+
+_FAILURES_MODULE = """\
+from typing import ClassVar
+
+from app.errors import codes
+
+
+class DuckDbInitError(InternalError):
+    code: ClassVar[str] = codes.FT_INTERNAL_DUCKDB_INIT.code
+"""
+
+
+def test_p003_silent_on_cross_file_code_constant(tmp_path: Path) -> None:
+    """The fleet's connector apps keep codes in their own module and
+    reference them as ``codes.X.code``. That indirection is a declaration —
+    with the prescribed prefix it must be silent."""
+    findings = _scan_files(
+        tmp_path,
+        {
+            "app/errors/codes.py": _CODES_MODULE_OK,
+            "app/errors/failures.py": _FAILURES_MODULE,
+        },
+    )
+    assert [f.rule_id for f in findings] == []
+
+
+def test_p003_fires_on_cross_file_code_constant_with_wrong_prefix(
+    tmp_path: Path,
+) -> None:
+    """Same shape carrying a legacy ``Atlan-*`` code fires — and names the
+    code, so the app can see what to rename. Live: atlan-fivetran-app, 23
+    findings that all read 'does not declare' while every class declared
+    one."""
+    findings = _scan_files(
+        tmp_path,
+        {
+            "app/errors/codes.py": _CODES_MODULE_LEGACY,
+            "app/errors/failures.py": _FAILURES_MODULE,
+        },
+    )
+    assert [f.rule_id for f in findings] == ["P003"]
+    assert "Atlan-FT-INTERNAL-500-01" in findings[0].message
+    assert "INTERNAL_" in findings[0].message
+    assert "does not declare" not in findings[0].message
 
 
 def test_p003_silent_on_abstract_intermediate_with_directive(tmp_path: Path) -> None:
@@ -1390,6 +1474,59 @@ def test_p014_silent_on_correctly_typed_task(tmp_path: Path) -> None:
     assert p014 == []
 
 
+def test_p014_silent_on_task_input_derived_from_sdk_template_contract(
+    tmp_path: Path,
+) -> None:
+    """An in-tree input extending the SDK's ExtractionTaskInput is valid."""
+    files = {
+        "contracts.py": (
+            "from application_sdk.templates.contracts import ExtractionTaskInput\n"
+            "\n"
+            "class SynapseTaskInput(ExtractionTaskInput):\n"
+            "    pass\n"
+        ),
+        "connector.py": (
+            _APP_IMPORTS + "from application_sdk.contracts import Output\n"
+            "from contracts import SynapseTaskInput\n"
+            "class MyApp(App):\n"
+            "    @task\n"
+            "    async def fetch(self, input: SynapseTaskInput) -> Output:\n"
+            "        return Output()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f for f in findings if f.rule_id == "P014"] == []
+
+
+def test_p014_fires_on_task_input_derived_from_local_extraction_task_input(
+    tmp_path: Path,
+) -> None:
+    """A local class named like an SDK contract is still checked normally."""
+    files = {
+        "contracts.py": (
+            "from pydantic import BaseModel\n"
+            "\n"
+            "class ExtractionTaskInput(BaseModel):\n"
+            "    pass\n"
+            "\n"
+            "class SynapseTaskInput(ExtractionTaskInput):\n"
+            "    pass\n"
+        ),
+        "connector.py": (
+            _APP_IMPORTS + "from application_sdk.contracts import Output\n"
+            "from contracts import SynapseTaskInput\n"
+            "class MyApp(App):\n"
+            "    @task\n"
+            "    async def fetch(self, input: SynapseTaskInput) -> Output:\n"
+            "        return Output()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p014 = [f for f in findings if f.rule_id == "P014"]
+    assert len(p014) == 1
+    assert "SynapseTaskInput" in p014[0].message
+
+
 def test_p014_silent_on_non_sdk_task_decorator(tmp_path: Path) -> None:
     """@celery.task with untyped args → not P014 (provenance-excluded)."""
     src = (
@@ -1543,6 +1680,59 @@ def test_p013_fires_on_multi_hop_invalid_base(tmp_path: Path) -> None:
     p013 = [f for f in findings if f.rule_id == "P013"]
     assert len(p013) == 1
     assert "FetchInput" in p013[0].message
+
+
+def test_p013_fires_on_local_subclass_of_non_sdk_base(tmp_path: Path) -> None:
+    """A local entrypoint contract inheriting from BaseModel is not an SDK contract."""
+    files = {
+        "contracts.py": (
+            "from pydantic import BaseModel\n"
+            "class OracleIncrementalExtractionInput(BaseModel):\n"
+            "    connection_id: str = ''\n"
+        ),
+        "out.py": (
+            "from application_sdk.contracts import Output\n"
+            "class FetchOutput(Output):\n"
+            "    rows: int = 0\n"
+        ),
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import OracleIncrementalExtractionInput\n"
+            "from out import FetchOutput\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def run_it(self, input: OracleIncrementalExtractionInput) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f for f in findings if f.rule_id == "P013"]
+
+
+def test_p013_silent_on_local_subclass_of_sdk_template_contract(tmp_path: Path) -> None:
+    """A local contract subclassing an SDK template Input is a valid boundary."""
+    files = {
+        "contracts.py": (
+            "from application_sdk.templates.contracts import IncrementalExtractionInput\n"
+            "class OracleIncrementalExtractionInput(IncrementalExtractionInput):\n"
+            "    connection_id: str = ''\n"
+        ),
+        "out.py": (
+            "from application_sdk.templates.contracts import IncrementalExtractionOutput\n"
+            "class OracleIncrementalExtractionOutput(IncrementalExtractionOutput):\n"
+            "    rows: int = 0\n"
+        ),
+        "connector.py": (
+            _APP_IMPORTS
+            + "from contracts import OracleIncrementalExtractionInput\n"
+            + "from out import OracleIncrementalExtractionOutput\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def run_it(self, input: OracleIncrementalExtractionInput) -> OracleIncrementalExtractionOutput:\n"
+            "        return OracleIncrementalExtractionOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f for f in findings if f.rule_id == "P013"] == []
 
 
 # TEST 9 — attribute-form non-SDK entrypoint decorator

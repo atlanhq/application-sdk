@@ -13,11 +13,13 @@ from application_sdk._runtime.progress import (
     bind_progress_tracker,
 )
 
-# Re-export shared registry fixtures so all unit tests can use them without
-# explicit per-file imports (pytest discovers fixtures via conftest chain).
+# Re-export shared fixtures so all unit tests can use them without explicit
+# per-file imports (pytest discovers fixtures via the conftest chain).
+# ``restore_logger_init_flags`` is autouse: the import is what applies it.
 from application_sdk.testing.fixtures import (  # noqa: F401
     clean_app_registry,
     clean_task_registry,
+    restore_logger_init_flags,
 )
 
 
@@ -85,7 +87,16 @@ def loguru_capture():
         format="{message}",
     )
     yield records
-    _loguru_logger.remove(sink_id)
+    try:
+        _loguru_logger.remove(sink_id)
+    except ValueError:
+        # Someone already took this sink out from under us: an adapter
+        # initialised mid-test and loguru's remove-all took every handler with
+        # it (see _restore_logger_init_flags). That fixture is what stops the
+        # cross-test case; this only keeps a test that resets the flags itself
+        # from dying in teardown. Note the capture is *incomplete* when this
+        # fires — anything logged after the wipe never reached ``records``.
+        pass
 
 
 def _safe_patch(target, side_effect=None, mock_obj=None):
@@ -239,3 +250,30 @@ def mock_dapr_client():
     yield
     if ctx is not None:
         ctx.__exit__(None, None, None)
+
+
+@pytest.fixture(autouse=True)
+def e2e_evidence_stays_out_of_the_repo(tmp_path_factory, monkeypatch):
+    """Point the e2e evidence bundle at a temp directory for every unit test.
+
+    ``BaseE2ETest.evidence_dir`` defaults to ``results/e2e-evidence``, relative
+    to the working directory — which is right in CI, where ``results/`` is what
+    ``upload-artifact`` is pointed at, and wrong here, where the working
+    directory is the repo. Without this, any unit test that drives
+    ``test_full_dag_runs_end_to_end`` to a failure writes real files into the
+    checkout, and the first sign of it is an untracked directory in ``git
+    status`` rather than a failing assertion.
+
+    Autouse and class-level rather than a per-test opt-in, because the tests
+    that trip it are the ones *not* about evidence: they drive the failure path
+    for some unrelated reason and have no cause to know a bundle now exists. A
+    test that is about the bundle sets ``evidence_dir`` on its own instance,
+    which still wins.
+    """
+    from application_sdk.testing.e2e.base import BaseE2ETest
+
+    monkeypatch.setattr(
+        BaseE2ETest,
+        "evidence_dir",
+        str(tmp_path_factory.mktemp("e2e-evidence")),
+    )

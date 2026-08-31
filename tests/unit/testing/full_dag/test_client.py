@@ -1,16 +1,18 @@
 """Unit tests for :mod:`application_sdk.testing.full_dag.client`.
 
-Network is monkeypatched out at ``_request``; we just verify the parse
-+ poll-loop logic.
+Network is monkeypatched out at the async reader's ``_request``; we just verify
+the parse + poll-loop logic through the deprecated package's re-export of the
+sync ``AEWorkflowClient`` facade.
 """
 
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 import pytest
 
-from application_sdk.testing.e2e._poll import fake_clock
+from application_sdk.testing.e2e.client import _FORBIDDEN_ATTEMPTS_REMOVAL_VERSION
 from application_sdk.testing.full_dag._errors import (
     AtlanApiHttpError,
     AtlanApiResponseInvariantError,
@@ -20,19 +22,26 @@ from application_sdk.testing.full_dag.client import (
     DAGNodeStatus,
     DAGRunStatus,
 )
+from application_sdk.testing.harness._poll import fake_clock
+from tests.unit.testing._atlas_fakes import FakeSearchResult, fake_atlas
 
 
 def _make_client(monkeypatch: pytest.MonkeyPatch, responses: list[tuple[int, Any]]):
-    """Build a client whose ``_request`` returns the queued responses in order."""
+    """Build a client whose AE ``_request`` returns the queued responses in order.
+
+    Patched on ``client._ae`` — the async
+    :class:`~application_sdk.testing.harness.automation_engine.client.AEClient`
+    the facade delegates to since child F, where ``_request`` lives now.
+    """
     client = AEWorkflowClient("https://tenant.example.com/", "fake-token")
     queue = list(responses)
 
-    def fake_request(method, path, *, body=None, timeout=30, **_kwargs):
+    async def fake_request(method, path, *, body=None, timeout=30, **_kwargs):
         if not queue:
             raise AssertionError("More HTTP calls than queued responses")
         return queue.pop(0)
 
-    monkeypatch.setattr(client, "_request", fake_request)
+    monkeypatch.setattr(client._ae, "_request", fake_request)
     return client, queue
 
 
@@ -177,15 +186,16 @@ def test_poll_atlas_for_connection_succeeds_when_search_finds_it(
     earlier polls)."""
     client, _ = _make_client(monkeypatch, [])
 
-    # Stub the search-based existence check directly — first two polls
-    # return False (indexer lag), third returns True (Connection found).
+    # Stub the Atlas search itself — first two polls find nothing (indexer lag),
+    # the third finds the Connection. The real reader and the real poll loop run.
     calls = {"n": 0}
 
-    def fake_search(_qn: str) -> bool:
+    def behavior(_request: Any) -> FakeSearchResult:
         calls["n"] += 1
-        return calls["n"] >= 3
+        return FakeSearchResult(count=1 if calls["n"] >= 3 else 0)
 
-    monkeypatch.setattr(client, "connection_exists_in_atlas_via_search", fake_search)
+    atlas = fake_atlas(behavior)
+    monkeypatch.setattr(client, "_atlas", lambda: atlas)
     with fake_clock():
         assert (
             client.poll_atlas_for_connection(
@@ -194,6 +204,9 @@ def test_poll_atlas_for_connection_succeeds_when_search_finds_it(
             is True
         )
     assert calls["n"] == 3
+    # The point of the split: one client and one TLS handshake for the whole
+    # poll, where the asyncio.run bridge stood up a fresh one per probe.
+    assert atlas.opens == 1
 
 
 def test_poll_atlas_for_connection_bails_after_not_found_streak(
@@ -202,7 +215,7 @@ def test_poll_atlas_for_connection_bails_after_not_found_streak(
     """``max_not_found_attempts`` consecutive empty searches → False fast."""
     client, _ = _make_client(monkeypatch, [])
     monkeypatch.setattr(
-        client, "connection_exists_in_atlas_via_search", lambda _: False
+        client, "_atlas", lambda: fake_atlas(lambda _request: FakeSearchResult(count=0))
     )
     with fake_clock():
         assert (
@@ -214,3 +227,77 @@ def test_poll_atlas_for_connection_bails_after_not_found_streak(
             )
             is False
         )
+
+
+def test_max_forbidden_attempts_says_it_does_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The vestigial knob now announces itself rather than being ``del``'d unread.
+
+    The poll reads the search index, whose ACL is permissive, so a 403 never
+    surfaces and there is no 403 budget to bound. Deleting the argument unread is
+    the shape that lets a caller keep passing a number and believe it does
+    something; FND-240 makes it say so, with a named removal version so the
+    warning is something to act on.
+    """
+    client, _ = _make_client(monkeypatch, [])
+    monkeypatch.setattr(
+        client, "_atlas", lambda: fake_atlas(lambda _request: FakeSearchResult(count=1))
+    )
+    with fake_clock(), pytest.warns(DeprecationWarning, match="has no effect"):
+        assert (
+            client.poll_atlas_for_connection(
+                "default/mysql/test",
+                interval_seconds=1,
+                timeout_seconds=10,
+                max_forbidden_attempts=5,
+            )
+            is True
+        )
+
+
+def test_omitting_the_vestigial_knob_is_silent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Why the default became ``None`` rather than staying ``5``: with a real
+    default there is no way to tell "the caller asked for this" from "the
+    signature did", and every single call would warn."""
+    client, _ = _make_client(monkeypatch, [])
+    monkeypatch.setattr(
+        client, "_atlas", lambda: fake_atlas(lambda _request: FakeSearchResult(count=1))
+    )
+    with fake_clock(), warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        assert (
+            client.poll_atlas_for_connection(
+                "default/mysql/test", interval_seconds=1, timeout_seconds=10
+            )
+            is True
+        )
+
+
+def test_the_vestigial_knob_names_its_removal_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The notice spells "v4.0" literally; this is what stops that drifting.
+
+    Conformance rule B002 reads a deprecation notice as written in the source, so
+    interpolating ``_FORBIDDEN_ATTEMPTS_REMOVAL_VERSION`` would make a compliant
+    deprecation look like one that never named a removal version. Spelling it
+    twice needs one assertion tying them together — the same shape ``AppConfig``'s
+    own removal-version test uses.
+    """
+    client, _ = _make_client(monkeypatch, [])
+    monkeypatch.setattr(
+        client, "_atlas", lambda: fake_atlas(lambda _request: FakeSearchResult(count=1))
+    )
+    with fake_clock(), pytest.warns(DeprecationWarning) as caught:
+        client.poll_atlas_for_connection(
+            "default/mysql/test",
+            interval_seconds=1,
+            timeout_seconds=10,
+            max_forbidden_attempts=5,
+        )
+    message = str(caught[0].message)
+    assert f"removed in v{_FORBIDDEN_ATTEMPTS_REMOVAL_VERSION}" in message
+    assert "use max_not_found_attempts instead" in message

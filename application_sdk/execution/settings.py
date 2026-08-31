@@ -71,6 +71,21 @@ class InterceptorSettings:
     enable_output_interceptor: bool = True
     """Enable structured output collection interceptor (metrics/artifacts)."""
 
+    enable_sizing_telemetry: bool = False
+    """Collect per-activity peak memory and CPU throttling. Off by default, and
+    independent of the allow-list so collection can be stopped in one place.
+    """
+
+    sizing_telemetry_activities: frozenset[str] = frozenset()
+    """Activity names to measure; empty collects nothing, so a half-finished config
+    change is fail-closed. ``"*"`` measures all of them.
+    """
+
+    sizing_telemetry_poll_seconds: float = 1.0
+    """Poll interval when the kernel watermark is unusable. Two file reads a tick,
+    no RPC; ``0`` disables polling and collects no peak on kernels before 6.8.
+    """
+
     enable_cleanup_interceptor: bool = False
     """Enable temp-directory cleanup interceptor.
 
@@ -131,8 +146,40 @@ def load_interceptor_settings() -> InterceptorSettings:
             return True
         return default
 
+    def _float(env_var: str, default: float) -> float:
+        raw = os.environ.get(env_var, "").strip()
+        if not raw:
+            return default
+        try:
+            value = float(raw)
+        except ValueError:
+            logger.warning(
+                "%s=%r is not a number; using %s",
+                env_var,
+                raw,
+                default,
+                exc_info=True,
+            )
+            return default
+        # Clamp rather than raise: a bad value must not stop workers starting.
+        return max(0.0, value)
+
+    def _name_set(env_var: str) -> frozenset[str]:
+        """Parse a comma-separated allow-list, tolerating Helm-file whitespace."""
+        raw = os.environ.get(env_var, "")
+        return frozenset(name.strip() for name in raw.split(",") if name.strip())
+
     return InterceptorSettings(
         enable_event_interceptor=_bool("APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR"),
         enable_output_interceptor=_bool("APPLICATION_SDK_ENABLE_OUTPUT_INTERCEPTOR"),
+        enable_sizing_telemetry=_bool(
+            "APPLICATION_SDK_ENABLE_SIZING_TELEMETRY", default=False
+        ),
+        sizing_telemetry_activities=_name_set(
+            "APPLICATION_SDK_SIZING_TELEMETRY_ACTIVITIES"
+        ),
+        sizing_telemetry_poll_seconds=_float(
+            "APPLICATION_SDK_SIZING_TELEMETRY_POLL_SECONDS", 1.0
+        ),
         enable_cleanup_interceptor=_bool("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR"),
     )

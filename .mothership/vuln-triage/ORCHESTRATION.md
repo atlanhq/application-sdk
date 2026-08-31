@@ -23,8 +23,8 @@ nears expiry. Concretely, for each CVE you:
 
 **Hard limits (the GHA gate enforces these — do not rely on them being lenient):**
 - An **allowlist PR** must touch **ONLY** `.security/base-allowlist.json`.
-- A **bump PR** must touch **ONLY** a subset of `pyproject.toml`, `uv.lock`,
-  `requirements.txt`. If a Case-1 fix also needs source-code changes, the bump PR
+- A **bump PR** must touch **ONLY** a subset of `pyproject.toml` and `uv.lock`.
+  If a Case-1 fix also needs source-code changes, the bump PR
   no longer matches the gate's path-allowlist — open it **without** the
   `vuln-auto-merge` label (as a draft) and tag a human. The gate is the safety
   boundary; these instructions are not.
@@ -223,9 +223,8 @@ git checkout main && git checkout -b fix/bump-<pkg>-<version>-<cve-id> origin/ma
 
 1. Follow the **uv recipe** in tools.md: pin uv to main's lock format; only edit
    `pyproject.toml` if its range doesn't cover the fixed version; then
-   `uv sync --all-extras --all-groups --upgrade` and
-   `uv export --no-hashes --frozen > requirements.txt`. The PR must touch
-   **only** `pyproject.toml`, `uv.lock`, `requirements.txt`.
+   `uv sync --all-extras --all-groups --upgrade`. The PR must touch
+   **only** `pyproject.toml` and `uv.lock`.
 2. Run the **validation greps + pre-commit + unit tests** (tools.md).
 3. **If the bump needs source-code changes, or any check fails:** the PR no
    longer fits the auto-merge path-allowlist. Open it **as a draft, WITHOUT the

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import sys
 from pathlib import Path
@@ -131,11 +132,13 @@ def test_fetch_all_prs_trips_safety_backstop():
 
 
 def test_fetch_all_prs_raises_when_search_api_cap_truncates_results():
-    # The search API caps total matches (commonly ~1000) — pageInfo can report
-    # hasNextPage=False while issueCount still exceeds what was actually returned.
-    # This must fail loudly rather than silently reporting an incomplete dashboard.
+    # Real truncation presents *at* the cap: pagination stops dead having
+    # returned exactly SEARCH_RESULT_CAP nodes while issueCount is higher. This
+    # must fail loudly rather than silently reporting an incomplete dashboard.
+    capped = [{"number": n, "url": f"u{n}"} for n in range(rfs.SEARCH_RESULT_CAP)]
+
     def fake_post(token, payload):
-        return _page([{"number": 1}], has_next=False, issue_count=1500)
+        return _page(capped, has_next=False, issue_count=1500)
 
     try:
         rfs.fetch_all_prs("tok", "org:atlanhq is:pr", "number", post=fake_post)
@@ -143,6 +146,36 @@ def test_fetch_all_prs_raises_when_search_api_cap_truncates_results():
     except RuntimeError as exc:
         assert "1500" in str(exc)
         assert "cap" in str(exc).lower()
+
+
+def test_fetch_all_prs_tolerates_a_count_that_drifted_during_pagination(capsys):
+    # issueCount is measured once, on the first page, while the walk takes
+    # minutes. A PR merging in between leaves the count one ahead of what came
+    # back — nothing is missing. Observed live 2026-08-30: a scheduled run died
+    # on "matched 391 but only 390 were returned", 609 short of any cap.
+    nodes = [{"number": n, "url": f"u{n}"} for n in range(390)]
+
+    def fake_post(token, payload):
+        return _page(nodes, has_next=False, issue_count=391)
+
+    result = rfs.fetch_all_prs("tok", "org:atlanhq is:pr", "number", post=fake_post)
+
+    assert len(result) == 390
+    err = capsys.readouterr().err
+    assert "::warning::" in err
+    assert "changed state during pagination" in err
+
+
+def test_drift_tolerance_stops_exactly_at_the_cap():
+    # One node short of the cap is drift; at the cap it is truncation. Pinning
+    # the boundary keeps a future page-size change from sliding it.
+    below = [{"number": n, "url": f"u{n}"} for n in range(rfs.SEARCH_RESULT_CAP - 1)]
+
+    def fake_post(token, payload):
+        return _page(below, has_next=False, issue_count=rfs.SEARCH_RESULT_CAP + 5)
+
+    # Below the cap: tolerated, however large the reported shortfall.
+    assert len(rfs.fetch_all_prs("tok", "q", "number", post=fake_post)) == len(below)
 
 
 def test_fetch_all_prs_no_error_when_issue_count_matches_returned_nodes():
@@ -554,7 +587,9 @@ def test_post_graphql_wraps_transport_errors_as_runtime_error(monkeypatch):
 
     monkeypatch.setattr(rfs.urllib.request, "urlopen", boom)
     try:
-        rfs._post_graphql("tok", {"query": "{}"})
+        # _post_graphql_once, not _post_graphql: the wrapping under test lives
+        # there now, and going through the retry wrapper would sleep for real.
+        rfs._post_graphql_once("tok", {"query": "{}"})
         assert False, "expected RuntimeError"
     except RuntimeError as exc:
         assert "name resolution failed" in str(exc)
@@ -568,7 +603,7 @@ def test_post_graphql_wraps_timeouts_as_runtime_error(monkeypatch):
 
     monkeypatch.setattr(rfs.urllib.request, "urlopen", boom)
     try:
-        rfs._post_graphql("tok", {"query": "{}"})
+        rfs._post_graphql_once("tok", {"query": "{}"})
         assert False, "expected RuntimeError"
     except RuntimeError as exc:
         assert "timed out" in str(exc)
@@ -585,3 +620,282 @@ def test_fetch_lock_texts_survives_a_transport_failure(capsys):
     assert rfs.fetch_lock_texts("tok", prs, flaky_post) == 0
     assert "uvLockText" not in prs[0]
     assert "could not read uv.lock" in capsys.readouterr().err
+
+
+# --- transient-failure retry (FND-909) ------------------------------------
+#
+# Every scheduled renovate-dashboard run failed for ten days straight, all with
+# `502 Bad Gateway` out of _post_graphql, because one transient GitHub-side
+# failure aborted the whole fleet pass. A pass issues on the order of a hundred
+# GraphQL calls, so meeting at least one 502 is close to certain.
+
+
+class _ScriptedPost:
+    """Stands in for _post_graphql_once, replaying a scripted list of outcomes.
+
+    Each item is either an exception to raise or a dict to return, so a test can
+    say "fail twice, then succeed" without touching the network.
+    """
+
+    def __init__(self, outcomes):
+        self.outcomes = list(outcomes)
+        self.calls = 0
+
+    def __call__(self, token, payload):
+        self.calls += 1
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+def _wrapped(status: int, reason: str = "Bad Gateway") -> RuntimeError:
+    """A RuntimeError shaped exactly as _post_graphql_once normalises an HTTPError."""
+    return RuntimeError(f"GraphQL request failed: {status} {reason}: <html>")
+
+
+def test_retries_past_a_502_and_succeeds(monkeypatch):
+    # The exact failure that took the dashboard down for ten days.
+    post = _ScriptedPost([_wrapped(502), _wrapped(502), {"data": {"ok": True}}])
+    monkeypatch.setattr(rfs, "_post_graphql_once", post)
+    slept = []
+
+    result = rfs._post_graphql("tok", {}, sleep=slept.append)
+
+    assert result == {"data": {"ok": True}}
+    assert post.calls == 3
+    assert slept == [1.0, 2.0]  # exponential, and it really did back off
+
+
+def test_retry_gives_up_at_the_attempt_cap(monkeypatch):
+    # A sustained outage still fails the run rather than retrying forever.
+    post = _ScriptedPost([_wrapped(502)] * rfs.GRAPHQL_ATTEMPTS)
+    monkeypatch.setattr(rfs, "_post_graphql_once", post)
+
+    try:
+        rfs._post_graphql("tok", {}, sleep=lambda _: None)
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "502" in str(exc)
+    assert post.calls == rfs.GRAPHQL_ATTEMPTS
+
+
+def test_retry_covers_every_transient_status(monkeypatch):
+    # 500/503/504 are the same class of GitHub-side blip as 502.
+    for status in (500, 503, 504):
+        post = _ScriptedPost([_wrapped(status), {"ok": 1}])
+        monkeypatch.setattr(rfs, "_post_graphql_once", post)
+
+        assert rfs._post_graphql("tok", {}, sleep=lambda _: None) == {"ok": 1}
+        assert post.calls == 2, f"{status} should have been retried"
+
+
+def test_does_not_retry_an_auth_failure(monkeypatch):
+    # A 401 fails identically every attempt; retrying only delays the report.
+    post = _ScriptedPost([_wrapped(401, "Unauthorized")])
+    monkeypatch.setattr(rfs, "_post_graphql_once", post)
+
+    try:
+        rfs._post_graphql("tok", {}, sleep=lambda _: None)
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "401" in str(exc)
+    assert post.calls == 1
+
+
+def test_does_not_retry_a_malformed_query(monkeypatch):
+    # 422 means the query is wrong — a human's problem, not the network's.
+    post = _ScriptedPost([_wrapped(422, "Unprocessable Entity")])
+    monkeypatch.setattr(rfs, "_post_graphql_once", post)
+
+    try:
+        rfs._post_graphql("tok", {}, sleep=lambda _: None)
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "422" in str(exc)
+    assert post.calls == 1
+
+
+def test_retries_a_transport_failure(monkeypatch):
+    # Connection reset / DNS blip carries no status but is the same transient.
+    post = _ScriptedPost(
+        [
+            RuntimeError("GraphQL request failed: <urlopen error [Errno 104] reset>"),
+            {"ok": 1},
+        ]
+    )
+    monkeypatch.setattr(rfs, "_post_graphql_once", post)
+
+    assert rfs._post_graphql("tok", {}, sleep=lambda _: None) == {"ok": 1}
+    assert post.calls == 2
+
+
+def test_retries_a_read_timeout(monkeypatch):
+    post = _ScriptedPost(
+        [
+            RuntimeError("GraphQL request failed: The read operation timed out"),
+            {"ok": 1},
+        ]
+    )
+    monkeypatch.setattr(rfs, "_post_graphql_once", post)
+
+    assert rfs._post_graphql("tok", {}, sleep=lambda _: None) == {"ok": 1}
+    assert post.calls == 2
+
+
+def test_a_successful_first_attempt_never_sleeps(monkeypatch):
+    # The happy path must not pay for the retry machinery.
+    post = _ScriptedPost([{"data": {}}])
+    monkeypatch.setattr(rfs, "_post_graphql_once", post)
+    slept = []
+
+    rfs._post_graphql("tok", {}, sleep=slept.append)
+
+    assert post.calls == 1
+    assert slept == []
+
+
+def test_retry_warns_so_a_degraded_run_is_visible(monkeypatch, capsys):
+    # A run that only succeeded after three retries is healthy-but-degraded, and
+    # worth seeing before it becomes a run that fails outright.
+    post = _ScriptedPost([_wrapped(502), {"ok": 1}])
+    monkeypatch.setattr(rfs, "_post_graphql_once", post)
+
+    rfs._post_graphql("tok", {}, sleep=lambda _: None)
+
+    assert "::warning::GraphQL attempt 1/4 failed" in capsys.readouterr().err
+
+
+def test_retry_is_wired_into_the_default_post_fn():
+    # fetch_all_prs and fetch_lock_texts default their `post` argument, so a fix
+    # that retried in a function nothing called would leave the outage in place.
+    for fn in (rfs.fetch_all_prs, rfs.fetch_lock_texts):
+        default = inspect.signature(fn).parameters["post"].default
+        assert default is rfs._post_graphql, f"{fn.__name__} bypasses the retry"
+
+
+# --- query cost + the 1000-result search cap (FND-909) --------------------
+#
+# Two independent faults, both measured against the live fleet on 2026-08-29,
+# both of which failed every scheduled dashboard run:
+#
+#   1. The open-PR query cost too much. PAGE_SIZE=100 -> 502, 50 -> 504 "we
+#      couldn't respond in time", 25 -> OK. Removing files(first:100) let 100
+#      through, so the nested file connection is the dominant term.
+#   2. The combined org-wide search had outgrown the API's ~1000-result cap
+#      (open 1003, merged 1020), so even a cheap-enough query returned a
+#      silently truncated fleet.
+#
+# The retry added earlier could not help with either: both are deterministic.
+
+
+def test_open_page_size_stays_under_the_measured_ceiling():
+    # 50 returned 504 and 100 returned 502 against the real API. Anything above
+    # the measured-good 25 is a regression that only shows up in production.
+    assert rfs.OPEN_PAGE_SIZE <= 25
+
+
+def test_payload_honours_an_explicit_page_size():
+    payload = rfs.build_graphql_payload("q", "number", after=None, page_size=25)
+    assert "first: 25" in payload["query"]
+
+
+def test_payload_falls_back_to_the_module_default():
+    payload = rfs.build_graphql_payload("q", "number", after=None)
+    assert f"first: {rfs.PAGE_SIZE}" in payload["query"]
+
+
+def test_fetch_all_prs_threads_the_page_size_through():
+    # A page size that stopped at build_graphql_payload's signature would leave
+    # the 502 in place while every unit test still passed.
+    seen = []
+
+    def fake_post(token, payload):
+        seen.append(payload["query"])
+        return _page([{"number": 1, "url": "u1"}], has_next=False)
+
+    rfs.fetch_all_prs("tok", "q", "number", post=fake_post, page_size=25)
+    assert "first: 25" in seen[0]
+
+
+def test_fetch_by_author_issues_one_query_per_author():
+    # One combined OR query is what breached the cap; the split is the fix.
+    queries = []
+
+    def fake_post(token, payload):
+        queries.append(payload["query"])
+        return _page([{"number": 1, "url": f"u{len(queries)}"}], has_next=False)
+
+    rfs.fetch_prs_by_author("tok", "org:atlanhq", "is:open", "number", post=fake_post)
+
+    assert len(queries) == len(rfs.RENOVATE_PR_AUTHORS)
+    for author in rfs.RENOVATE_PR_AUTHORS:
+        assert any(f"author:{author}" in q for q in queries), author
+    # Each slice names exactly one author — an OR would defeat the whole point.
+    for q in queries:
+        assert sum(f"author:{a}" in q for a in rfs.RENOVATE_PR_AUTHORS) == 1
+
+
+def test_fetch_by_author_concatenates_every_slice():
+    pages = [
+        _page([{"number": 1, "url": "u1"}], has_next=False),
+        _page([{"number": 2, "url": "u2"}], has_next=False),
+    ]
+
+    def fake_post(token, payload):
+        return pages.pop(0)
+
+    result = rfs.fetch_prs_by_author(
+        "tok", "org:atlanhq", "is:open", "number", post=fake_post
+    )
+    assert [pr["number"] for pr in result] == [1, 2]
+
+
+def test_fetch_by_author_deduplicates_across_slices():
+    # Defensive: GitHub cannot attribute one PR to two authors today, but a
+    # double-counted PR would inflate every number on the dashboard.
+    pages = [
+        _page([{"number": 1, "url": "same"}], has_next=False),
+        _page([{"number": 1, "url": "same"}], has_next=False),
+    ]
+
+    def fake_post(token, payload):
+        return pages.pop(0)
+
+    result = rfs.fetch_prs_by_author(
+        "tok", "org:atlanhq", "is:open", "number", post=fake_post
+    )
+    assert len(result) == 1
+
+
+def test_fetch_by_author_still_raises_when_one_slice_is_truncated():
+    # The fleet keeps growing. When a single author's slice breaches the cap in
+    # turn, that must fail loudly rather than report a partial fleet.
+    capped = [{"number": n, "url": f"u{n}"} for n in range(rfs.SEARCH_RESULT_CAP)]
+
+    def fake_post(token, payload):
+        return _page(capped, has_next=False, issue_count=1500)
+
+    try:
+        rfs.fetch_prs_by_author(
+            "tok", "org:atlanhq", "is:open", "number", post=fake_post
+        )
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "cap" in str(exc).lower()
+
+
+def test_the_scan_entrypoint_uses_the_sliced_fetch_with_measured_page_sizes():
+    # The wiring pin. A fix that lives in a function the entrypoint never calls
+    # would leave the outage exactly where it was, and every test above would
+    # still pass. Read the source rather than trusting the call site by eye.
+    source = inspect.getsource(rfs.run)
+    assert "fetch_prs_by_author" in source
+    assert "fetch_all_prs(" not in source, "run must not use the unsliced fetch"
+    assert "OPEN_PAGE_SIZE" in source
+    assert "MERGED_PAGE_SIZE" in source
+
+
+def test_main_delegates_to_run():
+    # The pin above reads run(); this is what makes run() the real entrypoint.
+    assert "run(" in inspect.getsource(rfs.main)

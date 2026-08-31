@@ -15,6 +15,7 @@ import pytest
 from application_sdk.app.base import _run_preflight_gate
 from application_sdk.execution._temporal.preflight_gate import (
     CLASSIFICATION_GATE_BROKEN,
+    FAILURE_AUDIENCE_KEY,
 )
 from application_sdk.execution.errors import ApplicationError
 from application_sdk.handler.contracts import PreflightOutput, PreflightStatus
@@ -183,19 +184,20 @@ class TestRunPreflightGate:
             result = await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
         assert result is None
         exec_mock.assert_awaited_once()
-        levels = [c.args[0] for c in safe_log.call_args_list]
-        assert "error" in levels
-        assert "no_verdict" in _outcomes(safe_log)
-        no_verdict_call = next(
-            c
-            for c in safe_log.call_args_list
-            if c.kwargs.get("outcome") == "no_verdict"
-        )
+        # One record for the whole event (FND-901): the no_verdict outcome row
+        # itself is the ERROR, carrying the stack and who must act.
+        error_calls = [c for c in safe_log.call_args_list if c.args[0] == "error"]
+        assert len(error_calls) == 1
+        no_verdict_call = error_calls[0]
+        assert no_verdict_call.kwargs.get("outcome") == "no_verdict"
+        assert no_verdict_call.kwargs.get("exc_info") is True
+        assert no_verdict_call.kwargs.get(FAILURE_AUDIENCE_KEY) == "APP_OWNER"
         assert no_verdict_call.kwargs.get("reason") == "ApplicationError"
         assert (
             no_verdict_call.kwargs.get("gate_classification")
             == CLASSIFICATION_GATE_BROKEN
         )
+        assert _outcomes(safe_log) == ["no_verdict"]
 
     async def test_fail_open_reason_names_the_underlying_error_not_the_wrapper(
         self, safe_log

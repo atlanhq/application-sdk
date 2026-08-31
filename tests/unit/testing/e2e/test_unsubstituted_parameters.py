@@ -15,9 +15,9 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from application_sdk.testing.e2e.client import (
-    AEWorkflowClient,
-    _unsubstituted_parameter_tokens,
+from application_sdk.testing.e2e.client import AEWorkflowClient
+from application_sdk.testing.harness.automation_engine.retry import (
+    unsubstituted_parameter_tokens as _unsubstituted_parameter_tokens,
 )
 
 
@@ -157,8 +157,10 @@ class TestSubmitWarnsOnUnsubstituted:
             {"name": "credential-guid", "value": "{{credentialGuid}}"}
         )
         with (
-            patch.object(client, "_request", return_value=(200, resp)),
-            patch("application_sdk.testing.e2e.client.logger") as log,
+            patch.object(client._ae, "_request", return_value=(200, resp)),
+            patch(
+                "application_sdk.testing.harness.automation_engine.client.logger"
+            ) as log,
         ):
             run_id = client.submit_workflow(self._payload(), retries=0)
         assert run_id == "run-xyz"
@@ -174,8 +176,10 @@ class TestSubmitWarnsOnUnsubstituted:
             {"name": "credential-guid", "value": "a1b2c3d4-dead-beef-0000-111122223333"}
         )
         with (
-            patch.object(client, "_request", return_value=(200, resp)),
-            patch("application_sdk.testing.e2e.client.logger") as log,
+            patch.object(client._ae, "_request", return_value=(200, resp)),
+            patch(
+                "application_sdk.testing.harness.automation_engine.client.logger"
+            ) as log,
         ):
             run_id = client.submit_workflow(self._payload(), retries=0)
         assert run_id == "run-xyz"
@@ -189,8 +193,10 @@ class TestSubmitWarnsOnUnsubstituted:
             {"name": "agent-json", "value": "s3cr3t-should-never-be-logged"},
         )
         with (
-            patch.object(client, "_request", return_value=(200, resp)),
-            patch("application_sdk.testing.e2e.client.logger") as log,
+            patch.object(client._ae, "_request", return_value=(200, resp)),
+            patch(
+                "application_sdk.testing.harness.automation_engine.client.logger"
+            ) as log,
         ):
             client.submit_workflow(self._payload(), retries=0)
         assert "s3cr3t-should-never-be-logged" not in self._rendered(log.warning)
@@ -207,8 +213,10 @@ class TestSubmitWarnsOnUnsubstituted:
             {"name": "credential-guid", "value": "a1b2c3d4-dead-beef-0000-111122223333"}
         )
         with (
-            patch.object(client, "_request", return_value=(200, resp)),
-            patch("application_sdk.testing.e2e.client.logger") as log,
+            patch.object(client._ae, "_request", return_value=(200, resp)),
+            patch(
+                "application_sdk.testing.harness.automation_engine.client.logger"
+            ) as log,
         ):
             client.submit_workflow(self._payload(), retries=0)
         assert not log.warning.called
@@ -221,8 +229,10 @@ class TestSubmitWarnsOnUnsubstituted:
         client = _make_client()
         resp = {"data": {"run_id": "run-xyz", "token": "s3cr3t-value"}}
         with (
-            patch.object(client, "_request", return_value=(200, resp)),
-            patch("application_sdk.testing.e2e.client.logger") as log,
+            patch.object(client._ae, "_request", return_value=(200, resp)),
+            patch(
+                "application_sdk.testing.harness.automation_engine.client.logger"
+            ) as log,
         ):
             client.submit_workflow(self._payload(), retries=0)
         fmt, *args = log.info.call_args.args

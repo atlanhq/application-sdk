@@ -23,9 +23,11 @@ from application_sdk.constants import (
     ENABLE_OBSERVABILITY_STORE_SINK,
     LOG_FILE_NAME,
     METRICS_FILE_NAME,
+    SIZING_FILE_NAME,
     TRACES_FILE_NAME,
     UPSTREAM_OBJECT_STORE_NAME,
 )
+from application_sdk.observability.utils import in_temporal_workflow
 
 # --- Path configuration ---
 # Structure: observability/<mode>/<signal>/year=.../hour=.../file.json.gz
@@ -38,6 +40,9 @@ LOCAL_OBS_SUBDIR_MAP = {
     "logs": f"{_OBS_MODE}/logs",
     "metrics": f"{_OBS_MODE}/metrics",
     "traces": f"{_OBS_MODE}/traces",
+    # Must be added alongside the S3 prefix below: a signal in only one map writes
+    # to ``other/`` locally while uploading to ``sizing/``.
+    "sizing": f"{_OBS_MODE}/sizing",
 }
 
 # Map of signal type → S3 remote key prefix
@@ -45,6 +50,9 @@ OBSERVABILITY_S3_PREFIX_MAP = {
     "logs": f"artifacts/apps/observability/{_OBS_MODE}/logs",
     "metrics": f"artifacts/apps/observability/{_OBS_MODE}/metrics",
     "traces": f"artifacts/apps/observability/{_OBS_MODE}/traces",
+    # Its own prefix, not the "other" fallback: this dataset has to be selectable
+    # across tenants without filtering out everything else in "other".
+    "sizing": f"artifacts/apps/observability/{_OBS_MODE}/sizing",
 }
 
 
@@ -88,6 +96,15 @@ class AtlanObservability(Generic[T], ABC):
 
     _last_cleanup_key = "last_cleanup_time"
     _instances: ClassVar[list[Any]] = []
+    # Resolved once for the whole hierarchy. Both getters below read and write
+    # these through ``AtlanObservability`` explicitly rather than through
+    # ``cls``: a ``cls.<attr> = ...`` from a classmethod called on a *subclass*
+    # binds a subclass attribute that shadows the base one, so the cache would
+    # be per-subclass and anything swapping the base (test fixtures,
+    # ``_reset_for_testing``) would be silently ignored. Nothing here varies by
+    # subclass — the binding names are module constants and ``_components_dir``
+    # is defined only here — so one shared entry is also one resolution instead
+    # of one per adapter. Same reason ``_instances`` is appended via the base.
     _deployment_store: ClassVar["BoundStore | None"] = None
     _upstream_store: ClassVar["BoundStore | None"] = None
 
@@ -99,7 +116,7 @@ class AtlanObservability(Generic[T], ABC):
 
     @classmethod
     def _get_deployment_store(cls) -> "BoundStore":
-        if cls._deployment_store is None:
+        if AtlanObservability._deployment_store is None:
             from application_sdk.storage.binding import (  # noqa: PLC0415
                 create_store_from_binding_with_put_attrs,
             )
@@ -109,12 +126,12 @@ class AtlanObservability(Generic[T], ABC):
                 DEPLOYMENT_OBJECT_STORE_NAME,
                 components_dir=cls._components_dir(),
             )
-            cls._deployment_store = BoundStore(store, put_attrs)
-        return cls._deployment_store
+            AtlanObservability._deployment_store = BoundStore(store, put_attrs)
+        return AtlanObservability._deployment_store
 
     @classmethod
     def _get_upstream_store(cls) -> "BoundStore":
-        if cls._upstream_store is None:
+        if AtlanObservability._upstream_store is None:
             from application_sdk.storage.binding import (  # noqa: PLC0415 — deferred to break the observability→storage circular import
                 create_store_from_binding_with_put_attrs,
             )
@@ -124,8 +141,8 @@ class AtlanObservability(Generic[T], ABC):
                 UPSTREAM_OBJECT_STORE_NAME,
                 components_dir=cls._components_dir(),
             )
-            cls._upstream_store = BoundStore(store, put_attrs)
-        return cls._upstream_store
+            AtlanObservability._upstream_store = BoundStore(store, put_attrs)
+        return AtlanObservability._upstream_store
 
     def __init__(
         self,
@@ -175,12 +192,12 @@ class AtlanObservability(Generic[T], ABC):
         This method should only be used in tests to allow fresh initialization
         for each test case.
         """
-        cls._instances.clear()
-        cls._deployment_store = None
-        cls._upstream_store = None
+        AtlanObservability._instances.clear()
+        AtlanObservability._deployment_store = None
+        AtlanObservability._upstream_store = None
 
     def _get_signal_type(self) -> str:
-        """Map file_name to signal type (logs, metrics, traces).
+        """Map file_name to signal type (logs, metrics, traces, sizing).
 
         Returns:
             str: The signal type based on self.file_name
@@ -191,7 +208,15 @@ class AtlanObservability(Generic[T], ABC):
             return "metrics"
         elif self.file_name == TRACES_FILE_NAME:
             return "traces"
+        elif self.file_name == SIZING_FILE_NAME:
+            return "sizing"
         return "other"
+
+    def _store_sink_enabled(self) -> bool:
+        """Whether this signal writes to the object store. Overridable because the
+        shared switch covers three signals, so disabling it can silently drop one.
+        """
+        return ENABLE_OBSERVABILITY_STORE_SINK
 
     def _get_partition_path(self, timestamp: datetime) -> str:
         """Generate local partition path based on timestamp.
@@ -382,20 +407,18 @@ class AtlanObservability(Generic[T], ABC):
         - Uploads to customer bucket (DEPLOYMENT_OBJECT_STORE) always
         - Uploads to Atlan bucket (UPSTREAM_OBJECT_STORE) when ``ENABLE_ATLAN_UPLOAD=true``
         """
-        if not ENABLE_OBSERVABILITY_STORE_SINK or not records:
+        if not self._store_sink_enabled() or not records:
             return
 
-        # File I/O is restricted inside Temporal's workflow sandbox — skip the
-        # store sink there; records are still exported via OTLP/console.
-        try:
-            from temporalio.workflow import (  # noqa: PLC0415 — defensive: try/except detects temporal sandbox / non-temporal context
-                unsafe as _wf_unsafe,
-            )
-
-            if _wf_unsafe.in_sandbox():
-                return
-        except ImportError:  # conformance: ignore[E002,E008] Temporal sandbox check unavailable outside a worker; normal flush
-            pass
+        # Blocking file I/O, the object-store upload and the retention sweep's
+        # thread offload below are all illegal on Temporal's deterministic
+        # workflow loop — skip the store sink there; records are still exported
+        # via OTLP/console. Shares one predicate with SegmentClient.flush() so
+        # both guards answer "am I in a workflow" the same way; the previous
+        # ``workflow.unsafe.in_sandbox()`` check missed passed-through modules
+        # and unsandboxed workers. See utils.in_temporal_workflow.
+        if in_temporal_workflow():
+            return
 
         # ``current_writer`` is non-None iff a gzip partition file is currently open.
         # The _PartitionWriter dataclass bundles all four related state fields so they

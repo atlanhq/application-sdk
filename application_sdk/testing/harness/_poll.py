@@ -1,8 +1,8 @@
-"""One bounded-poll primitive for the e2e harness's deadline loops.
+"""The deadline arithmetic every bounded loop in the harness runs on.
 
-Every "probe until it's ready or the budget runs out" loop in this package
-routes through :func:`until_deadline` (sync) or :func:`until_deadline_async`
-(async). Before this module each of them hand-rolled the same three lines::
+Every "probe until it's ready or the budget runs out" loop routes through
+:func:`until_deadline` (sync) or :func:`until_deadline_async` (async). Before
+this module each of them hand-rolled the same three lines::
 
     deadline = time.monotonic() + timeout
     while True:
@@ -36,6 +36,23 @@ Testing: pass ``clock``/``sleep`` explicitly, or wrap the code under test in
 :func:`fake_clock`. Neither touches :func:`time.monotonic` itself — the asyncio
 event loop reads that for its own timers, and fast-forwarding it globally makes
 async tests flake.
+
+Private, and it lives here rather than in ``testing/e2e/`` because the harness
+cannot import from the package it is about to be the foundation of: child H
+re-expresses ``testing/e2e`` *over*
+:mod:`application_sdk.testing.harness.waiting`, and a
+``harness -> e2e -> harness`` cycle is what keeping the deadline loop on the e2e
+side would have produced. Both sides read it from here today: child C moved it
+and rewired five ``testing/e2e`` call sites byte for byte, and child D (FND-240)
+brought the rest across — after which **no bounded loop in the harness owns a
+deadline**, and there is one clock rather than the monotonic-deadline /
+elapsed-accumulator / ``time.time()`` three that coexisted before.
+
+The remaining direct callers are the ones whose probe is *synchronous* — a
+connector-supplied write, a local test client — and so cannot reach
+:func:`~application_sdk.testing.harness.waiting.poll_until` without blocking the
+bridge's loop inside someone else's code. Everything async goes through the
+primitive instead, and gets the guards and the verdict vocabulary with it.
 """
 
 from __future__ import annotations
@@ -110,6 +127,40 @@ class Attempt:
         gap = min(max(seconds, 0.0), self.remaining)
         self._gap = gap
         return gap
+
+
+def monotonic() -> float:
+    """Read the clock the bounded-wait loops run on.
+
+    For code that keeps its own elapsed-time ledger *alongside* a loop rather
+    than inside one — a probe wrapper that logs progress, or one that has to
+    report how long a reading has been unchanged. Such a wrapper is called by
+    :func:`~application_sdk.testing.harness.waiting.poll_until`, which does not
+    hand it the :class:`Attempt`, so the only way for the two to agree on
+    "elapsed" is to read the same clock.
+
+    Reading it through this function rather than calling :func:`time.monotonic`
+    directly is what puts the wrapper under :func:`fake_clock` with the loop it
+    accompanies. A wrapper on the real clock inside a fake-clock test reports
+    zero elapsed for a wait the loop believes ran for ten minutes, which is
+    exactly the sort of disagreement a progress ledger exists to rule out.
+    """
+    return _monotonic()
+
+
+async def sleep_async(seconds: float) -> None:
+    """Await *seconds* through this module's swappable sleep.
+
+    The gap between two attempts of a *retry* loop rather than of a deadline
+    loop — a bounded ``for`` over :func:`until_deadline_async` owns its own
+    sleeping, but the AE write retries in
+    :mod:`application_sdk.testing.harness.automation_engine.client` count
+    attempts instead of watching a clock, so they have no :class:`Attempt` to
+    ask. Routing them here rather than calling :func:`asyncio.sleep` directly
+    puts them under :func:`fake_clock` with everything else, so a test asserts a
+    retry's real gap sequence instead of counting calls to a patched sleep.
+    """
+    await _async_sleep(seconds)
 
 
 def _log_heartbeat(label: str, attempt: Attempt, timeout_seconds: float) -> None:

@@ -198,18 +198,24 @@ def _sdk_extras_in(raw: str) -> list[str]:
 
 
 def _is_floating_range(spec: str) -> bool:
-    """Return True iff *spec* is a two-sided range that can still float (D011).
+    """Return True iff *spec* is capped but unfrozen — it can still float (D011).
 
-    Deliberately stricter than :func:`_is_bounded_specifier`, which accepts
+    Deliberately different from :func:`_is_bounded_specifier`, which accepts
     ``==X`` and ``~=X.Y`` as "bounded".  For the conformance suite an exact or
     compatible-release pin is the defect, not a satisfying answer: the D-series
     CI leg resolves the suite from the app's ``uv.lock``, so a frozen specifier
     freezes the ruleset that grades the repo.  The canonical form is
-    ``>=<floor>,<1.0.0`` — a floor plus the 1.0.0 major boundary — which lets a
-    lockfile refresh pick up each new release.
+    ``<=1.0.0`` — the major boundary alone — which lets a lockfile refresh pick
+    up every release below it.
+
+    A floor is *optional*, not required: it neither freezes nor unfreezes the
+    ruleset (resolution takes the newest version under the cap either way), so
+    ``>=<floor>,<1.0.0`` — the form the fleet already carries — floats just as
+    well and stays accepted.
 
     Rejected: bare names, exact (``==`` / ``===``), compatible-release (``~=``),
-    and one-sided ranges (``>=0.17.0`` with no upper bound).
+    and lower-only ranges (``>=0.17.0`` with no cap, which admits an unreviewed
+    major).
     """
     spec = spec.strip()
     if not spec:
@@ -218,20 +224,15 @@ def _is_floating_range(spec: str) -> bool:
     if not clauses:
         return False
 
-    has_lower = False
     has_upper = False
     for clause in clauses:
         if clause.startswith(("===", "==", "~=")):
             # A pin of any flavour freezes the ruleset — never floating.
             return False
-        if clause.startswith(">=") or (
-            clause.startswith(">") and not clause.startswith(">=")
-        ):
-            has_lower = True
-        elif clause.startswith("<"):
+        if clause.startswith("<"):
             # covers both ``<`` and ``<=``
             has_upper = True
-    return has_lower and has_upper
+    return has_upper
 
 
 def _is_bounded_specifier(spec: str) -> bool:
@@ -1636,10 +1637,12 @@ def _scan_conformance_dependency(
        skips dependency groups, so the declaration ships a dev-only tool in
        the runtime image.  Reported even when a correct dev-group entry also
        exists, because the runtime line still has to go.
-    3. **Pinned or one-sided** — declared, but with a specifier that cannot
-       float (``==0.13.0``, ``~=0.17``, or a bare ``>=0.17.0`` with no upper
-       bound).  The D-series CI leg resolves the suite out of the app's
-       ``uv.lock``, so a frozen specifier freezes the ruleset grading the repo.
+    3. **Pinned or uncapped** — declared, but with a specifier that cannot
+       float (``==0.13.0``, ``~=0.17``) or one with no upper bound at all (a
+       bare ``>=0.17.0``).  The D-series CI leg resolves the suite out of the
+       app's ``uv.lock``, so a frozen specifier freezes the ruleset grading the
+       repo, and an uncapped one admits an unreviewed major.  A floor is
+       optional — ``<=1.0.0`` and ``>=0.17.0,<1.0.0`` both float.
     4. **Missing from the lock** — declared and floating, but absent from a
        readable ``uv.lock``.  CI syncs from the lock, so a pyproject-only edit
        leaves the console script unavailable in the very environment that needs
@@ -1653,7 +1656,7 @@ def _scan_conformance_dependency(
 
     suppressions = parse_toml_suppressions(text)
     conformance_norm = _normalise_name(CONFORMANCE_PACKAGE)
-    canonical = f"{CONFORMANCE_PACKAGE}>=0.17.0,<1.0.0"
+    canonical = f"{CONFORMANCE_PACKAGE}<=1.0.0"
 
     entries = [
         e
@@ -1736,12 +1739,14 @@ def _scan_conformance_dependency(
                         f"'{CONFORMANCE_PACKAGE}' is declared in "
                         f"[{entry.array_path}] with a specifier that cannot "
                         f"float ({shown}). The D-series CI leg resolves the "
-                        f"suite from this repo's uv.lock, so an exact pin, a "
-                        f"'~=' compatible-release pin, or a one-sided '>=' "
-                        f"freezes or unbounds the ruleset that grades the "
-                        f"repo. Use a floor plus the 1.0.0 major boundary so a "
-                        f"lockfile refresh picks up each release: "
-                        f"'{canonical}'."
+                        f"suite from this repo's uv.lock, so an exact pin or a "
+                        f"'~=' compatible-release pin freezes the ruleset that "
+                        f"grades the repo, and a bare '>=' leaves it unbounded. "
+                        f"Cap it at the 1.0.0 major boundary so a lockfile "
+                        f"refresh picks up each release below it: "
+                        f"'{canonical}'. A floor is optional — an existing "
+                        f"two-sided range such as '>=0.17.0,<1.0.0' floats too "
+                        f"and needs no change."
                     ),
                     suppressions=suppressions,
                 )

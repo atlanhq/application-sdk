@@ -12,6 +12,11 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+from application_sdk.common.task_queue import (
+    APP_NAME_TOKEN,
+    DEPLOYMENT_NAME_TOKEN,
+    derive_task_queue,
+)
 from application_sdk.contracts.base import Input, Output
 from application_sdk.handler.base import DefaultHandler, Handler, HandlerError
 from application_sdk.handler.contracts import (
@@ -405,6 +410,24 @@ class TestPreflightEndpoint:
         assert body["preflight"]["status"] == "ready"
         assert "should_block" not in body["preflight"]
         assert body["preflight"]["checks"] == []
+
+    def test_preflight_emits_structured_outcome_row(self) -> None:
+        # FND-901: the HTTP surface emits the shared "Preflight check outcome"
+        # row (INFO — the caller is watching the screen) instead of prose.
+        client = _make_client()
+        with patch("application_sdk.handler.service.logger") as ml:
+            response = client.post("/workflows/v1/check", json={"credentials": []})
+        assert response.status_code == 200
+        event = next(
+            c.kwargs
+            for c in ml.info.call_args_list
+            if c.args and c.args[0] == "Preflight check outcome"
+        )
+        assert event["preflight_surface"] == "http"
+        assert event["outcome"] == "ready"
+        assert event["request_id"]
+        assert event["check_matrix"] == "[]"
+        ml.error.assert_not_called()
 
     def test_default_handler_reports_success_with_no_checks(self) -> None:
         client = _make_client(handler=DefaultHandler())
@@ -3339,6 +3362,195 @@ class TestManifestEndpoint:
                 assert resp.json()["app_name"] == ep_name
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
+
+
+class TestServedManifestTaskQueueContract:
+    """The served manifest's resolved ``task_queue`` is a cross-repo contract.
+
+    :func:`~application_sdk.common.task_queue.resolve_manifest_tokens` *stamps*
+    the queue this process was configured with into the manifest the route
+    serves, rather than letting the consumer re-derive it (FND-195). The
+    Automation Engine — and, from FND-224, the runtime scenario suite's contract
+    tier — read that resolved value straight out of the response and submit work
+    to it.
+
+    That makes a value this repo writes an **input to another repo's test
+    suite**, and the unit tests over ``task_queue.py`` do not pin it: they
+    exercise the resolver directly, so a refactor that renamed the key, moved
+    where the stamp is applied, or reverted the route to byte substitution would
+    keep them green while reddening a suite that cannot vote here.
+
+    These tests therefore assert through the HTTP boundary the consumer actually
+    reads, at the documented key, for every shape ``_rewrite_task_queue_fields``
+    walks. See ``docs/standards/cross-repo-contracts.md`` (FND-403).
+    """
+
+    #: ``(id, manifest, path to the queue)`` for the three shapes a real DAG
+    #: manifest carries the dispatch queue at. Kept as data so a fourth shape is
+    #: one tuple rather than a fourth near-duplicate test.
+    _SHAPES: tuple[tuple[str, dict[str, object], tuple[str, ...]], ...] = (
+        (
+            "dag-node",
+            {
+                "execution_mode": "dag",
+                "dag": {
+                    "extract": {
+                        "activity_name": "execute_workflow",
+                        "app_name": "{app_name}",
+                        "task_queue": "atlan-{app_name}-{deployment_name}",
+                    }
+                },
+            },
+            ("dag", "extract", "task_queue"),
+        ),
+        (
+            "dag-node-inputs",
+            {
+                "execution_mode": "dag",
+                "dag": {
+                    "extract": {
+                        "activity_name": "execute_workflow",
+                        "app_name": "{app_name}",
+                        "inputs": {
+                            "workflow_type": "extraction",
+                            "task_queue": "atlan-{app_name}-{deployment_name}",
+                        },
+                    }
+                },
+            },
+            ("dag", "extract", "inputs", "task_queue"),
+        ),
+        (
+            "top-level",
+            {
+                "execution_mode": "dag",
+                "app_name": "{app_name}",
+                "task_queue": "atlan-{app_name}-{deployment_name}",
+            },
+            ("task_queue",),
+        ),
+    )
+
+    @staticmethod
+    def _dig(body: object, path: tuple[str, ...]) -> object:
+        """Read ``path`` out of a parsed manifest, failing on a missing key.
+
+        Deliberately not ``.get()`` chaining: a renamed or relocated key is the
+        defect these tests exist to catch, and it must surface at the exact
+        segment that moved rather than as ``None != "atlan-dbt-prod"``.
+        """
+        node = body
+        for i, segment in enumerate(path):
+            assert isinstance(node, dict), (
+                f"{'.'.join(path[:i]) or '<root>'} is {type(node).__name__}, "
+                "not an object — the served manifest's shape changed"
+            )
+            assert segment in node, (
+                f"served manifest has no {'.'.join(path[: i + 1])}; keys at "
+                f"{'.'.join(path[:i]) or '<root>'}: {sorted(node)}"
+            )
+            node = node[segment]
+        return node
+
+    @staticmethod
+    def _serve(
+        manifest: dict[str, object],
+        contract_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        task_queue: str = "",
+    ) -> dict[str, object]:
+        """Write ``manifest`` to disk and fetch it back through the route."""
+        from application_sdk.handler import service as svc_module
+
+        (contract_dir / "manifest.json").write_text(json.dumps(manifest))
+        monkeypatch.setattr(svc_module, "CONTRACT_GENERATED_DIR", contract_dir)
+        app = create_app_handler_service(
+            _TestHandler(), app_name="test-app", task_queue=task_queue
+        )
+        response = TestClient(app).get("/workflows/v1/manifest")
+        assert response.status_code == 200
+        return response.json()
+
+    @pytest.mark.parametrize(
+        ("manifest", "path"),
+        [pytest.param(m, p, id=i) for i, m, p in _SHAPES],
+    )
+    def test_served_queue_is_resolved_at_the_documented_key(
+        self,
+        manifest: dict[str, object],
+        path: tuple[str, ...],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Every shape is served with the queue the worker polls, at its key.
+
+        The expectation is :func:`derive_task_queue`'s answer rather than a
+        literal ``"atlan-dbt-prod"``: the contract is *agreement with the
+        worker*, so hard-coding the string would let a change to the naming rule
+        satisfy this test while pointing AE at a queue nobody polls.
+        """
+        monkeypatch.setenv("ATLAN_APPLICATION_NAME", "dbt")
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "prod")
+
+        body = self._serve(manifest, tmp_path, monkeypatch)
+
+        assert self._dig(body, path) == derive_task_queue("dbt", "prod")
+
+    @pytest.mark.parametrize(
+        ("manifest", "path"),
+        [pytest.param(m, p, id=i) for i, m, p in _SHAPES],
+    )
+    def test_no_unresolved_token_survives_in_the_served_bytes(
+        self,
+        manifest: dict[str, object],
+        path: tuple[str, ...],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A literal token reaching the consumer is the CONNECT-183 failure.
+
+        AE submits whatever it reads, so ``atlan-{app_name}-prod`` is a queue
+        name with no worker behind it. Asserting over the whole response rather
+        than just the queue field also covers the residual ``{app_name}`` fill
+        that carries log identity (HYP-1954).
+        """
+        monkeypatch.setenv("ATLAN_APPLICATION_NAME", "dbt")
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "prod")
+
+        served = json.dumps(self._serve(manifest, tmp_path, monkeypatch))
+
+        assert APP_NAME_TOKEN not in served
+        assert DEPLOYMENT_NAME_TOKEN not in served
+
+    @pytest.mark.parametrize(
+        ("manifest", "path"),
+        [pytest.param(m, p, id=i) for i, m, p in _SHAPES],
+    )
+    def test_served_queue_is_stamped_from_the_handler_not_re_derived(
+        self,
+        manifest: dict[str, object],
+        path: tuple[str, ...],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An explicit queue reaches the consumer, beating the env derivation.
+
+        This is the property the stamp exists for. ``ATLAN_TASK_QUEUE`` /
+        ``--task-queue`` is an override no re-derivation can reproduce, so a
+        route that re-derived from the env would serve ``atlan-dbt-prod`` while
+        the worker polled ``custom-override-queue`` — the two paths disagreeing
+        silently, which is exactly FND-195.
+        """
+        monkeypatch.setenv("ATLAN_APPLICATION_NAME", "dbt")
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "prod")
+
+        body = self._serve(
+            manifest, tmp_path, monkeypatch, task_queue="custom-override-queue"
+        )
+
+        assert self._dig(body, path) == "custom-override-queue"
+        assert derive_task_queue("dbt", "prod") not in json.dumps(body)
 
 
 class TestNormalizeCredentials:

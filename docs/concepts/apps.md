@@ -326,6 +326,17 @@ Object-store access check failed (1 store(s) with errors):
 | `invalid credentials` | HTTP 401, `InvalidAccessKeyId`, `SignatureDoesNotMatch`, `unauthenticated` | Wrong/expired access key or secret |
 | `connectivity / unknown` | Timeout, network error, bucket not found | Endpoint URL, bucket name, or network unreachable from this pod/host |
 
+Interactive SDR preflight (`sdr:preflight_check`) maps those buckets onto existing taxonomy leaves so routing and retry match the cause, not a single retryable outage:
+
+| Role + bucket | Leaf | Audience | Retryable |
+|---|---|---|---|
+| Either role, `permission denied` | `AppPermissionDeniedError` | USER | no |
+| Either role, `invalid credentials` | `AuthError` | USER | no |
+| Deployment store, `connectivity / unknown` | `SourceUnavailableError` | USER | yes |
+| Upstream Atlan upload proxy, `connectivity / unknown` | `DependencyUnavailableError` | PLATFORM | yes |
+
+Customer-facing `suggested_action` is kept on every leaf. When a READY handler is downgraded because an object-store probe failed, the aggregate `PreflightOutput.error` / `message` banner is pinned to that object-store row — not the first failed check overall, which can be a non-fatal secret-store row.
+
 **Timeout override:**
 
 ```bash
@@ -851,6 +862,10 @@ pools {
 See [ADR-0016](../adr/0016-multi-pool-worker-routing.md) for the full design including rollout-drain requirements.
 
 ---
+
+### Choosing a pool from measurements
+
+Picking a pool means guessing a resource profile unless you have measured one. Activity sizing telemetry records peak container memory, CPU throttling and input bytes per execution, which is what turns "this feels memory-intensive" into a number you can size against. It is off by default and opt-in per activity — see [Monitoring → Activity Sizing Telemetry](monitoring.md#activity-sizing-telemetry).
 
 ## Retry Policies
 

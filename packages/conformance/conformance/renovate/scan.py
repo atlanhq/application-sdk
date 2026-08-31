@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from conformance.renovate.classify import classify, lock_refusal_window
+from conformance.renovate.classify import classify, parse_refusal_options
 from conformance.renovate.models import (
     AutoMergeStats,
     BlockingReason,
@@ -109,8 +109,9 @@ def _parse_pr(raw: dict) -> Optional[RenovatePR]:
     Two fields beyond that schema are read when present, both supplied by
     renovate_fleet_scan.py: ``headCommittedAt`` and ``uvLockText`` (the branch
     head's uv.lock, fetched only for the handful of PRs that could be carrying a
-    bounded-lock refusal). The text is reduced to its window here and dropped —
-    the model never holds the lockfile.
+    bounded-lock refusal). The text is reduced to its window and refusal reason
+    here and dropped — the model never holds the lockfile. One parse, not one per
+    field: these locks run to several MB.
     """
     try:
         created = datetime.fromisoformat(raw["createdAt"].replace("Z", "+00:00"))
@@ -118,6 +119,9 @@ def _parse_pr(raw: dict) -> Optional[RenovatePR]:
         labels = [lb["name"] for lb in raw.get("labels", [])]
         files = [f["path"] for f in raw.get("files", [])]
         rollup = raw.get("statusCheckRollup") or []
+        refusal_window, refusal_reason = parse_refusal_options(
+            raw.get("uvLockText") or ""
+        )
         return RenovatePR(
             number=raw["number"],
             url=raw["url"],
@@ -134,7 +138,8 @@ def _parse_pr(raw: dict) -> Optional[RenovatePR]:
             body=raw.get("body") or "",
             auto_merge_enabled=bool(raw.get("autoMergeEnabled") or False),
             head_committed_at=_parse_head_committed_at(raw),
-            lock_refusal_window=lock_refusal_window(raw.get("uvLockText") or ""),
+            lock_refusal_window=refusal_window,
+            lock_refusal_reason=refusal_reason,
         )
     except (KeyError, ValueError) as exc:
         print(f"Warning: skipping malformed PR record: {exc}", file=sys.stderr)
@@ -238,12 +243,14 @@ def _pr_to_dict(pr: RenovatePR) -> dict:
         "updatedAt": pr.updated_at.isoformat(),
         # Bounded-lock refusal evidence, so a blockingReason of
         # bounded_lock_refusal_expired can be rendered with the window it named
-        # and how long the branch has actually been frozen. Both null/empty on
+        # and how long the branch has actually been frozen, and so the standing
+        # variant can name the fault a human has to clear. All null/empty on
         # every PR that carries no tripwire, which is nearly all of them.
         "headCommittedAt": pr.head_committed_at.isoformat()
         if pr.head_committed_at
         else None,
         "lockRefusalWindow": pr.lock_refusal_window,
+        "lockRefusalReason": pr.lock_refusal_reason,
         # Which packages this PR delivers (parsed from body table / title) —
         # lets the fleet-freshness dashboard join "repo behind on tool X" to
         # the exact PR that fixes it. Empty for lock-maintenance PRs.
@@ -373,8 +380,11 @@ def main(argv: list[str] | None = None) -> int:
         repo = slug.replace("_", "/", 1)  # atlanhq_my-app → atlanhq/my-app
 
         try:
-            open_prs_raw: list[dict] = json.loads(open_file.read_text())
-        except (json.JSONDecodeError, OSError) as exc:
+            # read_bytes(), not read_text(): json.loads accepts bytes natively,
+            # so decoding first is a wasted round trip *and* would decode with
+            # the platform locale (cp1252 on Windows) unless told otherwise.
+            open_prs_raw: list[dict] = json.loads(open_file.read_bytes())
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
             print(f"Warning: skipping {open_file}: {exc}", file=sys.stderr)
             continue
 
@@ -383,8 +393,8 @@ def main(argv: list[str] | None = None) -> int:
             merged_file = merged_dir / open_file.name
             if merged_file.exists():
                 try:
-                    merged_raw = json.loads(merged_file.read_text())
-                except (json.JSONDecodeError, OSError):
+                    merged_raw = json.loads(merged_file.read_bytes())
+                except (json.JSONDecodeError, UnicodeDecodeError, OSError):
                     pass
 
         report = _build_repo_report(repo, open_prs_raw, merged_raw)
@@ -392,7 +402,9 @@ def main(argv: list[str] | None = None) -> int:
 
         # Per-repo output.
         repo_path = out_dir / "repos" / f"{slug}.json"
-        repo_path.write_text(json.dumps(_report_to_dict(report), indent=2))
+        repo_path.write_text(
+            json.dumps(_report_to_dict(report), indent=2), encoding="utf-8"
+        )
 
         # Append-only history.
         history_entry = {
@@ -403,7 +415,7 @@ def main(argv: list[str] | None = None) -> int:
             "autoMergeEligibleButStuck": report.summary.auto_merge_eligible_but_stuck,
         }
         history_path = out_dir / f"history_{slug}.jsonl"
-        with history_path.open("a") as fh:
+        with history_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(history_entry) + "\n")
 
         print(
@@ -415,7 +427,9 @@ def main(argv: list[str] | None = None) -> int:
 
     # Fleet aggregate.
     fleet = _build_fleet(reports)
-    (out_dir / "fleet.json").write_text(json.dumps(_fleet_to_dict(fleet), indent=2))
+    (out_dir / "fleet.json").write_text(
+        json.dumps(_fleet_to_dict(fleet), indent=2), encoding="utf-8"
+    )
 
     # Fleet history.
     fleet_history = {
@@ -424,7 +438,7 @@ def main(argv: list[str] | None = None) -> int:
         "reposWithOpenPRs": fleet.repos_with_open_prs,
         "totalOpenPRs": fleet.total_open_prs,
     }
-    with (out_dir / "history_fleet.jsonl").open("a") as fh:
+    with (out_dir / "history_fleet.jsonl").open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(fleet_history) + "\n")
 
     print(

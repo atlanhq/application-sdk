@@ -1763,6 +1763,15 @@ class App(ABC):
 
             await asyncio.gather(_local_cleanup(), _storage_cleanup())
 
+        # Inert when this runs inside the generated Temporal workflow (the
+        # normal case — on_complete() is called from _run()'s finally). Both
+        # legs self-guard on ``utils.in_temporal_workflow``: the object-store
+        # sink in ``AtlanObservability._flush_records`` and the Segment drain in
+        # ``SegmentClient.flush()``. Neither is a loss — OTLP export is per-call,
+        # and queued Segment events go out on the worker's batch timer, with
+        # ``close()`` draining the remainder at process exit. The call is kept
+        # for the non-workflow callers of on_complete() (direct invocation,
+        # tests, and any subclass that calls super() outside a workflow).
         try:
             await AtlanObservability.flush_all()
         # conformance: ignore[E004] logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
@@ -2042,10 +2051,14 @@ async def _run_preflight_gate(
         from application_sdk.credentials.ref import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
             CredentialResolvable,
         )
+        from application_sdk.errors.categories import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
+            Audience,
+        )
         from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
             CHECK_MATRIX_KEY,
             CLASSIFICATION_GATE_BROKEN,
             EMPTY_CHECK_MATRIX,
+            FAILURE_AUDIENCE_KEY,
             PREFLIGHT_OUTCOME_EVENT,
             PreflightGateInput,
             gate_retry_policy,
@@ -2095,24 +2108,22 @@ async def _run_preflight_gate(
         if is_preflight_block(e):
             raise
         # Fail-open: only the workflow knows a no-verdict failure happened, so it
-        # owns the no_verdict row (plus the loud ERROR line).
+        # owns the no_verdict row — one record, at ERROR (FND-901): the gate's
+        # own plumbing broke and the run proceeded unverified, which is the app
+        # team's fault to fix, hence the APP_OWNER audience.
         _safe_log(
             "error",
-            "Preflight gate could not produce a verdict; proceeding without source "
-            "verification (fail-open)",
-            app_name=app_name,
-            entrypoint=entry,
-            exc_info=True,
-        )
-        _safe_log(
-            "info",
             PREFLIGHT_OUTCOME_EVENT,
             app_name=app_name,
             entrypoint=entry,
             outcome="no_verdict",
             reason=underlying_error_type(e),
             gate_classification=CLASSIFICATION_GATE_BROKEN,
-            **{CHECK_MATRIX_KEY: EMPTY_CHECK_MATRIX},
+            exc_info=True,
+            **{
+                CHECK_MATRIX_KEY: EMPTY_CHECK_MATRIX,
+                FAILURE_AUDIENCE_KEY: Audience.APP_OWNER.value,
+            },
         )
         return
 

@@ -16,7 +16,7 @@ app must go red, and every *unanswerable* outcome must not.
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -29,11 +29,13 @@ from application_sdk.testing.e2e._manifest_identity import (
     node_identities,
 )
 from application_sdk.testing.e2e.base import _supersedes
-from application_sdk.testing.e2e.client import (
-    AEWorkflowClient,
-    PublishedVersion,
-    _first_version_row,
+from application_sdk.testing.e2e.client import AEWorkflowClient, PublishedVersion
+from application_sdk.testing.harness._poll import fake_clock
+from application_sdk.testing.harness.automation_engine import AEClient
+from application_sdk.testing.harness.automation_engine.wire import (
+    first_version_row as _first_version_row,
 )
+from application_sdk.testing.harness.bridge import run_sync
 
 
 def _node(app_name: str, workflow_type: str) -> dict[str, Any]:
@@ -70,12 +72,39 @@ def _harness(**overrides: Any) -> _Harness:
     two pieces of state bootstrap leaves behind.
     """
     harness = _Harness()
-    harness.client = _make_client()
+    harness._ae = AEClient("https://tenant.example.invalid", "tok-test")
     harness._expected_node_identities = node_identities(_LOCAL_DAG, app_name="mysql")
     harness._seed_version = 1000
     for key, value in overrides.items():
         setattr(harness, key, value)
     return harness
+
+
+def _reads(harness: _Harness, *, returns: Any = None, side_effect: Any = None) -> Any:
+    """Patch the AE reader the check polls, as the async method it now is."""
+    return patch.object(
+        harness._ae,
+        "get_published_version",
+        new=AsyncMock(return_value=returns, side_effect=side_effect),
+    )
+
+
+def _assert_matches(harness: _Harness, slug: str) -> None:
+    """Drive the check from a synchronous test, through the harness' own bridge.
+
+    Under ``fake_clock`` so the poll gaps cost nothing. The wait runs on
+    ``poll_until`` -> ``until_deadline_async``, which sleeps through ``_poll``'s
+    own swappable default — the reason the ``patch("time.sleep")`` these tests
+    used to carry was inert, and why they still spent five real seconds between
+    them separating two mocked reads (FND-962). Applied here rather than per
+    test so a new waiting test cannot forget it; it is a no-op for the ones that
+    settle on the first read.
+
+    The fake advances only ``_poll``'s clock, never ``time.monotonic`` — the
+    bridge's event loop reads that for its own timers.
+    """
+    with fake_clock():
+        run_sync(harness._assert_deployed_manifest_matches(slug))
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +263,7 @@ class TestGetPublishedVersion:
     def test_reads_the_published_version_and_its_dag(self) -> None:
         client = _make_client()
         body = {"data": [{"version": 42, "dag": _LOCAL_DAG}]}
-        with patch.object(client, "_request", return_value=(200, body)) as request:
+        with patch.object(client._ae, "_request", return_value=(200, body)) as request:
             published = client.get_published_version("mysql-abc")
         assert published == PublishedVersion(version=42, dag=_LOCAL_DAG)
         _, path = request.call_args.args
@@ -245,32 +274,34 @@ class TestGetPublishedVersion:
 
     def test_the_slug_is_url_encoded(self) -> None:
         client = _make_client()
-        with patch.object(client, "_request", return_value=(200, {"data": []})) as req:
+        with patch.object(
+            client._ae, "_request", return_value=(200, {"data": []})
+        ) as req:
             client.get_published_version("a/b?c")
         assert "workflows/a%2Fb%3Fc/versions" in req.call_args.args[1]
 
     def test_a_version_row_without_a_dag_yields_an_empty_dag(self) -> None:
         client = _make_client()
-        with patch.object(client, "_request", return_value=(200, {"data": [{}]})):
+        with patch.object(client._ae, "_request", return_value=(200, {"data": [{}]})):
             published = client.get_published_version("s")
         assert published == PublishedVersion(version=None, dag={})
 
     @pytest.mark.parametrize("status", [404, 500, 503])
     def test_a_non_2xx_answers_none_rather_than_raising(self, status: int) -> None:
         client = _make_client()
-        with patch.object(client, "_request", return_value=(status, {"err": "x"})):
+        with patch.object(client._ae, "_request", return_value=(status, {"err": "x"})):
             assert client.get_published_version("s") is None
 
     def test_a_transport_failure_answers_none_rather_than_raising(self) -> None:
         """The check is an enhancement on top of the run; a read that cannot get
         through must never be the thing that fails the leg."""
         client = _make_client()
-        with patch.object(client, "_request", side_effect=AppError(message="down")):
+        with patch.object(client._ae, "_request", side_effect=AppError(message="down")):
             assert client.get_published_version("s") is None
 
     def test_an_unparseable_envelope_answers_none(self) -> None:
         client = _make_client()
-        with patch.object(client, "_request", return_value=(200, "not json")):
+        with patch.object(client._ae, "_request", return_value=(200, "not json")):
             assert client.get_published_version("s") is None
 
 
@@ -286,23 +317,17 @@ def _published(dag: dict[str, Any], version: int | None = 2000) -> PublishedVers
 class TestAssertDeployedManifestMatches:
     def test_a_matching_published_dag_passes(self) -> None:
         harness = _harness()
-        with patch.object(
-            harness.client, "get_published_version", return_value=_published(_LOCAL_DAG)
-        ):
-            harness._assert_deployed_manifest_matches("mysql-abc")
+        with _reads(harness, returns=_published(_LOCAL_DAG)):
+            _assert_matches(harness, "mysql-abc")
 
     def test_a_diverging_published_dag_fails_the_leg(self) -> None:
         harness = _harness()
         deployed = {"extract": _node("mysql", "OldMySQLWorkflow")}
         with (
-            patch.object(
-                harness.client,
-                "get_published_version",
-                return_value=_published(deployed),
-            ),
+            _reads(harness, returns=_published(deployed)),
             pytest.raises(DeployedManifestMismatchError) as exc,
         ):
-            harness._assert_deployed_manifest_matches("mysql-abc")
+            _assert_matches(harness, "mysql-abc")
         # The diff has to name the nodes, not merely report a mismatch.
         assert "OldMySQLWorkflow" in exc.value.message
         assert "publish" in exc.value.message
@@ -311,18 +336,20 @@ class TestAssertDeployedManifestMatches:
 
     def test_the_check_is_skippable_per_connector(self) -> None:
         harness = _harness()
+        read = AsyncMock(return_value=None)
         with (
             patch.object(type(harness), "assert_deployed_manifest", False),
-            patch.object(harness.client, "get_published_version") as read,
+            patch.object(harness._ae, "get_published_version", new=read),
         ):
-            harness._assert_deployed_manifest_matches("mysql-abc")
+            _assert_matches(harness, "mysql-abc")
         read.assert_not_called()
 
     def test_a_suite_with_no_manifest_derived_dag_skips_without_reading(self) -> None:
         harness = _harness()
         harness._expected_node_identities = {}
-        with patch.object(harness.client, "get_published_version") as read:
-            harness._assert_deployed_manifest_matches("mysql-abc")
+        read = AsyncMock(return_value=None)
+        with patch.object(harness._ae, "get_published_version", new=read):
+            _assert_matches(harness, "mysql-abc")
         read.assert_not_called()
 
     def test_a_published_version_that_never_supersedes_the_seed_asserts_nothing(
@@ -337,37 +364,24 @@ class TestAssertDeployedManifestMatches:
             deployed_manifest_poll_interval_seconds=1,
         )
         seed_echo = _published({"extract": _node("mysql", "Divergent")}, version=1000)
-        with (
-            patch.object(
-                harness.client, "get_published_version", return_value=seed_echo
-            ),
-            patch("time.sleep"),
-        ):
-            harness._assert_deployed_manifest_matches("mysql-abc")
+        with _reads(harness, returns=seed_echo):
+            _assert_matches(harness, "mysql-abc")
 
     def test_an_unreadable_published_version_asserts_nothing(self) -> None:
         harness = _harness(
             deployed_manifest_timeout_seconds=1,
             deployed_manifest_poll_interval_seconds=1,
         )
-        with (
-            patch.object(harness.client, "get_published_version", return_value=None),
-            patch("time.sleep"),
-        ):
-            harness._assert_deployed_manifest_matches("mysql-abc")
+        with _reads(harness, returns=None):
+            _assert_matches(harness, "mysql-abc")
 
     def test_an_empty_published_dag_asserts_nothing(self) -> None:
         harness = _harness(
             deployed_manifest_timeout_seconds=1,
             deployed_manifest_poll_interval_seconds=1,
         )
-        with (
-            patch.object(
-                harness.client, "get_published_version", return_value=_published({})
-            ),
-            patch("time.sleep"),
-        ):
-            harness._assert_deployed_manifest_matches("mysql-abc")
+        with _reads(harness, returns=_published({})):
+            _assert_matches(harness, "mysql-abc")
 
     def test_a_late_supersede_is_waited_for(self) -> None:
         """AE's version listing is read-after-write: the first read can still be
@@ -382,11 +396,10 @@ class TestAssertDeployedManifestMatches:
             _published({"extract": _node("mysql", "Divergent")}),
         ]
         with (
-            patch.object(harness.client, "get_published_version", side_effect=reads),
-            patch("time.sleep"),
+            _reads(harness, side_effect=reads),
             pytest.raises(DeployedManifestMismatchError),
         ):
-            harness._assert_deployed_manifest_matches("mysql-abc")
+            _assert_matches(harness, "mysql-abc")
 
     def test_a_published_version_with_no_version_number_asserts_nothing(self) -> None:
         """AE's version number is optional on the wire, so ``_safe_int`` can
@@ -398,13 +411,8 @@ class TestAssertDeployedManifestMatches:
             deployed_manifest_poll_interval_seconds=1,
         )
         unnumbered = _published({"extract": _node("mysql", "Divergent")}, version=None)
-        with (
-            patch.object(
-                harness.client, "get_published_version", return_value=unnumbered
-            ),
-            patch("time.sleep"),
-        ):
-            harness._assert_deployed_manifest_matches("mysql-abc")
+        with _reads(harness, returns=unnumbered):
+            _assert_matches(harness, "mysql-abc")
 
     def test_an_unnumbered_read_does_not_end_the_wait(self) -> None:
         """It is unprovable, not terminal: a numbered supersede later in the
@@ -418,11 +426,10 @@ class TestAssertDeployedManifestMatches:
             _published({"extract": _node("mysql", "Divergent")}, version=2000),
         ]
         with (
-            patch.object(harness.client, "get_published_version", side_effect=reads),
-            patch("time.sleep"),
+            _reads(harness, side_effect=reads),
             pytest.raises(DeployedManifestMismatchError),
         ):
-            harness._assert_deployed_manifest_matches("mysql-abc")
+            _assert_matches(harness, "mysql-abc")
 
     def test_a_readable_read_survives_a_later_blip(self) -> None:
         """A blip after a good read must not make the diagnostic claim AE was
@@ -432,11 +439,8 @@ class TestAssertDeployedManifestMatches:
             deployed_manifest_poll_interval_seconds=1,
         )
         reads = [_published({}, version=1000), None]
-        with (
-            patch.object(harness.client, "get_published_version", side_effect=reads),
-            patch("time.sleep"),
-        ):
-            harness._assert_deployed_manifest_matches("mysql-abc")
+        with _reads(harness, side_effect=reads):
+            _assert_matches(harness, "mysql-abc")
 
     def test_an_empty_first_read_does_not_end_the_wait(self) -> None:
         harness = _harness(
@@ -448,11 +452,10 @@ class TestAssertDeployedManifestMatches:
             _published({"extract": _node("mysql", "Divergent")}),
         ]
         with (
-            patch.object(harness.client, "get_published_version", side_effect=reads),
-            patch("time.sleep"),
+            _reads(harness, side_effect=reads),
             pytest.raises(DeployedManifestMismatchError),
         ):
-            harness._assert_deployed_manifest_matches("mysql-abc")
+            _assert_matches(harness, "mysql-abc")
 
     def test_a_harness_with_no_seed_version_compares_the_first_readable_dag(
         self,
@@ -463,14 +466,12 @@ class TestAssertDeployedManifestMatches:
         harness = _harness()
         harness._seed_version = None
         with (
-            patch.object(
-                harness.client,
-                "get_published_version",
-                return_value=_published({"extract": _node("mysql", "Divergent")}),
+            _reads(
+                harness, returns=_published({"extract": _node("mysql", "Divergent")})
             ),
             pytest.raises(DeployedManifestMismatchError),
         ):
-            harness._assert_deployed_manifest_matches("mysql-abc")
+            _assert_matches(harness, "mysql-abc")
 
 
 class TestSupersedes:

@@ -778,3 +778,24 @@ class TestFlush:
             await client.flush()  # must not raise
 
         assert cf_future.cancelled()
+
+    @pytest.mark.timeout(2)
+    async def test_flush_inside_temporal_workflow_does_not_bridge_worker_loop(self):
+        """Avoid the unsupported asyncio bridge from a Temporal workflow.
+
+        Temporal's workflow loop raises NotImplementedError from is_closed() when
+        asyncio.wrap_future wires the worker future back to the workflow context.
+        """
+        client = _enabled_client_no_thread()
+        fake_loop = mock.MagicMock()
+        fake_loop.is_running.return_value = True
+        client._loop = fake_loop
+        client._queue = asyncio.Queue()
+
+        with (
+            mock.patch.object(sc_module, "in_temporal_workflow", return_value=True),
+            mock.patch.object(sc_module.asyncio, "run_coroutine_threadsafe") as mrun,
+        ):
+            await client.flush()
+
+        mrun.assert_not_called()

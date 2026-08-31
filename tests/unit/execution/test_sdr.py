@@ -234,6 +234,71 @@ class TestBuildSdrActivities:
         with pytest.raises(AppContextError):
             _ = handler.context
 
+    async def test_preflight_activity_emits_outcome_row(self) -> None:
+        # FND-901: the SDR surface was silent — a failed test-connection left no
+        # log evidence. It now emits the shared "Preflight check outcome" row.
+        handler = _StubHandler()
+        activities = build_sdr_activities(handler, app_name="myapp")
+        by_name = {
+            getattr(a, "__temporal_activity_definition").name: a for a in activities
+        }
+        preflight = by_name[SDR_PREFLIGHT_ACTIVITY]
+        with mock.patch("application_sdk.execution._temporal.sdr.logger") as ml:
+            await preflight(PreflightInput(credentials=[]))
+        event = next(
+            c.kwargs
+            for c in ml.info.call_args_list
+            if c.args and c.args[0] == "Preflight check outcome"
+        )
+        assert event["preflight_surface"] == "sdr"
+        assert event["outcome"] == "ready"
+        assert event["app_name"] == "myapp"
+
+    async def test_preflight_fatal_secret_store_emits_outcome_row(self) -> None:
+        # The fatal short-circuit return path must emit the same row — its
+        # checks are the synthetic secret-store row, so the shape differs.
+        handler = _StubHandler()
+        activities = build_sdr_activities(handler, app_name="myapp")
+        by_name = {
+            getattr(a, "__temporal_activity_definition").name: a for a in activities
+        }
+        preflight = by_name[SDR_PREFLIGHT_ACTIVITY]
+        fatal = SecretStoreCheckResult(
+            passed=False,
+            store_down=True,
+            fatal=True,
+            substituted=0,
+            message="Secret store unreachable",
+        )
+        fake_infra = mock.MagicMock()
+        fake_infra.secret_store = mock.MagicMock(name="SecretStore")
+        with (
+            mock.patch(
+                "application_sdk.execution._temporal.sdr.get_infrastructure",
+                return_value=fake_infra,
+            ),
+            mock.patch(
+                "application_sdk.execution._temporal.sdr.check_secret_store_access",
+                new=mock.AsyncMock(return_value=fatal),
+            ),
+            mock.patch("application_sdk.execution._temporal.sdr.logger") as ml,
+        ):
+            result = await preflight(
+                PreflightInput(agent_json={"agent-name": "acme", "secret-path": "p"})
+            )
+        assert result.status == PreflightStatus.NOT_READY
+        assert handler.preflight_input is None  # short-circuited, handler never ran
+        # A failed SDR test-connection surfaces through a run log read at the
+        # default ERROR filter, so the row mirrors the gate and lands at ERROR.
+        event = next(
+            c.kwargs
+            for c in ml.error.call_args_list
+            if c.args and c.args[0] == "Preflight check outcome"
+        )
+        assert event["preflight_surface"] == "sdr"
+        assert event["outcome"] == "not_ready"
+        assert "Secret store" in event["check_matrix"]
+
     async def test_fetch_metadata_activity_dispatches(self) -> None:
         handler = _StubHandler()
         activities = build_sdr_activities(handler, app_name="myapp")
@@ -690,17 +755,17 @@ class TestSdrPreflightObjectStoreChecks:
         names = [c.name for c in result.checks]
         assert names == [
             "Deployment reachability",
-            "Object store",
-            "Metadata / egress connectivity",
+            "Deployment object store",
+            "Metadata upload connectivity",
         ]
         # Names avoid the "SDR" acronym so the frontend title-caser doesn't
         # render it as "S D R"; the SDR context lives in the messages.
         assert not any("SDR" in n for n in names)
         messages = [c.message for c in result.checks]
         assert messages == [
-            "SDR Deployment is reachable.",
-            "Object Store configuration for SDR deployment successful",
-            "Metadata/Egress connectivity from SDR to Atlan SaaS tenant successful",
+            "The SDR worker is reachable.",
+            "Configured object store is accessible. Read and write access confirmed.",
+            "SDR worker can upload metadata to Atlan.",
         ]
         assert all(c.passed for c in result.checks)
         # The probe's elapsed time is folded into the output's duration
@@ -737,16 +802,273 @@ class TestSdrPreflightObjectStoreChecks:
         # Row 0 is the "SDR deployment reachable" marker; row 1 is the failed probe.
         assert len(result.checks) == 2
         assert result.checks[0].passed is True
-        assert result.checks[0].message == "SDR Deployment is reachable."
+        assert result.checks[0].message == "The SDR worker is reachable."
         check = result.checks[1]
         assert check.passed is False
         assert check.error is not None
-        assert check.error.category == FailureCategory.DEPENDENCY_UNAVAILABLE
-        assert check.error.code == "OBJECT_STORE_ACCESS"
+        # Permission bucket → AppPermissionDeniedError (USER, not retryable).
+        from application_sdk.errors.categories import Audience
+
+        assert check.error.category == FailureCategory.PERMISSION
+        assert check.error.code == "PERMISSION"
+        assert check.error.audience == Audience.USER
         assert check.error.retryable is False
+        # The class-specific remediation is carried, not discarded.
+        assert check.error.suggested_action is not None
+        assert "read and write access" in check.error.suggested_action
+        # Probe context rides along as evidence via to_failure_details().
+        assert check.error.evidence.get("resource") == "objectstore"
+        assert check.error.evidence.get("required_action") == "read and write"
         # Simple, non-technical failure copy (no probe internals in the UI).
-        assert "not reachable" in check.resolved_message
+        assert "not accessible" in check.resolved_message
         assert "403" not in check.resolved_message
+        # The banner carries the real reason (typed + string), not "not_ready".
+        assert result.message == "Configured object store is not accessible."
+        assert result.error is not None
+        assert result.error.category == FailureCategory.PERMISSION
+        assert result.resolved_message == "Configured object store is not accessible."
+
+    async def test_failed_object_store_maps_auth_and_availability_leaves(self) -> None:
+        """Classifier buckets map onto existing USER/PLATFORM leaves, not one retryable leaf."""
+        from application_sdk.errors.categories import Audience, FailureCategory
+        from application_sdk.storage.preflight import ObjectStoreCheckResult
+
+        handler = _StubHandler()
+        preflight = self._preflight(handler)
+
+        results = [
+            ObjectStoreCheckResult(
+                label="deployment",
+                binding_name="objectstore",
+                passed=False,
+                error_class="invalid credentials",
+            ),
+            ObjectStoreCheckResult(
+                label="upstream",
+                binding_name="atlan-objectstore",
+                passed=False,
+                error_class="connectivity / unknown",
+            ),
+        ]
+        with mock.patch(
+            "application_sdk.execution._temporal.sdr.check_object_store_access",
+            mock.AsyncMock(return_value=results),
+        ):
+            result = await preflight(PreflightInput(credentials=[]))
+
+        auth_row, upstream_row = result.checks[1], result.checks[2]
+        assert auth_row.error is not None
+        assert auth_row.error.category == FailureCategory.AUTH
+        assert auth_row.error.audience == Audience.USER
+        assert auth_row.error.retryable is False
+        assert auth_row.error.suggested_action is not None
+        assert "expired" in auth_row.error.suggested_action
+
+        assert upstream_row.error is not None
+        assert upstream_row.error.category == FailureCategory.DEPENDENCY_UNAVAILABLE
+        assert upstream_row.error.audience == Audience.PLATFORM
+        assert upstream_row.error.retryable is True
+        assert upstream_row.error.evidence.get("target") == "atlan-objectstore"
+
+        # Banner is pinned to the first object-store failure (deployment/auth),
+        # not rescanned from all checks.
+        assert result.error is not None
+        assert result.error.category == FailureCategory.AUTH
+
+    async def test_deployment_connectivity_is_source_unavailable(self) -> None:
+        """Customer-owned store outage stays SOURCE_UNAVAILABLE / USER."""
+        from application_sdk.errors.categories import Audience, FailureCategory
+        from application_sdk.storage.preflight import ObjectStoreCheckResult
+
+        handler = _StubHandler()
+        preflight = self._preflight(handler)
+        results = [
+            ObjectStoreCheckResult(
+                label="deployment",
+                binding_name="objectstore",
+                passed=False,
+                error_class="connectivity / unknown",
+            ),
+        ]
+        with mock.patch(
+            "application_sdk.execution._temporal.sdr.check_object_store_access",
+            mock.AsyncMock(return_value=results),
+        ):
+            result = await preflight(PreflightInput(credentials=[]))
+
+        check = result.checks[1]
+        assert check.error is not None
+        assert check.error.category == FailureCategory.SOURCE_UNAVAILABLE
+        assert check.error.audience == Audience.USER
+        assert check.error.retryable is True
+        assert check.error.evidence.get("endpoint") == "objectstore"
+
+    async def test_not_configured_object_store_is_non_retryable_precondition(
+        self,
+    ) -> None:
+        """A missing binding is a permanent config gap, not a transient outage.
+
+        The probe emits ``"not configured"`` (bypassing the classifier); it must
+        map to PRECONDITION / retryable=False, and it must surface the probe's
+        own "add a Dapr component" hint as the customer step rather than
+        discarding it behind a generic connectivity action.
+
+        Only the ``deployment`` label is exercised because only it can reach
+        this state: ``check_object_store_access`` appends the upstream probe
+        solely when ``infra.upstream_storage is not None``, so an unconfigured
+        upstream store produces no row at all rather than a not-configured one.
+        ``test_every_producer_bucket_maps_to_a_leaf`` covers the mapper's
+        label-agnostic handling directly.
+        """
+        from application_sdk.errors.categories import FailureCategory
+        from application_sdk.storage.preflight import (
+            _NOT_CONFIGURED,
+            ObjectStoreCheckResult,
+        )
+
+        handler = _StubHandler()
+        preflight = self._preflight(handler)
+        results = [
+            ObjectStoreCheckResult(
+                label="deployment",
+                binding_name="objectstore",
+                passed=False,
+                error_class=_NOT_CONFIGURED,
+                hint="Add a Dapr component named 'objectstore'.",
+            ),
+        ]
+        with mock.patch(
+            "application_sdk.execution._temporal.sdr.check_object_store_access",
+            mock.AsyncMock(return_value=results),
+        ):
+            result = await preflight(PreflightInput(credentials=[]))
+
+        row = result.checks[1]
+        assert row.error is not None
+        assert row.error.category == FailureCategory.PRECONDITION
+        assert row.error.retryable is False
+        # The probe's engineer hint becomes the customer step.
+        assert row.error.suggested_action == "Add a Dapr component named 'objectstore'."
+
+    def test_every_producer_bucket_maps_to_a_leaf(self) -> None:
+        """Every bucket the producer can emit maps to a typed, correctly-retryable leaf.
+
+        Iterates ``_OBJECT_STORE_ERROR_CLASSES``, which the producer *derives*
+        from its own rule table (plus the ``"not configured"`` path that
+        bypasses the classifier) — so adding a classifier bucket fails here
+        rather than silently falling through ``_object_store_failure`` to the
+        retryable connectivity default, which is how ``"not configured"``
+        originally slipped past it. A renamed bucket fails too: the mapper keys
+        off the literals.
+
+        Availability buckets stay retryable; a permanent config gap must not.
+        """
+        from application_sdk.execution._temporal.sdr import (
+            _OBJECT_STORE_ACTIONS,
+            _object_store_failure,
+        )
+        from application_sdk.storage.preflight import (
+            _NOT_CONFIGURED,
+            _OBJECT_STORE_ERROR_CLASSES,
+            _classify_access_error,
+        )
+
+        # The declared surface has to be the *real* one: anything the classifier
+        # returns from outside the rule table (an early return added later)
+        # escapes the loop below, so pin the two together.
+        classifier_buckets = {
+            _classify_access_error(exc)[0]
+            for exc in (
+                Exception("403 AccessDenied"),
+                Exception("401 SignatureDoesNotMatch"),
+                Exception("connection refused"),
+            )
+        }
+        assert classifier_buckets <= _OBJECT_STORE_ERROR_CLASSES
+        assert _NOT_CONFIGURED in _OBJECT_STORE_ERROR_CLASSES
+
+        for bucket in sorted(_OBJECT_STORE_ERROR_CLASSES):
+            for label in ("deployment", "upstream"):
+                err = _object_store_failure(
+                    label=label,
+                    error_class=bucket,
+                    binding_name="binding",
+                    message="failed",
+                    hint="do the thing",
+                )
+                fd = err.to_failure_details()
+                if bucket == _NOT_CONFIGURED:
+                    # A permanent config gap is never advertised as retryable,
+                    # and the probe's own hint is the customer step.
+                    assert fd.retryable is False, f"{label}/{bucket} was retryable"
+                    assert fd.suggested_action == "do the thing"
+                    continue
+                # Asserting the bucket's *own* action, not merely that some
+                # action exists: ``_object_store_failure`` defaults an unknown
+                # bucket to the connectivity entry, so a truthiness check would
+                # pass for a bucket nobody mapped.
+                assert (label, bucket) in _OBJECT_STORE_ACTIONS, (
+                    f"{label}/{bucket} has no action — _object_store_failure "
+                    "would silently serve the connectivity default"
+                )
+                assert fd.suggested_action == _OBJECT_STORE_ACTIONS[(label, bucket)]
+
+    async def test_banner_pins_object_store_over_nonfatal_secret_store(self) -> None:
+        """A non-fatal secret-store row must not become the aggregate banner."""
+        from application_sdk.errors.categories import FailureCategory
+        from application_sdk.storage.preflight import ObjectStoreCheckResult
+
+        handler = _StubHandler()
+        preflight = self._preflight(handler)
+
+        zero_resolved = SecretStoreCheckResult(
+            passed=False,
+            store_down=False,
+            fatal=False,
+            substituted=0,
+            message="Secret store is reachable, but no secret was resolved.",
+            suggested_action="Check that the configured secret keys exist.",
+            resolved={"username": "literal-user"},
+        )
+        object_store = [
+            ObjectStoreCheckResult(
+                label="deployment",
+                binding_name="objectstore",
+                passed=False,
+                error_class="permission denied",
+            ),
+        ]
+        fake_infra = mock.MagicMock()
+        fake_infra.secret_store = mock.MagicMock(name="SecretStore")
+        with (
+            mock.patch(
+                "application_sdk.execution._temporal.sdr.get_infrastructure",
+                return_value=fake_infra,
+            ),
+            mock.patch(
+                "application_sdk.execution._temporal.sdr.check_secret_store_access",
+                new=mock.AsyncMock(return_value=zero_resolved),
+            ),
+            mock.patch(
+                "application_sdk.execution._temporal.sdr.check_object_store_access",
+                mock.AsyncMock(return_value=object_store),
+            ),
+        ):
+            result = await preflight(
+                PreflightInput(agent_json={"agent-name": "acme", "secret-path": "p"})
+            )
+
+        secret_check = next(c for c in result.checks if c.name == "Secret store")
+        assert secret_check.passed is False
+        object_check = next(
+            c for c in result.checks if c.name == "Deployment object store"
+        )
+        assert object_check.passed is False
+        assert result.status == PreflightStatus.NOT_READY
+        assert result.error is not None
+        assert result.error.category == FailureCategory.PERMISSION
+        assert result.message == "Configured object store is not accessible."
+        assert result.resolved_message == "Configured object store is not accessible."
 
     async def test_failed_check_does_not_upgrade_partial(self) -> None:
         """A handler PARTIAL/NOT_READY verdict is left untouched on failure."""
@@ -803,9 +1125,12 @@ class TestSecretStoreCheckRow:
     the failure category must come from ``store_down`` (is the store the
     blocker?), not from whether a fetch happened."""
 
-    def test_store_down_is_dependency_unavailable(self) -> None:
+    def test_store_down_is_source_unavailable(self) -> None:
+        # The customer owns the secret store, so a store outage is a
+        # SourceUnavailableError (SOURCE_UNAVAILABLE / audience=USER), not the
+        # DEPENDENCY_UNAVAILABLE/PLATFORM pair that would route to the app team.
         from application_sdk.credentials.agent import SecretStoreCheckResult
-        from application_sdk.errors.categories import FailureCategory
+        from application_sdk.errors.categories import Audience, FailureCategory
 
         row = _secret_store_check_row(
             SecretStoreCheckResult(
@@ -813,12 +1138,15 @@ class TestSecretStoreCheckRow:
                 store_down=True,
                 fatal=True,
                 substituted=0,
-                message="Secret store is not reachable.",
+                message="Configured secret store is not accessible.",
+                suggested_action="Check that the secret store is running.",
             )
         )
         assert row.passed is False
         assert row.error is not None
-        assert row.error.category == FailureCategory.DEPENDENCY_UNAVAILABLE
+        assert row.error.category == FailureCategory.SOURCE_UNAVAILABLE
+        assert row.error.audience == Audience.USER
+        assert row.error.suggested_action == "Check that the secret store is running."
 
     def test_config_gap_is_precondition_not_dependency_unavailable(self) -> None:
         # A multi-key spec with no secret-path is fatal (creds can't resolve) but
@@ -839,6 +1167,29 @@ class TestSecretStoreCheckRow:
         assert row.passed is False
         assert row.error is not None
         assert row.error.category == FailureCategory.PRECONDITION
+        # A config gap is permanent — it must not be advertised as retryable.
+        assert row.error.retryable is False
+
+    def test_no_store_configured_is_a_non_retryable_precondition(self) -> None:
+        # "No secret store configured" is a deployment config gap, not a store
+        # outage: PRECONDITION / retryable=False, never a retryable
+        # SourceUnavailableError. store_down is False for exactly this reason.
+        from application_sdk.credentials.agent import SecretStoreCheckResult
+        from application_sdk.errors.categories import FailureCategory
+
+        row = _secret_store_check_row(
+            SecretStoreCheckResult(
+                passed=False,
+                store_down=False,
+                fatal=True,
+                substituted=0,
+                message="Secret store is not configured for the SDR deployment.",
+                suggested_action="Configure a secret store on the SDR deployment.",
+            )
+        )
+        assert row.error is not None
+        assert row.error.category == FailureCategory.PRECONDITION
+        assert row.error.retryable is False
 
     def test_passed_row_has_no_error(self) -> None:
         from application_sdk.credentials.agent import SecretStoreCheckResult

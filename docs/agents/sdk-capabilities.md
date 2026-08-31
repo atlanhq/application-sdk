@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.28.3
-source-sha:    552d36d15f0be66f01885adcc7b51c20e9406128
-source-date:   2026-08-25T22:34:28+01:00
+sdk-version:   3.30.0
+source-sha:    17caa4a9026ff1093521f9cc70e722c574150e7c
+source-date:   2026-08-29T17:15:36+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -29,12 +29,12 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
-| `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 28 |
+| `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 29 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 97 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 297 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -2628,6 +2628,13 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/observability/events.py`
 
+#### `PREFLIGHT_CHECK_EVENT`
+
+- **Import:** `from application_sdk.observability.events import PREFLIGHT_CHECK_EVENT`
+- **Signature:** `PREFLIGHT_CHECK_EVENT: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/events.py`
+
 #### `PREFLIGHT_OUTCOME_EVENT`
 
 - **Import:** `from application_sdk.observability.events import PREFLIGHT_OUTCOME_EVENT`
@@ -3080,13 +3087,42 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 ### Classes
 
+#### `AdminIdentity`
+
+- **Import:** `from application_sdk.testing.harness.atlas import AdminIdentity`
+- **Signature:** `class AdminIdentity(*, roles: tuple[str, ...] = (), users: tuple[str, ...] = ()) -> None`
+- **Summary:** Who may administer a Connection this run creates.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
+#### `AEClient`
+
+- **Import:** `from application_sdk.testing.harness.automation_engine import AEClient`
+- **Also importable from:** `application_sdk.testing.harness.automation_engine.client`
+- **Signature:** `class AEClient(tenant_url: str, api_token: str)`
+- **Summary:** Async client for the Automation Engine endpoints a full-DAG run uses.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/client.py`
+
+#### `AERunHandle`
+
+- **Import:** `from application_sdk.testing.harness.starters import AERunHandle`
+- **Signature:** `class AERunHandle(*, workflow_slug: str, run_id: str, seed_version: int | None = None)`
+- **Summary:** A run started through the Automation Engine.
+- **Defined in:** `application_sdk/testing/harness/starters/_specs.py`
+
 #### `AEWorkflowClient`
 
 - **Import:** `from application_sdk.testing.full_dag import AEWorkflowClient`
-- **Also importable from:** `application_sdk.testing.full_dag.client`
+- **Also importable from:** `application_sdk.testing.e2e.client`, `application_sdk.testing.full_dag.client`
 - **Signature:** `class AEWorkflowClient(tenant_url: str, ...)`
-- **Summary:** Thin wrapper over the three Atlan endpoints used by full-DAG tests.
+- **Summary:** Thin sync wrapper over the harness's AE and Atlas readers.
 - **Defined in:** `application_sdk/testing/e2e/client.py`
+
+#### `AEWorkflowSpec`
+
+- **Import:** `from application_sdk.testing.harness.starters import AEWorkflowSpec`
+- **Signature:** `class AEWorkflowSpec(*, ...)`
+- **Summary:** A workflow to start through the Automation Engine.
+- **Defined in:** `application_sdk/testing/harness/starters/_specs.py`
 
 #### `APIType`
 
@@ -3098,9 +3134,39 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `AppConfig`
 
 - **Import:** `from application_sdk.testing.e2e import AppConfig`
-- **Signature:** `class AppConfig(app_name: str, ...)`
-- **Summary:** Configuration for an app under K8s e2e testing.
+- **Also importable from:** `application_sdk.testing.e2e.config`
+- **Signature:** `class AppConfig(app_name: str = '', ...)`
+- **Summary:** Deprecated (removed in v4.0) — use :class:`AppUnderTest`.
 - **Defined in:** `application_sdk/testing/e2e/config.py`
+
+#### `AppExecutor`
+
+- **Import:** `from application_sdk.testing.integration.fixtures import AppExecutor`
+- **Signature:** `class AppExecutor(backend: TemporalExecutorBackend) -> None`
+- **Summary:** Thin shim over :class:`TemporalExecutorBackend` for integration suites.
+- **Defined in:** `application_sdk/testing/integration/fixtures.py`
+
+#### `AppNotReadyError`
+
+- **Import:** `from application_sdk.testing.harness.automation_engine import AppNotReadyError`
+- **Signature:** `class AppNotReadyError(*, ...)`
+- **Summary:** The tenant-installed app pod did not accept connections before AE submit.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/_errors.py`
+
+#### `AppsReads`
+
+- **Import:** `from application_sdk.testing.harness.cluster.kube import AppsReads`
+- **Signature:** `class AppsReads`
+- **Summary:** The read verbs this backend uses from ``AppsV1Api``.
+- **Defined in:** `application_sdk/testing/harness/cluster/kube.py`
+
+#### `AppUnderTest`
+
+- **Import:** `from application_sdk.testing.harness import AppUnderTest`
+- **Also importable from:** `application_sdk.testing.harness.spec`
+- **Signature:** `class AppUnderTest(app_name: str, namespace: str, handler_port: int = 8000)`
+- **Summary:** Where to find the app under test inside a cluster.
+- **Defined in:** `application_sdk/testing/harness/spec.py`
 
 #### `AssetDiff`
 
@@ -3109,6 +3175,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class AssetDiff(asset_type: str, ...)`
 - **Summary:** A single difference found between expected and actual metadata.
 - **Defined in:** `application_sdk/testing/integration/comparison.py`
+
+#### `AssetExpectations`
+
+- **Import:** `from application_sdk.testing.harness.expectations import AssetExpectations`
+- **Signature:** `class AssetExpectations(*, ...)`
+- **Summary:** What a run is expected to have landed in Atlas.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 #### `AssetValidationFailure`
 
@@ -3124,6 +3197,41 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Aggregate outcome of validating a batch of transformed assets.
 - **Defined in:** `application_sdk/validation/assets.py`
 
+#### `AtlanAEWorkflowAlreadyActiveError`
+
+- **Import:** `from application_sdk.testing.harness.automation_engine import AtlanAEWorkflowAlreadyActiveError`
+- **Signature:** `class AtlanAEWorkflowAlreadyActiveError(*, ...)`
+- **Summary:** A run for the AE workflow is already active, so a new submit was rejected.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/_errors.py`
+
+#### `AtlanApiHttpError`
+
+- **Import:** `from application_sdk.testing.harness.automation_engine import AtlanApiHttpError`
+- **Signature:** `class AtlanApiHttpError(*, ...)`
+- **Summary:** Non-2xx response from the Atlan Automation Engine API.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/_errors.py`
+
+#### `AtlanApiResponseInvariantError`
+
+- **Import:** `from application_sdk.testing.harness.automation_engine import AtlanApiResponseInvariantError`
+- **Signature:** `class AtlanApiResponseInvariantError(*, ...)`
+- **Summary:** AE API returned 2xx but the expected field (slug, run_id) was absent.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/_errors.py`
+
+#### `AtlanApiTimeoutError`
+
+- **Import:** `from application_sdk.testing.harness.automation_engine import AtlanApiTimeoutError`
+- **Signature:** `class AtlanApiTimeoutError(*, ...)`
+- **Summary:** No response received from the AE API before the timeout elapsed.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/_errors.py`
+
+#### `AutomationEngineNotDispatchingError`
+
+- **Import:** `from application_sdk.testing.harness.automation_engine import AutomationEngineNotDispatchingError`
+- **Signature:** `class AutomationEngineNotDispatchingError(*, ...)`
+- **Summary:** The AE run never left ``Pending`` within the stall-grace window.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/_errors.py`
+
 #### `BaseE2ETest`
 
 - **Import:** `from application_sdk.testing.e2e import BaseE2ETest`
@@ -3135,7 +3243,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Import:** `from application_sdk.testing.full_dag import BaseFullDAGE2ETest`
 - **Signature:** `class BaseFullDAGE2ETest`
-- **Summary:** Deprecated (v4.0) — pytest base; use ``application_sdk.testing.e2e.BaseE2ETest``.
+- **Summary:** Deprecated: pytest base — use ``application_sdk.testing.e2e.BaseE2ETest``.
 - **Defined in:** `application_sdk/testing/full_dag/base.py`
 
 #### `BaseIntegrationTest`
@@ -3149,8 +3257,32 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Import:** `from application_sdk.testing.sdr import BaseSDRIntegrationTest`
 - **Signature:** `class BaseSDRIntegrationTest`
-- **Summary:** Deprecated: use ``application_sdk.testing.e2e.BaseE2ETest`` with
+- **Summary:** Deprecated: migrate per concern — SDR is a deployment mode, not a test tier.
 - **Defined in:** `application_sdk/testing/sdr/base.py`
+
+#### `Budget`
+
+- **Import:** `from application_sdk.testing.harness import Budget`
+- **Also importable from:** `application_sdk.testing.harness.budgets`
+- **Signature:** `class Budget(*, ...)`
+- **Summary:** Everything a single bounded wait is allowed to spend.
+- **Defined in:** `application_sdk/testing/harness/budgets.py`
+
+#### `BudgetProfile`
+
+- **Import:** `from application_sdk.testing.harness import BudgetProfile`
+- **Also importable from:** `application_sdk.testing.harness.budgets`
+- **Signature:** `class BudgetProfile(*, name: str, budgets: Mapping[str, Budget], requests: Mapping[str, RequestBudget] = dict())`
+- **Summary:** A named set of budgets for one execution tier.
+- **Defined in:** `application_sdk/testing/harness/budgets.py`
+
+#### `Call`
+
+- **Import:** `from application_sdk.testing.harness import Call`
+- **Also importable from:** `application_sdk.testing.harness.budgets`
+- **Signature:** `class Call`
+- **Summary:** The outbound call shapes a run makes, as profile keys.
+- **Defined in:** `application_sdk/testing/harness/budgets.py`
 
 #### `CategoryResult`
 
@@ -3159,35 +3291,93 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Comparison result for a single category (e.g., table, column).
 - **Defined in:** `application_sdk/testing/parity/models.py`
 
+#### `ClusterReader`
+
+- **Import:** `from application_sdk.testing.harness.cluster import ClusterReader`
+- **Signature:** `class ClusterReader`
+- **Summary:** Read built-in Kubernetes state. No mutation, by decision.
+- **Defined in:** `application_sdk/testing/harness/cluster/_protocols.py`
+
+#### `ClusterReadFailedError`
+
+- **Import:** `from application_sdk.testing.harness.cluster import ClusterReadFailedError`
+- **Signature:** `class ClusterReadFailedError(*, ...)`
+- **Summary:** A cluster read reached the API server and did not come back with data.
+- **Defined in:** `application_sdk/testing/harness/cluster/_errors.py`
+
+#### `ConnectionIdentity`
+
+- **Import:** `from application_sdk.testing.harness.identity import ConnectionIdentity`
+- **Signature:** `class ConnectionIdentity(qualified_name: str, display_name: str) -> None`
+- **Summary:** The ephemeral connection one harness run creates and then purges.
+- **Defined in:** `application_sdk/testing/harness/identity.py`
+
+#### `CoreReads`
+
+- **Import:** `from application_sdk.testing.harness.cluster.kube import CoreReads`
+- **Signature:** `class CoreReads`
+- **Summary:** The read verbs this backend uses from ``CoreV1Api``.
+- **Defined in:** `application_sdk/testing/harness/cluster/kube.py`
+
+#### `CustomObjectReads`
+
+- **Import:** `from application_sdk.testing.harness.cluster.kube import CustomObjectReads`
+- **Signature:** `class CustomObjectReads`
+- **Summary:** The read verbs this backend uses from ``CustomObjectsApi``.
+- **Defined in:** `application_sdk/testing/harness/cluster/kube.py`
+
+#### `CustomResourceDefinitionReads`
+
+- **Import:** `from application_sdk.testing.harness.cluster.kube import CustomResourceDefinitionReads`
+- **Signature:** `class CustomResourceDefinitionReads`
+- **Summary:** The read verb this backend uses from ``ApiextensionsV1Api``.
+- **Defined in:** `application_sdk/testing/harness/cluster/kube.py`
+
+#### `CustomResourceReader`
+
+- **Import:** `from application_sdk.testing.harness.cluster import CustomResourceReader`
+- **Signature:** `class CustomResourceReader`
+- **Summary:** Read custom resources, parameterised by :class:`ResourceRef`.
+- **Defined in:** `application_sdk/testing/harness/cluster/_protocols.py`
+
 #### `DAGNodeResult`
 
-- **Import:** `from application_sdk.testing.full_dag.client import DAGNodeResult`
+- **Import:** `from application_sdk.testing.e2e.client import DAGNodeResult`
+- **Also importable from:** `application_sdk.testing.full_dag.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
 - **Signature:** `class DAGNodeResult(name: str, ...)`
 - **Summary:** One row of the per-node breakdown returned by ``native-status``.
-- **Defined in:** `application_sdk/testing/e2e/client.py`
+- **Defined in:** `application_sdk/testing/harness/automation_engine/wire.py`
 
 #### `DAGNodeStatus`
 
 - **Import:** `from application_sdk.testing.full_dag import DAGNodeStatus`
-- **Also importable from:** `application_sdk.testing.full_dag.client`
+- **Also importable from:** `application_sdk.testing.e2e.client`, `application_sdk.testing.full_dag.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
 - **Signature:** `class DAGNodeStatus`
 - **Summary:** Status values returned by ``native-status`` per DAG node.
-- **Defined in:** `application_sdk/testing/e2e/client.py`
+- **Defined in:** `application_sdk/testing/harness/automation_engine/wire.py`
+
+#### `DAGProgressStalledError`
+
+- **Import:** `from application_sdk.testing.harness.automation_engine import DAGProgressStalledError`
+- **Signature:** `class DAGProgressStalledError(*, ...)`
+- **Summary:** A DAG node ran without any state transition for the progress window.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/_errors.py`
 
 #### `DAGRunResult`
 
-- **Import:** `from application_sdk.testing.full_dag.client import DAGRunResult`
+- **Import:** `from application_sdk.testing.e2e.client import DAGRunResult`
+- **Also importable from:** `application_sdk.testing.full_dag.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
 - **Signature:** `class DAGRunResult(run_id: str, ...)`
-- **Summary:** Full result returned by :meth:`AEWorkflowClient.poll_native_status`.
-- **Defined in:** `application_sdk/testing/e2e/client.py`
+- **Summary:** Full result of one ``native-status`` read.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/wire.py`
 
 #### `DAGRunStatus`
 
 - **Import:** `from application_sdk.testing.full_dag import DAGRunStatus`
-- **Also importable from:** `application_sdk.testing.full_dag.client`
+- **Also importable from:** `application_sdk.testing.e2e.client`, `application_sdk.testing.full_dag.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
 - **Signature:** `class DAGRunStatus`
 - **Summary:** Top-level status of an AE workflow run.
-- **Defined in:** `application_sdk/testing/e2e/client.py`
+- **Defined in:** `application_sdk/testing/harness/automation_engine/wire.py`
 
 #### `DataForgeSource`
 
@@ -3196,12 +3386,85 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** The integration source's credential fields, read uniformly from env.
 - **Defined in:** `application_sdk/testing/integration/source.py`
 
+#### `DeploymentState`
+
+- **Import:** `from application_sdk.testing.harness.cluster import DeploymentState`
+- **Signature:** `class DeploymentState(*, name: str, namespace: str, desired_replicas: int, ready_replicas: int, updated_replicas: int)`
+- **Summary:** One Deployment's replica counts.
+- **Defined in:** `application_sdk/testing/harness/cluster/_states.py`
+
+#### `EvidenceBundle`
+
+- **Import:** `from application_sdk.testing.harness.evidence import EvidenceBundle`
+- **Signature:** `class EvidenceBundle(*, ...)`
+- **Summary:** Everything worth keeping about one harness run.
+- **Defined in:** `application_sdk/testing/harness/evidence.py`
+
+#### `EvidenceLog`
+
+- **Import:** `from application_sdk.testing.harness.fixtures import EvidenceLog`
+- **Signature:** `class EvidenceLog(label: str) -> None`
+- **Summary:** A mutable builder for one test's :class:`EvidenceBundle`.
+- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+
+#### `Expired`
+
+- **Import:** `from application_sdk.testing.harness import Expired`
+- **Also importable from:** `application_sdk.testing.harness.outcome`
+- **Signature:** `class Expired(*, label: str, attempts: int, elapsed: timedelta, budget: timedelta, last: T | None = None)`
+- **Summary:** The budget ran out while work was still progressing.
+- **Defined in:** `application_sdk/testing/harness/outcome.py`
+
+#### `FakeRequest`
+
+- **Import:** `from application_sdk.testing import FakeRequest`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `class FakeRequest(method: str, ...)`
+- **Summary:** One inbound request, parsed into the pieces a handler actually wants.
+- **Defined in:** `application_sdk/testing/fake_source.py`
+
+#### `FakeResponse`
+
+- **Import:** `from application_sdk.testing import FakeResponse`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `class FakeResponse(status: int = 200, ...)`
+- **Summary:** What a handler returns: a status, a body, and optional headers.
+- **Defined in:** `application_sdk/testing/fake_source.py`
+
+#### `FakeSourceNotRunningError`
+
+- **Import:** `from application_sdk.testing.fake_source import FakeSourceNotRunningError`
+- **Signature:** `class FakeSourceNotRunningError(*, ...)`
+- **Summary:** ``base_url`` or ``port`` was read before the server was started.
+- **Defined in:** `application_sdk/testing/_errors.py`
+
+#### `FakeSourceRouteError`
+
+- **Import:** `from application_sdk.testing.fake_source import FakeSourceRouteError`
+- **Signature:** `class FakeSourceRouteError(*, ...)`
+- **Summary:** A route was registered with no HTTP methods.
+- **Defined in:** `application_sdk/testing/_errors.py`
+
 #### `FieldDiff`
 
 - **Import:** `from application_sdk.testing.parity import FieldDiff`
 - **Signature:** `class FieldDiff(field_path: str, baseline_value: Any, candidate_value: Any)`
 - **Summary:** A single field-level difference between baseline and candidate.
 - **Defined in:** `application_sdk/testing/parity/models.py`
+
+#### `Finding`
+
+- **Import:** `from application_sdk.testing.harness.expectations import Finding`
+- **Signature:** `class Finding(*, subject: str, detail: str, expectation: str) -> None`
+- **Summary:** One unmet expectation, in a form a report can render without re-parsing.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `FixtureNotConfiguredError`
+
+- **Import:** `from application_sdk.testing.harness import FixtureNotConfiguredError`
+- **Signature:** `class FixtureNotConfiguredError(*, ...)`
+- **Summary:** A composer requested a harness fixture without declaring what it needs.
+- **Defined in:** `application_sdk/testing/harness/_errors.py`
 
 #### `FullDAGOutcome`
 
@@ -3217,12 +3480,124 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Summary of all differences between expected and actual metadata.
 - **Defined in:** `application_sdk/testing/integration/comparison.py`
 
+#### `GateReport`
+
+- **Import:** `from application_sdk.testing.harness import GateReport`
+- **Also importable from:** `application_sdk.testing.harness.preconditions`
+- **Signature:** `class GateReport(*, verdict: Verdict, outcomes: tuple[Outcome[Any], ...] = tuple())`
+- **Summary:** What the gate observed, and the one verdict it reduces to.
+- **Defined in:** `application_sdk/testing/harness/preconditions.py`
+
+#### `HarnessNotBuiltError`
+
+- **Import:** `from application_sdk.testing.harness import HarnessNotBuiltError`
+- **Signature:** `class HarnessNotBuiltError(*, ...)`
+- **Summary:** A scaffolded harness function whose implementation has not landed yet.
+- **Defined in:** `application_sdk/testing/harness/_errors.py`
+
+#### `HealthReading`
+
+- **Import:** `from application_sdk.testing.harness import HealthReading`
+- **Also importable from:** `application_sdk.testing.harness.preconditions`
+- **Signature:** `class HealthReading(*, status: int | None = None, error: str = '')`
+- **Summary:** One reading of an HTTP health endpoint.
+- **Defined in:** `application_sdk/testing/harness/preconditions.py`
+
+#### `HttpFakeSource`
+
+- **Import:** `from application_sdk.testing import HttpFakeSource`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `class HttpFakeSource(*, ...)`
+- **Summary:** A loopback HTTP server that replays a connector's reconstructed responses.
+- **Defined in:** `application_sdk/testing/fake_source.py`
+
+#### `HttpFakeSourceFactory`
+
+- **Import:** `from application_sdk.testing import HttpFakeSourceFactory`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `class HttpFakeSourceFactory()`
+- **Summary:** The fakes one pytest session built, owned in one place.
+- **Defined in:** `application_sdk/testing/fake_source.py`
+
+#### `HttpRequest`
+
+- **Import:** `from application_sdk.testing.harness.cluster import HttpRequest`
+- **Signature:** `class HttpRequest(*, ...)`
+- **Summary:** An HTTP call to make against a :class:`ServiceTarget`.
+- **Defined in:** `application_sdk/testing/harness/cluster/_states.py`
+
+#### `HttpResponse`
+
+- **Import:** `from application_sdk.testing.harness.cluster import HttpResponse`
+- **Signature:** `class HttpResponse(*, status: int, body: Any | None = None, text: str = '')`
+- **Summary:** What came back.
+- **Defined in:** `application_sdk/testing/harness/cluster/_states.py`
+
+#### `HttpRunHandle`
+
+- **Import:** `from application_sdk.testing.harness.starters import HttpRunHandle`
+- **Signature:** `class HttpRunHandle(*, workflow_id: str)`
+- **Summary:** A run started through the app's handler Service.
+- **Defined in:** `application_sdk/testing/harness/starters/_specs.py`
+
+#### `HttpWorkflowSpec`
+
+- **Import:** `from application_sdk.testing.harness.starters import HttpWorkflowSpec`
+- **Signature:** `class HttpWorkflowSpec(*, target: ServiceTarget, workflow_name: str, body: Mapping[str, object] = dict())`
+- **Summary:** A workflow to start by calling the app's own handler Service.
+- **Defined in:** `application_sdk/testing/harness/starters/_specs.py`
+
+#### `Indeterminate`
+
+- **Import:** `from application_sdk.testing.harness import Indeterminate`
+- **Also importable from:** `application_sdk.testing.harness.outcome`
+- **Signature:** `class Indeterminate(*, ...)`
+- **Summary:** The wait could not reach a verdict — the probe itself failed.
+- **Defined in:** `application_sdk/testing/harness/outcome.py`
+
 #### `IntegrationTestClient`
 
 - **Import:** `from application_sdk.testing.integration import IntegrationTestClient`
 - **Signature:** `class IntegrationTestClient(host: str, version: str = 'v1', workflow_endpoint: str = '/start', timeout: int = 30)`
 - **Summary:** Client for integration testing of the Core 3 APIs.
 - **Defined in:** `application_sdk/testing/integration/client.py`
+
+#### `KitOptions`
+
+- **Import:** `from application_sdk.testing.integration.fixtures import KitOptions`
+- **Signature:** `class KitOptions(data_converter: bool = True, ...)`
+- **Summary:** Knobs for the fixture set. Override ``integration_options`` to change one.
+- **Defined in:** `application_sdk/testing/integration/fixtures.py`
+
+#### `KubeconfigUnavailableError`
+
+- **Import:** `from application_sdk.testing.harness.cluster import KubeconfigUnavailableError`
+- **Signature:** `class KubeconfigUnavailableError(*, ...)`
+- **Summary:** No usable kubeconfig, or the named context is not in it.
+- **Defined in:** `application_sdk/testing/harness/cluster/_errors.py`
+
+#### `KubernetesApis`
+
+- **Import:** `from application_sdk.testing.harness.cluster import KubernetesApis`
+- **Also importable from:** `application_sdk.testing.harness.cluster.kube`
+- **Signature:** `class KubernetesApis(*, ...)`
+- **Summary:** One thread's API objects, plus the model-to-dict conversion they share.
+- **Defined in:** `application_sdk/testing/harness/cluster/kube.py`
+
+#### `KubernetesExtraMissingError`
+
+- **Import:** `from application_sdk.testing.harness.cluster import KubernetesExtraMissingError`
+- **Signature:** `class KubernetesExtraMissingError(*, ...)`
+- **Summary:** The typed Kubernetes client is not installed in this environment.
+- **Defined in:** `application_sdk/testing/harness/cluster/_errors.py`
+
+#### `KubernetesReader`
+
+- **Import:** `from application_sdk.testing.harness.cluster import KubernetesReader`
+- **Also importable from:** `application_sdk.testing.harness.cluster.kube`
+- **Signature:** `class KubernetesReader(*, ...)`
+- **Summary:** Read cluster state through the in-process typed client.
+- **Defined in:** `application_sdk/testing/harness/cluster/kube.py`
 
 #### `Lazy`
 
@@ -3234,9 +3609,30 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `LogCollector`
 
 - **Import:** `from application_sdk.testing.e2e import LogCollector`
-- **Signature:** `class LogCollector(namespace: str, output_dir: Path)`
-- **Summary:** Collect kubectl logs, pod descriptions, and events from a namespace.
+- **Signature:** `class LogCollector(namespace: str, output_dir: Path, *, reader: KubernetesReader | None = None)`
+- **Summary:** Collect container logs, pod descriptions, and events from a namespace.
 - **Defined in:** `application_sdk/testing/e2e/logs.py`
+
+#### `LogLine`
+
+- **Import:** `from application_sdk.testing.harness.cluster import LogLine`
+- **Signature:** `class LogLine(*, pod: str, container: str, message: str, timestamp: datetime | None = None)`
+- **Summary:** One line of container output.
+- **Defined in:** `application_sdk/testing/harness/cluster/_states.py`
+
+#### `Minter`
+
+- **Import:** `from application_sdk.testing.harness.identity import Minter`
+- **Signature:** `class Minter(*, clock: Callable[[], int], randbelow: Callable[[int], int], run_id_env: str | None = None) -> None`
+- **Summary:** Mints the per-run identifiers a harness run needs.
+- **Defined in:** `application_sdk/testing/harness/identity.py`
+
+#### `MissingTenantEnvError`
+
+- **Import:** `from application_sdk.testing.harness import MissingTenantEnvError`
+- **Signature:** `class MissingTenantEnvError(*, ...)`
+- **Summary:** The environment carries no tenant for the harness to run against.
+- **Defined in:** `application_sdk/testing/harness/_errors.py`
 
 #### `MockBinding`
 
@@ -3280,12 +3676,138 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** In-memory state store with call-tracking for unit tests.
 - **Defined in:** `application_sdk/testing/mocks.py`
 
+#### `NeverStarted`
+
+- **Import:** `from application_sdk.testing.harness import NeverStarted`
+- **Also importable from:** `application_sdk.testing.harness.outcome`
+- **Signature:** `class NeverStarted(*, label: str, attempts: int, elapsed: timedelta, grace: timedelta, last: T | None = None)`
+- **Summary:** Nothing ever started, so the budget was spent waiting for work to begin.
+- **Defined in:** `application_sdk/testing/harness/outcome.py`
+
+#### `NoWorkerOnTaskQueueError`
+
+- **Import:** `from application_sdk.testing.harness.automation_engine import NoWorkerOnTaskQueueError`
+- **Signature:** `class NoWorkerOnTaskQueueError(*, ...)`
+- **Summary:** No worker started any DAG node while the AE run was live.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/_errors.py`
+
+#### `PodPhase`
+
+- **Import:** `from application_sdk.testing.harness.cluster import PodPhase`
+- **Signature:** `class PodPhase`
+- **Summary:** Kubernetes pod phase, as the API server reports it.
+- **Defined in:** `application_sdk/testing/harness/cluster/_states.py`
+
+#### `PodState`
+
+- **Import:** `from application_sdk.testing.harness.cluster import PodState`
+- **Signature:** `class PodState(*, ...)`
+- **Summary:** One pod, reduced to what a harness assertion reads.
+- **Defined in:** `application_sdk/testing/harness/cluster/_states.py`
+
+#### `PollerInfo`
+
+- **Import:** `from application_sdk.testing.harness.temporal import PollerInfo`
+- **Signature:** `class PollerInfo(*, ...)`
+- **Summary:** One worker seen polling a task queue.
+- **Defined in:** `application_sdk/testing/harness/temporal/_states.py`
+
+#### `PollerReading`
+
+- **Import:** `from application_sdk.testing.harness import PollerReading`
+- **Also importable from:** `application_sdk.testing.harness.preconditions`
+- **Signature:** `class PollerReading(*, pollers: tuple[PollerInfo, ...] = tuple(), stale: tuple[PollerInfo, ...] = tuple())`
+- **Summary:** One reading of who is polling a task queue.
+- **Defined in:** `application_sdk/testing/harness/preconditions.py`
+
+#### `PortForward`
+
+- **Import:** `from application_sdk.testing.e2e.portforward import PortForward`
+- **Also importable from:** `application_sdk.testing.harness.cluster`
+- **Signature:** `class PortForward(namespace: str, service: str, port: int, *, timeout: float = 30.0, kube_context: str | None = None)`
+- **Summary:** One ``kubectl port-forward`` tunnel to a Service, and calls over it.
+- **Defined in:** `application_sdk/testing/harness/cluster/_portforward.py`
+
+#### `PreconditionCheck`
+
+- **Import:** `from application_sdk.testing.harness import PreconditionCheck`
+- **Also importable from:** `application_sdk.testing.harness.preconditions`
+- **Signature:** `class PreconditionCheck(*, label: str, run: Callable[[], Coroutine[Any, Any, Outcome[Any]]])`
+- **Summary:** One thing that must be true before a scenario starts.
+- **Defined in:** `application_sdk/testing/harness/preconditions.py`
+
+#### `PreconditionsFailedError`
+
+- **Import:** `from application_sdk.testing.harness import PreconditionsFailedError`
+- **Signature:** `class PreconditionsFailedError(*, ...)`
+- **Summary:** The scenario's starting state was read, and it was not fit to test on.
+- **Defined in:** `application_sdk/testing/harness/_errors.py`
+
+#### `PreconditionsIndeterminateError`
+
+- **Import:** `from application_sdk.testing.harness import PreconditionsIndeterminateError`
+- **Signature:** `class PreconditionsIndeterminateError(*, ...)`
+- **Summary:** The scenario's starting state could not be read, so nothing was dispatched.
+- **Defined in:** `application_sdk/testing/harness/_errors.py`
+
+#### `PublishedVersion`
+
+- **Import:** `from application_sdk.testing.e2e.client import PublishedVersion`
+- **Also importable from:** `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
+- **Signature:** `class PublishedVersion(version: int | None, dag: dict[str, Any])`
+- **Summary:** The workflow version AE currently serves as published, and its DAG.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/wire.py`
+
+#### `PurgeReport`
+
+- **Import:** `from application_sdk.testing.harness.teardown import PurgeReport`
+- **Signature:** `class PurgeReport(*, purged: int = 0, orphaned: Sequence[str] = tuple(), errors: Sequence[str] = tuple()) -> None`
+- **Summary:** What a purge managed to delete, and what it did not.
+- **Defined in:** `application_sdk/testing/harness/teardown.py`
+
+#### `QueueWorkflowSpec`
+
+- **Import:** `from application_sdk.testing.harness.starters import QueueWorkflowSpec`
+- **Signature:** `class QueueWorkflowSpec(*, ...)`
+- **Summary:** A workflow to dispatch straight onto a Temporal task queue.
+- **Defined in:** `application_sdk/testing/harness/starters/_specs.py`
+
 #### `ReferentialFailure`
 
 - **Import:** `from application_sdk.testing.integration import ReferentialFailure`
 - **Signature:** `class ReferentialFailure(missing_type_name: str, ...)`
 - **Summary:** A relationship reference whose target asset is absent from the batch.
 - **Defined in:** `application_sdk/validation/assets.py`
+
+#### `RequestBudget`
+
+- **Import:** `from application_sdk.testing.harness import RequestBudget`
+- **Also importable from:** `application_sdk.testing.harness.budgets`
+- **Signature:** `class RequestBudget(*, ...)`
+- **Summary:** Everything one outbound call, including its retries, is allowed to spend.
+- **Defined in:** `application_sdk/testing/harness/budgets.py`
+
+#### `RequestDelivery`
+
+- **Import:** `from application_sdk.testing.harness.automation_engine import RequestDelivery`
+- **Signature:** `class RequestDelivery`
+- **Summary:** Whether a failed HTTP request can have taken effect at the origin.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/_errors.py`
+
+#### `ResourceRef`
+
+- **Import:** `from application_sdk.testing.harness.cluster import ResourceRef`
+- **Signature:** `class ResourceRef(group: str, version: str, plural: str)`
+- **Summary:** Identifies a custom-resource kind by its API coordinates.
+- **Defined in:** `application_sdk/testing/harness/cluster/_states.py`
+
+#### `RunLookup`
+
+- **Import:** `from application_sdk.testing.e2e.client import RunLookup`
+- **Also importable from:** `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.retry`
+- **Signature:** `class RunLookup(run_id: str | None = None, conclusive: bool = False)`
+- **Summary:** What a read of AE's run list learned about a run we expected to exist.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/retry.py`
 
 #### `RunMode`
 
@@ -3309,11 +3831,33 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Result of executing a single scenario.
 - **Defined in:** `application_sdk/testing/integration/models.py`
 
+#### `SeededWorkflow`
+
+- **Import:** `from application_sdk.testing.harness.starters import SeededWorkflow`
+- **Signature:** `class SeededWorkflow(*, slug: str, seed_version: int | None = None)`
+- **Summary:** An AE workflow with a published version, ready to be submitted against.
+- **Defined in:** `application_sdk/testing/harness/starters/_specs.py`
+
+#### `ServiceTarget`
+
+- **Import:** `from application_sdk.testing.harness.cluster import ServiceTarget`
+- **Signature:** `class ServiceTarget(*, namespace: str, service: str, port: int)`
+- **Summary:** A Service and port to reach, however the backend chooses to reach it.
+- **Defined in:** `application_sdk/testing/harness/cluster/_states.py`
+
+#### `Settled`
+
+- **Import:** `from application_sdk.testing.harness import Settled`
+- **Also importable from:** `application_sdk.testing.harness.outcome`
+- **Signature:** `class Settled(*, label: str, attempts: int, elapsed: timedelta, value: T)`
+- **Summary:** The probe reached the settled state inside its budget.
+- **Defined in:** `application_sdk/testing/harness/outcome.py`
+
 #### `SQLAppE2EFullTest`
 
 - **Import:** `from application_sdk.testing.full_dag import SQLAppE2EFullTest`
 - **Signature:** `class SQLAppE2EFullTest`
-- **Summary:** Deprecated (v4.0) — SQL full-DAG base; use ``application_sdk.testing.e2e.SQLAppE2ETest``.
+- **Summary:** Deprecated: SQL full-DAG base — use ``application_sdk.testing.e2e.SQLAppE2ETest``.
 - **Defined in:** `application_sdk/testing/full_dag/sql_app.py`
 
 #### `SQLAppE2ETest`
@@ -3323,7 +3867,224 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Full-DAG e2e harness pre-wired for SQL connectors.
 - **Defined in:** `application_sdk/testing/e2e/sql_app.py`
 
+#### `Stalled`
+
+- **Import:** `from application_sdk.testing.harness import Stalled`
+- **Also importable from:** `application_sdk.testing.harness.outcome`
+- **Signature:** `class Stalled(*, ...)`
+- **Summary:** Work started, then stopped making observable progress.
+- **Defined in:** `application_sdk/testing/harness/outcome.py`
+
+#### `SubmitRetry`
+
+- **Import:** `from application_sdk.testing.harness.starters import SubmitRetry`
+- **Signature:** `class SubmitRetry(*, retries: int, sleep_seconds: int)`
+- **Summary:** How hard the AE submit tries before it gives up.
+- **Defined in:** `application_sdk/testing/harness/starters/_specs.py`
+
+#### `Substrate`
+
+- **Import:** `from application_sdk.testing.harness import Substrate`
+- **Also importable from:** `application_sdk.testing.harness.substrate`
+- **Signature:** `class Substrate`
+- **Summary:** Where the code driving the harness is running, relative to the app.
+- **Defined in:** `application_sdk/testing/harness/substrate.py`
+
+#### `SubstrateHasNoClusterError`
+
+- **Import:** `from application_sdk.testing.harness import SubstrateHasNoClusterError`
+- **Signature:** `class SubstrateHasNoClusterError(*, ...)`
+- **Summary:** A cluster read was requested on a substrate that has no cluster.
+- **Defined in:** `application_sdk/testing/harness/_errors.py`
+
+#### `SyncBridgeInAsyncContextError`
+
+- **Import:** `from application_sdk.testing.harness import SyncBridgeInAsyncContextError`
+- **Signature:** `class SyncBridgeInAsyncContextError(*, ...)`
+- **Summary:** :func:`~application_sdk.testing.harness.run_sync` was called from a running loop.
+- **Defined in:** `application_sdk/testing/harness/_errors.py`
+
+#### `TaskQueueType`
+
+- **Import:** `from application_sdk.testing.harness.temporal import TaskQueueType`
+- **Signature:** `class TaskQueueType`
+- **Summary:** Which half of a task queue a poller is holding.
+- **Defined in:** `application_sdk/testing/harness/temporal/_states.py`
+
+#### `TemporalConnectFailedError`
+
+- **Import:** `from application_sdk.testing.harness.temporal import TemporalConnectFailedError`
+- **Signature:** `class TemporalConnectFailedError(*, ...)`
+- **Summary:** Could not establish a client against the Temporal frontend.
+- **Defined in:** `application_sdk/testing/harness/temporal/_errors.py`
+
+#### `TemporalConnection`
+
+- **Import:** `from application_sdk.testing.harness.temporal import TemporalConnection`
+- **Also importable from:** `application_sdk.testing.harness.temporal.client`
+- **Signature:** `class TemporalConnection(*, client: Client, namespace: str, address: str, close: Callable[[], Awaitable[None]] = _noop)`
+- **Summary:** One loop's client, plus whatever transport is holding it up.
+- **Defined in:** `application_sdk/testing/harness/temporal/client.py`
+
+#### `TemporalReader`
+
+- **Import:** `from application_sdk.testing.harness.temporal import TemporalReader`
+- **Signature:** `class TemporalReader`
+- **Summary:** Read Temporal state. No mutation, by decision.
+- **Defined in:** `application_sdk/testing/harness/temporal/_protocols.py`
+
+#### `TemporalReaderLoopMismatchError`
+
+- **Import:** `from application_sdk.testing.harness.temporal import TemporalReaderLoopMismatchError`
+- **Signature:** `class TemporalReaderLoopMismatchError(*, ...)`
+- **Summary:** A connected reader was used from a different event loop than it opened on.
+- **Defined in:** `application_sdk/testing/harness/temporal/_errors.py`
+
+#### `TemporalReadFailedError`
+
+- **Import:** `from application_sdk.testing.harness.temporal import TemporalReadFailedError`
+- **Signature:** `class TemporalReadFailedError(*, ...)`
+- **Summary:** A Temporal read reached the frontend and did not come back with data.
+- **Defined in:** `application_sdk/testing/harness/temporal/_errors.py`
+
+#### `TemporalServiceReader`
+
+- **Import:** `from application_sdk.testing.harness.temporal import TemporalServiceReader`
+- **Also importable from:** `application_sdk.testing.harness.temporal.client`
+- **Signature:** `class TemporalServiceReader(*, ...)`
+- **Summary:** Read Temporal state through the ``temporalio`` client.
+- **Defined in:** `application_sdk/testing/harness/temporal/client.py`
+
+#### `TenantAuth`
+
+- **Import:** `from application_sdk.testing.harness.identity import TenantAuth`
+- **Signature:** `class TenantAuth(base_url: str, ...)`
+- **Summary:** How a run authenticates against the tenant under test.
+- **Defined in:** `application_sdk/testing/harness/identity.py`
+
+#### `UnknownConnectorTypeError`
+
+- **Import:** `from application_sdk.testing.harness.atlas import UnknownConnectorTypeError`
+- **Signature:** `class UnknownConnectorTypeError(*, ...)`
+- **Summary:** The suite's connection type is not a pyatlan ``AtlanConnectorType``.
+- **Defined in:** `application_sdk/testing/harness/atlas/_errors.py`
+
+#### `Unreadable`
+
+- **Import:** `from application_sdk.testing.harness.expectations import Unreadable`
+- **Signature:** `class Unreadable(*, cause: BaseException) -> None`
+- **Summary:** A reading that could not be taken.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `UnusableTaskQueueError`
+
+- **Import:** `from application_sdk.testing.harness.starters import UnusableTaskQueueError`
+- **Signature:** `class UnusableTaskQueueError(*, ...)`
+- **Summary:** The task-queue name could not name a queue any worker polls.
+- **Defined in:** `application_sdk/testing/harness/starters/_errors.py`
+
+#### `Verdict`
+
+- **Import:** `from application_sdk.testing.harness import Verdict`
+- **Also importable from:** `application_sdk.testing.harness.outcome`
+- **Signature:** `class Verdict`
+- **Summary:** How a whole scenario graded, once everything it observed is in.
+- **Defined in:** `application_sdk/testing/harness/outcome.py`
+
+#### `Wait`
+
+- **Import:** `from application_sdk.testing.harness import Wait`
+- **Also importable from:** `application_sdk.testing.harness.budgets`
+- **Signature:** `class Wait`
+- **Summary:** The bounded waits a connector run performs, as profile keys.
+- **Defined in:** `application_sdk/testing/harness/budgets.py`
+
+#### `WaitExpiredError`
+
+- **Import:** `from application_sdk.testing.harness import WaitExpiredError`
+- **Signature:** `class WaitExpiredError(*, ...)`
+- **Summary:** A bounded wait spent its whole budget while work was still progressing.
+- **Defined in:** `application_sdk/testing/harness/_errors.py`
+
+#### `WaitIndeterminateError`
+
+- **Import:** `from application_sdk.testing.harness import WaitIndeterminateError`
+- **Signature:** `class WaitIndeterminateError(*, ...)`
+- **Summary:** The wait reached no verdict, because the probe itself could not be read.
+- **Defined in:** `application_sdk/testing/harness/_errors.py`
+
+#### `WaitNeverStartedError`
+
+- **Import:** `from application_sdk.testing.harness import WaitNeverStartedError`
+- **Signature:** `class WaitNeverStartedError(*, ...)`
+- **Summary:** A bounded wait's start-grace window closed with nothing having started.
+- **Defined in:** `application_sdk/testing/harness/_errors.py`
+
+#### `WaitStalledError`
+
+- **Import:** `from application_sdk.testing.harness import WaitStalledError`
+- **Signature:** `class WaitStalledError(*, ...)`
+- **Summary:** Work started, then stopped making observable progress.
+- **Defined in:** `application_sdk/testing/harness/_errors.py`
+
+#### `WorkflowExecutionStatus`
+
+- **Import:** `from application_sdk.testing.harness.temporal import WorkflowExecutionStatus`
+- **Signature:** `class WorkflowExecutionStatus`
+- **Summary:** Terminal and non-terminal states a workflow execution can report.
+- **Defined in:** `application_sdk/testing/harness/temporal/_states.py`
+
+#### `WorkflowNotFoundError`
+
+- **Import:** `from application_sdk.testing.harness.temporal import WorkflowNotFoundError`
+- **Signature:** `class WorkflowNotFoundError(*, ...)`
+- **Summary:** Temporal has no execution under this workflow ID.
+- **Defined in:** `application_sdk/testing/harness/temporal/_errors.py`
+
+#### `WorkflowRunHandle`
+
+- **Import:** `from application_sdk.testing.harness.starters import WorkflowRunHandle`
+- **Signature:** `class WorkflowRunHandle(*, workflow_id: str, run_id: str, task_queue: str)`
+- **Summary:** A run started directly on a task queue.
+- **Defined in:** `application_sdk/testing/harness/starters/_specs.py`
+
+#### `WorkflowStartConflictError`
+
+- **Import:** `from application_sdk.testing.harness.starters import WorkflowStartConflictError`
+- **Signature:** `class WorkflowStartConflictError(*, ...)`
+- **Summary:** A run is already using this workflow id.
+- **Defined in:** `application_sdk/testing/harness/starters/_errors.py`
+
+#### `WorkflowStartFailedError`
+
+- **Import:** `from application_sdk.testing.harness.starters import WorkflowStartFailedError`
+- **Signature:** `class WorkflowStartFailedError(*, ...)`
+- **Summary:** The dispatch did not come back with a started run.
+- **Defined in:** `application_sdk/testing/harness/starters/_errors.py`
+
+#### `WorkflowStatus`
+
+- **Import:** `from application_sdk.testing.harness.temporal import WorkflowStatus`
+- **Signature:** `class WorkflowStatus(*, ...)`
+- **Summary:** One workflow execution's state.
+- **Defined in:** `application_sdk/testing/harness/temporal/_states.py`
+
+#### `WriteRecovery`
+
+- **Import:** `from application_sdk.testing.e2e.client import WriteRecovery`
+- **Also importable from:** `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.retry`
+- **Signature:** `class WriteRecovery(body: dict[str, Any] | None = None, proven_absent: bool = False)`
+- **Summary:** What a follow-up read learned about a write whose response was lost.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/retry.py`
+
 ### Functions
+
+#### `admin_identity`
+
+- **Import:** `from application_sdk.testing.harness.atlas import admin_identity`
+- **Signature:** `admin_identity(client: AsyncAtlanClient, *, role_name: str = ADMIN_ROLE_NAME) -> Reading[AdminIdentity]`
+- **Summary:** Resolve the admin ACL fallback for a harness-created Connection.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
 #### `all_of`
 
@@ -3346,6 +4107,50 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** AppContext wired with MockStateStore and MockSecretStore.
 - **Defined in:** `application_sdk/testing/fixtures.py`
 
+#### `as_count`
+
+- **Import:** `from application_sdk.testing.harness.outcome import as_count`
+- **Signature:** `as_count(reading: Outcome[int]) -> CountRead`
+- **Summary:** Project a one-shot count read into the evaluator's vocabulary.
+- **Defined in:** `application_sdk/testing/harness/outcome.py`
+
+#### `as_counts`
+
+- **Import:** `from application_sdk.testing.harness.outcome import as_counts`
+- **Signature:** `as_counts(reading: Outcome[Mapping[str, int]], type_names: Sequence[str]) -> Mapping[str, CountRead]`
+- **Summary:** Project a per-type count read, spreading an unreadable one over its types.
+- **Defined in:** `application_sdk/testing/harness/outcome.py`
+
+#### `as_samples`
+
+- **Import:** `from application_sdk.testing.harness.outcome import as_samples`
+- **Signature:** `as_samples(reading: Outcome[Mapping[str, Sequence[str]]], type_names: Sequence[str]) -> Mapping[str, SampleRead]`
+- **Summary:** Project a qualified-name sample read the same way :func:`as_counts` does.
+- **Defined in:** `application_sdk/testing/harness/outcome.py`
+
+#### `assert_gate`
+
+- **Import:** `from application_sdk.testing.harness import assert_gate`
+- **Also importable from:** `application_sdk.testing.harness.preconditions`
+- **Signature:** `assert_gate(report: GateReport)`
+- **Summary:** Raise unless every precondition was met.
+- **Defined in:** `application_sdk/testing/harness/preconditions.py`
+
+#### `assert_settled`
+
+- **Import:** `from application_sdk.testing.harness import assert_settled`
+- **Also importable from:** `application_sdk.testing.harness.outcome`
+- **Signature:** `assert_settled(outcome: Outcome[T])`
+- **Summary:** Return the settled value, or raise the typed leaf for the verdict.
+- **Defined in:** `application_sdk/testing/harness/outcome.py`
+
+#### `atlas_client`
+
+- **Import:** `from application_sdk.testing.harness.atlas import atlas_client`
+- **Signature:** `atlas_client(tenant_url: str, *, ...)`
+- **Summary:** Open one ``AsyncAtlanClient`` for a batch of Atlas reads.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
 #### `between`
 
 - **Import:** `from application_sdk.testing.integration import between`
@@ -3367,6 +4172,22 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Deprecated (v4.0) — seed-version DAG; use ``application_sdk.testing.e2e.payload``.
 - **Defined in:** `application_sdk/testing/full_dag/payload.py`
 
+#### `check_no_stale_pollers`
+
+- **Import:** `from application_sdk.testing.harness import check_no_stale_pollers`
+- **Also importable from:** `application_sdk.testing.harness.preconditions`
+- **Signature:** `check_no_stale_pollers(*, *, ...)`
+- **Summary:** Require that the queue is polled, and only by the intended build.
+- **Defined in:** `application_sdk/testing/harness/preconditions.py`
+
+#### `check_worker_health`
+
+- **Import:** `from application_sdk.testing.harness import check_worker_health`
+- **Also importable from:** `application_sdk.testing.harness.preconditions`
+- **Signature:** `check_worker_health(url: str, *, ...)`
+- **Summary:** Require that a worker answers 2xx on its health endpoint.
+- **Defined in:** `application_sdk/testing/harness/preconditions.py`
+
 #### `clean_app_registry`
 
 - **Import:** `from application_sdk.testing import clean_app_registry`
@@ -3381,12 +4202,36 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** TaskRegistry reset before and after each test.
 - **Defined in:** `application_sdk/testing/fixtures.py`
 
+#### `close_loop`
+
+- **Import:** `from application_sdk.testing.harness import close_loop`
+- **Also importable from:** `application_sdk.testing.harness.bridge`
+- **Signature:** `close_loop()`
+- **Summary:** Close this thread's bridge loop, if it has one. Idempotent.
+- **Defined in:** `application_sdk/testing/harness/bridge.py`
+
+#### `cluster_reader_for`
+
+- **Import:** `from application_sdk.testing.harness import cluster_reader_for`
+- **Also importable from:** `application_sdk.testing.harness.substrate`
+- **Signature:** `cluster_reader_for(substrate: Substrate, *, kube_context: str | None = None)`
+- **Summary:** Build the cluster reader *substrate* implies.
+- **Defined in:** `application_sdk/testing/harness/substrate.py`
+
 #### `cold_start_submit_kwargs`
 
-- **Import:** `from application_sdk.testing.full_dag.client import cold_start_submit_kwargs`
+- **Import:** `from application_sdk.testing.e2e.client import cold_start_submit_kwargs`
+- **Also importable from:** `application_sdk.testing.full_dag.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.retry`
 - **Signature:** `cold_start_submit_kwargs(timeout_seconds: int, poll_interval_seconds: int)`
-- **Summary:** Re-size :meth:`AEWorkflowClient.submit_workflow`'s retry to a cold start.
-- **Defined in:** `application_sdk/testing/e2e/client.py`
+- **Summary:** Re-size the AE submit's retry to a cold start.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/retry.py`
+
+#### `collect_pod_evidence`
+
+- **Import:** `from application_sdk.testing.harness.evidence import collect_pod_evidence`
+- **Signature:** `collect_pod_evidence(namespace: str, *, ...)`
+- **Summary:** Collect container logs and pod state from *namespace* into one bundle.
+- **Defined in:** `application_sdk/testing/harness/evidence.py`
 
 #### `compare_category`
 
@@ -3402,12 +4247,47 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Compare actual extracted metadata against an expected baseline.
 - **Defined in:** `application_sdk/testing/integration/comparison.py`
 
+#### `connection_exists`
+
+- **Import:** `from application_sdk.testing.harness.atlas import connection_exists`
+- **Signature:** `connection_exists(client: AsyncAtlanClient, qualified_name: str) -> Reading[bool]`
+- **Summary:** Search-based Connection probe — works around the direct-fetch ACL.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
 #### `contains`
 
 - **Import:** `from application_sdk.testing.integration import contains`
 - **Signature:** `contains(item: Any, *, description: str | None = None)`
 - **Summary:** Assert that the actual value contains the given item.
 - **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `count_assets`
+
+- **Import:** `from application_sdk.testing.harness.atlas import count_assets`
+- **Signature:** `count_assets(client: AsyncAtlanClient, ...)`
+- **Summary:** Count active assets of each named type under a connection.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
+#### `count_lineage`
+
+- **Import:** `from application_sdk.testing.harness.atlas import count_lineage`
+- **Signature:** `count_lineage(client: AsyncAtlanClient, ...)`
+- **Summary:** Count assets of each named type that have lineage attached.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
+#### `count_total_assets`
+
+- **Import:** `from application_sdk.testing.harness.atlas import count_total_assets`
+- **Signature:** `count_total_assets(client: AsyncAtlanClient, connection_qualified_name: str) -> Reading[int]`
+- **Summary:** Count every descendant asset under the connection prefix, ALL types.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
+#### `create_connection`
+
+- **Import:** `from application_sdk.testing.harness.atlas import create_connection`
+- **Signature:** `create_connection(client: AsyncAtlanClient, *, ...)`
+- **Summary:** Create a Connection at an exact qualified name, and return that name.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
 #### `custom`
 
@@ -3423,6 +4303,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Find all category subdirectories across both dirs.
 - **Defined in:** `application_sdk/testing/parity/comparator.py`
 
+#### `embedded_temporal`
+
+- **Import:** `from application_sdk.testing.integration.fixtures import embedded_temporal`
+- **Signature:** `embedded_temporal(integration_options: KitOptions) -> AsyncIterator[EmbeddedRuntime]`
+- **Summary:** Boot the embedded Temporal dev server for the session.
+- **Defined in:** `application_sdk/testing/integration/fixtures.py`
+
 #### `ends_with`
 
 - **Import:** `from application_sdk.testing.integration import ends_with`
@@ -3437,12 +4324,33 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Assert that the actual value equals the expected value.
 - **Defined in:** `application_sdk/testing/integration/assertions.py`
 
+#### `evaluate_counts`
+
+- **Import:** `from application_sdk.testing.harness.expectations import evaluate_counts`
+- **Signature:** `evaluate_counts(counts: Mapping[str, *, ...)`
+- **Summary:** Evaluate per-type counts against the declared floors, exacts and backstop.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
 #### `evaluate_if_lazy`
 
 - **Import:** `from application_sdk.testing.integration import evaluate_if_lazy`
 - **Signature:** `evaluate_if_lazy(value: T)`
 - **Summary:** Evaluate a value if it's lazy, otherwise return as-is.
 - **Defined in:** `application_sdk/testing/integration/lazy.py`
+
+#### `evaluate_locations`
+
+- **Import:** `from application_sdk.testing.harness.expectations import evaluate_locations`
+- **Signature:** `evaluate_locations(samples: Mapping[str, SampleRead], expectations: AssetExpectations) -> Sequence[Finding]`
+- **Summary:** Evaluate sampled qualified names against the declared hierarchy depths.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `executor`
+
+- **Import:** `from application_sdk.testing.integration.fixtures import executor`
+- **Signature:** `executor(temporal_client: Client, worker: None, integration_task_queue: str) -> AppExecutor`
+- **Summary:** Executor submitting to the running worker's task queue.
+- **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
 #### `exists`
 
@@ -3457,6 +4365,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `format_validation_report(results: list[dict[str, Any]])`
 - **Summary:** Format pandera validation results into a human-readable report.
 - **Defined in:** `application_sdk/testing/integration/validation.py`
+
+#### `frontend_connection`
+
+- **Import:** `from application_sdk.testing.harness.temporal import frontend_connection`
+- **Also importable from:** `application_sdk.testing.harness.temporal.client`
+- **Signature:** `frontend_connection(*, address: str, namespace: str, api_key: str | None = None, tls: bool = False)`
+- **Summary:** Connect to a Temporal frontend at a known address.
+- **Defined in:** `application_sdk/testing/harness/temporal/client.py`
 
 #### `generate_json_report`
 
@@ -3493,6 +4409,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Find all pandera YAML schema files in the given directory.
 - **Defined in:** `application_sdk/testing/integration/validation.py`
 
+#### `grade`
+
+- **Import:** `from application_sdk.testing.harness import grade`
+- **Also importable from:** `application_sdk.testing.harness.outcome`
+- **Signature:** `grade(*, outcomes: Iterable[Outcome[Any]] = (), findings: Iterable[Finding] = ())`
+- **Summary:** Reduce everything a scenario accumulated to its one verdict.
+- **Defined in:** `application_sdk/testing/harness/outcome.py`
+
 #### `greater_than`
 
 - **Import:** `from application_sdk.testing.integration import greater_than`
@@ -3507,12 +4431,209 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Assert that the actual value is greater than or equal to the given value.
 - **Defined in:** `application_sdk/testing/integration/assertions.py`
 
+#### `harness_ae_client`
+
+- **Import:** `from application_sdk.testing.harness.fixtures import harness_ae_client`
+- **Signature:** `harness_ae_client(harness_tenant_auth: TenantAuth) -> AsyncIterator[AEClient]`
+- **Summary:** An Automation Engine client over one pooled connection, closed at teardown.
+- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+
+#### `harness_app_under_test`
+
+- **Import:** `from application_sdk.testing.harness.fixtures import harness_app_under_test`
+- **Signature:** `harness_app_under_test() -> AppUnderTest`
+- **Summary:** Where to find the app under test inside a cluster.
+- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+
+#### `harness_atlas_client`
+
+- **Import:** `from application_sdk.testing.harness.fixtures import harness_atlas_client`
+- **Signature:** `harness_atlas_client(harness_tenant_auth: TenantAuth) -> AsyncIterator[AsyncAtlanClient]`
+- **Summary:** One ``AsyncAtlanClient`` for the whole test, closed at teardown.
+- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+
+#### `harness_budget_profile`
+
+- **Import:** `from application_sdk.testing.harness.fixtures import harness_budget_profile`
+- **Signature:** `harness_budget_profile() -> BudgetProfile`
+- **Summary:** Which timing tier this suite's waits run on.
+- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+
+#### `harness_cluster_reader`
+
+- **Import:** `from application_sdk.testing.harness.fixtures import harness_cluster_reader`
+- **Signature:** `harness_cluster_reader(harness_substrate: Substrate, harness_kube_context: str | None) -> ClusterReader`
+- **Summary:** A read-only cluster reader for the declared substrate.
+- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+
+#### `harness_connection_identity`
+
+- **Import:** `from application_sdk.testing.harness.fixtures import harness_connection_identity`
+- **Signature:** `harness_connection_identity(harness_minter: Minter, harness_connection_type: str) -> ConnectionIdentity`
+- **Summary:** The ephemeral connection this test creates, and teardown purges.
+- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+
+#### `harness_connection_teardown`
+
+- **Import:** `from application_sdk.testing.harness.fixtures import harness_connection_teardown`
+- **Signature:** `harness_connection_teardown(harness_connection_identity: ConnectionIdentity, ...)`
+- **Summary:** Yield this test's connection identity, and purge it afterwards.
+- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+
+#### `harness_connection_type`
+
+- **Import:** `from application_sdk.testing.harness.fixtures import harness_connection_type`
+- **Signature:** `harness_connection_type() -> str`
+- **Summary:** Atlan catalog type segment for the connection this run creates.
+- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+
+#### `harness_environ`
+
+- **Import:** `from application_sdk.testing.harness.fixtures import harness_environ`
+- **Signature:** `harness_environ() -> Mapping[str, str]`
+- **Summary:** The environment this run reads, as one immutable snapshot.
+- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+
+#### `harness_evidence`
+
+- **Import:** `from application_sdk.testing.harness.fixtures import harness_evidence`
+- **Signature:** `harness_evidence(request: pytest.FixtureRequest, ...)`
+- **Summary:** Accumulate evidence, and write it — redacted — if the test fails.
+- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+
+#### `harness_evidence_dir`
+
+- **Import:** `from application_sdk.testing.harness.fixtures import harness_evidence_dir`
+- **Signature:** `harness_evidence_dir() -> Path | None`
+- **Summary:** Directory a failed test's evidence bundle is written under.
+- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+
+#### `harness_kube_context`
+
+- **Import:** `from application_sdk.testing.harness.fixtures import harness_kube_context`
+- **Signature:** `harness_kube_context() -> str | None`
+- **Summary:** Kubeconfig context cluster reads go through.
+- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+
+#### `harness_minter`
+
+- **Import:** `from application_sdk.testing.harness.fixtures import harness_minter`
+- **Signature:** `harness_minter(harness_environ: Mapping[str, str]) -> Minter`
+- **Summary:** The per-run identifier minter, wired to the real clock and CI run id.
+- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+
+#### `harness_precondition_checks`
+
+- **Import:** `from application_sdk.testing.harness.fixtures import harness_precondition_checks`
+- **Signature:** `harness_precondition_checks(harness_worker_health_url: str | None, ...)`
+- **Summary:** What must be true before this suite dispatches any work.
+- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+
+#### `harness_preconditions`
+
+- **Import:** `from application_sdk.testing.harness.fixtures import harness_preconditions`
+- **Signature:** `harness_preconditions(harness_precondition_checks: Sequence[PreconditionCheck]) -> GateReport`
+- **Summary:** Assert the starting state before the test dispatches any work.
+- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+
+#### `harness_run_id`
+
+- **Import:** `from application_sdk.testing.harness.fixtures import harness_run_id`
+- **Signature:** `harness_run_id(harness_minter: Minter) -> int`
+- **Summary:** Identifier scoping every name this run mints.
+- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+
+#### `harness_substrate`
+
+- **Import:** `from application_sdk.testing.harness.fixtures import harness_substrate`
+- **Signature:** `harness_substrate() -> Substrate`
+- **Summary:** Where this suite is running, relative to the app under test.
+- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+
+#### `harness_sync_bridge`
+
+- **Import:** `from application_sdk.testing.harness.fixtures import harness_sync_bridge`
+- **Signature:** `harness_sync_bridge() -> Iterator[None]`
+- **Summary:** Close the sync bridge's event loop for this thread at teardown.
+- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+
+#### `harness_tenant_auth`
+
+- **Import:** `from application_sdk.testing.harness.fixtures import harness_tenant_auth`
+- **Signature:** `harness_tenant_auth(harness_environ: Mapping[str, str]) -> TenantAuth`
+- **Summary:** How this run authenticates against the tenant under test.
+- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+
+#### `harness_worker_health_url`
+
+- **Import:** `from application_sdk.testing.harness.fixtures import harness_worker_health_url`
+- **Signature:** `harness_worker_health_url(harness_environ: Mapping[str, str]) -> str | None`
+- **Summary:** Health endpoint the default precondition polls, if there is one.
+- **Defined in:** `application_sdk/testing/harness/fixtures.py`
+
 #### `has_length`
 
 - **Import:** `from application_sdk.testing.integration import has_length`
 - **Signature:** `has_length(expected_length: int, *, description: str | None = None)`
 - **Summary:** Assert that the actual value has the expected length.
 - **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `hold_stable`
+
+- **Import:** `from application_sdk.testing.harness import hold_stable`
+- **Also importable from:** `application_sdk.testing.harness.waiting`
+- **Signature:** `hold_stable(probe: Probe[T], *, ...)`
+- **Summary:** Assert *invariant* holds for every reading across the whole budget.
+- **Defined in:** `application_sdk/testing/harness/waiting.py`
+
+#### `http_fake_source_factory`
+
+- **Import:** `from application_sdk.testing.integration.fixtures import http_fake_source_factory`
+- **Signature:** `http_fake_source_factory() -> Iterator[HttpFakeSourceFactory]`
+- **Summary:** Session-scoped factory for started :class:`HttpFakeSource` servers.
+- **Defined in:** `application_sdk/testing/integration/fixtures.py`
+
+#### `infrastructure`
+
+- **Import:** `from application_sdk.testing.integration.fixtures import infrastructure`
+- **Signature:** `infrastructure(store_root: Path, ...)`
+- **Summary:** Wire mocked infrastructure for the session, after the source is up.
+- **Defined in:** `application_sdk/testing/integration/fixtures.py`
+
+#### `integration_app_cls`
+
+- **Import:** `from application_sdk.testing.integration.fixtures import integration_app_cls`
+- **Signature:** `integration_app_cls() -> type[App]`
+- **Summary:** The App class under test. Every adopting conftest overrides this.
+- **Defined in:** `application_sdk/testing/integration/fixtures.py`
+
+#### `integration_options`
+
+- **Import:** `from application_sdk.testing.integration.fixtures import integration_options`
+- **Signature:** `integration_options() -> KitOptions`
+- **Summary:** The kit's knobs. Override to return a customised :class:`KitOptions`.
+- **Defined in:** `application_sdk/testing/integration/fixtures.py`
+
+#### `integration_secrets`
+
+- **Import:** `from application_sdk.testing.integration.fixtures import integration_secrets`
+- **Signature:** `integration_secrets(integration_source: object) -> Mapping[str, str]`
+- **Summary:** Seed for the mocked secret store, as a ``{key: json}`` mapping.
+- **Defined in:** `application_sdk/testing/integration/fixtures.py`
+
+#### `integration_source`
+
+- **Import:** `from application_sdk.testing.integration.fixtures import integration_source`
+- **Signature:** `integration_source() -> object`
+- **Summary:** Whatever this connector extracts from; ``None`` until overridden.
+- **Defined in:** `application_sdk/testing/integration/fixtures.py`
+
+#### `integration_task_queue`
+
+- **Import:** `from application_sdk.testing.integration.fixtures import integration_task_queue`
+- **Signature:** `integration_task_queue(integration_app_cls: type[App]) -> str`
+- **Summary:** Task queue the worker listens on and the executor submits to.
+- **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
 #### `is_dict`
 
@@ -3584,12 +4705,28 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Assert that the actual value is an instance of the given type.
 - **Defined in:** `application_sdk/testing/integration/assertions.py`
 
+#### `kit_infrastructure`
+
+- **Import:** `from application_sdk.testing.integration.fixtures import kit_infrastructure`
+- **Signature:** `kit_infrastructure(store_root: Path, *, ...)`
+- **Summary:** The :func:`infrastructure` fixture's body, callable directly.
+- **Defined in:** `application_sdk/testing/integration/fixtures.py`
+
 #### `kube_http_call`
 
 - **Import:** `from application_sdk.testing.e2e import kube_http_call`
+- **Also importable from:** `application_sdk.testing.e2e.portforward`, `application_sdk.testing.harness.cluster`
 - **Signature:** `kube_http_call(namespace: str, ...)`
-- **Summary:** Make an HTTP call to a K8s service via an ephemeral port-forward.
-- **Defined in:** `application_sdk/testing/e2e/portforward.py`
+- **Summary:** Make one HTTP call to a K8s Service via an ephemeral port-forward.
+- **Defined in:** `application_sdk/testing/harness/cluster/_portforward.py`
+
+#### `kubeconfig_apis`
+
+- **Import:** `from application_sdk.testing.harness.cluster import kubeconfig_apis`
+- **Also importable from:** `application_sdk.testing.harness.cluster.kube`
+- **Signature:** `kubeconfig_apis(*, kube_context: str | None = None)`
+- **Summary:** Build one thread's API bundle from the ambient kubeconfig.
+- **Defined in:** `application_sdk/testing/harness/cluster/kube.py`
 
 #### `lazy`
 
@@ -3717,12 +4854,108 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Create a pytest parametrize decorator for scenarios.
 - **Defined in:** `application_sdk/testing/integration/runner.py`
 
+#### `poll_for_connection`
+
+- **Import:** `from application_sdk.testing.harness.atlas import poll_for_connection`
+- **Signature:** `poll_for_connection(client: AsyncAtlanClient, qualified_name: str, *, budget: Budget) -> Outcome[bool]`
+- **Summary:** Poll Atlas until the Connection appears, or the budget or grace says stop.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
+#### `poll_until`
+
+- **Import:** `from application_sdk.testing.harness import poll_until`
+- **Also importable from:** `application_sdk.testing.harness.waiting`
+- **Signature:** `poll_until(probe: Probe[T], *, ...)`
+- **Summary:** Poll until *settled*, or until the budget, grace or watchdog says stop.
+- **Defined in:** `application_sdk/testing/harness/waiting.py`
+
+#### `port_forward`
+
+- **Import:** `from application_sdk.testing.e2e.portforward import port_forward`
+- **Also importable from:** `application_sdk.testing.harness.cluster`
+- **Signature:** `port_forward(namespace: str, service: str, port: int, *, timeout: float = 30.0, kube_context: str | None = None)`
+- **Summary:** Hold one tunnel to a Service for a batch of calls.
+- **Defined in:** `application_sdk/testing/harness/cluster/_portforward.py`
+
+#### `port_forwarded_connection`
+
+- **Import:** `from application_sdk.testing.harness.temporal import port_forwarded_connection`
+- **Also importable from:** `application_sdk.testing.harness.temporal.client`
+- **Signature:** `port_forwarded_connection(*, *, ...)`
+- **Summary:** Connect to an in-cluster Temporal frontend Service through a tunnel.
+- **Defined in:** `application_sdk/testing/harness/temporal/client.py`
+
+#### `publish_seed_version`
+
+- **Import:** `from application_sdk.testing.harness.starters import publish_seed_version`
+- **Signature:** `publish_seed_version(spec: AEWorkflowSpec, *, client: AEClient, minter: Minter | None = None)`
+- **Summary:** Return a slug with a published version, creating and seeding one if needed.
+- **Defined in:** `application_sdk/testing/harness/starters/_ae.py`
+
+#### `purge_connection`
+
+- **Import:** `from application_sdk.testing.harness.teardown import purge_connection`
+- **Signature:** `purge_connection(client: AsyncAtlanClient, connection_qualified_name: str) -> PurgeReport`
+- **Summary:** Delete every asset under *connection_qualified_name*, then the connection.
+- **Defined in:** `application_sdk/testing/harness/teardown.py`
+
+#### `read_tenant_auth`
+
+- **Import:** `from application_sdk.testing.harness.identity import read_tenant_auth`
+- **Signature:** `read_tenant_auth(environ: Mapping[str, str]) -> TenantAuth`
+- **Summary:** Read and validate the tenant credentials a run needs from the environment.
+- **Defined in:** `application_sdk/testing/harness/identity.py`
+
+#### `redact`
+
+- **Import:** `from application_sdk.testing.harness.evidence import redact`
+- **Signature:** `redact(bundle: EvidenceBundle, *, secrets: Sequence[str] = ()) -> EvidenceBundle`
+- **Summary:** Return *bundle* with credential-shaped values replaced by placeholders.
+- **Defined in:** `application_sdk/testing/harness/evidence.py`
+
+#### `redact_text`
+
+- **Import:** `from application_sdk.testing.harness.evidence import redact_text`
+- **Signature:** `redact_text(text: str, *, secrets: Sequence[str] = ()) -> str`
+- **Summary:** Return *text* with credential-shaped and literally-known values blanked.
+- **Defined in:** `application_sdk/testing/harness/evidence.py`
+
+#### `reset_http_fake_sources`
+
+- **Import:** `from application_sdk.testing.integration.fixtures import reset_http_fake_sources`
+- **Signature:** `reset_http_fake_sources() -> None`
+- **Summary:** Reset every session fake's per-test recordings, once a factory is live.
+- **Defined in:** `application_sdk/testing/integration/fixtures.py`
+
+#### `restore_logger_init_flags`
+
+- **Import:** `from application_sdk.testing import restore_logger_init_flags`
+- **Signature:** `restore_logger_init_flags()`
+- **Summary:** Stop a test that reset the logger's init state from leaking it forward.
+- **Defined in:** `application_sdk/testing/fixtures.py`
+
 #### `run_comparison`
 
 - **Import:** `from application_sdk.testing.parity import run_comparison`
 - **Signature:** `run_comparison(baseline_dir: Path, candidate_dir: Path)`
 - **Summary:** Run full parity comparison across all categories.
 - **Defined in:** `application_sdk/testing/parity/comparator.py`
+
+#### `run_preconditions`
+
+- **Import:** `from application_sdk.testing.harness import run_preconditions`
+- **Also importable from:** `application_sdk.testing.harness.preconditions`
+- **Signature:** `run_preconditions(checks: Iterable[PreconditionCheck])`
+- **Summary:** Run every check and grade what they observed.
+- **Defined in:** `application_sdk/testing/harness/preconditions.py`
+
+#### `run_sync`
+
+- **Import:** `from application_sdk.testing.harness import run_sync`
+- **Also importable from:** `application_sdk.testing.harness.bridge`
+- **Signature:** `run_sync(coro: Coroutine[Any, Any, T])`
+- **Summary:** Run *coro* to completion on this thread's bridge loop and return its result.
+- **Defined in:** `application_sdk/testing/harness/bridge.py`
 
 #### `run_workflow`
 
@@ -3731,12 +4964,68 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** POST to the handler's workflow endpoint and return the workflow ID.
 - **Defined in:** `application_sdk/testing/e2e/workflows.py`
 
+#### `sample_qualified_names`
+
+- **Import:** `from application_sdk.testing.harness.atlas import sample_qualified_names`
+- **Signature:** `sample_qualified_names(client: AsyncAtlanClient, *, ...)`
+- **Summary:** Sample up to *per_type* qualified names per type under the connection.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
+#### `secrets_from_environment`
+
+- **Import:** `from application_sdk.testing.harness.evidence import secrets_from_environment`
+- **Signature:** `secrets_from_environment(environ: Mapping[str, str], *, also: Sequence[str] = ()) -> tuple[str, ...]`
+- **Summary:** Collect the literal values a run is holding, for :func:`redact`'s ``secrets``.
+- **Defined in:** `application_sdk/testing/harness/evidence.py`
+
+#### `stale_version_pollers`
+
+- **Import:** `from application_sdk.testing.harness.temporal import stale_version_pollers`
+- **Signature:** `stale_version_pollers(pollers: Iterable[PollerInfo], *, current_build_id: str | None)`
+- **Summary:** Return the pollers that are *not* on *current_build_id*.
+- **Defined in:** `application_sdk/testing/harness/temporal/_states.py`
+
+#### `start_on_task_queue`
+
+- **Import:** `from application_sdk.testing.harness.starters import start_on_task_queue`
+- **Signature:** `start_on_task_queue(spec: QueueWorkflowSpec, *, connection: TemporalConnection, minter: Minter | None = None)`
+- **Summary:** Start a workflow by dispatching it directly onto a Temporal task queue.
+- **Defined in:** `application_sdk/testing/harness/starters/_queue.py`
+
+#### `start_via_app_handler`
+
+- **Import:** `from application_sdk.testing.harness.starters import start_via_app_handler`
+- **Signature:** `start_via_app_handler(spec: HttpWorkflowSpec, *, reader: ClusterReader) -> HttpRunHandle`
+- **Summary:** Start a workflow by POSTing to the app's own handler Service.
+- **Defined in:** `application_sdk/testing/harness/starters/__init__.py`
+
+#### `start_via_automation_engine`
+
+- **Import:** `from application_sdk.testing.harness.starters import start_via_automation_engine`
+- **Signature:** `start_via_automation_engine(spec: AEWorkflowSpec, *, client: AEClient, minter: Minter | None = None)`
+- **Summary:** Create, seed, publish and submit a workflow through the Automation Engine.
+- **Defined in:** `application_sdk/testing/harness/starters/_ae.py`
+
 #### `starts_with`
 
 - **Import:** `from application_sdk.testing.integration import starts_with`
 - **Signature:** `starts_with(prefix: str, *, description: str | None = None)`
 - **Summary:** Assert that the actual value starts with the given prefix.
 - **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `store_root`
+
+- **Import:** `from application_sdk.testing.integration.fixtures import store_root`
+- **Signature:** `store_root(tmp_path_factory: pytest.TempPathFactory, integration_options: KitOptions) -> Path`
+- **Summary:** Root of the session-scoped LocalStore backing the object store.
+- **Defined in:** `application_sdk/testing/integration/fixtures.py`
+
+#### `temporal_client`
+
+- **Import:** `from application_sdk.testing.integration.fixtures import temporal_client`
+- **Signature:** `temporal_client(embedded_temporal: EmbeddedRuntime, ...)`
+- **Summary:** Connect to the embedded dev server, in its namespace.
+- **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
 #### `validate_asset`
 
@@ -3765,6 +5054,186 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `wait_for_workflow(namespace: str, ...)`
 - **Summary:** Poll GET /api/v1/workflows/{id} until the workflow reaches a terminal state.
 - **Defined in:** `application_sdk/testing/e2e/workflows.py`
+
+#### `worker`
+
+- **Import:** `from application_sdk.testing.integration.fixtures import worker`
+- **Signature:** `worker(temporal_client: Client, ...)`
+- **Summary:** Run the App's worker in-process, with infrastructure already wired.
+- **Defined in:** `application_sdk/testing/integration/fixtures.py`
+
+#### `write_bundle`
+
+- **Import:** `from application_sdk.testing.harness.evidence import write_bundle`
+- **Signature:** `write_bundle(bundle: EvidenceBundle, output_dir: Path, *, secrets: Sequence[str] = ()) -> Sequence[Path]`
+- **Summary:** Redact *bundle* and write it under *output_dir*.
+- **Defined in:** `application_sdk/testing/harness/evidence.py`
+
+### Constants and Enums
+
+#### `ADMIN_ROLE_NAME`
+
+- **Import:** `from application_sdk.testing.harness.atlas import ADMIN_ROLE_NAME`
+- **Signature:** `ADMIN_ROLE_NAME`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
+#### `APPLICATION_NAME_ENV`
+
+- **Import:** `from application_sdk.testing.integration.fixtures import APPLICATION_NAME_ENV`
+- **Signature:** `APPLICATION_NAME_ENV`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/integration/fixtures.py`
+
+#### `Authorizer`
+
+- **Import:** `from application_sdk.testing import Authorizer`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `Authorizer`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/fake_source.py`
+
+#### `Classifier`
+
+- **Import:** `from application_sdk.testing.harness import Classifier`
+- **Also importable from:** `application_sdk.testing.harness.waiting`
+- **Signature:** `Classifier: TypeAlias`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/waiting.py`
+
+#### `CLEANUP_INTERCEPTOR_ENV`
+
+- **Import:** `from application_sdk.testing.integration.fixtures import CLEANUP_INTERCEPTOR_ENV`
+- **Signature:** `CLEANUP_INTERCEPTOR_ENV`
+- **Summary:** Env var gating ``App.on_complete()``'s file and object-store cleanup.
+- **Defined in:** `application_sdk/testing/integration/fixtures.py`
+
+#### `CONNECTOR_CI`
+
+- **Import:** `from application_sdk.testing.harness import CONNECTOR_CI`
+- **Also importable from:** `application_sdk.testing.harness.budgets`
+- **Signature:** `CONNECTOR_CI`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/budgets.py`
+
+#### `CountRead`
+
+- **Import:** `from application_sdk.testing.harness.expectations import CountRead`
+- **Signature:** `CountRead: TypeAlias`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `DEFAULT_TYPE_NAMES`
+
+- **Import:** `from application_sdk.testing.harness.atlas import DEFAULT_TYPE_NAMES`
+- **Signature:** `DEFAULT_TYPE_NAMES: tuple[str, ...]`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
+#### `DEPLOYMENT_NAME_ENV`
+
+- **Import:** `from application_sdk.testing.integration.fixtures import DEPLOYMENT_NAME_ENV`
+- **Signature:** `DEPLOYMENT_NAME_ENV`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/integration/fixtures.py`
+
+#### `ENVIRONMENT_SCOPED_FIELDS`
+
+- **Import:** `from application_sdk.testing import ENVIRONMENT_SCOPED_FIELDS`
+- **Also importable from:** `application_sdk.testing.volatile_fields`
+- **Signature:** `ENVIRONMENT_SCOPED_FIELDS: frozenset[str]`
+- **Summary:** Fields that differ between environments but are stable across runs.
+- **Defined in:** `application_sdk/testing/volatile_fields.py`
+
+#### `ENVIRONMENT_SCOPED_NESTED_FIELDS`
+
+- **Import:** `from application_sdk.testing import ENVIRONMENT_SCOPED_NESTED_FIELDS`
+- **Also importable from:** `application_sdk.testing.volatile_fields`
+- **Signature:** `ENVIRONMENT_SCOPED_NESTED_FIELDS: frozenset[str]`
+- **Summary:** Attributes holding nested reference objects with environment-scoped contents.
+- **Defined in:** `application_sdk/testing/volatile_fields.py`
+
+#### `Handler`
+
+- **Import:** `from application_sdk.testing import Handler`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `Handler`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/fake_source.py`
+
+#### `HandlerResult`
+
+- **Import:** `from application_sdk.testing import HandlerResult`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `HandlerResult`
+- **Summary:** Everything :func:`_coerce` accepts from a handler or authorizer.
+- **Defined in:** `application_sdk/testing/fake_source.py`
+
+#### `Outcome`
+
+- **Import:** `from application_sdk.testing.harness import Outcome`
+- **Also importable from:** `application_sdk.testing.harness.outcome`
+- **Signature:** `Outcome: TypeAlias`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/outcome.py`
+
+#### `PLACEHOLDER`
+
+- **Import:** `from application_sdk.testing.harness.evidence import PLACEHOLDER`
+- **Signature:** `PLACEHOLDER`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/evidence.py`
+
+#### `Probe`
+
+- **Import:** `from application_sdk.testing.harness import Probe`
+- **Also importable from:** `application_sdk.testing.harness.waiting`
+- **Signature:** `Probe: TypeAlias`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/waiting.py`
+
+#### `PURGE_BATCH_SIZE`
+
+- **Import:** `from application_sdk.testing.harness.teardown import PURGE_BATCH_SIZE`
+- **Signature:** `PURGE_BATCH_SIZE`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/teardown.py`
+
+#### `Reading`
+
+- **Import:** `from application_sdk.testing.harness.atlas import Reading`
+- **Signature:** `Reading: TypeAlias`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
+#### `RUN_VOLATILE_FIELDS`
+
+- **Import:** `from application_sdk.testing import RUN_VOLATILE_FIELDS`
+- **Also importable from:** `application_sdk.testing.volatile_fields`
+- **Signature:** `RUN_VOLATILE_FIELDS: frozenset[str]`
+- **Summary:** Fields that change on every run. Strip before any comparison.
+- **Defined in:** `application_sdk/testing/volatile_fields.py`
+
+#### `SampleRead`
+
+- **Import:** `from application_sdk.testing.harness.expectations import SampleRead`
+- **Signature:** `SampleRead: TypeAlias`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `SECRET_KEY_FRAGMENTS`
+
+- **Import:** `from application_sdk.testing.harness.evidence import SECRET_KEY_FRAGMENTS`
+- **Signature:** `SECRET_KEY_FRAGMENTS: tuple[str, ...]`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/evidence.py`
+
+#### `UNREADABLE`
+
+- **Import:** `from application_sdk.testing.harness.expectations import UNREADABLE`
+- **Signature:** `UNREADABLE`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 ## `application_sdk.validation`
 
@@ -4748,7 +6217,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `status: PreflightStatus` — Overall verdict — decides the gate. ``NOT_READY`` blocks the run only in
   - `checks: list[PreflightCheck]` `= []` — Individual check results (display + failure attribution).
   - `message: str` `= ''` — Human-readable summary. Seeds the gate's abort reason when set.
+  - `error: FailureDetails | None` — Typed aggregate failure — the reason the overall verdict is NOT_READY,
   - `total_duration_ms: float` `= 0.0` — Total time for all checks in milliseconds.
+  - `resolved_message: str` — Aggregate message under the precedence rule: ``error`` wins when set.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `SqlMetadataObject`

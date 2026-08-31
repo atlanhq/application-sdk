@@ -33,14 +33,6 @@ repos:
       - id: conventional-pre-commit
         stages: [commit-msg]
         args: []
-  - repo: local
-    hooks:
-      - id: sync-requirements-txt
-        name: Sync requirements.txt with uv.lock
-        entry: bash -c 'uv export --no-hashes --frozen > requirements.txt && git add requirements.txt'
-        language: system
-        files: ^(uv\.lock|requirements\.txt)$
-        pass_filenames: false
   - repo: https://github.com/renovatebot/pre-commit-hooks
     # Pinned to the SAME renovate version the fleet runner installs
     # (.github/workflows/renovate.yaml), so a config that validates here cannot

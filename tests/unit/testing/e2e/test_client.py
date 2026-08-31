@@ -1,8 +1,21 @@
-"""Unit tests for AEWorkflowClient.poll_native_status transient-error handling.
+"""Unit tests for ``AEWorkflowClient``, the sync face of the harness's AE reader.
 
-Verifies that the except AppError branch in poll_native_status is reachable
-(i.e. AtlanApiHttpError — which inherits AppError — is caught) and that the
-transient_streak budget works correctly.
+Driven through the public sync client rather than through
+:class:`~application_sdk.testing.harness.automation_engine.client.AEClient`
+directly, because that is the surface every connector suite calls and the one
+whose behaviour child F promised not to change. The seams patched below moved
+onto ``client._ae`` with the AE half (FND-242); everything above them —
+signatures, return types, which leaf is raised, how many POSTs a retry makes —
+is asserted exactly as it was.
+
+Two sleeps, two seams, as before the split:
+
+* :data:`_SLEEP` is the *retry* loops' own inter-attempt gap, where
+  ``time.sleep`` used to be, and with the same reach.
+* the *deadline* loops sleep through
+  :mod:`application_sdk.testing.harness._poll`, so they need
+  :func:`~application_sdk.testing.harness._poll.fake_clock` instead — which is
+  why patching one has never silenced the other.
 """
 
 from __future__ import annotations
@@ -23,32 +36,77 @@ from application_sdk.testing.e2e._errors import (
     NoWorkerOnTaskQueueError,
     RequestDelivery,
 )
-from application_sdk.testing.e2e._poll import fake_clock
 from application_sdk.testing.e2e.client import (
-    _MAX_RETRY_AFTER_SECONDS,
-    _RECONCILE_CLOCK_SKEW_SECONDS,
-    _REQUEST_MAX_ATTEMPTS,
-    _RETRY_AFTER_BUDGET_SECONDS,
     AEWorkflowClient,
     DAGNodeResult,
     DAGNodeStatus,
     DAGRunResult,
     DAGRunStatus,
     RunLookup,
-    _classify_delivery,
-    _is_already_active_run,
-    _is_app_not_ready,
-    _is_credential_name_conflict,
-    _newest_run_since,
-    _parse_run_timestamp,
-    _requested_retry_after,
-    _retry_gap,
-    _rotate_submit_credential_name,
-    _safe_node_status,
-    _safe_run_status,
 )
+from application_sdk.testing.harness._poll import fake_clock
+from application_sdk.testing.harness.automation_engine.client import (
+    _RECONCILE_CLOCK_SKEW_SECONDS,
+    _REQUEST_MAX_ATTEMPTS,
+)
+from application_sdk.testing.harness.automation_engine.retry import (
+    MAX_RETRY_AFTER_SECONDS as _MAX_RETRY_AFTER_SECONDS,
+)
+from application_sdk.testing.harness.automation_engine.retry import (
+    RETRY_AFTER_BUDGET_SECONDS as _RETRY_AFTER_BUDGET_SECONDS,
+)
+from application_sdk.testing.harness.automation_engine.retry import (
+    classify_delivery as _classify_delivery,
+)
+from application_sdk.testing.harness.automation_engine.retry import (
+    is_already_active_run as _is_already_active_run,
+)
+from application_sdk.testing.harness.automation_engine.retry import (
+    is_app_not_ready as _is_app_not_ready,
+)
+from application_sdk.testing.harness.automation_engine.retry import (
+    is_credential_name_conflict as _is_credential_name_conflict,
+)
+from application_sdk.testing.harness.automation_engine.retry import (
+    newest_run_since as _newest_run_since,
+)
+from application_sdk.testing.harness.automation_engine.retry import (
+    parse_run_timestamp as _parse_run_timestamp,
+)
+from application_sdk.testing.harness.automation_engine.retry import (
+    requested_retry_after as _requested_retry_after,
+)
+from application_sdk.testing.harness.automation_engine.retry import (
+    retry_gap as _retry_gap,
+)
+from application_sdk.testing.harness.automation_engine.retry import (
+    rotate_submit_credential_name as _rotate_submit_credential_name,
+)
+from application_sdk.testing.harness.automation_engine.wire import (
+    safe_node_status as _safe_node_status,
+)
+from application_sdk.testing.harness.automation_engine.wire import (
+    safe_run_status as _safe_run_status,
+)
+from application_sdk.testing.harness.bridge import run_sync
 
 _RUN_ID = "test-run-123"
+
+#: Where the AE write loops take their inter-attempt gap. The deadline loops
+#: take theirs from ``_poll``'s swappable default instead, so patching this
+#: cannot accidentally silence one of those.
+_SLEEP = "application_sdk.testing.harness.automation_engine.client.sleep_async"
+
+
+def _drive(coro):
+    """Run one of the async reader's internals to completion.
+
+    ``_request`` and ``_post_with_retry`` are private to
+    :class:`~application_sdk.testing.harness.automation_engine.client.AEClient`
+    and have no facade method, so the tests that drive them directly await them
+    through the same bridge every public method uses.
+    """
+    return run_sync(coro)
 
 
 def _make_client() -> AEWorkflowClient:
@@ -109,7 +167,7 @@ class TestPollNativeStatusStallGuard:
         client = _make_client()
         stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
 
-        with patch.object(client, "get_native_status", return_value=stuck):
+        with patch.object(client._ae, "get_native_status", return_value=stuck):
             with fake_clock():
                 with pytest.raises(NoWorkerOnTaskQueueError) as exc:
                     client.poll_native_status(
@@ -130,7 +188,7 @@ class TestPollNativeStatusStallGuard:
         client = _make_client()
         stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.SCHEDULED)
 
-        with patch.object(client, "get_native_status", return_value=stuck):
+        with patch.object(client._ae, "get_native_status", return_value=stuck):
             with fake_clock():
                 with pytest.raises(NoWorkerOnTaskQueueError):
                     client.poll_native_status(
@@ -151,7 +209,9 @@ class TestPollNativeStatusStallGuard:
         client = _make_client()
         never_dispatched = _result(DAGRunStatus.PENDING, DAGNodeStatus.PENDING)
 
-        with patch.object(client, "get_native_status", return_value=never_dispatched):
+        with patch.object(
+            client._ae, "get_native_status", return_value=never_dispatched
+        ):
             with fake_clock():
                 with pytest.raises(AutomationEngineNotDispatchingError) as exc:
                     client.poll_native_status(
@@ -172,7 +232,7 @@ class TestPollNativeStatusStallGuard:
         client = _make_client()
         stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
 
-        with patch.object(client, "get_native_status", return_value=stuck):
+        with patch.object(client._ae, "get_native_status", return_value=stuck):
             with fake_clock():
                 with pytest.raises(NoWorkerOnTaskQueueError) as exc:
                     client.poll_native_status(
@@ -193,7 +253,7 @@ class TestPollNativeStatusStallGuard:
         # Node running for many polls (well past grace), then succeeds.
         side_effects = [running] * 6 + [done]
 
-        with patch.object(client, "get_native_status", side_effect=side_effects):
+        with patch.object(client._ae, "get_native_status", side_effect=side_effects):
             with fake_clock():
                 result = client.poll_native_status(
                     _RUN_ID,
@@ -210,7 +270,7 @@ class TestPollNativeStatusStallGuard:
         client = _make_client()
         stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
 
-        with patch.object(client, "get_native_status", return_value=stuck):
+        with patch.object(client._ae, "get_native_status", return_value=stuck):
             with fake_clock():
                 result = client.poll_native_status(
                     _RUN_ID,
@@ -226,7 +286,7 @@ class TestPollNativeStatusStallGuard:
         client = _make_client()
         stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
 
-        with patch.object(client, "get_native_status", return_value=stuck):
+        with patch.object(client._ae, "get_native_status", return_value=stuck):
             with fake_clock():
                 result = client.poll_native_status(
                     _RUN_ID,
@@ -242,7 +302,7 @@ class TestPollNativeStatusStallGuard:
         client = _make_client()
         stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
 
-        with patch.object(client, "get_native_status", return_value=stuck):
+        with patch.object(client._ae, "get_native_status", return_value=stuck):
             with fake_clock():
                 result = client.poll_native_status(
                     _RUN_ID,
@@ -265,7 +325,7 @@ class TestPollNativeStatusProgressWatchdog:
         client = _make_client()
         stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
 
-        with patch.object(client, "get_native_status", return_value=stuck):
+        with patch.object(client._ae, "get_native_status", return_value=stuck):
             with fake_clock():
                 with pytest.raises(DAGProgressStalledError) as exc:
                     client.poll_native_status(
@@ -298,7 +358,7 @@ class TestPollNativeStatusProgressWatchdog:
         client = _make_client()
         stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
 
-        with patch.object(client, "get_native_status", return_value=stuck):
+        with patch.object(client._ae, "get_native_status", return_value=stuck):
             with fake_clock():
                 result = client.poll_native_status(
                     _RUN_ID,
@@ -317,7 +377,7 @@ class TestPollNativeStatusProgressWatchdog:
         done = _succeeded_result()
 
         with patch.object(
-            client, "get_native_status", side_effect=[running, running, done]
+            client._ae, "get_native_status", side_effect=[running, running, done]
         ):
             with fake_clock():
                 result = client.poll_native_status(
@@ -352,7 +412,7 @@ class TestSkippedStatus:
         client = _make_client()
         skipped = _result(DAGRunStatus.SKIPPED, DAGNodeStatus.PENDING)
 
-        with patch.object(client, "get_native_status", return_value=skipped):
+        with patch.object(client._ae, "get_native_status", return_value=skipped):
             with fake_clock():
                 result = client.poll_native_status(
                     _RUN_ID,
@@ -374,7 +434,7 @@ class TestPollNativeStatusTransientHandling:
         ok = _succeeded_result()
         side_effects = [err, err, ok]
 
-        with patch.object(client, "get_native_status", side_effect=side_effects):
+        with patch.object(client._ae, "get_native_status", side_effect=side_effects):
             with fake_clock():
                 result = client.poll_native_status(
                     _RUN_ID,
@@ -391,7 +451,7 @@ class TestPollNativeStatusTransientHandling:
         max_failures = 3
         side_effects = [_http_error()] * max_failures
 
-        with patch.object(client, "get_native_status", side_effect=side_effects):
+        with patch.object(client._ae, "get_native_status", side_effect=side_effects):
             with fake_clock():
                 with pytest.raises(AtlanApiHttpError):
                     client.poll_native_status(
@@ -415,7 +475,7 @@ class TestPollNativeStatusTransientHandling:
         )
         side_effects = [err, err, running, err, err, ok]
 
-        with patch.object(client, "get_native_status", side_effect=side_effects):
+        with patch.object(client._ae, "get_native_status", side_effect=side_effects):
             with fake_clock():
                 result = client.poll_native_status(
                     _RUN_ID,
@@ -432,7 +492,7 @@ class TestPollNativeStatusTransientHandling:
 
         with (
             patch.object(
-                client, "get_native_status", side_effect=ValueError("unexpected")
+                client._ae, "get_native_status", side_effect=ValueError("unexpected")
             ),
             fake_clock(),
             pytest.raises(ValueError, match="unexpected"),
@@ -453,18 +513,20 @@ class TestPostWithRetry:
         client = _make_client()
         with (
             patch.object(
-                client,
+                client._ae,
                 "_request",
                 side_effect=[TimeoutError("timed out"), (200, {"ok": True})],
             ),
-            patch("time.sleep"),
+            patch(_SLEEP),
         ):
-            status, body = client._post_with_retry(
-                "/some/path",
-                total_attempts=2,
-                sleep_seconds=1,
-                retryable=lambda s, b: s >= 500,
-                op_name="test_op",
+            status, body = _drive(
+                client._ae._post_with_retry(
+                    "/some/path",
+                    total_attempts=2,
+                    sleep_seconds=1,
+                    retryable=lambda s, b: s >= 500,
+                    op_name="test_op",
+                )
             )
         assert status == 200
         assert body == {"ok": True}
@@ -473,16 +535,18 @@ class TestPostWithRetry:
         """TimeoutError on every attempt → raises AtlanApiTimeoutError."""
         client = _make_client()
         with (
-            patch.object(client, "_request", side_effect=TimeoutError("timed out")),
-            patch("time.sleep"),
+            patch.object(client._ae, "_request", side_effect=TimeoutError("timed out")),
+            patch(_SLEEP),
             pytest.raises(AtlanApiTimeoutError),
         ):
-            client._post_with_retry(
-                "/some/path",
-                total_attempts=3,
-                sleep_seconds=1,
-                retryable=lambda s, b: s >= 500,
-                op_name="test_op",
+            _drive(
+                client._ae._post_with_retry(
+                    "/some/path",
+                    total_attempts=3,
+                    sleep_seconds=1,
+                    retryable=lambda s, b: s >= 500,
+                    op_name="test_op",
+                )
             )
 
     def test_5xx_then_success(self):
@@ -490,18 +554,20 @@ class TestPostWithRetry:
         client = _make_client()
         with (
             patch.object(
-                client,
+                client._ae,
                 "_request",
                 side_effect=[(503, {"err": "overloaded"}), (200, {"ok": True})],
             ),
-            patch("time.sleep"),
+            patch(_SLEEP),
         ):
-            status, _ = client._post_with_retry(
-                "/some/path",
-                total_attempts=2,
-                sleep_seconds=1,
-                retryable=lambda s, b: s >= 500,
-                op_name="test_op",
+            status, _ = _drive(
+                client._ae._post_with_retry(
+                    "/some/path",
+                    total_attempts=2,
+                    sleep_seconds=1,
+                    retryable=lambda s, b: s >= 500,
+                    op_name="test_op",
+                )
             )
         assert status == 200
 
@@ -509,15 +575,17 @@ class TestPostWithRetry:
         """HTTP 404 with retryable=False → returns on first attempt, no sleep."""
         client = _make_client()
         with (
-            patch.object(client, "_request", side_effect=[(404, {"not": "found"})]),
-            patch("time.sleep") as mock_sleep,
+            patch.object(client._ae, "_request", side_effect=[(404, {"not": "found"})]),
+            patch(_SLEEP) as mock_sleep,
         ):
-            status, _ = client._post_with_retry(
-                "/some/path",
-                total_attempts=5,
-                sleep_seconds=1,
-                retryable=lambda s, b: s >= 500,
-                op_name="test_op",
+            status, _ = _drive(
+                client._ae._post_with_retry(
+                    "/some/path",
+                    total_attempts=5,
+                    sleep_seconds=1,
+                    retryable=lambda s, b: s >= 500,
+                    op_name="test_op",
+                )
             )
         assert status == 404
         mock_sleep.assert_not_called()
@@ -534,18 +602,20 @@ class TestPostWithRetry:
         pending = (200, {"status": "pending"})
         success = (200, {"status": "success"})
         with (
-            patch.object(client, "_request", side_effect=[pending, success]),
-            patch("time.sleep") as mock_sleep,
+            patch.object(client._ae, "_request", side_effect=[pending, success]),
+            patch(_SLEEP) as mock_sleep,
         ):
-            status, body = client._post_with_retry(
-                "/some/path",
-                total_attempts=3,
-                sleep_seconds=1,
-                retryable=lambda s, b: (
-                    s >= 300
-                    or not (isinstance(b, dict) and b.get("status") == "success")
-                ),
-                op_name="test_op",
+            status, body = _drive(
+                client._ae._post_with_retry(
+                    "/some/path",
+                    total_attempts=3,
+                    sleep_seconds=1,
+                    retryable=lambda s, b: (
+                        s >= 300
+                        or not (isinstance(b, dict) and b.get("status") == "success")
+                    ),
+                    op_name="test_op",
+                )
             )
         assert status == 200
         assert isinstance(body, dict) and body.get("status") == "success"
@@ -657,18 +727,20 @@ class TestPostWithRetryHonoursRetryAfter:
         client = _make_client()
         with (
             patch.object(
-                client,
+                client._ae,
                 "_request",
                 side_effect=[(504, _OVERLOADED_504_BODY), (200, {"ok": True})],
             ),
-            patch("time.sleep") as mock_sleep,
+            patch(_SLEEP) as mock_sleep,
         ):
-            status, _ = client._post_with_retry(
-                "/some/path",
-                total_attempts=2,
-                sleep_seconds=5,
-                retryable=lambda s, b: s >= 500,
-                op_name="test_op",
+            status, _ = _drive(
+                client._ae._post_with_retry(
+                    "/some/path",
+                    total_attempts=2,
+                    sleep_seconds=5,
+                    retryable=lambda s, b: s >= 500,
+                    op_name="test_op",
+                )
             )
         assert status == 200
         mock_sleep.assert_called_once_with(120)
@@ -677,18 +749,20 @@ class TestPostWithRetryHonoursRetryAfter:
         client = _make_client()
         with (
             patch.object(
-                client,
+                client._ae,
                 "_request",
                 side_effect=[(503, {"err": "overloaded"}), (200, {"ok": True})],
             ),
-            patch("time.sleep") as mock_sleep,
+            patch(_SLEEP) as mock_sleep,
         ):
-            client._post_with_retry(
-                "/some/path",
-                total_attempts=2,
-                sleep_seconds=5,
-                retryable=lambda s, b: s >= 500,
-                op_name="test_op",
+            _drive(
+                client._ae._post_with_retry(
+                    "/some/path",
+                    total_attempts=2,
+                    sleep_seconds=5,
+                    retryable=lambda s, b: s >= 500,
+                    op_name="test_op",
+                )
             )
         mock_sleep.assert_called_once_with(5)
 
@@ -704,15 +778,19 @@ class TestPostWithRetryHonoursRetryAfter:
         attempts = 5
         fixed_gap = 5
         with (
-            patch.object(client, "_request", return_value=(504, _OVERLOADED_504_BODY)),
-            patch("time.sleep") as mock_sleep,
+            patch.object(
+                client._ae, "_request", return_value=(504, _OVERLOADED_504_BODY)
+            ),
+            patch(_SLEEP) as mock_sleep,
         ):
-            status, _ = client._post_with_retry(
-                "/some/path",
-                total_attempts=attempts,
-                sleep_seconds=fixed_gap,
-                retryable=lambda s, b: s >= 500,
-                op_name="test_op",
+            status, _ = _drive(
+                client._ae._post_with_retry(
+                    "/some/path",
+                    total_attempts=attempts,
+                    sleep_seconds=fixed_gap,
+                    retryable=lambda s, b: s >= 500,
+                    op_name="test_op",
+                )
             )
         assert status == 504
         slept = [call.args[0] for call in mock_sleep.call_args_list]
@@ -730,8 +808,10 @@ class TestPostWithRetryHonoursRetryAfter:
         """create_workflow's raise keeps the hint for the operator to see."""
         client = _make_client()
         with (
-            patch.object(client, "_request", return_value=(504, _OVERLOADED_504_BODY)),
-            patch("time.sleep"),
+            patch.object(
+                client._ae, "_request", return_value=(504, _OVERLOADED_504_BODY)
+            ),
+            patch(_SLEEP),
             pytest.raises(AtlanApiHttpError) as excinfo,
         ):
             client.create_workflow("wf-name", retries=1, retry_sleep_seconds=1)
@@ -751,7 +831,7 @@ class TestPollNativeStatusHonoursRetryAfter:
         )
         with (
             patch.object(
-                client, "get_native_status", side_effect=[err, _succeeded_result()]
+                client._ae, "get_native_status", side_effect=[err, _succeeded_result()]
             ),
             fake_clock() as clock,
         ):
@@ -768,7 +848,7 @@ class TestPollNativeStatusHonoursRetryAfter:
         client = _make_client()
         with (
             patch.object(
-                client,
+                client._ae,
                 "get_native_status",
                 side_effect=[_http_error(), _succeeded_result()],
             ),
@@ -791,7 +871,7 @@ class TestPollNativeStatusHonoursRetryAfter:
             retry_after_seconds=120,
         )
         with (
-            patch.object(client, "get_native_status", side_effect=[err] * 10),
+            patch.object(client._ae, "get_native_status", side_effect=[err] * 10),
             fake_clock() as clock,
             pytest.raises(AtlanApiTimeoutError),
         ):
@@ -815,7 +895,7 @@ class TestPollNativeStatusHonoursRetryAfter:
             retry_after_seconds=120,
         )
         with (
-            patch.object(client, "get_native_status", side_effect=[err] * 10),
+            patch.object(client._ae, "get_native_status", side_effect=[err] * 10),
             fake_clock() as clock,
             pytest.raises(AtlanApiTimeoutError),
         ):
@@ -840,7 +920,7 @@ class TestPollNativeStatusHonoursRetryAfter:
             retry_after_seconds=120,
         )
         with (
-            patch.object(client, "get_native_status", side_effect=[err] * 10),
+            patch.object(client._ae, "get_native_status", side_effect=[err] * 10),
             fake_clock() as clock,
             pytest.raises(AtlanApiHttpError),
         ):
@@ -867,10 +947,12 @@ class TestPollNativeStatusHonoursRetryAfter:
 def _patch_transport(*results: httpx.Response | Exception):
     """Patch the one httpx call ``_request`` makes, per attempt.
 
-    ``_request`` builds a single-use ``httpx.Client`` per attempt, so patching
-    ``Client.request`` covers every attempt from one place. Pass one entry per
-    expected attempt: a ``Response`` to answer with, or an exception to raise.
-    A single entry is repeated for every attempt.
+    ``_request`` now issues through one pooled ``httpx.AsyncClient``, dropped
+    and rebuilt after a transport error so a retry still gets a fresh
+    connection; patching ``AsyncClient.request`` covers every attempt from one
+    place either way. Pass one entry per expected attempt: a ``Response`` to
+    answer with, or an exception to raise. A single entry is repeated for every
+    attempt.
     """
     if len(results) == 1:
         only = results[0]
@@ -884,7 +966,7 @@ def _patch_transport(*results: httpx.Response | Exception):
         )
     else:
         kwargs = {"side_effect": list(results)}
-    return patch.object(httpx.Client, "request", autospec=True, **kwargs)
+    return patch.object(httpx.AsyncClient, "request", autospec=True, **kwargs)
 
 
 def _response(status: int, raw: bytes) -> httpx.Response:
@@ -931,9 +1013,9 @@ class TestRequestNetworkRetry:
             _patch_transport(
                 httpx.ConnectError("dns blip"), _response(200, b'{"ok": true}')
             ),
-            patch("time.sleep"),
+            patch(_SLEEP),
         ):
-            status, body = client._request("GET", "/native-status")
+            status, body = _drive(client._ae._request("GET", "/native-status"))
         assert status == 200
         assert body == {"ok": True}
 
@@ -942,10 +1024,10 @@ class TestRequestNetworkRetry:
         client = _make_client()
         with (
             _patch_transport(httpx.ConnectError("name resolution")) as mock_req,
-            patch("time.sleep"),
+            patch(_SLEEP),
             pytest.raises(AtlanApiTimeoutError),
         ):
-            client._request("GET", "/native-status")
+            _drive(client._ae._request("GET", "/native-status"))
         assert mock_req.call_count == _REQUEST_MAX_ATTEMPTS
 
     def test_5xx_returns_immediately_without_retry(self):
@@ -953,9 +1035,9 @@ class TestRequestNetworkRetry:
         client = _make_client()
         with (
             _patch_transport(_response(500, b'{"err": "boom"}')) as mock_req,
-            patch("time.sleep") as mock_sleep,
+            patch(_SLEEP) as mock_sleep,
         ):
-            status, body = client._request("GET", "/native-status")
+            status, body = _drive(client._ae._request("GET", "/native-status"))
         assert status == 500
         assert body == {"err": "boom"}
         assert mock_req.call_count == 1
@@ -965,7 +1047,7 @@ class TestRequestNetworkRetry:
         """A 2xx that isn't JSON degrades to text rather than crashing."""
         client = _make_client()
         with _patch_transport(_response(200, b"<html>gateway</html>")):
-            status, body = client._request("GET", "/native-status")
+            status, body = _drive(client._ae._request("GET", "/native-status"))
         assert status == 200
         assert body == "<html>gateway</html>"
 
@@ -975,18 +1057,18 @@ class TestRequestNetworkRetry:
         client = _make_client()
         with (
             _patch_transport(httpx.ReadTimeout("read timed out")),
-            patch("time.sleep"),
+            patch(_SLEEP),
             pytest.raises(AtlanApiTimeoutError) as excinfo,
         ):
-            client._request("GET", "/native-status")
+            _drive(client._ae._request("GET", "/native-status"))
         assert excinfo.value.delivery is RequestDelivery.AMBIGUOUS
 
         with (
             _patch_transport(httpx.ConnectTimeout("handshake never completed")),
-            patch("time.sleep"),
+            patch(_SLEEP),
             pytest.raises(AtlanApiTimeoutError) as excinfo,
         ):
-            client._request("GET", "/native-status")
+            _drive(client._ae._request("GET", "/native-status"))
         assert excinfo.value.delivery is RequestDelivery.NOT_DELIVERED
 
 
@@ -1057,8 +1139,8 @@ class TestSubmitWorkflowCredentialRetry:
         ok = (200, {"data": {"run_id": "run-xyz"}})
         payload = self._payload_with_cred()
         with (
-            patch.object(client, "_request", side_effect=[dup, ok]),
-            patch("time.sleep"),
+            patch.object(client._ae, "_request", side_effect=[dup, ok]),
+            patch(_SLEEP),
         ):
             run_id = client.submit_workflow(payload, retries=4, retry_sleep_seconds=0)
         assert run_id == "run-xyz"
@@ -1071,11 +1153,11 @@ class TestSubmitWorkflowCredentialRetry:
         payload = self._payload_with_cred()
         with (
             patch.object(
-                client,
+                client._ae,
                 "_request",
                 side_effect=[(503, {"err": "overloaded"}), (200, {"run_id": "r2"})],
             ),
-            patch("time.sleep"),
+            patch(_SLEEP),
         ):
             run_id = client.submit_workflow(payload, retries=4, retry_sleep_seconds=0)
         assert run_id == "r2"
@@ -1086,8 +1168,8 @@ class TestSubmitWorkflowCredentialRetry:
         client = _make_client()
         dup = (400, {"message": 'unique constraint "credentials_name_key"'})
         with (
-            patch.object(client, "_request", side_effect=[dup, dup]),
-            patch("time.sleep"),
+            patch.object(client._ae, "_request", side_effect=[dup, dup]),
+            patch(_SLEEP),
         ):
             with pytest.raises(AtlanApiHttpError):
                 client.submit_workflow(
@@ -1155,11 +1237,11 @@ class TestSubmitWorkflowAppColdStart:
         refused = (500, _REFUSED_BODY)
         with (
             patch.object(
-                client,
+                client._ae,
                 "_request",
                 side_effect=[refused, refused, (200, {"data": {"run_id": "run-warm"}})],
             ),
-            patch("time.sleep"),
+            patch(_SLEEP),
         ):
             run_id = client.submit_workflow(
                 {"metadata": {"name": "wf"}}, retries=60, retry_sleep_seconds=0
@@ -1171,8 +1253,8 @@ class TestSubmitWorkflowAppColdStart:
         client = _make_client()
         refused = (500, _REFUSED_BODY)
         with (
-            patch.object(client, "_request", side_effect=[refused] * 3),
-            patch("time.sleep"),
+            patch.object(client._ae, "_request", side_effect=[refused] * 3),
+            patch(_SLEEP),
         ):
             with pytest.raises(AppNotReadyError) as excinfo:
                 client.submit_workflow(
@@ -1189,8 +1271,10 @@ class TestSubmitWorkflowAppColdStart:
         """The cold-start naming never swallows a real AE failure."""
         client = _make_client()
         with (
-            patch.object(client, "_request", side_effect=[(500, {"err": "boom"})] * 2),
-            patch("time.sleep"),
+            patch.object(
+                client._ae, "_request", side_effect=[(500, {"err": "boom"})] * 2
+            ),
+            patch(_SLEEP),
         ):
             with pytest.raises(AtlanApiHttpError):
                 client.submit_workflow(
@@ -1241,9 +1325,9 @@ class TestSubmitWorkflowIdempotency:
         client = _make_client()
         with (
             patch.object(
-                client, "_request", return_value=(500, _MASKED_409_BODY)
+                client._ae, "_request", return_value=(500, _MASKED_409_BODY)
             ) as mock_req,
-            patch("time.sleep") as mock_sleep,
+            patch(_SLEEP) as mock_sleep,
             pytest.raises(AtlanAEWorkflowAlreadyActiveError),
         ):
             client.submit_workflow({"any": "payload"})
@@ -1257,8 +1341,8 @@ class TestSubmitWorkflowIdempotency:
         client = _make_client()
         bare_409 = (409, {"code": "AE-WF-409-03", "message": "already active"})
         with (
-            patch.object(client, "_request", return_value=bare_409) as mock_req,
-            patch("time.sleep") as mock_sleep,
+            patch.object(client._ae, "_request", return_value=bare_409) as mock_req,
+            patch(_SLEEP) as mock_sleep,
             pytest.raises(AtlanAEWorkflowAlreadyActiveError),
         ):
             client.submit_workflow({"any": "payload"})
@@ -1276,8 +1360,8 @@ class TestSubmitWorkflowIdempotency:
             delivery=RequestDelivery.AMBIGUOUS,
         )
         with (
-            patch.object(client, "_request", side_effect=ambiguous) as mock_req,
-            patch("time.sleep"),
+            patch.object(client._ae, "_request", side_effect=ambiguous) as mock_req,
+            patch(_SLEEP),
             pytest.raises(AtlanApiTimeoutError, match=r"after 1 attempt") as excinfo,
         ):
             client.submit_workflow({"any": "payload"})
@@ -1290,9 +1374,9 @@ class TestSubmitWorkflowIdempotency:
         client = _make_client()
         with (
             patch.object(
-                client, "_request", side_effect=TimeoutError("read timed out")
+                client._ae, "_request", side_effect=TimeoutError("read timed out")
             ) as mock_req,
-            patch("time.sleep"),
+            patch(_SLEEP),
             pytest.raises(AtlanApiTimeoutError, match=r"after 1 attempt"),
         ):
             client.submit_workflow({"any": "payload"})
@@ -1310,9 +1394,11 @@ class TestSubmitWorkflowIdempotency:
         )
         with (
             patch.object(
-                client, "_request", side_effect=[never_sent, (200, {"run_id": "r-2"})]
+                client._ae,
+                "_request",
+                side_effect=[never_sent, (200, {"run_id": "r-2"})],
             ) as mock_req,
-            patch("time.sleep"),
+            patch(_SLEEP),
         ):
             assert client.submit_workflow({"any": "payload"}) == "r-2"
         assert mock_req.call_count == 2
@@ -1327,8 +1413,8 @@ class TestSubmitWorkflowIdempotency:
             delivery=RequestDelivery.NOT_DELIVERED,
         )
         with (
-            patch.object(client, "_request", side_effect=never_sent) as mock_req,
-            patch("time.sleep"),
+            patch.object(client._ae, "_request", side_effect=never_sent) as mock_req,
+            patch(_SLEEP),
             pytest.raises(AtlanApiTimeoutError, match=r"after 3 attempt") as excinfo,
         ):
             client.submit_workflow({"any": "payload"}, retries=2)
@@ -1343,10 +1429,14 @@ class TestSubmitWorkflowIdempotency:
         client = _make_client()
         with (
             _patch_transport(httpx.ReadTimeout("read timed out")) as mock_req,
-            patch("time.sleep"),
+            patch(_SLEEP),
             pytest.raises(AtlanApiTimeoutError),
         ):
-            client._request("POST", "/submit", body={}, retry_network_errors=False)
+            _drive(
+                client._ae._request(
+                    "POST", "/submit", body={}, retry_network_errors=False
+                )
+            )
         assert mock_req.call_count == 1
 
     def test_request_no_repost_even_when_never_delivered(self):
@@ -1356,10 +1446,14 @@ class TestSubmitWorkflowIdempotency:
         client = _make_client()
         with (
             _patch_transport(httpx.ConnectTimeout("no handshake")) as mock_req,
-            patch("time.sleep"),
+            patch(_SLEEP),
             pytest.raises(AtlanApiTimeoutError) as excinfo,
         ):
-            client._request("POST", "/submit", body={}, retry_network_errors=False)
+            _drive(
+                client._ae._request(
+                    "POST", "/submit", body={}, retry_network_errors=False
+                )
+            )
         assert mock_req.call_count == 1
         assert excinfo.value.delivery is RequestDelivery.NOT_DELIVERED
 
@@ -1369,11 +1463,11 @@ class TestSubmitWorkflowIdempotency:
         client = _make_client()
         with (
             patch.object(
-                client,
+                client._ae,
                 "_request",
                 side_effect=[(503, {"err": "overloaded"}), (200, {"run_id": "r-ok"})],
             ) as mock_req,
-            patch("time.sleep"),
+            patch(_SLEEP),
         ):
             run_id = client.submit_workflow({"any": "payload"})
         assert run_id == "r-ok"
@@ -1381,7 +1475,9 @@ class TestSubmitWorkflowIdempotency:
 
     def test_happy_path_returns_run_id(self):
         client = _make_client()
-        with patch.object(client, "_request", return_value=(200, {"run_id": "r-1"})):
+        with patch.object(
+            client._ae, "_request", return_value=(200, {"run_id": "r-1"})
+        ):
             assert client.submit_workflow({"any": "payload"}) == "r-1"
 
 
@@ -1482,14 +1578,14 @@ class TestFindRunCreatedSince:
     def test_found_run_is_conclusive(self):
         client = _make_client()
         body = {"data": [{"guid": "r-real", "created_at": "2026-08-20T13:58:46Z"}]}
-        with patch.object(client, "_request", return_value=(200, body)):
+        with patch.object(client._ae, "_request", return_value=(200, body)):
             lookup = client.find_run_created_since("slug-x", self._SINCE)
         assert lookup == RunLookup(run_id="r-real", conclusive=True)
 
     def test_queries_ae_under_the_slug(self):
         client = _make_client()
         with patch.object(
-            client, "_request", return_value=(200, {"data": []})
+            client._ae, "_request", return_value=(200, {"data": []})
         ) as mock_req:
             client.find_run_created_since(
                 "slug/with space", self._SINCE, timeout_seconds=0
@@ -1503,7 +1599,7 @@ class TestFindRunCreatedSince:
 
     def test_empty_answer_is_proof_of_absence(self):
         client = _make_client()
-        with patch.object(client, "_request", return_value=(200, {"data": []})):
+        with patch.object(client._ae, "_request", return_value=(200, {"data": []})):
             lookup = client.find_run_created_since(
                 "slug-x", self._SINCE, timeout_seconds=0
             )
@@ -1515,7 +1611,9 @@ class TestFindRunCreatedSince:
         the duplicate submit this whole mechanism exists to prevent."""
         client = _make_client()
         with patch.object(
-            client, "_request", side_effect=AtlanApiTimeoutError(message="blackholed")
+            client._ae,
+            "_request",
+            side_effect=AtlanApiTimeoutError(message="blackholed"),
         ):
             lookup = client.find_run_created_since(
                 "slug-x", self._SINCE, timeout_seconds=0
@@ -1524,7 +1622,7 @@ class TestFindRunCreatedSince:
 
     def test_non_2xx_read_proves_nothing(self):
         client = _make_client()
-        with patch.object(client, "_request", return_value=(503, {"err": "down"})):
+        with patch.object(client._ae, "_request", return_value=(503, {"err": "down"})):
             lookup = client.find_run_created_since(
                 "slug-x", self._SINCE, timeout_seconds=0
             )
@@ -1533,22 +1631,33 @@ class TestFindRunCreatedSince:
     def test_polls_until_the_run_becomes_searchable(self):
         """AE serves this list from Elasticsearch, so a run committed just
         before the connection died can take a moment to appear. One empty
-        answer is not the end of the search."""
+        answer is not the end of the search.
+
+        Under ``fake_clock`` rather than ``patch(_SLEEP)``: this loop is a
+        *deadline* loop, so it sleeps through ``_poll``'s swappable default and
+        never touches ``sleep_async``. Patching the retry seam here left the two
+        ``interval_seconds`` gaps running on the real clock — twenty seconds of
+        the unit suite spent proving nothing the fake does not prove. See
+        FND-962.
+        """
         client = _make_client()
         late = {"data": [{"guid": "r-late", "created_at": "2026-08-20T13:58:46Z"}]}
         with (
             patch.object(
-                client,
+                client._ae,
                 "_request",
                 side_effect=[(200, {"data": []}), (200, {"data": []}), (200, late)],
             ) as mock_req,
-            patch("time.sleep"),
+            fake_clock() as clock,
         ):
             lookup = client.find_run_created_since(
                 "slug-x", self._SINCE, timeout_seconds=60, interval_seconds=10
             )
         assert lookup.run_id == "r-late"
         assert mock_req.call_count == 3
+        # The cadence itself, which the inert patch could not see: two full
+        # intervals between the three reads.
+        assert clock.slept == [10, 10]
 
     def test_clock_skew_window_admits_a_slightly_earlier_run(self):
         """The runner's clock and the tenant's are compared directly, so a run
@@ -1556,7 +1665,7 @@ class TestFindRunCreatedSince:
         client = _make_client()
         skewed = self._SINCE - timedelta(seconds=_RECONCILE_CLOCK_SKEW_SECONDS // 2)
         body = {"data": [{"guid": "r-skewed", "created_at": skewed.isoformat()}]}
-        with patch.object(client, "_request", return_value=(200, body)):
+        with patch.object(client._ae, "_request", return_value=(200, body)):
             lookup = client.find_run_created_since("slug-x", self._SINCE)
         assert lookup.run_id == "r-skewed"
 
@@ -1564,7 +1673,7 @@ class TestFindRunCreatedSince:
         client = _make_client()
         stale = self._SINCE - timedelta(seconds=_RECONCILE_CLOCK_SKEW_SECONDS + 60)
         body = {"data": [{"guid": "r-stale", "created_at": stale.isoformat()}]}
-        with patch.object(client, "_request", return_value=(200, body)):
+        with patch.object(client._ae, "_request", return_value=(200, body)):
             lookup = client.find_run_created_since(
                 "slug-x", self._SINCE, timeout_seconds=0
             )
@@ -1581,12 +1690,12 @@ class TestProbeRunIsListed:
     def test_listed_run_returns_true(self):
         body = {"data": [{"guid": "r-1"}, {"guid": "r-0"}]}
         client = _make_client()
-        with patch.object(client, "_request", return_value=(200, body)):
+        with patch.object(client._ae, "_request", return_value=(200, body)):
             assert client.probe_run_is_listed("slug-x", "r-1") is True
 
     def test_answered_without_the_run_returns_false(self):
         client = _make_client()
-        with patch.object(client, "_request", return_value=(200, {"data": []})):
+        with patch.object(client._ae, "_request", return_value=(200, {"data": []})):
             assert client.probe_run_is_listed("slug-x", "r-1") is False
 
     def test_unanswered_read_returns_none_not_false(self):
@@ -1594,19 +1703,21 @@ class TestProbeRunIsListed:
         'absent' would be recorded as evidence for flipping the gate."""
         client = _make_client()
         with patch.object(
-            client, "_request", side_effect=AtlanApiTimeoutError(message="blackholed")
+            client._ae,
+            "_request",
+            side_effect=AtlanApiTimeoutError(message="blackholed"),
         ):
             assert client.probe_run_is_listed("slug-x", "r-1") is None
 
     def test_non_2xx_returns_none(self):
         client = _make_client()
-        with patch.object(client, "_request", return_value=(503, {"err": "down"})):
+        with patch.object(client._ae, "_request", return_value=(503, {"err": "down"})):
             assert client.probe_run_is_listed("slug-x", "r-1") is None
 
     def test_never_raises_into_the_leg(self):
         """Outcome-neutral: a broken probe must not fail a passing e2e run."""
         client = _make_client()
-        with patch.object(client, "_request", return_value=(200, {"data": "junk"})):
+        with patch.object(client._ae, "_request", return_value=(200, {"data": "junk"})):
             assert client.probe_run_is_listed("slug-x", "r-1") is False
 
 
@@ -1627,13 +1738,13 @@ class TestSubmitReconciliation:
         running, so return its id instead of failing the leg."""
         client = _make_client()
         with (
-            patch.object(client, "_request", side_effect=self._ambiguous()),
+            patch.object(client._ae, "_request", side_effect=self._ambiguous()),
             patch.object(
-                client,
+                client._ae,
                 "find_run_created_since",
                 return_value=RunLookup(run_id="r-adopted", conclusive=True),
             ) as mock_find,
-            patch("time.sleep"),
+            patch(_SLEEP),
         ):
             assert client.submit_workflow({"any": "p"}, slug="slug-x") == "r-adopted"
         assert mock_find.call_args[0][0] == "slug-x"
@@ -1641,13 +1752,15 @@ class TestSubmitReconciliation:
     def test_does_not_resubmit_after_adopting(self):
         client = _make_client()
         with (
-            patch.object(client, "_request", side_effect=self._ambiguous()) as mock_req,
             patch.object(
-                client,
+                client._ae, "_request", side_effect=self._ambiguous()
+            ) as mock_req,
+            patch.object(
+                client._ae,
                 "find_run_created_since",
                 return_value=RunLookup(run_id="r-adopted", conclusive=True),
             ),
-            patch("time.sleep"),
+            patch(_SLEEP),
         ):
             client.submit_workflow({"any": "p"}, slug="slug-x", retries=4)
         assert mock_req.call_count == 1
@@ -1659,21 +1772,21 @@ class TestSubmitReconciliation:
         client = _make_client()
         with (
             patch.object(
-                client,
+                client._ae,
                 "_request",
                 side_effect=[self._ambiguous(), (200, {"run_id": "r-2"})],
             ) as mock_req,
             patch.object(
-                client,
+                client._ae,
                 "find_run_created_since",
                 return_value=RunLookup(run_id=None, conclusive=True),
             ),
             patch(
-                "application_sdk.testing.e2e.client."
+                "application_sdk.testing.harness.automation_engine.client."
                 "_RESUBMIT_WHEN_AE_REPORTS_NO_RUN",
                 True,
             ),
-            patch("time.sleep"),
+            patch(_SLEEP),
         ):
             assert client.submit_workflow({"any": "p"}, slug="slug-x") == "r-2"
         assert mock_req.call_count == 2
@@ -1683,13 +1796,15 @@ class TestSubmitReconciliation:
         did before reconciliation existed. Adopting is the only enabled half."""
         client = _make_client()
         with (
-            patch.object(client, "_request", side_effect=self._ambiguous()) as mock_req,
             patch.object(
-                client,
+                client._ae, "_request", side_effect=self._ambiguous()
+            ) as mock_req,
+            patch.object(
+                client._ae,
                 "find_run_created_since",
                 return_value=RunLookup(run_id=None, conclusive=True),
             ),
-            patch("time.sleep"),
+            patch(_SLEEP),
             pytest.raises(AtlanApiTimeoutError, match=r"after 1 attempt"),
         ):
             client.submit_workflow({"any": "p"}, slug="slug-x")
@@ -1700,13 +1815,15 @@ class TestSubmitReconciliation:
         behaviour stands, rather than risking a duplicate run."""
         client = _make_client()
         with (
-            patch.object(client, "_request", side_effect=self._ambiguous()) as mock_req,
             patch.object(
-                client,
+                client._ae, "_request", side_effect=self._ambiguous()
+            ) as mock_req,
+            patch.object(
+                client._ae,
                 "find_run_created_since",
                 return_value=RunLookup(run_id=None, conclusive=False),
             ),
-            patch("time.sleep"),
+            patch(_SLEEP),
             pytest.raises(AtlanApiTimeoutError, match=r"after 1 attempt") as excinfo,
         ):
             client.submit_workflow({"any": "p"}, slug="slug-x")
@@ -1718,9 +1835,11 @@ class TestSubmitReconciliation:
         contract — the guard degrades, it does not guess."""
         client = _make_client()
         with (
-            patch.object(client, "_request", side_effect=self._ambiguous()) as mock_req,
-            patch.object(client, "find_run_created_since") as mock_find,
-            patch("time.sleep"),
+            patch.object(
+                client._ae, "_request", side_effect=self._ambiguous()
+            ) as mock_req,
+            patch.object(client._ae, "find_run_created_since") as mock_find,
+            patch(_SLEEP),
             pytest.raises(AtlanApiTimeoutError),
         ):
             client.submit_workflow({"any": "p"})
@@ -1738,10 +1857,12 @@ class TestSubmitReconciliation:
         )
         with (
             patch.object(
-                client, "_request", side_effect=[never_sent, (200, {"run_id": "r-3"})]
+                client._ae,
+                "_request",
+                side_effect=[never_sent, (200, {"run_id": "r-3"})],
             ),
-            patch.object(client, "find_run_created_since") as mock_find,
-            patch("time.sleep"),
+            patch.object(client._ae, "find_run_created_since") as mock_find,
+            patch(_SLEEP),
         ):
             assert client.submit_workflow({"any": "p"}, slug="slug-x") == "r-3"
         mock_find.assert_not_called()
@@ -1761,7 +1882,7 @@ class TestPollNativeStatusCeilingStamp:
         client = _make_client()
         stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
 
-        with patch.object(client, "get_native_status", return_value=stuck):
+        with patch.object(client._ae, "get_native_status", return_value=stuck):
             with fake_clock():
                 result = client.poll_native_status(
                     _RUN_ID,
@@ -1783,7 +1904,7 @@ class TestPollNativeStatusCeilingStamp:
         running = _result(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
 
         with patch.object(
-            client, "get_native_status", side_effect=[pending] + [running] * 20
+            client._ae, "get_native_status", side_effect=[pending] + [running] * 20
         ):
             with fake_clock():
                 result = client.poll_native_status(
@@ -1804,7 +1925,7 @@ class TestPollNativeStatusCeilingStamp:
         client = _make_client()
 
         with patch.object(
-            client, "get_native_status", return_value=_succeeded_result()
+            client._ae, "get_native_status", return_value=_succeeded_result()
         ):
             with fake_clock():
                 result = client.poll_native_status(

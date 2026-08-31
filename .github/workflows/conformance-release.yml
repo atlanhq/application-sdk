@@ -75,7 +75,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.6"
+          version: "0.12.7"
 
       - name: Compute version, bump pyproject + __init__, update CHANGELOG
         id: versions
@@ -106,33 +106,29 @@ jobs:
           git commit -m "chore(conformance): release v${new_version}"
           git push origin "${BUMP_BRANCH}" --force-with-lease
 
-          existing="$(gh pr list \
-            --head "${BUMP_BRANCH}" \
+          body_file="$(mktemp)"
+          {
+            echo "Automated release PR for atlan-application-sdk-conformance v${new_version}."
+            echo
+            echo "Merging this PR triggers Publish Conformance Package, which builds"
+            echo "the wheel + sdist and publishes to PyPI, then creates the"
+            echo "conformance-v${new_version} tag."
+            echo
+            echo "## Release notes"
+            echo
+            cat /tmp/conformance-release-notes.md
+          } > "$body_file"
+
+          # Upsert rather than create-or-skip. The force-push above moves the
+          # branch to a newer version and a freshly generated release-notes
+          # block, but the previous `if` only logged that the PR existed — so a
+          # reused PR kept the *first* run's version in its title and the first
+          # run's release notes in its body. The script re-syncs both, ensures
+          # the release label, and no-ops when nothing changed.
+          python3 .github/scripts/upsert_release_pr.py \
+            --repo "${GITHUB_REPOSITORY}" \
             --base main \
-            --state open \
-            --json number \
-            --jq '.[0].number')"
-
-          if [ -n "$existing" ]; then
-            echo "PR #${existing} already exists for ${BUMP_BRANCH}; force-push updated it."
-          else
-            body_file="$(mktemp)"
-            {
-              echo "Automated release PR for atlan-application-sdk-conformance v${new_version}."
-              echo
-              echo "Merging this PR triggers Publish Conformance Package, which builds"
-              echo "the wheel + sdist and publishes to PyPI, then creates the"
-              echo "conformance-v${new_version} tag."
-              echo
-              echo "## Release notes"
-              echo
-              cat /tmp/conformance-release-notes.md
-            } > "$body_file"
-
-            gh pr create \
-              --base main \
-              --head "${BUMP_BRANCH}" \
-              --title "chore(conformance): release v${new_version}" \
-              --body-file "$body_file" \
-              --label "${RELEASE_LABEL}"
-          fi
+            --head "${BUMP_BRANCH}" \
+            --title "chore(conformance): release v${new_version}" \
+            --body-file "$body_file" \
+            --label "${RELEASE_LABEL}"

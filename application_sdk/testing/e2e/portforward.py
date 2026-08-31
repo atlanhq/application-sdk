@@ -1,103 +1,26 @@
-"""Ephemeral kubectl port-forward helper for K8s e2e tests."""
+"""Ephemeral kubectl port-forward helper for K8s e2e tests.
 
-import asyncio
-import socket
-from typing import Any
+The implementation moved to
+:mod:`application_sdk.testing.harness.cluster._portforward` with the typed
+cluster backend (FND-241, child E on FND-224). It moved for direction, not for
+tidiness: :meth:`ClusterReader.http` sits on it, and a harness module cannot
+import from the package child H re-expresses *over* it without making a
+``harness -> e2e -> harness`` cycle. Same reason ``_poll`` and the AE error
+leaves moved in the earlier children.
 
-import httpx
+This module re-exports the *same function object*, so
+``from application_sdk.testing.e2e.portforward import kube_http_call`` and every
+existing call site are unchanged.
 
-from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.testing.e2e._poll import until_deadline_async
+New code that makes more than one call to the same Service should reach for
+:func:`~application_sdk.testing.harness.cluster.port_forward` instead — one
+tunnel for the batch rather than one ``kubectl`` process per call.
+"""
 
-logger = get_logger(__name__)
+from application_sdk.testing.harness.cluster._portforward import (
+    PortForward,
+    kube_http_call,
+    port_forward,
+)
 
-# Tight cadence: the port opens within a few hundred ms once kubectl's tunnel is
-# up, and every attempt already carries its own 1s connect timeout.
-_PORT_POLL_INTERVAL_SECONDS = 0.1
-
-
-def _find_free_port() -> int:
-    """Bind to port 0 to let the OS pick a free port, return it."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("", 0))  # noqa: S104 — intentional: OS picks free port on all interfaces
-        return s.getsockname()[1]
-
-
-async def _wait_for_port(
-    port: int, host: str = "127.0.0.1", timeout: float = 10.0
-) -> None:
-    """Poll until TCP port accepts connections or timeout."""
-    async for attempt in until_deadline_async(
-        timeout,
-        _PORT_POLL_INTERVAL_SECONDS,
-        label=f"tcp://{host}:{port}",
-        # A 10s budget never reaches the 30s heartbeat cadence, and the caller
-        # already logs the port-forward it is waiting on.
-        heartbeat_seconds=0,
-    ):
-        try:
-            _reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(host, port), timeout=1.0
-            )
-            writer.close()
-            await writer.wait_closed()
-            return
-        except (ConnectionRefusedError, OSError, asyncio.TimeoutError) as exc:
-            if attempt.is_last:
-                raise TimeoutError(
-                    f"Port {port} did not become ready within {timeout}s "
-                    f"({attempt.number} attempts)"
-                ) from exc
-
-
-async def kube_http_call(
-    namespace: str,
-    service: str,
-    port: int,
-    method: str,
-    path: str,
-    body: dict[str, Any] | None = None,
-    timeout: float = 30.0,
-) -> httpx.Response:
-    """Make an HTTP call to a K8s service via an ephemeral port-forward.
-
-    Opens a ``kubectl port-forward`` tunnel for the duration of the request,
-    makes the HTTP call, then closes the tunnel. This avoids idle TCP timeout
-    issues that occur with persistent port-forwards.
-
-    Args:
-        namespace: K8s namespace where the service lives.
-        service: Service name (without ``svc/`` prefix).
-        port: Remote port to forward to.
-        method: HTTP method (``GET``, ``POST``, etc.).
-        path: Request path, e.g. ``"/health"``.
-        body: Optional JSON body for POST/PUT requests.
-        timeout: Total timeout in seconds for port-forward + HTTP request.
-
-    Returns:
-        The :class:`httpx.Response`.
-    """
-    local_port = _find_free_port()
-    pf_proc = await asyncio.create_subprocess_exec(
-        "kubectl",
-        "port-forward",
-        f"svc/{service}",
-        f"{local_port}:{port}",
-        "-n",
-        namespace,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
-    try:
-        await _wait_for_port(local_port, timeout=min(10.0, timeout))
-        async with httpx.AsyncClient(
-            base_url=f"http://127.0.0.1:{local_port}", timeout=timeout
-        ) as client:
-            response = await client.request(method, path, json=body)
-        return response
-    finally:
-        pf_proc.terminate()
-        try:
-            await asyncio.wait_for(pf_proc.wait(), timeout=5.0)
-        except asyncio.TimeoutError:
-            pf_proc.kill()
+__all__ = ["PortForward", "kube_http_call", "port_forward"]

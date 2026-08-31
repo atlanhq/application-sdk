@@ -84,13 +84,13 @@ runs:
         TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
 
     - name: Upload Vulnerability Scan Results
-      uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4
+      uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
       with:
         sarif_file: 'trivy-vuln-results.sarif'
         category: 'trivy-vulnerability'
 
     - name: Upload Secret Scan Results
-      uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4
+      uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
       with:
         sarif_file: 'trivy-secret-results.sarif'
         category: 'trivy-secret'

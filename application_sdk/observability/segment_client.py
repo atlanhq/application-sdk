@@ -16,6 +16,7 @@ from application_sdk.constants import (
     SEGMENT_WRITE_KEY,
 )
 from application_sdk.observability.models import MetricRecord
+from application_sdk.observability.utils import in_temporal_workflow
 from application_sdk.version import __version__
 
 
@@ -225,15 +226,30 @@ class SegmentClient:
         sent when close() cancels the worker task — call close() after flush()
         for a complete drain.
         Bridges to the worker's dedicated event loop via asyncio.wrap_future.
-        No-op if the client is disabled or the worker loop is not running.
         Times out after 10 s to keep shutdown bounded (matches the
         Pushgateway per-call budget; two 10 s calls fit within K8s'
         default 30 s terminationGracePeriodSeconds).
+
+        No-op when any of these hold:
+
+        - the client is disabled (no write key) or the worker loop is not running;
+        - the caller is inside a Temporal workflow. ``asyncio.wrap_future``
+          resolves the awaited future from a done-callback that first calls
+          ``is_closed()`` on the destination loop; Temporal's deterministic
+          workflow loop raises ``NotImplementedError`` there, so the callback
+          dies before resolving and the await burns the full 10 s timeout
+          (SYSAPPS-328). Queued events are not lost — the worker's own batch
+          timer (``SEGMENT_BATCH_TIMEOUT_SECONDS``) sends them, and ``close()``
+          drains the remainder at process exit.
         """
         if not self.enabled or not self._loop or not self._queue:
             return
         if not self._loop.is_running():
             return
+
+        if in_temporal_workflow():
+            return
+
         future = asyncio.run_coroutine_threadsafe(self._flush_queue(), self._loop)
         try:
             await asyncio.wait_for(asyncio.wrap_future(future), timeout=10.0)
