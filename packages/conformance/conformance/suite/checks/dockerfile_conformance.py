@@ -311,6 +311,54 @@ def _arg_defaults(instructions: list[_Instruction]) -> dict[str, str]:
     return defaults
 
 
+def _global_arg_defaults(instructions: list[_Instruction]) -> dict[str, str]:
+    """Map ``{ARG_NAME: default}`` for ARGs declared before the first ``FROM``.
+
+    These are Docker's *global* ARGs.  ``FROM`` can reference them directly, but
+    no instruction inside a stage can — a stage only sees a global ARG once it
+    re-imports the name with a bare ``ARG NAME``.  See :func:`_stage_arg_scope`.
+    """
+    first_from = next(
+        (idx for idx, instr in enumerate(instructions) if instr.keyword == "FROM"),
+        len(instructions),
+    )
+    return _arg_defaults(instructions[:first_from])
+
+
+def _stage_arg_scope(args: str, global_defaults: dict[str, str]) -> dict[str, str]:
+    """Resolve one in-stage ``ARG`` instruction into ``{name: effective value}``.
+
+    ``ARG NAME=value`` declares its own default and shadows any global of the
+    same name.  A bare ``ARG NAME`` re-imports the global ARG — the only way a
+    default declared before the first ``FROM`` becomes visible to instructions
+    inside a stage.  A bare re-import of a name with no global default resolves
+    to the empty string, which is exactly what Docker substitutes.
+    """
+    scope: dict[str, str] = {}
+    for token in args.split():
+        name, sep, value = token.partition("=")
+        name = name.strip()
+        if not name:
+            continue
+        scope[name] = value if sep else global_defaults.get(name, "")
+    return scope
+
+
+def _resolve_arg_ref(value: str, arg_scope: dict[str, str]) -> str:
+    """Substitute a whole-value ``$NAME`` / ``${NAME}`` from in-scope ARGs.
+
+    Returns ``value`` untouched when it is not a bare ARG reference or when the
+    name is not in scope — leaving the caller to report it as unresolved.
+    """
+    match = _ARG_REF_RE.match(value.strip())
+    if match is None:
+        return value
+    name = match.group(1) or match.group(2)
+    if name not in arg_scope:
+        return value
+    return arg_scope[name]
+
+
 # ---------------------------------------------------------------------------
 # Per-rule checks
 # ---------------------------------------------------------------------------
@@ -426,23 +474,42 @@ def _check_i003(
     would produce false negatives (``good → $UNDEFINED`` passes) and false
     positives (``empty → valid`` fires).
 
+    ``ENV ATLAN_APP_MODULE=${APP_MODULE}`` is legitimate when the final stage
+    declares ``ARG APP_MODULE=<module>:<Class>`` above it — Docker bakes the
+    default into the image, and the build-arg stays overridable at build time.
+    Resolution follows Docker's ARG scoping exactly: a default declared before
+    the first ``FROM`` is *global* and is invisible to ``ENV`` unless the final
+    stage re-imports it with a bare ``ARG APP_MODULE``; a builder stage's ARG
+    never reaches the final stage at all.
+
     Rejects the effective value when it is:
     - absent from the final stage entirely (builder-stage ENV doesn't carry over)
-    - empty or whitespace-only (``ENV ATLAN_APP_MODULE=" "``)
+    - empty or whitespace-only (``ENV ATLAN_APP_MODULE=" "``), including a
+      build-arg reference that resolves to an empty default
     - an unresolved build-arg reference (``ENV ATLAN_APP_MODULE=$UNDEFINED_ARG``)
     - not in ``module:Class`` shape
     """
     final_start = _final_stage_start_idx(instructions)
+    global_args = _global_arg_defaults(instructions)
 
     # Accumulate to find the effective (last) value Docker will use.
     # A single tuple keeps value and line together so pyright can track that
     # last_line is always assigned alongside last_value — no dead initializer.
     last: tuple[str, int] | None = None
+    # ARG names in scope for the final stage, walked in instruction order: an
+    # ENV can only expand an ARG declared *above* it, so the reference is
+    # resolved at each ENV rather than once against a whole-stage map.
+    stage_args: dict[str, str] = {}
     for instr in instructions[final_start:]:
-        if instr.keyword == "ENV":
+        if instr.keyword == "ARG":
+            stage_args.update(_stage_arg_scope(instr.args, global_args))
+        elif instr.keyword == "ENV":
             env = _env_vars(instr.args)
             if "ATLAN_APP_MODULE" in env:
-                last = (env["ATLAN_APP_MODULE"], instr.line)
+                last = (
+                    _resolve_arg_ref(env["ATLAN_APP_MODULE"], stage_args),
+                    instr.line,
+                )
 
     if last is None:
         # Distinguish "never set anywhere" from "builder-stage only" for
@@ -483,19 +550,30 @@ def _check_i003(
         ]
 
     if value.startswith("$"):
-        return [
-            _make_finding(
-                RULE_I003,
-                file,
-                last_line,
+        ref = _ARG_REF_RE.match(value)
+        ref_name = (ref.group(1) or ref.group(2)) if ref is not None else None
+        if ref_name is not None and ref_name in global_args:
+            # The default exists, but it was declared before the first FROM.
+            # Docker keeps global ARGs out of every stage's scope, so the ENV
+            # expands to an empty string unless the stage re-imports the name.
+            msg = (
+                f"ENV ATLAN_APP_MODULE='{value}' references build-arg "
+                f"'{ref_name}', whose default is declared before the first "
+                "FROM.  Docker does not expose a global ARG inside a build "
+                f"stage, so this expands to an empty value.  Add 'ARG "
+                f"{ref_name}' after the final FROM to re-import it, or declare "
+                f"'ARG {ref_name}=<module>:<AppClass>' there directly."
+            )
+        else:
+            msg = (
                 f"ENV ATLAN_APP_MODULE='{value}' looks like an unresolved "
                 "build-arg reference.  The runtime needs a concrete "
                 "'module:ClassName' value, not a shell variable.  Set a "
                 "literal value (e.g. 'ENV ATLAN_APP_MODULE=myapp.app:MyApp') "
-                "or ensure the ARG default is always defined.",
-                directives,
+                "or declare 'ARG <NAME>=<module>:<AppClass>' after the final "
+                "FROM so the reference resolves at build time."
             )
-        ]
+        return [_make_finding(RULE_I003, file, last_line, msg, directives)]
 
     # Soft shape check: must contain ':' with non-empty parts on both sides.
     parts = value.split(":", 1)
