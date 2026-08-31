@@ -57,25 +57,29 @@ body that never arrives.
 
 from __future__ import annotations
 
+import base64
 import re
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Self
+from typing import Any, Generic, Self, TypeVar
 from urllib.parse import parse_qs, urlsplit
 
 import orjson
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing._errors import (
+    CursorPageLimitError,
     FakeSourceNotRunningError,
     FakeSourceRouteError,
 )
 
 __all__ = [
     "Authorizer",
+    "CursorPage",
+    "CursorPageLimitError",
     "FakeRequest",
     "FakeResponse",
     "FakeSourceNotRunningError",
@@ -84,9 +88,12 @@ __all__ = [
     "HandlerResult",
     "HttpFakeSource",
     "HttpFakeSourceFactory",
+    "cursor_page",
 ]
 
 logger = get_logger(__name__)
+
+T = TypeVar("T")
 
 _LOOPBACK = "127.0.0.1"
 _METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
@@ -853,3 +860,126 @@ class HttpFakeSourceFactory:
         sources, self._sources = self._sources, []
         for source in reversed(sources):
             source.stop()
+
+
+@dataclass(frozen=True)
+class CursorPage(Generic[T]):
+    """One page of a cursor scheme; ``next_cursor`` is opaque, as a real one is.
+
+    The default token encodes only a position, but as base64 of an internal form
+    rather than a bare integer — a connector that parses the cursor instead of
+    echoing it back would pass against a fake that handed out plain offsets and
+    then fail against the real source. Pass ``encode``/``decode`` to
+    :func:`cursor_page` when the captured traffic shows a specific token format
+    the connector's loop depends on.
+
+    ``next_cursor`` is ``None`` on the last page. Some sources instead signal
+    exhaustion by echoing the *same* cursor back, and their clients loop until the
+    token stops changing; spell that in the envelope with
+    ``page.next_cursor or request.param("cursor")`` rather than changing the page.
+    """
+
+    items: Sequence[T]
+    limit: int
+    total: int
+    next_cursor: str | None
+
+    @property
+    def has_more(self) -> bool:
+        """Whether any item remains after this page."""
+        return self.next_cursor is not None
+
+
+def cursor_page(
+    items: Sequence[T],
+    request: FakeRequest,
+    *,
+    cursor_param: str = "cursor",
+    limit_param: str = "limit",
+    default_limit: int = 100,
+    max_limit: int | None = None,
+    encode: Callable[[int], str] | None = None,
+    decode: Callable[[str], int] | None = None,
+) -> CursorPage[T]:
+    """Slice ``items`` per the request's cursor/limit parameters.
+
+    An absent cursor is the first page. An unparseable cursor serves the first
+    page's items but as a TERMINAL page (``next_cursor=None``), with a WARNING
+    naming the token: a real source answers one stale token with a fresh page,
+    but a client re-sending the same undecodable token would otherwise loop on
+    identical pages forever — and a test fixture must turn a token-format
+    mismatch into a failed assertion, never a hang.
+
+    ``encode``/``decode`` override the token format when the connector's client
+    depends on the shape the real source emits — a Solr-style ``off:<n>`` mark,
+    say. They are position-in/position-out; a ``decode`` that raises gets the
+    terminal-first-page treatment above.
+
+    ``default_limit`` and ``max_limit`` must be positive — a non-positive value
+    would slice an empty (or negatively-sliced) page that still carries a next
+    cursor, handing a well-behaved client loop the exact hang the terminal-page
+    rule exists to prevent — so both raise :class:`CursorPageLimitError` up
+    front. A non-positive *request* limit stays a fallback to ``default_limit``:
+    that one is client input, not fixture configuration.
+    """
+    if default_limit <= 0:
+        raise CursorPageLimitError(
+            message=f"cursor_page default_limit must be > 0, got {default_limit}.",
+            field="default_limit",
+            constraint="positive",
+        )
+    if max_limit is not None and max_limit <= 0:
+        raise CursorPageLimitError(
+            message=f"cursor_page max_limit must be > 0, got {max_limit}.",
+            field="max_limit",
+            constraint="positive",
+        )
+    encode_token = _encode_cursor if encode is None else encode
+    decode_token = _decode_cursor if decode is None else decode
+    total = len(items)
+    decoded_start = _decode_with(decode_token, request.param(cursor_param))
+    terminal = decoded_start is None
+    start = 0 if decoded_start is None else min(max(0, decoded_start), total)
+    limit = request.int_param(limit_param, default_limit)
+    if limit <= 0:
+        limit = default_limit
+    if max_limit is not None:
+        limit = min(limit, max_limit)
+    page = list(items[start : start + limit])
+    end = start + len(page)
+    return CursorPage(
+        items=page,
+        limit=limit,
+        total=total,
+        next_cursor=encode_token(end) if end < total and not terminal else None,
+    )
+
+
+def _encode_cursor(offset: int) -> str:
+    return base64.urlsafe_b64encode(f"o:{offset}".encode()).decode().rstrip("=")
+
+
+def _decode_with(decode: Callable[[str], int], cursor: str | None) -> int | None:
+    """Decode a cursor token; ``None`` means the token could not be decoded."""
+    if not cursor:
+        return 0
+    try:
+        return decode(cursor)
+    except Exception:  # noqa: BLE001 — the caller turns any decode failure into a terminal page
+        logger.warning(
+            "cursor_page could not decode cursor token %r; serving a terminal "
+            "first page so a client loop re-sending it cannot spin forever",
+            cursor,
+            exc_info=True,
+        )
+        return None
+
+
+def _decode_cursor(cursor: str) -> int:
+    """Decode the default ``o:<offset>`` base64 token; raises on any other shape."""
+    padded = cursor + "=" * (-len(cursor) % 4)
+    decoded = base64.urlsafe_b64decode(padded.encode()).decode()
+    if not decoded.startswith("o:"):
+        # conformance: ignore[E012] internal decode-failure signal, caught one frame up by _decode_with
+        raise ValueError(f"not an o:<offset> cursor token: {decoded!r}")
+    return int(decoded[2:])
