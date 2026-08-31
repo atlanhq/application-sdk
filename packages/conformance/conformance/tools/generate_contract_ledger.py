@@ -53,7 +53,7 @@ from conformance.suite.checks._entrypoint_contract_fields import (
 from conformance.suite.checks.deprecation._ledger_schema import (
     ContractField,
     ContractLedger,
-    load_ledger,
+    load_ledger_baseline,
     regen_command,
     serialize,
 )
@@ -202,8 +202,10 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(2)
 
     outfile: Path = args.outfile
-    existing = load_ledger(outfile if outfile.exists() else None)
-    ledger = build_ledger(repo_root, existing)
+    # A first ledger starts EMPTY — see load_ledger_baseline for why, and note
+    # that bootstrap's write-if-absent scaffold shares the same helper so the
+    # invariant cannot drift between the two writers.
+    ledger = build_ledger(repo_root, load_ledger_baseline(outfile))
     content = serialize(ledger)
 
     if args.check:
