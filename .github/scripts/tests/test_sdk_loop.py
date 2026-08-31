@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -700,6 +701,40 @@ def test_a_dismissed_run_starts_no_rounds() -> None:
 # ---------------------------------------------------------------------------
 # Generated workflow freshness
 # ---------------------------------------------------------------------------
+
+
+def test_no_job_reads_outputs_from_a_job_it_does_not_need() -> None:
+    """GitHub rejects the WHOLE workflow at parse time for this, so no job runs
+    and the fence never gets to say why — the user sees total silence from a
+    lane whose whole point is that it always answers.
+
+    Shipped exactly this way: resolve-N read needs.resolve-(N-1).outputs.ledger
+    while declaring only [fence, review-N]. Four live invocations produced a
+    startup failure with zero jobs and zero comments before it was found.
+    """
+    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    dangling = []
+    for name, job in jobs.items():
+        needs = job.get("needs") or []
+        needs = [needs] if isinstance(needs, str) else needs
+        body = yaml.dump({k: v for k, v in job.items() if k != "needs"})
+        for ref in sorted(set(re.findall(r"needs\.([A-Za-z0-9_-]+)\.", body))):
+            if ref not in needs:
+                dangling.append(f"{name} reads needs.{ref}, needs={needs}")
+    assert not dangling, "dangling needs references:\n  " + "\n  ".join(dangling)
+
+
+def test_the_action_pins_in_the_generator_match_the_generated_file() -> None:
+    """Renovate edits the generated workflow, not the template that produced
+    it, so a bump silently desyncs the two and the freshness gate goes red on
+    main. It did, within hours of merge."""
+    gen = (
+        pathlib.Path(__file__).resolve().parents[1] / "gen_sdk_loop_workflow.py"
+    ).read_text(encoding="utf-8")
+    pin = re.compile(r"uses: (actions/[a-z-]+@[0-9a-f]{40})")
+    assert set(pin.findall(gen)) <= set(
+        pin.findall(WORKFLOW.read_text(encoding="utf-8"))
+    )
 
 
 def test_the_committed_workflow_matches_its_generator() -> None:

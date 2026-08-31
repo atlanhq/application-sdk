@@ -121,8 +121,8 @@ jobs:
       base_sha: ${{ steps.fence.outputs.base_sha }}
       reason: ${{ steps.fence.outputs.reason }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
       - name: Authorize, dismiss duplicates, pin the baseline
@@ -146,8 +146,8 @@ FOOTER = """
     runs-on: ubuntu-latest
     timeout-minutes: 6
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
       - name: Post the run summary
@@ -230,9 +230,15 @@ def resolve_job(n: int) -> str:
     """
     prev = f"review-{n}"
     prev_res = f"resolve-{n - 1}" if n > 1 else None
+    # The ledger comes from the PREVIOUS resolve, so that job has to be in
+    # `needs` — GitHub rejects the whole workflow at parse time for a
+    # `needs.<job>` reference to a job the caller does not depend on, which
+    # means no jobs run and the fence never gets to say why. The `!cancelled()`
+    # in the gate keeps a skipped previous resolve from blocking this one.
+    needs = f"[fence, {prev}]" if prev_res is None else f"[fence, {prev}, {prev_res}]"
     return f"""
   resolve-{n}:
-    needs: [fence, {prev}]
+    needs: {needs}
     if: >-
       !cancelled() && needs.{prev}.outputs.outcome == 'ok'
     uses: ./.github/workflows/sdk-loop-phase.yml
