@@ -424,6 +424,7 @@ class TestDefaultRootExpansion:
     ) -> None:
         monkeypatch.delenv(GOLDEN_ROOT_ENV, raising=False)
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
         _write_corpus(tmp_path / "corpus")
         corpus = GoldenCorpus.from_env(default_root="~/corpus")
         assert corpus.root == tmp_path / "corpus"

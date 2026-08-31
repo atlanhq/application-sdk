@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.30.0
-source-sha:    e40dad5c334fb6329930c1be81e77f3a67873e14
-source-date:   2026-08-31T14:48:21+05:30
+source-sha:    c58f38345cc8f898ceda3a0405d9efc7a151486c
+source-date:   2026-08-31T17:22:13+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 312 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 316 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3330,7 +3330,8 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `CursorPage`
 
 - **Import:** `from application_sdk.testing import CursorPage`
-- **Signature:** `class CursorPage(Generic[T])(items: Sequence[T], limit: int, total: int, next_cursor: str | None)`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `class CursorPage(items: Sequence[T], limit: int, total: int, next_cursor: str | None)`
 - **Summary:** One page of a cursor scheme; ``next_cursor`` is opaque, as a real one is.
 - **Defined in:** `application_sdk/testing/fake_source.py`
 
@@ -3476,20 +3477,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** A route was registered with no HTTP methods.
 - **Defined in:** `application_sdk/testing/_errors.py`
 
-#### `FieldDiff` (golden)
+#### `FieldDiff`
 
 - **Import:** `from application_sdk.testing import FieldDiff`
-- **Also importable from:** `application_sdk.testing.golden`
+- **Also importable from:** `application_sdk.testing.golden`, `application_sdk.testing.parity`
 - **Signature:** `class FieldDiff(field_path: str, golden_value: Any, ours_value: Any)`
 - **Summary:** One field whose value differs between the golden fixture and ours.
 - **Defined in:** `application_sdk/testing/golden.py`
-
-#### `FieldDiff` (parity)
-
-- **Import:** `from application_sdk.testing.parity import FieldDiff`
-- **Signature:** `class FieldDiff(field_path: str, baseline_value: Any, candidate_value: Any)`
-- **Summary:** A single field-level difference between baseline and candidate.
-- **Defined in:** `application_sdk/testing/parity/models.py`
 
 #### `Finding`
 
@@ -4395,6 +4389,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `cursor_page`
 
 - **Import:** `from application_sdk.testing import cursor_page`
+- **Also importable from:** `application_sdk.testing.fake_source`
 - **Signature:** `cursor_page(items: Sequence[T], *, ...)`
 - **Summary:** Slice ``items`` per the request's cursor/limit parameters.
 - **Defined in:** `application_sdk/testing/fake_source.py`
@@ -5311,6 +5306,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Everything :func:`_coerce` accepts from a handler or authorizer.
 - **Defined in:** `application_sdk/testing/fake_source.py`
 
+#### `NO_TYPENAME`
+
+- **Import:** `from application_sdk.testing import NO_TYPENAME`
+- **Also importable from:** `application_sdk.testing.golden`
+- **Signature:** `NO_TYPENAME`
+- **Summary:** Fallback bucket for records without a ``typeName``.
+- **Defined in:** `application_sdk/testing/golden.py`
+
 #### `Outcome`
 
 - **Import:** `from application_sdk.testing.harness import Outcome`
@@ -5347,14 +5350,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `Reading: TypeAlias`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
-
-#### `NO_TYPENAME`
-
-- **Import:** `from application_sdk.testing import NO_TYPENAME`
-- **Also importable from:** `application_sdk.testing.golden`
-- **Signature:** `NO_TYPENAME: str`
-- **Summary:** Fallback bucket for records without a ``typeName``.
-- **Defined in:** `application_sdk/testing/golden.py`
 
 #### `RUN_VOLATILE_FIELDS`
 
