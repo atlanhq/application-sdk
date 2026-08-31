@@ -228,10 +228,25 @@ class Input(BaseModel):
     back to ATLAN_APPLICATION_NAME (metric labels are always connector-level;
     see observability/utils.get_metric_labels)."""
 
+    workflow_slug: str = ""
+    """AE's slug for the workflow this run belongs to (AUT-1124).
+
+    Stamped into child-workflow args by the Automation Engine at dispatch. The
+    only identifier every preflight check shares — a workflow may legitimately
+    have no connection — so it is what the preflight-results store is indexed on.
+    Declared here rather than left as an extra because ``Input`` does not allow
+    extras: an undeclared key is dropped before any reader sees it, and trips
+    :meth:`_warn_on_unknown_keys` on every run.
+
+    Empty for a run AE did not dispatch — a local run, an SDR probe, a run started
+    by hand — which is a legitimate state and not an error.
+    """
+
     _config_hash_exclude: ClassVar[set[str]] = {
         "workflow_id",
         "correlation_id",
         "app_name",
+        "workflow_slug",
     }
     """Fields to exclude from config_hash(). Extend in subclasses to add
     volatile/per-run fields that shouldn't affect checkpoint identity.
