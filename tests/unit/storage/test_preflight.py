@@ -800,3 +800,109 @@ async def test_probe_cause_is_sanitised(failing_phase: str) -> None:
     assert "X-Amz-Signature=***" in result.cause
     # The rendered, user-facing string is the thing that actually leaks.
     assert "deadbeefcafe" not in result.message
+
+
+# ---------------------------------------------------------------------------
+# Traceback sanitisation on the probe log paths
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("failing_phase", ["write", "read/head", "write-multipart"])
+@pytest.mark.asyncio
+async def test_probe_log_does_not_emit_an_unredacted_traceback(
+    failing_phase: str,
+) -> None:
+    """No probe may hand the logger an exception it will render verbatim.
+
+    ``exc_info=True`` reaches the adaptor's ``_format_exception_stacktrace``,
+    which calls ``traceback.format_exception`` with no redaction, and
+    ``_extract_exception_attributes``, whose ``exception.message`` is a bare
+    ``str(exc_value)``. Sanitising only the log *message* therefore still ships
+    the presigned signature in the OTel attributes. These paths log
+    ``safe_traceback(exc)`` instead: frames kept, secrets stripped.
+    """
+    from application_sdk.storage import preflight as preflight_mod
+
+    exc = Exception(_SIGNED_URL_ERROR)
+    puts: list = [None, None]
+    head = None
+    if failing_phase == "write":
+        puts = [exc]
+    elif failing_phase == "read/head":
+        head = exc
+    else:
+        puts = [None, exc]
+
+    # The SDK logger is loguru-backed and does not propagate to stdlib, so
+    # caplog cannot see it — substitute the module's logger instead.
+    with patch.object(preflight_mod, "logger") as mock_logger:
+        result, _ = await _run_probe_structured(
+            _fake_store(),
+            include_multipart_probe=True,
+            put_side_effects=puts,
+            head_side_effect=head,
+        )
+
+    assert result.passed is False
+    warnings = mock_logger.warning.call_args_list
+    assert warnings, "the failing probe must log"
+    for call in warnings:
+        assert "exc_info" not in call.kwargs, (
+            "exc_info renders the cause verbatim into exception.stacktrace and "
+            "exception.message, neither of which the adaptor redacts"
+        )
+    rendered = " ".join(str(a) for call in warnings for a in call.args)
+    assert "deadbeefcafe" not in rendered
+    assert "X-Amz-Signature=***" in rendered
+    # The frames are still there — that is why safe_traceback beats dropping it.
+    assert "Traceback" in rendered
+
+
+# ---------------------------------------------------------------------------
+# timeout_seconds is a ceiling, not a suggestion
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_check_below_floor_budget_skips_instead_of_overrunning() -> None:
+    """A budget under the per-store floor must not be silently overridden.
+
+    ``timeout_seconds`` is documented as an overall budget. Raising the
+    per-store timeout to the floor would make the call outlast the budget it
+    was given; probing inside the share would time out and report a healthy
+    store as a connectivity failure. Neither is honest, so the probes are
+    skipped and the empty result reads as "unverified".
+    """
+    from application_sdk.storage.preflight import (
+        _RUN_PROBE_FLOOR_SECONDS,
+        check_run_storage_access,
+    )
+
+    infra = _make_infra(storage=_fake_store(), upstream_storage=None)
+    with patch(
+        "application_sdk.storage.preflight._probe_store_structured"
+    ) as mock_probe:
+        results = await check_run_storage_access(
+            infra, timeout_seconds=_RUN_PROBE_FLOOR_SECONDS / 5
+        )
+
+    assert results == []
+    mock_probe.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_check_never_raises_per_store_above_its_share() -> None:
+    """Each store's timeout stays within its share of the declared budget."""
+    from application_sdk.storage.preflight import check_run_storage_access
+
+    seen: list[float] = []
+
+    async def _capture(stores, *, per_store_timeout):
+        seen.append(per_store_timeout)
+        return []
+
+    infra = _make_infra(storage=_fake_store(), upstream_storage=_fake_store())
+    with patch("application_sdk.storage.preflight._check_stores", side_effect=_capture):
+        await check_run_storage_access(infra, timeout_seconds=40)
+
+    assert seen == [20.0], seen

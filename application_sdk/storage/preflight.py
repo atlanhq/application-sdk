@@ -27,7 +27,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from application_sdk.errors.base import sanitize_cause_repr
+from application_sdk.errors.base import safe_traceback, sanitize_cause_repr
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
@@ -45,8 +45,11 @@ _MULTIPART_PROBE_CHUNK_SIZE = 5 * 1024 * 1024
 
 # Floor for the run-path per-store probe timeout. Below this a real cloud
 # round-trip of write + HEAD + multipart initiate/part/complete is doomed to
-# time out and would report a healthy store as a connectivity failure — the
-# caller's budget floor should skip the whole check before this gets binding.
+# time out and would report a healthy store as a connectivity failure. The
+# preflight gate's own 15s budget floor means it never asks for a share this
+# small; a direct caller that does gets no probe rather than either a false
+# failure or a wait past the budget it declared (see
+# :func:`check_run_storage_access`).
 _RUN_PROBE_FLOOR_SECONDS = 5.0
 
 # Per-store probe timeout.  Keeps a blackholed endpoint from stalling boot
@@ -358,12 +361,21 @@ async def _probe_store_structured(
             store, probe_key, _PREFLIGHT_PAYLOAD, attributes=put_attributes
         )
     except Exception as exc:
+        # The frames are worth keeping — a TLS or driver-level failure is only
+        # diagnosable from them — but exc_info=True renders the cause verbatim
+        # into both exception.stacktrace and exception.message, and the logger
+        # adaptor redacts neither (_format_exception_stacktrace calls
+        # traceback.format_exception directly). An object-store error quotes the
+        # request URL, so for a presigned request that is the signature.
+        # safe_traceback keeps the frames and strips the secrets. This is the
+        # no-traceback boundary L004/E005 exempt by design — arguments flowing
+        # through a redaction helper — so it needs no suppression directive.
         logger.warning(
-            "SDR preflight: write probe failed for %s store (binding: %s): %s",
+            "SDR preflight: write probe failed for %s store (binding: %s): %s\n%s",
             label,
             binding_name,
             sanitize_cause_repr(exc),
-            exc_info=True,
+            safe_traceback(exc),
         )
         error_class, hint = _classify_access_error(exc)
         return ObjectStoreCheckResult(
@@ -383,11 +395,12 @@ async def _probe_store_structured(
         await obstore.head_async(store, probe_key)
     except Exception as exc:
         logger.warning(
-            "SDR preflight: read/head probe failed for %s store (binding: %s): %s",
+            "SDR preflight: read/head probe failed for %s store (binding: %s): "
+            "%s\n%s",
             label,
             binding_name,
             sanitize_cause_repr(exc),
-            exc_info=True,
+            safe_traceback(exc),
         )
         error_class, hint = _classify_access_error(exc)
         return ObjectStoreCheckResult(
@@ -418,11 +431,11 @@ async def _probe_store_structured(
         except Exception as exc:
             logger.warning(
                 "Storage preflight: multipart write probe failed for %s store "
-                "(binding: %s): %s",
+                "(binding: %s): %s\n%s",
                 label,
                 binding_name,
                 sanitize_cause_repr(exc),
-                exc_info=True,
+                safe_traceback(exc),
             )
             error_class, hint = _classify_access_error(exc)
             return ObjectStoreCheckResult(
@@ -712,12 +725,21 @@ async def check_run_storage_access(
         infra: The current ``InfrastructureContext`` (or ``None``).
         timeout_seconds: Overall budget across all probed stores; each store
             gets an equal share, capped by ``ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS``.
-            ``None`` gives each store the full per-store default.
+            Honoured as a ceiling: the per-store timeout is never raised above
+            the share, so this function does not outlast the budget given. A
+            share below :data:`_RUN_PROBE_FLOOR_SECONDS` — too little for a real
+            round-trip — skips the probes entirely instead. ``None`` gives each
+            store the full per-store default.
 
     Returns:
-        One :class:`ObjectStoreCheckResult` per store the run writes to; ``[]``
-        only when *infra* is ``None`` (no infrastructure context at all — unit
-        tests, direct calls). A live context whose deployment store is ``None``
+        One :class:`ObjectStoreCheckResult` per store the run writes to. ``[]``
+        means the probes did not run — either *infra* is ``None`` (no
+        infrastructure context at all: unit tests, direct calls) or
+        *timeout_seconds* left each store less than
+        :data:`_RUN_PROBE_FLOOR_SECONDS`. Both are "storage unverified", never
+        "storage healthy"; the preflight gate renders an empty result as a
+        failed advisory row for exactly that reason. A live context whose
+        deployment store is ``None``
         — a binding that is absent or failed to parse — yields a **failed**
         ``not configured`` check, exactly like :func:`check_object_store_access`:
         that config gap is the one case preflight should certainly catch.
@@ -740,9 +762,24 @@ async def check_run_storage_access(
 
     per_store = _PROBE_TIMEOUT_SECS
     if timeout_seconds is not None:
-        per_store = max(
-            _RUN_PROBE_FLOOR_SECONDS,
-            min(per_store, timeout_seconds / len(stores_to_probe)),
-        )
+        share = timeout_seconds / len(stores_to_probe)
+        if share < _RUN_PROBE_FLOOR_SECONDS:
+            # Neither available answer is truthful here, so don't give one.
+            # Raising the per-store timeout to the floor would make this
+            # function outlast the budget its own signature advertises;
+            # probing inside the share would time out and report a healthy
+            # store as a connectivity failure. Skip instead — the gate turns
+            # an empty result into a visible "storage not verified" row.
+            logger.warning(
+                "Skipping run-path storage probes: a %.1fs budget across %d "
+                "store(s) leaves %.1fs each, under the %.1fs a real round-trip "
+                "needs; storage is unverified for this run",
+                timeout_seconds,
+                len(stores_to_probe),
+                share,
+                _RUN_PROBE_FLOOR_SECONDS,
+            )
+            return []
+        per_store = min(per_store, share)
 
     return await _check_stores(stores_to_probe, per_store_timeout=per_store)
