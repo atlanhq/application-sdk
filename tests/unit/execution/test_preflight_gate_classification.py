@@ -26,6 +26,7 @@ from application_sdk.errors.leaves import (
 )
 from application_sdk.execution._temporal.preflight_gate import (
     CLASSIFICATION_SOURCE_UNVERIFIABLE,
+    FAILURE_AUDIENCE_KEY,
     GATE_ATTEMPTS_DEFAULT,
     GATE_ATTEMPTS_MAX,
     GATE_ATTEMPTS_MIN,
@@ -57,6 +58,7 @@ from application_sdk.observability.logger_adaptor import (
     GATE_DURATION_KEY,
     GATE_MODE_KEY,
     GATE_TIMEOUT_KEY,
+    PREFLIGHT_SURFACE_KEY,
 )
 
 _GATE = "application_sdk.execution._temporal.preflight_gate"
@@ -103,9 +105,16 @@ def _gate(handler, *, enforce: bool, budget: float = 0.3):
 
 
 def _outcome_rows(mock_logger) -> list[dict]:
+    # All three levels: the outcome row is the level carrier (FND-901) — a
+    # block or an unverifiable source emits it at error, advisory-failure
+    # proceeds at warning, healthy rows at info.
     return [
         c.kwargs
-        for c in mock_logger.info.call_args_list
+        for c in [
+            *mock_logger.info.call_args_list,
+            *mock_logger.warning.call_args_list,
+            *mock_logger.error.call_args_list,
+        ]
         if c.args and c.args[0] == "Preflight gate outcome"
     ]
 
@@ -123,10 +132,7 @@ def _outcome(mock_logger) -> dict:
 
 
 def _no_outcome(mock_logger) -> bool:
-    return not any(
-        c.args and c.args[0] == "Preflight gate outcome"
-        for c in mock_logger.info.call_args_list
-    )
+    return not _outcome_rows(mock_logger)
 
 
 class TestBudgetResolution:
@@ -278,7 +284,12 @@ class TestSourceUnverifiableAppliesMode:
         # raise and re-classified TIMEOUT -> INTERNAL, losing the budget message.
         assert event["reason"] == "TIMEOUT"
         assert "budget" in str(excinfo.value)
+        # One record for the whole event (FND-901): the outcome row itself is
+        # the ERROR, carrying the diagnostic exception and who must act.
         assert mock_logger.error.call_count == 1
+        assert mock_logger.error.call_args.args[0] == "Preflight gate outcome"
+        assert event["exc_info"] is not None
+        assert event[FAILURE_AUDIENCE_KEY] == "APP_OWNER"
 
     async def test_budget_overrun_reports_and_proceeds_in_soft_mode(self) -> None:
         handler = _SlowHandler()
@@ -291,6 +302,10 @@ class TestSourceUnverifiableAppliesMode:
         assert event["outcome"] == "would_block"
         assert event[GATE_CLASSIFICATION_KEY] == CLASSIFICATION_SOURCE_UNVERIFIABLE
         assert event[GATE_MODE_KEY] == "soft"
+        # Unverifiable is a real failure in both modes — the row stays ERROR
+        # even when soft mode proceeds (the run continued unverified).
+        assert mock_logger.error.call_count == 1
+        assert mock_logger.info.call_count == 0
 
     async def test_handler_crash_blocks_in_hard_mode(self) -> None:
         gate = _gate(_RaisingHandler(RuntimeError("boom")), enforce=True)
@@ -691,6 +706,8 @@ class TestMeasuredDurationIsEmitted:
 class TestNewKeysReachTheWire:
     """Unregistered kwargs are dropped before OTLP, so registration is the wire."""
 
-    @pytest.mark.parametrize("key", [GATE_DURATION_KEY, GATE_ATTEMPTS_KEY])
+    @pytest.mark.parametrize(
+        "key", [GATE_DURATION_KEY, GATE_ATTEMPTS_KEY, PREFLIGHT_SURFACE_KEY]
+    )
     def test_key_is_registered(self, key: str) -> None:
         assert key in _KNOWN_EXTRA_KEYS

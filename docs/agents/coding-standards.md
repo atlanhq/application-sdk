@@ -123,11 +123,34 @@ Every gated run emits a structured `Preflight gate outcome` event
 
 ### Logging contract
 
-- **Verdict blocks** (`PreflightFailed` from a handler `NOT_READY`) — `warning`, no stack
-  trace. The block is an expected typed outcome, not a crash.
-- **No-verdict blocks** (budget overrun, handler crash) — `error` with `exc_info=True`.
-  There is a real exception behind these and it is the only diagnostic.
-- **Gate plumbing failures** (exception during dispatch) — `error` with `exc_info=True`.
+One record per gate event: the outcome row itself carries the level (FND-901 — the
+customer-facing log view filters at ERROR, so a block must be the ERROR record, not a WARN
+beside one). Each row stamps `failure.audience` (who must act) except `proceeded`/`skipped`.
+
+- **Verdict blocks** (`PreflightFailed` from a handler `NOT_READY`) — the outcome row at
+  `error`, no stack trace, audience from the primary check's typed error (typically `USER`).
+  The block is an expected typed outcome, not a crash — but it aborted the customer's run.
+- **No-verdict outcomes** (budget overrun, handler crash — `source_unverifiable`) — the
+  outcome row at `error` with `exc_info`, in both modes: the failure is real even when soft
+  mode proceeds. There is a real exception behind these and it is the only diagnostic.
+- **Gate plumbing failures** (exception during dispatch — `gate_broken`) — the workflow's
+  `no_verdict` row at `error` with `exc_info=True`, audience `APP_OWNER`.
+- **Advisory failures** (`proceeded` with any failed check — PARTIAL, or READY with a failed
+  advisory row) — the outcome row at `warning`. P047 bans the handler from logging the
+  warning itself, so the gate owns the one level that case is semantically for.
+- **Clean `proceeded` / `skipped` / verdict `would_block`** — `info`.
+- The interceptor's `workflow.ended` / `activity.ended … BLOCKED (preflight gate)` lifecycle
+  records stay `warning`, terse, no stack.
+- **Interactive surfaces** (the HTTP `/workflows/v1/check` endpoint and the SDR
+  `sdr:preflight_check` activity) emit the sibling `Preflight check outcome` row via
+  `emit_preflight_check_outcome`, with `preflight_surface` naming the surface. The level
+  follows whether the log is the delivery channel: HTTP rows stay `info` (the verdict IS
+  the response body rendered in the setup form); SDR failures surface through a workflow
+  run log read at the default ERROR filter, so SDR rows mirror the gate — `not_ready` at
+  `error`, advisory failure at `warning`, clean at `info`. Handler crashes stay `error`
+  at each surface's boundary handler. The surface is the `PreflightSurface` enum, not a
+  string, and its level policy is the `_LOG_ROW_IS_ONLY_CHANNEL` table — a new surface
+  fails `test_every_surface_has_a_level_policy` until someone routes it.
 
 ## Contract Evolution
 

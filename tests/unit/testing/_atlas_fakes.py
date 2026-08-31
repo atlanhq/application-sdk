@@ -11,11 +11,17 @@ so every consumer drives the same seam. The purge is why the result grew
 the same ``asset.search`` the counts do and then writes through the one verb
 next to it, and a sibling double would let the two disagree about what a page
 looks like.
+
+Child H added the caches, ``user`` and ``save`` for the same reason: resolving
+the ``$admin`` ACL and creating the ephemeral connection are Atlas calls that
+used to go through a *second*, synchronous pyatlan client built inside
+``BaseE2ETest``. There is one client now, so there is one double.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from types import SimpleNamespace
 from typing import Any
 
 
@@ -77,6 +83,7 @@ class FakeAssetApi:
         self._on_purge = on_purge
         self.requests: list[Any] = []
         self.purged: list[Any] = []
+        self.saved: list[Any] = []
 
     async def search(self, request: Any) -> Any:
         self.requests.append(request)
@@ -87,22 +94,103 @@ class FakeAssetApi:
         if self._on_purge is not None:
             self._on_purge(guid)
 
+    async def save(self, asset: Any) -> None:
+        self.saved.append(asset)
+
+
+class FakeCache:
+    """One of pyatlan's async caches, as ``create_connection`` uses them.
+
+    Both verbs matter and they are different jobs. ``get_id_for_name`` is the
+    ``$admin`` lookup :func:`~application_sdk.testing.harness.atlas.admin_identity`
+    makes; the ``validate_*`` verbs are the three checks
+    ``Connection.creator`` performs and
+    :func:`~application_sdk.testing.harness.atlas.create_connection` keeps, so a
+    typo in an ACL fails naming the bad value rather than as an Atlas rejection
+    naming the whole request.
+
+    Args:
+        ids: Role/user name -> id, for the name lookup.
+        error: Raised by every method, for the unreadable-cache case.
+    """
+
+    def __init__(
+        self,
+        ids: dict[str, str] | None = None,
+        *,
+        error: BaseException | None = None,
+    ) -> None:
+        self._ids = ids or {}
+        self._error = error
+        self.validated: list[Any] = []
+
+    async def get_id_for_name(self, name: str) -> str | None:
+        if self._error is not None:
+            raise self._error
+        return self._ids.get(name)
+
+    async def validate_idstrs(self, idstrs: Any) -> None:
+        self.validated.append(idstrs)
+
+    async def validate_names(self, names: Any) -> None:
+        self.validated.append(names)
+
+    async def validate_aliases(self, aliases: Any) -> None:
+        self.validated.append(aliases)
+
+
+class FakeUserApi:
+    """``client.user``, for the current-identity half of the admin read."""
+
+    def __init__(
+        self, username: str | None = "svc", *, error: BaseException | None = None
+    ) -> None:
+        self._username = username
+        self._error = error
+
+    async def get_current(self) -> Any:
+        if self._error is not None:
+            raise self._error
+        if self._username is None:
+            return None
+        return SimpleNamespace(username=self._username)
+
 
 class FakeAtlasClient:
-    """What :func:`~application_sdk.testing.harness.atlas.atlas_client` yields."""
+    """What :func:`~application_sdk.testing.harness.atlas.atlas_client` yields.
+
+    Args:
+        behavior: What ``asset.search`` answers.
+        on_purge: Called with each ``purge_by_guid`` argument.
+        roles: Role name -> GUID, for the ``$admin`` lookup.
+        username: Who ``user.get_current`` reports, or ``None`` for nobody.
+        identity_error: Raised by both halves of the admin read.
+    """
 
     def __init__(
         self,
         behavior: Callable[[Any], Any],
         *,
         on_purge: Callable[[Any], None] | None = None,
+        roles: dict[str, str] | None = None,
+        username: str | None = "svc",
+        identity_error: BaseException | None = None,
     ) -> None:
         self.asset = FakeAssetApi(behavior, on_purge=on_purge)
+        self.role_cache = FakeCache(roles, error=identity_error)
+        self.user_cache = FakeCache()
+        self.group_cache = FakeCache()
+        self.user = FakeUserApi(username, error=identity_error)
 
     @property
     def searches(self) -> int:
         """How many searches this one client served — the reuse assertion."""
         return len(self.asset.requests)
+
+    @property
+    def saved(self) -> list[Any]:
+        """Every asset written through ``asset.save``, in order."""
+        return self.asset.saved
 
 
 class FakeAtlasClientCM:

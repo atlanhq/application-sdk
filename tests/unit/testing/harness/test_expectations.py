@@ -13,6 +13,9 @@ so there was no input that could express it.
 
 from __future__ import annotations
 
+from datetime import timedelta
+from typing import Any
+
 import pytest
 
 from application_sdk.testing.harness.expectations import (
@@ -21,6 +24,13 @@ from application_sdk.testing.harness.expectations import (
     Unreadable,
     evaluate_counts,
     evaluate_locations,
+)
+from application_sdk.testing.harness.outcome import (
+    Indeterminate,
+    Settled,
+    as_count,
+    as_counts,
+    as_samples,
 )
 
 _SQL_DEPTHS = {"Database": 1, "Schema": 2, "Table": 3, "View": 3, "Column": 4}
@@ -299,3 +309,64 @@ def test_findings_are_immutable_and_carry_a_machine_readable_expectation() -> No
         # misc: the write is the assertion — Finding is frozen, and the point is
         # that the type checker and the runtime agree about that.
         finding.subject = "Schema"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# The projection from a reader's verdict into an evaluator's reading
+# ---------------------------------------------------------------------------
+#
+# The seam that makes "could not read" survive the trip from
+# ``application_sdk.testing.harness.atlas`` to :func:`evaluate_counts`. Each of
+# these has a mirror-image bug behind it: before the projection existed an
+# unreadable batch arrived as zeros and was graded as a low count, and an
+# unreadable sample arrived as ``[]`` and was skipped.
+
+
+def _settled(value: object) -> Settled[Any]:
+    return Settled(label="read", attempts=1, elapsed=timedelta(0), value=value)
+
+
+def _indeterminate(cause: BaseException) -> Indeterminate[Any]:
+    return Indeterminate(label="read", attempts=1, elapsed=timedelta(0), cause=cause)
+
+
+def test_a_settled_count_projects_to_the_number() -> None:
+    assert as_count(_settled(7)) == 7
+
+
+def test_an_unreadable_count_keeps_its_cause() -> None:
+    boom = RuntimeError("atlas is down")
+    read = as_count(_indeterminate(boom))
+    assert isinstance(read, Unreadable)
+    assert read.cause is boom
+
+
+def test_an_unreadable_batch_marks_every_type_that_was_asked_for() -> None:
+    """A type simply *missing* from the mapping counts as zero — the fail-open."""
+    reads = as_counts(_indeterminate(RuntimeError("down")), ("Table", "Column"))
+    assert set(reads) == {"Table", "Column"}
+    assert all(isinstance(value, Unreadable) for value in reads.values())
+
+
+def test_a_settled_batch_projects_the_mapping_through() -> None:
+    reads = as_counts(_settled({"Table": 3, "Column": 0}), ("Table", "Column"))
+    assert reads == {"Table": 3, "Column": 0}
+
+
+def test_an_unreadable_sample_is_not_an_empty_one() -> None:
+    """The distinction that stops a failed search reading as a silent pass."""
+    reads = as_samples(_indeterminate(RuntimeError("down")), ("Table",))
+    assert isinstance(reads["Table"], Unreadable)
+
+
+def test_a_settled_sample_projects_to_a_list() -> None:
+    reads = as_samples(_settled({"Table": ("a", "b")}), ("Table",))
+    assert reads == {"Table": ["a", "b"]}
+
+
+def test_a_projected_unreadable_batch_grades_as_ungraded_not_unmet() -> None:
+    """End to end: never "floor not met" for a search nobody could read."""
+    reads = as_counts(_indeterminate(RuntimeError("down")), ("Table",))
+    findings = evaluate_counts(reads, AssetExpectations(floors={"Table": 5}))
+    assert findings
+    assert {finding.expectation for finding in findings} == {UNREADABLE}

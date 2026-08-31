@@ -89,6 +89,8 @@ from ._error_code_prefix import (
     collect_classes,
     collect_import_aliases,
     emit_p003,
+    module_code_constants,
+    resolve_indirect_codes,
     resolve_leaf_prefix,
 )
 from ._file_reference import check_p010
@@ -204,6 +206,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     file_records: dict[Path, list[ClassRecord]] = {}
     file_trees: dict[Path, ast.AST] = {}
     by_name: dict[str, ClassRecord] = {}
+    code_consts: dict[str, str] = {}
 
     for path in paths:
         try:
@@ -258,10 +261,18 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         aliases = collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
         records = collect_classes(tree, rel_str, aliases)
         file_records[path] = records
+        # App-wide, because the codes module is a different file from the
+        # exception classes that reference it (`code = codes.X.code`).
+        code_consts.update(module_code_constants(tree))
         for rec in records:
             by_name.setdefault(rec.name, rec)
 
     # Pass 2 + 3 — resolve and emit P003
+    # Codes reached through a module-level constant are declared, just not
+    # inline; resolve them before emitting so the finding says what is
+    # actually wrong (the prefix) instead of "does not declare".
+    for records in file_records.values():
+        resolve_indirect_codes(records, code_consts)
     cache: dict[str, str | None] = {}
     for path, records in file_records.items():
         directives = file_directives[path]

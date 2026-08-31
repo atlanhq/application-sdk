@@ -140,3 +140,33 @@ def test_committed_ledger_matches_fresh_scan() -> None:
         "contract_schema.lock.json is stale — regenerate with "
         "`uv run atlan-application-sdk-conformance gen-contract-ledger` and commit it."
     )
+
+
+def test_new_consumer_ledger_is_not_seeded_from_the_sdk_ledger(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """An app generating its FIRST ledger must start empty, never from the
+    SDK's own packaged ledger. build_ledger is append-only, so a seeded entry
+    can never be removed: every SDK template contract would be baked into the
+    consumer's ledger and fire B005 against any app class sharing its name
+    (live: 14 of clickhouse's 25 findings)."""
+    from conformance.tools.generate_contract_ledger import main
+
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
+    (tmp_path / "app.py").write_text(
+        "from application_sdk.app import App\n\n"
+        "class MyInput:\n    only_mine: str = ''\n\n"
+        "class MyApp(App):\n"
+        "    async def run(self, input: MyInput) -> None:\n        pass\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "contract_schema.lock.json"
+    main(["--repo", str(tmp_path), "--outfile", str(out)])
+
+    import json
+
+    contracts = {f["contract"] for f in json.loads(out.read_text())["fields"]}
+    assert contracts == {"MyInput"}
+    # The SDK's own template contracts must not have leaked in.
+    assert "QueryExtractionInput" not in contracts
+    assert "QueryExtractionOutput" not in contracts

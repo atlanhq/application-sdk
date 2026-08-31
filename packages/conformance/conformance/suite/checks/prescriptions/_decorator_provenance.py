@@ -33,6 +33,7 @@ from ._constants import _SDK_MODULE_PREFIX
 _SDK_CONTRACT_MODULE_PREFIXES: tuple[str, ...] = (
     "application_sdk.contracts",
     "application_sdk.handler.contracts",
+    "application_sdk.templates.contracts",
 )
 
 
@@ -124,6 +125,7 @@ def collect_import_provenance(tree: ast.AST) -> ImportProvenance:
             ):
                 for alias in node.names:
                     sdk_contracts.add(alias.asname or alias.name)
+                    sdk_contracts.add(alias.name)
 
         elif isinstance(node, ast.Import):
             for alias in node.names:

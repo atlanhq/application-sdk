@@ -1,8 +1,19 @@
 # Prune Dashboard Repo — one-shot S3 cleanup for retired/renamed repos.
 #
-# Use when a repo is being removed from the central security dashboard
-# (k.atlan.dev/security-dashboard/). Triggered manually via workflow_dispatch
-# with the repo's dashboard slug (e.g. atlanhq_atlan-mongodb-app).
+# Use when a repo is being removed from a central dashboard
+# (k.atlan.dev/<dashboard_path>/). Triggered manually via workflow_dispatch.
+#
+# Two modes:
+#   Single slug (repo_slug set): remove exactly that repo from one prefix.
+#   Archived sweep (sweep_archived: true): find every repo in the named
+#     prefixes that GitHub reports as archived and remove those.
+#
+# The sweep exists because a manifest is rebuilt by LISTING the bucket, which has
+# no deletion path — so a repo that leaves the fleet keeps being enumerated
+# forever. publish_fleet_dashboard.py now omits departed repos on full-fleet
+# runs, but the per-repo publishers (security / conformance / test-readiness,
+# driven from each app repo's own update-dashboard.yml) have no full-fleet view
+# and cannot. FND-960.
 #
 # Removes:
 #   s3://kryptonite-store/security-dashboard/repos/<slug>.json
@@ -20,9 +31,25 @@ on:
   workflow_dispatch:
     inputs:
       repo_slug:
-        description: "Dashboard slug to remove (e.g. atlanhq_atlan-mongodb-app)"
-        required: true
+        description: "Dashboard slug to remove (e.g. atlanhq_atlan-mongodb-app). Leave empty when sweeping."
+        required: false
+        default: ""
         type: string
+      sweep_archived:
+        description: "Sweep every archived repo out of the prefixes named below (ignores repo_slug)"
+        required: false
+        default: false
+        type: boolean
+      sweep_prefixes:
+        description: "Prefixes to sweep, comma-separated. Only used when sweep_archived is true."
+        required: false
+        default: "conformance-dashboard,security-dashboard,test-readiness-dashboard,gate-enforcement-dashboard,renovate-dashboard"
+        type: string
+      sweep_dry_run:
+        description: "Sweep mode: report what would be removed and change nothing"
+        required: false
+        default: true
+        type: boolean
       dashboard_path:
         description: "S3 prefix under kryptonite-store"
         required: false
@@ -37,9 +64,23 @@ jobs:
   prune:
     name: Prune
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Sweep mode walks every stored slug in every named prefix with one
+    # synchronous `gh api` call each (~630 repos across five prefixes), so it
+    # needs the same ceiling as the sibling fleet-wide dashboard jobs. A kill
+    # mid-prefix after sweep_dry_run=false leaves some prefixes mutated and
+    # others not.
+    timeout-minutes: 45
     steps:
+      # Mode selection lives entirely in `if:` expressions — no branching inside
+      # a run: block, per docs/standards/ci.md.
+      - name: Refuse a dispatch that names nothing to do
+        if: inputs.repo_slug == '' && !inputs.sweep_archived
+        run: |
+          echo "::error::pass repo_slug=<slug> for a single prune, or sweep_archived=true"
+          exit 1
+
       - name: Validate slug
+        if: inputs.repo_slug != ''
         env:
           SLUG: ${{ inputs.repo_slug }}
         run: |
@@ -59,6 +100,7 @@ jobs:
           role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
 
       - name: Delete per-repo data + history
+        if: inputs.repo_slug != '' && !inputs.sweep_archived
         env:
           SLUG: ${{ inputs.repo_slug }}
           PREFIX: ${{ inputs.dashboard_path }}
@@ -71,6 +113,7 @@ jobs:
           aws s3 rm "$HIST_KEY" || echo "(history JSONL was not present)"
 
       - name: Rebuild repos.json manifest
+        if: inputs.repo_slug != '' && !inputs.sweep_archived
         env:
           PREFIX: ${{ inputs.dashboard_path }}
         run: |
@@ -83,3 +126,32 @@ jobs:
             > /tmp/repos.json
           aws s3 cp /tmp/repos.json "s3://kryptonite-store/${PREFIX}/repos.json"
           echo "Manifest rebuilt — $(python3 -c 'import json; print(len(json.load(open("/tmp/repos.json"))))') repos remain"
+
+      # Sweep mode runs a script out of this repo; the single-slug path above
+      # only needs the AWS CLI, so the checkout is scoped to the sweep.
+      - name: Checkout application-sdk
+        if: inputs.sweep_archived
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Org-wide read so the sweep can ask GitHub whether each stored repo is
+      # archived. No `repositories:` list — the manifest spans the whole fleet,
+      # and a token scoped to one repo would report every other repo as
+      # unreadable, which the script correctly refuses to act on.
+      - name: Mint fleet App token
+        id: app-token
+        if: inputs.sweep_archived
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+
+      - name: Sweep archived repos
+        if: inputs.sweep_archived
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PREFIXES: ${{ inputs.sweep_prefixes }}
+          DRY_RUN: ${{ inputs.sweep_dry_run && '--dry-run' || '' }}
+        run: |
+          python3 .github/scripts/sweep_archived_dashboard_repos.py \
+            --prefixes "$PREFIXES" $DRY_RUN

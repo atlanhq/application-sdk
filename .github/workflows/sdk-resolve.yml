@@ -16,9 +16,10 @@
 #
 # Required configuration (shared with sdk-review.yml):
 #   secrets.HARNESS_TOKEN           Bearer token for /api/sandbox/execute.
-#   secrets.GLOBALPROTECT_USERNAME  VPN auth.
-#   secrets.GLOBALPROTECT_PASSWORD  VPN auth.
-#   vars.GLOBALPROTECT_PORTAL_URL   VPN portal URL.
+#   secrets.TWINGATE_SERVICE_KEY    Twingate service-account key (primary).
+#   secrets.GLOBALPROTECT_USERNAME  Fallback VPN auth, used only if the
+#   secrets.GLOBALPROTECT_PASSWORD  Twingate step fails.
+#   vars.GLOBALPROTECT_PORTAL_URL   Fallback VPN portal URL.
 #   vars.MOTHERSHIP_URL             e.g. https://mothership.atlan.dev
 #
 # Optional configuration:
@@ -126,6 +127,17 @@ jobs:
               body,
             });
 
+      # Twingate first; GlobalProtect below is the automatic fallback. See the
+      # equivalent block in sdk-review.yml for the full rationale.
+      - name: Connect to Twingate
+        id: twingate
+        uses: ./.github/actions/twingate-connect
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          service-key: ${{ secrets.TWINGATE_SERVICE_KEY }}
+          mothership-url: ${{ vars.MOTHERSHIP_URL }}
+
       # timeout-minutes: 5 is a runner-enforced hard cap on each step. The
       # inner nick-fields/retry timeout_minutes is best-effort — it SIGTERMs
       # the bash subshell, but sudo/openconnect children survive parent
@@ -136,6 +148,7 @@ jobs:
       # three retries are separately-capped steps, not uncapped inner loops.
       - name: Connect to VPN (attempt 1/3)
         id: vpn1
+        if: steps.twingate.outcome == 'failure'
         uses: ./.github/actions/globalprotect-connect
         continue-on-error: true
         timeout-minutes: 5

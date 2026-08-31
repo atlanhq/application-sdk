@@ -12,7 +12,10 @@ import pytest
 
 from application_sdk.clients.base import BaseClient
 from application_sdk.constants import _HTTP_POOL_LIMITS, _HTTP_POOL_TIMEOUT_SECONDS
-from application_sdk.infrastructure._dapr.http import AsyncDaprClient
+from application_sdk.infrastructure._dapr.http import (
+    _DEFAULT_RETRY_TOTAL,
+    AsyncDaprClient,
+)
 
 # ---------------------------------------------------------------------------
 # AsyncDaprClient pool configuration
@@ -102,11 +105,23 @@ class TestPoolTimeoutPropagation:
 
     @pytest.mark.asyncio
     async def test_dapr_client_pool_timeout_propagates(self):
-        """httpx.PoolTimeout must propagate up, not be swallowed."""
-        client = AsyncDaprClient(base_url="http://localhost:3500")
+        """httpx.PoolTimeout must propagate up, not be swallowed.
+
+        ``backoff_factor=0`` collapses the retry ladder without shortening it:
+        the client still makes ``_DEFAULT_RETRY_TOTAL + 1`` attempts and still
+        has to surface the last one, which is the property under test. On the
+        production factor of 1.0 the same assertion cost six real seconds of
+        sleep (FND-962); the ladder's own arithmetic is pinned by
+        ``test_retry_covers_connection_errors_with_widened_budget``.
+        """
+        client = AsyncDaprClient(base_url="http://localhost:3500", backoff_factor=0)
 
         # Inject a PoolTimeout-raising transport
+        attempts = 0
+
         async def always_pool_timeout(request: httpx.Request) -> httpx.Response:
+            nonlocal attempts
+            attempts += 1
             raise httpx.PoolTimeout("simulated pool exhaustion", request=request)
 
         try:
@@ -116,5 +131,10 @@ class TestPoolTimeoutPropagation:
         except AttributeError:
             pytest.skip("httpx internal structure changed; update test")
 
-        with pytest.raises(Exception):
+        with pytest.raises(httpx.PoolTimeout):
             await client._client.get("/v1.0/healthz")
+        # A PoolTimeout is a TimeoutException, so it is retried — the raise
+        # above is the exhausted ladder, not a first-attempt passthrough. Asserted
+        # so a future narrowing of retry_on_exceptions cannot make this test pass
+        # for the opposite reason.
+        assert attempts == _DEFAULT_RETRY_TOTAL + 1

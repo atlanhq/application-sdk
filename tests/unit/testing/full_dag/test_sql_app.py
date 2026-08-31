@@ -6,6 +6,8 @@ dependency and is monkey-patched out via ``_resolve_admin_role_guid``.
 
 from __future__ import annotations
 
+import warnings
+
 import pytest
 
 from application_sdk.testing.full_dag import RunMode, SQLAppE2EFullTest
@@ -30,6 +32,35 @@ def _make_test(role_guid: str = "stub-admin-guid"):
 
     _Concrete.database_spec = database_spec
     return _Concrete
+
+
+def test_subclassing_emits_both_deprecation_warnings() -> None:
+    """A consumer subclass warns twice, and both notices name their own class.
+
+    ``SQLAppE2EFullTest`` carries its own ``__init_subclass__`` on top of the one
+    it inherits from :class:`BaseFullDAGE2ETest`, so a consumer subclass triggers
+    both. Each has a distinct migration target (``SQLAppE2ETest`` vs
+    ``BaseE2ETest``), so collapsing them to one notice would send SQL connectors
+    to the wrong replacement.
+    """
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+
+        class _DeprecatedSQLSuite(SQLAppE2EFullTest):
+            connector_short_name = "mysql"
+
+    messages = [str(w.message) for w in caught if w.category is DeprecationWarning]
+    assert len(messages) == 2, f"expected the base + sql notices, got {messages}"
+    assert any(
+        "SQLAppE2EFullTest is deprecated" in m
+        and "application_sdk.testing.e2e.SQLAppE2ETest" in m
+        for m in messages
+    ), f"no notice pointed SQL connectors at SQLAppE2ETest: {messages}"
+    assert any(
+        "BaseFullDAGE2ETest is deprecated" in m
+        and "application_sdk.testing.e2e.BaseE2ETest" in m
+        for m in messages
+    ), f"the inherited base notice is missing: {messages}"
 
 
 def _bootstrap_env(monkeypatch: pytest.MonkeyPatch) -> None:

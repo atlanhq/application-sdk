@@ -10,10 +10,16 @@ The pool has one property worth pinning in both directions. Reusing a
 connection is the point on the happy path; reusing one that is already
 half-dead is exactly the condition a transport retry exists to escape, which is
 why the pool is dropped after a transport error rather than retried into.
+
+A third property arrived with FND-225: the pool is bound to the event loop that
+built it, so a second loop gets a second pool — and the *first* one has to be
+released rather than merely dropped on the floor, which is a leak per loop on
+any suite that gives each test its own.
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import httpx
@@ -169,3 +175,105 @@ class TestSyncBoundary:
             if "asyncio.run(" in path.read_text(encoding="utf-8")
         ]
         assert offenders == []
+
+
+class TestLoopHandoff:
+    """A pool belongs to one event loop, and the outgoing one must be released.
+
+    ``httpx`` registers each connection with the loop that opened it, so a pool
+    reused from a second loop fails inside ``httpx`` rather than at the seam.
+    Rebuilding is therefore right — but rebuilding *without releasing* swapped
+    one bug for another: the first pool's sockets stay open with nothing
+    referencing them.
+    """
+
+    def test_a_second_loop_gets_its_own_pool_and_the_first_is_closed(
+        self, counted: type[_CountingClient], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two loops, both kept alive, so the release path is actually exercised.
+
+        ``asyncio.run`` twice would close the first loop before the second
+        began, which takes the *other* branch — the one where there is nothing
+        left to release. Driving two live loops by hand is what makes the close
+        observable.
+        """
+        monkeypatch.setattr(httpx.AsyncClient, "request", _ok)
+        client = AEClient("https://tenant.example.com", "tok")
+
+        first_loop = asyncio.new_event_loop()
+        second_loop = asyncio.new_event_loop()
+        try:
+            first_loop.run_until_complete(client._request("GET", "/x"))
+            assert len(counted.built) == 1
+            first_pool = counted.built[0]
+            assert not first_pool.is_closed
+
+            second_loop.run_until_complete(client._request("GET", "/x"))
+            assert len(counted.built) == 2, "the second loop must not reuse the pool"
+
+            # The close is scheduled *on the owning loop*, because that is where
+            # the connections live. Turning that loop once runs it.
+            first_loop.run_until_complete(asyncio.sleep(0))
+            assert first_pool.is_closed, (
+                "the outgoing pool was dropped without being closed — one "
+                "leaked pool per event loop"
+            )
+        finally:
+            first_loop.close()
+            second_loop.close()
+
+    def test_a_dead_previous_loop_is_not_an_error(
+        self, counted: type[_CountingClient], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The common shape, and it must stay silent.
+
+        A closed loop already tore its transports down, so there is nothing to
+        release and nothing an operator could act on. What must not happen is a
+        raise on the way to serving a perfectly good request.
+        """
+        monkeypatch.setattr(httpx.AsyncClient, "request", _ok)
+        client = AEClient("https://tenant.example.com", "tok")
+
+        asyncio.run(client._request("GET", "/x"))
+        status, _ = asyncio.run(client._request("GET", "/x"))
+
+        assert status == 200
+        assert len(counted.built) == 2
+
+
+class TestAsyncContextManager:
+    """``async with`` is the shape a caller whose lifetime fits a block wants.
+
+    It is the reason the class has one: teardown expressed as a block is a
+    property of the code, where teardown expressed as a separate ``aclose`` is a
+    property of the caller remembering — and the second produced a never-closed
+    leak twice on ``PortForward`` before it grew the same pair.
+    """
+
+    async def test_the_block_closes_the_pool_on_success(
+        self, counted: type[_CountingClient], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(httpx.AsyncClient, "request", _ok)
+        async with AEClient("https://tenant.example.com", "tok") as client:
+            await client._request("GET", "/x")
+            assert not counted.built[0].is_closed
+        assert counted.built[0].is_closed
+
+    async def test_the_block_closes_the_pool_when_the_body_raises(
+        self, counted: type[_CountingClient], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The half that matters: a leak on the failure path is the one nobody
+        notices, because the failure is what gets read."""
+        monkeypatch.setattr(httpx.AsyncClient, "request", _ok)
+        with pytest.raises(RuntimeError, match="boom"):
+            async with AEClient("https://tenant.example.com", "tok") as client:
+                await client._request("GET", "/x")
+                raise RuntimeError("boom")
+        assert counted.built[0].is_closed
+
+    async def test_entering_opens_nothing(self, counted: type[_CountingClient]) -> None:
+        """The pool is still built on first use, so a block that makes no call
+        pays for no connection."""
+        async with AEClient("https://tenant.example.com", "tok"):
+            pass
+        assert counted.built == []

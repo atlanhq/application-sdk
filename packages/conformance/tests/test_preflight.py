@@ -1,4 +1,4 @@
-"""Meta-tests for the preflight-gate checks (P032–P035, BLDX-1545).
+"""Meta-tests for the preflight-gate checks (P032–P035, P047, BLDX-1545, FND-901).
 
 These checks fan out across the fleet, so each rule is tested to fire *exactly*
 when it should and stay silent otherwise — both false positives and false
@@ -47,7 +47,7 @@ def _ids(tmp_path: Path, src: str) -> list[str]:
 
 
 def test_rule_metadata() -> None:
-    for rid in ("P033", "P034", "P035"):
+    for rid in ("P033", "P034", "P035", "P047"):
         rule = get_rule(rid)
         assert rule.scope is RuleScope.APP
         assert rule.tier is EnforcementTier.WARN
@@ -498,4 +498,75 @@ def test_p035_suppressed(tmp_path: Path) -> None:
     }
     findings = _scan(tmp_path, files)
     assert [f.rule_id for f in findings] == ["P035"]
+    assert findings[0].suppressed is True
+
+
+# ── P047 PreflightFailureLoggedAsWarning ───────────────────────────────────────
+
+
+def test_p047_fires_on_logger_warning(tmp_path: Path) -> None:
+    src = _handler_with_preflight(
+        '        logger.warning("auth check failed: %s", "boom")\n'
+        "        return PreflightOutput(checks=[])\n"
+    )
+    assert [f.rule_id for f in _scan(tmp_path, {"h.py": src})] == ["P047"]
+
+
+def test_p047_fires_on_self_logger_and_stdlib_logging(tmp_path: Path) -> None:
+    src = _handler_with_preflight(
+        '        self.logger.warning("degraded")\n'
+        '        logging.warning("degraded")\n'
+        "        return PreflightOutput(checks=[])\n"
+    )
+    assert [f.rule_id for f in _scan(tmp_path, {"h.py": src})] == ["P047", "P047"]
+
+
+def test_p047_silent_on_other_levels(tmp_path: Path) -> None:
+    src = _handler_with_preflight(
+        '        logger.info("probing")\n'
+        '        logger.error("probe crashed", exc_info=True)\n'
+        "        return PreflightOutput(checks=[])\n"
+    )
+    assert [f.rule_id for f in _scan(tmp_path, {"h.py": src})] == []
+
+
+def test_p047_silent_outside_preflight_check(tmp_path: Path) -> None:
+    src = (
+        _HANDLER_IMPORTS
+        + "class H(Handler):\n"
+        + "    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:\n"
+        + "        return PreflightOutput(checks=[])\n"
+        + "    async def other(self):\n"
+        + '        logger.warning("fine here")\n'
+    )
+    assert [f.rule_id for f in _scan(tmp_path, {"h.py": src})] == []
+
+
+def test_p047_fires_on_common_logger_aliases(tmp_path: Path) -> None:
+    src = _handler_with_preflight(
+        '        log.warning("via log alias")\n'
+        '        self._log.warning("via private attr")\n'
+        '        logger.warn("deprecated alias")\n'
+        "        return PreflightOutput(checks=[])\n"
+    )
+    assert [f.rule_id for f in _scan(tmp_path, {"h.py": src})] == ["P047"] * 3
+
+
+def test_p047_silent_on_non_logger_receiver(tmp_path: Path) -> None:
+    src = _handler_with_preflight(
+        '        warnings.warning("not a logger")\n'
+        '        self._client.warning("a source API, not a logger")\n'
+        "        return PreflightOutput(checks=[])\n"
+    )
+    assert [f.rule_id for f in _scan(tmp_path, {"h.py": src})] == []
+
+
+def test_p047_suppressed(tmp_path: Path) -> None:
+    src = _handler_with_preflight(
+        "        # conformance: ignore[P047] advisory-only probe, see FND-901\n"
+        '        logger.warning("advisory")\n'
+        "        return PreflightOutput(checks=[])\n"
+    )
+    findings = _scan(tmp_path, {"h.py": src})
+    assert [f.rule_id for f in findings] == ["P047"]
     assert findings[0].suppressed is True

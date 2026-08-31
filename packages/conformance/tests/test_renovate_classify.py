@@ -6,9 +6,10 @@ from datetime import datetime, timedelta, timezone
 
 from conformance.renovate.classify import (
     STALE_AFTER_DAYS,
-    bounded_lock_refusal_expired,
+    bounded_lock_refusal_state,
     classify,
 )
+from conformance.renovate.classify import lock_refusal_reason as extract_refusal_reason
 from conformance.renovate.classify import lock_refusal_window as extract_refusal_window
 from conformance.renovate.classify import parse_window
 from conformance.renovate.models import (
@@ -46,6 +47,7 @@ def make_pr(
     auto_merge_enabled: bool = False,
     head_committed_at: datetime | None = None,
     lock_refusal_window: str = "",
+    lock_refusal_reason: str = "",
 ) -> RenovatePR:
     """Construct an unclassified RenovatePR with sane defaults for one scenario."""
     return RenovatePR(
@@ -65,6 +67,7 @@ def make_pr(
         auto_merge_enabled=auto_merge_enabled,
         head_committed_at=head_committed_at,
         lock_refusal_window=lock_refusal_window,
+        lock_refusal_reason=lock_refusal_reason,
     )
 
 
@@ -707,8 +710,13 @@ def _refusal_pr(
     files: list[str] | None = None,
     labels: list[str] | None = None,
     checks_state: ChecksState = ChecksState.FAILING,
+    reason: str = "",
 ) -> RenovatePR:
-    """A red, uv.lock-only lock-maintenance PR carrying an expired tripwire."""
+    """A red, uv.lock-only lock-maintenance PR carrying an expired tripwire.
+
+    ``reason`` defaults to unstamped — the pre-FND-909 shape, which is judged
+    against the window it names rather than the reaper's grace.
+    """
     return make_pr(
         labels=labels if labels is not None else ["update:lock-maintenance"],
         title="Lock file maintenance",
@@ -718,6 +726,7 @@ def _refusal_pr(
         created_at=_OLD,
         head_committed_at=_NOW - head_age,
         lock_refusal_window=window,
+        lock_refusal_reason=reason,
     )
 
 
@@ -746,6 +755,37 @@ def test_refusal_window_empty_for_uv_written_options() -> None:
 
 def test_refusal_window_empty_for_ordinary_lock() -> None:
     assert extract_refusal_window(_PLAIN_LOCK) == ""
+
+
+def test_refusal_reason_read_from_a_stamped_tripwire() -> None:
+    stamped = _TRIPWIRE_LOCK.replace(
+        'exclude-newer-span = "P3D"',
+        'exclude-newer-span = "P3D"  # refusal: window-empty',
+    )
+    assert extract_refusal_reason(stamped) == "window-empty"
+    # The stamp must not corrupt the window every existing reader already parses.
+    assert extract_refusal_window(stamped) == "P3D"
+
+
+def test_refusal_reason_empty_for_an_unstamped_tripwire() -> None:
+    # Pre-FND-909 shape: a tripwire is present, but it names no reason.
+    assert extract_refusal_window(_TRIPWIRE_LOCK) == "P3D"
+    assert extract_refusal_reason(_TRIPWIRE_LOCK) == ""
+
+
+def test_refusal_reason_ignores_a_comment_that_is_not_a_stamp() -> None:
+    # Only the driver's `refusal:` prefix counts; a stray comment is not a reason.
+    lock = _TRIPWIRE_LOCK.replace(
+        'exclude-newer-span = "P3D"',
+        'exclude-newer-span = "P3D"  # set by hand, do not edit',
+    )
+    assert extract_refusal_reason(lock) == ""
+    assert extract_refusal_window(lock) == "P3D"
+
+
+def test_refusal_reason_empty_for_uv_written_options() -> None:
+    # uv's own table is not a refusal at all, so it names no reason either.
+    assert extract_refusal_reason(_UV_OWN_OPTIONS_LOCK) == ""
 
 
 def test_refusal_window_ignores_a_span_outside_the_options_table() -> None:
@@ -836,8 +876,80 @@ def test_refusal_expiry_tolerates_a_naive_clock_from_a_caller() -> None:
     # UTC coercion classify() applies to created_at.
     naive_now = _NOW.replace(tzinfo=None)
     assert (
-        bounded_lock_refusal_expired(
-            _refusal_pr(), Category.LOCK_MAINTENANCE, naive_now
-        )
-        is True
+        bounded_lock_refusal_state(_refusal_pr(), Category.LOCK_MAINTENANCE, naive_now)
+        is BlockingReason.BOUNDED_LOCK_REFUSAL_EXPIRED
     )
+
+
+# --- the stamped split (FND-909) ------------------------------------------
+
+
+def test_stamped_self_healing_refusal_expires_on_the_reaper_grace() -> None:
+    """Past two fleet passes the reaper should have deleted this branch.
+
+    Well inside the P3D window it names, so the window clock alone would still
+    call it live — the point of the stamp is that the window stopped being the
+    question once something is supposed to delete the branch regardless.
+    """
+    pr = classify(_refusal_pr(reason="window-empty", head_age=timedelta(hours=10)))
+    assert pr.blocking_reason is BlockingReason.BOUNDED_LOCK_REFUSAL_EXPIRED
+
+
+def test_stamped_self_healing_refusal_is_not_flagged_within_the_grace() -> None:
+    """One missed pass is latency, not an outage. The reaper gets two."""
+    pr = classify(_refusal_pr(reason="window-empty", head_age=timedelta(hours=5)))
+    assert pr.blocking_reason is BlockingReason.CHECKS_FAILING
+
+
+def test_standing_fault_is_reported_immediately() -> None:
+    """No clock: waiting never clears it, so an age gate would only delay a human."""
+    pr = classify(_refusal_pr(reason="rollback", head_age=timedelta(minutes=1)))
+    assert pr.blocking_reason is BlockingReason.BOUNDED_LOCK_REFUSAL_STANDING
+
+
+def test_standing_fault_never_ages_into_the_reaper_signal() -> None:
+    """An old wedge is still a human's, not evidence the reaper broke."""
+    pr = classify(
+        _refusal_pr(reason="unsatisfiable-floor", head_age=timedelta(days=30))
+    )
+    assert pr.blocking_reason is BlockingReason.BOUNDED_LOCK_REFUSAL_STANDING
+
+
+def test_standing_fault_is_reported_without_a_head_clock() -> None:
+    """The stamp alone is enough; the standing path never reaches the clock."""
+    pr = classify(
+        make_pr(
+            labels=["update:lock-maintenance"],
+            title="Lock file maintenance",
+            branch="renovate/lock-file-maintenance",
+            checks_state=ChecksState.FAILING,
+            files=["uv.lock"],
+            created_at=_OLD,
+            head_committed_at=None,
+            lock_refusal_window="P3D",
+            lock_refusal_reason="no-packaging",
+        )
+    )
+    assert pr.blocking_reason is BlockingReason.BOUNDED_LOCK_REFUSAL_STANDING
+
+
+def test_an_unrecognised_reason_is_treated_as_standing() -> None:
+    """The safe direction: an unknown stamp gets a human, never the shorter clock.
+
+    A refusal path added to the driver without updating the reader must not
+    inherit self-healing by accident — that would have the alarm stay quiet on a
+    real wedge.
+    """
+    pr = classify(_refusal_pr(reason="some-future-reason", head_age=timedelta(days=9)))
+    assert pr.blocking_reason is BlockingReason.BOUNDED_LOCK_REFUSAL_STANDING
+
+
+def test_unstamped_tripwire_keeps_the_window_clock() -> None:
+    """Pre-FND-909 locks carry no reason; "none given" must not read as healing.
+
+    Ten hours is past the reaper grace but well inside P3D. A stamped
+    self-healing refusal would be flagged here; an unstamped one must not be,
+    because nothing claims the reaper was ever going to take it.
+    """
+    pr = classify(_refusal_pr(reason="", head_age=timedelta(hours=10)))
+    assert pr.blocking_reason is BlockingReason.CHECKS_FAILING

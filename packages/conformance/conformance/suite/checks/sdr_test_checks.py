@@ -17,10 +17,14 @@ Cross-artifact checks for SDR integration-test quality:
   and upload behaviour in an SDR-like environment) at all.
 
 * ``T003`` — DeprecatedSdrHarness: ``BaseSDRIntegrationTest`` is deprecated and
-  will be removed in v4.0.  Any subclass under ``tests/`` is flagged and told to
-  migrate to the agnostic e2e harness — a ``BaseE2ETest`` subclass (usually via a
-  generated ``*GeneratedE2EBase``) run in agent mode (``mode = RunMode.AGENT``),
-  which validates the self-deployed-runtime path end to end against a real tenant.
+  will be removed in v4.0.  Any subclass under ``tests/`` is flagged.  There is
+  no single replacement harness, and the finding must not name one: SDR is a
+  deployment *mode*, not a test tier, so most of what an SDR suite asserts
+  (auth, preflight, credential resolution) is not SDR-specific and belongs in
+  the app's ordinary handler and unit tests.  Only agent-mode credential routing
+  and upload behaviour genuinely differ by mode — which is what T002's
+  agent-mode e2e covers.  The finding splits the suite by concern rather than
+  pointing at a replacement class.
 
 ``scan_path`` is a no-op — T002 requires cross-file context (does *any* test
 file declare the subclass?) plus ``atlan.yaml`` for the SDR gate.  The runner
@@ -156,8 +160,8 @@ def _scan_file(path: Path, root: Path) -> tuple[list[Finding], bool]:
 
     SDR coverage is either a legacy ``BaseSDRIntegrationTest`` subclass or an
     agent-mode e2e class (``mode = RunMode.AGENT``).  T003 applies only to the
-    legacy subclass — the deprecated harness — telling it to migrate to the
-    agnostic e2e harness.
+    legacy subclass — the deprecated harness — and its message splits the suite
+    by concern rather than naming a replacement harness.
 
     Returns ``(findings, has_sdr_coverage)``.
     """
@@ -196,11 +200,20 @@ def _scan_file(path: Path, root: Path) -> tuple[list[Finding], bool]:
                 node=node,
                 message=(
                     f"class {node.name!r} subclasses BaseSDRIntegrationTest, which is "
-                    "deprecated and will be removed in v4.0. Migrate to the agnostic "
-                    "e2e harness: a BaseE2ETest subclass (from application_sdk.testing.e2e, "
-                    "usually via a generated *GeneratedE2EBase) with mode = RunMode.AGENT. "
-                    "Add the agent-mode e2e test first and confirm T002 passes, then delete "
-                    "this SDR test. See application_sdk.testing.e2e.BaseE2ETest."
+                    "deprecated and will be removed in v4.0. There is no single "
+                    "replacement harness: SDR is a deployment mode, not a test tier, so "
+                    "split the scenarios by concern. auth/preflight scenarios -> call the "
+                    "handler directly (handler.test_auth(...), handler.preflight_check(...)) "
+                    "in the app's own unit or integration tests, negative cases included. "
+                    "Credential resolution -> already covered in application-sdk's "
+                    "tests/unit/credentials; per-app, test against fake secret stores. "
+                    "workflow scenarios / a full DAG -> tests/e2e via the generated "
+                    "*GeneratedE2EBase, choosing the run mode with the mode ClassVar. "
+                    "An agent-mode e2e (mode = RunMode.AGENT) is what satisfies T002, "
+                    "because agent-mode credential routing and upload behaviour are the "
+                    "parts that genuinely differ by mode — add it first and confirm T002 "
+                    "passes, then re-home the rest and delete this SDR test. "
+                    "See docs/standards/connector-ci-e2e.md."
                 ),
                 directives=directives,
             )

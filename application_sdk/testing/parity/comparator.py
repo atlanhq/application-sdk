@@ -5,6 +5,7 @@ joins on qualifiedName, and classifies each asset as ADDED, REMOVED,
 MODIFIED, or UNCHANGED.
 """
 
+from collections.abc import Collection
 from pathlib import Path
 from typing import Any
 
@@ -12,15 +13,11 @@ import orjson
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.parity.models import AssetDiff, CategoryResult, FieldDiff
+from application_sdk.testing.volatile_fields import RUN_VOLATILE_FIELDS
 
 logger = get_logger(__name__)
 
-# Fields that change every run and must be ignored in comparison.
-VOLATILE_FIELDS: set[str] = {
-    "lastSyncWorkflowName",
-    "lastSyncRun",
-    "lastSyncRunAt",
-}
+VOLATILE_FIELDS: set[str] = set(RUN_VOLATILE_FIELDS)
 
 
 def load_ndjson(directory: Path) -> list[dict[str, Any]]:
@@ -48,14 +45,21 @@ def load_ndjson(directory: Path) -> list[dict[str, Any]]:
     return assets
 
 
-def strip_volatile(obj: Any) -> Any:
-    """Recursively remove volatile fields from dicts and lists."""
+def strip_volatile(obj: Any, fields: Collection[str] | None = None) -> Any:
+    """Recursively remove volatile fields from dicts and lists.
+
+    Args:
+        obj: Any JSON-shaped value. Dicts and lists are descended into; scalars
+            are returned unchanged.
+        fields: Field names to strip at every depth. Defaults to
+            :data:`VOLATILE_FIELDS`.
+    """
+    if fields is None:
+        fields = VOLATILE_FIELDS
     if isinstance(obj, dict):
-        return {
-            k: strip_volatile(v) for k, v in obj.items() if k not in VOLATILE_FIELDS
-        }
+        return {k: strip_volatile(v, fields) for k, v in obj.items() if k not in fields}
     if isinstance(obj, list):
-        return [strip_volatile(item) for item in obj]
+        return [strip_volatile(item, fields) for item in obj]
     return obj
 
 

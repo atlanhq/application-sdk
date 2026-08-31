@@ -88,7 +88,7 @@ jobs:
       # were committed).
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.6"
+          version: "0.12.7"
 
       # Absolute ref, not `./…`: this is a reusable workflow, so a relative
       # action path would resolve against the CONSUMER repo's workspace, which

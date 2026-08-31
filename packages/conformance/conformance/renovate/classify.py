@@ -81,6 +81,29 @@ STALE_AFTER_DAYS = 1
 _WINDOW_RE = re.compile(r"^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?$")
 
 
+# The refusal reasons ``withhold()`` stamps onto the tripwire line, split by
+# whether waiting fixes them. The writer's copy of this vocabulary lives in
+# ``.github/scripts/renovate_uv_lock_bounded.py``; the two are pinned equal by a
+# test in ``.github/scripts/tests/`` rather than shared by import, because the
+# driver runs as a bare ``python3`` script on the fleet runner with no venv and
+# so cannot import this package.
+#
+# Only ``window-empty`` heals on its own: the bound admitted nothing on the pass
+# that wrote it, which the next slice of window routinely fixes. The rest are
+# standing faults — a broken interpreter, an unsatisfiable floor, a floor that
+# was admitted and still failed, a yanked-pin rollback — where waiting changes
+# nothing and a human owns the branch.
+SELF_HEALING_REFUSALS = frozenset({"window-empty"})
+
+# How long a self-healing refusal may sit before its survival is itself the
+# finding. The reaper step in renovate.yaml deletes one on sight and the fleet
+# cron is four-hourly, so anything past two passes means the reaper did not run.
+# Deliberately not the refusal's own window: that clock answers "would the bound
+# admit something now?", which stops being the question once something is
+# supposed to have deleted the branch regardless of what the bound would admit.
+REAPER_GRACE = timedelta(hours=9)
+
+
 def _non_dep_files(files: list[str]) -> list[str]:
     return [f for f in files if not _DEP_FILE_RE.match(f)]
 
@@ -94,14 +117,23 @@ def parse_window(window: str) -> Optional[timedelta]:
     return timedelta(days=days, hours=hours, minutes=minutes)
 
 
-def lock_refusal_window(lock_text: str) -> str:
-    """The release-age window named by a bounded-lock *refusal* tripwire, or "".
+def parse_refusal_options(lock_text: str) -> tuple[str, str]:
+    """The bounded-lock refusal tripwire's ``(window, reason)``, or ``("", "")``.
+
+    One parser behind two accessors — :func:`lock_refusal_window` and
+    :func:`lock_refusal_reason` — rather than two line loops that could disagree
+    about what counts as a tripwire.
 
     ``withhold()`` in ``.github/scripts/renovate_uv_lock_bounded.py`` refuses a
-    lock refresh by writing the baseline versions plus a bare ``[options]`` table::
+    lock refresh by writing the baseline versions plus a bare ``[options]`` table,
+    stamped since FND-909 with why it refused::
 
         [options]
-        exclude-newer-span = "P3D"
+        exclude-newer-span = "P3D"  # refusal: window-empty
+
+    The reason is empty for a tripwire written before that stamp existed. "No
+    reason given" must never read as self-healing, so callers treat an unstamped
+    tripwire as the pre-FND-909 shape and fall back to the window clock.
 
     That table is the refusal's only durable trace — nothing else on the PR
     records it — and it is precisely what ``uv sync --locked`` rejects, which is
@@ -121,12 +153,13 @@ def lock_refusal_window(lock_text: str) -> str:
     and needs six lines of it.
     """
     span = ""
+    reason = ""
     in_options = False
     for raw in lock_text.splitlines():
         line = raw.strip()
         if line.startswith("[options."):
             # uv's own per-package ceiling subtable. Never written by withhold().
-            return ""
+            return "", ""
         if line.startswith("[options]"):
             in_options = True
             continue
@@ -140,10 +173,31 @@ def lock_refusal_window(lock_text: str) -> str:
         key, _, value = line.partition("=")
         if key.strip() == "exclude-newer":
             # uv wrote this table, not the driver.
-            return ""
+            return "", ""
         if key.strip() == "exclude-newer-span":
-            span = value.split("#")[0].strip().strip("\"'")
-    return span
+            head, _, stamp = value.partition("#")
+            span = head.strip().strip("\"'")
+            stamp = stamp.strip()
+            if stamp.startswith("refusal:"):
+                reason = stamp[len("refusal:") :].strip()
+    return span, reason
+
+
+def lock_refusal_window(lock_text: str) -> str:
+    """The release-age window a bounded-lock refusal tripwire names, or "".
+
+    See :func:`parse_refusal_options` for the shape being read.
+    """
+    return parse_refusal_options(lock_text)[0]
+
+
+def lock_refusal_reason(lock_text: str) -> str:
+    """Why the driver refused, per the tripwire's stamp, or "" if unstamped.
+
+    A reason outside :data:`SELF_HEALING_REFUSALS` is a standing fault: waiting
+    does not clear it and the reaper deliberately leaves it alone.
+    """
+    return parse_refusal_options(lock_text)[1]
 
 
 def _is_uv_lock_only(files: list[str]) -> bool:
@@ -151,47 +205,66 @@ def _is_uv_lock_only(files: list[str]) -> bool:
     return len(files) == 1 and files[0].rsplit("/", 1)[-1] == "uv.lock"
 
 
-def bounded_lock_refusal_expired(
+def bounded_lock_refusal_state(
     pr: RenovatePR, category: Category, now: datetime
-) -> bool:
-    """Is this red PR a bounded-lock refusal whose window has already elapsed?
+) -> Optional[BlockingReason]:
+    """Which bounded-lock refusal this red PR is, or ``None`` if it is not one.
 
-    Four conditions, all machine-checkable and none heuristic:
+    Three conditions identify a refusal at all, machine-checkable and none
+    heuristic: it is a lock-maintenance PR, the diff is a ``uv.lock`` and nothing
+    else, and that lock carries the driver's tripwire (see
+    :func:`parse_refusal_options`).
 
-    1. it is a lock-maintenance PR,
-    2. the diff is a ``uv.lock`` and nothing else,
-    3. that lock carries the driver's refusal tripwire (see
-       :func:`lock_refusal_window`), and
-    4. the branch head is at least as old as the window the tripwire names.
+    What separates the two findings is the tripwire's stamp, because they have
+    different owners and different clocks:
 
-    (4) is what makes the refusal *expired* rather than merely present. A refusal
-    written at ``T`` was caused by content published inside ``(T - W, T]``; by
-    ``T + W`` every one of those releases is at least ``W`` old, so the same
-    resolve would now be admitted. ``head_committed_at`` is the right clock and
-    ``created_at`` is not: Renovate rewrites a lock branch in place, so a PR opened
-    a week ago may carry a refusal written an hour ago.
+    ``BOUNDED_LOCK_REFUSAL_STANDING``
+        A reason outside :data:`SELF_HEALING_REFUSALS` — a broken interpreter, an
+        unsatisfiable floor, a yanked-pin rollback. Waiting fixes none of them and
+        the reaper leaves them alone by design, so this is reported the moment it
+        is seen. No clock: an age gate here would only delay a human looking at a
+        branch that was never going to recover on its own.
 
-    What this deliberately does not claim is *which* refusal path wrote the
-    tripwire — ``withhold()`` is also called for an unsatisfiable floor and for the
-    rollback gate, and those do not expire with the clock. The signal is honest
-    about that: it says the tripwire is on and the window it names has elapsed,
-    which is already strictly more than ``checks_failing`` conveys, and the first
-    triage step (look at the branch; delete it to force a fresh resolve) is the
-    same either way.
+    ``BOUNDED_LOCK_REFUSAL_EXPIRED``
+        A refusal that should already be gone. Two clocks reach it, and which one
+        applies depends on whether the tripwire is stamped:
+
+        *Stamped self-healing* — the reaper deletes these on sight, so the finding
+        is not "would the bound admit something now?" but "why is this still
+        here?". :data:`REAPER_GRACE` (two fleet passes) is the answer, and the
+        refusal's own window stops being relevant once something is supposed to
+        have deleted the branch regardless of what the bound would admit.
+
+        *Unstamped* — written before FND-909, so the reason is unknowable and the
+        reaper correctly ignores it. Falls back to the original window clock: a
+        refusal written at ``T`` was caused by content published inside
+        ``(T - W, T]``, so by ``T + W`` every one of those releases is at least
+        ``W`` old and the same resolve would now be admitted. "No reason given"
+        must never read as self-healing, so this path never claims the shorter
+        grace.
+
+    ``head_committed_at`` is the right clock for both and ``created_at`` is not:
+    Renovate rewrites a lock branch in place, so a PR opened a week ago may carry
+    a refusal written an hour ago.
     """
     if category is not Category.LOCK_MAINTENANCE:
-        return False
+        return None
     if not _is_uv_lock_only(pr.files):
-        return False
+        return None
     window = parse_window(pr.lock_refusal_window)
     if window is None:
-        return False
+        return None
+
+    reason = pr.lock_refusal_reason
+    if reason and reason not in SELF_HEALING_REFUSALS:
+        return BlockingReason.BOUNDED_LOCK_REFUSAL_STANDING
+
     head = pr.head_committed_at
     if head is None:
         # No clock for the branch head — the input predates the field. Report the
         # ordinary red-build reason rather than guessing from created_at, which
         # Renovate's in-place branch rewrites make unrelated to the refusal.
-        return False
+        return None
     # Both sides get the same naive->UTC coercion classify() applies to
     # created_at. Normalising only one of them makes a naive clock a TypeError on
     # subtraction rather than a wrong-by-an-offset answer, which is a worse
@@ -200,7 +273,10 @@ def bounded_lock_refusal_expired(
         head = head.replace(tzinfo=timezone.utc)
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
-    return now - head >= window
+    grace = REAPER_GRACE if reason in SELF_HEALING_REFUSALS else window
+    if now - head >= grace:
+        return BlockingReason.BOUNDED_LOCK_REFUSAL_EXPIRED
+    return None
 
 
 def categorize(pr: RenovatePR) -> Category:
@@ -410,11 +486,13 @@ def blocking_reason(
 
     if pr.checks_state == ChecksState.FAILING:
         # Red is ordinarily a human's problem and age adds nothing to it. One
-        # shape is different: a bounded-lock refusal is red by design and nothing
-        # will ever re-evaluate it, so once its window has elapsed it is frozen
-        # rather than broken. Separate it out so the dashboard can say which.
-        if bounded_lock_refusal_expired(pr, category, now):
-            return BlockingReason.BOUNDED_LOCK_REFUSAL_EXPIRED
+        # shape is different: a bounded-lock refusal is red by design, so it is
+        # either frozen past when the reaper should have cleared it, or a standing
+        # fault waiting on a human. Separate both out so the dashboard can say
+        # which, and so an alarm can fire on the first without the second.
+        refusal = bounded_lock_refusal_state(pr, category, now)
+        if refusal is not None:
+            return refusal
         return BlockingReason.CHECKS_FAILING
     if pr.checks_state == ChecksState.PENDING:
         return BlockingReason.CHECKS_PENDING
