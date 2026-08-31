@@ -38,6 +38,7 @@ import re
 import shutil
 import subprocess
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
@@ -308,6 +309,19 @@ PHASE2_AGENTS = (
 )
 
 
+def _agent_prompt(name: str) -> str:
+    """The playbook's agent brief, read from this runner's own checkout.
+
+    Deliberately NOT wrapped in a try/except. A missing brief means the review
+    would run a domain agent with no instructions and still emit a verdict —
+    the single most dangerous failure mode in a review lane, because nothing
+    downstream distinguishes it from a clean pass.
+    """
+    path = os.path.join(".mothership", "pr-review", "agents", f"{name}.md")
+    with open(path, encoding="utf-8") as handle:
+        return handle.read()
+
+
 def review_subagents(model: str) -> dict[str, Any]:
     """opencode subagent entries for the playbook's Phase 2 agents.
 
@@ -320,14 +334,56 @@ def review_subagents(model: str) -> dict[str, Any]:
             "description": f"SDK review — {name} domain agent (Phase 2 Wave 1).",
             "mode": "subagent",
             "model": f"{PROVIDER}/{model}",
-            "prompt": f"{{file:./.mothership/pr-review/agents/{name}.md}}",
-            # Same auto-reject trap as the primary agent: headless opencode
-            # has nobody to answer an "ask", and an unlisted tool IS an ask.
+            # A dispatched sub-agent is INVISIBLE while it runs — the parent
+            # prints one `• agent` line and nothing more until it returns — so
+            # nothing else in this lane can bound a sub-agent that loops. Two
+            # measured runs sat in one such call for 904s and 2582s.
+            #
+            # Sizing: the PARENT completes a whole review in ~17 model round
+            # trips. A single-domain sub-agent doing more than 60 is not being
+            # thorough, it is looping, and at ~13s per round trip 60 is already
+            # ~13 minutes. This forces a text-only answer at the cap rather
+            # than running forever, so the review degrades to a partial finding
+            # set instead of losing the phase entirely.
+            #
+            # NOT claimed as the fix for the stall: token accounting does not
+            # attribute sub-agent usage, so whether those runs burned steps or
+            # hung inside one is still unknown. This bounds one of the two.
+            "maxSteps": SUBAGENT_MAX_STEPS,
+            # Inlined rather than `{file:./.mothership/pr-review/agents/…}`.
+            # The template's resolution against a DOT-directory is unverified
+            # here, and the same path returns 0 matches through the agent's own
+            # Glob — so a template that silently resolved to nothing would hand
+            # the sub-agent no instructions at all and look exactly like a slow
+            # review. Reading it in Python removes the question: the file is
+            # either present or the phase fails loudly with a traceback.
+            "prompt": _agent_prompt(name),
+            # Enumerated in full, mirroring the primary agent, because a
+            # PARTIAL block here was not equivalent: `external_directory` and
+            # `doom_loop` ask unless listed, headless opencode has nobody to
+            # answer an ask, and an unlisted tool IS an ask. The primary
+            # carries the full list and works; the sub-agents carried only
+            # four keys and stalled. That is suggestive, NOT a diagnosis —
+            # a blocking ask cannot explain the #3478 sub-agent that returned
+            # a complete verdict after 15 minutes on this same partial block.
+            # Aligned because the asymmetry is indefensible either way, not
+            # because it is known to be the stall.
+            #
             # `edit` stays denied so read-only holds in the agent as well as
             # in its token; the outbound channels stay denied for the same
-            # injection reason.
+            # injection reason. Last matching rule wins, so these override
+            # the wildcard.
             "permission": {
                 "*": "allow",
+                "read": "allow",
+                "glob": "allow",
+                "grep": "allow",
+                "bash": "allow",
+                "skill": "allow",
+                "lsp": "allow",
+                "question": "allow",
+                "external_directory": "allow",
+                "doom_loop": "allow",
                 "edit": "deny",
                 "webfetch": "deny",
                 "websearch": "deny",
@@ -526,6 +582,16 @@ def format_usage(usage: dict[str, int]) -> str:
 #: MISREADING the head as moved) silently eats the whole round cap: a live run
 #: burned three rounds on the identical mismatch, each reporting `reaim` and
 #: advancing as though something had changed.
+#: Hard cap on a sub-agent's agentic iterations. See `review_subagents`.
+SUBAGENT_MAX_STEPS = 60
+
+#: Kill an agent that has printed nothing for this long. Sized off measurement,
+#: not taste: across observed runs the longest gap between two output lines in a
+#: HEALTHY phase was well under a minute, while a stalled one produced 43
+#: minutes of nothing. Five minutes sits far above the former and far below the
+#: latter, so it cannot fire on a slow-but-working phase.
+IDLE_TIMEOUT_S = 5 * 60
+
 MAX_CONSECUTIVE_REAIMS = 2
 
 
@@ -548,11 +614,17 @@ def reaim_exhausted(consecutive: int) -> bool:
 #: lanes bill to it concurrently. And `opencode stats` already reports tokens
 #: per phase, exactly.
 #:
-#: PROVISIONAL — a runaway guard, not a tuned value. No complete run has yet
-#: reported a token count, because the measurement landed in the same change
-#: that removed the broken dollar path. Re-tune from the first run that reports
-#: real numbers. Sized generously on purpose: a ceiling that stops healthy runs
-#: is worse than none, as the $25 -> $50 correction already showed.
+#: NOT YET A WORKING GUARD, and the number says so. Two complete runs have now
+#: reported `in 260 · out 10` and `in 230 · out 5` — for a 20-minute and a
+#: 45-minute review respectively. `opencode stats` aggregates its own store and
+#: demonstrably does not attribute what a dispatched sub-agent spends, which on
+#: those runs was substantially all of it.
+#:
+#: So the ceiling is left far out of reach ON PURPOSE. Tightening it to a
+#: plausible-looking figure would produce a guard that reads as working, fires
+#: against a number covering a few percent of real usage, and stops healthy
+#: runs at random. Until a run reports a total consistent with its wall-clock,
+#: treat the `tokens:` line as diagnostics and the round cap as the real bound.
 DEFAULT_MAX_TOKENS = 20_000_000
 
 
@@ -616,6 +688,20 @@ AGENT_ENV_PASSTHROUGH = (
     "RIPGREP_CONFIG_PATH",
     "GH_TOKEN",
     "GITHUB_REPOSITORY",
+    # The playbook's own variables. Their absence was VISIBLE in a live
+    # transcript — the agent's very first shell block printed `REPO env:
+    # unset`, `PR_NUMBER env: unset`, `GHA_RUN_URL env: unset` and four more,
+    # then spent turns re-deriving each from `git` and `gh` before it could
+    # start reviewing. The phase script has all of them; it simply was not
+    # handing them on, so every run paid to rediscover its own context.
+    "REPO",
+    "PR_NUMBER",
+    "HEAD_SHA",
+    "HEAD_REF",
+    "BASE_SHA",
+    "GHA_RUN_URL",
+    "COMMENTER",
+    "COMMENT_ID",
 )
 
 
@@ -680,6 +766,97 @@ class AgentResult:
         )
 
 
+def _opencode_log_dir() -> str:
+    return os.path.join(
+        os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"),
+        "opencode",
+        "log",
+    )
+
+
+def _newest_log(since: float) -> str | None:
+    """The log opencode opened for THIS run, or None if it has not yet."""
+    directory = _opencode_log_dir()
+    try:
+        candidates = [
+            os.path.join(directory, f)
+            for f in os.listdir(directory)
+            if f.endswith(".log")
+        ]
+        fresh = [c for c in candidates if os.path.getmtime(c) >= since]
+        return max(fresh, key=os.path.getmtime) if fresh else None
+    except OSError:
+        return None
+
+
+def _follow_opencode_log(stop: threading.Event, emit: Any, since: float) -> None:
+    """Stream opencode's internal log to the job log WHILE the agent runs.
+
+    This is the only live window into a dispatched sub-agent. opencode's stdout
+    prints `• Agent` when one starts and `✓ Agent` when it ends, and nothing in
+    between — so a sub-agent that ran 43 minutes and a sub-agent that died
+    instantly produce identical output until the very end. Its internal log,
+    by contrast, records the stream lifecycle per session id: `stream`,
+    `stream error`, retry backoff, tool dispatch. That is what tells a stall
+    apart from slow work, and waiting for the artifact means waiting for the
+    phase to end before anyone can see why it will not.
+
+    Emitted with an `[oc]` prefix and deliberately NOT appended to the parsed
+    transcript. The caller greps that transcript for verdict markers and
+    `SDK_LOOP_DISMISSED:` lines; mixing a second stream into it risks changing
+    what those parsers see. Routing to the job log only keeps diagnostics and
+    control strictly separate.
+    """
+    handle = None
+    try:
+        while not stop.is_set():
+            if handle is None:
+                path = _newest_log(since)
+                if path is None:
+                    stop.wait(2)
+                    continue
+                handle = open(path, encoding="utf-8", errors="replace")
+            chunk = handle.readline()
+            if not chunk:
+                stop.wait(1)
+                continue
+            emit(f"[oc] {chunk.rstrip()}")
+    except OSError:
+        return
+    finally:
+        if handle is not None:
+            try:
+                handle.close()
+            except OSError:
+                pass
+
+
+def _save_opencode_log(transcript_path: str) -> None:
+    """Copy opencode's own log next to the transcript, for the artifact.
+
+    The transcript is only what opencode prints to stdout, and that says
+    NOTHING about what happens inside a dispatched sub-agent — the measured
+    stall showed one `• agent` line and then 43 minutes of silence, which is
+    unactionable. opencode's internal log records the stream lifecycle
+    (`stream`, `stream error`, retry backoff, model and session ids) for the
+    sub-agent as well as the primary, so it is the only place a stall can be
+    told apart from slow work.
+
+    Best-effort throughout: this is diagnostics, and losing it must never fail
+    a phase that produced a verdict.
+    """
+    source = _opencode_log_dir()
+    target = f"{os.path.splitext(transcript_path)[0]}-opencode.log"
+    try:
+        newest = max(
+            (os.path.join(source, f) for f in os.listdir(source) if f.endswith(".log")),
+            key=os.path.getmtime,
+        )
+        shutil.copyfile(newest, target)
+    except (OSError, ValueError):
+        return
+
+
 def run_agent(
     model: str,
     prompt: str,
@@ -688,6 +865,7 @@ def run_agent(
     transcript_path: str | None = None,
     sink: Any = None,
     subagents: bool = False,
+    idle_timeout_s: int = IDLE_TIMEOUT_S,
 ) -> AgentResult:
     """Invoke one agent phase, STREAMING its output to the job log.
 
@@ -714,6 +892,9 @@ def run_agent(
         json.dump(opencode_config(model, with_subagents=subagents), handle, indent=2)
 
     lines: list[str] = []
+    # Stamped BEFORE launch so the follower can tell this run's log file from
+    # one a previous phase left behind in the same runner image.
+    started_at = time.time()
     try:
         process = subprocess.Popen(
             ["opencode", "run", "--model", f"{PROVIDER}/{model}", prompt],
@@ -726,21 +907,66 @@ def run_agent(
             text=True,
             bufsize=1,
         )
-        # A watchdog rather than a deadline inside the read loop: readline()
-        # blocks, so a phase that hangs with no output would otherwise never
-        # reach the check and would sit until the job timeout instead of ours.
-        timer = threading.Timer(timeout_s, process.kill)
-        timer.daemon = True
-        timer.start()
+        # TWO deadlines, because they catch different deaths.
+        #
+        # The total one is a backstop. The one that actually matters is the
+        # IDLE deadline, and it exists because of a measured failure: a review
+        # dispatched its domain sub-agent at 14:32:22 and printed not one
+        # further line until the total watchdog killed it at 15:15:24 — 43
+        # minutes of runner time bought nothing, and the transcript ended
+        # mid-air with no statement of what went wrong. A healthy phase streams
+        # a line every ~20s in every run observed, so silence on this scale is
+        # not slow work; it is a dead process that nobody has told.
+        #
+        # Killing on silence rather than on total elapsed turns that 45-minute
+        # burn into a ~7-minute failure, and does so without needing to know
+        # WHY the agent stalled — which is the point, since that cause is still
+        # unproven.
+        deadline = [time.monotonic()]
+        stalled = threading.Event()
+
+        def watch() -> None:
+            start = time.monotonic()
+            while process.poll() is None:
+                now = time.monotonic()
+                if now - deadline[0] > idle_timeout_s:
+                    stalled.set()
+                    process.kill()
+                    return
+                if now - start > timeout_s:
+                    process.kill()
+                    return
+                # Coarse on purpose: a 10s tick costs nothing against deadlines
+                # measured in minutes, and re-arming a Timer per output line
+                # would churn a thread thousands of times per phase.
+                stalled.wait(10)
+
+        watcher = threading.Thread(target=watch, daemon=True)
+        watcher.start()
+        follower = threading.Thread(
+            target=_follow_opencode_log, args=(stalled, emit, started_at), daemon=True
+        )
+        follower.start()
         try:
             assert process.stdout is not None
             for line in process.stdout:
                 line = line.rstrip("\n")
+                deadline[0] = time.monotonic()
                 lines.append(line)
                 emit(line)
             process.wait()
         finally:
-            timer.cancel()
+            stalled.set()  # release the watcher's wait() immediately
+        if stalled.is_set() and process.returncode is not None and lines:
+            # Say so IN the transcript. A silent death and a killed stall look
+            # identical downstream otherwise, and the caller reports whichever
+            # it guesses.
+            note = (
+                f"[sdk-loop] no output for {idle_timeout_s}s — agent killed as "
+                "stalled. The phase did not finish; this is not a clean verdict."
+            )
+            lines.append(note)
+            emit(note)
     finally:
         # Never leave the pinned config in a tree the resolve phase might commit.
         for stray in (config_path, os.path.join(cwd, RG_CONFIG_NAME)):
@@ -748,6 +974,9 @@ def run_agent(
                 os.unlink(stray)
             except FileNotFoundError:
                 pass
+
+    if transcript_path:
+        _save_opencode_log(transcript_path)
 
     transcript = "\n".join(lines)
     if transcript_path:

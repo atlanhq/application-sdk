@@ -68,6 +68,10 @@ from sdk_loop_common import (
 #: Wall-clock per phase. Review is the slower of the two: it walks the whole
 #: five-phase playbook including sub-agents, where a resolve round is mostly
 #: targeted edits.
+# Outer backstops, deliberately left generous. The idle watchdog in
+# `run_agent` is what actually catches a dead agent, and it fires on silence
+# rather than on elapsed time — so these only ever cap a phase that is still
+# talking. Cutting them would trade a real (if slow) review for no review.
 TIMEOUT_REVIEW_S = 45 * 60
 TIMEOUT_RESOLVE_S = 30 * 60
 
@@ -495,9 +499,6 @@ def main(argv: list[str] | None = None) -> int:
         counts = opencode_usage(workspace)
         usage, cost = format_usage(counts), usage_total(counts)
         print(f"tokens: {usage}")
-        counts = opencode_usage(workspace)
-        usage, cost = format_usage(counts), usage_total(counts)
-        print(f"tokens: {usage}")
         emit_outputs(
             outcome=outcome.outcome,
             verdict=outcome.verdict,
@@ -540,6 +541,14 @@ def main(argv: list[str] | None = None) -> int:
         after = live_head(repo, head_ref)
         dismissals = parse_dismissals(f"{result.stdout}\n{result.stderr}")
         outcome = interpret_resolve(result, bool(dirty), before, after, dismissals)
+        # Measured here rather than inherited: `cost` and `usage` were only
+        # ever assigned inside the review branch, so every resolve phase
+        # reached `emit_outputs` with both names unbound and died on a
+        # NameError AFTER the resolver had already pushed its fix — the work
+        # landed, the round was reported as failed, and the loop stopped.
+        counts = opencode_usage(workspace)
+        usage, cost = format_usage(counts), usage_total(counts)
+        print(f"tokens: {usage}")
         for entry in outcome.dismissals:
             ledger.add(entry["id"], entry["rationale"], round_no)
         emit_outputs(

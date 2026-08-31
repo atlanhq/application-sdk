@@ -241,6 +241,15 @@ jobs:
           SPENT_SO_FAR: ${{ inputs.spent_so_far }}
           REAIMS_SO_FAR: ${{ inputs.reaims_so_far }}
           SDK_LOOP_MAX_TOKENS: ${{ vars.SDK_LOOP_MAX_TOKENS }}
+          # $HEAD_SHA is referenced 9 times by the playbook (the
+          # moved-since-dispatch guard, the delta diff range, the commit-status
+          # POST) and was never being set. The agent recovers by running
+          # `git rev-parse HEAD` itself, so this is wasted turns rather than a
+          # wrong result — worth perhaps a minute of Phase 0, NOT the stall.
+          # $GHA_RUN_URL the playbook never references; it is passed only to
+          # save the agent re-fetching the started-comment for its own run URL.
+          HEAD_SHA: ${{ inputs.base_sha }}
+          GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
           LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL }}

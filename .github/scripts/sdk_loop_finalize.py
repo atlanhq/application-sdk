@@ -23,6 +23,10 @@ import os
 import subprocess
 from dataclasses import dataclass
 
+# The one shared formatter. Finalize is otherwise stdlib-only, but duplicating
+# the token rendering is how the USD/token mismatch this fixes got in.
+from sdk_loop_common import format_tokens
+
 MARKER = "<!-- SDK_LOOP_SUMMARY -->"
 
 #: Every way a run can end, and the one-line explanation a reader gets. Keys
@@ -154,7 +158,7 @@ def render_rounds(rounds: list[Round]) -> str:
         "|---|---|---|---|---|--:|---|---|",
     ]
     for r in rounds:
-        cost = "—" if r.cost is None else f"{int(r.cost):,}"
+        cost = "—" if r.cost is None else format_tokens(int(r.cost))
         lines.append(
             f"| {r.number} | {r.phase} | `{r.outcome}` | {_cell(r.verdict)} "
             f"| `{r.sha[:8] or '—'}` | {cost} | {_cell(r.usage)} | {_cell(r.detail)} |"
@@ -163,28 +167,34 @@ def render_rounds(rounds: list[Round]) -> str:
 
 
 def render_cost(rounds: list[Round]) -> str:
-    """The run total, with the caveat that makes the number honest.
+    """The run's token total, with the caveat that keeps it honest.
 
-    Cost is measured as the movement in the gateway KEY's cumulative spend
-    across each phase. The key is the billing unit, not the run — and this lane
-    runs PRs in parallel and shares its key with other automation — so anything
-    else billing during a phase lands in that phase's figure. It is an upper
-    bound, and saying so is the difference between a useful number and a
-    misleading one.
+    Tokens, not dollars: the gateway's /key/info is unreadable with this lane's
+    non-admin key, and the key is shared, so a spend delta was an upper bound
+    over other lanes' traffic as well as this run's. `opencode stats` is
+    per-phase and exact by comparison.
+
+    The caveat that matters now is a different one. Two complete runs reported
+    a few hundred tokens for reviews lasting twenty and forty-five minutes,
+    because `opencode stats` does not attribute what a DISPATCHED SUB-AGENT
+    spends — and on a real review that is most of it. So this figure is a
+    floor, not a total, and it is labelled as one rather than presented as a
+    bill someone might reconcile against.
     """
     total, unmeasured = total_cost(rounds)
-    if not any(r.cost is not None for r in rounds):
+    measured = sum(1 for r in rounds if r.cost is not None)
+    if not measured:
         return (
-            "\n**Cost:** unavailable — the gateway did not report key spend. "
+            "\n**Tokens:** unavailable — `opencode stats` reported no usage. "
             "No figure is better than a wrong one.\n"
         )
-    line = f"\n**Cost:** ${total:,.4f} across {sum(1 for r in rounds if r.cost is not None)} phases"
+    line = f"\n**Tokens:** {format_tokens(int(total))} across {measured} phases"
     if unmeasured:
         line += f" ({unmeasured} phase(s) unmeasured)"
     return (
         line
-        + ". Measured as the movement in the gateway key's spend, so concurrent "
-        + "traffic on the same key is included — read it as an upper bound.\n"
+        + ". Billable input + output from `opencode stats`. Sub-agent usage is "
+        + "NOT attributed by that source, so read this as a floor.\n"
     )
 
 
