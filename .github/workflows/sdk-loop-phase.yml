@@ -249,6 +249,13 @@ jobs:
           # $GHA_RUN_URL the playbook never references; it is passed only to
           # save the agent re-fetching the started-comment for its own run URL.
           HEAD_SHA: ${{ inputs.base_sha }}
+          # The phase already READ this ("answers_trigger") and never received
+          # it, so the ANSWERS_TRIGGER filter in `newest_verdict` silently ran
+          # with None on every round — meaning a verdict comment older than
+          # this invocation could be adopted as this phase's own. `github.event`
+          # is available inside a reusable workflow called from the same run,
+          # so this needs no new input.
+          COMMENT_ID: ${{ github.event.comment.id }}
           GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}

@@ -723,10 +723,21 @@ class AgentResult:
     exit_code: int
     stdout: str
     stderr: str
+    #: The idle watchdog killed this agent. Carried as a FIELD rather than
+    #: left as a line in the transcript: `completed` is what the phase
+    #: interpreter reads, and a killed agent that reports completed lets the
+    #: phase go on to accept whatever verdict comment happens to be newest —
+    #: including a prior @sdk-review on the same sha, adopted as its own.
+    stalled: bool = False
 
     @property
     def abort_reason(self) -> str:
         """The agent's own fatal error, if it printed one."""
+        if self.stalled:
+            return (
+                "agent produced no output for the idle timeout and was killed "
+                "as stalled — no verdict from this phase is trustworthy"
+            )
         match = _ABORT_RE.search(f"{self.stdout}\n{self.stderr}")
         return match.group(1).strip() if match else ""
 
@@ -789,7 +800,9 @@ def _newest_log(since: float) -> str | None:
         return None
 
 
-def _follow_opencode_log(stop: threading.Event, emit: Any, since: float) -> None:
+def _follow_opencode_log(
+    stop: threading.Event, emit: Any, since: float, deadline: list[float] | None = None
+) -> None:
     """Stream opencode's internal log to the job log WHILE the agent runs.
 
     This is the only live window into a dispatched sub-agent. opencode's stdout
@@ -820,6 +833,16 @@ def _follow_opencode_log(stop: threading.Event, emit: Any, since: float) -> None
             if not chunk:
                 stop.wait(1)
                 continue
+            # This line is ACTIVITY, not just diagnostics. A dispatched
+            # sub-agent emits nothing on the parent's stdout for its whole
+            # life — the healthy one measured here was silent there for 904s —
+            # so an idle watchdog fed only by stdout would kill a working
+            # review at the timeout. The internal log is the only progress
+            # signal during a dispatch, which makes refreshing the deadline
+            # from it the difference between "fires on a stall" and "fires on
+            # every sub-agent".
+            if deadline is not None:
+                deadline[0] = time.monotonic()
             emit(f"[oc] {chunk.rstrip()}")
     except OSError:
         return
@@ -949,7 +972,9 @@ def run_agent(
         watcher = threading.Thread(target=watch, daemon=True)
         watcher.start()
         follower = threading.Thread(
-            target=_follow_opencode_log, args=(stop, emit, started_at), daemon=True
+            target=_follow_opencode_log,
+            args=(stop, emit, started_at, deadline),
+            daemon=True,
         )
         follower.start()
         try:
@@ -992,7 +1017,12 @@ def run_agent(
             # Losing the artifact copy must not fail a phase that otherwise
             # produced a verdict.
             pass
-    return AgentResult(exit_code=process.returncode, stdout=transcript, stderr="")
+    return AgentResult(
+        exit_code=process.returncode,
+        stdout=transcript,
+        stderr="",
+        stalled=stalled.is_set(),
+    )
 
 
 # --------------------------------------------------------------------------

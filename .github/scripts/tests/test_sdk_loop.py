@@ -19,6 +19,9 @@ import pathlib
 import re
 import subprocess
 import sys
+import tempfile
+import threading
+import time
 
 import pytest
 import yaml
@@ -38,6 +41,7 @@ from sdk_loop_common import (  # noqa: E402
     REVIEW_MODEL,
     AgentResult,
     DismissalLedger,
+    _follow_opencode_log,
     format_usage,
     gateway_base,
     head_state,
@@ -565,6 +569,77 @@ def test_an_empty_ledger_adds_nothing_to_the_prompt() -> None:
 # ---------------------------------------------------------------------------
 # Observability — a running phase must not look identical to a stalled one
 # ---------------------------------------------------------------------------
+
+
+def test_a_quiet_sub_agent_is_not_killed_while_its_internal_log_moves() -> None:
+    """The failure this nearly shipped: a HEALTHY dispatched sub-agent prints
+    nothing on the parent's stdout for its entire life — measured at 904s —
+    while the idle bound was 300s. Sizing the bound on parent-turn gaps (~29s)
+    measured the wrong thing, because the watchdog does not sit in those gaps;
+    it sits in the dispatch. Internal-log lines are the only progress signal
+    there, so they must refresh the deadline or the watchdog kills every
+    sub-agent that outlives the timeout.
+    """
+    deadline = [time.monotonic() - 10_000]  # far past any bound
+    stop = threading.Event()
+
+    with tempfile.TemporaryDirectory() as home:
+        log_dir = pathlib.Path(home) / "opencode" / "log"
+        log_dir.mkdir(parents=True)
+        (log_dir / "opencode.log").write_text(
+            "timestamp=... message=stream session.id=ses_sub\n", encoding="utf-8"
+        )
+        monkey = pytest.MonkeyPatch()
+        monkey.setenv("XDG_DATA_HOME", home)
+        try:
+            emitted: list[str] = []
+            worker = threading.Thread(
+                target=_follow_opencode_log,
+                args=(stop, emitted.append, 0.0, deadline),
+                daemon=True,
+            )
+            worker.start()
+            for _ in range(100):
+                if deadline[0] > time.monotonic() - 5_000:
+                    break
+                time.sleep(0.05)
+            stop.set()
+            worker.join(timeout=5)
+        finally:
+            monkey.undo()
+
+    assert deadline[0] > time.monotonic() - 5_000, (
+        "an internal-log line must refresh the idle deadline; without this a "
+        "working sub-agent is killed at the timeout"
+    )
+
+
+def test_a_stalled_agent_is_an_abort_not_a_note_in_the_transcript() -> None:
+    """A killed phase must not be able to adopt someone else's verdict.
+
+    `interpret_review` gates on `completed`, and opencode exits 0 even when
+    fatal — so if a stall only left prose in the transcript, the phase would
+    carry on and take whatever verdict comment was newest, which on a re-run
+    can be a prior @sdk-review for the same sha.
+    """
+    stalled = AgentResult(exit_code=0, stdout="some output", stderr="", stalled=True)
+    assert not stalled.completed
+    assert "stalled" in stalled.abort_reason
+
+    fine = AgentResult(exit_code=0, stdout="some output", stderr="", stalled=False)
+    assert fine.completed
+    assert fine.abort_reason == ""
+
+
+def test_the_phase_job_passes_the_triggering_comment_id() -> None:
+    """`newest_verdict` takes an ANSWERS_TRIGGER so it cannot mistake an older
+    comment for this invocation's verdict. The phase script always read
+    COMMENT_ID and the phase workflow never set it, so that filter ran with
+    None on every round."""
+    phase = pathlib.Path(".github/workflows/sdk-loop-phase.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "COMMENT_ID:" in phase, "the phase job must pass the triggering comment id"
 
 
 def test_the_agent_transcript_streams_rather_than_buffering(
