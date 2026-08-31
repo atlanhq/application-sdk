@@ -1971,8 +1971,8 @@ written, and query-based lineage and popularity go silently missing for as long 
 takes someone to notice.
 
 A function takes a `connection_qualified_name`, calls `.split(...)` on a value derived
-from it, and can `raise` out of its own body — while that function does not itself reach
-the SDK seam.
+from it, and can `raise` out of its own body — while that function does not itself call
+`get_persistent_s3_prefix` or `extract_epoch_id_from_qualified_name`.
 
 The app has taken over a decision the SDK already makes, and made it stricter.
 `extract_epoch_id_from_qualified_name` logs a warning and returns the segment when it is
@@ -1991,8 +1991,14 @@ prefix = get_persistent_s3_prefix(connection_qualified_name, app_name)
 ```
 
 Raising a typed app error *around* the SDK call is correct and not flagged: a function
-that calls a seam symbol is delegating, so one that catches the SDK's error and
-re-raises its own stays silent.
+that derives the value through one of those two helpers is delegating, so one that
+catches the SDK's error and re-raises its own stays silent.
+
+Only those two symbols count as delegation.  The marker helpers
+(`fetch_marker_from_storage`, `persist_marker_to_storage`, `create_next_marker`,
+`process_marker_timestamp`) take an already-derived prefix and leave the parse to their
+caller, so reading a marker through the SDK while still splitting the qualified name by
+hand is a finding — that half-migrated shape is the likeliest recurrence.
 
 Delegation is judged **per function**, not per module.  A module-level gate reads as
 delegation today, when almost no app module imports the seam — but the point of P048 and
