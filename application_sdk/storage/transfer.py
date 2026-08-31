@@ -169,6 +169,10 @@ async def _upload_from_store(
 
     Returns ``(transferred, reason)``.
     """
+    from application_sdk.storage.chunked import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _part_path,
+        _transfer_state_path,
+    )
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         download_file_chunked,
         exists,
@@ -204,7 +208,7 @@ async def _upload_from_store(
         # file survives slow egress on the cross-store copy path. (BLDX-1513)
         # resume=False: mkstemp yields a fresh name per call, so a checkpoint
         # sidecar could never be reused — without this, a failed copy strands
-        # a {tmp}.transfer-state file in /tmp until pod restart.
+        # a checkpoint under /tmp until pod restart.
         await download_file_chunked(
             source_key, tmp, source_store, normalize=False, resume=False
         )
@@ -213,8 +217,15 @@ async def _upload_from_store(
         return True, "uploaded"
     finally:
         tmp.unlink(missing_ok=True)
-        # Belt-and-braces: never strand a checkpoint sidecar for a temp file.
-        Path(str(tmp) + ".transfer-state").unlink(missing_ok=True)
+        # Belt-and-braces: never strand either staging file for a temp
+        # destination. Both live in `.sdk-partial/` beside it, so ask the
+        # helpers rather than rebuilding the names here — a local copy of the
+        # layout is how a cleanup site silently stops matching the writer
+        # (CONNECT-1126). The part file is the one that can actually survive
+        # `resume=False`: a publish failure leaves it on disk deliberately, and
+        # with a fresh mkstemp name no later attempt will ever claim it.
+        _part_path(tmp).unlink(missing_ok=True)
+        _transfer_state_path(tmp).unlink(missing_ok=True)
 
 
 async def _download_one(
@@ -890,10 +901,17 @@ async def download(
             # (BLDX-1155 #5).
             if owns_temp:
                 try:
+                    from application_sdk.storage.chunked import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+                        _part_path,
+                        _transfer_state_path,
+                    )
+
                     dest.unlink(missing_ok=True)
-                    # Belt-and-braces: never strand a checkpoint sidecar for
-                    # a temp file either.
-                    Path(str(dest) + ".transfer-state").unlink(missing_ok=True)
+                    # Belt-and-braces: never strand either staging file for a
+                    # temp destination either — see the matching cleanup in
+                    # _upload_from_store for why these come from the helpers.
+                    _part_path(dest).unlink(missing_ok=True)
+                    _transfer_state_path(dest).unlink(missing_ok=True)
                 except OSError:  # conformance: ignore[E002] best-effort cleanup of partial download; original error re-raised below
                     pass
             raise

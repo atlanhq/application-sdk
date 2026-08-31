@@ -439,3 +439,81 @@ class TestStagingFilesInvisibleToWalks:
         from application_sdk.common._listing import safe_list_directory
 
         assert safe_list_directory(tmp_path) == [artifact]
+
+
+class TestOwnedTempCleanupRemovesBothStagingFiles:
+    """A ``mkstemp`` destination can never be resumed, so nothing later will
+    ever claim its staging files — the caller has to remove them itself.
+
+    The part file is the one that survives ``resume=False``: a chunk failure
+    deletes it (``_handle_chunk_failure``), but a *publish* failure leaves it
+    on disk deliberately, as a valid resume state. With a fresh temp name per
+    call that state is unreachable, so it strands under ``/tmp`` until the pod
+    restarts. Both cleanup sites in ``transfer.py`` derive the names from the
+    ``chunked`` helpers rather than rebuilding them, so a future move of the
+    staging layout cannot leave them silently pointing at nothing — which is
+    what happened when the checkpoint moved into ``.sdk-partial/``.
+    """
+
+    async def test_copy_leaves_no_staging_residue_when_publish_fails(
+        self, store, tmp_path
+    ) -> None:
+        from application_sdk.storage.transfer import _upload_from_store
+
+        content = bytes(range(256)) * 4
+        await _put("copy/src.bin", content, store, normalize=False)
+        target = create_memory_store()
+
+        staged: list[Path] = []
+        real_replace = os.replace
+
+        def failing_publish(src, dst, *args, **kwargs):
+            staged.append(Path(src))
+            raise OSError("transient rename failure")
+
+        # _upload_from_store passes no chunk_size_bytes, so a small object would
+        # take the single-stream delegate — whose own `finally` cleans up, and
+        # which never creates a `.part` at all. Shrink the keyword default so
+        # the object under test actually goes down the chunked path.
+        with (
+            patch.dict(download_file_chunked.__kwdefaults__, {"chunk_size_bytes": 64}),
+            patch("application_sdk.storage.chunked.os.replace", new=failing_publish),
+        ):
+            with pytest.raises(StorageError):
+                await _upload_from_store(store, "copy/src.bin", target, "copy/dst.bin")
+
+        assert staged, "the publish never reached os.replace — test proves nothing"
+        assert staged[0].parent.name == PARTIAL_DIRNAME, (
+            f"expected the chunked staging file, got {staged[0]} — the small-file "
+            "delegate ran instead and this test is not exercising the leak"
+        )
+        assert not staged[0].exists(), (
+            f"{staged[0]} survived the failed copy; with a fresh mkstemp name per "
+            "call no later attempt can ever claim it, so it strands until the "
+            "pod restarts"
+        )
+        assert real_replace is os.replace  # patch scoped, not leaked
+
+    async def test_cleanup_paths_track_the_staging_layout(self, tmp_path) -> None:
+        """Both cleanup sites must derive names from the ``chunked`` helpers.
+
+        Pinning the call, not just the effect: the previous spelling was
+        ``Path(str(tmp) + ".transfer-state")``, which kept passing every test
+        after the checkpoint moved into ``.sdk-partial/`` — it simply unlinked
+        a path that could no longer exist.
+        """
+        import inspect
+
+        from application_sdk.storage import transfer
+
+        for func in (transfer._upload_from_store, transfer.download):
+            source = inspect.getsource(func)
+            assert '+ ".transfer-state"' not in source, (
+                f"{func.__name__} rebuilds the checkpoint name by string "
+                "concatenation; use _transfer_state_path so the cleanup cannot "
+                "drift from the writer"
+            )
+            assert "_part_path(" in source, (
+                f"{func.__name__} cleans up a temp destination without removing "
+                "its .part file, which survives a publish failure"
+            )
