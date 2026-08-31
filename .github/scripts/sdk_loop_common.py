@@ -435,11 +435,35 @@ def agent_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     return env
 
 
+#: opencode prints a fatal error as a line starting `Error:` and then exits 0.
+#: Seen live: `Error: [DecimalError] Invalid argument: [object Object]`, 11ms
+#: into round 1, after which the phase did nothing for four rounds while the
+#: harness read a stale third-party verdict as its own output.
+_ABORT_RE = re.compile(r"^\s*(?:\x1b\[[0-9;]*m)*Error:\s*(.+)$", re.MULTILINE)
+
+
 @dataclass(frozen=True)
 class AgentResult:
     exit_code: int
     stdout: str
     stderr: str
+
+    @property
+    def abort_reason(self) -> str:
+        """The agent's own fatal error, if it printed one."""
+        match = _ABORT_RE.search(f"{self.stdout}\n{self.stderr}")
+        return match.group(1).strip() if match else ""
+
+    @property
+    def completed(self) -> bool:
+        """Whether the agent ran to completion rather than aborting.
+
+        The exit code is useless here — opencode returns 0 on fatal errors — so
+        this reads the transcript for the error it prints on the way out. A
+        phase that aborted must be reported as failed, never left for the
+        caller to infer from whatever side effects are lying around.
+        """
+        return not self.abort_reason
 
     @property
     def looks_authenticated(self) -> bool:

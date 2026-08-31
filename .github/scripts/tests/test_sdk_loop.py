@@ -60,7 +60,6 @@ from sdk_loop_phase import (  # noqa: E402
     OUTCOME_FAILED,
     OUTCOME_NO_PROGRESS,
     OUTCOME_OK,
-    OUTCOME_REAIM,
     OUTCOME_TERMINAL_VERDICT,
     interpret_resolve,
     interpret_review,
@@ -275,11 +274,57 @@ def test_a_verdict_no_resolve_can_fix_stops_the_loop(verdict: str) -> None:
     assert outcome.outcome == OUTCOME_TERMINAL_VERDICT
 
 
-def test_a_verdict_stamped_against_another_sha_triggers_a_reaim() -> None:
+def test_a_verdict_stamped_against_another_sha_is_a_failure_not_a_reaim() -> None:
+    """Only this run's own verdict is accepted, and main() already fences the
+    head against the remote — so a stamp mismatch means the reviewer disobeyed,
+    not that the branch moved. Reporting it as a re-aim let a broken round
+    masquerade as progress: four rounds ran and none reviewed anything."""
     outcome = interpret_review(
         _ok(), _verdict_comment("NEEDS_FIXES", "b" * 40), "a" * 40
     )
-    assert outcome.outcome == OUTCOME_REAIM
+    assert outcome.outcome == OUTCOME_FAILED
+
+
+def test_an_aborted_agent_is_a_failure_whatever_it_left_behind() -> None:
+    """Live on the first run: `Error: [DecimalError] Invalid argument:
+    [object Object]` 11ms into round 1. opencode exited 0, the harness found an
+    unrelated verdict already on the PR, and called the round a re-aim."""
+    crashed = AgentResult(
+        exit_code=0,
+        stdout="I'll read the orchestration instructions.\n"
+        "Error: [DecimalError] Invalid argument: [object Object]\n",
+        stderr="",
+    )
+    assert not crashed.completed
+    assert "DecimalError" in crashed.abort_reason
+    outcome = interpret_review(
+        crashed, _verdict_comment("READY_TO_MERGE", "a" * 40), "a" * 40
+    )
+    assert outcome.outcome == OUTCOME_FAILED
+    assert "aborted" in outcome.detail
+
+
+def test_a_clean_transcript_is_not_read_as_an_abort() -> None:
+    # "Error" inside ordinary prose must not fail a round that worked.
+    fine = AgentResult(
+        exit_code=0,
+        stdout="Considered an ErrorHandler finding; dropped it.\n",
+        stderr="",
+    )
+    assert fine.completed
+
+
+def test_a_verdict_answering_someone_elses_trigger_is_not_ours() -> None:
+    """PRs carry old verdicts — from @sdk-review, from an earlier loop. Taking
+    the newest makes a phase that produced nothing look like it produced
+    whatever was lying there."""
+    mine = _verdict_comment("NEEDS_FIXES", "a" * 40, cid=9)
+    mine["body"] += "<!-- ANSWERS_TRIGGER: 555 -->\n"
+    theirs = _verdict_comment("READY_TO_MERGE", "b" * 40, cid=20)
+    theirs["body"] += "<!-- ANSWERS_TRIGGER: 111 -->\n"
+    picked = newest_verdict([mine, theirs], answers_trigger="555")
+    assert picked is not None and parse_verdict(picked["body"]) == "NEEDS_FIXES"
+    assert newest_verdict([theirs], answers_trigger="555") is None
 
 
 def test_newest_verdict_wins_over_an_older_one() -> None:
