@@ -29,14 +29,19 @@ based, event-driven, etc.) — only the SQL-specific defaults live here.
 from __future__ import annotations
 
 import os
-from typing import ClassVar
+import warnings
+from typing import Any, ClassVar
 
 from application_sdk.testing.full_dag.base import BaseFullDAGE2ETest
 from application_sdk.testing.full_dag.payload import AgentSpec, ConnectionSpec, RunMode
 
 
 class SQLAppE2EFullTest(BaseFullDAGE2ETest):
-    """Deprecated (v4.0) — SQL full-DAG base; use ``application_sdk.testing.e2e.SQLAppE2ETest``.
+    """Deprecated: SQL full-DAG base — use ``application_sdk.testing.e2e.SQLAppE2ETest``.
+
+    Removed in v4.0. Subclassing this emits a :class:`DeprecationWarning`, and
+    conformance B001 flags consumers fleet-wide via the deprecated-symbol
+    manifest. This package is frozen — see ``docs/standards/connector-ci-e2e.md``.
 
     Full-DAG e2e harness pre-wired for SQL connectors.
 
@@ -67,6 +72,16 @@ class SQLAppE2EFullTest(BaseFullDAGE2ETest):
     Everything else (agent_spec, connection_spec, the $admin role
     resolution) is inherited from this class.
     """
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        warnings.warn(
+            "application_sdk.testing.full_dag.SQLAppE2EFullTest is deprecated; "
+            "use application_sdk.testing.e2e.SQLAppE2ETest "
+            "— will be removed in v4.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     # Connection ACL — the API-key service account that runs the
     # back-side probe gets onto the Connection via the ``$admin`` role

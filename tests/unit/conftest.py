@@ -13,11 +13,13 @@ from application_sdk._runtime.progress import (
     bind_progress_tracker,
 )
 
-# Re-export shared registry fixtures so all unit tests can use them without
-# explicit per-file imports (pytest discovers fixtures via conftest chain).
+# Re-export shared fixtures so all unit tests can use them without explicit
+# per-file imports (pytest discovers fixtures via the conftest chain).
+# ``restore_logger_init_flags`` is autouse: the import is what applies it.
 from application_sdk.testing.fixtures import (  # noqa: F401
     clean_app_registry,
     clean_task_registry,
+    restore_logger_init_flags,
 )
 
 
@@ -85,7 +87,16 @@ def loguru_capture():
         format="{message}",
     )
     yield records
-    _loguru_logger.remove(sink_id)
+    try:
+        _loguru_logger.remove(sink_id)
+    except ValueError:
+        # Someone already took this sink out from under us: an adapter
+        # initialised mid-test and loguru's remove-all took every handler with
+        # it (see _restore_logger_init_flags). That fixture is what stops the
+        # cross-test case; this only keeps a test that resets the flags itself
+        # from dying in teardown. Note the capture is *incomplete* when this
+        # fires — anything logged after the wipe never reached ``records``.
+        pass
 
 
 def _safe_patch(target, side_effect=None, mock_obj=None):

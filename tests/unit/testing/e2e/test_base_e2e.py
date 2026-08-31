@@ -8,12 +8,14 @@ Covers the two methods the review flagged as uncovered (TEST-001/G4):
 from __future__ import annotations
 
 import json
-import urllib.error
-from dataclasses import dataclass
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
+import httpx
 import orjson
 import pytest
 
@@ -29,7 +31,6 @@ from application_sdk.testing.e2e._errors import (
     WorkerNotHealthyError,
 )
 from application_sdk.testing.e2e.base import (
-    _PURGE_BATCH_SIZE,
     BaseE2ETest,
     FullDAGOutcome,
     NodeDispatch,
@@ -44,6 +45,62 @@ from application_sdk.testing.e2e.client import (
 from application_sdk.testing.e2e.credential import CredentialBody
 from application_sdk.testing.e2e.payload import AgentSpec, DatabaseSpec, RunMode
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
+from application_sdk.testing.harness._poll import fake_clock
+
+
+@asynccontextmanager
+async def _null_atlas_client() -> AsyncIterator[object]:
+    """Stand-in for the Atlas client, for a test that patches what reads it."""
+    yield object()
+
+
+class _FakeAE:
+    """Async stand-in for the AE client ``BaseE2ETest`` holds, recording calls.
+
+    Async because everything below the pytest boundary is (FND-224's decision
+    D1): the base class talks to
+    :class:`~application_sdk.testing.harness.automation_engine.AEClient`
+    directly now, not through the sync ``AEWorkflowClient`` shim, so a
+    ``MagicMock`` would hand back coroutine-shaped nonsense.
+    """
+
+    def __init__(self, *, poll: object = None) -> None:
+        self._poll = poll
+        self.submits: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        self.polls: list[dict[str, Any]] = []
+        self.listed: list[tuple[str, str]] = []
+        self.closed = False
+
+    async def submit_workflow(self, payload: dict[str, Any], **kwargs: Any) -> str:
+        self.submits.append((payload, kwargs))
+        return "run-1"
+
+    async def poll_native_status(self, run_id: str, **kwargs: Any) -> Any:
+        self.polls.append(kwargs)
+        if isinstance(self._poll, BaseException):
+            raise self._poll
+        return self._poll
+
+    async def get_published_version(self, slug: str) -> None:
+        return None
+
+    async def probe_run_is_listed(self, slug: str, run_id: str) -> None:
+        self.listed.append((slug, run_id))
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+def _stub_bootstrap(monkeypatch: pytest.MonkeyPatch, slug: str = "slug") -> None:
+    """Replace the seed-and-publish step, which needs a tenant, with the slug."""
+
+    async def _bootstrap(self: object) -> str:
+        return slug
+
+    monkeypatch.setattr(_ConcreteE2ETest, "_bootstrap_workflow", _bootstrap)
+    monkeypatch.setattr(
+        _ConcreteE2ETest, "_build_ae_payload", lambda self, slug: {"slug": slug}
+    )
 
 
 def _make_connection_ref() -> ConnectionRef:
@@ -418,21 +475,29 @@ class TestTwoStoreDirectModeWarning:
 # ---------------------------------------------------------------------------
 
 
-class _FakeHealthResponse:
-    """Minimal urlopen() stand-in usable as a context manager."""
+def _scripted_http(*responses: object) -> httpx.MockTransport:
+    """A transport that answers with each item in turn, repeating the last.
 
-    def __init__(self, status: int) -> None:
-        self.status = status
+    An item is either an ``int`` status or an exception to raise, so one script
+    can mix "answered 503" with "refused the connection". The probe under test
+    runs on a real :class:`httpx.AsyncClient` over this, rather than against a
+    patched module global — the seam
+    :func:`~application_sdk.testing.harness.preconditions.check_worker_health`
+    offers, reached here through ``_worker_health_transport``.
+    """
+    script = list(responses)
 
-    def __enter__(self) -> _FakeHealthResponse:
-        return self
+    def _handle(request: httpx.Request) -> httpx.Response:
+        item = script.pop(0) if len(script) > 1 else script[0]
+        if isinstance(item, BaseException):
+            raise item
+        return httpx.Response(int(item), request=request)
 
-    def __exit__(self, *_exc: object) -> bool:
-        return False
+    return httpx.MockTransport(_handle)
 
 
 class _NoSourceTest(_ConcreteE2ETest):
-    # Pre-set admin roles so the source-available path never makes the pyatlan
+    # Pre-set admin roles so the source-available path never makes the
     # $admin network lookup (irrelevant here and slow).
     connection_admin_roles = ("test-admin-role-guid",)
 
@@ -453,8 +518,12 @@ class TestSourceAvailabilityGate:
         harness.setup_method()
 
         assert harness.source_available is False
-        # AE client + connection identity are never built on this path.
-        assert not hasattr(harness, "client")
+        # AE client + connection identity are never built on this path. Asked
+        # for one anyway, the harness says why rather than handing back a client
+        # pointed at nothing.
+        assert not hasattr(harness, "_ae")
+        with pytest.raises(MissingHarnessEnvError):
+            _ = harness.client
         assert not hasattr(harness, "connection_qualified_name")
 
     def test_true_builds_tenant_wiring(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -467,8 +536,46 @@ class TestSourceAvailabilityGate:
         harness.setup_method()
 
         assert harness.source_available is True
-        assert hasattr(harness, "client")
+        assert hasattr(harness, "_ae")
         assert harness.connection_qualified_name.startswith("default/openapi/")
+
+    def test_the_deprecated_client_is_built_only_when_it_is_asked_for(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """It warns on construction, so constructing it eagerly would warn every
+        connector run about a symbol most of them never touch."""
+        monkeypatch.setenv("ATLAN_BASE_URL", "https://test.example.invalid")
+        monkeypatch.setenv("ATLAN_API_KEY", "test-token")
+
+        harness = _NoSourceTest()
+        harness.setup_method()
+
+        assert harness._client is None
+        with pytest.warns(DeprecationWarning):
+            first = harness.client
+        # Same instance thereafter, sharing the run's own AE pool rather than
+        # opening a second one.
+        assert harness.client is first
+        assert first._ae is harness._ae
+
+    def test_the_client_attribute_is_still_assignable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """It was a plain attribute for as long as it existed.
+
+        A refactor whose premise is that the public surface does not move does
+        not get to take assignment away from a suite that supplies its own
+        double.
+        """
+        monkeypatch.setenv("ATLAN_BASE_URL", "https://test.example.invalid")
+        monkeypatch.setenv("ATLAN_API_KEY", "test-token")
+
+        harness = _NoSourceTest()
+        harness.setup_method()
+        stand_in = SimpleNamespace()
+        harness.client = stand_in  # type: ignore[assignment]
+
+        assert harness.client is stand_in
 
     def test_default_is_source_available(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("E2E_SOURCE_AVAILABLE", raising=False)
@@ -512,11 +619,39 @@ class TestSourceAvailabilityGate:
 class TestWorkerUpTier:
     """Worker-up-only assertions when no source is provisioned."""
 
-    def _harness(self) -> _NoSourceTest:
-        harness = _NoSourceTest()
+    @pytest.fixture(autouse=True)
+    def _fake_clock(self):
+        """Run the health-probe loop on a fake clock.
+
+        ``assert_worker_up`` waits through ``poll_until`` ->
+        ``until_deadline_async``, so every test below in which the worker never
+        answers 2xx runs the budget out for real. The old settings — interval
+        ``0``, timeout ``1`` — made that a one-second *spin* per test, four
+        seconds across this class, and interval ``0`` left "polls once and gives
+        up" indistinguishable from "polls to the deadline" (FND-962).
+
+        The interval must stay above zero under the fake: its sleep advances the
+        clock, so a zero gap would never reach the deadline.
+        """
+        with fake_clock():
+            yield
+
+    def _harness(self, *responses: object) -> _NoSourceTest:
+        """A no-source harness whose health probe runs on a scripted transport."""
+        transport = _scripted_http(*responses) if responses else None
+
+        class _Scripted(_NoSourceTest):
+            # Three attempts, one interval apart: enough that a loop which gave
+            # up after the first probe would fail the attempt-count assertion
+            # below. Free under the fake clock above.
+            worker_health_poll_interval_seconds = 1
+            worker_health_timeout_seconds = 3
+
+            def _worker_health_transport(self) -> httpx.AsyncBaseTransport | None:
+                return transport
+
+        harness = _Scripted()
         harness.source_available = False
-        harness.worker_health_poll_interval_seconds = 0
-        harness.worker_health_timeout_seconds = 1
         return harness
 
     def test_test_method_runs_worker_up_only(
@@ -539,51 +674,24 @@ class TestWorkerUpTier:
 
         assert calls == {"worker_up": 1, "full_dag": 0}
 
-    def test_test_method_fails_red_when_worker_unhealthy(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_test_method_fails_red_when_worker_unhealthy(self) -> None:
         # The no-source tier is a skip only when the worker is healthy. An
         # unhealthy worker must still fail RED (AssertionError), not be masked
         # by the pytest.skip — otherwise a worker that never deploys would show
         # SKIPPED instead of failing.
-        harness = self._harness()
-
-        def _refused(url: str, timeout: int = 10) -> _FakeHealthResponse:
-            raise urllib.error.URLError("connection refused")
-
-        monkeypatch.setattr(
-            "application_sdk.testing.e2e.base.urllib.request.urlopen", _refused
-        )
+        harness = self._harness(httpx.ConnectError("connection refused"))
         with pytest.raises(AssertionError, match="did not become healthy"):
             harness.test_full_dag_runs_end_to_end()
 
-    def test_assert_worker_up_passes_on_2xx(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        harness = self._harness()
-        monkeypatch.setattr(
-            "application_sdk.testing.e2e.base.urllib.request.urlopen",
-            lambda url, timeout=10: _FakeHealthResponse(200),
-        )
-        harness.assert_worker_up()  # must not raise
+    def test_assert_worker_up_passes_on_2xx(self) -> None:
+        self._harness(200).assert_worker_up()  # must not raise
 
-    def test_assert_worker_up_raises_when_never_healthy(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        harness = self._harness()
-
-        def _refused(url: str, timeout: int = 10) -> _FakeHealthResponse:
-            raise urllib.error.URLError("connection refused")
-
-        monkeypatch.setattr(
-            "application_sdk.testing.e2e.base.urllib.request.urlopen", _refused
-        )
+    def test_assert_worker_up_raises_when_never_healthy(self) -> None:
+        harness = self._harness(httpx.ConnectError("connection refused"))
         with pytest.raises(AssertionError, match="did not become healthy"):
             harness.assert_worker_up()
 
-    def test_the_worker_failure_is_typed_and_still_an_assertion_error(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_the_worker_failure_is_typed_and_still_an_assertion_error(self) -> None:
         """Both halves of the FND-240 change, in one raise.
 
         The leaf is typed — ``last_error`` is a field a report can read rather
@@ -594,14 +702,7 @@ class TestWorkerUpTier:
         ``except AssertionError`` against it. Typing the leaf is worth doing;
         taking that clause away from the fleet to do it is not.
         """
-        harness = self._harness()
-
-        def _unavailable(url: str, timeout: int = 10) -> _FakeHealthResponse:
-            return _FakeHealthResponse(503)
-
-        monkeypatch.setattr(
-            "application_sdk.testing.e2e.base.urllib.request.urlopen", _unavailable
-        )
+        harness = self._harness(503)
         with pytest.raises(WorkerNotHealthyError) as excinfo:
             harness.assert_worker_up()
 
@@ -610,21 +711,14 @@ class TestWorkerUpTier:
         assert error.code == "PRECONDITION_WORKER_NOT_HEALTHY"
         assert error.url == harness.worker_health_url
         assert error.last_error == "HTTP 503"
-        assert error.attempts is not None and error.attempts >= 1
+        # It re-probed rather than giving up on the first 503: three attempts is
+        # the whole budget at this interval.
+        assert error.attempts == 3
 
-    def test_a_refused_connection_and_a_5xx_are_told_apart(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_a_refused_connection_and_a_5xx_are_told_apart(self) -> None:
         """The reason ``last_error`` is a field. "Nothing is listening" and "it is
         listening and unhappy" send an operator to different places."""
-        harness = self._harness()
-
-        def _refused(url: str, timeout: int = 10) -> _FakeHealthResponse:
-            raise urllib.error.URLError("connection refused")
-
-        monkeypatch.setattr(
-            "application_sdk.testing.e2e.base.urllib.request.urlopen", _refused
-        )
+        harness = self._harness(httpx.ConnectError("connection refused"))
         with pytest.raises(WorkerNotHealthyError) as excinfo:
             harness.assert_worker_up()
 
@@ -1016,22 +1110,13 @@ class TestSubmitRetryKwargs:
     ) -> None:
         """The budget actually reaches the submit — not just computed and dropped."""
         harness = _ConcreteE2ETest()
-        harness.client = MagicMock()
-        harness.client.submit_workflow.return_value = "run-1"
         harness.connection_qualified_name = "default/test/1234567890"
-        monkeypatch.setattr(
-            _ConcreteE2ETest, "_bootstrap_workflow", lambda self: "slug"
-        )
-        monkeypatch.setattr(
-            _ConcreteE2ETest, "_build_ae_payload", lambda self, slug: {"slug": slug}
-        )
         # Stop right after the submit — the polls beyond it are covered elsewhere.
-        harness.client.poll_native_status.side_effect = RuntimeError(
-            "stop after submit"
-        )
+        harness._ae = _FakeAE(poll=RuntimeError("stop after submit"))
+        _stub_bootstrap(monkeypatch)
         with pytest.raises(RuntimeError, match="stop after submit"):
             harness.run_full_dag()
-        _, kwargs = harness.client.submit_workflow.call_args
+        _, kwargs = harness._ae.submits[0]
         assert kwargs == {
             "slug": "slug",
             "retries": 60,
@@ -1105,19 +1190,12 @@ class TestResolvedProgressStallSeconds:
         """The resolved window actually reaches the poll — not just computed."""
         harness = _ConcreteE2ETest()
         harness.ae_poll_timeout_seconds = 1800
-        harness.client = MagicMock()
-        harness.client.submit_workflow.return_value = "run-1"
         harness.connection_qualified_name = "default/test/1234567890"
-        monkeypatch.setattr(
-            _ConcreteE2ETest, "_bootstrap_workflow", lambda self: "slug"
-        )
-        monkeypatch.setattr(
-            _ConcreteE2ETest, "_build_ae_payload", lambda self, slug: {"slug": slug}
-        )
-        harness.client.poll_native_status.side_effect = RuntimeError("stop at poll")
+        harness._ae = _FakeAE(poll=RuntimeError("stop at poll"))
+        _stub_bootstrap(monkeypatch)
         with pytest.raises(RuntimeError, match="stop at poll"):
             harness.run_full_dag()
-        _, kwargs = harness.client.poll_native_status.call_args
+        kwargs = harness._ae.polls[0]
         assert kwargs["progress_stall_seconds"] == 600
 
 
@@ -1284,10 +1362,8 @@ class TestCaptureNodeDispatch:
             app_name="", task_queue=""
         )
 
-    def test_bootstrap_captures_the_seed_dag_routing(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The capture is wired into the real bootstrap, not only callable."""
+    def test_the_seed_build_captures_the_dag_routing(self, tmp_path: Path) -> None:
+        """The capture is wired into the real seed build, not only callable."""
         manifest = tmp_path / "manifest.json"
         manifest.write_text(
             json.dumps(
@@ -1304,11 +1380,9 @@ class TestCaptureNodeDispatch:
         harness = _ConcreteE2ETest()
         harness.manifest_path = str(manifest)
         harness.run_id = 1
-        harness.client = MagicMock()
-        harness.client.create_workflow.return_value = "slug"
-        harness.client.create_version.return_value = 1
-        monkeypatch.setattr("time.sleep", lambda _s: None)
-        harness._bootstrap_workflow()
+        # The real seed build, which is what the bootstrap publishes and what
+        # carries the capture — no AE writes needed to exercise it.
+        harness._build_seed_dag()
         assert (
             harness._node_dispatch["publish"].task_queue == "atlan-publish-production"
         )
@@ -1565,23 +1639,19 @@ class TestProgressStallDiagnostics:
     wired into the exception path too — otherwise the shape this work exists to
     explain is the one shape that skips the explanation."""
 
-    def _harness(self, monkeypatch: pytest.MonkeyPatch) -> _ConcreteE2ETest:
+    def _harness(
+        self, monkeypatch: pytest.MonkeyPatch, poll: BaseException
+    ) -> _ConcreteE2ETest:
         harness = _ConcreteE2ETest()
         harness.ae_poll_timeout_seconds = 1800
-        harness.client = MagicMock()
-        harness.client.submit_workflow.return_value = "run-1"
         harness.connection_qualified_name = "default/openapi/1"
         harness._node_dispatch = {
             "lineage-publish": NodeDispatch(
                 app_name="publish", task_queue="atlan-publish-production"
             )
         }
-        monkeypatch.setattr(
-            _ConcreteE2ETest, "_bootstrap_workflow", lambda self: "slug"
-        )
-        monkeypatch.setattr(
-            _ConcreteE2ETest, "_build_ae_payload", lambda self, slug: {"slug": slug}
-        )
+        harness._ae = _FakeAE(poll=poll)
+        _stub_bootstrap(monkeypatch)
         return harness
 
     def test_stall_reraises_with_the_full_per_node_breakdown(
@@ -1590,19 +1660,21 @@ class TestProgressStallDiagnostics:
         """The FND-708 shape via the watchdog: upstream succeeded, a later node
         frozen. The operator must get the queue and the child workflow here, not
         just ``name=status``."""
-        harness = self._harness(monkeypatch)
-        harness.client.poll_native_status.side_effect = DAGProgressStalledError(
-            message="No DAG node changed state for 600s for run run-1",
-            result=_stalled_result(
-                [
-                    _node(
-                        "extract",
-                        DAGNodeStatus.SUCCEEDED,
-                        started_at_ms=0,
-                        completed_at_ms=98_000,
-                    ),
-                    _node("lineage-publish", DAGNodeStatus.PENDING),
-                ]
+        harness = self._harness(
+            monkeypatch,
+            DAGProgressStalledError(
+                message="No DAG node changed state for 600s for run run-1",
+                result=_stalled_result(
+                    [
+                        _node(
+                            "extract",
+                            DAGNodeStatus.SUCCEEDED,
+                            started_at_ms=0,
+                            completed_at_ms=98_000,
+                        ),
+                        _node("lineage-publish", DAGNodeStatus.PENDING),
+                    ]
+                ),
             ),
         )
         with pytest.raises(DAGProgressStalledError) as exc:
@@ -1623,9 +1695,8 @@ class TestProgressStallDiagnostics:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Nothing to render from, so re-raising would only lose the original."""
-        harness = self._harness(monkeypatch)
         original = DAGProgressStalledError(message="stalled, no result attached")
-        harness.client.poll_native_status.side_effect = original
+        harness = self._harness(monkeypatch, original)
         with pytest.raises(DAGProgressStalledError) as exc:
             harness.run_full_dag()
         assert exc.value is original
@@ -1636,170 +1707,100 @@ class TestProgressStallDiagnostics:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class _StubAsset:
-    """Minimal stand-in for a pyatlan search hit."""
+class TestTeardownDelegatesToTheHarnessPurge:
+    """``teardown_method`` decides *what* to purge; the harness decides *how*.
 
-    guid: str | None
-
-
-class _StubAssetClient:
-    """Records purge batches and replays canned search results.
-
-    ``search`` answers the child query first and the connection query second,
-    matching the order ``teardown_method`` issues them.
+    The purge mechanics that used to live on this class — batching under httpx's
+    URL ceiling, reading the whole listing before deleting anything, the two
+    independently guarded phases — are
+    :mod:`application_sdk.testing.harness.teardown` since child H, and
+    ``tests/unit/testing/harness/test_teardown.py`` is where they are pinned.
+    What is left to check here is the wiring: the run's *own* qualified name
+    reaches the purge, the AE pool is released, and nothing on this path can
+    raise over a verdict that has already been decided.
     """
 
-    def __init__(
-        self,
-        children: list[_StubAsset],
-        connection: list[_StubAsset] | None = None,
-        failing_batches: frozenset[int] = frozenset(),
-        search_error: Exception | None = None,
-    ) -> None:
-        self._children = children
-        self._connection = (
-            connection if connection is not None else [_StubAsset("conn-guid")]
-        )
-        self._failing_batches = failing_batches
-        self._search_error = search_error
-        self.search_count = 0
-        self.purge_batches: list[list[str]] = []
+    _QN = "default/openapi/1787587123106596"
 
-    def search(self, request: object) -> list[_StubAsset]:
-        self.search_count += 1
-        if self.search_count == 1:
-            if self._search_error is not None:
-                raise self._search_error
-            return self._children
-        return self._connection
+    def _harness(self, monkeypatch: pytest.MonkeyPatch) -> tuple[Any, list[str]]:
+        purged: list[str] = []
 
-    def purge_by_guid(self, guid: str | list[str]) -> None:
-        batch = [guid] if isinstance(guid, str) else list(guid)
-        self.purge_batches.append(batch)
-        if len(self.purge_batches) in self._failing_batches:
-            raise RuntimeError("simulated purge failure")
+        async def _record(client: object, connection_qualified_name: str) -> object:
+            purged.append(connection_qualified_name)
+            return SimpleNamespace(purged=1, orphaned=(), errors=())
 
-
-class _StubTenantClient:
-    def __init__(self, asset: _StubAssetClient) -> None:
-        self.asset = asset
-
-
-class TestTeardownPurgeBatching:
-    """A crawl's full GUID list must never go out as one oversized request.
-
-    pyatlan puts one ``guid=`` query param per asset into a single DELETE, and
-    httpx refuses to build a URL whose query exceeds 65536 bytes — raised
-    client-side, so an unbatched purge deletes nothing at all.
-    """
-
-    HTTPX_MAX_URL_LENGTH = 65536
-
-    def _harness(
-        self, monkeypatch: pytest.MonkeyPatch, asset_client: _StubAssetClient
-    ) -> _ConcreteE2ETest:
         harness = _ConcreteE2ETest()
-        harness.connection_qualified_name = "default/openapi/1787587123106596"
+        harness.connection_qualified_name = self._QN
         monkeypatch.setattr(
-            BaseE2ETest,
-            "_teardown_client",
-            staticmethod(lambda: _StubTenantClient(asset_client)),
+            "application_sdk.testing.e2e.base.purge_connection", _record
         )
-        return harness
-
-    def test_large_child_set_is_purged_in_bounded_batches(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        children = [_StubAsset(f"guid-{i:04d}") for i in range(2000)]
-        asset_client = _StubAssetClient(children)
-        self._harness(monkeypatch, asset_client).teardown_method(method=None)
-
-        child_batches = asset_client.purge_batches[:-1]
-        assert len(child_batches) == 2000 // _PURGE_BATCH_SIZE
-        assert all(len(batch) <= _PURGE_BATCH_SIZE for batch in child_batches)
-        # Every GUID goes out exactly once — batching must not drop or duplicate.
-        assert [guid for batch in child_batches for guid in batch] == [
-            f"guid-{i:04d}" for i in range(2000)
-        ]
-
-    def test_a_full_batch_stays_under_the_httpx_url_cap(self) -> None:
-        """The batch size is what keeps the built URL constructible at all."""
-        guid_len = len("0004b475-1234-4abc-8def-0123456789ab")
-        query_len = len("deleteType=PURGE") + _PURGE_BATCH_SIZE * (
-            len("&guid=") + guid_len
+        monkeypatch.setattr(
+            _ConcreteE2ETest, "_atlas_client", lambda self: _null_atlas_client()
         )
-        assert query_len < self.HTTPX_MAX_URL_LENGTH
+        return harness, purged
 
-    def test_ragged_final_batch_is_still_purged(
+    def test_this_runs_own_connection_is_what_gets_purged(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        children = [_StubAsset(f"guid-{i}") for i in range(_PURGE_BATCH_SIZE + 3)]
-        asset_client = _StubAssetClient(children)
-        self._harness(monkeypatch, asset_client).teardown_method(method=None)
+        harness, purged = self._harness(monkeypatch)
+        harness.teardown_method(method=None)
+        assert purged == [self._QN]
 
-        child_batches = asset_client.purge_batches[:-1]
-        assert [len(batch) for batch in child_batches] == [_PURGE_BATCH_SIZE, 3]
-
-    def test_a_failing_batch_does_not_abort_the_remaining_batches(
+    def test_a_run_with_no_connection_purges_nothing(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        children = [_StubAsset(f"guid-{i}") for i in range(_PURGE_BATCH_SIZE * 3)]
-        asset_client = _StubAssetClient(children, failing_batches=frozenset({2}))
-        self._harness(monkeypatch, asset_client).teardown_method(method=None)
+        """The worker-up tier never mints a connection; teardown must be a no-op."""
+        harness, purged = self._harness(monkeypatch)
+        del harness.connection_qualified_name
+        harness.teardown_method(method=None)
+        assert purged == []
 
-        # 3 child batches attempted (the failing one included) + the connection.
-        assert len(asset_client.purge_batches) == 4
-
-    def test_child_purge_failure_still_purges_the_connection(
+    def test_an_unreachable_tenant_does_not_raise(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The regression: one guard for both phases orphaned the connection."""
-        children = [_StubAsset("guid-0")]
-        asset_client = _StubAssetClient(children, failing_batches=frozenset({1}))
-        self._harness(monkeypatch, asset_client).teardown_method(method=None)
+        """Teardown runs after the assertions have decided the verdict.
 
-        assert asset_client.purge_batches[-1] == ["conn-guid"]
-
-    def test_child_search_failure_still_purges_the_connection(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        asset_client = _StubAssetClient([], search_error=RuntimeError("search down"))
-        self._harness(monkeypatch, asset_client).teardown_method(method=None)
-
-        assert asset_client.purge_batches == [["conn-guid"]]
-
-    def test_assets_without_a_guid_are_skipped(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        children = [_StubAsset("guid-0"), _StubAsset(None), _StubAsset("guid-1")]
-        asset_client = _StubAssetClient(children)
-        self._harness(monkeypatch, asset_client).teardown_method(method=None)
-
-        assert asset_client.purge_batches[0] == ["guid-0", "guid-1"]
-
-    def test_no_children_purges_only_the_connection(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        asset_client = _StubAssetClient([])
-        self._harness(monkeypatch, asset_client).teardown_method(method=None)
-
-        assert asset_client.purge_batches == [["conn-guid"]]
-
-    def test_unconfigured_env_is_a_no_op(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """No tenant creds means nothing to clean up — and nothing to raise.
-
-        The real ``_teardown_client`` runs here: stubbing it out would skip the
-        very env branch this covers, and building an AtlanClient against an
-        empty base URL is what would raise.
+        Raising here would replace a real failure with a cleanup error, which is
+        exactly the miscue the two-phase guard exists to avoid.
         """
-        monkeypatch.delenv("ATLAN_BASE_URL", raising=False)
-        monkeypatch.delenv("ATLAN_API_KEY", raising=False)
-        assert BaseE2ETest._teardown_client() is None
-
         harness = _ConcreteE2ETest()
-        harness.connection_qualified_name = "default/openapi/1787587123106596"
-        harness.teardown_method(method=None)  # should not raise
+        harness.connection_qualified_name = self._QN
+
+        def _unreachable(self: object) -> Any:
+            raise RuntimeError("no tenant configured")
+
+        monkeypatch.setattr(_ConcreteE2ETest, "_atlas_client", _unreachable)
+        harness.teardown_method(method=None)  # must not raise
+
+    def test_the_ae_pool_is_released(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The AE client is opened per test in setup; teardown is what closes it.
+
+        An unclosed pool survives to process exit, which a test process tolerates
+        — but a suite is many tests, and the pool is bound to the loop that
+        opened it.
+        """
+        harness, _ = self._harness(monkeypatch)
+        closed: list[bool] = []
+
+        async def _aclose() -> None:
+            closed.append(True)
+
+        harness._ae = SimpleNamespace(aclose=_aclose)
+        harness.teardown_method(method=None)
+        assert closed == [True]
+
+    def test_a_pool_that_will_not_close_does_not_raise(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness, purged = self._harness(monkeypatch)
+
+        async def _aclose() -> None:
+            raise RuntimeError("transport already gone")
+
+        harness._ae = SimpleNamespace(aclose=_aclose)
+        harness.teardown_method(method=None)  # must not raise
+        # ...and the purge still ran: closing is the second, independent phase.
+        assert purged == [self._QN]
 
 
 # ---------------------------------------------------------------------------

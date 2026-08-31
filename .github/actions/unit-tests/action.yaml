@@ -59,10 +59,30 @@ runs:
         else
           SOCKET_FLAGS=""  # intentionally empty — see comment above
         fi
-        $UV_RUN coverage run -m pytest --import-mode=importlib --capture=no --log-cli-level=INFO tests/ $PYTEST_IGNORE -v --full-trace --hypothesis-show-statistics ${SOCKET_FLAGS}
-        $UV_RUN coverage xml
-        $UV_RUN coverage html
-        $UV_RUN coverage report --fail-under=${{ inputs.fail-under }}
+        # -n auto: the suite is ~8,700 tests and was single-threaded, so a leg
+        # took 6-10 minutes while the runner sat on 4 idle vCPUs. Roughly a
+        # third of that was tests sleeping on real clocks, which parallelism
+        # hides for free. See FND-961.
+        #
+        # --cov rather than `coverage run -m pytest`: coverage only traces the
+        # parent process, so under xdist the workers' coverage is silently lost
+        # and --fail-under reads well under half the true number.
+        #
+        # --capture=no is deliberately absent. xdist ignores it in workers, and
+        # leaving it on means a failing test's stdout is written to a worker
+        # process nobody reads instead of being replayed in the failure report.
+        # --log-cli-level is deliberately absent, and it is the single biggest
+        # remaining lever: it costs 42% of wall time under xdist (77.6s -> 45.3s
+        # locally) and 93s of CPU, because every worker formats each record and
+        # ships it over execnet. It also forces per-test verbose headers even
+        # without -v, which is what made a job log 20,000 lines. Under xdist the
+        # live stream is dropped for passing tests anyway; a failing test still
+        # gets its `Captured log call` section.
+        $UV_RUN pytest --import-mode=importlib tests/ $PYTEST_IGNORE \
+          -n auto --hypothesis-show-statistics ${SOCKET_FLAGS} \
+          --durations=25 --durations-min=1.0 \
+          --cov=application_sdk --cov-report=xml --cov-report=html \
+          --cov-report=term --cov-fail-under=${{ inputs.fail-under }}
 
     - name: Comment Coverage Report on PR
       uses: orgoro/coverage@ca0c362dc1a4f100447309405e6dfea47e251495 # v3.3.1

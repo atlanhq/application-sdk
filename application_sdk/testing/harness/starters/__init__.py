@@ -43,7 +43,10 @@ from __future__ import annotations
 
 from application_sdk.testing.harness._errors import HarnessNotBuiltError
 from application_sdk.testing.harness.cluster import ClusterReader
-from application_sdk.testing.harness.starters._ae import start_via_automation_engine
+from application_sdk.testing.harness.starters._ae import (
+    publish_seed_version,
+    start_via_automation_engine,
+)
 from application_sdk.testing.harness.starters._errors import (
     UnusableTaskQueueError,
     WorkflowStartConflictError,
@@ -56,6 +59,7 @@ from application_sdk.testing.harness.starters._specs import (
     HttpRunHandle,
     HttpWorkflowSpec,
     QueueWorkflowSpec,
+    SeededWorkflow,
     SubmitRetry,
     WorkflowRunHandle,
 )
@@ -67,8 +71,12 @@ __all__ = [
     "HttpRunHandle",
     "HttpWorkflowSpec",
     "QueueWorkflowSpec",
+    "SeededWorkflow",
     "SubmitRetry",
     "WorkflowRunHandle",
+    # The publish half of the AE sequence, for a caller whose payload needs the
+    # slug this mints before it can be built.
+    "publish_seed_version",
     # The three ways to start work
     "start_on_task_queue",
     "start_via_app_handler",

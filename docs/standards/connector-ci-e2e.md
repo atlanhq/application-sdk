@@ -2,8 +2,11 @@
 
 > **Audience:** Connector teams onboarding (or maintaining) one of the two end-to-end test pipelines this SDK ships.
 > **Canonical reference adopter:** [`atlanhq/atlan-mysql-app`](https://github.com/atlanhq/atlan-mysql-app) — see its [`docs/CI-E2E.md`](https://github.com/atlanhq/atlan-mysql-app/blob/main/docs/CI-E2E.md) for the full connector-side walkthrough.
+> **All four canonical apps:** `docs/agents/canonical-apps.md` — hello-world, openapi, mysql, metabase. These are the only connector repos worth copying from; an arbitrary `atlan-*-app` may be mid-migration or carry patterns the SDK has since deprecated.
 
 This doc covers what the SDK ships — the composite action, the reusable workflow, conventions, and inputs. Connector-side wiring lives in each connector repo; see the mysql-app walkthrough for a copy-pasteable example.
+
+> **Do not invest in "SDR" or "full_dag" as test tiers.** Both names describe *where* a connector runs, or *which* pipeline once ran a suite — never a category of thing under test. `application_sdk.testing.full_dag` is frozen and removed in v4.0; `BaseSDRIntegrationTest` is deprecated and removed in v4.0. Neither needs a replacement harness, a compatibility layer, or new SDK surface. New work is placed per concern — see [The SDR base class](#the-sdr-base-class) for the table. If a proposal starts "to preserve SDR coverage we should…", the premise is wrong: read that section first.
 
 ## What the SDK ships
 
@@ -13,7 +16,7 @@ This doc covers what the SDK ships — the composite action, the reusable workfl
 | `build-app-image` composite action | `.github/actions/build-app-image/action.yaml` | SDK-ref repin → manifest regeneration → buildx build/push → platform assert → interpreter assert. Extracted from `sdr-e2e` so the image can be built **once per run** ahead of the e2e matrix, and optionally multi-arch (see [Building the image once](#building-the-image-once)). |
 | `e2e-full-reusable.yaml` reusable workflow | `.github/workflows/e2e-full-reusable.yaml` | Boilerplate (120-min timeout, concurrency group, env wiring, agent-name resolution) for the full-DAG pipeline. Connector repos `uses:` it as a 5-line wrapper. |
 | `e2e-apps` cross-repo dispatcher | `.github/actions/e2e-apps/action.yaml` | Fires `workflow_dispatch` on the connector repo with the apps-sdk PR's head SHA. Polls for completion, surfaces a sticky status comment on the SDK PR. |
-| `BaseSDRIntegrationTest` | `application_sdk/testing/sdr/` | pytest base for the SDR pipeline. Connector test class declares `Scenario(...)` instances. |
+| ~~`BaseSDRIntegrationTest`~~ | `application_sdk/testing/sdr/` | pytest base for the SDR pipeline. Connector test class declares `Scenario(...)` instances. **Deprecated since 3.23.0, removed in v4.0** — it emits a `DeprecationWarning` on subclass and conformance B001 flags consumers fleet-wide. There is no single replacement because SDR is a deployment mode, not a test tier: see [The SDR base class](#the-sdr-base-class). |
 | `BaseE2ETest` / `SQLAppE2ETest` | `application_sdk/testing/e2e/` | pytest base for the full-DAG pipeline. `BaseE2ETest` is connector-agnostic and is what the codegen'd `app/generated/_e2e_base.py` subclasses; SQL connectors use `SQLAppE2ETest` on top of it, subclassing with `include_filter`, `expected_min_asset_counts`, `database_spec()`, etc. |
 | ~~`SQLAppE2EFullTest` / `BaseFullDAGE2ETest`~~ | `application_sdk/testing/full_dag/` | **Deprecated, removed in v4.0.** The predecessor of the row above; it emits a `DeprecationWarning` on import and its client / error types are already re-exports of the `testing/e2e` ones. Do not start a new suite here — see [Which harness](#which-harness). |
 
@@ -28,16 +31,51 @@ New suites use `application_sdk.testing.e2e`. Nothing new should be written agai
 
 `BaseE2ETest` is connector-agnostic and is already the base for every scaffolded app. The SQL-shaped parameter rows (`include-filter` / `exclude-filter`) come from `SQLAppE2ETest`, not from the base — so "my connector is not SQL, so I need the old harness" does not follow. If a non-SQL connector genuinely cannot express its manifest tokens through `BaseE2ETest`, that is an SDK gap worth filing, not a reason to start a `full_dag` suite.
 
-`application_sdk.testing.full_dag` is deprecated and removed in v4.0. It emits a `DeprecationWarning` on import, and its `client` / `_errors` modules are already thin re-exports of the `testing/e2e` ones. Suites still on it (domo, looker, saperp at time of writing) are pinned to released SDKs where it still works; they need migrating before a v4 repin, not preserving as a second supported path.
+`application_sdk.testing.full_dag` is deprecated and removed in v4.0. It emits a `DeprecationWarning` on import and on subclassing `BaseFullDAGE2ETest` / `SQLAppE2EFullTest`, and its `client` / `_errors` modules are already thin re-exports of the `testing/e2e` ones. Suites still on it (domo, looker, saperp at time of writing) are pinned to released SDKs where it still works; they need migrating before a v4 repin, not preserving as a second supported path.
+
+The `full_dag` package is **frozen** (FND-245): it gets no backports from `application_sdk/testing/harness/` and no drift repair. Its duplicate mustache substitution and its unconditional sleep stay as they are and die with the package at v4.0. Effort that would have gone into collapsing it into re-export shims goes into migrating the three remaining suites instead.
+
+### The SDR base class
+
+`BaseSDRIntegrationTest` is deprecated on the same v4.0 clock. Removing it needs **no new SDK surface**, because there is no SDR-shaped hole to fill.
+
+**SDR is a deployment mode, not a test tier.** `RunMode` in `application_sdk/testing/e2e/payload.py` is documented as "whether the connector runs in tenant or in caller-controlled CI" — `DIRECT` dispatches to the tenant's production-deployed pod, `AGENT` puts an `agent-name` on the *same* Temporal queue so a caller-deployed worker picks it up. That is placement. Auth, preflight, credential resolution and metadata extraction are handler functionality that behaves identically either way; none of them is unique to SDR, and none of them should be pinned to an "SDR" tier.
+
+`testing/e2e` already models this correctly: one harness, one `mode` ClassVar, tiers 4 and 5 from the same class. `testing/sdr` is the vestige of an older framing in which a deployment mode got its own test base — which is why its three documented additions over `BaseIntegrationTest` turn out not to be about SDR at all:
+
+1. **Workflow completion polling** — a generic convenience, mode-independent.
+2. **"Agent credential routing"** — injects `extraction_method="agent"` plus an `agent_json`. That *is* the mode flag; it is not a distinct capability.
+3. **Multi-entrypoint `workflow_type` injection** — mode-independent.
+
+The deprecation notice on `sdr/base.py` ("use `BaseE2ETest` with `RunMode.AGENT`") repeats the original error: it answers "what replaces the SDR *tier*" by naming a *mode*. Ignore that framing. The honest guidance is per-concern, and none of it mentions SDR:
+
+| Concern | Where it belongs | Canonical example |
+|---|---|---|
+| Handler functionality — auth, preflight | call the handler directly | mysql `tests/integration/test_mysql_handler.py` against a real MySQL, including wrong-password and unreachable-host; metabase `tests/unit/test_handler.py` against a mocked client |
+| Credential resolution | this repo, once | `tests/unit/credentials/` (337 tests, `resolve_agent_json` / `secret-manager` / `secret_path` included); per-app, mysql `tests/integration/test_credential_resolution.py` against fake secret stores |
+| A full DAG, in **either** mode | `tests/e2e/` | the generated `_e2e_base.py`; pick tier 4 or 5 with the `mode` ClassVar, not with a different base class |
+
+The canonical apps (`atlan-openapi-app`, `atlan-mysql-app`, `atlan-metabase-app`) each have exactly `unit/`, `integration/`, `e2e/`. None has a `tests/sdr/`; none uses `Scenario` or `BaseIntegrationTest`.
+
+Two corollaries worth stating, because the intuition tends to run the other way:
+
+- **Credentials are already first-class in `tests/e2e/`.** `application_sdk/testing/e2e/credential.py` generates a typed per-connector `CredentialBody` from `contract/app.pkl` — a stronger contract than a hand-written `agent_spec_template` dict, and the reason connectors needing real credentials (mysql, metabase) run e2e at all.
+- **The compose stack is not SDR-specific.** `e2e-full-reusable.yaml` uses the same `.github/actions/sdr-e2e` composite action, so both pipelines bring up the same atlan-configurator + Dapr + Temporal stack. Running "in the SDR stack" distinguishes nothing.
+
+So: write no new SDR suites, and do not look for an SDR replacement. Place each concern per the table above.
 
 ## The two pipelines
 
-| Pipeline | What it validates | Stack | Wall time | Triggers |
-|---|---|---|---|---|
-| **SDR Integration Tests (testcontainer)** | Credential → secret-store → connector-client chain. Auth / preflight / extract polled to `COMPLETED` on CI tenant Temporal. | Hermetic — testcontainer DB + worker + Dapr + Temporal. | ~3 min | Auto on every connector PR push |
-| **E2E Full Tests (system apps)** | Full DAG: connector extract → publish → query-intelligence → lineage-app → lineage-publish. Asset counts + lineage assertions in Atlas. | Live — configurator-generated compose, worker on a dynamic Temporal queue against the CI tenant's full Atlan stack. | ~20–40 min | Label-gated (`e2e`) — see below |
+The two pipeline **names** below are the report titles the composite action emits, derived from the test path. They are labels on CI legs, not test tiers — do not read a category of coverage off them.
 
-Both call the same composite action; difference is test target, Dapr components, compose overlay, and secret-bundle shape.
+| Pipeline (report title) | How much of the DAG runs | Source system | Wall time | Triggers |
+|---|---|---|---|---|
+| **SDR Integration Tests (testcontainer)** | The connector's own handlers and workflow only — no system apps. | Local testcontainer. | ~3 min | Auto on every connector PR push |
+| **E2E Full Tests (system apps)** | Full DAG: connector extract → publish → query-intelligence → lineage-app → lineage-publish, with asset-count and lineage assertions in Atlas. | Whatever the suite points at. | ~20–40 min | Label-gated (`e2e`) — see below |
+
+The distinguishing axis is **how much of the DAG runs**, and therefore wall time and trigger policy. It is not SDR-vs-not, and it is not hermetic-vs-live: both legs call the same composite action, and both reach the CI tenant's Temporal (`<tenant>-temporal.atlan.com`, requiring `ATLAN_BASE_URL` + the OAuth pair). The difference is test target, Dapr components, compose overlay, and secret-bundle shape.
+
+Neither leg is the place credential resolution is proven. That is `tests/unit/credentials/` in this repo — see the table in [The SDR base class](#the-sdr-base-class).
 
 ### What the `e2e` label actually gates
 
@@ -244,6 +282,8 @@ required check.
     report-title:       # OPTIONAL. Override the auto-derived PR-comment title.
                         # Auto: tests/sdr/ → "SDR Integration Tests (testcontainer)",
                         #       tests/full_dag/ → "E2E Full Tests (system apps)".
+                        # tests/e2e/ has no special-case title and derives
+                        # "E2E Tests"; set this if you want the fuller label.
     secrets-script:     # OPTIONAL. Path to the script that writes
                         # <sdr-config-dir>/secrets/credentials.json from env vars.
                         # Default: .github/sdr-e2e/make-secrets.sh.
@@ -298,7 +338,10 @@ jobs:
     with:
       app-name:                 # REQUIRED.
       app-image-name:           # REQUIRED.
-      test-path:                # OPTIONAL. Default tests/full_dag/.
+      test-path:                # OPTIONAL. Default tests/full_dag/ — the deprecated
+                                # layout, kept only so existing callers don't break.
+                                # New suites live in tests/e2e/, so set this
+                                # explicitly rather than taking the default.
       secrets-script:           # OPTIONAL. Default .github/e2e/make-secrets-e2e-full.py.
       components-dir:           # OPTIONAL. Default .github/e2e/e2e-full-components.
       compose-overlay:          # OPTIONAL. Default .github/e2e/e2e-full-docker-compose.yaml.
@@ -915,6 +958,44 @@ Three states used to render identically as `status=<X> error=None`, which read a
 Because a reachable watchdog closes *before* the ceiling, it — not the ceiling — is now the exit a stall actually takes on any suite whose ceiling is 1800s or lower. It raises `DAGProgressStalledError` rather than returning, so the same per-node breakdown is rendered onto that exception: the error carries the last observation (`DAGRunResult.progress_stalled_after_seconds`, alongside the ceiling's `timed_out_after_seconds`) and `run_full_dag` re-raises it through the one renderer above. The only difference in the output is the clause naming which exit closed — `AE reports Pending when the 600s progress watchdog closed` instead of `at the 1800s poll ceiling`. A node wedged `Running` reads the same way rather than falling back to `status=Running error=None`.
 
 **Why the harness cannot shorten the timeouts that actually bind.** The node-level budget is generous by design: `publish` and `lineage-publish` default to a 3-day `startToCloseTimeoutSeconds` (right for a large tenant doing real work, see [contract-toolkit reference](../../contract-toolkit/docs/reference.md)). But the timeout that produced the stall above was one layer down — a `heartbeat_timeout_seconds` of 3600 on the `publish` activity, which turns each lost heartbeat into an hour of dead time before the retry, well past any e2e budget. Neither is reachable from the harness: at AE submit Heracles re-fetches the manifest from the **tenant-deployed pod** and that DAG is what executes (see [Building the image once](#building-the-image-once)); the seed DAG establishes the workflow record, not the graph. The only effective place is the app's own committed contract — which is the manifest that also ships to production, so shortening it for CI would mean e2e no longer exercises the contract we ship. Precise reporting plus a reachable watchdog is what the harness can do; a heartbeat watchdog in the owning system app ([ADR-0018](../adr/0018-progress-aware-heartbeat.md)) is where that class of stall actually gets fixed.
+
+## What a red leg means when Atlas could not be read (FND-225)
+
+`BaseE2ETest` and `SQLAppE2ETest` are unchanged names with unchanged class attributes and unchanged hooks — a connector suite, and the codegen'd `app/generated/_e2e_base.py` it subclasses, need no edit. What changed underneath is that the harness plumbing now lives in `application_sdk.testing.harness`, and one consequence is visible from a connector repo.
+
+**An Atlas search that could not be read is no longer graded as a low count.** It used to arrive at the assertion ladder as zeros, so an expired token or a 503 from the asset server was reported as:
+
+```
+Atlas inventory under default/mysql/… did not meet expectations:
+  - Table: got 0, expected >= 2
+```
+
+— a confident claim about the connector, made by a run that never read it. The harness readers report "could not read" as its own answer, and the ladder now raises `AtlasReadIndeterminateError` (`DEPENDENCY_UNAVAILABLE_ATLAS_READ_INDETERMINATE`) instead. It is deliberately **not** an `AssertionError`, so pytest reports the leg as an **error** rather than a failure:
+
+```
+Atlas could not be read under default/mysql/…, so 2 expectation(s) went ungraded.
+This is not a verdict on the connector — the run never saw what it landed:
+  - Table: could not be read, so the floor expectation was not graded: …
+```
+
+Read that as "re-run it", not as "the connector regressed". The same distinction closes the mirror bug on the location check (`expected_asset_qn_depth`), which used to fail **open**: a failed sample read returned `[]`, an empty sample is skipped, and so an auth fault was graded as a pass.
+
+**`self.client` is deprecated.** Nothing in the base class routes through `AEWorkflowClient` any more; it is built on first access, warns, and goes away in v4.0. A suite that calls it directly — waiting on a connection it seeded itself, say — should call the harness functions instead:
+
+```python
+from application_sdk.testing.harness import atlas, run_sync
+
+async def _wait() -> bool:
+    async with atlas.atlas_client(base_url, api_key) as client:
+        outcome = await atlas.poll_for_connection(
+            client, qn, budget=self._atlas_connection_budget()
+        )
+        return isinstance(outcome, Settled) and outcome.value
+```
+
+**One behaviour changed on the seeded-connection path.** `seed_connection()` creates the Connection at the qualified name *this run minted*, rather than letting `Connection.creator` derive `default/<type>/<epoch>` and adopting whatever came back. That derivation had one second of resolution, so two legs of one e2e matrix starting in the same second shared a connection — and the first to finish purged the other's assets while both reported a clean teardown.
+
+**Optionally, Temporal can be asked who is polling the extract queue.** `NoWorkerOnTaskQueueError` fires on an inference: nothing started inside `ae_stall_grace_seconds`, so probably nothing is polling. Set `temporal_address` on the suite (or export `E2E_TEMPORAL_ADDRESS`, plus `E2E_TEMPORAL_NAMESPACE`) and the harness reads the queue's pollers and attaches what it saw to the same error. Off by default because the connector CI runner has **no route into a tenant's vcluster** — the same constraint that makes the AE submit the only tenant-facing probe of the installed app pod — so it is for a suite driving a cluster it can actually reach. A read that fails changes nothing: the inference still stands.
 
 ## Contract regeneration before tests
 

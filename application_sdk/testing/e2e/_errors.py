@@ -1,14 +1,16 @@
 """Typed error leaves for the full-DAG end-to-end test harness.
 
-Ten of these moved into the harness with the AE half of ``client.py`` (child F
-on FND-224) and are re-exported below: nine to
+Eleven of these have moved into the harness and are re-exported below. Ten went
+with the AE half of ``client.py`` (child F on FND-224): nine to
 :mod:`application_sdk.testing.harness.automation_engine._errors` because the AE
 reader raises them, and ``MissingHarnessClassAttrError`` to
 :mod:`application_sdk.testing.harness._errors` because ``cold_start_submit_kwargs``
-does. Same class objects and same ``code`` values, so every existing import and
-``except`` clause here is unchanged; the move is only about direction, since a
-harness module cannot raise a leaf that lives in the package child H
-re-expresses over it.
+does. ``UnknownConnectorTypeError`` went to
+:mod:`application_sdk.testing.harness.atlas._errors` in child H, because
+``create_connection`` is what raises it now. Same class objects and same ``code``
+values, so every existing import and ``except`` clause here is unchanged; the
+move is only about direction, since a harness module cannot raise a leaf that
+lives in the package child H re-expresses over it.
 """
 
 from __future__ import annotations
@@ -18,12 +20,14 @@ from typing import ClassVar
 
 from application_sdk.errors.leaves import (
     DataIntegrityError,
+    DependencyUnavailableError,
     InvalidInputError,
     NotFoundError,
     PreconditionError,
     UnimplementedError,
 )
 from application_sdk.testing.harness._errors import MissingHarnessClassAttrError
+from application_sdk.testing.harness.atlas._errors import UnknownConnectorTypeError
 from application_sdk.testing.harness.automation_engine._errors import (
     AppNotReadyError,
     AtlanAEWorkflowAlreadyActiveError,
@@ -39,6 +43,7 @@ from application_sdk.testing.harness.automation_engine._errors import (
 __all__ = [
     "AdminRoleNotResolvedError",
     "AgentSpecRequiredError",
+    "AtlasReadIndeterminateError",
     "AppNotReadyError",
     "AtlanAEWorkflowAlreadyActiveError",
     "AtlanApiHttpError",
@@ -151,20 +156,32 @@ class ProgressWatchdogUnreachableError(InvalidInputError):
 
 
 @dataclass(kw_only=True)
-class UnknownConnectorTypeError(InvalidInputError):
-    """The suite's connection type is not a pyatlan ``AtlanConnectorType``.
+class AtlasReadIndeterminateError(DependencyUnavailableError):
+    """An Atlas read the run is graded on could not be taken at all.
 
-    Raised by :meth:`~application_sdk.testing.e2e.base.BaseE2ETest.seed_connection`,
-    which needs a real connector type to create the Connection. The harness's
-    own ``connection_type or connector_short_name`` fallback is fine for
-    composing a qualifiedName segment but not for this, because an app name and
-    an Atlan catalog type legitimately differ (the OpenAPI connector is
-    ``connector_short_name="openapi"`` / ``connection_type="api"``). Failing
-    here names the fix rather than surfacing a bare pyatlan ``ValueError``.
+    Not an ``AssertionError``, and that is the whole point of the leaf. Before
+    child H a failed Atlas search arrived at the assertion ladder as zeros, so an
+    expired token or a 503 was reported as "the connector landed no assets" — a
+    confident claim about the thing under test, made by a run that never read
+    it. The harness readers answer
+    :class:`~application_sdk.testing.harness.outcome.Indeterminate` for that
+    case, and this is what
+    :meth:`~application_sdk.testing.e2e.base.BaseE2ETest._assert_full_dag_outcome`
+    raises when it sees one: pytest reports an *error* rather than a failure, so
+    a red leg cannot be read as a connector regression.
+
+    ``DEPENDENCY_UNAVAILABLE`` for the reason
+    :class:`~application_sdk.testing.harness._errors.WaitIndeterminateError`
+    carries it: the same call is expected to work once Atlas recovers, which is
+    the category's own litmus test.
+
+    Attributes:
+        checks: Comma-separated names of the expectations that went ungraded.
     """
 
-    code: ClassVar[str] = "INVALID_INPUT_UNKNOWN_CONNECTOR_TYPE"
-    field: str | None = "connection_type"
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_ATLAS_READ_INDETERMINATE"
+    component: str | None = "e2e_harness_atlas"
+    checks: str | None = None
 
 
 @dataclass(kw_only=True)

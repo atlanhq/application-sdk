@@ -258,20 +258,54 @@ versions plus a bare `[options]` table — the one lever the driver holds over a
 *required* check, since `uv sync --locked` then rejects the lock and
 `scan / Build Image` holds the branch. Two consequences follow, and both bite:
 
-**Nothing expires it.** The branch is not behind its base, so Renovate reuses it
-without re-running `postUpgradeTasks`, and the marker committed into `uv.lock`
-carries no clock. Observed 2026-08-24: five fleet lock PRs sat frozen for two to
-four days after the window that blocked them had opened. Recovery is to delete
-the branch and let the next pass rebuild it — `recreateClosed: true` in the shared
-preset is what makes that safe.
+**Nothing expired it, so the driver stamps why it refused.** The branch is not
+behind its base, so Renovate reuses it without re-running `postUpgradeTasks`, and
+the marker committed into `uv.lock` carries no clock. Observed 2026-08-24: five
+fleet lock PRs sat frozen for two to four days after the window that blocked them
+had opened. `withhold()` now writes the reason on the tripwire's own line
+(FND-909), which is what lets a machine tell the two kinds apart:
 
-**The fleet dashboard names it.** `conformance.renovate.classify` splits that
-shape out of `checks_failing` as `bounded_lock_refusal_expired` (FND-782) once
-four things hold: the PR is lock-maintenance, its diff is a `uv.lock` and nothing
-else, that lock carries a lone `exclude-newer-span` (uv's own `[options]` always
-records the absolute `exclude-newer` beside it, so a lone span is the driver's
-signature), and the branch head is at least as old as the window it names. It
-reports; it does not self-heal. A recurrence is meant to be visible, not absorbed.
+```
+exclude-newer-span = "P3D"  # refusal: window-empty
+```
+
+Only `window-empty` heals on its own — the bound admitted nothing on that pass,
+which the next slice of window routinely fixes. A broken interpreter, an
+unsatisfiable floor, a floor that was admitted and still failed, and a yanked-pin
+rollback are standing faults that waiting never clears.
+
+**A reaper clears the self-healing half.** `renovate_reap_refused_locks.py` runs
+immediately before Renovate in each repo's matrix job, deletes a stamped
+`window-empty` branch on sight, and Renovate rebuilds it in the same pass —
+`recreateClosed: true` in the shared preset is what makes that safe. Standing
+faults keep their tripwire and stay red for a human; recycling a real wedge every
+four hours would hide it behind a lane that looks busy. An *unstamped* tripwire
+is also left alone: "no reason given" must never read as self-healing.
+
+**The fleet dashboard names both, and one of them alarms.**
+`conformance.renovate.classify` splits the shape out of `checks_failing` once
+three things hold — the PR is lock-maintenance, its diff is a `uv.lock` and
+nothing else, and that lock carries a lone `exclude-newer-span` (uv's own
+`[options]` always records the absolute `exclude-newer` beside it, so a lone span
+is the driver's signature). The stamp then decides which finding it is:
+
+| Finding | When | Who acts |
+| -- | -- | -- |
+| `bounded_lock_refusal_standing` | stamped with a reason outside the self-healing set, immediately | a human |
+| `bounded_lock_refusal_expired` | stamped self-healing and older than `REAPER_GRACE` (two fleet passes), **or** unstamped and older than the window it names | nobody — the reaper should already have taken it |
+
+`renovate_refusal_alarm.py` runs last in `renovate-dashboard.yaml` and fails the
+run on `bounded_lock_refusal_expired`, because reaching that state means the
+reaper did not run — and the reaper never fails its own job, so the outage is
+otherwise silent. Standing faults are printed and never fatal: a wedge a human is
+legitimately still working through must not red a six-hourly job, or the alarm
+stops being read.
+
+The self-healing vocabulary lives twice — in the driver that writes stamps and in
+the classifier that reads them — because the driver runs as a bare `python3` on
+the fleet runner and cannot import the conformance package. A test in
+`.github/scripts/tests/` pins the two equal; without it, adding a reason to the
+writer alone would silently make the alarm stop firing.
 
 ## The release-age bound on application-sdk's own lock refresh
 

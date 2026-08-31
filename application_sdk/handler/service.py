@@ -2844,12 +2844,18 @@ def create_app_handler_service(
                     result = await ep_fn(preflight_input, context)
                 else:
                     result = await handler.preflight_check(preflight_input)
-                logger.info(
-                    "Preflight check completed: app=%s request=%s status=%s checks=%d",
+                from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — handler/__init__ imports this module; a top-level import back into preflight_gate is a cycle
+                    PreflightSurface,
+                    emit_preflight_check_outcome,
+                )
+
+                emit_preflight_check_outcome(
+                    logger,
                     app_name,
-                    context.request_id_str,
-                    result.status.value,
-                    len(result.checks),
+                    result,
+                    surface=PreflightSurface.HTTP,
+                    entrypoint=entrypoint,
+                    request_id=context.request_id_str,
                 )
                 # Build v2-compatible response: each check becomes a top-level
                 # key in data so the frontend can iterate check names directly.

@@ -1,11 +1,12 @@
 """Base class for Self-Deployed Runtime (SDR) integration tests.
 
 .. deprecated:: 3.23.0
-   ``BaseSDRIntegrationTest`` is deprecated in favour of the agnostic e2e
-   harness :class:`application_sdk.testing.e2e.BaseE2ETest` run in agent mode
-   (``mode = RunMode.AGENT``). It will be removed in v4.0. Subclassing this
+   ``BaseSDRIntegrationTest`` is deprecated and removed in v4.0. Do not look for
+   a single replacement class — SDR is a deployment mode, not a test tier, so
+   migrate each concern to where it belongs instead. See the migration note on
+   the class below, and ``docs/standards/connector-ci-e2e.md``. Subclassing this
    class emits a :class:`DeprecationWarning`; conformance rule B001 flags
-   consumers fleet-wide. See the migration note on the class below.
+   consumers fleet-wide.
 
 Connector apps subclass :class:`BaseSDRIntegrationTest` to run their auth /
 preflight / workflow scenarios against a real SDR container — the same
@@ -51,6 +52,16 @@ Example:
             Scenario(name="auth_valid", api="auth", ...),
             Scenario(name="workflow_runs", api="workflow", workflow_timeout=300, ...),
         ]
+
+The dotted credential prefix above **must** match the template's own
+``auth-type``: ``CredentialRef.resolve`` routes through
+:func:`~application_sdk.common.transforms.transform_agent_credentials`, which
+collapses only ``{auth-type}.<field>`` to a root-level ``<field>``. A connector
+declaring, say, ``auth-type: "iam"`` while keeping ``basic.*`` keys reaches its
+client with no credential fields at all, and fails as a *source* authentication
+error rather than a payload one (FND-923). The example is ``basic`` throughout;
+for any other auth type both the declared ``auth-type`` and the dotted prefix
+change with it.
 """
 
 from __future__ import annotations
@@ -98,17 +109,28 @@ def _collect_placeholders(obj: Any) -> set[str]:
 
 
 class BaseSDRIntegrationTest(BaseIntegrationTest):
-    """Deprecated: use ``application_sdk.testing.e2e.BaseE2ETest`` with
-    ``RunMode.AGENT`` — will be removed in v4.0.
+    """Deprecated: migrate per concern — SDR is a deployment mode, not a test tier.
 
     Base class for SDR integration tests.
 
     .. deprecated:: 3.23.0
-       The self-deployed-runtime path is now validated by the agnostic e2e
-       harness. Migrate to a ``BaseE2ETest`` subclass (typically via the
-       generated ``*GeneratedE2EBase``) with a class-level ``mode = RunMode.AGENT``,
-       guarding the import and marking the class ``@pytest.mark.e2e``. Subclassing
-       ``BaseSDRIntegrationTest`` emits a :class:`DeprecationWarning`.
+       Removed in v4.0. There is no single replacement class, and looking for one
+       is the mistake: ``RunMode.AGENT`` vs ``RunMode.DIRECT`` is only *where* the
+       connector runs, so auth, preflight, credential resolution and metadata
+       extraction are not "SDR coverage" — they behave identically in both modes.
+       Migrate each concern to where it belongs:
+
+       * auth / preflight — call the handler directly (``handler.test_auth(...)``,
+         ``handler.preflight_check(...)``) in the app's own unit or integration
+         tests, negative cases included.
+       * credential resolution — already proven once in this repo under
+         ``tests/unit/credentials/``; per-app, test against fake secret stores.
+       * a full DAG — ``tests/e2e/`` via the generated ``*GeneratedE2EBase``,
+         selecting tier 4 or 5 with the ``mode`` ClassVar rather than a different
+         base class.
+
+       See ``docs/standards/connector-ci-e2e.md``. Subclassing this class emits a
+       :class:`DeprecationWarning`.
 
     Class attributes subclasses are expected to set:
 
@@ -202,7 +224,12 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
         super().__init_subclass__(**kwargs)
         warnings.warn(
             "application_sdk.testing.sdr.BaseSDRIntegrationTest is deprecated; "
-            "use application_sdk.testing.e2e.BaseE2ETest with RunMode.AGENT "
+            "SDR is a deployment mode, not a test tier, so there is no single "
+            "replacement class — migrate each concern to where it belongs "
+            "(auth/preflight: call the handler directly; credential resolution: "
+            "already covered in application-sdk's tests/unit/credentials; a full "
+            "DAG: tests/e2e with mode=RunMode.AGENT). See "
+            "docs/standards/connector-ci-e2e.md "
             "— will be removed in v4.0",
             DeprecationWarning,
             stacklevel=2,

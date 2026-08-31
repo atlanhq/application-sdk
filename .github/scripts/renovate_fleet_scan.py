@@ -32,13 +32,43 @@ import argparse
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Callable, Optional
 
 GRAPHQL_URL = "https://api.github.com/graphql"
-PAGE_SIZE = 100
+
+# Page size is per-query, because cost is per-query. GitHub bills a GraphQL
+# request by the total nodes it may return — the product of the page size and
+# every nested connection limit inside each node — and answers a request it
+# cannot serve in time with a 502 or 504 rather than a cost error.
+#
+# Measured against the live fleet on 2026-08-29 with the real _OPEN_PR_FIELDS:
+#
+#     PAGE_SIZE=100  ->  502 Bad Gateway
+#     PAGE_SIZE=50   ->  504 "We couldn't respond to your request in time"
+#     PAGE_SIZE=25   ->  OK
+#
+# and with `files(first: 100)` removed, 100 succeeds — so the nested file
+# connection is the dominant term, not the rollup. The open-PR page size is cut
+# rather than the file limit because a truncated file list would silently
+# misclassify: `_is_uv_lock_only` and the auto-approve allowlist both need the
+# complete set, and "first 20 files happened to be uv.lock" is a wrong answer
+# that looks like a right one.
+# GitHub's search API never returns more than this many results for one query,
+# however the caller paginates. Truncation can therefore only present *at* the
+# cap — which is what separates it from the count drifting under concurrent PR
+# activity. See the shortfall branch in fetch_all_prs.
+SEARCH_RESULT_CAP = 1000
+
+OPEN_PAGE_SIZE = 25
+# The merged-PR field set carries no files and no statusCheckRollup, and was
+# measured OK at 100/50/25 — it does not need the cut.
+MERGED_PAGE_SIZE = 100
+# Back-compat alias for callers/tests that predate the split.
+PAGE_SIZE = OPEN_PAGE_SIZE
 # Safety backstop, not a real ceiling: 50 pages x 100 = 5000 PRs in one search window,
 # far beyond any realistic fleet. Trips only if a query is unexpectedly unbounded.
 MAX_PAGES = 50
@@ -48,6 +78,22 @@ MAX_PAGES = 50
 # pre-filter it backs up should leave a handful of candidates fleet-wide, and
 # anything over the cap is reported rather than silently dropped.
 MAX_LOCK_FETCHES = 25
+
+# Transient GitHub-side failures. A fleet pass issues on the order of a hundred
+# GraphQL calls (paginated search plus one lock fetch per candidate), so the
+# chance of meeting at least one 502 approaches certainty — and before FND-909
+# a single one aborted the whole run. Every scheduled dashboard run failed this
+# way for ten days straight, all with `502 Bad Gateway` from _post_graphql.
+#
+# 5xx only. A 401/403 is a token problem and a 422 is a malformed query; both
+# would fail identically on every attempt, so retrying them only delays the
+# report of a fault that needs a human.
+_RETRYABLE_STATUS = frozenset({500, 502, 503, 504})
+GRAPHQL_ATTEMPTS = 4
+# 1s, 2s, 4s between the four attempts. Bounded at ~7s added latency in the worst
+# case, against a job that already runs for minutes — cheap enough that it is not
+# worth making configurable, and short enough not to mask a sustained outage.
+_BACKOFF_BASE_SECONDS = 1.0
 
 _OPEN_PR_FIELDS = """
 number
@@ -116,11 +162,19 @@ def build_search_query(scope: str, extra: str) -> str:
     return f"{scope} is:pr {authors} {extra}".strip()
 
 
-def build_graphql_payload(search_query: str, fields: str, after: Optional[str]) -> dict:
+def build_graphql_payload(
+    search_query: str,
+    fields: str,
+    after: Optional[str],
+    page_size: Optional[int] = None,
+) -> dict:
+    # Defaults to the module-level PAGE_SIZE so existing callers and tests keep
+    # working; fetch_all_prs passes the size matched to its field set.
+    first = PAGE_SIZE if page_size is None else page_size
     after_arg = f", after: {json.dumps(after)}" if after else ""
     query = f"""
     query {{
-      search(query: {json.dumps(search_query)}, type: ISSUE, first: {PAGE_SIZE}{after_arg}) {{
+      search(query: {json.dumps(search_query)}, type: ISSUE, first: {first}{after_arg}) {{
         issueCount
         pageInfo {{ hasNextPage endCursor }}
         nodes {{
@@ -134,7 +188,8 @@ def build_graphql_payload(search_query: str, fields: str, after: Optional[str]) 
     return {"query": query}
 
 
-def _post_graphql(token: str, payload: dict) -> dict:
+def _post_graphql_once(token: str, payload: dict) -> dict:
+    """One GraphQL POST. Raises RuntimeError on any failure; see _post_graphql."""
     req = urllib.request.Request(
         GRAPHQL_URL,
         data=json.dumps(payload).encode(),
@@ -164,11 +219,62 @@ def _post_graphql(token: str, payload: dict) -> dict:
         raise RuntimeError(f"GraphQL response was not JSON: {exc}") from exc
 
 
+def _is_retryable(exc: RuntimeError) -> bool:
+    """Is this failure worth another attempt?
+
+    Matched on the message because _post_graphql_once has already normalised
+    every failure to RuntimeError — deliberately, so callers that degrade on one
+    need a single handler. Keeping that normalisation and re-deriving the status
+    here beats leaking HTTPError back out to every caller for the sake of retry.
+    """
+    text = str(exc)
+    if any(f"failed: {status} " in text for status in _RETRYABLE_STATUS):
+        return True
+    # Transport-level: connection reset, DNS blip, read timeout. None of these
+    # carry a status, and all are the same kind of transient as a 502.
+    return "failed: <urlopen error" in text or "timed out" in text.lower()
+
+
+def _post_graphql(
+    token: str,
+    payload: dict,
+    *,
+    attempts: int = GRAPHQL_ATTEMPTS,
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict:
+    """POST with bounded exponential backoff on transient GitHub failures.
+
+    ``sleep`` is injected so tests exercise the real retry path without wall-clock
+    delay — patching ``time.sleep`` globally would reach anything else running in
+    the same process.
+    """
+    last: RuntimeError
+    for attempt in range(1, attempts + 1):
+        try:
+            return _post_graphql_once(token, payload)
+        except RuntimeError as exc:
+            last = exc
+            if attempt == attempts or not _is_retryable(exc):
+                raise
+            delay = _BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+            # Visible in the job log: a run that succeeded only after three
+            # retries is healthy-but-degraded, and that is worth seeing before
+            # it becomes a run that fails outright.
+            print(
+                f"::warning::GraphQL attempt {attempt}/{attempts} failed "
+                f"({exc}); retrying in {delay:.0f}s",
+                file=sys.stderr,
+            )
+            sleep(delay)
+    raise last  # unreachable: the loop either returns or raises
+
+
 def fetch_all_prs(
     token: str,
     search_query: str,
     fields: str,
     post: PostFn = _post_graphql,
+    page_size: Optional[int] = None,
 ) -> list[dict]:
     """Paginate a GraphQL PR search to completion. Raises on a GraphQL 'errors' response,
     or if the result was silently truncated by the search API's ~1000-item hard cap."""
@@ -176,7 +282,7 @@ def fetch_all_prs(
     issue_count: Optional[int] = None
     after: Optional[str] = None
     for _ in range(MAX_PAGES):
-        payload = build_graphql_payload(search_query, fields, after)
+        payload = build_graphql_payload(search_query, fields, after, page_size)
         data = post(token, payload)
         if "errors" in data:
             raise RuntimeError(
@@ -197,13 +303,85 @@ def fetch_all_prs(
         )
 
     if issue_count is not None and len(nodes) < issue_count:
-        raise RuntimeError(
-            f"query {search_query!r} matched {issue_count} results but only "
-            f"{len(nodes)} were returned — the search API's result cap likely "
-            "truncated this query. Narrow it (e.g. split by date range) rather "
-            "than silently reporting incomplete dashboard data."
+        # A shortfall has two very different causes, and only one is a fault.
+        #
+        # Truncation: the query matched more than the search API will ever
+        # return, so pagination stops dead at the cap. The dashboard would then
+        # silently omit repos, which is worth failing the run over.
+        #
+        # Drift: `issueCount` is measured once, on the first page, while
+        # pagination takes minutes — this scan walks ~1,400 PRs. Any PR that
+        # merges or closes in between leaves the count one or two ahead of what
+        # comes back. Nothing is missing; the total simply moved.
+        #
+        # The two are distinguishable because truncation can only happen *at*
+        # the cap. Observed 2026-08-30, a scheduled run died on "matched 391
+        # results but only 390 were returned" — a single PR merging mid-walk,
+        # 609 short of any cap. Before the per-author split every slice was over
+        # the cap anyway, so the distinction never came up.
+        if len(nodes) >= SEARCH_RESULT_CAP:
+            raise RuntimeError(
+                f"query {search_query!r} matched {issue_count} results but only "
+                f"{len(nodes)} were returned — the search API's result cap "
+                "truncated this query. Narrow it (e.g. split by date range) "
+                "rather than silently reporting incomplete dashboard data."
+            )
+        print(
+            f"::warning::query {search_query!r} matched {issue_count} results "
+            f"but returned {len(nodes)} — {issue_count - len(nodes)} PR(s) "
+            "changed state during pagination. Well short of the "
+            f"{SEARCH_RESULT_CAP}-result cap, so nothing was truncated.",
+            file=sys.stderr,
         )
     return nodes
+
+
+def fetch_prs_by_author(
+    token: str,
+    scope: str,
+    extra: str,
+    fields: str,
+    post: PostFn = _post_graphql,
+    page_size: Optional[int] = None,
+) -> list[dict]:
+    """Run the search once per Renovate author and concatenate the results.
+
+    GitHub's search API returns at most ~1000 results per query, no matter how
+    the caller paginates. Measured 2026-08-29, the combined org-wide query had
+    outgrown that:
+
+        combined open:            1003   (over the cap — truncated)
+          app/renovate:            615
+          app/atlan-app-fleet:     388
+        combined merged (30d):    1020   (over the cap — truncated)
+          app/renovate:            192
+          app/atlan-app-fleet:     828
+
+    One query per author puts every slice comfortably under the cap while
+    covering exactly the same set, because the combined query is a plain OR of
+    the same author qualifiers. It is also the narrowing that costs nothing: the
+    total PR count and page count are unchanged, only their grouping.
+
+    Deduplicated by URL. GitHub cannot attribute one PR to two authors today, so
+    the overlap is empty in practice — but a slice that silently double-counted
+    would inflate every dashboard number, and the guard is one set.
+
+    ``fetch_all_prs`` still raises if any individual slice is truncated. The
+    fleet is growing, so that will eventually fire again; the next narrowing is
+    by date range (or a shorter ``--since`` window for the merged search).
+    """
+    seen: set[str] = set()
+    out: list[dict] = []
+    for author in RENOVATE_PR_AUTHORS:
+        query = f"{scope} is:pr author:{author} {extra}".strip()
+        for node in fetch_all_prs(token, query, fields, post, page_size):
+            url = node.get("url")
+            if url is not None and url in seen:
+                continue
+            if url is not None:
+                seen.add(url)
+            out.append(node)
+    return out
 
 
 def _status_rollup_to_list(pr: dict) -> list[dict]:
@@ -415,14 +593,19 @@ def run(
     token: str,
     post: PostFn = _post_graphql,
 ) -> tuple[dict[str, list[dict]], dict[str, list[dict]]]:
-    open_nodes = fetch_all_prs(
-        token, build_search_query(scope, "is:open"), _OPEN_PR_FIELDS, post
+    # Sliced per author and paged at a size the API can actually serve — see
+    # fetch_prs_by_author for the 1000-result cap and OPEN_PAGE_SIZE for the
+    # query-cost measurements behind each number.
+    open_nodes = fetch_prs_by_author(
+        token, scope, "is:open", _OPEN_PR_FIELDS, post, OPEN_PAGE_SIZE
     )
-    merged_nodes = fetch_all_prs(
+    merged_nodes = fetch_prs_by_author(
         token,
-        build_search_query(scope, f"is:merged merged:>={since}"),
+        scope,
+        f"is:merged merged:>={since}",
         _MERGED_PR_FIELDS,
         post,
+        MERGED_PAGE_SIZE,
     )
 
     # Second pass, deliberately narrow: only the red uv.lock-only PRs, and only
