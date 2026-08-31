@@ -4,8 +4,9 @@
 #
 # One workflow run, one job per phase, up to 8 review/resolve pairs. The review
 # phase runs on kimi-k3; the resolve phase on gpt-5.6-luna via opencode, both
-# through llmproxy.atlan.dev (public Cloudflare edge — no VPN, no mothership
-# sandbox). Every phase reads the EXISTING playbooks from this checkout:
+# through the Atlan AI gateway — a public edge, so no VPN and no mothership
+# sandbox. Its URL is a secret and is deliberately not written anywhere in
+# this repo. Every phase reads the EXISTING playbooks from this checkout:
 # .mothership/pr-review/ORCHESTRATION.md and .mothership/pr-resolve/. Neither
 # file is copied or edited by this lane.
 #
@@ -40,7 +41,8 @@
 #   secrets.LITELLM_API_KEY           gateway key allowing kimi-k3 + gpt-5.6-luna
 #   secrets.SDK_LOOP_APP_ID           GitHub App, so each phase mints a fresh
 #   secrets.SDK_LOOP_APP_PRIVATE_KEY  scoped installation token
-#   vars.LITELLM_BASE_URL             optional; defaults to llmproxy.atlan.dev
+#   secrets.LITELLM_BASE_URL          gateway base URL. Required — there is no
+#                                     default and the endpoint is never in-repo.
 
 name: SDK Loop
 

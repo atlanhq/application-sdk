@@ -28,10 +28,12 @@ from _gha_expr import evaluate  # noqa: E402
 from sdk_loop_common import (  # noqa: E402
     ALLOWED_MODELS,
     MAX_ROUNDS,
+    PROVIDER,
     RESOLVE_MODEL,
     REVIEW_MODEL,
     AgentResult,
     DismissalLedger,
+    gateway_base,
     head_state,
     opencode_config,
     parse_reviewed_head,
@@ -348,12 +350,42 @@ def test_an_empty_ledger_adds_nothing_to_the_prompt() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_opencode_is_pinned_to_the_gateway_and_only_our_two_models() -> None:
+def test_opencode_is_pinned_to_the_gateway_and_only_our_two_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_BASE_URL", "https://gateway.example/")
     cfg = opencode_config(REVIEW_MODEL)
-    provider = cfg["provider"]["llmproxy"]
-    assert provider["options"]["baseURL"].endswith("/v1")
+    provider = cfg["provider"][PROVIDER]
+    assert provider["options"]["baseURL"] == "https://gateway.example/v1"
     assert set(provider["models"]) == set(ALLOWED_MODELS)
-    assert cfg["model"] == f"llmproxy/{REVIEW_MODEL}"
+    assert cfg["model"] == f"{PROVIDER}/{REVIEW_MODEL}"
+
+
+def test_the_gateway_url_is_never_defaulted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No endpoint in the repo, and no guess at one either.
+
+    A default would send a phase somewhere unintended when the secret is
+    missing, and the first symptom would be a confusing auth error mid-run.
+    """
+    monkeypatch.delenv("LITELLM_BASE_URL", raising=False)
+    with pytest.raises(RuntimeError, match="LITELLM_BASE_URL"):
+        gateway_base()
+
+
+def test_no_gateway_hostname_is_committed_in_this_lane() -> None:
+    lane = [
+        "sdk_loop_common.py",
+        "sdk_loop_fence.py",
+        "sdk_loop_phase.py",
+        "sdk_loop_finalize.py",
+        "gen_sdk_loop_workflow.py",
+    ]
+    root = pathlib.Path(__file__).resolve().parents[1]
+    for name in lane:
+        text = (root / name).read_text(encoding="utf-8")
+        assert "atlan.dev" not in text, f"{name} hardcodes a gateway hostname"
+    wf = WORKFLOW.read_text(encoding="utf-8")
+    assert "atlan.dev" not in wf
 
 
 def test_an_unknown_model_fails_at_config_time_not_as_a_paid_400() -> None:
@@ -365,9 +397,10 @@ def test_review_and_resolve_run_on_different_models() -> None:
     assert REVIEW_MODEL != RESOLVE_MODEL
 
 
-def test_the_agent_cannot_reach_the_web() -> None:
+def test_the_agent_cannot_reach_the_web(monkeypatch: pytest.MonkeyPatch) -> None:
     # It reads untrusted PR content; an injected prompt must not meet an
     # outbound channel it can choose freely.
+    monkeypatch.setenv("LITELLM_BASE_URL", "https://gateway.example")
     assert opencode_config(RESOLVE_MODEL)["permission"]["webfetch"] == "deny"
 
 

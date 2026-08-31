@@ -24,7 +24,9 @@ and they must not drift apart:
 
 Environment shared by the whole lane:
     LITELLM_API_KEY     gateway bearer; the ONLY credential the agent gets
-    LITELLM_BASE_URL    optional; defaults to https://llmproxy.atlan.dev
+    LITELLM_BASE_URL    gateway base URL. Required, and deliberately has no
+                        default — the endpoint is supplied as a secret, never
+                        written into this repo.
     GH_TOKEN            App installation token, scoped per phase
 """
 
@@ -58,7 +60,9 @@ REVIEW_MODEL = "kimi-k3"
 #: uses, where luna is first-line and kimi is escalation.
 RESOLVE_MODEL = "gpt-5.6-luna"
 
-DEFAULT_GATEWAY = "https://llmproxy.atlan.dev"
+#: The provider key inside `opencode.json`. A local alias only — the real
+#: endpoint arrives at runtime from LITELLM_BASE_URL and is never in this repo.
+PROVIDER = "gateway"
 
 #: Every model this lane may reach. opencode is pinned to exactly these so a
 #: typo'd alias fails closed at config time instead of as a paid 400 mid-run.
@@ -236,7 +240,20 @@ class DismissalLedger:
 
 
 def gateway_base() -> str:
-    return (os.environ.get("LITELLM_BASE_URL") or DEFAULT_GATEWAY).rstrip("/")
+    """The AI gateway base URL, from the environment. No default, on purpose.
+
+    The endpoint is configuration, not source: it is supplied as a secret and
+    must not be written into this repository. Failing closed also beats
+    guessing — a missing value would otherwise send the phase somewhere
+    unintended, and the first sign would be a confusing auth error mid-run.
+    """
+    base = (os.environ.get("LITELLM_BASE_URL") or "").strip()
+    if not base:
+        raise RuntimeError(
+            "LITELLM_BASE_URL is not set. The AI gateway endpoint is supplied "
+            "as a secret; there is no built-in default."
+        )
+    return base.rstrip("/")
 
 
 def opencode_config(model: str) -> dict[str, Any]:
@@ -256,7 +273,7 @@ def opencode_config(model: str) -> dict[str, Any]:
     return {
         "$schema": "https://opencode.ai/config.json",
         "provider": {
-            "llmproxy": {
+            PROVIDER: {
                 "npm": "@ai-sdk/openai-compatible",
                 "name": "Atlan AI Gateway",
                 "options": {
@@ -266,7 +283,7 @@ def opencode_config(model: str) -> dict[str, Any]:
                 "models": {name: {} for name in ALLOWED_MODELS},
             }
         },
-        "model": f"llmproxy/{model}",
+        "model": f"{PROVIDER}/{model}",
         # Headless runs have nobody to answer an "ask", and opencode treats an
         # unanswered ask as a rejection — a connector-pulse run starved exactly
         # that way when its skill reads were auto-rejected. So everything a
@@ -354,7 +371,7 @@ def run_agent(
         json.dump(opencode_config(model), handle, indent=2)
     try:
         completed = runner(
-            ["opencode", "run", "--model", f"llmproxy/{model}", prompt],
+            ["opencode", "run", "--model", f"{PROVIDER}/{model}", prompt],
             cwd=cwd,
             env=agent_env(),
             capture_output=True,

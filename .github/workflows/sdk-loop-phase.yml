@@ -55,6 +55,11 @@ on:
     secrets:
       LITELLM_API_KEY:
         required: true
+      # The gateway endpoint is configuration, not source. It rides a secret so
+      # the URL is never written into this repository, and the phase script
+      # fails closed rather than defaulting to a guess.
+      LITELLM_BASE_URL:
+        required: true
       SDK_LOOP_APP_ID:
         required: true
       SDK_LOOP_APP_PRIVATE_KEY:
@@ -149,5 +154,5 @@ jobs:
           VERDICT_URL: ${{ inputs.verdict_url }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
-          LITELLM_BASE_URL: ${{ vars.LITELLM_BASE_URL }}
+          LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL }}
         run: python3 .github/scripts/sdk_loop_phase.py
