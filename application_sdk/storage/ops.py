@@ -779,6 +779,7 @@ async def upload_file(
         )
         if isinstance(exc, Exception):
             from application_sdk.storage.errors import (  # noqa: PLC0415
+                StorageBucketRelocationError,
                 StorageConfigError,
                 StorageError,
             )
@@ -786,6 +787,26 @@ async def upload_file(
             if _is_azure_container_not_found(exc):
                 raise StorageConfigError(
                     _azure_container_not_found_message(key)
+                ) from exc
+            # Reuse the preflight classifier's rules rather than a second
+            # detection path: a bucket mid-relocation rejects multipart
+            # initiation for the whole move window, and a relocation that
+            # starts *after* the gate passed still lands here — the typed
+            # code and hint are what keep it platform-attributed instead of
+            # a generic storage failure counted against the connector.
+            from application_sdk.storage.preflight import (  # noqa: PLC0415 — error path only; avoids a module-load cycle
+                RELOCATION_BUCKET,
+                _classify_access_error,
+            )
+
+            bucket, hint = _classify_access_error(exc)
+            if bucket == RELOCATION_BUCKET:
+                raise StorageBucketRelocationError(
+                    f"Failed to upload file to key '{key}': the destination "
+                    "bucket is being relocated",
+                    key=key,
+                    cause=exc,
+                    suggested_action=hint,
                 ) from exc
             raise StorageError(
                 f"Failed to upload file to key '{key}'", key=key, cause=exc

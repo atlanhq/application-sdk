@@ -77,6 +77,35 @@ class StorageError(DependencyUnavailableError):
 
 
 @dataclass(kw_only=True)
+class StorageBucketRelocationError(StorageError):
+    """A write was rejected because the bucket is being relocated.
+
+    GCS rejects multipart upload *initiation* for the whole window of a
+    dual-/multi-region bucket relocation (HTTP 400 ``PreconditionFailed``
+    naming the relocation) while plain single-request PUTs keep working. The
+    condition is temporary and entirely platform-side — no credential,
+    permission, or connector change fixes it — so it carries its own code
+    (shared with the preflight gate's storage check, see
+    ``OBJECT_STORE_RELOCATION_IN_PROGRESS``) instead of the generic
+    ``DEPENDENCY_UNAVAILABLE_STORAGE``, and a remediation hint saying to retry
+    after the relocation finishes.
+    """
+
+    code: ClassVar[str] = "OBJECT_STORE_RELOCATION_IN_PROGRESS"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        key: str | None = None,
+        cause: Exception | None = None,
+        suggested_action: str | None = None,
+    ) -> None:
+        StorageError.__init__(self, message, key=key, cause=cause)
+        self.suggested_action = suggested_action
+
+
+@dataclass(kw_only=True)
 class StorageNotFoundError(NotFoundError, StorageError):
     """Object or key not found in the store.
 

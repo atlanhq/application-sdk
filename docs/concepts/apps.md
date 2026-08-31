@@ -492,10 +492,15 @@ The handler certifies the *source*; nothing certifies the store the run will upl
 artifacts to — and a run that cannot upload is doomed however healthy the source is. Setting
 `preflight_verify_storage = True` opts the app into probing every configured artifact store
 inside the gate, in whatever budget the handler left: a plain write, a HEAD, and a
-**multipart-forced** write. The multipart probe matters because artifact uploads stream through
-the multipart writer regardless of file size, and a store can accept plain PUTs while rejecting
-multipart initiation — GCS does exactly this for the whole window of a bucket relocation, a
-condition a production RCA traced under multi-hour extractions dying at their final upload.
+**multipart-forced** write. The multipart probe matters because uploads above the writer's part
+size (8 MiB by default; `ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES`) go out as multipart, and a store
+can accept plain PUTs while rejecting multipart initiation — GCS does exactly this for the whole
+window of a bucket relocation, a condition a production RCA traced under multi-hour extractions
+dying at their final upload. The probe is deliberately stricter than a small-artifact-only
+workload's real writes; an app whose artifacts never exceed the part size should weigh that
+before opting in. A mid-run relocation (starting after the gate passed) is covered separately:
+the upload path itself classifies the rejection as `OBJECT_STORE_RELOCATION_IN_PROGRESS` with a
+platform-attributed hint instead of a generic storage failure.
 
 ```python
 class MyConnector(App):

@@ -42,6 +42,12 @@ _PREFLIGHT_PAYLOAD = b"atlan-preflight"
 # part — the point of the probe is the *initiate* call, not the data volume.
 _MULTIPART_PROBE_CHUNK_SIZE = 5 * 1024 * 1024
 
+# Floor for the run-path per-store probe timeout. Below this a real cloud
+# round-trip of write + HEAD + multipart initiate/part/complete is doomed to
+# time out and would report a healthy store as a connectivity failure — the
+# caller's budget floor should skip the whole check before this gets binding.
+_RUN_PROBE_FLOOR_SECONDS = 5.0
+
 # Per-store probe timeout.  Keeps a blackholed endpoint from stalling boot
 # indefinitely — obstore wraps the Rust object_store crate, whose default
 # connect_timeout and request timeout are both None.
@@ -118,6 +124,13 @@ class _AccessErrorRule:
         return any(marker in msg for marker in self.markers)
 
 
+# The relocation bucket's name, exported so every consumer that keys behavior
+# off this bucket (the preflight gate's code stamp, the upload path's typed
+# error) imports it from here instead of copying the literal — renaming the
+# bucket then breaks loudly at import/test time rather than silently dropping
+# the consumers' special-casing.
+RELOCATION_BUCKET = "bucket relocation in progress"
+
 _ACCESS_ERROR_RULES: tuple[_AccessErrorRule, ...] = (
     # First: the most specific bucket. Requires BOTH tokens so an etag/if-match
     # 412 ("precondition" alone) is never misread as a relocation. GCS rejects
@@ -125,8 +138,12 @@ _ACCESS_ERROR_RULES: tuple[_AccessErrorRule, ...] = (
     # naming the relocation for the entire dual-/multi-region move window,
     # while plain single-request PUTs keep working — confirmed in a production
     # RCA where small artifacts uploaded fine and only multipart ones failed.
+    # The matched shape is the native GCSStore error; behind the s3proxy
+    # compose-based multipart emulation the message shape is unverified — an
+    # unrecognized rejection still fails the probe, classified
+    # connectivity/unknown.
     _AccessErrorRule(
-        bucket="bucket relocation in progress",
+        bucket=RELOCATION_BUCKET,
         pattern=re.compile(r"precondition.*relocation|relocation.*precondition", re.S),
         hint=(
             "The bucket is being relocated (dual-/multi-region move); the store "
@@ -280,11 +297,21 @@ async def _probe_store_structured(
             **multipart** upload API. A store can accept plain PUTs while
             rejecting multipart initiation — GCS does exactly this for the whole
             window of a bucket relocation — so a simple-write probe alone
-            certifies a store the run's real artifact uploads (which stream via
-            the multipart writer, whatever the file size) cannot use. Off by
-            default so the boot-time path keeps its historical behavior: a
-            worker must not crash-loop for a temporary relocation it could
-            partially work through.
+            certifies a store that the run's larger artifact uploads cannot
+            use: the upload writer switches to multipart once a file exceeds
+            its part size (8 MiB by default, deployment-tunable via
+            ``ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES``), while smaller files go
+            out as plain PUTs. The probe is therefore deliberately *stricter*
+            than a small-artifact-only workload's real writes. Off by default
+            so the boot-time path keeps its historical behavior: a worker must
+            not crash-loop for a temporary relocation it could partially work
+            through.
+
+            Note on cost: a probe cancelled mid-initiate (timeout) can leave a
+            hidden, unfinished multipart upload behind; providers charge for
+            those parts until aborted. The payload is a few bytes and buckets
+            should carry an abort-incomplete-multipart lifecycle rule, which
+            Atlan-managed buckets do.
 
     Returns:
         An :class:`ObjectStoreCheckResult`.  Never raises for obstore-level
@@ -300,9 +327,30 @@ async def _probe_store_structured(
         probe_key,
     )
 
+    # Same per-write attributes real uploads use (e.g. a binding-declared
+    # Storage-Class) so the probe certifies the actual write path and never
+    # lands its object in the wrong storage class. Resolution failures degrade
+    # to attribute-less writes — the probe must not fail on its own plumbing.
+    try:
+        from application_sdk.storage.ops import (  # noqa: PLC0415 — lazy: ops imports obstore at module load
+            _resolve_put_attributes,
+        )
+
+        put_attributes = _resolve_put_attributes(store)  # type: ignore[arg-type]
+    except Exception:
+        logger.debug(
+            "Could not resolve put attributes for the %s store probe; "
+            "probing without them",
+            label,
+            exc_info=True,
+        )
+        put_attributes = None
+
     # Write
     try:
-        await obstore.put_async(store, probe_key, _PREFLIGHT_PAYLOAD)
+        await obstore.put_async(
+            store, probe_key, _PREFLIGHT_PAYLOAD, attributes=put_attributes
+        )
     except Exception as exc:
         logger.warning(
             "SDR preflight: write probe failed for %s store (binding: %s): %s",
@@ -359,6 +407,7 @@ async def _probe_store_structured(
                 _PREFLIGHT_PAYLOAD,
                 use_multipart=True,
                 chunk_size=_MULTIPART_PROBE_CHUNK_SIZE,
+                attributes=put_attributes,
             )
         except Exception as exc:
             logger.warning(
@@ -552,7 +601,7 @@ async def check_object_store_access(
     if not ENABLE_ATLAN_UPLOAD or infra is None:
         return []
 
-    stores_to_probe: list[tuple[str, str, object]] = [
+    stores_to_probe: list[tuple[str, str, object | None]] = [
         ("deployment", DEPLOYMENT_OBJECT_STORE_NAME, infra.storage),
     ]
     if infra.upstream_storage is not None:
@@ -560,6 +609,23 @@ async def check_object_store_access(
             ("upstream", UPSTREAM_OBJECT_STORE_NAME, infra.upstream_storage)
         )
 
+    return await _check_stores(stores_to_probe, per_store_timeout=_PROBE_TIMEOUT_SECS)
+
+
+async def _check_stores(
+    stores_to_probe: list[tuple[str, str, object | None]],
+    *,
+    per_store_timeout: float,
+) -> list[ObjectStoreCheckResult]:
+    """Shared probe loop behind both non-raising checkers. Never raises.
+
+    One implementation so the SDR surface and the run-path gate cannot diverge
+    on policy: a ``None`` store — a binding that is absent or failed to parse —
+    is a **failed** ``not configured`` check on both paths (a config gap is the
+    one case preflight should certainly catch, not an absence of stores to
+    probe), every probe includes the multipart-forced write, and a probe cut by
+    *per_store_timeout* reports as a connectivity failure.
+    """
     results: list[ObjectStoreCheckResult] = []
     for label, binding_name, store in stores_to_probe:
         if store is None:
@@ -586,14 +652,15 @@ async def check_object_store_access(
                 _probe_store_structured(
                     store, label, binding_name, include_multipart_probe=True
                 ),
-                timeout=_PROBE_TIMEOUT_SECS,
+                timeout=per_store_timeout,
             )
         except TimeoutError:
             logger.warning(
-                "SDR preflight: probe for %s store (binding: %s) timed out after %.0fs",
+                "Storage preflight: probe for %s store (binding: %s) timed out "
+                "after %.0fs",
                 label,
                 binding_name,
-                _PROBE_TIMEOUT_SECS,
+                per_store_timeout,
                 exc_info=True,
             )
             result = ObjectStoreCheckResult(
@@ -601,7 +668,7 @@ async def check_object_store_access(
                 binding_name=binding_name,
                 passed=False,
                 error_class=_CONNECTIVITY_UNKNOWN,
-                cause=f"probe timed out after {_PROBE_TIMEOUT_SECS:.0f}s",
+                cause=f"probe timed out after {per_store_timeout:.0f}s",
                 hint=_CONNECTIVITY_HINT,
                 failed_operation="connectivity",
             )
@@ -628,10 +695,10 @@ async def check_run_storage_access(
     set when configured (SDR).
 
     Probes include the multipart-forced write (see
-    :func:`_probe_store_structured`) because artifact uploads stream through the
-    multipart writer regardless of file size — a store accepting plain PUTs but
-    rejecting multipart initiation (a GCS bucket mid-relocation) must fail this
-    check.
+    :func:`_probe_store_structured`) because artifact uploads above the writer's
+    part size (8 MiB default) go out as multipart — a store accepting plain PUTs
+    but rejecting multipart initiation (a GCS bucket mid-relocation) must fail
+    this check.
 
     This function **never raises**; probe failures are captured into results.
 
@@ -642,9 +709,12 @@ async def check_run_storage_access(
             ``None`` gives each store the full per-store default.
 
     Returns:
-        One :class:`ObjectStoreCheckResult` per configured store; ``[]`` when
-        *infra* is ``None`` or no store is configured (local dev without a
-        binding is not a failed check — there is nothing the run will upload to).
+        One :class:`ObjectStoreCheckResult` per store the run writes to; ``[]``
+        only when *infra* is ``None`` (no infrastructure context at all — unit
+        tests, direct calls). A live context whose deployment store is ``None``
+        — a binding that is absent or failed to parse — yields a **failed**
+        ``not configured`` check, exactly like :func:`check_object_store_access`:
+        that config gap is the one case preflight should certainly catch.
     """
     from application_sdk.constants import (  # noqa: PLC0415 — cold path: probe-time only
         DEPLOYMENT_OBJECT_STORE_NAME,
@@ -654,49 +724,19 @@ async def check_run_storage_access(
     if infra is None:
         return []
 
-    stores_to_probe: list[tuple[str, str, object]] = []
-    if infra.storage is not None:
-        stores_to_probe.append(
-            ("deployment", DEPLOYMENT_OBJECT_STORE_NAME, infra.storage)
-        )
+    stores_to_probe: list[tuple[str, str, object | None]] = [
+        ("deployment", DEPLOYMENT_OBJECT_STORE_NAME, infra.storage),
+    ]
     if infra.upstream_storage is not None:
         stores_to_probe.append(
             ("upstream", UPSTREAM_OBJECT_STORE_NAME, infra.upstream_storage)
         )
-    if not stores_to_probe:
-        return []
 
     per_store = _PROBE_TIMEOUT_SECS
     if timeout_seconds is not None:
-        per_store = max(1.0, min(per_store, timeout_seconds / len(stores_to_probe)))
+        per_store = max(
+            _RUN_PROBE_FLOOR_SECONDS,
+            min(per_store, timeout_seconds / len(stores_to_probe)),
+        )
 
-    results: list[ObjectStoreCheckResult] = []
-    for label, binding_name, store in stores_to_probe:
-        try:
-            result = await asyncio.wait_for(
-                _probe_store_structured(
-                    store, label, binding_name, include_multipart_probe=True
-                ),
-                timeout=per_store,
-            )
-        except TimeoutError:
-            logger.warning(
-                "Storage preflight: probe for %s store (binding: %s) timed out "
-                "after %.0fs",
-                label,
-                binding_name,
-                per_store,
-                exc_info=True,
-            )
-            result = ObjectStoreCheckResult(
-                label=label,
-                binding_name=binding_name,
-                passed=False,
-                error_class=_CONNECTIVITY_UNKNOWN,
-                cause=f"probe timed out after {per_store:.0f}s",
-                hint=_CONNECTIVITY_HINT,
-                failed_operation="connectivity",
-            )
-        results.append(result)
-
-    return results
+    return await _check_stores(stores_to_probe, per_store_timeout=per_store)

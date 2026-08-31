@@ -641,15 +641,11 @@ async def test_run_check_probes_without_sdr_mode(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_check_empty_when_nothing_configured() -> None:
-    """No infra, or no stores → [] (local dev is not a failed check)."""
+async def test_run_check_empty_only_without_infra_context() -> None:
+    """No infrastructure context at all → [] (unit tests, direct calls)."""
     from application_sdk.storage.preflight import check_run_storage_access
 
     assert await check_run_storage_access(None) == []
-    assert (
-        await check_run_storage_access(_make_infra(storage=None, upstream_storage=None))
-        == []
-    )
 
 
 @pytest.mark.asyncio
@@ -681,12 +677,64 @@ async def test_run_check_timeout_bounded_by_budget() -> None:
         await asyncio.sleep(9999)
 
     infra = _make_infra(storage=_fake_store(), upstream_storage=None)
-    with patch(
-        "application_sdk.storage.preflight._probe_store_structured",
-        side_effect=_stall,
+    with (
+        patch(
+            "application_sdk.storage.preflight._probe_store_structured",
+            side_effect=_stall,
+        ),
+        patch("application_sdk.storage.preflight._RUN_PROBE_FLOOR_SECONDS", 0.01),
     ):
-        results = await check_run_storage_access(infra, timeout_seconds=1.0)
+        results = await check_run_storage_access(infra, timeout_seconds=0.05)
 
     assert results[0].passed is False
     assert results[0].error_class == "connectivity / unknown"
     assert "timed out" in (results[0].cause or "")
+
+
+@pytest.mark.asyncio
+async def test_run_check_missing_deployment_store_is_a_failed_check() -> None:
+    """A binding that failed to parse must fail the check, not vanish.
+
+    Mirrors check_object_store_access: storage=None on a live infra context is
+    a deployment config gap — the one case preflight should certainly catch —
+    not an absence of stores to probe.
+    """
+    from application_sdk.storage.preflight import check_run_storage_access
+
+    results = await check_run_storage_access(
+        _make_infra(storage=None, upstream_storage=None)
+    )
+    assert len(results) == 1
+    assert results[0].label == "deployment"
+    assert results[0].passed is False
+    assert results[0].error_class == "not configured"
+
+
+@pytest.mark.asyncio
+async def test_probe_writes_with_binding_put_attributes() -> None:
+    """The probe must exercise the same put-attribute path real uploads use.
+
+    A binding declaring e.g. a Storage-Class writes every artifact with it; a
+    probe writing without attributes certifies a different code path (and lands
+    its object in the wrong storage class).
+    """
+    from application_sdk.storage.preflight import _probe_store_structured
+
+    attrs = {"Storage-Class": "STANDARD_IA"}
+    fake_obstore = MagicMock()
+    fake_obstore.put_async = AsyncMock()
+    fake_obstore.head_async = AsyncMock()
+    with (
+        patch.dict("sys.modules", {"obstore": fake_obstore}),
+        patch(
+            "application_sdk.storage.ops._resolve_put_attributes",
+            return_value=attrs,
+        ),
+    ):
+        result = await _probe_store_structured(
+            _fake_store(), "deployment", "objectstore", include_multipart_probe=True
+        )
+    assert result.passed is True
+    assert fake_obstore.put_async.await_count == 2
+    for call in fake_obstore.put_async.await_args_list:
+        assert call.kwargs.get("attributes") == attrs
