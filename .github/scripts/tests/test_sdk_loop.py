@@ -39,7 +39,13 @@ from sdk_loop_common import (  # noqa: E402
     parse_reviewed_head,
     parse_verdict,
 )
-from sdk_loop_fence import decide, find_live_run, is_authorized  # noqa: E402
+from sdk_loop_fence import (  # noqa: E402
+    decide,
+    find_live_run,
+    is_allowed_actor,
+    is_authorized,
+    parse_allowlist,
+)
 from sdk_loop_finalize import Round, parse_rounds, render  # noqa: E402
 from sdk_loop_phase import (  # noqa: E402
     OUTCOME_CLEAN,
@@ -96,9 +102,62 @@ def test_everyone_else_may_not(assoc: str | None) -> None:
     assert not is_authorized(assoc)
 
 
+ALLOWED = frozenset({"alice", "bob"})
+
+
+@pytest.mark.parametrize(
+    "raw", ["alice,bob", " alice , bob ", "@alice,@bob", "Alice,BOB"]
+)
+def test_the_allowlist_tolerates_how_people_actually_write_handles(raw: str) -> None:
+    assert parse_allowlist(raw) == ALLOWED
+
+
+def test_an_allowlisted_collaborator_may_run_the_lane() -> None:
+    d = decide("MEMBER", [], "42", "1", actor="alice", allowlist=ALLOWED)
+    assert d.proceed is True
+
+
+def test_a_collaborator_not_on_the_list_may_not() -> None:
+    d = decide("MEMBER", [], "42", "1", actor="mallory", allowlist=ALLOWED)
+    assert d.proceed is False
+    assert "not on the `SDK_LOOP_ALLOWED` list" in d.reason
+
+
+def test_being_on_the_list_does_not_survive_losing_repo_access() -> None:
+    # Association is checked first on purpose: someone who has left the org
+    # must not keep the lane just because their handle is still listed.
+    d = decide("NONE", [], "42", "1", actor="alice", allowlist=ALLOWED)
+    assert d.proceed is False
+    assert "collaborators" in d.reason
+
+
+def test_an_unset_allowlist_permits_nobody() -> None:
+    # Fail closed. A forgotten variable silently widening a lane that pushes is
+    # the failure nobody notices; a lane refusing to start is the one everybody
+    # notices immediately.
+    d = decide("OWNER", [], "42", "1", actor="alice", allowlist=frozenset())
+    assert d.proceed is False
+    assert "no one is on" in d.reason
+
+
+def test_handle_matching_is_case_insensitive() -> None:
+    assert is_allowed_actor("ALICE", ALLOWED)
+    assert is_allowed_actor("@Alice", ALLOWED)
+    assert not is_allowed_actor("alice2", ALLOWED)
+
+
+def test_workflow_dispatch_cannot_bypass_the_allowlist() -> None:
+    """The dispatch path forces association to OWNER, so the allowlist is the
+    only thing standing between "has write access" and "can drive the lane"."""
+    wf = WORKFLOW.read_text(encoding="utf-8")
+    assert "ALLOWED_ACTORS: ${{ vars.SDK_LOOP_ALLOWED }}" in wf
+    # ACTOR must fall back to github.actor, which is who pressed the button.
+    assert "github.event.comment.user.login || github.actor" in wf
+
+
 def test_a_second_loop_on_the_same_pr_is_dismissed_not_queued() -> None:
     runs = [{"databaseId": 111, "status": "in_progress", "displayTitle": "loop on #42"}]
-    decision = decide("MEMBER", runs, "42", self_run_id="222")
+    decision = decide("MEMBER", runs, "42", "222", actor="alice", allowlist=ALLOWED)
     assert decision.proceed is False
     assert decision.live_run_id == "111"
     assert "already running" in decision.reason
@@ -106,25 +165,37 @@ def test_a_second_loop_on_the_same_pr_is_dismissed_not_queued() -> None:
 
 def test_the_run_does_not_dismiss_itself() -> None:
     runs = [{"databaseId": 222, "status": "in_progress", "displayTitle": "loop on #42"}]
-    assert decide("MEMBER", runs, "42", self_run_id="222").proceed is True
+    assert (
+        decide("MEMBER", runs, "42", "222", actor="alice", allowlist=ALLOWED).proceed
+        is True
+    )
 
 
 def test_a_loop_on_a_different_pr_does_not_block_this_one() -> None:
     # Cross-PR parallelism is the point: no fleet-wide throttle.
     runs = [{"databaseId": 111, "status": "in_progress", "displayTitle": "loop on #99"}]
-    assert decide("MEMBER", runs, "42", self_run_id="222").proceed is True
+    assert (
+        decide("MEMBER", runs, "42", "222", actor="alice", allowlist=ALLOWED).proceed
+        is True
+    )
 
 
 def test_a_finished_run_is_not_live() -> None:
     runs = [{"databaseId": 111, "status": "completed", "displayTitle": "loop on #42"}]
-    assert decide("MEMBER", runs, "42", self_run_id="222").proceed is True
+    assert (
+        decide("MEMBER", runs, "42", "222", actor="alice", allowlist=ALLOWED).proceed
+        is True
+    )
 
 
 def test_a_queued_run_counts_as_live() -> None:
     # It has not touched the branch yet but it will, so a duplicate must stand
     # down rather than race it.
     runs = [{"databaseId": 111, "status": "queued", "displayTitle": "loop on #42"}]
-    assert decide("MEMBER", runs, "42", self_run_id="222").proceed is False
+    assert (
+        decide("MEMBER", runs, "42", "222", actor="alice", allowlist=ALLOWED).proceed
+        is False
+    )
 
 
 def test_a_fork_run_is_matched_through_the_title() -> None:
