@@ -34,13 +34,16 @@ tested one literal at a time would miss the very defect it exists for, so
 ``_assemble`` reconstructs the path across ``str.join``, f-strings and ``+``
 concatenation, with runtime pieces standing in as a wildcard segment.
 
-No seam-import gate
--------------------
-Unlike ``P049``, this check does not skip modules that import
-``application_sdk.common.incremental``.  The gate existed to compensate for the
-loose root-segment match; with the layout matched precisely it would only create
-a blind spot, because a module that imports the seam *and* still hand-rolls the
-connection layout is exactly a finding worth making.
+No delegation gate at all
+-------------------------
+Unlike ``P049``, which exempts a function that derives the value through
+``get_persistent_s3_prefix`` / ``extract_epoch_id_from_qualified_name``, this
+check has no such exemption — and in particular does not skip modules that
+import ``application_sdk.common.incremental``.  An earlier seam-import gate
+existed to compensate for the loose root-segment match; with the layout matched
+precisely it would only create a blind spot, because a module that imports the
+seam *and* still hand-rolls the connection layout is exactly a finding worth
+making.  ``test_p048_fires_even_when_module_imports_the_seam`` is the contract.
 """
 
 from __future__ import annotations

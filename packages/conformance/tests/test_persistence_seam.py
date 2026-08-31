@@ -1,13 +1,18 @@
-"""Meta-tests for the P-series persistence-seam check (P048, CONNECT-1275).
+"""Meta-tests for the P-series persistence-seam checks (P048/P049, CONNECT-1275).
 
 P048 flags an app assembling the SDK-owned ``persistent-artifacts`` object-store
 layout itself instead of deriving it from
-``application_sdk.common.incremental.helpers.get_persistent_s3_prefix``.
+``application_sdk.common.incremental.helpers.get_persistent_s3_prefix``; P049
+flags a function that parses ``connection_qualified_name`` itself and raises
+where the SDK warns and proceeds.
 
-The rule is a two-signal heuristic (prefix literal AND no seam import), so the
-tests pin both halves, the exact-segment matching, the docstring/comment
-exclusion, and — most importantly — the real CONNECT-1136 before/after shapes:
-the pre-fix module must fire and the post-fix module must not.
+P048 matches the layout alone — there is no seam-import gate, and
+``test_p048_fires_even_when_module_imports_the_seam`` is the contract.  P049 does
+gate on delegation, but per function and only on the two helpers that own this
+parse, so the tests pin the exact-segment matching, the docstring/comment
+exclusion, the delegation boundary, and — most importantly — the real
+CONNECT-1136 before/after shapes: the pre-fix module must fire and the post-fix
+module must not.
 """
 
 from __future__ import annotations
@@ -265,6 +270,73 @@ def test_p049_fires_when_a_sibling_function_delegates() -> None:
     )
     fs = _p049(src)
     assert len(fs) == 1 and fs[0].line == 7
+
+
+def test_p049_fires_when_the_only_seam_call_is_a_marker_read() -> None:
+    """Reaching the seam is not the same as delegating *this* parse.
+
+    ``fetch_marker_from_storage`` takes an already-derived prefix and says
+    nothing about which segment is the connection id, so a function that reads
+    its marker through the SDK and still splits the qualified name apart itself
+    has forked exactly the decision P049 guards. This is the half-migrated shape
+    a BLOCK-tier recurrence guard must not go blind on.
+    """
+    src = (
+        "from application_sdk.common.incremental import fetch_marker_from_storage\n"
+        "def key(connection_qualified_name, app_name):\n"
+        '    parts = connection_qualified_name.split("/")\n'
+        "    if not parts[-1].isdigit():\n"
+        "        raise ValueError('not an epoch')\n"
+        '    return fetch_marker_from_storage(f"p/{parts[-1]}")\n'
+    )
+    fs = _p049(src)
+    assert len(fs) == 1 and fs[0].line == 5
+
+
+def test_p049_fires_when_the_only_seam_call_is_create_next_marker() -> None:
+    # Same boundary through the module-alias spelling, which resolves the
+    # symbol name via the receiver's import origin rather than the bare name.
+    src = (
+        "from application_sdk.common.incremental import marker\n"
+        "def key(connection_qualified_name):\n"
+        '    parts = connection_qualified_name.split("/")\n'
+        "    if not parts[-1].isdigit():\n"
+        "        raise ValueError('not an epoch')\n"
+        "    return marker.create_next_marker(parts[-1])\n"
+    )
+    assert len(_p049(src)) == 1
+
+
+def test_p049_silent_when_function_calls_extract_epoch_id() -> None:
+    # The other half of the boundary: the parse helper itself is delegation.
+    src = (
+        "from application_sdk.common.incremental import (\n"
+        "    extract_epoch_id_from_qualified_name,\n"
+        ")\n"
+        "def key(connection_qualified_name):\n"
+        '    _ = connection_qualified_name.split("/")\n'
+        "    cid = extract_epoch_id_from_qualified_name(connection_qualified_name)\n"
+        "    if not cid:\n"
+        "        raise ValueError('no connection id')\n"
+        "    return cid\n"
+    )
+    assert _p049(src) == []
+
+
+def test_p049_silent_when_seam_symbol_is_aliased() -> None:
+    # An ``as`` alias binds a different name but the same import origin.
+    src = (
+        "from application_sdk.common.incremental import (\n"
+        "    get_persistent_s3_prefix as prefix_for,\n"
+        ")\n"
+        "def key(connection_qualified_name, app_name):\n"
+        '    _ = connection_qualified_name.split("/")\n'
+        "    try:\n"
+        "        return prefix_for(connection_qualified_name, app_name)\n"
+        "    except AppError as exc:\n"
+        "        raise MarkerKeyInputError('cannot derive') from exc\n"
+    )
+    assert _p049(src) == []
 
 
 def test_p049_silent_when_function_calls_seam_via_module_alias() -> None:

@@ -8,7 +8,8 @@ from the SDK rather than assembled by the app:
   instead of deriving it from ``get_persistent_s3_prefix``.
 * ``P049`` StrictConnectionQualifiedNameParse (app) — a function that parses a
   ``connection_qualified_name`` itself and raises on it, where the SDK warns and
-  proceeds, and that does not itself reach the SDK seam.
+  proceeds, and that does not delegate the parse to the SDK's
+  ``get_persistent_s3_prefix`` / ``extract_epoch_id_from_qualified_name``.
 
 This is a fourth check registered under series letter ``P`` (alongside
 ``prescriptions``, ``orchestration`` and ``client_seam``), the established

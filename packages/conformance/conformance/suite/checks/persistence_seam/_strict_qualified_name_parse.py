@@ -27,7 +27,7 @@ A function that
 * calls ``.split(...)`` on a value that traces back to that parameter, and
 * can ``raise`` out of its own body,
 
-**and does not itself reach the SDK seam.**
+**and does not delegate that parse to the SDK.**
 
 Why the gate is per-function, not per-module
 --------------------------------------------
@@ -39,10 +39,23 @@ and "module imports the seam *and* one function still hand-rolls a strict parse"
 is the most likely shape of the next recurrence.  For a permanent BLOCK-tier
 recurrence guard that is a hole, not a nit.
 
-So delegation is judged per function: a function that calls a seam symbol is
-deriving the value through the SDK and stays silent — including the correct
-post-fix shape, which catches the SDK's typed error and re-raises its own.  A
-sibling function in the same module that parses by hand is still caught.
+So delegation is judged per function: a function that calls one of the two seam
+symbols owning *this* parse is deriving the value through the SDK and stays
+silent — including the correct post-fix shape, which catches the SDK's typed
+error and re-raises its own.  A sibling function in the same module that parses
+by hand is still caught.
+
+Which seam symbols count as delegation
+--------------------------------------
+Only ``get_persistent_s3_prefix`` and ``extract_epoch_id_from_qualified_name``.
+Touching the seam anywhere is not the same as delegating this decision:
+``fetch_marker_from_storage``, ``persist_marker_to_storage``,
+``create_next_marker`` and ``process_marker_timestamp`` all take an
+already-derived prefix or marker and say nothing about which segment of the
+qualified name is the connection id.  Treating any call beneath the seam as
+delegation would let the exact CONNECT-1136 shape through unremarked the moment
+the offending function also read its marker via the SDK — which is precisely
+what a half-migrated app looks like, and a hole in a BLOCK-tier recurrence guard.
 
 ``raise`` statements inside nested function definitions are not attributed to the
 enclosing function; a nested helper is scanned in its own right if it takes the
@@ -70,16 +83,42 @@ from conformance.suite.schema.findings import Finding
 # field.
 _PARAM_SUFFIX = "connection_qualified_name"
 
-# The seam that owns this parse. A function reaching anything beneath it is
-# delegating, so it is not the target of this rule.
+# The package that owns this parse.
 _SEAM_MODULE = "application_sdk.common.incremental"
+
+# The two symbols beneath the seam that answer *this* question — "where does
+# this connection's state live?" and "which segment is its id?".  A function
+# calling one of them has handed the parse to the SDK.
+#
+# Deliberately not "anything under the seam": the marker helpers
+# (``fetch_marker_from_storage``, ``persist_marker_to_storage``,
+# ``create_next_marker``, ``process_marker_timestamp``) consume an
+# already-derived prefix and leave the parse entirely to their caller, so a
+# function that calls one and still splits the qualified name apart itself is
+# a finding, not a delegation.
+_PARSE_SEAM_SYMBOLS = frozenset(
+    {
+        "extract_epoch_id_from_qualified_name",
+        "get_persistent_s3_prefix",
+    }
+)
 
 _FUNC_DEFS = (ast.FunctionDef, ast.AsyncFunctionDef)
 
 
-def _is_seam_origin(origin: str) -> bool:
-    """True if a resolved import origin is the seam or a symbol beneath it."""
-    return origin == _SEAM_MODULE or origin.startswith(_SEAM_MODULE + ".")
+def _is_parse_seam_origin(origin: str) -> bool:
+    """True if *origin* resolves to a seam symbol that owns this parse.
+
+    Both the package re-export
+    (``application_sdk.common.incremental.get_persistent_s3_prefix``) and the
+    defining submodule (``…incremental.helpers.get_persistent_s3_prefix``)
+    resolve here, since only the trailing symbol name is matched beneath the
+    seam.  An ``as`` alias binds a different *name* but the same origin, so it
+    resolves too.
+    """
+    if not origin.startswith(_SEAM_MODULE + "."):
+        return False
+    return origin.rsplit(".", 1)[-1] in _PARSE_SEAM_SYMBOLS
 
 
 def _takes_qualified_name(func: ast.FunctionDef | ast.AsyncFunctionDef) -> str | None:
@@ -109,8 +148,8 @@ def _own_body(func: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.AST]:
     return own
 
 
-def _reaches_seam(body: list[ast.AST], origins: dict[str, str]) -> bool:
-    """True if any call in *body* resolves to a symbol under the SDK seam.
+def _delegates_the_parse(body: list[ast.AST], origins: dict[str, str]) -> bool:
+    """True if any call in *body* hands this parse to the SDK seam.
 
     Resolves the three call spellings ``collect_import_origins`` covers: a bare
     name (``get_persistent_s3_prefix(...)``), a single-level attribute on an
@@ -135,7 +174,7 @@ def _reaches_seam(body: list[ast.AST], origins: dict[str, str]) -> bool:
             origin = qualify_chained_attr_call(func, origins)
         else:
             continue
-        if origin and _is_seam_origin(origin):
+        if origin and _is_parse_seam_origin(origin):
             return True
     return False
 
@@ -197,7 +236,7 @@ def check_p049(
         raises = [n for n in body if isinstance(n, ast.Raise)]
         if not raises:
             continue
-        if _reaches_seam(body, origins):
+        if _delegates_the_parse(body, origins):
             # This function derives the value through the SDK; a typed re-raise
             # around the SDK's own error is the correct shape, not a divergence.
             continue

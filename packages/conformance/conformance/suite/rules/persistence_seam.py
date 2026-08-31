@@ -47,7 +47,7 @@ either without the other, so neither rule subsumes the other:
 decidable is the fingerprint each half leaves: for ``P048``, app code assembling
 the segment sequence ``persistent-artifacts/apps/<app>/connection``; for
 ``P049``, a ``raise`` reachable from a function that splits the qualified name
-apart itself and does not reach the seam.
+apart itself and does not hand that parse to the seam.
 
 ``P048`` matched the bare ``persistent-artifacts`` root segment first.  Measured
 across the fleet that fired 65 times, of which **one** was the connection layout
@@ -210,7 +210,8 @@ RULES: tuple[RuleDefinition, ...] = (
         full_description=(
             "A function takes a ``connection_qualified_name``, calls ``.split(...)`` on\n"
             "a value derived from it, and can ``raise`` out of its own body — while\n"
-            "that function does not itself reach the SDK seam.\n"
+            "that function does not itself call ``get_persistent_s3_prefix`` or\n"
+            "``extract_epoch_id_from_qualified_name``.\n"
             "\n"
             "The app has taken over a decision the SDK already makes, and made it\n"
             "stricter.  ``extract_epoch_id_from_qualified_name`` logs a warning and\n"
@@ -228,8 +229,16 @@ RULES: tuple[RuleDefinition, ...] = (
             "    prefix = get_persistent_s3_prefix(connection_qualified_name, app_name)\n"
             "\n"
             "Raising a typed app error *around* the SDK call is correct and not\n"
-            "flagged: a function that calls a seam symbol is delegating, so one that\n"
-            "catches the SDK's error and re-raises its own stays silent.\n"
+            "flagged: a function that derives the value through one of those two\n"
+            "helpers is delegating, so one that catches the SDK's error and re-raises\n"
+            "its own stays silent.\n"
+            "\n"
+            "Only those two symbols count as delegation.  The marker helpers\n"
+            "(``fetch_marker_from_storage``, ``persist_marker_to_storage``,\n"
+            "``create_next_marker``, ``process_marker_timestamp``) take an\n"
+            "already-derived prefix and leave the parse to their caller, so reading a\n"
+            "marker through the SDK while still splitting the qualified name by hand\n"
+            "is a finding — that half-migrated shape is the likeliest recurrence.\n"
             "\n"
             "Delegation is judged **per function**, not per module.  A module-level\n"
             "gate reads as delegation today, when almost no app module imports the\n"
