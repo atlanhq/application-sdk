@@ -72,7 +72,7 @@ class TracebackMixin(_MixinBase):
                 continue  # logger.exception() is handled by L017; not relevant here
             if method not in LOG_METHODS_WITH_TRACEBACK:
                 continue
-            if has_exc_info_true(node):
+            if has_exc_info_true(node, handler.name):
                 continue
             if call_uses_sanitizer(node):
                 # Deliberate redaction boundary — exc_info would serialize the
