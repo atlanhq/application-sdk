@@ -5,12 +5,17 @@ Lives here rather than in the unit suite for two reasons. The unit legs run with
 and holds a connection open is both an exception to the guard and sensitive to
 what else shares its worker. And what these assert — that the write genuinely
 leaves the process and that no failure of it reaches the caller — is a property
-of the transport, which a stubbed client cannot show either way: a stub returns
-immediately whether the real one would or not.
+of the transport: that no failure of the write — a refused connection, a rejected
+row, a broken store — reaches the caller, and that a rejection body never lands in
+a log. A stubbed client cannot show any of that either way.
 
-The ordering itself is pinned deterministically, without a socket, in
-``tests/unit/execution/test_preflight_persist.py``. Nothing here needs Temporal
-or any running service — only loopback.
+What is deliberately *not* here is the ordering claim — that the caller returns
+before the write starts. Asserting it over a socket means catching a connection
+mid-flight, which proved sensitive to whatever else shares the suite, and it needs
+no socket to prove: ``tests/unit/execution/test_preflight_persist.py`` pins it
+deterministically on call ordering instead.
+
+Nothing here needs Temporal or any running service — only loopback.
 """
 
 from __future__ import annotations
@@ -75,8 +80,8 @@ class TestTheWriteReallyLeavesTheProcess:
     async def _serving(handler):
         """A server on a free loopback port, torn down without waiting on handlers.
 
-        Handlers are tracked and cancelled rather than awaited: one of them holds
-        a connection open on purpose, and ``wait_closed`` would block on it.
+        Handlers are tracked and cancelled rather than awaited, so a client that
+        has not finished reading cannot hold teardown open.
         """
         live: set[asyncio.Task[None]] = set()
 
@@ -116,34 +121,6 @@ class TestTheWriteReallyLeavesTheProcess:
         return persist.persist_check_result(
             _gate(workflow_slug=SLUG), _verdict(), endpoint=endpoint, timeout=timeout
         )
-
-    def test_the_caller_returns_before_the_store_answers(self):
-        # The point of the whole design: the app endpoint opens a Polaris catalog,
-        # may create the table and commits Parquet. Were this ever awaited, every
-        # gated run in the fleet would carry that latency.
-        connected = asyncio.Event()
-
-        async def _never_answer(reader, writer):
-            connected.set()
-            await asyncio.Event().wait()  # held open until cancelled
-
-        async def scenario():
-            async with self._serving(_never_answer) as endpoint:
-                loop = asyncio.get_running_loop()
-                started = loop.time()
-                task = self._persist(endpoint, timeout=30)
-                assert loop.time() - started < 0.05
-                assert task is not None and not task.done()
-
-                # The request does reach the socket, and is still in flight long
-                # after the caller moved on.
-                await connected.wait()
-                assert not task.done()
-
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
-
-        self._run(scenario)
 
     def test_a_store_that_refuses_the_connection_does_not_reach_the_caller(self):
         async def scenario():
