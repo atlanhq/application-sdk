@@ -59,6 +59,7 @@ from conformance.suite.checks import (
     manifest_contract,
     optimizations,
     orchestration,
+    persistence_seam,
     preflight,
     prescriptions,
     release_contract,
@@ -111,6 +112,11 @@ _CHECKS: list[CheckRegistration] = [
         series=client_seam.SERIES,
         discover=client_seam.discover,
         scan_path=client_seam.scan_path,
+    ),
+    CheckRegistration(
+        series=persistence_seam.SERIES,
+        discover=persistence_seam.discover,
+        scan_path=persistence_seam.scan_path,
     ),
     CheckRegistration(
         series=download_retry.SERIES,

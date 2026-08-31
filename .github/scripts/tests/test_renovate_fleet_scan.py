@@ -380,13 +380,93 @@ def test_write_repo_files_writes_grouped_data(tmp_path):
     assert written == [{"number": 1}]
 
 
-def test_write_repo_files_includes_repos_not_in_known_list_too(tmp_path):
-    # A repo that has PRs but wasn't in the discovery list should still get written —
-    # known_repos only guarantees a floor of `[]` files, never excludes real data.
+def test_write_repo_files_falls_back_to_grouped_with_no_scope(tmp_path):
+    # No known_repos at all (the file was absent) can only mean "whatever the
+    # search found" — there is no other scope available to honour.
     grouped = {"atlanhq/surprise-repo": [{"number": 7}]}
-    rfs.write_repo_files(grouped, tmp_path, known_repos=[])
+    rfs.write_repo_files(grouped, tmp_path, known_repos=None)
     written = json.loads((tmp_path / "atlanhq_surprise-repo.json").read_text())
     assert written == [{"number": 7}]
+
+
+def test_write_repo_files_writes_nothing_for_an_empty_scope(tmp_path):
+    """An empty scope is a scope, not a missing one.
+
+    Discovery returning zero repos is a failure — a 401 on `gh repo list` is
+    indistinguishable from an empty fleet — so `[]` must NOT fall back to the
+    org-wide search result. That fallback is how the 616-repo dashboard would
+    come back: collapsed discovery, full dashboard of unrelated repos.
+    """
+    grouped = {f"atlanhq/unrelated-{i}": [{"number": i}] for i in range(5)}
+    rfs.write_repo_files(grouped, tmp_path, known_repos=[])
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_main_passes_none_when_the_known_repos_file_is_absent(tmp_path, monkeypatch):
+    """The None-vs-[] distinction has to survive argument parsing.
+
+    `main` used to initialise known_repos to [], which merged "no file" into
+    "empty scope" and put the fail-open back one layer down.
+    """
+    seen = {}
+
+    def fake_run(**kwargs):
+        seen["known_repos"] = kwargs["known_repos"]
+        return {}, {}
+
+    monkeypatch.setattr(rfs, "run", lambda **kw: fake_run(**kw))
+    monkeypatch.setenv("GH_TOKEN", "t")
+
+    argv = [
+        "--org",
+        "atlanhq",
+        "--since",
+        "2026-01-01",
+        "--open-dir",
+        str(tmp_path / "open"),
+        "--merged-dir",
+        str(tmp_path / "merged"),
+        "--known-repos-file",
+        str(tmp_path / "does-not-exist.json"),
+    ]
+    assert rfs.main(argv) == 0
+    assert seen["known_repos"] is None
+
+    (tmp_path / "empty.json").write_text("[]")
+    argv[-1] = str(tmp_path / "empty.json")
+    assert rfs.main(argv) == 0
+    assert seen["known_repos"] == []
+
+
+def test_write_repo_files_excludes_repos_outside_the_known_list(tmp_path):
+    """known_repos BOUNDS the output; grouped only supplies contents.
+
+    The org-wide PR search returns every repo in the org with a Renovate PR, most
+    of which are not consumers. Writing those put 449 unrelated repos on the
+    dashboard (`AI-taskforce`, `Atlan11`, `CARAT`...).
+    """
+    grouped = {
+        "atlanhq/atlan-mysql-app": [{"number": 1}],
+        "atlanhq/AI-taskforce": [{"number": 2}],
+        "atlanhq/CARAT": [{"number": 3}],
+    }
+    rfs.write_repo_files(grouped, tmp_path, known_repos=["atlanhq/atlan-mysql-app"])
+    assert [p.name for p in sorted(tmp_path.iterdir())] == [
+        "atlanhq_atlan-mysql-app.json"
+    ]
+
+
+def test_a_collapsed_discovery_yields_a_near_empty_dashboard(tmp_path):
+    """A broken discovery must be visible, not papered over.
+
+    Discovery collapsing to 1 repo used to produce a FULL dashboard of the wrong
+    repos, because the writer unioned the org-wide search in. One repo in means
+    one repo out — which is what makes the breakage obvious.
+    """
+    grouped = {f"atlanhq/unrelated-{i}": [{"number": i}] for i in range(5)}
+    grouped["atlanhq/application-sdk"] = [{"number": 99}]
+    rfs.write_repo_files(grouped, tmp_path, known_repos=["atlanhq/application-sdk"])
+    assert [p.name for p in tmp_path.iterdir()] == ["atlanhq_application-sdk.json"]
 
 
 # ---------------------------------------------------------------------------

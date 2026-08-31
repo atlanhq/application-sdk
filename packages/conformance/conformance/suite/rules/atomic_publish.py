@@ -1,4 +1,4 @@
-"""Atomic-publish rule definition (P048, CONNECT-1126).
+"""Atomic-publish rule definition (P050, CONNECT-1126).
 
 A file that another coroutine, activity or process may read must never be
 written in place: an ``os.open`` with ``O_TRUNC`` empties the destination the
@@ -19,7 +19,7 @@ flags carry ``O_TRUNC`` in a scope that never publishes via ``os.replace`` /
 
 Scope
 -----
-``P048`` is ``sdk``-scoped: the transfer and writer seams live in the SDK, and
+``P050`` is ``sdk``-scoped: the transfer and writer seams live in the SDK, and
 consumer apps are steered to ``FileReference`` / SDK writers by the storage-seam
 rules (P008–P012) rather than to raw descriptors.
 
@@ -49,7 +49,7 @@ from conformance.suite.schema.disposition import (
 
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
-        id="P048",
+        id="P050",
         scope=RuleScope.SDK,
         name="NonAtomicDestinationWrite",
         tier=EnforcementTier.WARN,
@@ -95,10 +95,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "enclosing function publishes via ``os.replace`` / ``os.rename`` is\n"
             "recognised as that pattern and passes.\n"
             "\n"
-            "Land as ``WARN``: a justified inline ``# conformance: ignore[P048]\n"
+            "Land as ``WARN``: a justified inline ``# conformance: ignore[P050]\n"
             "<reason>`` records any single-consumer exception (e.g. a signal\n"
             "handler's diagnostic dump) and stays visible in SARIF.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p048",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p050",
     ),
 )

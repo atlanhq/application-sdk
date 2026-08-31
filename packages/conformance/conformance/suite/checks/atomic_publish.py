@@ -1,4 +1,4 @@
-"""P048 NonAtomicDestinationWrite — in-place ``O_TRUNC`` write, no atomic publish.
+"""P050 NonAtomicDestinationWrite — in-place ``O_TRUNC`` write, no atomic publish.
 
 ``os.open(path, ... | os.O_TRUNC ...)`` truncates the destination at open time
 and streams bytes into it in place.  A concurrent reader of the same path —
@@ -49,7 +49,7 @@ tooling output) — see the rule definition in ``suite.rules.atomic_publish``.
 
 Inline suppression
 ------------------
-``# conformance: ignore[P048] <reason>`` on the offending line, or on the
+``# conformance: ignore[P050] <reason>`` on the offending line, or on the
 comment-only line directly above it.
 """
 
@@ -70,7 +70,7 @@ from conformance.suite.checks._ast_common import (
 from conformance.suite.schema.findings import Finding
 
 SERIES = "P"
-RULE_ID = "P048"
+RULE_ID = "P050"
 
 __all__ = ["RULE_ID", "SERIES", "discover", "main", "scan_path", "scan_text"]
 
@@ -81,7 +81,7 @@ _MESSAGE = (
     "FileReference.local_path, JSONL parse failure at char 0). Write to a "
     "staging file (common.atomic helpers, or a temp inside PARTIAL_DIRNAME) "
     "and publish with os.replace. Suppress a reviewed single-consumer "
-    "exception with '# conformance: ignore[P048] <reason>'."
+    "exception with '# conformance: ignore[P050] <reason>'."
 )
 
 
@@ -276,7 +276,7 @@ def _scope_shadowed_names(scope: ast.AST) -> frozenset[str]:
 
 
 class _AtomicPublishChecker(ast.NodeVisitor):
-    """Walk a module AST and emit P048 findings."""
+    """Walk a module AST and emit P050 findings."""
 
     def __init__(self, filename: str, directives: dict[int, _IgnoreDirective]) -> None:
         self._filename = filename
@@ -386,7 +386,7 @@ class _AtomicPublishChecker(ast.NodeVisitor):
 
 
 def scan_text(text: str, file: str) -> list[Finding]:
-    """Scan a single Python source *text* for P048 findings."""
+    """Scan a single Python source *text* for P050 findings."""
     try:
         tree = ast.parse(text, filename=file)
     except SyntaxError:
@@ -397,7 +397,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
 
 
 def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single Python file for P048 findings."""
+    """Scan a single Python file for P050 findings."""
     text = safe_read_text(path)
     if text is None:
         return []
@@ -410,7 +410,7 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
 
 main = make_cli_main(
     scan_text,
-    description="P048: flag in-place os.open(O_TRUNC) writes with no os.replace publish.",
+    description="P050: flag in-place os.open(O_TRUNC) writes with no os.replace publish.",
     discover=discover,
 )
 

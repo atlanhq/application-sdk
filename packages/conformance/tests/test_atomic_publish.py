@@ -1,6 +1,6 @@
-"""Meta-tests for the P-series atomic-publish check (P048, CONNECT-1126).
+"""Meta-tests for the P-series atomic-publish check (P050, CONNECT-1126).
 
-P048 flags ``os.open`` calls whose flags carry ``O_TRUNC`` when no enclosing
+P050 flags ``os.open`` calls whose flags carry ``O_TRUNC`` when no enclosing
 scope publishes via ``os.replace`` / ``os.rename``.  Two properties of the
 defect drive what is tested here:
 
@@ -28,13 +28,13 @@ _VIOLATION = (
 
 
 def _rule(src: str, file: str = "application_sdk/x.py") -> list[Finding]:
-    """P048 findings from a per-file scan of *src* at path *file*."""
+    """P050 findings from a per-file scan of *src* at path *file*."""
     return [f for f in scan_text(src, file) if f.rule_id == RULE_ID]
 
 
 def test_series_letter() -> None:
     assert SERIES == "P"
-    assert RULE_ID == "P048"
+    assert RULE_ID == "P050"
 
 
 # ── Fires — in-place O_TRUNC write with no publish in scope ──────────────────
@@ -390,7 +390,7 @@ def test_p048_inline_ignore_suppresses() -> None:
     src = (
         "import os\n"
         "def dump(path):\n"
-        "    fd = os.open(path, os.O_WRONLY | os.O_TRUNC)  # conformance: ignore[P048] single-consumer diagnostic\n"
+        "    fd = os.open(path, os.O_WRONLY | os.O_TRUNC)  # conformance: ignore[P050] single-consumer diagnostic\n"
     )
     (finding,) = _rule(src)
     assert finding.suppressed
@@ -401,7 +401,7 @@ def test_p048_ignore_on_line_above_suppresses() -> None:
     src = (
         "import os\n"
         "def dump(path):\n"
-        "    # conformance: ignore[P048] single-consumer diagnostic\n"
+        "    # conformance: ignore[P050] single-consumer diagnostic\n"
         "    fd = os.open(path, os.O_WRONLY | os.O_TRUNC)\n"
     )
     (finding,) = _rule(src)

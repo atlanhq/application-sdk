@@ -12,8 +12,9 @@ The check uses the same cross-file class-registry machinery as P013/P014:
 
 Field extraction resolves the full inheritance hierarchy (``resolve_contract_fields``):
 in-repo base classes are resolved from their own AST body via ``by_name``; SDK-provided
-contract bases (``Input``, ``Output``, ``PublishInputMixin``) that live outside the
-scanned repo are resolved from the static registry in ``_sdk_contract_mixins``. This
+contract bases (``Input``, ``Output``, ``PublishInputMixin``) and SDK template
+contract bases (such as ``ExtractionOutput``) that live outside the scanned repo
+are resolved from the static registries in ``_sdk_contract_mixins``. This
 means a field inherited from a base class or SDK mixin is tracked exactly like one
 declared directly on the contract — no need to redeclare it just to stay ledger-protected.
 
@@ -28,7 +29,10 @@ import ast
 from pathlib import Path
 from typing import NamedTuple
 
-from conformance.suite.checks._sdk_contract_mixins import SDK_CONTRACT_BASE_FIELDS
+from conformance.suite.checks._sdk_contract_mixins import (
+    SDK_CONTRACT_BASE_FIELDS,
+    SDK_TEMPLATE_CONTRACT_FIELDS,
+)
 from conformance.suite.checks.prescriptions._contract_common import _unwrap_annotated
 from conformance.suite.checks.prescriptions._decorator_provenance import (
     ImportProvenance,
@@ -269,13 +273,16 @@ def resolve_contract_fields(
     classdef: ast.ClassDef,
     aliases: dict[str, str],
     by_name: dict[str, ClassRecord],
+    *,
+    by_name_all: dict[str, list[ClassRecord]] | None = None,
 ) -> list[_FieldInfo]:
     """Return field info for *classdef*, resolved across its full base-class chain.
 
     In-repo base classes are resolved recursively from their own AST body (via
     *by_name*); SDK-provided contract bases not present in the scanned repo
-    (``Input``, ``Output``, ``PublishInputMixin``) are resolved from the static
-    registry in :mod:`_sdk_contract_mixins`. A field declared directly on a
+    (``Input``, ``Output``, ``PublishInputMixin``) and SDK template contracts
+    (such as ``ExtractionOutput``) are resolved from the static registries in
+    :mod:`_sdk_contract_mixins`. A field declared directly on a
     (sub)class always overrides a same-named field inherited from a base —
     mirrors Python's MRO. Cycle-safe: mirrors the ``visiting``-guarded pattern
     used by :func:`resolve_ancestor` in ``_error_code_prefix``.
@@ -287,6 +294,15 @@ def resolve_contract_fields(
     ``B`` and ``C`` derive from ``A``) would be re-merged once per path,
     re-applying its fields and clobbering an override a higher-precedence
     sibling already established for the same field name.
+
+    *by_name_all* is optional and opt-in: when a base-class NAME is declared
+    more than once in the scanned repo (two entrypoints that both declare
+    ``AppInputContract``, say), ``by_name`` keeps only the first and the
+    resolved field set silently becomes whichever declaration happened to be
+    parsed first. Passing the full multimap makes such an ambiguous ancestor
+    contribute the UNION of its declarations instead — the honest reading when
+    a bare class name cannot identify one of them. Callers that need today's
+    first-wins behaviour simply omit it.
 
     ``ClassRecord.bases`` (not ``rec.node.bases``) is used once recursion
     reaches a registered ancestor: ``collect_classes`` already de-aliases base
@@ -309,16 +325,24 @@ def resolve_contract_fields(
             return  # cycle — treat as unknown, same as resolve_ancestor
         visiting.add(name)
 
-        rec = by_name.get(name)
-        if rec is not None:
-            # Reversed so the leftmost grand-ancestor (highest MRO precedence)
-            # is merged last and therefore wins the dict overwrite below.
-            for base_name in reversed(rec.bases):
-                merge_ancestor(base_name, visiting)
-            for fi in _iter_fields(rec.node):
-                fields_by_name[fi.name] = fi._replace(node=None)
+        recs = (by_name_all or {}).get(name)
+        if not recs:
+            rec_one = by_name.get(name)
+            recs = [rec_one] if rec_one is not None else []
+        if recs:
+            for rec in recs:
+                # Reversed so the leftmost grand-ancestor (highest MRO
+                # precedence) is merged last and therefore wins the dict
+                # overwrite below.
+                for base_name in reversed(rec.bases):
+                    merge_ancestor(base_name, visiting)
+                for fi in _iter_fields(rec.node):
+                    fields_by_name[fi.name] = fi._replace(node=None)
         else:
-            for sdk_field in SDK_CONTRACT_BASE_FIELDS.get(name, ()):
+            sdk_fields = SDK_CONTRACT_BASE_FIELDS.get(
+                name, SDK_TEMPLATE_CONTRACT_FIELDS.get(name, ())
+            )
+            for sdk_field in sdk_fields:
                 fields_by_name[sdk_field.name] = _FieldInfo(
                     name=sdk_field.name,
                     canonical_type=sdk_field.canonical_type,

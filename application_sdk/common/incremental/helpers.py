@@ -42,6 +42,19 @@ def extract_epoch_id_from_qualified_name(connection_qualified_name: str) -> str:
     This is used to create cleaner S3 paths for persistent artifacts like marker.txt
     and current-state folder, avoiding nested folder structures.
 
+    A last segment that is not a numeric epoch is accepted with a warning, not
+    rejected: connections named after a workflow or environment
+    ("default/oracle/some-name") are legitimate — a tenant that provisions
+    connections programmatically produces them — and they crawl normally. Any
+    caller that raises on such a name is stricter than this function for no
+    gain, which is how CONNECT-1136 broke a tenant's miner while its crawler
+    ran fine. Route through this function rather than re-deriving the segment.
+
+    An *empty* last segment is the one case that is rejected, because it is not
+    a name at all: it collapses every such connection onto one directory, so
+    they would share a marker and silently overwrite each other's watermark.
+    Failing is strictly better than that.
+
     Args:
         connection_qualified_name: The full qualified name (e.g., "default/oracle/1764230875")
 
@@ -50,7 +63,8 @@ def extract_epoch_id_from_qualified_name(connection_qualified_name: str) -> str:
 
     Raises:
         ConnectionQualifiedNameEmptyError: If the qualified name is empty.
-        ConnectionQualifiedNameFormatError: If the qualified name doesn't have the expected format.
+        ConnectionQualifiedNameFormatError: If the qualified name has fewer than
+            three segments, or its last segment is empty.
     """
     if not connection_qualified_name:
         from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
@@ -69,6 +83,25 @@ def extract_epoch_id_from_qualified_name(connection_qualified_name: str) -> str:
         raise ConnectionQualifiedNameFormatError()
 
     connection_id = parts[-1]
+
+    # A trailing slash ("default/oracle/") passes the segment-count check above
+    # but yields an empty connection directory — ".../connection/" — which every
+    # connection ending that way would share. Two connections writing one marker
+    # move each other's watermark, so each re-extracts from the other's window or
+    # skips its own: silent, and only visible as missing data much later. Reject
+    # it here, at the one place every caller derives the segment.
+    if not connection_id:
+        from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
+            ConnectionQualifiedNameFormatError,
+        )
+
+        raise ConnectionQualifiedNameFormatError(
+            message=(
+                "connection_qualified_name has an empty last segment "
+                f"(qn={connection_qualified_name!r}); it would share a persistent "
+                "artifacts directory with every other such connection"
+            ),
+        )
 
     if not connection_id.isdigit():
         logger.warning(
