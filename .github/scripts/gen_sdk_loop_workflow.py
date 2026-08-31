@@ -309,8 +309,9 @@ def _rounds_expr() -> str:
                 '"verdict":"${{ needs.%s.outputs.verdict }}",'
                 '"sha":"${{ needs.%s.outputs.new_base_sha }}",'
                 '"detail":"${{ needs.%s.outputs.detail }}",'
-                '"cost":"${{ needs.%s.outputs.cost }}"}'
-                % (n, phase, job, job, job, job, job)
+                '"cost":"${{ needs.%s.outputs.cost }}",'
+                '"usage":"${{ needs.%s.outputs.usage }}"}'
+                % (n, phase, job, job, job, job, job, job)
             )
     return "'[" + ",".join(rows) + "]'"
 

@@ -27,6 +27,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from _gha_expr import evaluate  # noqa: E402
 from sdk_loop_common import (  # noqa: E402
+    AGENT_ENV_PASSTHROUGH,
     ALLOWED_MODELS,
     DEFAULT_MAX_USD,
     MAX_CONSECUTIVE_REAIMS,
@@ -38,14 +39,17 @@ from sdk_loop_common import (  # noqa: E402
     AgentResult,
     DismissalLedger,
     budget_exceeded,
+    format_usage,
     gateway_base,
     head_state,
     opencode_config,
+    parse_opencode_usage,
     parse_reviewed_head,
     parse_verdict,
     reaim_exhausted,
     run_agent,
     run_budget,
+    write_rg_config,
 )
 from sdk_loop_fence import (  # noqa: E402
     MARK_DECLINE,
@@ -1029,6 +1033,68 @@ def test_every_job_has_a_name_a_human_can_read() -> None:
     assert jobs["resolve-8"]["name"] == "Resolve 8"
     assert jobs["fence"]["name"] == "Fence"
     assert jobs["finalize"]["name"] == "Summary"
+
+
+def test_hidden_paths_are_searchable_structurally(tmp_path: pathlib.Path) -> None:
+    """opencode's Glob/Grep are ripgrep-backed and ripgrep skips dot-paths.
+
+    On the first complete run the reviewer got 0 matches TWICE — globbing its
+    own agent definitions, and grepping the reference rules for prior art on
+    the finding it was about to raise. It raised that finding anyway, without
+    the rules that exist to inform it, and said nothing about it.
+
+    ripgrep reads flags from RIPGREP_CONFIG_PATH, so this is fixed in the
+    environment rather than by asking the model to remember a prompt line.
+    """
+    path = write_rg_config(str(tmp_path))
+    assert pathlib.Path(path).read_text().strip() == "--hidden"
+    assert "RIPGREP_CONFIG_PATH" in AGENT_ENV_PASSTHROUGH
+
+
+def test_token_usage_is_parsed_and_a_cache_miss_is_called_out() -> None:
+    """`opencode stats` is the authoritative measurement: attributable to THIS
+    phase, unlike a gateway key several lanes share, and it reports
+    cache_read/cache_write — the one number that says whether the fixed ~90KB
+    playbook prefix is re-paid on every one of a phase's ~24 turns."""
+    usage = parse_opencode_usage(
+        "Input   1,234\nOutput  567\nCache Read  8,900\nCache Write 100"
+    )
+    assert usage == {
+        "input": 1234,
+        "output": 567,
+        "cache_read": 8900,
+        "cache_write": 100,
+    }
+    assert "cache r/w 8,900/100" in format_usage(usage)
+    # Zero cache is the finding, not an absence — say so rather than omit it.
+    assert "cache MISS" in format_usage({"input": 10, "output": 5})
+    assert format_usage({}) == "tokens unavailable"
+
+
+def test_a_failed_summary_post_is_reported(tmp_path: pathlib.Path) -> None:
+    """A live run generated the whole summary, exited 0, and posted nothing.
+    The summary is the only place a reader learns what the run did."""
+    src = (
+        pathlib.Path(__file__).resolve().parents[1] / "sdk_loop_finalize.py"
+    ).read_text(encoding="utf-8")
+    assert "::error::could not post the run summary" in src
+
+
+def test_uv_is_available_to_the_phases() -> None:
+    """The resolve playbook verifies its own fix with `uv run pre-commit` and
+    `uv run pytest`. A live round logged `uv: command not found` for both and
+    pushed the commit regardless — a resolver that cannot check its work is
+    worse than one that does not try, because the output looks the same."""
+    assert "astral-sh/setup-uv@" in PHASE_WF.read_text(encoding="utf-8")
+
+
+def test_the_resolver_commits_as_the_app_not_as_atlan_ci() -> None:
+    """atlan-ci is a CODEOWNER and the identity that mints approvals.
+    Attributing loop commits to it blurs "who wrote this" with "who approved
+    it" — the separation the merge gate rests on."""
+    text = PHASE_WF.read_text(encoding="utf-8")
+    assert 'user.name  "atlan-app-fleet[bot]"' in text
+    assert "atlan-ci@users.noreply.github.com" not in text
 
 
 def test_opencode_is_pinned_to_the_version_that_works() -> None:
