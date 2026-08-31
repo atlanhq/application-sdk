@@ -197,3 +197,15 @@ jobs:
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
           LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL }}
         run: python3 .github/scripts/sdk_loop_phase.py
+
+      # GitHub truncates long job logs, and the interesting part of a failed
+      # review is usually the middle. `always()` because a phase that died is
+      # exactly the one whose transcript someone will want.
+      - name: Keep the agent transcript
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sdk-loop-${{ inputs.phase }}-${{ inputs.round }}
+          path: sdk-loop-*.log
+          if-no-files-found: ignore
+          retention-days: 14

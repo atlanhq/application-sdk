@@ -407,7 +407,9 @@ def main(argv: list[str] | None = None) -> int:
     # Bracket the agent call, not the whole job: checkout and token minting
     # cost nothing and would only widen the window other traffic can leak into.
     spend_before = gateway_spend()
+    transcript = os.path.join(workspace, f"sdk-loop-{phase}-{round_no}.log")
     if phase == "review":
+        print(f"::group::review round {round_no} — agent transcript")
         result = run_agent(
             REVIEW_MODEL,
             review_prompt(
@@ -415,7 +417,9 @@ def main(argv: list[str] | None = None) -> int:
             ),
             workspace,
             TIMEOUT_REVIEW_S,
+            transcript_path=transcript,
         )
+        print("::endgroup::")
         comments = json.loads(
             _sh(
                 ["gh", "api", f"repos/{repo}/issues/{pr}/comments", "--paginate"]
@@ -443,13 +447,24 @@ def main(argv: list[str] | None = None) -> int:
 
     if phase == "resolve":
         before = state.live
+        print(f"::group::resolve round {round_no} — agent transcript")
         result = run_agent(
             RESOLVE_MODEL,
             resolve_prompt(pr, round_no, before, os.environ.get("VERDICT_URL", "")),
             workspace,
             TIMEOUT_RESOLVE_S,
+            transcript_path=transcript,
         )
-        dirty = _sh(["git", "status", "--porcelain"], cwd=workspace).stdout.strip()
+        print("::endgroup::")
+        # Exclude our own transcript: it lands in the workspace and would
+        # otherwise read as "the resolver changed something".
+        dirty = "\n".join(
+            line
+            for line in _sh(
+                ["git", "status", "--porcelain"], cwd=workspace
+            ).stdout.splitlines()
+            if "sdk-loop-" not in line
+        ).strip()
         after = live_head(repo, head_ref)
         dismissals = parse_dismissals(f"{result.stdout}\n{result.stderr}")
         outcome = interpret_resolve(result, bool(dirty), before, after, dismissals)

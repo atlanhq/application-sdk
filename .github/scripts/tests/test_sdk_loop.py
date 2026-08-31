@@ -40,6 +40,7 @@ from sdk_loop_common import (  # noqa: E402
     opencode_config,
     parse_reviewed_head,
     parse_verdict,
+    run_agent,
     run_budget,
 )
 from sdk_loop_fence import decide, find_live_run, is_authorized  # noqa: E402
@@ -368,6 +369,76 @@ def test_the_ledger_tells_the_next_review_not_to_re_raise() -> None:
 
 def test_an_empty_ledger_adds_nothing_to_the_prompt() -> None:
     assert DismissalLedger().as_prompt_section() == ""
+
+
+# ---------------------------------------------------------------------------
+# Observability — a running phase must not look identical to a stalled one
+# ---------------------------------------------------------------------------
+
+
+def test_the_agent_transcript_streams_rather_than_buffering(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """Buffered output means a 45-minute review shows nothing until it ends,
+    so a hung phase and a working one are indistinguishable — the exact thing
+    that made the sandbox lane painful to operate."""
+    seen: list[str] = []
+
+    class _Proc:
+        returncode = 0
+        stdout = iter(["phase 0 complete\n", "phase 1 complete\n"])
+
+        def wait(self) -> None:
+            return None
+
+        def kill(self) -> None:  # the timeout watchdog holds a reference
+            return None
+
+    monkeypatch.setenv("LITELLM_BASE_URL", "https://gateway.example")
+    monkeypatch.setattr("shutil.which", lambda _n: "/usr/bin/opencode")
+    monkeypatch.setattr("subprocess.Popen", lambda *a, **k: _Proc())
+    out = tmp_path / "t.log"
+    result = run_agent(
+        REVIEW_MODEL,
+        "go",
+        str(tmp_path),
+        60,
+        transcript_path=str(out),
+        sink=seen.append,
+    )
+    assert seen == ["phase 0 complete", "phase 1 complete"]
+    assert "phase 1 complete" in result.stdout
+    # And kept on disk, because GitHub truncates long job logs.
+    assert "phase 0 complete" in out.read_text()
+
+
+def test_the_pinned_config_is_not_left_in_the_tree(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    # The resolve phase commits from this directory; a stray opencode.json
+    # would ride along in its push.
+    class _Proc:
+        returncode = 0
+        stdout = iter([])
+
+        def wait(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            return None
+
+    monkeypatch.setenv("LITELLM_BASE_URL", "https://gateway.example")
+    monkeypatch.setattr("shutil.which", lambda _n: "/usr/bin/opencode")
+    monkeypatch.setattr("subprocess.Popen", lambda *a, **k: _Proc())
+    run_agent(RESOLVE_MODEL, "go", str(tmp_path), 60)
+    assert not (tmp_path / "opencode.json").exists()
+
+
+def test_the_transcript_is_uploaded_even_when_the_phase_died() -> None:
+    text = PHASE_WF.read_text(encoding="utf-8")
+    assert "actions/upload-artifact" in text
+    # A phase that died is exactly the one whose transcript someone wants.
+    assert "if: always()" in text
 
 
 # ---------------------------------------------------------------------------

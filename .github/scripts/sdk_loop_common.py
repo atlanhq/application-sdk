@@ -37,6 +37,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Sequence
@@ -470,38 +471,77 @@ def run_agent(
     prompt: str,
     cwd: str,
     timeout_s: int,
-    runner: Any = subprocess.run,
+    transcript_path: str | None = None,
+    sink: Any = None,
 ) -> AgentResult:
-    """Invoke one agent phase. NEVER treat the exit code as success.
+    """Invoke one agent phase, STREAMING its output to the job log.
 
-    The prompt is passed as an argv element, not through a shell, so untrusted
-    PR content in it can never be interpreted as a command.
+    Streaming is not a nicety here. A review phase can run three quarters of an
+    hour, and buffering it means the job shows nothing at all until it ends —
+    so a stalled phase and a working one look identical for 45 minutes, which
+    is the exact failure that made the mothership lane miserable to operate.
+    Every line is echoed as it arrives and also kept, because the caller has to
+    parse the transcript afterwards (dismissals, gateway rejections).
+
+    The full transcript is additionally written to *transcript_path* when given,
+    so the workflow can upload it as an artifact — GitHub truncates long job
+    logs, and the interesting part of a failed review is usually the middle.
+
+    The prompt is passed as an argv element, never through a shell, so
+    untrusted PR content in it cannot be interpreted as a command.
     """
     if shutil.which("opencode") is None:
         raise RuntimeError("opencode is not installed on this runner")
+    emit = sink or (lambda line: print(line, flush=True))
     config_path = os.path.join(cwd, "opencode.json")
     with open(config_path, "w", encoding="utf-8") as handle:
         json.dump(opencode_config(model), handle, indent=2)
+
+    lines: list[str] = []
     try:
-        completed = runner(
+        process = subprocess.Popen(
             ["opencode", "run", "--model", f"{PROVIDER}/{model}", prompt],
             cwd=cwd,
             env=agent_env(),
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            # Merged so the transcript preserves the real interleaving; the
+            # caller only ever reads them together anyway.
+            stderr=subprocess.STDOUT,
             text=True,
-            timeout=timeout_s,
+            bufsize=1,
         )
+        # A watchdog rather than a deadline inside the read loop: readline()
+        # blocks, so a phase that hangs with no output would otherwise never
+        # reach the check and would sit until the job timeout instead of ours.
+        timer = threading.Timer(timeout_s, process.kill)
+        timer.daemon = True
+        timer.start()
+        try:
+            assert process.stdout is not None
+            for line in process.stdout:
+                line = line.rstrip("\n")
+                lines.append(line)
+                emit(line)
+            process.wait()
+        finally:
+            timer.cancel()
     finally:
         # Never leave the pinned config in a tree the resolve phase might commit.
         try:
             os.unlink(config_path)
         except FileNotFoundError:
             pass
-    return AgentResult(
-        exit_code=completed.returncode,
-        stdout=completed.stdout or "",
-        stderr=completed.stderr or "",
-    )
+
+    transcript = "\n".join(lines)
+    if transcript_path:
+        try:
+            with open(transcript_path, "w", encoding="utf-8") as handle:
+                handle.write(transcript)
+        except OSError:
+            # Losing the artifact copy must not fail a phase that otherwise
+            # produced a verdict.
+            pass
+    return AgentResult(exit_code=process.returncode, stdout=transcript, stderr="")
 
 
 # --------------------------------------------------------------------------
