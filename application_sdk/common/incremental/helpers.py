@@ -42,12 +42,6 @@ def extract_epoch_id_from_qualified_name(connection_qualified_name: str) -> str:
     This is used to create cleaner S3 paths for persistent artifacts like marker.txt
     and current-state folder, avoiding nested folder structures.
 
-    Args:
-        connection_qualified_name: The full qualified name (e.g., "default/oracle/1764230875")
-
-    Returns:
-        The connection ID (epoch number) as a string
-
     A last segment that is not a numeric epoch is accepted with a warning, not
     rejected: connections named after a workflow or environment
     ("default/oracle/some-name") are legitimate — a tenant that provisions
