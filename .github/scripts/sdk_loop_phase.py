@@ -128,6 +128,12 @@ def live_head(
 # --------------------------------------------------------------------------
 
 
+#: Announces the lane to the review playbook. See the CONTRACT comment beside
+#: it in .mothership/pr-review/ORCHESTRATION.md — the string is shared with
+#: that file and a test asserts they still match.
+LANE_MARKER = "LANE: sdk-loop"
+
+
 def review_prompt(
     pr: int,
     round_no: int,
@@ -145,6 +151,16 @@ def review_prompt(
     """
     parts = [
         f"Read {PLAYBOOK_REVIEW} and follow it exactly for PR #{pr}.",
+        "",
+        # CONTRACT: the playbook's "Runtime" section keys its lane table on
+        # this exact string, and skips its sandbox-only Appendix A when it is
+        # present. Emitting it beats letting the agent infer the lane: a live
+        # transcript shows one spending a turn on
+        # `ls /workspace/application-sdk || echo NO` before reviewing
+        # anything, and an inference that goes the wrong way sends it into
+        # steps whose write calls 403 against this phase's read-only token.
+        # test_the_lane_marker_matches_the_playbook_contract pins both halves.
+        LANE_MARKER,
         "",
         f"You are reviewing sha {sha}. Stamp that sha as REVIEWED_HEAD.",
         f"This is round {round_no} of {MAX_ROUNDS} of an @sdk-loop run;",
