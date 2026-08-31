@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.30.0
-source-sha:    17caa4a9026ff1093521f9cc70e722c574150e7c
-source-date:   2026-08-29T17:15:36+01:00
+source-sha:    0b690af46c1ae895029a8a2782c20ae1fb1dd7d0
+source-date:   2026-08-31T10:58:09+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -32,7 +32,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 29 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 43 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 297 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
@@ -2832,6 +2832,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Import:** `from application_sdk.storage import check_object_store_access`
 - **Signature:** `check_object_store_access(infra: InfrastructureContext | None)`
 - **Summary:** Non-raising object-store access probe for the interactive SDR preflight.
+- **Defined in:** `application_sdk/storage/preflight.py`
+
+#### `check_run_storage_access`
+
+- **Import:** `from application_sdk.storage import check_run_storage_access`
+- **Signature:** `check_run_storage_access(infra: InfrastructureContext | None, *, timeout_seconds: float | None = None)`
+- **Summary:** Non-raising probe of every store a workflow run will upload artifacts to.
 - **Defined in:** `application_sdk/storage/preflight.py`
 
 #### `create_local_store`

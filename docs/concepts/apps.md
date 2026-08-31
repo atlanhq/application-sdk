@@ -499,7 +499,7 @@ window of a bucket relocation, a condition a production RCA traced under multi-h
 dying at their final upload. The probe is deliberately stricter than a small-artifact-only
 workload's real writes; an app whose artifacts never exceed the part size should weigh that
 before opting in. A mid-run relocation (starting after the gate passed) is covered separately:
-the upload path itself classifies the rejection as `OBJECT_STORE_RELOCATION_IN_PROGRESS` with a
+the upload path itself classifies the rejection as `DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION` with a
 platform-attributed hint instead of a generic storage failure.
 
 ```python
@@ -509,7 +509,7 @@ class MyConnector(App):
 ```
 
 A failed probe appends a typed, platform-attributed check (`objectStoreAccess:<store>`, with a
-relocation rejection stamped `OBJECT_STORE_RELOCATION_IN_PROGRESS`) and downgrades a `READY`
+relocation rejection stamped `DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION`) and downgrades a `READY`
 verdict to `NOT_READY` — so `preflight_gate_mode` still decides whether it blocks; soft mode
 reports it as `would_block`. The probe is skipped when the handler already returned `NOT_READY`
 or consumed the budget, and a failure of the probe machinery itself fails open. Note the

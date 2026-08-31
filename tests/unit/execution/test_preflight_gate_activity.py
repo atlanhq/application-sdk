@@ -1440,7 +1440,7 @@ class TestPreflightGateStorageChecks:
                 await gate(PreflightGateInput())
         assert excinfo.value.type == "PreflightFailed"
         details = excinfo.value.details[0]
-        assert details.code == "OBJECT_STORE_RELOCATION_IN_PROGRESS"
+        assert details.code == "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
         assert details.audience is Audience.PLATFORM
 
     async def test_relocation_soft_gate_reports_not_ready(self) -> None:
@@ -1455,7 +1455,7 @@ class TestPreflightGateStorageChecks:
         assert "objectStoreAccess:deployment" in names
         failed = next(c for c in result.checks if not c.passed)
         assert failed.error is not None
-        assert failed.error.code == "OBJECT_STORE_RELOCATION_IN_PROGRESS"
+        assert failed.error.code == "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
 
     async def test_healthy_storage_appends_passed_check(self) -> None:
         gate = build_preflight_gate_activity(
@@ -1535,7 +1535,7 @@ class TestPreflightGateStorageChecks:
             result = await gate(PreflightGateInput())
         failed = next(c for c in result.checks if not c.passed)
         assert failed.error is not None
-        assert failed.error.code == "OBJECT_STORE_RELOCATION_IN_PROGRESS"
+        assert failed.error.code == "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
         # Role-aware: an SDR deployment store is the customer's own bucket.
         assert failed.error.audience is Audience.USER
 
@@ -1592,7 +1592,7 @@ class TestPreflightGateStorageChecks:
             with pytest.raises(ApplicationError) as excinfo:
                 await gate(PreflightGateInput())
         assert excinfo.value.type == "PreflightFailed"
-        assert excinfo.value.details[0].code == "OBJECT_STORE_RELOCATION_IN_PROGRESS"
+        assert excinfo.value.details[0].code == "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
 
     def test_every_classifier_bucket_maps_to_a_typed_leaf(self) -> None:
         """The gate mapper covers every bucket the storage classifier can emit.
@@ -1660,7 +1660,7 @@ class TestPreflightGateStorageChecks:
         assert failed is True
         assert result.status is PreflightStatus.NOT_READY
         block = _build_block_error(result, "myapp")
-        assert block.details[0].code == "OBJECT_STORE_RELOCATION_IN_PROGRESS"
+        assert block.details[0].code == "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
 
     async def test_partial_verdict_is_downgraded(self) -> None:
         """Reviewer repro: PARTIAL proceeds today, so it must downgrade too."""

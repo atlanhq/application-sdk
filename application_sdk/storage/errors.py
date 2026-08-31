@@ -85,13 +85,13 @@ class StorageBucketRelocationError(StorageError):
     naming the relocation) while plain single-request PUTs keep working. The
     condition is temporary and entirely platform-side — no credential,
     permission, or connector change fixes it — so it carries its own code
-    (shared with the preflight gate's storage check, see
-    ``OBJECT_STORE_RELOCATION_IN_PROGRESS``) instead of the generic
+    (the single definition; the preflight gate's storage check imports it as
+    its block stamp) instead of the generic
     ``DEPENDENCY_UNAVAILABLE_STORAGE``, and a remediation hint saying to retry
     after the relocation finishes.
     """
 
-    code: ClassVar[str] = "OBJECT_STORE_RELOCATION_IN_PROGRESS"
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
 
     def __init__(
         self,

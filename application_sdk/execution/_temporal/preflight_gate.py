@@ -62,6 +62,7 @@ with workflow.unsafe.imports_passed_through():
         PreflightStatus,
     )
     from application_sdk.infrastructure.context import get_infrastructure
+    from application_sdk.storage.errors import StorageBucketRelocationError
 
     # Stable log bodies for the gate's two events — the contract connector-pulse
     # queries on. They live in the shared event-name registry and their values are
@@ -930,10 +931,10 @@ _STORAGE_CHECK_MIN_SECONDS = 15.0
 
 # Contract code stamped on a storage check blocked by a bucket relocation, so
 # the outcome event's ``reason`` names the condition (temporary, platform-side)
-# rather than a generic dependency outage. Same string as
-# ``StorageBucketRelocationError.code`` (storage/errors.py) so the gate block
-# and a mid-run upload failure land in one analytics bucket.
-OBJECT_STORE_RELOCATION_CODE = "OBJECT_STORE_RELOCATION_IN_PROGRESS"
+# rather than a generic dependency outage. Imported from the typed error's
+# single definition (storage/errors.py) so the gate block and a mid-run upload
+# failure land in one analytics bucket and cannot drift.
+OBJECT_STORE_RELOCATION_CODE = StorageBucketRelocationError.code
 
 
 def _storage_failure_details(result: Any, *, sdr_mode: bool) -> Any:

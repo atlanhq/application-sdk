@@ -2282,7 +2282,7 @@ class TestUploadFileRelocationClassification:
             with pytest.raises(StorageBucketRelocationError) as excinfo:
                 await upload_file("test/column.json", f, store)
         err = excinfo.value
-        assert err.code == "OBJECT_STORE_RELOCATION_IN_PROGRESS"
+        assert err.code == "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
         assert err.suggested_action and "relocation" in err.suggested_action
         assert err.key == "test/column.json"
 
