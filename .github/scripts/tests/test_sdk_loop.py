@@ -423,6 +423,23 @@ def test_the_phase_two_agents_are_registered_so_the_fan_out_can_happen() -> None
         monkey.undo()
 
 
+def test_every_agent_the_playbook_dispatches_is_registered() -> None:
+    """Both `Agent tool` sites in ORCHESTRATION.md must be satisfiable: §2a's
+    Wave 1 domain agents and the reachability dispatch at line 556."""
+    agents_dir = (
+        pathlib.Path(__file__).resolve().parents[3]
+        / ".mothership"
+        / "pr-review"
+        / "agents"
+    )
+    on_disk = {p.stem for p in agents_dir.glob("*.md")}
+    # Everything on disk is registered except adversarial, which Wave 2 uses
+    # and this lane skips — registering it would advertise a capability the
+    # phase is explicitly told not to use.
+    assert on_disk - set(PHASE2_AGENTS) == {"adversarial"}
+    assert "reachability" in PHASE2_AGENTS, "line 556 dispatches it by name"
+
+
 def test_the_review_prompt_names_the_delegation_tool_for_this_runtime() -> None:
     prompt = review_prompt(42, 1, "a" * 40, DismissalLedger())
     assert "`Task`" in prompt

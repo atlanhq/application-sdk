@@ -288,6 +288,16 @@ def gateway_base() -> str:
 #: The prompts are the EXISTING files, loaded by reference. Nothing is copied,
 #: so the agents stay owned by `.mothership/pr-review/agents/` and keep the
 #: reference rules #3530 gave them.
+#: Audited against both playbooks on 2026-08-31: `Agent tool` (ORCHESTRATION
+#: lines 556 and 918) is the ONLY harness-specific capability either one names.
+#: No Skills, no MCP, no glean, no WebFetch, no TodoWrite — everything else is
+#: bash, gh, git and file reads, all of which opencode has. So subagent
+#: registration was the whole gap, and the resolve playbook needs nothing: it
+#: has no agents directory and dispatches none.
+#:
+#: `adversarial.md` is deliberately absent from this list — Wave 2 is skipped
+#: in this lane (see the review prompt), so registering it would advertise a
+#: capability the phase is told not to use.
 PHASE2_AGENTS = (
     "correctness",
     "quality",
