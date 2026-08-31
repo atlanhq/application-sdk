@@ -1,0 +1,36 @@
+# actionlint configuration.
+#
+# Enabled after three consecutive @sdk-loop startup failures that a schema
+# validator would have caught before merge: a duplicate `description` key, and
+# a `needs.<job>` reference to a job the caller did not depend on. Both make
+# GitHub refuse to parse the workflow, and a workflow GitHub will not parse
+# runs NO jobs — so the symptom is silence, not an error, and CI stays green
+# while the lane is dead.
+#
+# Turned on as a ratchet: new and edited workflows are validated now, and the
+# pre-existing findings below are grandfathered so this lands green rather than
+# blocking every unrelated PR. Each has a ticket-shaped note; removing an entry
+# is the fix, not the goal being deferred forever.
+self-hosted-runner:
+  labels: []
+
+paths:
+  # `job.workflow_sha` does not exist — the `job` context has no such property,
+  # so `ref:` resolves to EMPTY and checkout silently takes the default branch
+  # instead of the pinned sha. A real bug, in the reusable workflows the whole
+  # connector fleet calls. Deliberately NOT fixed here: changing the checkout
+  # ref of the fleet's test harness does not belong in a CI-plumbing PR.
+  .github/workflows/tests-reusable.yaml:
+    ignore:
+      - 'property "workflow_sha" is not defined'
+  .github/workflows/e2e-full-reusable.yaml:
+    ignore:
+      - 'property "workflow_sha" is not defined'
+  # `app_repo_read_token` is not a declared secret, so it resolves to empty.
+  .github/workflows/v3-readiness-check.yaml:
+    ignore:
+      - 'property "app_repo_read_token" is not defined'
+  # Dead `if: false` branch, harmless but flagged.
+  .github/workflows/build-and-publish-app.yaml:
+    ignore:
+      - 'constant expression "false" in condition'

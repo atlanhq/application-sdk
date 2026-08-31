@@ -18,6 +18,24 @@ repos:
       - id: check-yaml
         name: check-yaml (GitHub composite-action manifests)
         files: ^\.github/actions/.*/action\.ya?ml$
+  # Validate workflows against GitHub's ACTUAL schema, not a parser that is
+  # more permissive than the one that will reject them. Three consecutive
+  # @sdk-loop startup failures reached main because every local check used
+  # yaml.safe_load — which accepts duplicate keys — while GitHub refused to
+  # parse the file. A workflow GitHub cannot parse runs NO jobs, so the symptom
+  # is silence and CI stays green while the lane is dead. actionlint catches
+  # that class (duplicate keys, undefined `needs.<job>` references, unknown
+  # context properties) at commit time.
+  #
+  # shellcheck is disabled for now: it reports 64 pre-existing findings in
+  # `run:` blocks, which are a separate and much lower-stakes concern than a
+  # workflow that will not start. Config and grandfathered findings live in
+  # .github/actionlint.yaml.
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
+        args: ['-shellcheck=']
   - repo: https://github.com/pycqa/isort
     rev: 5.13.2
     hooks:

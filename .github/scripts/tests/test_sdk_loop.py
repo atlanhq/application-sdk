@@ -777,6 +777,21 @@ def test_every_output_the_chain_reads_is_actually_exported() -> None:
     assert not (read - exported), f"not exported: {sorted(read - exported)}"
 
 
+def test_the_workflow_grants_every_scope_its_own_gh_calls_need() -> None:
+    """An explicit `permissions:` block makes everything unlisted `none`, and a
+    403 in the fence raises before it can post — so a missing scope shows up as
+    silence, not as an error. `gh run list` needs actions:read; `gh pr comment`
+    needs pull-requests:write."""
+    perms = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["permissions"]
+    fence = (
+        pathlib.Path(__file__).resolve().parents[1] / "sdk_loop_fence.py"
+    ).read_text(encoding="utf-8")
+    if '"run",' in fence and '"list",' in fence:
+        assert perms.get("actions") == "read", "gh run list needs actions: read"
+    if '"gh", "pr", "comment"' in fence:
+        assert perms.get("pull-requests") == "write"
+
+
 def test_no_job_reads_outputs_from_a_job_it_does_not_need() -> None:
     """GitHub rejects the WHOLE workflow at parse time for this, so no job runs
     and the fence never gets to say why — the user sees total silence from a
