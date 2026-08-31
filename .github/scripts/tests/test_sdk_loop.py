@@ -27,17 +27,20 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from _gha_expr import evaluate  # noqa: E402
 from sdk_loop_common import (  # noqa: E402
     ALLOWED_MODELS,
+    DEFAULT_MAX_USD,
     MAX_ROUNDS,
     PROVIDER,
     RESOLVE_MODEL,
     REVIEW_MODEL,
     AgentResult,
     DismissalLedger,
+    budget_exceeded,
     gateway_base,
     head_state,
     opencode_config,
     parse_reviewed_head,
     parse_verdict,
+    run_budget,
 )
 from sdk_loop_fence import decide, find_live_run, is_authorized  # noqa: E402
 from sdk_loop_finalize import Round, parse_rounds, render  # noqa: E402
@@ -54,6 +57,7 @@ from sdk_loop_phase import (  # noqa: E402
     parse_dismissals,
     resolve_prompt,
     review_prompt,
+    running_total,
 )
 
 WORKFLOW = pathlib.Path(__file__).resolve().parents[2] / "workflows" / "sdk-loop.yml"
@@ -260,6 +264,25 @@ def test_the_resolver_is_told_not_to_trigger_a_review() -> None:
     assert "SDK_LOOP_DISMISSED:" in prompt
 
 
+def test_round_one_gets_no_delta_range() -> None:
+    assert "git diff" not in review_prompt(42, 1, "a" * 40, DismissalLedger())
+
+
+def test_a_later_round_is_handed_the_incremental_range() -> None:
+    prompt = review_prompt(42, 3, "b" * 40, DismissalLedger(), prior_sha="a" * 40)
+    assert f"git diff {'a' * 40}..{'b' * 40}" in prompt
+
+
+def test_the_delta_range_never_narrows_the_review() -> None:
+    """§2e' forbids diff-scoping anything above Nit: a regression the resolver
+    just introduced two files away must still be caught. Handing over the range
+    is a labelling convenience, and the prompt has to say so or a model will
+    reasonably read it as permission to skip the rest."""
+    prompt = review_prompt(42, 3, "b" * 40, DismissalLedger(), prior_sha="a" * 40)
+    assert "Do NOT narrow the review to it" in prompt
+    assert "any line of the PR" in prompt
+
+
 def test_the_review_prompt_references_the_playbook_and_never_restates_it() -> None:
     prompt = review_prompt(42, 3, "a" * 40, DismissalLedger())
     assert ".mothership/pr-review/ORCHESTRATION.md" in prompt
@@ -345,6 +368,54 @@ def test_the_ledger_tells_the_next_review_not_to_re_raise() -> None:
 
 def test_an_empty_ledger_adds_nothing_to_the_prompt() -> None:
     assert DismissalLedger().as_prompt_section() == ""
+
+
+# ---------------------------------------------------------------------------
+# Budget — the ceiling that makes a runaway loop impossible
+# ---------------------------------------------------------------------------
+
+
+def test_the_default_ceiling_is_sized_from_real_runs() -> None:
+    # 61 stamped sdk-review runs in this repo: median $8.24 a review. 8
+    # unbounded round-pairs is ~$130 on one PR; 25 buys the 2-3 rounds the
+    # playbook says convergence typically takes.
+    assert DEFAULT_MAX_USD == 25.0
+
+
+def test_the_ceiling_is_tunable_without_a_code_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SDK_LOOP_MAX_USD", "40")
+    assert run_budget() == 40.0
+
+
+@pytest.mark.parametrize("raw", ["", "junk", "0", "-5"])
+def test_a_nonsense_ceiling_falls_back_rather_than_disabling_the_guard(
+    raw: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A typo'd variable must not read as "unlimited".
+    monkeypatch.setenv("SDK_LOOP_MAX_USD", raw)
+    assert run_budget() == DEFAULT_MAX_USD
+
+
+def test_a_run_at_its_ceiling_is_refused() -> None:
+    assert budget_exceeded(25.0, 25.0)
+    assert budget_exceeded(26.0, 25.0)
+    assert not budget_exceeded(24.99, 25.0)
+
+
+def test_unmeasurable_spend_never_blocks_the_loop() -> None:
+    """A gateway that cannot report spend is a metrics outage, not evidence of
+    overspend. Turning one into a stalled lane is the wrong trade — the round
+    cap still bounds the worst case."""
+    assert not budget_exceeded(None, 25.0)
+
+
+def test_the_tally_treats_an_unmeasured_phase_as_a_gap_not_a_zero() -> None:
+    assert running_total(1.0, 0.5) == 1.5
+    assert running_total(None, 0.5) == 0.5
+    assert running_total(2.0, None) == 2.0
+    assert running_total(None, None) is None
 
 
 # ---------------------------------------------------------------------------

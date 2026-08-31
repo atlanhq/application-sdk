@@ -49,12 +49,16 @@ from sdk_loop_common import (
     REVIEW_MODEL,
     AgentResult,
     DismissalLedger,
+    budget_exceeded,
     emit_outputs,
+    gateway_spend,
     head_state,
     is_verdict_comment,
     parse_reviewed_head,
     parse_verdict,
     run_agent,
+    run_budget,
+    spend_delta,
 )
 
 #: Wall-clock per phase. Review is the slower of the two: it walks the whole
@@ -71,6 +75,25 @@ OUTCOME_REAIM = "reaim"
 OUTCOME_NO_PROGRESS = "no_progress"
 OUTCOME_TERMINAL_VERDICT = "terminal_verdict"
 OUTCOME_FAILED = "failed"
+#: Refused before starting, because the run has spent its allowance.
+OUTCOME_BUDGET = "budget_exhausted"
+
+
+def _as_float(raw: str | None) -> float | None:
+    """Cumulative spend handed down the chain; empty means not measured."""
+    if not (raw or "").strip():
+        return None
+    try:
+        return float(raw)  # type: ignore[arg-type]
+    except ValueError:
+        return None
+
+
+def running_total(spent_so_far: float | None, phase_cost: float | None) -> float | None:
+    """Carry the tally forward, treating an unmeasured phase as a gap not a zero."""
+    if spent_so_far is None and phase_cost is None:
+        return None
+    return (spent_so_far or 0.0) + (phase_cost or 0.0)
 
 
 def _sh(args: list[str], runner: Callable[..., Any] = subprocess.run, **kw: Any) -> Any:
@@ -95,7 +118,13 @@ def live_head(
 # --------------------------------------------------------------------------
 
 
-def review_prompt(pr: int, round_no: int, sha: str, ledger: DismissalLedger) -> str:
+def review_prompt(
+    pr: int,
+    round_no: int,
+    sha: str,
+    ledger: DismissalLedger,
+    prior_sha: str = "",
+) -> str:
     """Point the agent at the playbook. The playbook is NOT restated here.
 
     Everything about what a good review is lives in
@@ -115,6 +144,22 @@ def review_prompt(pr: int, round_no: int, sha: str, ledger: DismissalLedger) -> 
         "to push, and do not treat a push failure as something to work around.",
         "",
     ]
+    if prior_sha:
+        # Handed over so §2e labelling and the §2e′ nit rules do not have to
+        # re-derive the range. It is ADDITIONAL context, never a substitute for
+        # the full diff: §2e′ is explicit that Critical/High/Important findings
+        # are raised on any line, including code the resolver just pushed, so a
+        # delta-scoped review would hide precisely the regressions this loop is
+        # most likely to introduce.
+        parts += [
+            f"A previous round of this run reviewed {prior_sha}. The incremental",
+            f"change since then is `git diff {prior_sha}..{sha}`.",
+            "",
+            "Use it for §2e labelling (RESOLVED / STILL PRESENT / NEW) and for the",
+            "§2e′ nit rules. Do NOT narrow the review to it — Critical, High and",
+            "Important findings are still raised on any line of the PR.",
+            "",
+        ]
     section = ledger.as_prompt_section()
     if section:
         parts.append(section)
@@ -344,11 +389,30 @@ def main(argv: list[str] | None = None) -> int:
         print(f"re-aim: head is {state.live[:8]}, expected {baseline[:8]}")
         return 0
 
+    # Budget before work: a phase refused at the boundary costs nothing, while
+    # one killed mid-flight is money spent for no verdict and no fix.
+    spent_so_far = _as_float(os.environ.get("SPENT_SO_FAR"))
+    budget = run_budget()
+    if budget_exceeded(spent_so_far, budget):
+        emit_outputs(
+            outcome=OUTCOME_BUDGET,
+            spent_total=f"{spent_so_far:.4f}",
+            new_base_sha=state.live,
+            detail=f"run has spent ${spent_so_far:,.2f} of its ${budget:,.2f} allowance",
+        )
+        print(f"budget: ${spent_so_far:.2f} of ${budget:.2f} spent — refusing round")
+        return 0
+
     workspace = os.environ.get("GITHUB_WORKSPACE", ".")
+    # Bracket the agent call, not the whole job: checkout and token minting
+    # cost nothing and would only widen the window other traffic can leak into.
+    spend_before = gateway_spend()
     if phase == "review":
         result = run_agent(
             REVIEW_MODEL,
-            review_prompt(pr, round_no, state.live, ledger),
+            review_prompt(
+                pr, round_no, state.live, ledger, os.environ.get("PRIOR_SHA", "")
+            ),
             workspace,
             TIMEOUT_REVIEW_S,
         )
@@ -359,6 +423,7 @@ def main(argv: list[str] | None = None) -> int:
             or "[]"
         )
         outcome = interpret_review(result, newest_verdict(comments), state.live)
+        cost = spend_delta(spend_before, gateway_spend())
         emit_outputs(
             outcome=outcome.outcome,
             verdict=outcome.verdict,
@@ -366,6 +431,12 @@ def main(argv: list[str] | None = None) -> int:
             verdict_url=outcome.verdict_url,
             detail=outcome.detail,
             new_base_sha=state.live,
+            cost="" if cost is None else f"{cost:.4f}",
+            spent_total=(
+                ""
+                if running_total(spent_so_far, cost) is None
+                else f"{running_total(spent_so_far, cost):.4f}"
+            ),
         )
         print(f"review round {round_no}: {outcome.outcome} {outcome.verdict}")
         return 0 if outcome.outcome != OUTCOME_FAILED else 1
@@ -382,6 +453,7 @@ def main(argv: list[str] | None = None) -> int:
         after = live_head(repo, head_ref)
         dismissals = parse_dismissals(f"{result.stdout}\n{result.stderr}")
         outcome = interpret_resolve(result, bool(dirty), before, after, dismissals)
+        cost = spend_delta(spend_before, gateway_spend())
         for entry in outcome.dismissals:
             ledger.add(entry["id"], entry["rationale"], round_no)
         emit_outputs(
@@ -390,6 +462,12 @@ def main(argv: list[str] | None = None) -> int:
             new_base_sha=after,
             ledger=ledger.to_json(),
             detail=outcome.detail,
+            cost="" if cost is None else f"{cost:.4f}",
+            spent_total=(
+                ""
+                if running_total(spent_so_far, cost) is None
+                else f"{running_total(spent_so_far, cost):.4f}"
+            ),
         )
         print(f"resolve round {round_no}: {outcome.outcome}")
         return 0 if outcome.outcome != OUTCOME_FAILED else 1

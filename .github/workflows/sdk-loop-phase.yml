@@ -52,6 +52,16 @@ on:
         type: string
         required: false
         default: ''
+      prior_sha:
+        type: string
+        required: false
+        default: ''
+      spent_so_far:
+        type: string
+        required: false
+        default: ''
+        description: 'USD this run has spent already. The phase refuses to start once it reaches the allowance.'
+        description: 'Sha the previous round reviewed, for delta labelling. Never narrows the review.'
     secrets:
       LITELLM_API_KEY:
         required: true
@@ -71,6 +81,8 @@ on:
         value: ${{ jobs.phase.outputs.verdict }}
       verdict_url:
         value: ${{ jobs.phase.outputs.verdict_url }}
+      reviewed_head:
+        value: ${{ jobs.phase.outputs.reviewed_head }}
       new_base_sha:
         value: ${{ jobs.phase.outputs.new_base_sha }}
       pushed_sha:
@@ -79,6 +91,10 @@ on:
         value: ${{ jobs.phase.outputs.ledger }}
       detail:
         value: ${{ jobs.phase.outputs.detail }}
+      cost:
+        value: ${{ jobs.phase.outputs.cost }}
+      spent_total:
+        value: ${{ jobs.phase.outputs.spent_total }}
 
 permissions:
   contents: read
@@ -94,10 +110,13 @@ jobs:
       outcome: ${{ steps.run.outputs.outcome }}
       verdict: ${{ steps.run.outputs.verdict }}
       verdict_url: ${{ steps.run.outputs.verdict_url }}
+      reviewed_head: ${{ steps.run.outputs.reviewed_head }}
       new_base_sha: ${{ steps.run.outputs.new_base_sha }}
       pushed_sha: ${{ steps.run.outputs.pushed_sha }}
       ledger: ${{ steps.run.outputs.ledger }}
       detail: ${{ steps.run.outputs.detail }}
+      cost: ${{ steps.run.outputs.cost }}
+      spent_total: ${{ steps.run.outputs.spent_total }}
     steps:
       - name: Mint a scoped App token
         id: app-token
@@ -136,8 +155,17 @@ jobs:
         with:
           python-version: '3.12'
 
+      # A loop is up to 17 phase jobs, each on a fresh runner, so anything
+      # installed per job is paid for 17 times. Cache the global npm store so
+      # only the first job of a run pays the download.
+      - name: Cache the opencode install
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: ~/.npm
+          key: opencode-${{ runner.os }}-0.6.3
+
       - name: Install opencode
-        run: npm install -g opencode-ai@0.6.3
+        run: npm install -g --prefer-offline opencode-ai@0.6.3
 
       - name: Configure git identity for the resolve phase
         if: inputs.phase == 'resolve'
@@ -162,6 +190,9 @@ jobs:
           OURS: ${{ inputs.ours }}
           LEDGER: ${{ inputs.ledger }}
           VERDICT_URL: ${{ inputs.verdict_url }}
+          PRIOR_SHA: ${{ inputs.prior_sha }}
+          SPENT_SO_FAR: ${{ inputs.spent_so_far }}
+          SDK_LOOP_MAX_USD: ${{ vars.SDK_LOOP_MAX_USD }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
           LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL }}

@@ -37,6 +37,7 @@ import os
 import re
 import shutil
 import subprocess
+import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
@@ -305,6 +306,96 @@ def opencode_config(model: str) -> dict[str, Any]:
             "webfetch": "deny",
         },
     }
+
+
+# --------------------------------------------------------------------------
+# Cost
+# --------------------------------------------------------------------------
+
+
+def parse_key_spend(payload: dict[str, Any]) -> float | None:
+    """Cumulative USD on the key, from a LiteLLM ``/key/info`` body."""
+    info = payload.get("info") or {}
+    spend = info.get("spend")
+    return float(spend) if isinstance(spend, (int, float)) else None
+
+
+def gateway_spend() -> float | None:
+    """Cumulative USD spend on this gateway key, or None if unreadable.
+
+    None means exactly that — endpoint disabled, key lacks permission, gateway
+    unreachable. Callers must report "unavailable" rather than substitute a
+    zero: a run that silently claims $0.00 is worse than one that admits it
+    could not measure.
+    """
+    key = os.environ.get("LITELLM_API_KEY", "")
+    if not key:
+        return None
+    request = urllib.request.Request(f"{gateway_base()}/key/info")
+    request.add_header("Authorization", f"Bearer {key}")
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return parse_key_spend(json.loads(response.read()))
+    except Exception:
+        return None
+
+
+def spend_delta(before: float | None, after: float | None) -> float | None:
+    """Cost of a phase, as the movement in key spend across it.
+
+    The key is the billing unit, not the run — so this is only the phase's own
+    cost when nothing else billed to the same key during the window. This lane
+    runs PRs fully in parallel and shares its key with other automation, so
+    treat the figure as an UPPER BOUND on the phase and say so wherever it is
+    shown. Attributing precisely would need per-request tagging the gateway
+    does not currently give us.
+
+    A negative delta is not possible from our own usage; it means the counter
+    reset or rolled over, so the measurement is discarded rather than reported
+    as a saving.
+    """
+    if before is None or after is None:
+        return None
+    delta = after - before
+    return delta if delta >= 0 else None
+
+
+#: Default ceiling on what one loop may spend, in USD. Sized from 61 real
+#: sdk-review runs in this repo: median $8.24 a review, and cost is almost
+#: uncorrelated with PR size (r=0.20) because the fixed playbook and the
+#: per-finding verification dominate, not the diff. At that rate 8 unbounded
+#: round-pairs is ~$130 on one PR. 25 buys the 2-3 rounds the playbook says
+#: convergence typically takes, and stops the runaway.
+DEFAULT_MAX_USD = 25.0
+
+
+def run_budget() -> float:
+    raw = (os.environ.get("SDK_LOOP_MAX_USD") or "").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_MAX_USD
+    return value if value > 0 else DEFAULT_MAX_USD
+
+
+def budget_exceeded(spent: float | None, budget: float) -> bool:
+    """Whether the NEXT phase should be refused.
+
+    Checked before a phase starts, never mid-flight: a half-finished review is
+    money spent for nothing, so the loop stops on a round boundary where the
+    work so far is still worth something.
+
+    Unmeasurable spend (None) never blocks. The gateway failing to report is
+    not evidence of overspend, and turning a metrics outage into a stalled lane
+    would be the wrong trade — the round cap still bounds the worst case.
+    """
+    if spent is None:
+        return False
+    return spent >= budget
+
+
+def format_usd(amount: float | None) -> str:
+    return "unavailable" if amount is None else f"${amount:,.4f}"
 
 
 #: Env the agent process inherits. An allowlist, not the runner's whole

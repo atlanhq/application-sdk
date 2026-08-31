@@ -121,6 +121,8 @@ jobs:
       base_sha: ${{ needs.fence.outputs.base_sha }}
       ours: ''
       ledger: ''
+      prior_sha: ''
+      spent_so_far: ''
 
   resolve-1:
     needs: [fence, review-1]
@@ -135,6 +137,7 @@ jobs:
       head_ref: ${{ needs.fence.outputs.head_ref }}
       base_sha: ${{ needs.review-1.outputs.new_base_sha }}
       verdict_url: ${{ needs.review-1.outputs.verdict_url }}
+      spent_so_far: ${{ needs.review-1.outputs.spent_total }}
       ledger: ''
 
   review-2:
@@ -151,6 +154,8 @@ jobs:
       base_sha: ${{ needs.resolve-1.outputs.new_base_sha || needs.review-1.outputs.new_base_sha }}
       ours: ${{ needs.resolve-1.outputs.pushed_sha }}
       ledger: ${{ needs.resolve-1.outputs.ledger }}
+      prior_sha: ${{ needs.review-1.outputs.reviewed_head }}
+      spent_so_far: ${{ needs.resolve-1.outputs.spent_total || needs.review-1.outputs.spent_total }}
 
   resolve-2:
     needs: [fence, review-2]
@@ -165,6 +170,7 @@ jobs:
       head_ref: ${{ needs.fence.outputs.head_ref }}
       base_sha: ${{ needs.review-2.outputs.new_base_sha }}
       verdict_url: ${{ needs.review-2.outputs.verdict_url }}
+      spent_so_far: ${{ needs.review-2.outputs.spent_total }}
       ledger: ${{ needs.resolve-1.outputs.ledger }}
 
   review-3:
@@ -181,6 +187,8 @@ jobs:
       base_sha: ${{ needs.resolve-2.outputs.new_base_sha || needs.review-2.outputs.new_base_sha }}
       ours: ${{ needs.resolve-2.outputs.pushed_sha }}
       ledger: ${{ needs.resolve-2.outputs.ledger }}
+      prior_sha: ${{ needs.review-2.outputs.reviewed_head }}
+      spent_so_far: ${{ needs.resolve-2.outputs.spent_total || needs.review-2.outputs.spent_total }}
 
   resolve-3:
     needs: [fence, review-3]
@@ -195,6 +203,7 @@ jobs:
       head_ref: ${{ needs.fence.outputs.head_ref }}
       base_sha: ${{ needs.review-3.outputs.new_base_sha }}
       verdict_url: ${{ needs.review-3.outputs.verdict_url }}
+      spent_so_far: ${{ needs.review-3.outputs.spent_total }}
       ledger: ${{ needs.resolve-2.outputs.ledger }}
 
   review-4:
@@ -211,6 +220,8 @@ jobs:
       base_sha: ${{ needs.resolve-3.outputs.new_base_sha || needs.review-3.outputs.new_base_sha }}
       ours: ${{ needs.resolve-3.outputs.pushed_sha }}
       ledger: ${{ needs.resolve-3.outputs.ledger }}
+      prior_sha: ${{ needs.review-3.outputs.reviewed_head }}
+      spent_so_far: ${{ needs.resolve-3.outputs.spent_total || needs.review-3.outputs.spent_total }}
 
   resolve-4:
     needs: [fence, review-4]
@@ -225,6 +236,7 @@ jobs:
       head_ref: ${{ needs.fence.outputs.head_ref }}
       base_sha: ${{ needs.review-4.outputs.new_base_sha }}
       verdict_url: ${{ needs.review-4.outputs.verdict_url }}
+      spent_so_far: ${{ needs.review-4.outputs.spent_total }}
       ledger: ${{ needs.resolve-3.outputs.ledger }}
 
   review-5:
@@ -241,6 +253,8 @@ jobs:
       base_sha: ${{ needs.resolve-4.outputs.new_base_sha || needs.review-4.outputs.new_base_sha }}
       ours: ${{ needs.resolve-4.outputs.pushed_sha }}
       ledger: ${{ needs.resolve-4.outputs.ledger }}
+      prior_sha: ${{ needs.review-4.outputs.reviewed_head }}
+      spent_so_far: ${{ needs.resolve-4.outputs.spent_total || needs.review-4.outputs.spent_total }}
 
   resolve-5:
     needs: [fence, review-5]
@@ -255,6 +269,7 @@ jobs:
       head_ref: ${{ needs.fence.outputs.head_ref }}
       base_sha: ${{ needs.review-5.outputs.new_base_sha }}
       verdict_url: ${{ needs.review-5.outputs.verdict_url }}
+      spent_so_far: ${{ needs.review-5.outputs.spent_total }}
       ledger: ${{ needs.resolve-4.outputs.ledger }}
 
   review-6:
@@ -271,6 +286,8 @@ jobs:
       base_sha: ${{ needs.resolve-5.outputs.new_base_sha || needs.review-5.outputs.new_base_sha }}
       ours: ${{ needs.resolve-5.outputs.pushed_sha }}
       ledger: ${{ needs.resolve-5.outputs.ledger }}
+      prior_sha: ${{ needs.review-5.outputs.reviewed_head }}
+      spent_so_far: ${{ needs.resolve-5.outputs.spent_total || needs.review-5.outputs.spent_total }}
 
   resolve-6:
     needs: [fence, review-6]
@@ -285,6 +302,7 @@ jobs:
       head_ref: ${{ needs.fence.outputs.head_ref }}
       base_sha: ${{ needs.review-6.outputs.new_base_sha }}
       verdict_url: ${{ needs.review-6.outputs.verdict_url }}
+      spent_so_far: ${{ needs.review-6.outputs.spent_total }}
       ledger: ${{ needs.resolve-5.outputs.ledger }}
 
   review-7:
@@ -301,6 +319,8 @@ jobs:
       base_sha: ${{ needs.resolve-6.outputs.new_base_sha || needs.review-6.outputs.new_base_sha }}
       ours: ${{ needs.resolve-6.outputs.pushed_sha }}
       ledger: ${{ needs.resolve-6.outputs.ledger }}
+      prior_sha: ${{ needs.review-6.outputs.reviewed_head }}
+      spent_so_far: ${{ needs.resolve-6.outputs.spent_total || needs.review-6.outputs.spent_total }}
 
   resolve-7:
     needs: [fence, review-7]
@@ -315,6 +335,7 @@ jobs:
       head_ref: ${{ needs.fence.outputs.head_ref }}
       base_sha: ${{ needs.review-7.outputs.new_base_sha }}
       verdict_url: ${{ needs.review-7.outputs.verdict_url }}
+      spent_so_far: ${{ needs.review-7.outputs.spent_total }}
       ledger: ${{ needs.resolve-6.outputs.ledger }}
 
   review-8:
@@ -331,6 +352,8 @@ jobs:
       base_sha: ${{ needs.resolve-7.outputs.new_base_sha || needs.review-7.outputs.new_base_sha }}
       ours: ${{ needs.resolve-7.outputs.pushed_sha }}
       ledger: ${{ needs.resolve-7.outputs.ledger }}
+      prior_sha: ${{ needs.review-7.outputs.reviewed_head }}
+      spent_so_far: ${{ needs.resolve-7.outputs.spent_total || needs.review-7.outputs.spent_total }}
 
   resolve-8:
     needs: [fence, review-8]
@@ -345,6 +368,7 @@ jobs:
       head_ref: ${{ needs.fence.outputs.head_ref }}
       base_sha: ${{ needs.review-8.outputs.new_base_sha }}
       verdict_url: ${{ needs.review-8.outputs.verdict_url }}
+      spent_so_far: ${{ needs.review-8.outputs.spent_total }}
       ledger: ${{ needs.resolve-7.outputs.ledger }}
 
   finalize:
@@ -364,5 +388,5 @@ jobs:
           PR_NUMBER: ${{ needs.fence.outputs.pr }}
           GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           STOP_REASON: ${{ needs.resolve-8.outputs.outcome || needs.review-8.outputs.outcome || needs.resolve-7.outputs.outcome || needs.review-7.outputs.outcome || needs.resolve-6.outputs.outcome || needs.review-6.outputs.outcome || needs.resolve-5.outputs.outcome || needs.review-5.outputs.outcome || needs.resolve-4.outputs.outcome || needs.review-4.outputs.outcome || needs.resolve-3.outputs.outcome || needs.review-3.outputs.outcome || needs.resolve-2.outputs.outcome || needs.review-2.outputs.outcome || needs.resolve-1.outputs.outcome || needs.review-1.outputs.outcome || 'failed' }}
-          ROUNDS_JSON: '[{"number":1,"phase":"review","outcome":"${{ needs.review-1.outputs.outcome }}","verdict":"${{ needs.review-1.outputs.verdict }}","sha":"${{ needs.review-1.outputs.new_base_sha }}","detail":"${{ needs.review-1.outputs.detail }}"},{"number":1,"phase":"resolve","outcome":"${{ needs.resolve-1.outputs.outcome }}","verdict":"${{ needs.resolve-1.outputs.verdict }}","sha":"${{ needs.resolve-1.outputs.new_base_sha }}","detail":"${{ needs.resolve-1.outputs.detail }}"},{"number":2,"phase":"review","outcome":"${{ needs.review-2.outputs.outcome }}","verdict":"${{ needs.review-2.outputs.verdict }}","sha":"${{ needs.review-2.outputs.new_base_sha }}","detail":"${{ needs.review-2.outputs.detail }}"},{"number":2,"phase":"resolve","outcome":"${{ needs.resolve-2.outputs.outcome }}","verdict":"${{ needs.resolve-2.outputs.verdict }}","sha":"${{ needs.resolve-2.outputs.new_base_sha }}","detail":"${{ needs.resolve-2.outputs.detail }}"},{"number":3,"phase":"review","outcome":"${{ needs.review-3.outputs.outcome }}","verdict":"${{ needs.review-3.outputs.verdict }}","sha":"${{ needs.review-3.outputs.new_base_sha }}","detail":"${{ needs.review-3.outputs.detail }}"},{"number":3,"phase":"resolve","outcome":"${{ needs.resolve-3.outputs.outcome }}","verdict":"${{ needs.resolve-3.outputs.verdict }}","sha":"${{ needs.resolve-3.outputs.new_base_sha }}","detail":"${{ needs.resolve-3.outputs.detail }}"},{"number":4,"phase":"review","outcome":"${{ needs.review-4.outputs.outcome }}","verdict":"${{ needs.review-4.outputs.verdict }}","sha":"${{ needs.review-4.outputs.new_base_sha }}","detail":"${{ needs.review-4.outputs.detail }}"},{"number":4,"phase":"resolve","outcome":"${{ needs.resolve-4.outputs.outcome }}","verdict":"${{ needs.resolve-4.outputs.verdict }}","sha":"${{ needs.resolve-4.outputs.new_base_sha }}","detail":"${{ needs.resolve-4.outputs.detail }}"},{"number":5,"phase":"review","outcome":"${{ needs.review-5.outputs.outcome }}","verdict":"${{ needs.review-5.outputs.verdict }}","sha":"${{ needs.review-5.outputs.new_base_sha }}","detail":"${{ needs.review-5.outputs.detail }}"},{"number":5,"phase":"resolve","outcome":"${{ needs.resolve-5.outputs.outcome }}","verdict":"${{ needs.resolve-5.outputs.verdict }}","sha":"${{ needs.resolve-5.outputs.new_base_sha }}","detail":"${{ needs.resolve-5.outputs.detail }}"},{"number":6,"phase":"review","outcome":"${{ needs.review-6.outputs.outcome }}","verdict":"${{ needs.review-6.outputs.verdict }}","sha":"${{ needs.review-6.outputs.new_base_sha }}","detail":"${{ needs.review-6.outputs.detail }}"},{"number":6,"phase":"resolve","outcome":"${{ needs.resolve-6.outputs.outcome }}","verdict":"${{ needs.resolve-6.outputs.verdict }}","sha":"${{ needs.resolve-6.outputs.new_base_sha }}","detail":"${{ needs.resolve-6.outputs.detail }}"},{"number":7,"phase":"review","outcome":"${{ needs.review-7.outputs.outcome }}","verdict":"${{ needs.review-7.outputs.verdict }}","sha":"${{ needs.review-7.outputs.new_base_sha }}","detail":"${{ needs.review-7.outputs.detail }}"},{"number":7,"phase":"resolve","outcome":"${{ needs.resolve-7.outputs.outcome }}","verdict":"${{ needs.resolve-7.outputs.verdict }}","sha":"${{ needs.resolve-7.outputs.new_base_sha }}","detail":"${{ needs.resolve-7.outputs.detail }}"},{"number":8,"phase":"review","outcome":"${{ needs.review-8.outputs.outcome }}","verdict":"${{ needs.review-8.outputs.verdict }}","sha":"${{ needs.review-8.outputs.new_base_sha }}","detail":"${{ needs.review-8.outputs.detail }}"},{"number":8,"phase":"resolve","outcome":"${{ needs.resolve-8.outputs.outcome }}","verdict":"${{ needs.resolve-8.outputs.verdict }}","sha":"${{ needs.resolve-8.outputs.new_base_sha }}","detail":"${{ needs.resolve-8.outputs.detail }}"}]'
+          ROUNDS_JSON: '[{"number":1,"phase":"review","outcome":"${{ needs.review-1.outputs.outcome }}","verdict":"${{ needs.review-1.outputs.verdict }}","sha":"${{ needs.review-1.outputs.new_base_sha }}","detail":"${{ needs.review-1.outputs.detail }}","cost":"${{ needs.review-1.outputs.cost }}"},{"number":1,"phase":"resolve","outcome":"${{ needs.resolve-1.outputs.outcome }}","verdict":"${{ needs.resolve-1.outputs.verdict }}","sha":"${{ needs.resolve-1.outputs.new_base_sha }}","detail":"${{ needs.resolve-1.outputs.detail }}","cost":"${{ needs.resolve-1.outputs.cost }}"},{"number":2,"phase":"review","outcome":"${{ needs.review-2.outputs.outcome }}","verdict":"${{ needs.review-2.outputs.verdict }}","sha":"${{ needs.review-2.outputs.new_base_sha }}","detail":"${{ needs.review-2.outputs.detail }}","cost":"${{ needs.review-2.outputs.cost }}"},{"number":2,"phase":"resolve","outcome":"${{ needs.resolve-2.outputs.outcome }}","verdict":"${{ needs.resolve-2.outputs.verdict }}","sha":"${{ needs.resolve-2.outputs.new_base_sha }}","detail":"${{ needs.resolve-2.outputs.detail }}","cost":"${{ needs.resolve-2.outputs.cost }}"},{"number":3,"phase":"review","outcome":"${{ needs.review-3.outputs.outcome }}","verdict":"${{ needs.review-3.outputs.verdict }}","sha":"${{ needs.review-3.outputs.new_base_sha }}","detail":"${{ needs.review-3.outputs.detail }}","cost":"${{ needs.review-3.outputs.cost }}"},{"number":3,"phase":"resolve","outcome":"${{ needs.resolve-3.outputs.outcome }}","verdict":"${{ needs.resolve-3.outputs.verdict }}","sha":"${{ needs.resolve-3.outputs.new_base_sha }}","detail":"${{ needs.resolve-3.outputs.detail }}","cost":"${{ needs.resolve-3.outputs.cost }}"},{"number":4,"phase":"review","outcome":"${{ needs.review-4.outputs.outcome }}","verdict":"${{ needs.review-4.outputs.verdict }}","sha":"${{ needs.review-4.outputs.new_base_sha }}","detail":"${{ needs.review-4.outputs.detail }}","cost":"${{ needs.review-4.outputs.cost }}"},{"number":4,"phase":"resolve","outcome":"${{ needs.resolve-4.outputs.outcome }}","verdict":"${{ needs.resolve-4.outputs.verdict }}","sha":"${{ needs.resolve-4.outputs.new_base_sha }}","detail":"${{ needs.resolve-4.outputs.detail }}","cost":"${{ needs.resolve-4.outputs.cost }}"},{"number":5,"phase":"review","outcome":"${{ needs.review-5.outputs.outcome }}","verdict":"${{ needs.review-5.outputs.verdict }}","sha":"${{ needs.review-5.outputs.new_base_sha }}","detail":"${{ needs.review-5.outputs.detail }}","cost":"${{ needs.review-5.outputs.cost }}"},{"number":5,"phase":"resolve","outcome":"${{ needs.resolve-5.outputs.outcome }}","verdict":"${{ needs.resolve-5.outputs.verdict }}","sha":"${{ needs.resolve-5.outputs.new_base_sha }}","detail":"${{ needs.resolve-5.outputs.detail }}","cost":"${{ needs.resolve-5.outputs.cost }}"},{"number":6,"phase":"review","outcome":"${{ needs.review-6.outputs.outcome }}","verdict":"${{ needs.review-6.outputs.verdict }}","sha":"${{ needs.review-6.outputs.new_base_sha }}","detail":"${{ needs.review-6.outputs.detail }}","cost":"${{ needs.review-6.outputs.cost }}"},{"number":6,"phase":"resolve","outcome":"${{ needs.resolve-6.outputs.outcome }}","verdict":"${{ needs.resolve-6.outputs.verdict }}","sha":"${{ needs.resolve-6.outputs.new_base_sha }}","detail":"${{ needs.resolve-6.outputs.detail }}","cost":"${{ needs.resolve-6.outputs.cost }}"},{"number":7,"phase":"review","outcome":"${{ needs.review-7.outputs.outcome }}","verdict":"${{ needs.review-7.outputs.verdict }}","sha":"${{ needs.review-7.outputs.new_base_sha }}","detail":"${{ needs.review-7.outputs.detail }}","cost":"${{ needs.review-7.outputs.cost }}"},{"number":7,"phase":"resolve","outcome":"${{ needs.resolve-7.outputs.outcome }}","verdict":"${{ needs.resolve-7.outputs.verdict }}","sha":"${{ needs.resolve-7.outputs.new_base_sha }}","detail":"${{ needs.resolve-7.outputs.detail }}","cost":"${{ needs.resolve-7.outputs.cost }}"},{"number":8,"phase":"review","outcome":"${{ needs.review-8.outputs.outcome }}","verdict":"${{ needs.review-8.outputs.verdict }}","sha":"${{ needs.review-8.outputs.new_base_sha }}","detail":"${{ needs.review-8.outputs.detail }}","cost":"${{ needs.review-8.outputs.cost }}"},{"number":8,"phase":"resolve","outcome":"${{ needs.resolve-8.outputs.outcome }}","verdict":"${{ needs.resolve-8.outputs.verdict }}","sha":"${{ needs.resolve-8.outputs.new_base_sha }}","detail":"${{ needs.resolve-8.outputs.detail }}","cost":"${{ needs.resolve-8.outputs.cost }}"}]'
         run: python3 .github/scripts/sdk_loop_finalize.py

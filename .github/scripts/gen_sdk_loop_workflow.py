@@ -175,6 +175,8 @@ def review_job(n: int) -> str:
         base = "${{ needs.fence.outputs.base_sha }}"
         ours = "''"
         ledger = "''"
+        prior_sha = "''"
+        spent = "''"
     else:
         prev_res, prev_rev = f"resolve-{n - 1}", f"review-{n - 1}"
         # Continue when the previous resolve made progress, or when either
@@ -192,6 +194,12 @@ def review_job(n: int) -> str:
         )
         ours = "${{ needs.%s.outputs.pushed_sha }}" % prev_res
         ledger = "${{ needs.%s.outputs.ledger }}" % prev_res
+        prior_sha = "${{ needs.%s.outputs.reviewed_head }}" % prev_rev
+        # Whichever of the pair ran last carries the live tally.
+        spent = (
+            "${{ needs.%s.outputs.spent_total || needs.%s.outputs.spent_total }}"
+            % (prev_res, prev_rev)
+        )
     return f"""
   review-{n}:
     needs: {needs}
@@ -207,6 +215,8 @@ def review_job(n: int) -> str:
       base_sha: {base}
       ours: {ours}
       ledger: {ledger}
+      prior_sha: {prior_sha}
+      spent_so_far: {spent}
 """
 
 
@@ -233,6 +243,7 @@ def resolve_job(n: int) -> str:
       head_ref: ${{{{ needs.fence.outputs.head_ref }}}}
       base_sha: ${{{{ needs.{prev}.outputs.new_base_sha }}}}
       verdict_url: ${{{{ needs.{prev}.outputs.verdict_url }}}}
+      spent_so_far: ${{{{ needs.{prev}.outputs.spent_total }}}}
       ledger: {"${{ needs.%s.outputs.ledger }}" % prev_res if prev_res else "''"}
 """
 
@@ -259,8 +270,9 @@ def _rounds_expr() -> str:
                 '{"number":%d,"phase":"%s","outcome":"${{ needs.%s.outputs.outcome }}",'
                 '"verdict":"${{ needs.%s.outputs.verdict }}",'
                 '"sha":"${{ needs.%s.outputs.new_base_sha }}",'
-                '"detail":"${{ needs.%s.outputs.detail }}"}'
-                % (n, phase, job, job, job, job)
+                '"detail":"${{ needs.%s.outputs.detail }}",'
+                '"cost":"${{ needs.%s.outputs.cost }}"}'
+                % (n, phase, job, job, job, job, job)
             )
     return "'[" + ",".join(rows) + "]'"
 
