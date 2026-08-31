@@ -35,12 +35,14 @@ Fixtures (import into conftest.py or test files)::
 
 from application_sdk.testing.fake_source import (
     Authorizer,
+    CursorPage,
     FakeRequest,
     FakeResponse,
     Handler,
     HandlerResult,
     HttpFakeSource,
     HttpFakeSourceFactory,
+    cursor_page,
 )
 from application_sdk.testing.fixtures import (
     app_context,
@@ -53,6 +55,15 @@ from application_sdk.testing.fixtures import (
     mock_secret_store,
     mock_state_store,
     restore_logger_init_flags,
+)
+from application_sdk.testing.golden import (
+    AssetMismatch,
+    DiffPolicy,
+    GoldenReport,
+    TypenameDiff,
+    TypenameRule,
+    assert_matches_golden,
+    diff_golden,
 )
 from application_sdk.testing.mocks import (
     MockBinding,
@@ -72,9 +83,13 @@ __all__ = [
     "ENVIRONMENT_SCOPED_FIELDS",
     "ENVIRONMENT_SCOPED_NESTED_FIELDS",
     "RUN_VOLATILE_FIELDS",
+    "AssetMismatch",
     "Authorizer",
+    "CursorPage",
+    "DiffPolicy",
     "FakeRequest",
     "FakeResponse",
+    "GoldenReport",
     "Handler",
     "HandlerResult",
     "HttpFakeSource",
@@ -85,9 +100,14 @@ __all__ = [
     "MockPubSub",
     "MockSecretStore",
     "MockStateStore",
+    "TypenameDiff",
+    "TypenameRule",
     "app_context",
+    "assert_matches_golden",
     "clean_app_registry",
     "clean_task_registry",
+    "cursor_page",
+    "diff_golden",
     "mock_binding",
     "mock_credential_store",
     "mock_heartbeat",

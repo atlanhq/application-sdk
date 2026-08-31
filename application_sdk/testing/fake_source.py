@@ -57,6 +57,7 @@ body that never arrives.
 
 from __future__ import annotations
 
+import base64
 import re
 import threading
 import time
@@ -853,3 +854,101 @@ class HttpFakeSourceFactory:
         sources, self._sources = self._sources, []
         for source in reversed(sources):
             source.stop()
+
+
+@dataclass(frozen=True)
+class CursorPage:
+    """One page of a cursor scheme; ``next_cursor`` is opaque, as a real one is.
+
+    The default token encodes only a position, but as base64 of an internal form
+    rather than a bare integer — a connector that parses the cursor instead of
+    echoing it back would pass against a fake that handed out plain offsets and
+    then fail against the real source. Pass ``encode``/``decode`` to
+    :func:`cursor_page` when the captured traffic shows a specific token format
+    the connector's loop depends on.
+
+    ``next_cursor`` is ``None`` on the last page. Some sources instead signal
+    exhaustion by echoing the *same* cursor back, and their clients loop until the
+    token stops changing; spell that in the envelope with
+    ``page.next_cursor or request.param("cursor")`` rather than changing the page.
+    """
+
+    items: Sequence[Any]
+    limit: int
+    total: int
+    next_cursor: str | None
+
+    @property
+    def has_more(self) -> bool:
+        """Whether any item remains after this page."""
+        return self.next_cursor is not None
+
+
+def cursor_page(
+    items: Sequence[Any],
+    request: FakeRequest,
+    *,
+    cursor_param: str = "cursor",
+    limit_param: str = "limit",
+    default_limit: int = 100,
+    max_limit: int | None = None,
+    encode: Callable[[int], str] | None = None,
+    decode: Callable[[str], int] | None = None,
+) -> CursorPage:
+    """Slice ``items`` per the request's cursor/limit parameters.
+
+    An absent cursor is the first page. An unparseable cursor also starts from the
+    beginning, because a real source's answer to a stale token is a fresh page far
+    more often than a 400, and a hard failure here would be indistinguishable from
+    the connector never having sent a cursor at all.
+
+    ``encode``/``decode`` override the token format when the connector's client
+    depends on the shape the real source emits — a Solr-style ``off:<n>`` mark,
+    say. They are position-in/position-out; ``decode`` returning anything
+    unparseable is treated as the first page.
+    """
+    encode_token = _encode_cursor if encode is None else encode
+    decode_token = _decode_cursor if decode is None else decode
+    total = len(items)
+    start = _decode_with(decode_token, request.param(cursor_param))
+    start = min(max(0, start), total)
+    limit = request.int_param(limit_param, default_limit)
+    if limit <= 0:
+        limit = default_limit
+    if max_limit is not None:
+        limit = min(limit, max_limit)
+    page = list(items[start : start + limit])
+    end = start + len(page)
+    return CursorPage(
+        items=page,
+        limit=limit,
+        total=total,
+        next_cursor=encode_token(end) if end < total else None,
+    )
+
+
+def _encode_cursor(offset: int) -> str:
+    return base64.urlsafe_b64encode(f"o:{offset}".encode()).decode().rstrip("=")
+
+
+def _decode_with(decode: Callable[[str], int], cursor: str | None) -> int:
+    if not cursor:
+        return 0
+    try:
+        return decode(cursor)
+    except Exception:  # noqa: BLE001 — any token a caller's decoder rejects is page one
+        return 0
+
+
+def _decode_cursor(cursor: str) -> int:
+    padded = cursor + "=" * (-len(cursor) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(padded.encode()).decode()
+    except (ValueError, UnicodeDecodeError):
+        return 0
+    if not decoded.startswith("o:"):
+        return 0
+    try:
+        return int(decoded[2:])
+    except ValueError:
+        return 0

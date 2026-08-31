@@ -142,6 +142,14 @@ if TYPE_CHECKING:
         load_actual_output,
         load_expected_data,
     )
+    from .corpus import (
+        GOLDEN_ROOT_ENV,
+        SUPPORTED_SUFFIXES,
+        GoldenCorpus,
+        GoldenLayout,
+        read_records,
+        require_golden_corpus,
+    )
     from .lazy import Lazy, evaluate_if_lazy, is_lazy, lazy
     from .models import APIType, Scenario, ScenarioResult
     from .runner import (
@@ -210,6 +218,12 @@ _LAZY_EXPORTS: dict[str, str] = {
     "one_of": ".assertions",
     "starts_with": ".assertions",
     "IntegrationTestClient": ".client",
+    "GOLDEN_ROOT_ENV": ".corpus",
+    "SUPPORTED_SUFFIXES": ".corpus",
+    "GoldenCorpus": ".corpus",
+    "GoldenLayout": ".corpus",
+    "read_records": ".corpus",
+    "require_golden_corpus": ".corpus",
     "AssetDiff": ".comparison",
     "GapReport": ".comparison",
     "compare_metadata": ".comparison",
@@ -321,6 +335,13 @@ __all__ = [
     "any_of",
     "none_of",
     "custom",
+    # Golden corpus layout and loader
+    "GOLDEN_ROOT_ENV",
+    "SUPPORTED_SUFFIXES",
+    "GoldenCorpus",
+    "GoldenLayout",
+    "read_records",
+    "require_golden_corpus",
     # Metadata Comparison
     "AssetDiff",
     "GapReport",

@@ -28,12 +28,14 @@ import pytest
 
 from application_sdk.testing import fake_source
 from application_sdk.testing.fake_source import (
+    CursorPage,
     FakeRequest,
     FakeResponse,
     FakeSourceNotRunningError,
     FakeSourceRouteError,
     HttpFakeSource,
     HttpFakeSourceFactory,
+    cursor_page,
 )
 
 pytestmark = pytest.mark.allow_hosts(["127.0.0.1"])
@@ -944,3 +946,90 @@ class TestRaisingAuthorizeAnswers:
             conn.close()
         assert status == 500
         assert b"authorize" in body
+
+
+class TestCursorPagination:
+    def _page(self, params: dict[str, str], **kwargs: Any) -> CursorPage:
+        request = FakeRequest(
+            method="GET",
+            path="/api/objects",
+            params=params,
+            query={},
+            path_params={},
+            headers={},
+            body=b"",
+        )
+        return cursor_page(OBJECTS, request, **kwargs)
+
+    def test_absent_cursor_is_the_first_page(self) -> None:
+        page = self._page({"limit": "3"})
+        assert [item["id"] for item in page.items] == ["obj-01", "obj-02", "obj-03"]
+        assert page.has_more is True
+
+    def test_token_is_opaque_not_a_bare_offset(self) -> None:
+        token = self._page({"limit": "3"}).next_cursor
+        assert token is not None
+        assert token != "3"
+        assert not token.isdigit()
+
+    def test_full_traversal_visits_every_item_exactly_once(self) -> None:
+        seen: list[str] = []
+        params = {"limit": "2"}
+        while True:
+            page = self._page(params)
+            seen.extend(item["id"] for item in page.items)
+            if page.next_cursor is None:
+                break
+            params = {"limit": "2", "cursor": page.next_cursor}
+        assert seen == [item["id"] for item in OBJECTS]
+
+    def test_last_page_has_no_next_cursor(self) -> None:
+        page = self._page({"limit": "100"})
+        assert page.next_cursor is None
+        assert page.has_more is False
+        assert len(page.items) == 7
+
+    def test_unparseable_cursor_restarts_rather_than_erroring(self) -> None:
+        page = self._page({"cursor": "!!!not-a-token!!!", "limit": "2"})
+        assert [item["id"] for item in page.items] == ["obj-01", "obj-02"]
+
+    def test_cursor_past_the_end_is_an_empty_terminal_page(self) -> None:
+        far = cursor_page(
+            OBJECTS[:1],
+            FakeRequest(
+                method="GET",
+                path="/a",
+                params={"limit": "5"},
+                query={},
+                path_params={},
+                headers={},
+                body=b"",
+            ),
+        )
+        assert far.next_cursor is None
+
+    def test_custom_encode_decode_reproduces_a_solr_style_mark(self) -> None:
+        page = self._page(
+            {"limit": "2"},
+            encode=lambda offset: f"off:{offset}",
+            decode=lambda token: int(token.split(":", 1)[1]),
+        )
+        assert page.next_cursor == "off:2"
+        second = self._page(
+            {"limit": "2", "cursor": "off:2"},
+            encode=lambda offset: f"off:{offset}",
+            decode=lambda token: int(token.split(":", 1)[1]),
+        )
+        assert [item["id"] for item in second.items] == ["obj-03", "obj-04"]
+
+    def test_a_raising_custom_decode_falls_back_to_the_first_page(self) -> None:
+        page = self._page(
+            {"cursor": "garbage", "limit": "2"},
+            decode=lambda token: int(token.split(":", 1)[1]),
+        )
+        assert [item["id"] for item in page.items] == ["obj-01", "obj-02"]
+
+    def test_bad_limit_and_max_limit(self) -> None:
+        assert self._page({"limit": "abc"}, default_limit=3).limit == 3
+        assert self._page({"limit": "-1"}, default_limit=3).limit == 3
+        assert self._page({"limit": "50"}, max_limit=2).limit == 2
