@@ -1606,14 +1606,16 @@ class TestPreflightGateStorageChecks:
         *imported* bucket constant — the gate holds no copied literal.
         """
         from application_sdk.execution._temporal.preflight_gate import (
-            OBJECT_STORE_RELOCATION_CODE,
             _storage_failure_details,
         )
+        from application_sdk.storage.errors import StorageBucketRelocationError
         from application_sdk.storage.preflight import (
             _OBJECT_STORE_ERROR_CLASSES,
             RELOCATION_BUCKET,
             ObjectStoreCheckResult,
         )
+
+        OBJECT_STORE_RELOCATION_CODE = StorageBucketRelocationError.code
 
         assert RELOCATION_BUCKET in _OBJECT_STORE_ERROR_CLASSES
         for label in ("deployment", "upstream"):
@@ -1678,3 +1680,100 @@ class TestPreflightGateStorageChecks:
             failed = await _append_storage_checks(result, 150.0, _time.monotonic())
         assert failed is True
         assert result.status is PreflightStatus.NOT_READY
+
+    async def test_handler_budget_reserves_storage_floor(self) -> None:
+        """Opting in must reserve the storage floor out of the advertised budget.
+
+        A handler that sizes its probes to ``PreflightInput.timeout_seconds`` —
+        exactly what the docs tell it to do — must still leave the storage
+        check its floor, or the opt-in silently degrades to a no-op skip.
+        """
+        from application_sdk.execution._temporal.preflight_gate import (
+            _STORAGE_CHECK_MIN_SECONDS,
+            GATE_TIMEOUT_DEFAULT_SECONDS,
+        )
+
+        handler = _StubHandler()
+        gate = build_preflight_gate_activity(
+            handler, app_name="myapp", verify_storage=True
+        )
+        with self._storage_patches([self._passed_result()]):
+            await gate(PreflightGateInput())
+        assert handler.preflight_input is not None
+        assert (
+            handler.preflight_input.timeout_seconds
+            <= GATE_TIMEOUT_DEFAULT_SECONDS - _STORAGE_CHECK_MIN_SECONDS
+        )
+
+    async def test_budget_skip_appends_visible_row(self) -> None:
+        """A budget-starved skip must be visible, not a debug-level nothing.
+
+        An app owner who opted in (and connector-pulse) must be able to tell
+        'storage verified clean' from 'storage never probed'.
+        """
+        gate = build_preflight_gate_activity(
+            _StubHandler(),
+            app_name="myapp",
+            enforce=True,
+            budget_seconds=5,
+            verify_storage=True,
+        )
+        with (
+            self._storage_patches([self._reloc_result()]) as checker,
+            mock.patch(f"{_GATE}._STORAGE_CHECK_MIN_SECONDS", 10_000.0),
+        ):
+            result = await gate(PreflightGateInput())
+        checker.assert_not_awaited()
+        assert result.status is PreflightStatus.READY
+        skipped = [c for c in result.checks if c.name == "objectStoreAccess:skipped"]
+        assert len(skipped) == 1
+        assert skipped[0].passed is False
+        assert "not verified" in skipped[0].message
+
+    async def test_error_pin_overwrites_handler_partial_error(self) -> None:
+        """The pin must be unconditional: the storage failure IS the reason the
+        verdict became NOT_READY, even when the handler set an aggregate error
+        on its PARTIAL verdict."""
+        import time as _time
+
+        from application_sdk.errors.leaves import PreconditionError
+        from application_sdk.execution._temporal.preflight_gate import (
+            _append_storage_checks,
+            _build_block_error,
+        )
+        from application_sdk.handler.contracts import PreflightOutput
+
+        result = PreflightOutput(
+            status=PreflightStatus.PARTIAL,
+            checks=[],
+            error=PreconditionError(message="partial advisory").to_failure_details(),
+        )
+        with self._storage_patches([self._reloc_result()]):
+            await _append_storage_checks(result, 150.0, _time.monotonic())
+        assert result.status is PreflightStatus.NOT_READY
+        from application_sdk.storage.errors import StorageBucketRelocationError
+
+        block = _build_block_error(result, "myapp")
+        assert block.details[0].code == StorageBucketRelocationError.code
+
+
+def test_gate_module_import_does_not_load_obstore() -> None:
+    """Importing the gate module must not pull obstore into its import set.
+
+    The gate is imported inside the Temporal workflow sandbox
+    (``workflow.unsafe.imports_passed_through()``); every storage import in the
+    module is deliberately lazy so the heavy obstore extension (and
+    ``storage.ops``, which imports it at module load) only loads in the
+    activity frame. A fresh interpreter proves it — this suite's own imports
+    would mask the leak in-process.
+    """
+    import subprocess
+    import sys
+
+    code = (
+        "import sys; "
+        "import application_sdk.execution._temporal.preflight_gate; "
+        "assert 'obstore' not in sys.modules, 'obstore leaked'; "
+        "assert 'application_sdk.storage.ops' not in sys.modules, 'ops leaked'"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)

@@ -10,8 +10,6 @@ import orjson
 from application_sdk.common.utils import download_file_from_upload_response
 from application_sdk.constants import DEPLOYMENT_OBJECT_STORE_NAME, TEMPORARY_PATH
 from application_sdk.observability import get_logger
-from application_sdk.storage.binding import create_store_from_binding
-from application_sdk.storage.ops import download_file
 
 logger = get_logger(__name__)
 
@@ -217,6 +215,14 @@ async def resolve_credential_file(
         try:
             os.makedirs(dest_dir, exist_ok=True)
             file_path = os.path.join(dest_dir, filename)
+            # Lazy: storage imports obstore at module load, and this module
+            # sits on the workflow-sandbox import chain (credentials package
+            # init) — see the preflight gate's import-hygiene test.
+            from application_sdk.storage.binding import (  # noqa: PLC0415
+                create_store_from_binding,
+            )
+            from application_sdk.storage.ops import download_file  # noqa: PLC0415
+
             store = create_store_from_binding(DEPLOYMENT_OBJECT_STORE_NAME)
             await download_file(key, file_path, store=store)
             logger.info(

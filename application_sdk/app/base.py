@@ -28,7 +28,6 @@ from typing import (
 )
 from uuid import UUID
 
-import obstore as obs
 from temporalio import activity, workflow
 from temporalio.exceptions import FailureError
 
@@ -1694,6 +1693,8 @@ class App(ABC):
                     continue
                 if storage_path.endswith("/"):
                     # Directory ref — stream-and-delete sub-keys.
+                    import obstore as obs  # noqa: PLC0415 — lazy: heavy Rust ext; keep out of the workflow-sandbox import set
+
                     for batch in obs.list(resolved, prefix=storage_path):
                         tasks = []
                         for item in batch:
@@ -1721,6 +1722,8 @@ class App(ABC):
         # 2. Delete run-scoped prefix (opt-in).
         if input.include_prefix_cleanup:
             prefix = build_output_path() + "/"
+            import obstore as obs  # noqa: PLC0415 — lazy: heavy Rust ext; keep out of the workflow-sandbox import set
+
             for batch in obs.list(resolved, prefix=prefix):
                 tasks = []
                 for item in batch:

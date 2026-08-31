@@ -88,7 +88,6 @@ with workflow.unsafe.imports_passed_through():
         AtlanLoggerAdapter,
         get_logger,
     )
-    from application_sdk.storage.errors import StorageBucketRelocationError
 
 logger = get_logger(__name__)
 
@@ -929,13 +928,6 @@ def _unverifiable_result(exc: BaseException, app_name: str) -> PreflightOutput:
 # connectivity failure — blocking a hard-mode run for its own starvation.
 _STORAGE_CHECK_MIN_SECONDS = 15.0
 
-# Contract code stamped on a storage check blocked by a bucket relocation, so
-# the outcome event's ``reason`` names the condition (temporary, platform-side)
-# rather than a generic dependency outage. Imported from the typed error's
-# single definition (storage/errors.py) so the gate block and a mid-run upload
-# failure land in one analytics bucket and cannot drift.
-OBJECT_STORE_RELOCATION_CODE = StorageBucketRelocationError.code
-
 
 def _storage_failure_details(result: Any, *, sdr_mode: bool) -> Any:
     """Map a failed storage probe onto typed ``FailureDetails`` for a gate check.
@@ -947,14 +939,20 @@ def _storage_failure_details(result: Any, *, sdr_mode: bool) -> Any:
     never read as the customer's source being unready — so it maps to the
     PLATFORM-audience :class:`DependencyUnavailableError` unconditionally.
 
-    A relocation-bucket failure gets :data:`OBJECT_STORE_RELOCATION_CODE`
+    A relocation-bucket failure gets ``StorageBucketRelocationError.code``
     stamped as its ``code`` in both modes, replacing the leaf's generic code
-    the way ``PREFLIGHT_FALLBACK_CODE`` replaces PRECONDITION.
+    the way ``PREFLIGHT_FALLBACK_CODE`` replaces PRECONDITION — one code for
+    the gate block and the mid-run upload failure, read lazily from its single
+    definition.
     """
     # Imported lazily (activity frame only) so the workflow-sandbox import set
-    # never pulls the storage module; the bucket name comes from its single
-    # definition rather than a copied literal, so a rename breaks loudly here
-    # instead of silently dropping the code stamp.
+    # never pulls the storage package (whose __init__ imports ops → obstore at
+    # module load); the bucket name and the relocation code come from their
+    # single definitions rather than copied literals, so a rename breaks
+    # loudly here instead of silently dropping the code stamp.
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — activity frame only
+        StorageBucketRelocationError,
+    )
     from application_sdk.storage.preflight import (  # noqa: PLC0415 — activity frame only
         RELOCATION_BUCKET,
     )
@@ -980,7 +978,7 @@ def _storage_failure_details(result: Any, *, sdr_mode: bool) -> Any:
             network_error=result.error_class or "connectivity / unknown",
         ).to_failure_details()
     if result.error_class == RELOCATION_BUCKET:
-        details = details.model_copy(update={"code": OBJECT_STORE_RELOCATION_CODE})
+        details = details.model_copy(update={"code": StorageBucketRelocationError.code})
     return details
 
 
@@ -994,9 +992,9 @@ async def _append_storage_checks(
     however healthy the source is (a production RCA traced multi-hour
     extractions dying at the final upload to a store condition detectable here
     in under a second). Appends one check per configured store and downgrades a
-    ``READY`` verdict to ``NOT_READY`` when any store fails, so the existing
-    block/emit machinery applies unchanged and the mode decision stays where it
-    lives today.
+    ``READY`` or ``PARTIAL`` verdict to ``NOT_READY`` when any store fails, so
+    the existing block/emit machinery applies unchanged and the mode decision
+    stays where it lives today.
 
     Deliberate taxonomy note: the gate fails **open** when its own plumbing
     *raises* (see ``_is_gate_broken``); this check instead returns a *verdict*
@@ -1023,11 +1021,26 @@ async def _append_storage_checks(
             return False
         remaining = budget_seconds - (time.monotonic() - started_monotonic)
         if remaining < _STORAGE_CHECK_MIN_SECONDS:
-            logger.debug(
+            logger.info(
                 "Skipping run-path storage checks: %.1fs of the gate budget "
                 "left (< %.1fs floor)",
                 remaining,
                 _STORAGE_CHECK_MIN_SECONDS,
+            )
+            # Visible, not a debug-level nothing: the owner opted in, so
+            # 'storage verified clean' and 'storage never probed' must be
+            # distinguishable in the check matrix (and to connector-pulse).
+            # Failed-but-not-downgrading = advisory; the verdict stands.
+            result.checks.append(
+                PreflightCheck(
+                    name="objectStoreAccess:skipped",
+                    passed=False,
+                    message=(
+                        "Storage was not verified: the handler left "
+                        f"{remaining:.1f}s of the gate budget, under the "
+                        f"{_STORAGE_CHECK_MIN_SECONDS:.0f}s the checks need"
+                    ),
+                )
             )
             return False
         from application_sdk.constants import (  # noqa: PLC0415 — read at call time so tests and SDR toggles see the live value
@@ -1074,8 +1087,11 @@ async def _append_storage_checks(
         if first_failed_details is not None:
             if result.status is not PreflightStatus.NOT_READY:
                 result.status = PreflightStatus.NOT_READY
-            if result.error is None:
-                result.error = first_failed_details
+            # Unconditional: this downgrade is why the verdict is NOT_READY,
+            # and ``PreflightOutput.error`` is defined as exactly that reason.
+            # A conditional pin would let a handler-set aggregate on a PARTIAL
+            # verdict steal the block banner from the storage failure.
+            result.error = first_failed_details
             return True
         return False
     except Exception:
@@ -1364,8 +1380,13 @@ def build_preflight_gate_activity(
 
         # Floor of the remaining budget, and the one number the handler is told —
         # the timeout message quotes it too, so what we enforce, what we report,
-        # and what we blame are all the same value.
-        handler_budget = max(1, int(remaining))
+        # and what we blame are all the same value. With storage verification
+        # opted in, the storage floor is reserved out of the *advertised*
+        # number: a handler that sizes its probes to this field — exactly what
+        # the docs say to do — must still leave the storage check its floor,
+        # or the opt-in silently degrades to a skip.
+        reserved = _STORAGE_CHECK_MIN_SECONDS if verify_storage else 0.0
+        handler_budget = max(1, int(remaining - reserved))
         # Build form config from the extraction-input snapshot in the activity
         # frame so app field reads stay outside the deterministic workflow.
         metadata_dump = _config_from_snapshot(
@@ -1451,7 +1472,11 @@ def build_preflight_gate_activity(
                     ApplicationError,
                 )
 
-                failed_stores = ", ".join(c.name for c in result.checks if not c.passed)
+                failed_stores = ", ".join(
+                    c.name
+                    for c in result.checks
+                    if not c.passed and c.name.startswith("objectStoreAccess:")
+                )
                 raise ApplicationError(
                     "Preflight storage checks failed; deferring to the gate's "
                     f"retry policy ({failed_stores})",

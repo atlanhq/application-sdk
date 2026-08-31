@@ -14,7 +14,6 @@ import orjson
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.server.fastapi.models import FileUploadResponse
-from application_sdk.storage.ops import download_file_chunked
 
 logger = get_logger(__name__)
 
@@ -65,6 +64,12 @@ async def download_file_from_upload_response(
         )
 
     local_path = os.path.join(TEMPORARY_PATH, key)
+
+    # Lazy: storage.ops imports obstore at module load, and this module sits on
+    # the workflow-sandbox import chain (credentials → here) — a top-level
+    # import would pull the heavy Rust extension into every sandboxed module's
+    # import set (the preflight gate pins that invariant with a test).
+    from application_sdk.storage.ops import download_file_chunked  # noqa: PLC0415
 
     # Chunk large uploads (user-supplied files are uncapped) so a big artifact
     # survives slow egress; small files still stream in a single GET. (BLDX-1513)
