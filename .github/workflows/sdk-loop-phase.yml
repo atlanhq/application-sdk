@@ -61,7 +61,7 @@ on:
         type: string
         required: false
         default: ''
-        description: 'USD this run has spent already. The phase refuses to start once it reaches the allowance.'
+        description: 'Tokens this run has used already. The phase refuses to start once it reaches the allowance.'
       reaims_so_far:
         type: string
         required: false
@@ -240,7 +240,23 @@ jobs:
           PRIOR_SHA: ${{ inputs.prior_sha }}
           SPENT_SO_FAR: ${{ inputs.spent_so_far }}
           REAIMS_SO_FAR: ${{ inputs.reaims_so_far }}
-          SDK_LOOP_MAX_USD: ${{ vars.SDK_LOOP_MAX_USD }}
+          SDK_LOOP_MAX_TOKENS: ${{ vars.SDK_LOOP_MAX_TOKENS }}
+          # $HEAD_SHA is referenced 9 times by the playbook (the
+          # moved-since-dispatch guard, the delta diff range, the commit-status
+          # POST) and was never being set. The agent recovers by running
+          # `git rev-parse HEAD` itself, so this is wasted turns rather than a
+          # wrong result — worth perhaps a minute of Phase 0, NOT the stall.
+          # $GHA_RUN_URL the playbook never references; it is passed only to
+          # save the agent re-fetching the started-comment for its own run URL.
+          HEAD_SHA: ${{ inputs.base_sha }}
+          # The phase already READ this ("answers_trigger") and never received
+          # it, so the ANSWERS_TRIGGER filter in `newest_verdict` silently ran
+          # with None on every round — meaning a verdict comment older than
+          # this invocation could be adopted as this phase's own. `github.event`
+          # is available inside a reusable workflow called from the same run,
+          # so this needs no new input.
+          COMMENT_ID: ${{ github.event.comment.id }}
+          GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
           LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL }}
