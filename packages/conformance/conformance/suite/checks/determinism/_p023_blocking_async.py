@@ -49,10 +49,9 @@ tell those apart; the ``await`` can.
 
 Remediation is a restructure (await / run_in_thread), so findings route to residue.
 
-The inventory below was assembled from an AST sweep of the connector fleet
-(mssql, dbt, snowflake, trino, athena, oracle, netsuite) for blocking calls
-reachable from an ``async def`` without an offload hop — every pattern listed
-here had at least one real occurrence.
+The inventory below was assembled from an AST sweep of the connector fleet for
+blocking calls reachable from an ``async def`` without an offload hop — every
+pattern listed here had at least one real occurrence.
 """
 
 from __future__ import annotations

@@ -405,7 +405,7 @@ def test_p023_dedup_workflow_rmtree_is_p021_not_p023() -> None:
 
 
 def test_p023_flags_pandas_read_sql() -> None:
-    """atlan-mssql-app: the sequential fallback ran pd.read_sql per database."""
+    """A connector fallback path ran pd.read_sql per database on the loop."""
     body = (
         "import pandas as pd\n"
         "class MyApp(App):\n"
@@ -417,7 +417,7 @@ def test_p023_flags_pandas_read_sql() -> None:
 
 
 def test_p023_flags_pandas_read_parquet_and_frame_writer() -> None:
-    """atlan-netsuite-app read parquet on the loop; the writer half is a method."""
+    """A connector read parquet on the loop; the writer half is a method call."""
     body = (
         "import pandas as pd\n"
         "class MyApp(App):\n"
@@ -430,7 +430,7 @@ def test_p023_flags_pandas_read_parquet_and_frame_writer() -> None:
 
 
 def test_p023_flags_pyarrow_parquet_read_table() -> None:
-    """atlan-snowflake-app: pq.read_table in the enrichment activities."""
+    """A connector called pq.read_table straight from an enrichment activity."""
     body = (
         "from pyarrow import parquet as pq\n"
         "class MyApp(App):\n"
@@ -442,8 +442,8 @@ def test_p023_flags_pyarrow_parquet_read_table() -> None:
 
 
 def test_p023_flags_tree_traversal() -> None:
-    """The sweep the module docstring deferred: os.walk (athena), glob (dbt),
-    Path.glob / Path.rglob (netsuite, oracle, snowflake)."""
+    """The sweep the module docstring deferred. All four forms occur in the
+    fleet; Path.glob / Path.rglob are the most common finding of any pattern."""
     body = (
         "import glob\n"
         "import os\n"
@@ -472,7 +472,7 @@ def test_p023_traversal_reports_glob_glob_once() -> None:
 
 
 def test_p023_flags_whole_file_pathlib_accessors() -> None:
-    """atlan-netsuite-app rewrote each JSON file with read_text/write_text."""
+    """A connector rewrote each JSON file in place with read_text/write_text."""
     body = (
         "class MyApp(App):\n"
         "    @task\n"
@@ -484,7 +484,7 @@ def test_p023_flags_whole_file_pathlib_accessors() -> None:
 
 
 def test_p023_flags_file_handle_serialization() -> None:
-    """atlan-netsuite-app: json.dump/json.load against an open handle."""
+    """json.dump / json.load against an open handle, per output file."""
     body = (
         "import json\n"
         "class MyApp(App):\n"
