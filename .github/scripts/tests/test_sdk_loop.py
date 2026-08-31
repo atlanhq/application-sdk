@@ -31,6 +31,7 @@ from sdk_loop_common import (  # noqa: E402
     DEFAULT_MAX_USD,
     MAX_CONSECUTIVE_REAIMS,
     MAX_ROUNDS,
+    PHASE2_AGENTS,
     PROVIDER,
     RESOLVE_MODEL,
     REVIEW_MODEL,
@@ -393,6 +394,39 @@ def test_the_delta_range_never_narrows_the_review() -> None:
     prompt = review_prompt(42, 3, "b" * 40, DismissalLedger(), prior_sha="a" * 40)
     assert "Do NOT narrow the review to it" in prompt
     assert "any line of the PR" in prompt
+
+
+def test_the_phase_two_agents_are_registered_so_the_fan_out_can_happen() -> None:
+    """§2a dispatches domain agents via a delegation tool. Claude Code calls it
+    the Agent tool; opencode calls it Task and supports the same parallel
+    dispatch — but only to agents it knows about. Unregistered, the primary
+    agent has nothing to delegate to and Phase 2's fan-out silently collapses
+    into one agent covering every domain: still a verdict, just a worse one,
+    with nothing in the output saying so.
+    """
+    monkey = pytest.MonkeyPatch()
+    monkey.setenv("LITELLM_BASE_URL", "https://gateway.example")
+    try:
+        cfg = opencode_config(REVIEW_MODEL, with_subagents=True)
+        assert set(cfg["agent"]) == set(PHASE2_AGENTS)
+        for name, spec in cfg["agent"].items():
+            assert spec["mode"] == "subagent"
+            # Prompts are the EXISTING files by reference, never copied.
+            assert (
+                spec["prompt"] == f"{{file:./.mothership/pr-review/agents/{name}.md}}"
+            )
+            # Read-only in the agent as well as in the credential.
+            assert spec["permission"]["edit"] == "deny"
+        # Resolve gets none — it does not run Phase 2.
+        assert "agent" not in opencode_config(RESOLVE_MODEL)
+    finally:
+        monkey.undo()
+
+
+def test_the_review_prompt_names_the_delegation_tool_for_this_runtime() -> None:
+    prompt = review_prompt(42, 1, "a" * 40, DismissalLedger())
+    assert "`Task`" in prompt
+    assert "Do NOT do their work yourself" in prompt
 
 
 def test_the_review_prompt_references_the_playbook_and_never_restates_it() -> None:

@@ -43,6 +43,7 @@ from typing import Any, Callable
 
 from sdk_loop_common import (
     MAX_ROUNDS,
+    PHASE2_AGENTS,
     PLAYBOOK_RESOLVE,
     PLAYBOOK_REVIEW,
     RESOLVE_MODEL,
@@ -146,6 +147,13 @@ def review_prompt(
         "",
         "You are READ-ONLY. Your token carries no write scope — do not attempt",
         "to push, and do not treat a push failure as something to work around.",
+        "",
+        "§2a says to dispatch the domain agents via the Agent tool. On this runtime",
+        "that tool is called `Task`, and the agents are already registered —",
+        f"{', '.join(PHASE2_AGENTS)}. Dispatch them in parallel exactly as §2a",
+        "routes them by review_scope. Do NOT do their work yourself in one pass:",
+        "a single agent covering every domain still produces a verdict, just a",
+        "worse one, and nothing in the output would say so.",
         "",
         "SKIP §2b (the Wave 2 cross-model adversarial). Two reasons, and either",
         "alone is sufficient:",
@@ -472,6 +480,7 @@ def main(argv: list[str] | None = None) -> int:
             workspace,
             TIMEOUT_REVIEW_S,
             transcript_path=transcript,
+            subagents=True,
         )
         print("::endgroup::")
         comments = json.loads(

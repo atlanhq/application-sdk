@@ -277,7 +277,48 @@ def gateway_base() -> str:
     return base.rstrip("/")
 
 
-def opencode_config(model: str) -> dict[str, Any]:
+#: The playbook's Phase 2 agents, registered so opencode's Task tool can
+#: dispatch them. §2a says "dispatch agents via the Agent tool" — Claude Code's
+#: name for it; opencode calls the same mechanism `Task`, and it runs them in
+#: parallel just the same. Without registering them the primary agent has
+#: nothing to delegate TO, and Phase 2's whole fan-out silently collapses into
+#: one agent doing everything: a review that still produces a verdict, just a
+#: worse one, with nothing in the output to say so.
+#:
+#: The prompts are the EXISTING files, loaded by reference. Nothing is copied,
+#: so the agents stay owned by `.mothership/pr-review/agents/` and keep the
+#: reference rules #3530 gave them.
+PHASE2_AGENTS = (
+    "correctness",
+    "quality",
+    "structure",
+    "reachability",
+    "conformance",
+    "ci-config",
+    "toolkit-review",
+)
+
+
+def review_subagents(model: str) -> dict[str, Any]:
+    """opencode subagent entries for the playbook's Phase 2 agents.
+
+    Each is read-only by construction: the review lane holds a token with no
+    write scope, and denying `edit` here makes that true of the agent as well
+    as the credential rather than relying on either alone.
+    """
+    return {
+        name: {
+            "description": f"SDK review — {name} domain agent (Phase 2 Wave 1).",
+            "mode": "subagent",
+            "model": f"{PROVIDER}/{model}",
+            "prompt": f"{{file:./.mothership/pr-review/agents/{name}.md}}",
+            "permission": {"edit": "deny", "read": "allow", "bash": "allow"},
+        }
+        for name in PHASE2_AGENTS
+    }
+
+
+def opencode_config(model: str, with_subagents: bool = False) -> dict[str, Any]:
     """`opencode.json` pinning the only provider and models this lane may use.
 
     Shell and network stay ALLOWED here, unlike the conformance fast lane which
@@ -343,6 +384,7 @@ def opencode_config(model: str) -> dict[str, Any]:
         # unanswered ask as a rejection — a connector-pulse run starved exactly
         # that way when its skill reads were auto-rejected. So everything a
         # phase legitimately does is allowed outright.
+        **({"agent": review_subagents(model)} if with_subagents else {}),
         "permission": {
             "read": "allow",
             "glob": "allow",
@@ -561,6 +603,7 @@ def run_agent(
     timeout_s: int,
     transcript_path: str | None = None,
     sink: Any = None,
+    subagents: bool = False,
 ) -> AgentResult:
     """Invoke one agent phase, STREAMING its output to the job log.
 
@@ -583,7 +626,7 @@ def run_agent(
     emit = sink or (lambda line: print(line, flush=True))
     config_path = os.path.join(cwd, "opencode.json")
     with open(config_path, "w", encoding="utf-8") as handle:
-        json.dump(opencode_config(model), handle, indent=2)
+        json.dump(opencode_config(model, with_subagents=subagents), handle, indent=2)
 
     lines: list[str] = []
     try:
