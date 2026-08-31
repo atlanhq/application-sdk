@@ -664,7 +664,7 @@ def test_no_gateway_hostname_is_committed_in_this_lane() -> None:
 def test_the_review_model_matches_what_the_existing_lanes_use() -> None:
     # All three lanes reviewing on one model means a finding difference between
     # them is about the harness, not the model.
-    assert REVIEW_MODEL == "xai/grok-4.6"
+    assert REVIEW_MODEL == "xai/grok-4-6"
 
 
 def test_a_slash_bearing_alias_composes_into_provider_and_model(
@@ -675,7 +675,7 @@ def test_a_slash_bearing_alias_composes_into_provider_and_model(
     `xai/grok-4.6`, and the config's `models` key must carry the full alias."""
     monkeypatch.setenv("LITELLM_BASE_URL", "https://gateway.example")
     cfg = opencode_config(REVIEW_MODEL)
-    assert cfg["model"] == "gateway/xai/grok-4.6"
+    assert cfg["model"] == "gateway/xai/grok-4-6"
     assert cfg["model"].split("/", 1) == [PROVIDER, REVIEW_MODEL]
     assert REVIEW_MODEL in cfg["provider"][PROVIDER]["models"]
 
@@ -695,7 +695,7 @@ def test_the_lane_reaches_exactly_two_models_and_has_no_fallback() -> None:
     reason about across rounds. Pinned so a future edit adding a ladder has to
     change this test and say why.
     """
-    assert ALLOWED_MODELS == ("xai/grok-4.6", "gpt-5.6-luna")
+    assert ALLOWED_MODELS == ("xai/grok-4-6", "gpt-5.6-luna")
     assert len(set(ALLOWED_MODELS)) == 2
 
 
