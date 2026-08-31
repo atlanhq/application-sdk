@@ -1,0 +1,63 @@
+# actionlint configuration.
+#
+# Enabled after three consecutive @sdk-loop startup failures that a schema
+# validator would have caught before merge: a duplicate `description` key, and
+# a `needs.<job>` reference to a job the caller did not depend on. Both make
+# GitHub refuse to parse the workflow, and a workflow GitHub will not parse
+# runs NO jobs — so the symptom is silence, not an error, and CI stays green
+# while the lane is dead.
+#
+# ── About the ignores below ────────────────────────────────────────────────
+# Every one is a checked FALSE POSITIVE, not deferred work. Each was read
+# against GitHub's own documentation or the surrounding intent before being
+# listed here, and the reason is recorded so a future reader does not have to
+# repeat the check. If actionlint ever learns these, delete the entry.
+#
+# shellcheck is disabled at the hook (`-shellcheck=`): 64 pre-existing findings
+# in `run:` blocks, a separate and far lower-stakes concern than a workflow
+# that will not start. Worth its own pass.
+
+self-hosted-runner:
+  labels: []
+
+paths:
+  # FALSE POSITIVE — actionlint's `job` context type is out of date.
+  #
+  # `job.workflow_sha` is REAL and documented: "the commit SHA of the workflow
+  # file that defines the current job". GitHub documents job.workflow_ref,
+  # job.workflow_sha, job.workflow_repository and job.workflow_file_path, and
+  # notes only that they are unavailable on GitHub Enterprise Server. There is
+  # no `github.job_workflow_sha` — the property lives on `job`, not `github`.
+  #
+  # These reusable workflows use it deliberately, and the reason is worth
+  # keeping: it pins the SDK script checkout to the same commit as the workflow
+  # executing it, so no caller-supplied ref can reach a checkout whose payload
+  # is then run. Rewriting it would BREAK that provenance pinning.
+  #
+  # Verified against docs.github.com on 2026-08-31; actionlint 1.7.12 still
+  # models `job` as {check_run_id, container, services, status}.
+  .github/workflows/tests-reusable.yaml:
+    ignore:
+      - 'property "workflow_sha" is not defined'
+  .github/workflows/e2e-full-reusable.yaml:
+    ignore:
+      - 'property "workflow_sha" is not defined'
+
+  # FALSE POSITIVE — actionlint only knows secrets declared under
+  # `workflow_call.secrets`, but a caller using `secrets: inherit` passes
+  # everything it has, declared or not. `APP_REPO_READ_TOKEN` is the caller-side
+  # name (see the header comment in that file), and it sits in a `||` fallback
+  # chain that ends at `secrets.GITHUB_TOKEN`, so the worst case is an empty
+  # term the chain skips over.
+  .github/workflows/v3-readiness-check.yaml:
+    ignore:
+      - 'property "app_repo_read_token" is not defined'
+
+  # FALSE POSITIVE — deliberate kill switch, not dead code left by accident.
+  # The job body and its input are retained on purpose so callers that still
+  # pass `unit_tests_workflow_file` keep validating; unit-test enforcement
+  # moved to the `certify` job (#1943). The file says "Revert this line to
+  # re-enable the gate", which is exactly what a constant condition is for.
+  .github/workflows/build-and-publish-app.yaml:
+    ignore:
+      - 'constant expression "false" in condition'

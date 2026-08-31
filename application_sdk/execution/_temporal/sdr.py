@@ -125,6 +125,14 @@ _OBJECT_STORE_ACTIONS: dict[tuple[str, str], str] = {
         "upstream",
         "connectivity / unknown",
     ): "Check that the SDR worker can reach Atlan, and verify the upstream endpoint.",
+    (
+        "deployment",
+        "bucket relocation in progress",
+    ): "The object store bucket is being relocated; uploads are rejected until the relocation completes. Retry afterwards — no credential change is needed.",
+    (
+        "upstream",
+        "bucket relocation in progress",
+    ): "The Atlan upload target is being relocated; uploads are rejected until the relocation completes. Retry afterwards — no credential change is needed.",
 }
 
 

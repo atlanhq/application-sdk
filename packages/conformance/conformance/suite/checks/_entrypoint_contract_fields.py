@@ -12,8 +12,9 @@ The check uses the same cross-file class-registry machinery as P013/P014:
 
 Field extraction resolves the full inheritance hierarchy (``resolve_contract_fields``):
 in-repo base classes are resolved from their own AST body via ``by_name``; SDK-provided
-contract bases (``Input``, ``Output``, ``PublishInputMixin``) that live outside the
-scanned repo are resolved from the static registry in ``_sdk_contract_mixins``. This
+contract bases (``Input``, ``Output``, ``PublishInputMixin``) and SDK template
+contract bases (such as ``ExtractionOutput``) that live outside the scanned repo
+are resolved from the static registries in ``_sdk_contract_mixins``. This
 means a field inherited from a base class or SDK mixin is tracked exactly like one
 declared directly on the contract — no need to redeclare it just to stay ledger-protected.
 
@@ -28,7 +29,10 @@ import ast
 from pathlib import Path
 from typing import NamedTuple
 
-from conformance.suite.checks._sdk_contract_mixins import SDK_CONTRACT_BASE_FIELDS
+from conformance.suite.checks._sdk_contract_mixins import (
+    SDK_CONTRACT_BASE_FIELDS,
+    SDK_TEMPLATE_CONTRACT_FIELDS,
+)
 from conformance.suite.checks.prescriptions._contract_common import _unwrap_annotated
 from conformance.suite.checks.prescriptions._decorator_provenance import (
     ImportProvenance,
@@ -276,8 +280,9 @@ def resolve_contract_fields(
 
     In-repo base classes are resolved recursively from their own AST body (via
     *by_name*); SDK-provided contract bases not present in the scanned repo
-    (``Input``, ``Output``, ``PublishInputMixin``) are resolved from the static
-    registry in :mod:`_sdk_contract_mixins`. A field declared directly on a
+    (``Input``, ``Output``, ``PublishInputMixin``) and SDK template contracts
+    (such as ``ExtractionOutput``) are resolved from the static registries in
+    :mod:`_sdk_contract_mixins`. A field declared directly on a
     (sub)class always overrides a same-named field inherited from a base —
     mirrors Python's MRO. Cycle-safe: mirrors the ``visiting``-guarded pattern
     used by :func:`resolve_ancestor` in ``_error_code_prefix``.
@@ -334,7 +339,10 @@ def resolve_contract_fields(
                 for fi in _iter_fields(rec.node):
                     fields_by_name[fi.name] = fi._replace(node=None)
         else:
-            for sdk_field in SDK_CONTRACT_BASE_FIELDS.get(name, ()):
+            sdk_fields = SDK_CONTRACT_BASE_FIELDS.get(
+                name, SDK_TEMPLATE_CONTRACT_FIELDS.get(name, ())
+            )
+            for sdk_field in sdk_fields:
                 fields_by_name[sdk_field.name] = _FieldInfo(
                     name=sdk_field.name,
                     canonical_type=sdk_field.canonical_type,

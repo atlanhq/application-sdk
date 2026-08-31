@@ -486,6 +486,58 @@ reservation** — a handler returning in 3s holds its worker slot for 3s whateve
 A generous budget therefore costs nothing on a healthy run; it only changes the run that would
 otherwise have been cut short.
 
+#### Verifying artifact storage (opt-in)
+
+The handler certifies the *source*; nothing certifies the store the run will upload its
+artifacts to — and a run that cannot upload is doomed however healthy the source is. Setting
+`preflight_verify_storage = True` opts the app into probing every configured artifact store
+inside the gate, in whatever budget the handler left: a plain write, a HEAD, and a
+**multipart-forced** write. The multipart probe matters because uploads above the writer's part
+size (8 MiB by default; `ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES`) go out as multipart, and a store
+can accept plain PUTs while rejecting multipart initiation — GCS does exactly this for the whole
+window of a bucket relocation, a condition a production RCA traced under multi-hour extractions
+dying at their final upload. The probe is deliberately stricter than a small-artifact-only
+workload's real writes; an app whose artifacts never exceed the part size should weigh that
+before opting in. A mid-run relocation (starting after the gate passed) is covered separately:
+the upload path itself classifies the rejection as `DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION` with a
+platform-attributed hint instead of a generic storage failure.
+
+```python
+class MyConnector(App):
+    preflight_gate_mode = "hard"
+    preflight_verify_storage = True   # a run that cannot upload should not extract
+```
+
+!!! warning "Deployment prerequisite: abort-incomplete-multipart lifecycle rule"
+
+    Every probed bucket must carry an abort-incomplete-multipart-upload lifecycle rule before
+    you set this `True`. A probe cancelled between multipart initiate and complete — which the
+    gate's own timeout does — leaves hidden partial parts the provider bills until they are
+    aborted, and with this opt-in that happens once per run rather than once per worker boot.
+    The SDK cannot clean them up: `obstore` owns the upload id inside `put_async` and exposes no
+    abort call, so there is no handle to cancel against. The SDK neither checks this rule nor
+    reports its absence — confirm it out of band.
+
+A failed probe appends a typed, platform-attributed check (`objectStoreAccess:<store>`, with a
+relocation rejection stamped `DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION`) and downgrades a
+`READY` or `PARTIAL` verdict to `NOT_READY` — so `preflight_gate_mode` still decides whether it
+blocks; soft mode reports it as `would_block`.
+
+The storage floor is reserved out of the budget advertised to the handler
+(`PreflightInput.timeout_seconds`), capped at half of it — the opt-in extra never squeezes out the
+source check the gate exists for, so an app declaring a small `preflight_gate_timeout_seconds`
+keeps a usable handler budget and simply gets the skip below. Every path that leaves storage
+unmeasured — too little budget, no infrastructure context, a checker that failed — appends a
+failed `objectStoreAccess:skipped` advisory row stamped `OBJECT_STORE_NOT_VERIFIED`, so
+"never probed" is visible in the check matrix and distinguishable from a real rejection by its
+code. Those rows never downgrade the verdict: nothing was measured, so nothing was disproved. The
+probe is skipped silently only when the handler already returned `NOT_READY`, since the run is
+blocked or reported on that verdict whatever storage would have said.
+
+Note the deliberate taxonomy choice: gate *plumbing* failures fail open, but a storage failure
+confirmed across the gate's retry attempts blocks in hard mode — a store rejecting every upload
+for hours is not the transient blip fail-open protects.
+
 `PreflightInput.timeout_seconds` carries what is *left* after credential resolution, so a handler
 sizing probes to that field is sizing to the real deadline. Three rules follow:
 

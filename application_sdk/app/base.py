@@ -28,7 +28,6 @@ from typing import (
 )
 from uuid import UUID
 
-import obstore as obs
 from temporalio import activity, workflow
 from temporalio.exceptions import FailureError
 
@@ -826,6 +825,38 @@ class App(ABC):
     time-to-verdict and the worker time held. So an app declaring a large
     :attr:`preflight_gate_timeout_seconds` usually wants ``1`` here — at the 300s
     ceiling, two attempts reserve a ~10 minute ``schedule_to_close``."""
+
+    preflight_verify_storage: ClassVar[bool] = False
+    """Also verify the run's artifact object store(s) in the preflight gate.
+
+    ``False`` (default) keeps the gate source-only. ``True`` opts in to probing
+    every store the run will upload artifacts to — a write, a HEAD, and a
+    **multipart-forced** write. The multipart probe matters because uploads
+    above the writer's part size (8 MiB default,
+    ``ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES``) go out as multipart, and a store
+    can accept plain PUTs while rejecting multipart initiation (GCS does
+    exactly this for the whole window of a bucket relocation; a production RCA
+    traced multi-hour extractions dying at the final upload to that
+    condition). A failed probe — after the gate's retry attempts are exhausted
+    — appends a typed platform-attributed check and downgrades a ``READY`` or
+    ``PARTIAL`` verdict to ``NOT_READY``, so :attr:`preflight_gate_mode`
+    decides whether it blocks; soft mode only reports it as ``would_block``.
+
+    Deliberately opt-in while the fleet's probe precision is measured: the probe
+    costs under a second per run against healthy storage, but a hard-mode app
+    turning this on is trusting a storage canary to abort real runs — and the
+    probe is stricter than a small-artifact-only workload's real writes, which
+    never touch multipart at all.
+
+    **Deployment prerequisite.** The probed buckets must carry an
+    abort-incomplete-multipart-upload lifecycle rule. A probe cancelled between
+    multipart initiate and complete — the gate's own timeout does exactly this —
+    leaves hidden partial parts that the provider bills until they are aborted,
+    and now once per run rather than once per worker boot. The SDK cannot clean
+    them up itself: ``obstore`` owns the upload id inside ``put_async`` and
+    exposes no abort call, so there is nothing to cancel against. Confirm the
+    lifecycle rule on every bucket in the deployment before setting this
+    ``True``; the SDK neither checks nor reports it."""
 
     artifact_validation_mode: ClassVar[Literal["hard", "soft"]] = "soft"
     """Artifact-validation posture (ADR-0020). ``"soft"`` (default) never blocks.
@@ -1672,6 +1703,8 @@ class App(ABC):
                     continue
                 if storage_path.endswith("/"):
                     # Directory ref — stream-and-delete sub-keys.
+                    import obstore as obs  # noqa: PLC0415 — lazy: heavy Rust ext; keep out of the workflow-sandbox import set
+
                     for batch in obs.list(resolved, prefix=storage_path):
                         tasks = []
                         for item in batch:
@@ -1699,6 +1732,8 @@ class App(ABC):
         # 2. Delete run-scoped prefix (opt-in).
         if input.include_prefix_cleanup:
             prefix = build_output_path() + "/"
+            import obstore as obs  # noqa: PLC0415 — lazy: heavy Rust ext; keep out of the workflow-sandbox import set
+
             for batch in obs.list(resolved, prefix=prefix):
                 tasks = []
                 for item in batch:
