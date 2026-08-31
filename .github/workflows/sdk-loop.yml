@@ -80,6 +80,11 @@ permissions:
   # this the duplicate check 403s, the fence raises before it can post, and
   # the lane goes silent — the failure mode it exists to prevent.
   actions: read
+  # Reactions are an Issues-scope resource, so the acknowledgement 403s
+  # without this. Caught by test_react_to_comment.py, which asserts every
+  # workflow calling the helper grants it — the same Issues-vs-PR distinction
+  # the fleet App token needed for posting the verdict comment.
+  issues: write
 
 jobs:
   fence:
