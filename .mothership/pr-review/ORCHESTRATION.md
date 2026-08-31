@@ -12,11 +12,29 @@ severity, the verdict — is identical. Only the bookkeeping differs, and doing
 a lane's bookkeeping twice is not free: each step is a model round trip, and
 several of them cannot even succeed on the wrong lane.
 
-Work out which lane you are on from the working directory: if
-`/workspace/application-sdk` exists you are the sandbox, otherwise you are
-`@sdk-loop` on a GitHub Actions runner. **Do not probe for it in a shell** —
-you are told below what each lane implies; a `ls /workspace || echo NO` costs
-a turn and answers nothing you cannot infer from `pwd`.
+<!-- CONTRACT: the literal string `LANE: sdk-loop` below is emitted by
+     review_prompt() in .github/scripts/sdk_loop_phase.py. Two files, one
+     string — exactly the shape that rots silently, because a playbook that
+     waits for a line nobody sends does not error, it just quietly runs the
+     wrong lane's steps and eats the 403s. Renaming it on either side without
+     the other breaks lane detection with no failing test and no log line
+     saying so. test_the_lane_marker_matches_the_playbook_contract in
+     .github/scripts/tests/test_sdk_loop.py asserts both sides agree; if you
+     change this string, that test fails and tells you where the other half
+     lives. Do not "fix" the test by loosening it. -->
+
+**You are told which lane you are on. Do not work it out.** The dispatch
+prompt states it: the `@sdk-loop` harness emits the line `LANE: sdk-loop`,
+and its absence means the mothership sandbox. Inferring it instead — probing
+for `/workspace`, reading `pwd`, checking for a runner env var — costs a turn
+and can be wrong; a live transcript shows an agent spending one on
+`ls -la /workspace/application-sdk … || echo "NO /workspace/application-sdk"`
+before doing any review work.
+
+This matters because the difference is not cosmetic. Several steps below
+**cannot succeed** on the wrong lane: they need a write scope the `@sdk-loop`
+review token does not have, and they fail with a 403 after the model has
+already been paid for the turn that made the call.
 
 | | mothership sandbox | `@sdk-loop` (GitHub Actions) |
 |---|---|---|
