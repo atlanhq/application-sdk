@@ -50,37 +50,40 @@ jobs:
       # but see `advanced_security` as absent even on a licensed private repo —
       # which would skip the upload. That direction is the safe one (it is
       # today's behaviour minus the failing job) and it is not silent: the
-      # notice below prints both values into the job log on every run, so the
-      # first licensed private repo shows up as `advanced_security=absent`
-      # rather than as a mystery. Querying code-scanning/analyses instead was
+      # probe prints both values into the job log on every run, so the first
+      # licensed private repo shows up as `advanced_security=absent` rather
+      # than as a mystery. Querying code-scanning/analyses instead was
       # rejected — it 404s on a repo with no analyses yet, which is exactly a
       # newly-licensed repo, so the check would lock itself off permanently.
       #
       # Nothing downstream depends on this upload: connector-pulse ingests the
       # k.atlan.dev mirror published by `update-dashboard.yml`, not the Security
       # tab, so a skipped leg costs no fleet visibility.
+      #
+      # The decision itself is a tested Python script, not inlined shell:
+      # docs/standards/ci.md forbids conditional logic in `run:` blocks because
+      # those branches cannot be regression-tested, and `bootstrap` force-writes
+      # this workflow into every consumer repo — an untested branch here would
+      # propagate fleet-wide with no way for a consumer to fix it. The four
+      # cases (public, private+enabled, private+absent-or-disabled, and a probe
+      # that could not read the API) are covered in application-sdk by
+      # .github/scripts/tests/test_probe_code_scanning.py.
+      #
+      # The checkout is what makes the script reachable: `workflow_run` jobs
+      # start with an empty workspace, and it is sparse because this job needs
+      # exactly that one file.
+      - name: "Check out the availability probe"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts/probe_code_scanning.py
+          sparse-checkout-cone-mode: false
+
       - name: "Check code scanning availability"
         id: probe
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -uo pipefail
-          info=$(gh api "repos/$GITHUB_REPOSITORY" \
-            --jq '"\(.visibility) \(.security_and_analysis.advanced_security.status // "absent")"')
-          vis=${info% *}
-          ghas=${info#* }
-          if [ "$vis" = "public" ] || [ "$ghas" = "enabled" ]; then
-            available=true
-          else
-            available=false
-            echo "::notice::Code scanning unavailable (visibility=$vis, advanced_security=$ghas) — skipping SARIF upload. The conformance gate result and the connector-pulse dashboard are unaffected."
-          fi
-          # The redirect carries no preceding space on purpose: this file is
-          # rendered by the bootstrap jinja2 pass, whose placeholder guard
-          # rejects a space followed by the jinja2 close delimiter anywhere in
-          # the rendered output (test_no_jinja2_placeholders_in_rendered_output).
-          # Hence also the single write here rather than one per branch.
-          echo "available=$available">>"$GITHUB_OUTPUT"
+        run: python .github/scripts/probe_code_scanning.py
 
       - name: "Download SARIF artifact"
         id: download
