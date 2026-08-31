@@ -29,7 +29,8 @@ def has_exc_info_traceback(call: ast.Call, exception_name: str | None = None) ->
     ``except ... as <name>`` binding in scope, ``exc_info=<name>``.  Any other
     ``exc_info`` value (``False``, ``None``, a call, an unrelated name) is
     reported as not carrying a traceback, and an absent keyword is likewise
-    False.
+    False.  The bound-name check is intentionally flow-insensitive: a name
+    rebound after the ``except`` binding is still treated as that binding.
     """
     for kw in call.keywords:
         if kw.arg != "exc_info":
