@@ -60,11 +60,17 @@ MAX_ROUNDS = 8
 #: (`.mothership/pr-resolve/ORCHESTRATION.md` §3d, "Fix every finding (or prove
 #: it false)"), so a separate adversarial reviewer would pay twice for one job.
 #:
-#: The alias contains a slash. opencode splits `--model` on the FIRST slash
-#: only, so `gateway/xai/grok-4.6` resolves to provider `gateway`, model
-#: `xai/grok-4.6` — and the key in the config's `models` map has to be the
-#: full alias, slash included.
-REVIEW_MODEL = "xai/grok-4.6"
+#: Written `grok-4-6`, not `grok-4.6`. Two live rounds died 11ms in with
+#: `Error: [DecimalError] Invalid argument: [object Object]` — decimal.js
+#: refusing a non-numeric argument — before the agent read anything. The
+#: dotted form is the one shape this lane has that connector-pulse's working
+#: config does not: its aliases (`gpt-5.6-luna`, `kimi-k3`) carry no dot in a
+#: position a decimal parser would try to consume.
+#:
+#: The alias also contains a slash. opencode splits `--model` on the FIRST
+#: slash only, so `gateway/xai/grok-4-6` resolves to provider `gateway`, model
+#: `xai/grok-4-6` — the key in the config's `models` map is the full alias.
+REVIEW_MODEL = "xai/grok-4-6"
 
 #: Resolve runs on the mechanical model — the same role split connector-pulse
 #: uses for its mechanical lane.
