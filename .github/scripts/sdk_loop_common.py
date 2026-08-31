@@ -309,6 +309,43 @@ PHASE2_AGENTS = (
 )
 
 
+#: Prepended to every sub-agent brief. Deliberately NOT a ban on reading
+#: third-party source — that is how a reviewer catches "you are calling this
+#: with the wrong semantics", which is some of the most valuable output a
+#: review produces. What went wrong in the run this is written from was the
+#: manner, not the act: the agent went external before checking the answer
+#: already recorded in the repo it was reviewing, re-read one scratch file
+#: five times, and kept going after two sources had failed to settle the
+#: question. Each re-read also re-enters the context, which is why later steps
+#: got slower as it went.
+RESEARCH_DISCIPLINE = """## Before you research anything outside this repo
+
+1. **Check local prior art first — then judge it, do not re-derive it.** The
+   answer is often already recorded here: a comment beside the code, a lint
+   config that grandfathers a case *with its reasoning*, `retro-log.md`, the
+   reference rules you own. Verifying a suppression is your job — a reviewer
+   who accepts every "false positive, I checked" is how bad ignores land — but
+   verifying it means **judging whether the stated evidence is specific and
+   checkable**, not independently rebuilding the proof. A justification that
+   quotes the vendor's documented behaviour and names the exception is
+   evidence. Cite it and move on.
+2. **Fetch once.** A file you have already read is already in your context.
+   Re-reading it tells you nothing new and makes every later step slower.
+3. **Doubt becomes a FINDING, not more research.** This is the rule that was
+   missing. If the local justification does not convince you, the output is a
+   finding against the justification — "this suppression cites X, which I could
+   not confirm; here is what would settle it" — raised at the tier the risk
+   deserves. It is NOT an instruction to keep digging until you are certain.
+   Two lookups is the bound; past that you are spending the review's budget to
+   answer a question the finding could have handed to a human in one line.
+4. **Targeted, not wholesale.** Grep for the symbol you need. Do not pull
+   whole source files or rendered HTML pages into context to search them.
+
+Reading a dependency's real source to check behaviour your code relies on is
+legitimate and encouraged. Reverse-engineering a linter's internal tables to
+second-guess a decision this repo has already documented is not."""
+
+
 def _agent_prompt(name: str) -> str:
     """The playbook's agent brief, read from this runner's own checkout.
 
@@ -357,7 +394,7 @@ def review_subagents(model: str) -> dict[str, Any]:
             # the sub-agent no instructions at all and look exactly like a slow
             # review. Reading it in Python removes the question: the file is
             # either present or the phase fails loudly with a traceback.
-            "prompt": _agent_prompt(name),
+            "prompt": f"{RESEARCH_DISCIPLINE}\n\n{_agent_prompt(name)}",
             # Enumerated in full, mirroring the primary agent, because a
             # PARTIAL block here was not equivalent: `external_directory` and
             # `doom_loop` ask unless listed, headless opencode has nobody to
@@ -383,10 +420,26 @@ def review_subagents(model: str) -> dict[str, Any]:
                 "lsp": "allow",
                 "question": "allow",
                 "external_directory": "allow",
-                "doom_loop": "allow",
                 "edit": "deny",
                 "webfetch": "deny",
                 "websearch": "deny",
+                # DENIED, reversing this lane's original setting. `doom_loop`
+                # is opencode's own repetition detector, and allowing it turns
+                # the detector off. A live ci-config sub-agent then spent 19
+                # steps and 18 minutes on one question its own repo already
+                # answers in a comment, re-reading the same scratch file five
+                # times and re-fetching the same fact from two sources — the
+                # exact shape the detector exists to catch.
+                #
+                # The original justification was that the playbook "re-runs
+                # similar greps across a large diff". That is the PARENT's
+                # behaviour — phase-boundary budget checks, offset re-reads of
+                # the playbook — and the parent keeps `allow` below. A
+                # single-domain sub-agent repeating itself is not being
+                # thorough. It also still has `maxSteps` under it, so a
+                # detector false positive costs a partial finding set, never
+                # the phase.
+                "doom_loop": "deny",
             },
         }
         for name in PHASE2_AGENTS
@@ -583,7 +636,14 @@ def format_usage(usage: dict[str, int]) -> str:
 #: burned three rounds on the identical mismatch, each reporting `reaim` and
 #: advancing as though something had changed.
 #: Hard cap on a sub-agent's agentic iterations. See `review_subagents`.
-SUBAGENT_MAX_STEPS = 60
+#:
+#: Lowered from 60. That figure assumed a flat cost per step, and measurement
+#: says otherwise: a live sub-agent's step latency ran 14s, 35s, 68s, 58s,
+#: 121s as its context grew with each tool result it accumulated. 60 steps of
+#: that is not the ~13 minutes the original comment claimed; it is over an
+#: hour, and the idle watchdog cannot help because a looping agent is
+#: producing output the whole time.
+SUBAGENT_MAX_STEPS = 25
 
 #: Kill an agent that has printed nothing for this long. Sized off measurement,
 #: not taste: across observed runs the longest gap between two output lines in a
