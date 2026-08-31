@@ -75,6 +75,11 @@ concurrency:
 permissions:
   contents: read
   pull-requests: write
+  # The fence runs `gh run list` to find a loop already working this PR. An
+  # explicit permissions block makes everything unlisted `none`, so without
+  # this the duplicate check 403s, the fence raises before it can post, and
+  # the lane goes silent — the failure mode it exists to prevent.
+  actions: read
 
 jobs:
   fence:

@@ -56,12 +56,12 @@ on:
         type: string
         required: false
         default: ''
+        description: 'Sha the previous round reviewed, for delta labelling. Never narrows the review.'
       spent_so_far:
         type: string
         required: false
         default: ''
         description: 'USD this run has spent already. The phase refuses to start once it reaches the allowance.'
-        description: 'Sha the previous round reviewed, for delta labelling. Never narrows the review.'
     secrets:
       LITELLM_API_KEY:
         required: true
