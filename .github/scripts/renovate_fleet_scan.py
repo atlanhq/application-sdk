@@ -575,11 +575,29 @@ def slug_for(repo: str) -> str:
 def write_repo_files(
     grouped: dict[str, list[dict]], out_dir: Path, known_repos: list[str]
 ) -> None:
-    """Write one <slug>.json per repo. Repos with no matching PRs still get a `[]`
-    file as long as they're in `known_repos`, preserving the "0 PRs = up to date"
-    vs. "not configured" distinction the dashboard relies on."""
+    """Write one <slug>.json per repo in `known_repos`.
+
+    A known repo with no matching PRs still gets a `[]` file, preserving the
+    "0 PRs = up to date" vs. "not configured" distinction the dashboard relies
+    on. That is what the set arithmetic here is for.
+
+    `known_repos` BOUNDS the output; `grouped` only supplies the contents. This
+    used to be a union, which was harmless while the PR data came from a REST
+    call per discovered repo — `grouped` was a subset of `known_repos` by
+    construction. Once the scan became one org-wide GraphQL search, the union
+    started admitting every repo in the org that merely has a Renovate PR: on
+    2026-08-31 the dashboard listed 616 repos, 449 of them not consumers at all
+    (`AI-taskforce`, `Atlan11`, `CARAT`...), while discovery had collapsed to 1.
+    The union is what hid that collapse — a broken discovery should show up as an
+    empty dashboard, not a full one made of the wrong repos.
+
+    With no `known_repos` at all (the file was absent), fall back to `grouped`:
+    a caller who passed no scope gets what the search found, which is the only
+    thing it can mean.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
-    for repo in set(known_repos) | set(grouped):
+    scope = set(known_repos) if known_repos else set(grouped)
+    for repo in scope:
         path = out_dir / f"{slug_for(repo)}.json"
         path.write_text(json.dumps(grouped.get(repo, [])))
 

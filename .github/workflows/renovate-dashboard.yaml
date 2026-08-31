@@ -60,47 +60,46 @@ jobs:
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
           owner: atlanhq
 
-      - name: Discover atlan-application-sdk consumers
-        id: discover
+      # Push-based single-repo mode: skip fleet discovery entirely. Split from
+      # the full-fleet step so the mode branch lives in `if:` rather than inside
+      # a run: block, per docs/standards/ci.md.
+      - name: Scope to one repo
+        id: discover_single
+        if: inputs.repo != ''
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           SINGLE_REPO: ${{ inputs.repo }}
         run: |
           set -euo pipefail
+          echo "Single-repo scan: $SINGLE_REPO"
+          printf 'repos=["%s"]\n' "$SINGLE_REPO" >> "$GITHUB_OUTPUT"
 
-          if [ -n "${SINGLE_REPO:-}" ]; then
-            # Push-based single-repo mode: skip fleet discovery entirely.
-            repos=$(printf '["%s"]' "$SINGLE_REPO")
-            echo "Single-repo scan: $SINGLE_REPO"
-          else
-            # Full-fleet mode: discover repos that have Renovate configured
-            # with the application-sdk preset. Searching for the preset
-            # reference in renovate.json (rather than all pyproject.toml
-            # consumers) excludes repos that don't have Renovate set up —
-            # those always show 0 open PRs which would falsely read as
-            # "up to date" rather than "Renovate not configured".
-            repos=$(gh search code \
-              --owner atlanhq \
-              "application-sdk//renovate-config/default.json filename:renovate.json" \
-              --json repository \
-              --jq '.[].repository.nameWithOwner' \
-              --limit 1000 \
-              | sort -u \
-              | jq -R . | jq -cs '.' \
-              || echo "[]")
-
-            if [ "$repos" = "[]" ] || [ -z "$repos" ]; then
-              echo "::warning::No consumer repos discovered. Check the atlan-app-fleet App installation/permissions."
-            else
-              echo "Discovered $(echo "$repos" | jq '. | length') consumer repos"
-            fi
-          fi
-          echo "repos=${repos}" >> "$GITHUB_OUTPUT"
+      # Full-fleet mode uses the same deterministic discovery the Renovate
+      # runner does, so the dashboard lists exactly the repos Renovate manages.
+      #
+      # This replaces a `gh search code` for the preset marker. Code search
+      # cannot enumerate this fleet: measured 2026-08-31, the exact query
+      # returned 1 repo (application-sdk itself), and even a bare
+      # `filename:renovate.json` returned 4 — against 79 repos that demonstrably
+      # extend the preset. Every scheduled run was logging "Discovered 1
+      # consumer repos" while the dashboard showed 616, because the writer
+      # unioned that with an org-wide PR search (see renovate_fleet_scan.py).
+      #
+      # discover_org_consumers.py lists with `gh repo list` and reads each
+      # renovate.json over the API, so it is deterministic and — relevant here —
+      # `--no-archived`, which keeps departed repos off the dashboard (FND-960).
+      - name: Discover atlan-application-sdk consumers
+        id: discover_fleet
+        if: inputs.repo == ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/discover_org_consumers.py --owner atlanhq
 
       - name: Gather Renovate PR data
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          REPOS: ${{ steps.discover.outputs.repos }}
+          REPOS: ${{ steps.discover_fleet.outputs.repos || steps.discover_single.outputs.repos }}
           SINGLE_REPO: ${{ inputs.repo }}
         run: |
           set -euo pipefail
