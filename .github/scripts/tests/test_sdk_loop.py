@@ -37,8 +37,10 @@ from sdk_loop_common import (  # noqa: E402
     MAX_ROUNDS,
     PHASE2_AGENTS,
     PROVIDER,
+    RESEARCH_DISCIPLINE,
     RESOLVE_MODEL,
     REVIEW_MODEL,
+    SUBAGENT_MAX_STEPS,
     AgentResult,
     DismissalLedger,
     _follow_opencode_log,
@@ -406,6 +408,62 @@ def test_the_delta_range_never_narrows_the_review() -> None:
     assert "any line of the PR" in prompt
 
 
+def test_sub_agents_keep_opencodes_repetition_detector_switched_on() -> None:
+    """`doom_loop: allow` turns opencode's own loop detector OFF, and this lane
+    shipped it that way. A live ci-config sub-agent then spent 19 steps and 18
+    minutes on one question the repo already answers in a comment, re-reading
+    the same scratch file five times.
+
+    The parent keeps `allow` on purpose — its phase-boundary budget checks and
+    offset re-reads of the playbook are repetition by design, and nothing has
+    been observed looping there. The asymmetry is the point of this test.
+    """
+    monkey = pytest.MonkeyPatch()
+    monkey.setenv("LITELLM_BASE_URL", "https://gateway.example")
+    try:
+        cfg = opencode_config(REVIEW_MODEL, with_subagents=True)
+    finally:
+        monkey.undo()
+
+    for name, spec in cfg["agent"].items():
+        assert (
+            spec["permission"]["doom_loop"] == "deny"
+        ), f"{name} must not have opencode's repetition detector disabled"
+    assert cfg["permission"]["doom_loop"] == "allow", (
+        "the primary orchestrates by design-repeated steps; only sub-agents "
+        "were observed looping"
+    )
+
+
+def test_sub_agents_are_told_to_check_local_prior_art_before_researching() -> None:
+    """Not a ban on reading third-party source — that is how a reviewer catches
+    a wrong-semantics call. The rule is about order and bound: the run this is
+    written from went external to re-derive a fact its own repo documents, then
+    kept going after two sources had failed to settle it."""
+    monkey = pytest.MonkeyPatch()
+    monkey.setenv("LITELLM_BASE_URL", "https://gateway.example")
+    try:
+        cfg = opencode_config(REVIEW_MODEL, with_subagents=True)
+    finally:
+        monkey.undo()
+
+    for name, spec in cfg["agent"].items():
+        assert (
+            RESEARCH_DISCIPLINE in spec["prompt"]
+        ), f"{name} is missing the research-discipline preamble"
+    # The capability itself must survive: a ban would cost real findings.
+    assert "legitimate and encouraged" in RESEARCH_DISCIPLINE
+
+
+def test_the_sub_agent_step_cap_is_below_the_observed_runaway() -> None:
+    """Sizing this off a flat per-step cost was the original mistake. Measured
+    step latency climbed 14s, 35s, 68s, 58s, 121s as context accumulated, so 60
+    steps was never the ~13 minutes its comment claimed."""
+    assert (
+        SUBAGENT_MAX_STEPS <= 25
+    ), "a cap this lane cannot reach inside its own time budget is not a cap"
+
+
 def test_the_lane_marker_matches_the_playbook_contract() -> None:
     """One string, two files — the shape that rots without anyone noticing.
 
@@ -456,7 +514,9 @@ def test_the_phase_two_agents_are_registered_so_the_fan_out_can_happen() -> None
             # a verdict. Asserting against the file's real bytes also proves
             # the brief exists, which the string form never did.
             brief = pathlib.Path(f".mothership/pr-review/agents/{name}.md")
-            assert spec["prompt"] == brief.read_text(encoding="utf-8")
+            assert (
+                brief.read_text(encoding="utf-8") in spec["prompt"]
+            ), f"{name}'s prompt must carry its playbook brief verbatim"
             assert spec["prompt"].strip(), f"{name} brief is empty"
             # Read-only in the agent as well as in the credential.
             assert spec["permission"]["edit"] == "deny"
