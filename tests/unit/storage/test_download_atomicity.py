@@ -202,6 +202,126 @@ class TestDiscardKeepsDestination:
         assert not state.exists()
 
 
+class TestCleanupCannotReplaceTheTransferResult:
+    """Staging cleanup is best-effort in fact, not only in the docstring.
+
+    ``missing_ok=True`` covers ``FileNotFoundError`` and nothing else, so an
+    undeletable staging file (EPERM, EBUSY, a read-only remount) would escape
+    the cleanup and *replace* whatever the caller was about to report: the
+    412/404 path would raise a bare ``OSError`` where the contract promises
+    ``StorageNotFoundError`` / ``StorageError``, and a copy that had already
+    succeeded would fail on the way out. Leaving a file behind is the lesser
+    fault in both.
+    """
+
+    @staticmethod
+    def _deny_unlink(*denied: Path):
+        """Patch ``Path.unlink`` to raise EPERM for *denied*, else pass through."""
+        real_unlink = Path.unlink
+        targets = {str(d) for d in denied}
+
+        def unlink(self, missing_ok=False):
+            if str(self) in targets:
+                raise PermissionError(13, "Operation not permitted")
+            return real_unlink(self, missing_ok=missing_ok)
+
+        return patch.object(Path, "unlink", unlink)
+
+    def test_discard_survives_an_undeletable_part_file(self, tmp_path) -> None:
+        dest = tmp_path / "records.json"
+        part = _part_path(dest)
+        part.parent.mkdir(parents=True, exist_ok=True)
+        part.write_bytes(b"stuck")
+        state = _transfer_state_path(dest)
+        state.write_bytes(b"{}")
+
+        with self._deny_unlink(part):
+            _discard_transfer_state(dest)  # must not raise
+
+        assert part.exists()  # genuinely undeletable, so the test is not vacuous
+        assert not state.exists(), (
+            "the second unlink was skipped because the first failed — cleanup "
+            "should attempt both"
+        )
+
+    async def test_404_still_raises_the_typed_error_when_cleanup_fails(
+        self, store, tmp_path
+    ) -> None:
+        """The reported shape: a stuck part file on the 404 path must not turn
+        ``StorageNotFoundError`` into a bare ``OSError``."""
+        from application_sdk.storage.errors import StorageNotFoundError
+
+        content = bytes(range(256)) * 4
+        await _put("gone/c.bin", content, store, normalize=False)
+        path = tmp_path / "c.bin"
+        part = _part_path(path)
+
+        real_get = obstore.get_async
+
+        async def vanish(st, key, **kw):
+            if (kw.get("options") or {}).get("range"):
+                raise FileNotFoundError(f"no such key: {key}")
+            return await real_get(st, key, **kw)
+
+        def _download():
+            return download_file_chunked(
+                "gone/c.bin",
+                path,
+                store,
+                chunk_size_bytes=64,
+                max_concurrent_chunks=1,
+                normalize=False,
+                verify=False,
+                resume=False,
+            )
+
+        with (
+            patch("application_sdk.storage.ops.obstore.get_async", new=vanish),
+            self._deny_unlink(part),
+        ):
+            with pytest.raises(StorageNotFoundError):
+                await _download()
+
+    async def test_successful_copy_survives_an_undeletable_part_file(
+        self, store, tmp_path
+    ) -> None:
+        """``_upload_from_store``'s ``finally`` runs after a copy has already
+        succeeded, so cleanup there must never turn success into failure."""
+        from application_sdk.storage.transfer import _upload_from_store
+
+        content = bytes(range(256)) * 4
+        await _put("copy/ok.bin", content, store, normalize=False)
+        target = create_memory_store()
+
+        parts: list[Path] = []
+        real_replace = os.replace
+
+        def record_and_publish(src, dst, *args, **kwargs):
+            src_path = Path(src)
+            if src_path.parent.name == PARTIAL_DIRNAME:
+                parts.append(src_path)
+            return real_replace(src, dst, *args, **kwargs)
+
+        real_unlink = Path.unlink
+
+        def deny_part_unlink(self, missing_ok=False):
+            if self.parent.name == PARTIAL_DIRNAME and self.suffix == ".part":
+                raise PermissionError(13, "Operation not permitted")
+            return real_unlink(self, missing_ok=missing_ok)
+
+        with (
+            patch.dict(download_file_chunked.__kwdefaults__, {"chunk_size_bytes": 64}),
+            patch("application_sdk.storage.chunked.os.replace", new=record_and_publish),
+            patch.object(Path, "unlink", deny_part_unlink),
+        ):
+            transferred, reason = await _upload_from_store(
+                store, "copy/ok.bin", target, "copy/ok.bin"
+            )
+
+        assert (transferred, reason) == (True, "uploaded")
+        assert parts, "the chunked path never published — test proves nothing"
+
+
 class TestCancellationCleanup:
     """A cancelled download must not strand a uniquely-named staging file."""
 

@@ -159,9 +159,21 @@ def _discard_transfer_state(path: Path) -> None:
     published complete generation, which stays valid — and stays useful to
     its readers — even when the stored object was rewritten (412) or deleted
     (404) mid-download (CONNECT-1126).
+
+    "Best-effort" is enforced here rather than promised: ``missing_ok`` covers
+    only ``FileNotFoundError``, so without the suppression an undeletable
+    staging file (EPERM, EBUSY, a read-only remount) would propagate out of
+    every caller and *replace* the result they were reporting — the 412/404
+    path in :func:`_handle_chunk_failure` would raise ``OSError`` in place of
+    the typed ``StorageNotFoundError`` / ``StorageError``, and the owned-temp
+    cleanups in ``storage.transfer`` would fail a copy that had already
+    succeeded. Leaving a file behind is the lesser fault in every one of
+    those cases, and the second unlink is attempted even when the first
+    fails.
     """
-    _part_path(path).unlink(missing_ok=True)
-    _transfer_state_path(path).unlink(missing_ok=True)
+    for staging in (_part_path(path), _transfer_state_path(path)):
+        with contextlib.suppress(OSError):
+            staging.unlink(missing_ok=True)
 
 
 def _load_and_validate_checkpoint(
@@ -357,8 +369,12 @@ def _handle_chunk_failure(
     if not resume:
         # Legacy behaviour: no checkpoint, so an in-flight part file is
         # garbage. The destination itself is untouched — it only ever holds
-        # a previous complete generation.
-        _part_path(path).unlink(missing_ok=True)
+        # a previous complete generation. Suppressed for the same reason
+        # _discard_transfer_state suppresses: this runs immediately before the
+        # typed raise below, so an undeletable part file would replace the
+        # transfer's real error with a bare OSError.
+        with contextlib.suppress(OSError):
+            _part_path(path).unlink(missing_ok=True)
     # With resume enabled the part file + sidecar stay on disk —
     # the next attempt (Temporal retry, same pod) fetches only the
     # missing ranges recorded in the checkpoint.
