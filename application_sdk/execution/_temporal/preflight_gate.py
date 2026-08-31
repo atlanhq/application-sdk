@@ -928,6 +928,48 @@ def _unverifiable_result(exc: BaseException, app_name: str) -> PreflightOutput:
 # connectivity failure — blocking a hard-mode run for its own starvation.
 _STORAGE_CHECK_MIN_SECONDS = 15.0
 
+# Name and sentinel ``code`` for the advisory row emitted when the opt-in was set
+# but the probes did not run. Distinct from a probe *failure*: a consumer counting
+# failed ``objectStoreAccess:*`` checks — the connector-pulse precision
+# measurement soft mode exists for — must not read "never measured" as "the store
+# rejected the write". The row stays ``passed=False`` (an owner who opted in has a
+# real gap to close) and never downgrades the verdict, since nothing was measured
+# and so nothing was disproved.
+STORAGE_UNVERIFIED_CHECK_NAME = "objectStoreAccess:skipped"
+OBJECT_STORE_UNVERIFIED_CODE = "OBJECT_STORE_NOT_VERIFIED"
+
+
+def _unverified_storage_check(message: str, *, app_owner: bool) -> PreflightCheck:
+    """Build the advisory row for storage the gate could not verify.
+
+    Every path that leaves the opt-in unmeasured goes through here, so the three
+    of them cannot drift into two visible and one silent: a budget too small to
+    start the probes, no infrastructure context to probe, and the checker itself
+    failing. ``app_owner`` picks the locus — a budget the app declared is the
+    owner's to raise, while a missing context or a crashed checker is Atlan-side
+    plumbing.
+    """
+    leaf = (
+        AppTimeoutError(
+            message=message,
+            operation="preflight_storage_check",
+            suggested_action=(
+                "Raise preflight_gate_timeout_seconds, or shorten the handler's "
+                "own checks, so the storage probes fit in the gate budget."
+            ),
+        )
+        if app_owner
+        else DependencyUnavailableError(message=message, service="object_store")
+    )
+    return PreflightCheck(
+        name=STORAGE_UNVERIFIED_CHECK_NAME,
+        passed=False,
+        message=message,
+        error=leaf.to_failure_details().model_copy(
+            update={"code": OBJECT_STORE_UNVERIFIED_CODE}
+        ),
+    )
+
 
 def _storage_failure_details(result: Any, *, sdr_mode: bool) -> Any:
     """Map a failed storage probe onto typed ``FailureDetails`` for a gate check.
@@ -1010,6 +1052,12 @@ async def _append_storage_checks(
     the slot cannot change that). **Never raises**: any unexpected failure logs
     and leaves the handler's verdict as it was.
 
+    Every path that leaves the opt-in unmeasured — too little budget, no
+    infrastructure context, a crashed checker — appends the
+    :func:`_unverified_storage_check` advisory row. Only the
+    ``NOT_READY``-already case is silent, because the run is blocked or reported
+    on the handler's verdict whatever storage would have said.
+
     Returns:
         ``True`` when at least one storage probe failed (the verdict was
         downgraded), so the caller can defer the block to the gate's retry
@@ -1030,16 +1078,12 @@ async def _append_storage_checks(
             # Visible, not a debug-level nothing: the owner opted in, so
             # 'storage verified clean' and 'storage never probed' must be
             # distinguishable in the check matrix (and to connector-pulse).
-            # Failed-but-not-downgrading = advisory; the verdict stands.
             result.checks.append(
-                PreflightCheck(
-                    name="objectStoreAccess:skipped",
-                    passed=False,
-                    message=(
-                        "Storage was not verified: the handler left "
-                        f"{remaining:.1f}s of the gate budget, under the "
-                        f"{_STORAGE_CHECK_MIN_SECONDS:.0f}s the checks need"
-                    ),
+                _unverified_storage_check(
+                    "Storage was not verified: the handler left "
+                    f"{remaining:.1f}s of the gate budget, under the "
+                    f"{_STORAGE_CHECK_MIN_SECONDS:.0f}s the checks need",
+                    app_owner=True,
                 )
             )
             return False
@@ -1054,6 +1098,20 @@ async def _append_storage_checks(
             get_infrastructure(), timeout_seconds=remaining - 1.0
         )
         if not probes:
+            # No infrastructure context to probe. Same visibility rule as the
+            # budget skip: an opted-in owner must never read an empty check
+            # matrix as a clean bill of health.
+            logger.info(
+                "Run-path storage checks found no store to probe; storage "
+                "is unverified for this run"
+            )
+            result.checks.append(
+                _unverified_storage_check(
+                    "Storage was not verified: no infrastructure context was "
+                    "available to probe",
+                    app_owner=False,
+                )
+            )
             return False
         first_failed_details = None
         for probe in probes:
@@ -1094,12 +1152,27 @@ async def _append_storage_checks(
             result.error = first_failed_details
             return True
         return False
-    except Exception:
+    except Exception as exc:
         logger.warning(
             "Run-path storage checks could not run; proceeding without "
             "storage verification",
             exc_info=True,
         )
+        # Fails open on the verdict, but not on the record: the same advisory
+        # row the other two unmeasured paths emit, so 'the checker broke' is
+        # visible rather than indistinguishable from 'verified clean'. Appending
+        # is itself guarded — a result object this cannot mutate must not turn
+        # the fail-open into a raise.
+        try:
+            result.checks.append(
+                _unverified_storage_check(
+                    "Storage was not verified: the storage checker failed "
+                    f"({sanitize_cause_repr(exc)})",
+                    app_owner=False,
+                )
+            )
+        except Exception:
+            logger.debug("Could not append the unverified-storage row", exc_info=True)
         return False
 
 
@@ -1385,7 +1458,18 @@ def build_preflight_gate_activity(
         # number: a handler that sizes its probes to this field — exactly what
         # the docs say to do — must still leave the storage check its floor,
         # or the opt-in silently degrades to a skip.
-        reserved = _STORAGE_CHECK_MIN_SECONDS if verify_storage else 0.0
+        #
+        # Capped at half the remaining budget, the same shape as
+        # :func:`_min_handler_seconds`: an uncapped reserve starves the source
+        # check on a small declared budget (a 10s budget would hand the handler
+        # 1s, then blame the source for the timeout — precisely what the
+        # credential-resolution guard above exists to prevent), and the storage
+        # dimension is the opt-in extra, never the thing that squeezes out the
+        # check the gate exists for. When the cap bites, the storage check takes
+        # its skip path and says so in a visible row.
+        reserved = (
+            min(_STORAGE_CHECK_MIN_SECONDS, remaining / 2) if verify_storage else 0.0
+        )
         handler_budget = max(1, int(remaining - reserved))
         # Build form config from the extraction-input snapshot in the activity
         # frame so app field reads stay outside the deterministic workflow.

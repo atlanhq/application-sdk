@@ -511,14 +511,22 @@ class MyConnector(App):
 A failed probe appends a typed, platform-attributed check (`objectStoreAccess:<store>`, with a
 relocation rejection stamped `DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION`) and downgrades a
 `READY` or `PARTIAL` verdict to `NOT_READY` — so `preflight_gate_mode` still decides whether it
-blocks; soft mode reports it as `would_block`. The storage floor is reserved out of the budget
-advertised to the handler (`PreflightInput.timeout_seconds`); if the handler still consumes
-everything, the skip is visible as a failed `objectStoreAccess:skipped` advisory row rather than
-silent. The probe is skipped when the handler already returned `NOT_READY`, and a failure of the
-probe machinery itself fails open. Note the
-deliberate taxonomy choice: gate *plumbing* failures fail open, but a storage failure confirmed
-across the gate's retry attempts blocks in hard mode — a store rejecting every upload for hours
-is not the transient blip fail-open protects.
+blocks; soft mode reports it as `would_block`.
+
+The storage floor is reserved out of the budget advertised to the handler
+(`PreflightInput.timeout_seconds`), capped at half of it — the opt-in extra never squeezes out the
+source check the gate exists for, so an app declaring a small `preflight_gate_timeout_seconds`
+keeps a usable handler budget and simply gets the skip below. Every path that leaves storage
+unmeasured — too little budget, no infrastructure context, a checker that failed — appends a
+failed `objectStoreAccess:skipped` advisory row stamped `OBJECT_STORE_NOT_VERIFIED`, so
+"never probed" is visible in the check matrix and distinguishable from a real rejection by its
+code. Those rows never downgrade the verdict: nothing was measured, so nothing was disproved. The
+probe is skipped silently only when the handler already returned `NOT_READY`, since the run is
+blocked or reported on that verdict whatever storage would have said.
+
+Note the deliberate taxonomy choice: gate *plumbing* failures fail open, but a storage failure
+confirmed across the gate's retry attempts blocks in hard mode — a store rejecting every upload
+for hours is not the transient blip fail-open protects.
 
 `PreflightInput.timeout_seconds` carries what is *left* after credential resolution, so a handler
 sizing probes to that field is sizing to the real deadline. Three rules follow:

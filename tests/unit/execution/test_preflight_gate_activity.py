@@ -77,8 +77,10 @@ class _StubHandler(Handler):
         return SqlMetadataOutput(objects=[])
 
 
-def _gate(handler: Handler):
-    activity = build_preflight_gate_activity(handler, app_name="myapp")
+def _gate(handler: Handler, *, verify_storage: bool = False):
+    activity = build_preflight_gate_activity(
+        handler, app_name="myapp", verify_storage=verify_storage
+    )
     assert getattr(activity, "__temporal_activity_definition").name == "myapp:preflight"
     return activity
 
@@ -1756,6 +1758,98 @@ class TestPreflightGateStorageChecks:
         block = _build_block_error(result, "myapp")
         assert block.details[0].code == StorageBucketRelocationError.code
 
+    @pytest.mark.parametrize("declared", [5, 10, 16, 20, 30, 150, 300])
+    async def test_reserve_never_starves_the_handler(self, declared: int) -> None:
+        """The storage reserve must never take the handler below half its budget.
+
+        An uncapped reserve hands a small-budget app's source handler a single
+        second and then attributes the timeout to the source — the failure the
+        credential-resolution guard exists to prevent, reached through the
+        opt-in instead. Half is the same bound ``_min_handler_seconds`` uses.
+        """
+        from application_sdk.execution._temporal.preflight_gate import (
+            _effective_budget,
+            resolve_gate_budget_seconds,
+        )
+
+        budget = _effective_budget(resolve_gate_budget_seconds(declared))
+        handler = _StubHandler()
+        gate = build_preflight_gate_activity(
+            handler,
+            app_name="myapp",
+            budget_seconds=resolve_gate_budget_seconds(declared),
+            verify_storage=True,
+        )
+        with self._storage_patches([self._passed_result()]):
+            await gate(PreflightGateInput())
+        assert handler.preflight_input is not None
+        # Half the budget, less the second the advertised value loses to
+        # ``int()`` truncation and credential-resolution elapsed time. The bug
+        # this pins gave a 10s-budget app's handler 1s, not 4s.
+        assert handler.preflight_input.timeout_seconds >= budget / 2 - 1, (
+            declared,
+            handler.preflight_input.timeout_seconds,
+        )
+
+    async def test_unverified_row_is_distinguishable_from_a_probe_failure(
+        self,
+    ) -> None:
+        """A skip and a real outage must not be the same row to a consumer.
+
+        Both are failed ``objectStoreAccess:*`` checks, so the only thing that
+        separates "never measured" from "the store rejected the write" is the
+        typed code — and connector-pulse counts these.
+        """
+        from application_sdk.execution._temporal.preflight_gate import (
+            OBJECT_STORE_UNVERIFIED_CODE,
+        )
+        from application_sdk.storage.errors import StorageBucketRelocationError
+
+        skipped_gate = build_preflight_gate_activity(
+            _StubHandler(), app_name="myapp", budget_seconds=5, verify_storage=True
+        )
+        with (
+            self._storage_patches([self._reloc_result()]),
+            mock.patch(f"{_GATE}._STORAGE_CHECK_MIN_SECONDS", 10_000.0),
+        ):
+            skipped = await skipped_gate(PreflightGateInput())
+        (skip_row,) = [c for c in skipped.checks if c.name.startswith("objectStore")]
+        assert skip_row.error is not None
+        assert skip_row.error.code == OBJECT_STORE_UNVERIFIED_CODE
+        assert skip_row.error.code != StorageBucketRelocationError.code
+
+    async def test_absent_infrastructure_context_is_visible(self) -> None:
+        """No store to probe is 'unverified', not an empty clean matrix."""
+        from application_sdk.execution._temporal.preflight_gate import (
+            OBJECT_STORE_UNVERIFIED_CODE,
+        )
+
+        gate = _gate(_StubHandler(), verify_storage=True)
+        with self._storage_patches([]):
+            result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.READY
+        (row,) = [c for c in result.checks if c.name.startswith("objectStore")]
+        assert row.passed is False
+        assert row.error is not None
+        assert row.error.code == OBJECT_STORE_UNVERIFIED_CODE
+
+    async def test_checker_crash_leaves_a_visible_row(self) -> None:
+        """The fail-open must fail open on the verdict, not on the record."""
+        from application_sdk.execution._temporal.preflight_gate import (
+            OBJECT_STORE_UNVERIFIED_CODE,
+        )
+
+        gate = _gate(_StubHandler(), verify_storage=True)
+        with mock.patch(
+            f"{_GATE}.get_infrastructure", side_effect=RuntimeError("boom")
+        ):
+            result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.READY
+        (row,) = [c for c in result.checks if c.name.startswith("objectStore")]
+        assert row.passed is False
+        assert row.error is not None
+        assert row.error.code == OBJECT_STORE_UNVERIFIED_CODE
+
 
 def test_gate_module_import_does_not_load_obstore() -> None:
     """Importing the gate module must not pull obstore into its import set.
@@ -1776,4 +1870,5 @@ def test_gate_module_import_does_not_load_obstore() -> None:
         "assert 'obstore' not in sys.modules, 'obstore leaked'; "
         "assert 'application_sdk.storage.ops' not in sys.modules, 'ops leaked'"
     )
-    subprocess.run([sys.executable, "-c", code], check=True)
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
