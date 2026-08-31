@@ -14,11 +14,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import sweep_dashboard_repos as sweep_module  # noqa: E402
 from sweep_dashboard_repos import (  # noqa: E402
     BUCKET,
     archived_state,
     list_slugs,
     load_roster,
+    main,
     slug_to_repo,
     sweep,
 )
@@ -333,3 +335,48 @@ def test_a_good_roster_loads_as_a_set(tmp_path):
         "atlanhq/atlan-mysql-app",
         "atlanhq/application-sdk",
     }
+
+
+def test_a_roster_may_not_be_fanned_across_prefixes(tmp_path, capsys):
+    """The panels do not share a publish scope.
+
+    gate-enforcement-dashboard spans every repo its probe visits (~166) against
+    renovate's ~80, so the Renovate roster would name about half of a healthy
+    panel for deletion — a fraction well under any cap an operator would raise
+    for a genuine cleanup. The fan-out itself has to be refused, before any
+    listing happens.
+    """
+    roster_file = tmp_path / "roster.json"
+    roster_file.write_text('["atlanhq/atlan-mysql-app"]')
+
+    rc = main(
+        [
+            "--prefixes",
+            "renovate-dashboard,gate-enforcement-dashboard",
+            "--roster-file",
+            str(roster_file),
+        ]
+    )
+    assert rc == 2
+    assert "exactly one --prefixes entry" in capsys.readouterr().err
+
+
+def test_the_archived_sweep_still_fans_out_across_prefixes(monkeypatch):
+    """Archived-ness is a property of the repo, not of a panel's scope, so the
+    multi-prefix default stays valid for that criterion."""
+    seen: list = []
+
+    def fake_sweep(prefix, tmp_dir, **kwargs):
+        seen.append(prefix)
+        assert kwargs["roster"] is None
+        return {
+            "prefix": prefix,
+            "stored": 0,
+            "swept": [],
+            "refused": [],
+            "unknown": [],
+        }
+
+    monkeypatch.setattr(sweep_module, "sweep", fake_sweep)
+    assert main(["--prefixes", "security-dashboard,renovate-dashboard"]) == 0
+    assert seen == ["security-dashboard", "renovate-dashboard"]

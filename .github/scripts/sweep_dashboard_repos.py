@@ -25,8 +25,16 @@ from an explicit roster of repos that belong on the panel — typically
 publisher's own scope. GitHub is not consulted at all: the roster is the whole
 question. This is what cleans up a publisher that used to write repos it should
 never have written; the archived criterion cannot, since those repos are alive.
-An empty roster is REFUSED rather than read as "delete everything", for the
-same reason a 401 must not read as an empty fleet.
+
+Two refusals guard it, because a roster narrower than the prefix it is applied
+to names legitimate rows for deletion:
+
+* An empty roster is REFUSED rather than read as "delete everything", for the
+  same reason a 401 must not read as an empty fleet.
+* Exactly ONE prefix per invocation. The dashboards do not share a publish
+  scope — the gate-enforcement panel spans every repo its probe visits (~166),
+  the Renovate one ~80 — so fanning one roster across prefixes would delete
+  half of a healthy panel, at a fraction no cap would catch.
 
 A delete the bucket refuses (AccessDenied, throttling) leaves the slug in
 ``repos.json``: the manifest tracks what is actually stored, so a row may only
@@ -331,8 +339,10 @@ def main(argv: Optional[list] = None) -> int:
         help="JSON array of 'owner/repo' names that BELONG on the panel (e.g. "
         "discover_org_consumers.py's output). Switches the criterion from "
         "'archived on GitHub' to 'absent from this roster', which is the only "
-        "way to clean up live repos a publisher should never have written. An "
-        "empty or unreadable roster is refused, never read as 'delete all'.",
+        "way to clean up live repos a publisher should never have written. "
+        "Requires exactly one --prefixes entry, since a roster describes one "
+        "publisher's scope. An empty or unreadable roster is refused, never read "
+        "as 'delete all'.",
     )
     args = parser.parse_args(argv)
 
@@ -343,11 +353,27 @@ def main(argv: Optional[list] = None) -> int:
 
     roster = None
     if args.roster_file is not None:
+        # One prefix per roster invocation. A roster states the publish scope of
+        # ONE publisher, and the dashboards do not share a scope: the
+        # gate-enforcement panel covers every repo the enforcement probe visits
+        # (~166), so applying the Renovate roster (~80) to it would name half of
+        # a legitimate panel for deletion. That is not a cap problem — 86 of 166
+        # is under any fraction an operator would raise the cap to for a genuine
+        # cleanup — so the fan-out itself has to be refused.
+        if len(prefixes) != 1:
+            print(
+                f"::error::--roster-file takes exactly one --prefixes entry, got "
+                f"{len(prefixes)} ({', '.join(prefixes)}). A roster describes one "
+                "publisher's scope; applying it to another dashboard would delete "
+                "rows that legitimately belong there. Run one prefix at a time.",
+                file=sys.stderr,
+            )
+            return 2
         roster = load_roster(args.roster_file)
         if roster is None:
             return 2
         print(
-            f"Roster: {len(roster)} repos belong on {', '.join(prefixes)}",
+            f"Roster: {len(roster)} repos belong on {prefixes[0]}",
             file=sys.stderr,
         )
 

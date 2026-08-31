@@ -7,12 +7,13 @@
 #   Single slug (repo_slug set): remove exactly that repo from one prefix.
 #   Archived sweep (sweep_archived: true): find every repo in the named
 #     prefixes that GitHub reports as archived and remove those.
-#   Unlisted sweep (sweep_unlisted: true): find every repo in the named prefixes
-#     that is NOT on the current fleet roster and remove those. For repos that
-#     are alive and well but were never supposed to be on the panel — the
-#     archived sweep cannot reach them, and a slug-at-a-time prune does not
-#     scale past a handful. Point it at ONE prefix at a time unless the roster
-#     genuinely describes every prefix named.
+#   Unlisted sweep (sweep_unlisted: true): find every repo on ONE prefix
+#     (unlisted_prefix) that is NOT on the current fleet roster and remove those.
+#     For repos that are alive and well but were never supposed to be on the
+#     panel — the archived sweep cannot reach them, and a slug-at-a-time prune
+#     does not scale past a handful. One prefix per run is enforced, not advised:
+#     the panels do not share a publish scope, so a roster applied to the wrong
+#     one names legitimate rows for deletion.
 #
 # The sweeps exist because a manifest is rebuilt by LISTING the bucket, which has
 # no deletion path — so a repo that does not belong keeps being enumerated
@@ -36,7 +37,7 @@
 #   # default — state the blast radius, then repeat with sweep_dry_run=false.
 #   gh workflow run prune-dashboard-repo.yaml \
 #     -f sweep_unlisted=true \
-#     -f sweep_prefixes=renovate-dashboard \
+#     -f unlisted_prefix=renovate-dashboard \
 #     -f sweep_max_fraction=0.8 \
 #     -f sweep_dry_run=true
 #
@@ -56,14 +57,19 @@ on:
         default: false
         type: boolean
       sweep_unlisted:
-        description: "Sweep every repo NOT on the current fleet roster out of the prefixes below. For a publisher that wrote repos it never should have (live repos, so the archived sweep cannot reach them)."
+        description: "Sweep every repo NOT on the current fleet roster out of unlisted_prefix. For a publisher that wrote repos it never should have (live repos, so the archived sweep cannot reach them)."
         required: false
         default: false
         type: boolean
       sweep_prefixes:
-        description: "Prefixes to sweep, comma-separated. Only used by the sweep modes."
+        description: "Prefixes to sweep, comma-separated. sweep_archived only — the archived criterion is true of a repo regardless of which panel it sits on, so it is safe to fan out."
         required: false
         default: "conformance-dashboard,security-dashboard,test-readiness-dashboard,gate-enforcement-dashboard,renovate-dashboard"
+        type: string
+      unlisted_prefix:
+        description: "sweep_unlisted only: the ONE prefix to sweep. Deliberately separate from sweep_prefixes — a roster describes one publisher's scope, and the panels do not share one (gate-enforcement spans ~166 repos, renovate ~80), so a roster fanned across prefixes deletes rows that belong."
+        required: false
+        default: "renovate-dashboard"
         type: string
       sweep_dry_run:
         description: "Sweep mode: report what would be removed and change nothing"
@@ -76,7 +82,7 @@ on:
         default: "0.2"
         type: string
       sweep_roster_name_pattern:
-        description: "sweep_unlisted only: regex a repo's bare name must match to belong on the panel. The default matches the renovate dashboard's own publish scope. Widen it if a prefix you are sweeping legitimately covers more repos than that."
+        description: "sweep_unlisted only: regex a repo's bare name must match to belong on the panel. The default matches the renovate dashboard's own publish scope, so it goes with unlisted_prefix=renovate-dashboard. Sweeping a different panel means setting BOTH — a pattern narrower than the panel deletes rows that belong."
         required: false
         default: "^(atlan-[a-z0-9-]+-app|application-sdk)$"
         type: string
@@ -218,10 +224,15 @@ jobs:
             --name-pattern "$NAME_PATTERN" \
             --fail-on-empty
 
+      # One prefix, from its own input — never sweep_prefixes, whose default
+      # names all five panels. The script refuses more than one anyway; passing
+      # the dedicated input means an operator following the header's cleanup
+      # recipe (raise the cap, turn off dry-run) cannot reach the other panels
+      # by leaving a default alone.
       - name: Sweep repos that are not on the roster
         if: inputs.sweep_unlisted
         env:
-          PREFIXES: ${{ inputs.sweep_prefixes }}
+          PREFIX: ${{ inputs.unlisted_prefix }}
           DRY_RUN: ${{ inputs.sweep_dry_run && '--dry-run' || '' }}
           MAX_FRACTION: ${{ inputs.sweep_max_fraction }}
           ROSTER: ${{ steps.roster.outputs.repos }}
@@ -229,6 +240,6 @@ jobs:
           set -euo pipefail
           printf '%s' "$ROSTER" > /tmp/fleet-roster.json
           python3 .github/scripts/sweep_dashboard_repos.py \
-            --prefixes "$PREFIXES" \
+            --prefixes "$PREFIX" \
             --roster-file /tmp/fleet-roster.json \
             --max-fraction "$MAX_FRACTION" $DRY_RUN
