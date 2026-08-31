@@ -820,10 +820,16 @@ def test_the_action_pins_in_the_generator_match_the_generated_file() -> None:
     gen = (
         pathlib.Path(__file__).resolve().parents[1] / "gen_sdk_loop_workflow.py"
     ).read_text(encoding="utf-8")
-    pin = re.compile(r"uses: (actions/[a-z-]+@[0-9a-f]{40})")
-    assert set(pin.findall(gen)) <= set(
-        pin.findall(WORKFLOW.read_text(encoding="utf-8"))
-    )
+    wf = WORKFLOW.read_text(encoding="utf-8")
+    # Guard everything Renovate can bump in the OUTPUT, not just action SHAs:
+    # after the SHA drift it bumped python-version next, and a pins-only guard
+    # missed that exactly the way it had missed the SHAs.
+    for label, pattern in (
+        ("action pin", r"uses: (actions/[a-z-]+@[0-9a-f]{40})"),
+        ("python-version", r"python-version: ('[0-9.]+')"),
+    ):
+        drift = set(re.findall(pattern, gen)) - set(re.findall(pattern, wf))
+        assert not drift, f"{label} in generator but not in output: {sorted(drift)}"
 
 
 def test_the_committed_workflow_matches_its_generator() -> None:
