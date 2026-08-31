@@ -1,4 +1,4 @@
-"""Tests for .github/scripts/sweep_archived_dashboard_repos.py.
+"""Tests for .github/scripts/sweep_dashboard_repos.py.
 
 The sweep DELETES dashboard objects, so the cases here are weighted towards what
 it must refuse: an unreadable repo state, an unexpected object in the prefix, and
@@ -14,10 +14,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from sweep_archived_dashboard_repos import (  # noqa: E402
+from sweep_dashboard_repos import (  # noqa: E402
     BUCKET,
     archived_state,
     list_slugs,
+    load_roster,
     slug_to_repo,
     sweep,
 )
@@ -203,3 +204,132 @@ def test_a_partial_delete_failure_still_sweeps_the_rest(tmp_path):
         "atlanhq_atlan-live-app.json",
         "atlanhq_b-dead-app.json",
     ]
+
+
+# ── roster mode ──────────────────────────────────────────────────────────────
+
+
+def test_a_repo_off_the_roster_is_swept_even_though_it_is_alive(tmp_path):
+    """The criterion the archived sweep cannot express.
+
+    A repo like `AI-taskforce` is healthy and was never a consumer; the only
+    thing wrong with it is that a publisher wrote it to a panel whose scope it
+    was never in. Archived-ness has nothing to say about that.
+    """
+    s3 = FakeS3(_bucket("atlanhq_atlan-mysql-app", "atlanhq_AI-taskforce"))
+    result = sweep(
+        PREFIX,
+        tmp_path,
+        run=s3,
+        gh=_gh(),  # never consulted
+        roster={"atlanhq/atlan-mysql-app"},
+    )
+    assert result["swept"] == ["atlanhq_AI-taskforce"]
+    assert json.loads(s3.objects[f"{BUCKET}/{PREFIX}/repos.json"]) == [
+        "atlanhq_atlan-mysql-app.json"
+    ]
+
+
+def test_roster_mode_never_asks_github(tmp_path):
+    """Roster membership is the whole question, so a GitHub call is a bug: it
+    would make the sweep's verdict depend on a token roster mode does not need."""
+
+    def exploding_gh(repo: str) -> tuple:
+        raise AssertionError(f"roster mode must not query GitHub (asked: {repo})")
+
+    s3 = FakeS3(_bucket("atlanhq_atlan-mysql-app"))
+    sweep(
+        PREFIX,
+        tmp_path,
+        run=s3,
+        gh=exploding_gh,
+        roster={"atlanhq/atlan-mysql-app"},
+    )
+    assert s3.removed == []
+
+
+def test_an_unparsable_slug_is_reported_not_swept_in_roster_mode(tmp_path):
+    """A slug that is not `<owner>_<name>` cannot be compared to the roster, so
+    it is undetermined — not 'absent from the roster'."""
+    s3 = FakeS3(_bucket("atlanhq_atlan-mysql-app", "stray-object"))
+    result = sweep(
+        PREFIX,
+        tmp_path,
+        run=s3,
+        gh=_gh(),
+        roster={"atlanhq/atlan-mysql-app"},
+    )
+    assert result["unknown"] == ["stray-object"]
+    assert s3.removed == []
+
+
+def test_a_truncated_roster_trips_the_fraction_cap(tmp_path, capsys):
+    """A roster that lost most of the fleet looks exactly like a mass prune.
+
+    Same rail as a bad token in archived mode: the cleanup has to be asked for
+    at the size it actually is, rather than arriving as a surprise.
+    """
+    names = [f"atlanhq_atlan-app-{i}" for i in range(5)]
+    s3 = FakeS3(_bucket(*names))
+    result = sweep(
+        PREFIX,
+        tmp_path,
+        run=s3,
+        gh=_gh(),
+        roster={"atlanhq/atlan-app-0"},
+    )
+    assert s3.removed == []
+    assert len(result["refused"]) == 4
+    err = capsys.readouterr().err
+    assert "not on the roster" in err
+    assert "sweeping none" in err
+
+
+def test_a_large_cleanup_goes_through_once_the_cap_is_raised(tmp_path):
+    """The renovate-dashboard shape: most of what is stored does not belong."""
+    names = [f"atlanhq_atlan-app-{i}" for i in range(5)]
+    s3 = FakeS3(_bucket(*names))
+    result = sweep(
+        PREFIX,
+        tmp_path,
+        run=s3,
+        gh=_gh(),
+        roster={"atlanhq/atlan-app-0"},
+        max_fraction=0.8,
+    )
+    assert len(result["swept"]) == 4
+    assert json.loads(s3.objects[f"{BUCKET}/{PREFIX}/repos.json"]) == [
+        "atlanhq_atlan-app-0.json"
+    ]
+
+
+def test_an_empty_roster_is_refused_rather_than_read_as_delete_everything(tmp_path):
+    """The roster is the deletion criterion, so an empty one is not a criterion.
+
+    Discovery returning [] (a 401 on `gh repo list` looks identical to an empty
+    fleet) would otherwise name every stored repo for deletion.
+    """
+    roster_file = tmp_path / "roster.json"
+    roster_file.write_text("[]")
+    assert load_roster(roster_file) is None
+
+
+def test_an_unreadable_or_wrong_shaped_roster_is_refused(tmp_path):
+    assert load_roster(tmp_path / "nope.json") is None
+
+    malformed = tmp_path / "malformed.json"
+    malformed.write_text("{not json")
+    assert load_roster(malformed) is None
+
+    wrong_shape = tmp_path / "shape.json"
+    wrong_shape.write_text('{"repos": ["atlanhq/atlan-mysql-app"]}')
+    assert load_roster(wrong_shape) is None
+
+
+def test_a_good_roster_loads_as_a_set(tmp_path):
+    roster_file = tmp_path / "roster.json"
+    roster_file.write_text('["atlanhq/atlan-mysql-app", " atlanhq/application-sdk "]')
+    assert load_roster(roster_file) == {
+        "atlanhq/atlan-mysql-app",
+        "atlanhq/application-sdk",
+    }

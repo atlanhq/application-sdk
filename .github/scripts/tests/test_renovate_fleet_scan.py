@@ -384,9 +384,58 @@ def test_write_repo_files_falls_back_to_grouped_with_no_scope(tmp_path):
     # No known_repos at all (the file was absent) can only mean "whatever the
     # search found" — there is no other scope available to honour.
     grouped = {"atlanhq/surprise-repo": [{"number": 7}]}
-    rfs.write_repo_files(grouped, tmp_path, known_repos=[])
+    rfs.write_repo_files(grouped, tmp_path, known_repos=None)
     written = json.loads((tmp_path / "atlanhq_surprise-repo.json").read_text())
     assert written == [{"number": 7}]
+
+
+def test_write_repo_files_writes_nothing_for_an_empty_scope(tmp_path):
+    """An empty scope is a scope, not a missing one.
+
+    Discovery returning zero repos is a failure — a 401 on `gh repo list` is
+    indistinguishable from an empty fleet — so `[]` must NOT fall back to the
+    org-wide search result. That fallback is how the 616-repo dashboard would
+    come back: collapsed discovery, full dashboard of unrelated repos.
+    """
+    grouped = {f"atlanhq/unrelated-{i}": [{"number": i}] for i in range(5)}
+    rfs.write_repo_files(grouped, tmp_path, known_repos=[])
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_main_passes_none_when_the_known_repos_file_is_absent(tmp_path, monkeypatch):
+    """The None-vs-[] distinction has to survive argument parsing.
+
+    `main` used to initialise known_repos to [], which merged "no file" into
+    "empty scope" and put the fail-open back one layer down.
+    """
+    seen = {}
+
+    def fake_run(**kwargs):
+        seen["known_repos"] = kwargs["known_repos"]
+        return {}, {}
+
+    monkeypatch.setattr(rfs, "run", lambda **kw: fake_run(**kw))
+    monkeypatch.setenv("GH_TOKEN", "t")
+
+    argv = [
+        "--org",
+        "atlanhq",
+        "--since",
+        "2026-01-01",
+        "--open-dir",
+        str(tmp_path / "open"),
+        "--merged-dir",
+        str(tmp_path / "merged"),
+        "--known-repos-file",
+        str(tmp_path / "does-not-exist.json"),
+    ]
+    assert rfs.main(argv) == 0
+    assert seen["known_repos"] is None
+
+    (tmp_path / "empty.json").write_text("[]")
+    argv[-1] = str(tmp_path / "empty.json")
+    assert rfs.main(argv) == 0
+    assert seen["known_repos"] == []
 
 
 def test_write_repo_files_excludes_repos_outside_the_known_list(tmp_path):

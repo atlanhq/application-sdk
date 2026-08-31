@@ -169,6 +169,14 @@ def main(argv: Optional[list] = None, run: RunFn = _run_gh) -> int:
         "repo on a different engine (e.g. atlanhq/application-sdk stays on the "
         "Mend-hosted app).",
     )
+    parser.add_argument(
+        "--fail-on-empty",
+        action="store_true",
+        help="exit non-zero when discovery finds no repo. A zero-repo answer is "
+        "indistinguishable from a token that lost org read (`gh repo list` 401 "
+        "-> no data), so a caller whose whole scope comes from this output "
+        "should red the run rather than proceed against an empty fleet.",
+    )
     args = parser.parse_args(argv)
 
     excluded = set(args.exclude or [])
@@ -176,18 +184,28 @@ def main(argv: Optional[list] = None, run: RunFn = _run_gh) -> int:
         args.owner, args.name_pattern, args.preset_marker, excluded, run=run
     )
 
+    with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+        f.write(f"repos={json.dumps(repos)}\n")
+
     if not repos:
+        # Written to the output first either way, so a caller that tolerates an
+        # empty fleet still sees `repos=[]` rather than an unset output.
+        if args.fail_on_empty:
+            print(
+                "::error::No fleet repos discovered (no atlan-*-app extends the "
+                "preset). Refusing to proceed on an empty fleet — check the "
+                "atlan-app-fleet App installation/permissions.",
+                file=sys.stderr,
+            )
+            return 1
         print(
             "::warning::No fleet repos discovered (no atlan-*-app extends the preset). "
             "Check the atlan-app-fleet App installation/permissions.",
             file=sys.stderr,
         )
-    else:
-        print(f"Discovered {len(repos)} fleet repos", file=sys.stderr)
+        return 0
 
-    with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-        f.write(f"repos={json.dumps(repos)}\n")
-
+    print(f"Discovered {len(repos)} fleet repos", file=sys.stderr)
     return 0
 
 

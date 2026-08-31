@@ -573,7 +573,7 @@ def slug_for(repo: str) -> str:
 
 
 def write_repo_files(
-    grouped: dict[str, list[dict]], out_dir: Path, known_repos: list[str]
+    grouped: dict[str, list[dict]], out_dir: Path, known_repos: Optional[list[str]]
 ) -> None:
     """Write one <slug>.json per repo in `known_repos`.
 
@@ -591,12 +591,18 @@ def write_repo_files(
     The union is what hid that collapse — a broken discovery should show up as an
     empty dashboard, not a full one made of the wrong repos.
 
-    With no `known_repos` at all (the file was absent), fall back to `grouped`:
-    a caller who passed no scope gets what the search found, which is the only
-    thing it can mean.
+    `None` and `[]` are deliberately NOT the same thing:
+
+    * `None` — no scope was passed at all (no `--known-repos-file`). Fall back to
+      `grouped`: what the search found is the only thing it can mean.
+    * `[]` — a scope was passed and it is empty. Write nothing. Discovery
+      returning zero repos is a failure (a 401 on `gh repo list` looks exactly
+      like an empty fleet), and falling back to `grouped` there would republish
+      the whole org — reinstating the 616-repo dashboard in precisely the case
+      this bound exists to catch.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-    scope = set(known_repos) if known_repos else set(grouped)
+    scope = set(grouped) if known_repos is None else set(known_repos)
     for repo in scope:
         path = out_dir / f"{slug_for(repo)}.json"
         path.write_text(json.dumps(grouped.get(repo, [])))
@@ -607,7 +613,7 @@ def run(
     since: str,
     open_dir: Path,
     merged_dir: Path,
-    known_repos: list[str],
+    known_repos: Optional[list[str]],
     token: str,
     post: PostFn = _post_graphql,
 ) -> tuple[dict[str, list[dict]], dict[str, list[dict]]]:
@@ -671,13 +677,21 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--known-repos-file",
         type=Path,
         default=None,
-        help="JSON array of repo full names to seed with an empty PR list even when they have zero matching PRs",
+        help=(
+            "JSON array of repo full names that BOUNDS the output: one file is "
+            "written per listed repo (an empty PR list when it has no matching "
+            "PRs), and repos outside the list are dropped even if the search "
+            "found PRs for them. Omit the flag entirely to write whatever the "
+            "search found; a file holding [] writes nothing."
+        ),
     )
     args = parser.parse_args(argv)
 
     token = os.environ["GH_TOKEN"]
 
-    known_repos: list[str] = []
+    # None means "no scope passed"; an empty list means "the scope is empty".
+    # write_repo_files treats them differently and must not see them merged.
+    known_repos: Optional[list[str]] = None
     if args.known_repos_file and args.known_repos_file.exists():
         known_repos = json.loads(args.known_repos_file.read_text())
 

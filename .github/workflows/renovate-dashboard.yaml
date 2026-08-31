@@ -8,16 +8,17 @@
 # fleet dashboard data to Kryptonite (k.atlan.dev/renovate-dashboard/).
 #
 # Mirrors the conformance dashboard job in update-dashboard.yaml for the S3
-# deployment pattern. This dashboard runs its own inline `gh search code`
-# discovery (see the discovery step below); the self-hosted renovate.yaml runner
-# instead uses the deterministic discover_org_consumers.py. Both target the same
-# signal — repos whose renovate.json extends the shared preset.
+# deployment pattern. Discovery is discover_org_consumers.py — the same
+# deterministic script the self-hosted renovate.yaml runner uses, against the
+# same signal (repos whose renovate.json extends the shared preset). It runs
+# here with a wider `--name-pattern` than the runner does: see the discovery
+# step for why the dashboard covers application-sdk and the runner must not.
 #
 # Two modes:
 #   Full-fleet (schedule / workflow_dispatch without repo input):
-#     Discovers all consumer repos via gh search code and scans the whole fleet.
-#     Updates per-repo data, fleet.json aggregate, repos.json manifest, and all
-#     history JSONL files.
+#     Discovers all consumer repos via discover_org_consumers.py and scans the
+#     whole fleet. Updates per-repo data, fleet.json aggregate, repos.json
+#     manifest, and all history JSONL files.
 #   Single-repo (workflow_dispatch with repo=<owner/name>):
 #     Scans only the specified repo. Skips fleet.json and fleet history so a
 #     partial scan never overwrites the full-fleet aggregate. Used by the
@@ -74,19 +75,36 @@ jobs:
           printf 'repos=["%s"]\n' "$SINGLE_REPO" >> "$GITHUB_OUTPUT"
 
       # Full-fleet mode uses the same deterministic discovery the Renovate
-      # runner does, so the dashboard lists exactly the repos Renovate manages.
+      # runner does, so the dashboard lists the repos Renovate actually manages.
       #
-      # This replaces a `gh search code` for the preset marker. Code search
-      # cannot enumerate this fleet: measured 2026-08-31, the exact query
-      # returned 1 repo (application-sdk itself), and even a bare
-      # `filename:renovate.json` returned 4 — against 79 repos that demonstrably
-      # extend the preset. Every scheduled run was logging "Discovered 1
-      # consumer repos" while the dashboard showed 616, because the writer
-      # unioned that with an org-wide PR search (see renovate_fleet_scan.py).
+      # This replaces a `gh search code` for the preset marker. That query only
+      # ever returned 1 repo (application-sdk itself) HERE, under the fleet App's
+      # installation token — the same query run with a user PAT returns ~75. The
+      # code-search index is not the problem; a server-to-server token's access
+      # to it is. So the failure was invisible in the one place it mattered:
+      # every scheduled run logged "Discovered 1 consumer repos" while the
+      # dashboard showed 616, because the writer unioned that collapsed scope
+      # with an org-wide PR search (see renovate_fleet_scan.py).
       #
-      # discover_org_consumers.py lists with `gh repo list` and reads each
-      # renovate.json over the API, so it is deterministic and — relevant here —
-      # `--no-archived`, which keeps departed repos off the dashboard (FND-960).
+      # Do not "fix" this by swapping the token — code search is also
+      # best-effort and unordered (a fleet rehearsal saw it return anywhere from
+      # 30 to ~90 results across calls, dropping a real consumer). discover_org_
+      # consumers.py lists with `gh repo list` and reads each renovate.json over
+      # the API, which the App token can do, deterministically, and with
+      # `--no-archived` — keeping departed repos off the dashboard (FND-960).
+      #
+      # --name-pattern is WIDER than the runner's default. The runner excludes
+      # application-sdk on purpose (it stays on the Mend-hosted app, which is
+      # what keeps its action pins updated), but Mend still publishes Renovate
+      # PRs against it and this repo carries the lock-PR lane the dashboard
+      # exists to watch. Excluded from the fleet runner, in scope for the fleet
+      # view. The connectors-{sql,api,pipeline} mirrors stay out of both: they
+      # extend the preset but no engine opens PRs on them, so they would only
+      # ever render as empty rows.
+      #
+      # --fail-on-empty because the dashboard's entire publish scope comes from
+      # this output, and a token that lost org read returns the same empty answer
+      # as a fleet with no consumers.
       - name: Discover atlan-application-sdk consumers
         id: discover_fleet
         if: inputs.repo == ''
@@ -94,7 +112,10 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
-          python3 .github/scripts/discover_org_consumers.py --owner atlanhq
+          python3 .github/scripts/discover_org_consumers.py \
+            --owner atlanhq \
+            --name-pattern '^(atlan-[a-z0-9-]+-app|application-sdk)$' \
+            --fail-on-empty
 
       - name: Gather Renovate PR data
         env:

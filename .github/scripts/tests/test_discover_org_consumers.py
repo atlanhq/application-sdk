@@ -185,3 +185,35 @@ def test_main_warns_when_no_fleet(tmp_path, monkeypatch, capsys):
     assert rc == 0
     assert output_file.read_text() == "repos=[]\n"
     assert "::warning::No fleet repos discovered" in capsys.readouterr().err
+
+
+def test_main_fails_on_empty_when_asked(tmp_path, monkeypatch, capsys):
+    """--fail-on-empty reds the run instead of proceeding on an empty fleet.
+
+    A 401 on `gh repo list` yields no data, which is indistinguishable from a
+    fleet with no consumers. The dashboard derives its ENTIRE publish scope from
+    this output, so an empty answer there must stop the run.
+    """
+    output_file = tmp_path / "github_output"
+    output_file.write_text("")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output_file))
+
+    rc = doc.main(["--owner", "atlanhq", "--fail-on-empty"], run=_fake_gh([], {}))
+    assert rc == 1
+    # The output is still written, so a downstream step that reads it on failure
+    # sees an explicit empty scope rather than an unset variable.
+    assert output_file.read_text() == "repos=[]\n"
+    assert "::error::No fleet repos discovered" in capsys.readouterr().err
+
+
+def test_main_fail_on_empty_is_quiet_when_the_fleet_is_found(tmp_path, monkeypatch):
+    output_file = tmp_path / "github_output"
+    output_file.write_text("")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output_file))
+
+    run = _fake_gh(
+        ["atlanhq/atlan-mysql-app"],
+        {"atlanhq/atlan-mysql-app": f'{{"extends": ["github>{MARKER}"]}}'},
+    )
+    assert doc.main(["--owner", "atlanhq", "--fail-on-empty"], run=run) == 0
+    assert output_file.read_text() == 'repos=["atlanhq/atlan-mysql-app"]\n'
