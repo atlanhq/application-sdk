@@ -1031,6 +1031,23 @@ def test_every_job_has_a_name_a_human_can_read() -> None:
     assert jobs["finalize"]["name"] == "Summary"
 
 
+def test_uv_is_available_to_the_phases() -> None:
+    """The resolve playbook verifies its own fix with `uv run pre-commit` and
+    `uv run pytest`. A live round logged `uv: command not found` for both and
+    pushed the commit regardless — a resolver that cannot check its work is
+    worse than one that does not try, because the output looks the same."""
+    assert "astral-sh/setup-uv@" in PHASE_WF.read_text(encoding="utf-8")
+
+
+def test_the_resolver_commits_as_the_app_not_as_atlan_ci() -> None:
+    """atlan-ci is a CODEOWNER and the identity that mints approvals.
+    Attributing loop commits to it blurs "who wrote this" with "who approved
+    it" — the separation the merge gate rests on."""
+    text = PHASE_WF.read_text(encoding="utf-8")
+    assert 'user.name  "atlan-app-fleet[bot]"' in text
+    assert "atlan-ci@users.noreply.github.com" not in text
+
+
 def test_opencode_is_pinned_to_the_version_that_works() -> None:
     """0.6.3 crashed before every request with a DecimalError. 1.18.22 is what
     connector-pulse runs in production, and the exact CI config works against
