@@ -57,6 +57,11 @@ def scan_contract_compat(
     file_directives: dict[Path, dict[int, _IgnoreDirective]] = {}
     file_aliases: dict[Path, dict[str, str]] = {}
     by_name: dict[str, ClassRecord] = {}
+    # Every declaration per class name, not just the first. The ledger keys
+    # fields by BARE class name, so a name declared in two modules makes the
+    # ledger ambiguous — see the B005 presence check below.
+    by_name_all: dict[str, list[ClassRecord]] = {}
+    aliases_by_rel: dict[str, dict[str, str]] = {}
 
     for path in paths:
         try:
@@ -76,8 +81,10 @@ def scan_contract_compat(
             rel = str(path)
         aliases = collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
         file_aliases[path] = aliases
+        aliases_by_rel[rel] = aliases
         for rec in collect_classes(tree, rel, aliases):
             by_name.setdefault(rec.name, rec)
+            by_name_all.setdefault(rec.name, []).append(rec)
 
     entrypoint_names = collect_entrypoint_contract_names(file_trees, by_name)
 
@@ -93,6 +100,7 @@ def scan_contract_compat(
         ledger_by_contract.setdefault(f.contract, []).append(f)
 
     regen = regen_command(scope)
+    has_ambiguous_names = any(len(v) > 1 for v in by_name_all.values())
 
     findings: list[Finding] = []
 
@@ -114,9 +122,43 @@ def scan_contract_compat(
             live_fields = resolve_contract_fields(class_node, aliases, by_name)
             live_by_name = {f.name: f for f in live_fields}
 
+            # A ledger entry is keyed by BARE class name. When that name is
+            # declared more than once in the repo — an app whose crawler and
+            # miner entrypoints both declare `AppInputContract`, or a contract
+            # whose base resolves to one of them — the entry cannot be
+            # attributed to a single declaration, and every field belonging to
+            # the OTHER declaration reads as "removed from the contract".
+            # (Live: 21 of clickhouse's 25 B005 findings were exactly this.)
+            # So compute presence against the union of same-named declarations
+            # and ambiguity-aware ancestors. Presence ONLY: `live_fields`
+            # itself is untouched, so B006 and the type-change check below keep
+            # today's behaviour exactly.
+            present_names = set(live_by_name)
+            if has_ambiguous_names:
+                present_names.update(
+                    f.name
+                    for f in resolve_contract_fields(
+                        class_node, aliases, by_name, by_name_all=by_name_all
+                    )
+                )
+                for rec in by_name_all.get(class_node.name, []):
+                    if rec.node is class_node:
+                        continue
+                    present_names.update(
+                        f.name
+                        for f in resolve_contract_fields(
+                            rec.node,
+                            aliases_by_rel.get(rec.file, {}),
+                            by_name,
+                            by_name_all=by_name_all,
+                        )
+                    )
+
             # B005: every ledger field must still exist with its recorded type
             for lf in ledger_by_contract.get(class_node.name, []):
                 live = live_by_name.get(lf.field)
+                if live is None and lf.field in present_names:
+                    continue  # ambiguous name — the field lives on a sibling
                 if live is None:
                     findings.append(
                         make_finding(

@@ -399,16 +399,22 @@ def _sync_contract_ledger(root: pathlib.Path) -> list[tuple[pathlib.Path, str]]:
     with existing entrypoint contract fields fails enforced mode on its very
     first run. Seed the baseline from current source — same output as
     running ``gen-contract-ledger`` by hand.
+
+    "Same output as gen-contract-ledger" is literal, and that is why the
+    baseline comes from ``load_ledger_baseline``: the app's fields are
+    discovered from its own source, and the SDK's packaged template contracts
+    are never copied in. ``build_ledger`` is append-only, so a seeded entry
+    could never be removed afterwards — see the helper's docstring.
     """
     ledger_dest = root / "contract_schema.lock.json"
     if not ledger_dest.exists():
         from conformance.suite.checks.deprecation._ledger_schema import (
-            load_ledger,
+            load_ledger_baseline,
             serialize,
         )
         from conformance.tools.generate_contract_ledger import build_ledger
 
-        ledger = build_ledger(root, load_ledger(None))
+        ledger = build_ledger(root, load_ledger_baseline(ledger_dest))
         ledger_dest.write_text(serialize(ledger), encoding="utf-8")
         print(f"scaffolded: {ledger_dest} ({len(ledger.fields)} fields)")
         return [(ledger_dest, "scaffolded")]
