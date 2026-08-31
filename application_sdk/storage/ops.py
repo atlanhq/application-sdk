@@ -36,6 +36,7 @@ to target a specific store instead.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import math
@@ -1026,8 +1027,15 @@ async def download_file(
     finally:
         # BaseException-safe: a Temporal cancel or worker shutdown must not
         # strand a uniquely-named staging file per attempt.
+        #
+        # Suppressed, like common.atomic._discard and the chunked path's
+        # _discard_transfer_state: `missing_ok` covers only FileNotFoundError,
+        # and a raise out of this `finally` would replace whatever the caller
+        # was about to receive — a completed download, or the typed
+        # StorageError above — with a bare OSError about the temp file.
         if not published and tmp_name is not None:
-            Path(tmp_name).unlink(missing_ok=True)
+            with contextlib.suppress(OSError):
+                Path(tmp_name).unlink(missing_ok=True)
 
     elapsed_ms = (time.monotonic() - started) * 1000.0
     _log_storage_event(

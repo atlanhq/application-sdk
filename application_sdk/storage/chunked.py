@@ -619,10 +619,12 @@ async def _download_chunked_locked(
         # streaming GET (avoids materialising the whole body via range GETs).
         # Drop any stale checkpoint and part file from an earlier, larger
         # object generation — the delegate never opens the part file, so
-        # nothing else would ever remove it.
+        # nothing else would ever remove it. Through the helper, so an
+        # undeletable leftover cannot fail this download before it starts:
+        # stale state we could not clear is strictly better than no download,
+        # and the delegate publishes to the destination without consulting it.
         if size <= chunk_size_bytes:
-            state_path.unlink(missing_ok=True)
-            part.unlink(missing_ok=True)
+            _discard_transfer_state(path)
             return await download_file(
                 key,
                 path,
@@ -652,7 +654,13 @@ async def _download_chunked_locked(
         # the one case where a mistake is undetectable.
         can_resume = resume and etag is not None
         if resume and etag is None:
-            state_path.unlink(missing_ok=True)
+            # Both staging files go, not just the checkpoint: without an etag
+            # this download always starts fresh, so the part file is about to
+            # be truncated anyway and keeping it buys nothing. Through the
+            # helper so an undeletable leftover cannot fail the download before
+            # it starts, which would surface as a bare OSError where the caller
+            # expects a fresh download or the transfer's own typed error.
+            _discard_transfer_state(path)
         done: set[int] = (
             _load_and_validate_checkpoint(
                 state_path,

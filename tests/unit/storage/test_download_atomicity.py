@@ -321,6 +321,99 @@ class TestCleanupCannotReplaceTheTransferResult:
         assert (transferred, reason) == (True, "uploaded")
         assert parts, "the chunked path never published — test proves nothing"
 
+    async def test_small_file_delegate_survives_undeletable_stale_staging(
+        self, store, tmp_path
+    ) -> None:
+        """The chunked entry point clears stale staging before delegating to the
+        single-stream path. An undeletable leftover must not fail the download
+        before it starts — the delegate publishes without consulting it."""
+        content = b"small enough to delegate"
+        await _put("small/s.bin", content, store, normalize=False)
+        path = tmp_path / "s.bin"
+        part = _part_path(path)
+        part.parent.mkdir(parents=True, exist_ok=True)
+        part.write_bytes(b"stale generation")
+        _transfer_state_path(path).write_bytes(b"{}")
+
+        with self._deny_unlink(part):
+            await download_file_chunked(
+                "small/s.bin",
+                path,
+                store,
+                chunk_size_bytes=4096,
+                normalize=False,
+                verify=False,
+            )
+
+        assert path.read_bytes() == content
+        assert part.exists()  # undeletable, so the test is not vacuous
+
+    async def test_unpinned_resume_survives_an_undeletable_checkpoint(
+        self, store, tmp_path
+    ) -> None:
+        """With no etag the download always starts fresh, so it drops the
+        checkpoint first. A stuck sidecar there must not become a bare OSError
+        in place of that fresh download."""
+        content = bytes(range(256)) * 4
+        await _put("unpinned/u.bin", content, store, normalize=False)
+        path = tmp_path / "u.bin"
+        state = _transfer_state_path(path)
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_bytes(b"{}")
+
+        with self._deny_unlink(state):
+            await download_file_chunked(
+                "unpinned/u.bin",
+                path,
+                store,
+                chunk_size_bytes=64,
+                max_concurrent_chunks=1,
+                normalize=False,
+                verify=False,
+                # resume requested, but the generation stays unpinned, which is
+                # the branch under test. file_size is what keeps it unpinned:
+                # passing it skips the internal HEAD that would otherwise
+                # capture an e_tag — the real shape being a prefix download
+                # whose listing carried sizes but whose store reports no etag.
+                resume=True,
+                file_size=len(content),
+                etag=None,
+            )
+
+        assert path.read_bytes() == content
+
+    async def test_download_file_survives_an_undeletable_staging_temp(
+        self, store, tmp_path
+    ) -> None:
+        """``download_file``'s `finally` removes its per-attempt staging temp.
+        A raise there would replace the typed StorageError the caller is about
+        to receive with an OSError about the temp file."""
+        from application_sdk.storage.errors import StorageError
+
+        await _put("fail/f.bin", b"x" * 32, store, normalize=False)
+        path = tmp_path / "f.bin"
+
+        real_unlink = Path.unlink
+
+        def deny_staging_unlink(self, missing_ok=False):
+            if self.parent.name == PARTIAL_DIRNAME:
+                raise PermissionError(13, "Operation not permitted")
+            return real_unlink(self, missing_ok=missing_ok)
+
+        class _Boom:
+            def stream(self, **kw):
+                raise OSError("disk fell over mid-stream")
+
+        with (
+            patch(
+                "application_sdk.storage.ops.obstore.get_async",
+                new=AsyncMock(return_value=_Boom()),
+            ),
+            patch.object(Path, "unlink", deny_staging_unlink),
+        ):
+            with pytest.raises(StorageError, match="Failed to write downloaded file"):
+                await download_file("fail/f.bin", path, store, normalize=False)
+
 
 class TestCancellationCleanup:
     """A cancelled download must not strand a uniquely-named staging file."""

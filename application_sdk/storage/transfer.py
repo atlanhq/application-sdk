@@ -36,6 +36,7 @@ identically for single files and directories.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import tempfile
 from pathlib import Path
@@ -215,7 +216,11 @@ async def _upload_from_store(
         current_progress_tracker().mark_progress("storage.copy_file")
         return True, "uploaded"
     finally:
-        tmp.unlink(missing_ok=True)
+        # Suppressed for the same reason _discard_transfer_state below is: this
+        # `finally` runs after a copy that may have already succeeded, so an
+        # undeletable temp must not turn `(True, "uploaded")` into an OSError.
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
         # Belt-and-braces: never strand either staging file for a temp
         # destination. `_discard_transfer_state` is the writer's own cleanup —
         # what it runs on a 412/404 — so this site cannot drift from the
