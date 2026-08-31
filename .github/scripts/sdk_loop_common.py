@@ -322,7 +322,17 @@ def review_subagents(model: str) -> dict[str, Any]:
             "mode": "subagent",
             "model": f"{PROVIDER}/{model}",
             "prompt": f"{{file:./.mothership/pr-review/agents/{name}.md}}",
-            "permission": {"edit": "deny", "read": "allow", "bash": "allow"},
+            # Same auto-reject trap as the primary agent: headless opencode
+            # has nobody to answer an "ask", and an unlisted tool IS an ask.
+            # `edit` stays denied so read-only holds in the agent as well as
+            # in its token; the outbound channels stay denied for the same
+            # injection reason.
+            "permission": {
+                "*": "allow",
+                "edit": "deny",
+                "webfetch": "deny",
+                "websearch": "deny",
+            },
         }
         for name in PHASE2_AGENTS
     }
@@ -395,13 +405,40 @@ def opencode_config(model: str, with_subagents: bool = False) -> dict[str, Any]:
         # that way when its skill reads were auto-rejected. So everything a
         # phase legitimately does is allowed outright.
         **({"agent": review_subagents(model)} if with_subagents else {}),
+        # Every permission the playbooks can reach, in one place.
+        #
+        # Headless opencode has nobody to answer an "ask", so it auto-REJECTS
+        # one — and an unlisted tool is an ask. A live round died after
+        # checkout with "The user rejected permission to use this specific
+        # tool call", naming no tool. `task` was the one that mattered: the
+        # subagents were registered but the primary agent was never allowed to
+        # DISPATCH them, so Phase 2 could not fan out even once registered.
+        #
+        # Enumerated rather than left to defaults because the defaults are not
+        # uniform: `external_directory` and `doom_loop` ask unless listed, and
+        # the review playbook legitimately does both — it reads /tmp scratch
+        # files and re-runs similar greps across a large diff.
+        #
+        # `webfetch` and `websearch` stay DENIED, and listing everything else
+        # is what makes that denial deliberate rather than incidental. The
+        # agent reads untrusted PR content, so an injected prompt must not
+        # reach an outbound channel it picks itself. Last matching rule wins,
+        # so both override the wildcard.
         "permission": {
+            "*": "allow",
             "read": "allow",
+            "edit": "allow",
             "glob": "allow",
             "grep": "allow",
-            "edit": "allow",
             "bash": "allow",
+            "task": "allow",
+            "skill": "allow",
+            "lsp": "allow",
+            "question": "allow",
+            "external_directory": "allow",
+            "doom_loop": "allow",
             "webfetch": "deny",
+            "websearch": "deny",
         },
     }
 
@@ -409,6 +446,64 @@ def opencode_config(model: str, with_subagents: bool = False) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 # Cost
 # --------------------------------------------------------------------------
+
+
+def parse_opencode_usage(text: str) -> dict[str, int]:
+    """Token counts from `opencode stats`, which is the authoritative source.
+
+    Preferred over the gateway's /key/info spend for two reasons. It is
+    attributable to THIS phase rather than to a key several lanes share, and
+    it reports cache_read/cache_write — the one measurement that decides
+    whether the fixed ~90KB playbook prefix is being re-paid for on every one
+    of a phase's ~24 turns, which is where this lane's cost actually lives.
+
+    Dollars are deliberately NOT taken from here: the model entries declare
+    zero cost (see `opencode_config`), so opencode's own total is $0.00 by
+    construction. Tokens are unaffected by that and are exact.
+    """
+    fields = {
+        "input": r"Input\s+([\d,]+)",
+        "output": r"Output\s+([\d,]+)",
+        "cache_read": r"Cache Read\s+([\d,]+)",
+        "cache_write": r"Cache Write\s+([\d,]+)",
+    }
+    out: dict[str, int] = {}
+    for key, pattern in fields.items():
+        match = re.search(pattern, text or "")
+        if match:
+            out[key] = int(match.group(1).replace(",", ""))
+    return out
+
+
+def opencode_usage(cwd: str, runner: Any = subprocess.run) -> dict[str, int]:
+    """Run `opencode stats` for today and parse it. Never raises."""
+    try:
+        proc = runner(
+            ["opencode", "stats", "--days", "1"],
+            cwd=cwd,
+            env=agent_env(),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except Exception:
+        return {}
+    return parse_opencode_usage(proc.stdout or "")
+
+
+def format_usage(usage: dict[str, int]) -> str:
+    """One-line token summary, with the cache signal made explicit."""
+    if not usage:
+        return "tokens unavailable"
+    parts = [f"in {usage.get('input', 0):,}", f"out {usage.get('output', 0):,}"]
+    read, write = usage.get("cache_read", 0), usage.get("cache_write", 0)
+    if read or write:
+        parts.append(f"cache r/w {read:,}/{write:,}")
+    else:
+        # Worth flagging rather than omitting: no cache activity at all means
+        # the fixed playbook prefix is being re-sent every turn.
+        parts.append("cache MISS (no reuse)")
+    return " · ".join(parts)
 
 
 def parse_key_spend(payload: dict[str, Any]) -> float | None:
@@ -420,6 +515,10 @@ def parse_key_spend(payload: dict[str, Any]) -> float | None:
 
 def gateway_spend() -> float | None:
     """Cumulative USD spend on this gateway key, or None if unreadable.
+
+    Observed returning None on a live run, hence `opencode_usage` above as the
+    primary measurement. Kept because it is the only source of DOLLARS; the
+    failure reason is now surfaced instead of swallowed.
 
     None means exactly that — endpoint disabled, key lacks permission, gateway
     unreachable. Callers must report "unavailable" rather than substitute a
@@ -434,7 +533,8 @@ def gateway_spend() -> float | None:
     try:
         with urllib.request.urlopen(request, timeout=20) as response:
             return parse_key_spend(json.loads(response.read()))
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - reason matters more than type
+        print(f"::warning::/key/info unreadable, cost will be blank: {exc}")
         return None
 
 
@@ -529,6 +629,28 @@ def format_usd(amount: float | None) -> str:
     return "unavailable" if amount is None else f"${amount:,.4f}"
 
 
+#: A ripgrep config that makes hidden paths searchable.
+#:
+#: opencode's Glob and Grep are ripgrep-backed, and ripgrep skips dot-paths.
+#: The whole playbook lives under `.mothership/`, so on the first complete run
+#: the reviewer got 0 matches TWICE: once globbing its own agent definitions,
+#: and once grepping the reference rules for prior art on the finding it was
+#: about to raise. It then raised that finding without the rules that exist to
+#: inform it — no error, no mention in the verdict.
+#:
+#: ripgrep reads flags from the file named by RIPGREP_CONFIG_PATH, so this is
+#: a structural fix rather than a prompt asking the model to remember.
+RG_CONFIG_NAME = ".sdk-loop-rgcfg"
+
+
+def write_rg_config(cwd: str) -> str:
+    """Write the ripgrep config and return its path."""
+    path = os.path.join(cwd, RG_CONFIG_NAME)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("--hidden\n")
+    return path
+
+
 #: Env the agent process inherits. An allowlist, not the runner's whole
 #: environment: every other GitHub Actions secret stays out of a process that
 #: is reading untrusted PR content.
@@ -540,6 +662,7 @@ AGENT_ENV_PASSTHROUGH = (
     "LC_ALL",
     "LITELLM_API_KEY",
     "LITELLM_BASE_URL",
+    "RIPGREP_CONFIG_PATH",
     "GH_TOKEN",
     "GITHUB_REPOSITORY",
 )
@@ -634,6 +757,7 @@ def run_agent(
     if shutil.which("opencode") is None:
         raise RuntimeError("opencode is not installed on this runner")
     emit = sink or (lambda line: print(line, flush=True))
+    os.environ["RIPGREP_CONFIG_PATH"] = write_rg_config(cwd)
     config_path = os.path.join(cwd, "opencode.json")
     with open(config_path, "w", encoding="utf-8") as handle:
         json.dump(opencode_config(model, with_subagents=subagents), handle, indent=2)
@@ -668,10 +792,11 @@ def run_agent(
             timer.cancel()
     finally:
         # Never leave the pinned config in a tree the resolve phase might commit.
-        try:
-            os.unlink(config_path)
-        except FileNotFoundError:
-            pass
+        for stray in (config_path, os.path.join(cwd, RG_CONFIG_NAME)):
+            try:
+                os.unlink(stray)
+            except FileNotFoundError:
+                pass
 
     transcript = "\n".join(lines)
     if transcript_path:

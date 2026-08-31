@@ -98,6 +98,8 @@ on:
         value: ${{ jobs.phase.outputs.detail }}
       cost:
         value: ${{ jobs.phase.outputs.cost }}
+      usage:
+        value: ${{ jobs.phase.outputs.usage }}
       reaims:
         value: ${{ jobs.phase.outputs.reaims }}
       spent_total:
@@ -127,6 +129,7 @@ jobs:
       ledger: ${{ steps.run.outputs.ledger }}
       detail: ${{ steps.run.outputs.detail }}
       cost: ${{ steps.run.outputs.cost }}
+      usage: ${{ steps.run.outputs.usage }}
       reaims: ${{ steps.run.outputs.reaims }}
       spent_total: ${{ steps.run.outputs.spent_total }}
     steps:
@@ -156,8 +159,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.base_sha }}
-          # Full history: the review playbook diffs against the base branch.
+          # Full history for the base-branch diff, but only the refs this
+          # phase needs. `fetch-depth: 0` alone pulled 540 branches per job —
+          # every ref in the repo, three times a round, for a diff that needs
+          # two.
           fetch-depth: 0
+          filter: blob:none
           token: ${{ steps.app-token.outputs.token }}
           # The resolve phase pushes with this credential; the review phase
           # holds one that cannot.
@@ -165,7 +172,7 @@ jobs:
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: '3.14'
 
       # A loop is up to 17 phase jobs, each on a fresh runner, so anything
       # installed per job is paid for 17 times. Cache the global npm store so
@@ -184,7 +191,7 @@ jobs:
       # Installed from npm rather than opencode.ai's install script, which is
       # `curl | bash` and barred by the org baseline.
       - name: Cache the opencode install
-        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.npm
           key: opencode-${{ runner.os }}-1.18.22
@@ -192,11 +199,26 @@ jobs:
       - name: Install opencode
         run: npm install -g --prefer-offline opencode-ai@1.18.22
 
+      # uv is how this repo runs everything — `uv run pytest`,
+      # `uv run pre-commit`. Without it the resolve phase's own verification
+      # silently no-ops: a live round logged `uv: command not found` for both
+      # its pre-commit and pytest calls and then pushed the commit anyway.
+      # A resolver that cannot check its work is worse than one that does not
+      # try, because the output looks identical.
+      - name: Install uv
+        uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc # v6.4.3
+        with:
+          enable-cache: true
+
       - name: Configure git identity for the resolve phase
         if: inputs.phase == 'resolve'
+        # Commit as the App whose token is doing the pushing, not as atlan-ci.
+        # atlan-ci is a CODEOWNER and the identity that mints approvals, so
+        # attributing loop commits to it blurs "who wrote this" with "who
+        # approved it" — precisely the separation the merge gate depends on.
         run: |
-          git config user.name  "atlan-ci"
-          git config user.email "atlan-ci@users.noreply.github.com"
+          git config user.name  "atlan-app-fleet[bot]"
+          git config user.email "4265590+atlan-app-fleet[bot]@users.noreply.github.com"
 
       - name: Run the phase
         id: run
