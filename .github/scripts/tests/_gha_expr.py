@@ -342,6 +342,16 @@ _FUNCTIONS: dict[str, Callable[..., Any]] = {
     "endswith": _ends_with,
     "join": _join,
     "always": lambda: True,
+    # `cancelled()` is modelled at False, and it is the ONLY status function
+    # that is. It appears in gates as `!cancelled() && <real condition>`, where
+    # its job is purely to keep a dependent running when an upstream `needs`
+    # job was skipped — it carries none of the gate's actual meaning, so
+    # pinning it lets a test exercise the part that does.
+    #
+    # `success()` and `failure()` stay unmodelled on purpose: they DO carry
+    # meaning, and guessing a value for them is how a gate scenario passes
+    # vacuously. See test_always_is_modelled_but_success_is_not.
+    "cancelled": lambda: False,
     "format": lambda template, *args: re.sub(
         r"\{(\d+)\}", lambda m: _stringify(args[int(m.group(1))]), _stringify(template)
     ),
