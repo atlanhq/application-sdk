@@ -57,6 +57,7 @@ from sdk_loop_common import (
     parse_answers_trigger,
     parse_reviewed_head,
     parse_verdict,
+    reaim_exhausted,
     run_agent,
     run_budget,
     spend_delta,
@@ -78,6 +79,8 @@ OUTCOME_TERMINAL_VERDICT = "terminal_verdict"
 OUTCOME_FAILED = "failed"
 #: Refused before starting, because the run has spent its allowance.
 OUTCOME_BUDGET = "budget_exhausted"
+#: Gave up re-aiming: the loop never got a clean pass at one commit.
+OUTCOME_REAIM_EXHAUSTED = "reaim_exhausted"
 
 
 def _as_float(raw: str | None) -> float | None:
@@ -417,12 +420,24 @@ def main(argv: list[str] | None = None) -> int:
     ledger = DismissalLedger.from_json(os.environ.get("LEDGER"))
 
     state = head_state(live_head(repo, head_ref), baseline, ours)
+    reaims = int(os.environ.get("REAIMS_SO_FAR") or 0)
+    if state.moved_by_other and reaim_exhausted(reaims):
+        # Stop rather than spend another round on a target that keeps moving.
+        emit_outputs(
+            outcome=OUTCOME_REAIM_EXHAUSTED,
+            new_base_sha=state.live,
+            reaims=str(reaims),
+            detail=f"{reaims} consecutive re-aims without a clean pass at one commit",
+        )
+        print(f"giving up after {reaims} consecutive re-aims")
+        return 0
     if state.moved_by_other:
         # Re-aim: discard whatever this round would have done and send the loop
         # back to review on the new head. Never resolve against a stale review.
         emit_outputs(
             outcome=OUTCOME_REAIM,
             new_base_sha=state.live,
+            reaims=str(reaims + 1),
             detail=f"head moved to {state.live[:8]} outside this run",
         )
         print(f"re-aim: head is {state.live[:8]}, expected {baseline[:8]}")
@@ -477,6 +492,7 @@ def main(argv: list[str] | None = None) -> int:
             reviewed_head=outcome.reviewed_head,
             verdict_url=outcome.verdict_url,
             detail=outcome.detail,
+            reaims="0",
             new_base_sha=state.live,
             cost="" if cost is None else f"{cost:.4f}",
             spent_total=(
@@ -517,6 +533,7 @@ def main(argv: list[str] | None = None) -> int:
         emit_outputs(
             outcome=outcome.outcome,
             pushed_sha=outcome.pushed_sha,
+            reaims="0",
             new_base_sha=after,
             ledger=ledger.to_json(),
             detail=outcome.detail,

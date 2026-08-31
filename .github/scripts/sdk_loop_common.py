@@ -384,6 +384,25 @@ def spend_delta(before: float | None, after: float | None) -> float | None:
 DEFAULT_MAX_USD = 50.0
 
 
+#: Consecutive re-aims before the loop gives up. A re-aim is not progress —
+#: it discards the round's work and starts over — so it needs a budget of its
+#: own. Without one, a branch that keeps moving (or a harness that keeps
+#: MISREADING the head as moved) silently eats the whole round cap: a live run
+#: burned three rounds on the identical mismatch, each reporting `reaim` and
+#: advancing as though something had changed.
+MAX_CONSECUTIVE_REAIMS = 2
+
+
+def reaim_exhausted(consecutive: int) -> bool:
+    """Whether a further re-aim should stop the run instead of costing a round.
+
+    Consecutive, not cumulative: a branch legitimately edited twice over a long
+    drive is normal, whereas two re-aims back to back with no round in between
+    means the loop is not converging on any one commit.
+    """
+    return consecutive >= MAX_CONSECUTIVE_REAIMS
+
+
 def run_budget() -> float:
     raw = (os.environ.get("SDK_LOOP_MAX_USD") or "").strip()
     try:

@@ -29,6 +29,7 @@ from _gha_expr import evaluate  # noqa: E402
 from sdk_loop_common import (  # noqa: E402
     ALLOWED_MODELS,
     DEFAULT_MAX_USD,
+    MAX_CONSECUTIVE_REAIMS,
     MAX_ROUNDS,
     PROVIDER,
     RESOLVE_MODEL,
@@ -41,6 +42,7 @@ from sdk_loop_common import (  # noqa: E402
     opencode_config,
     parse_reviewed_head,
     parse_verdict,
+    reaim_exhausted,
     run_agent,
     run_budget,
 )
@@ -971,10 +973,22 @@ def test_a_detail_containing_a_pipe_cannot_break_the_table() -> None:
     assert "a \\| b" in render(rounds, "failed", "http://run")
 
 
-def test_rounds_json_from_a_skipped_job_is_tolerated() -> None:
-    # Skipped jobs emit empty outputs; the summary must still render.
-    raw = json.dumps(
-        [{"number": 1, "phase": "review", "outcome": "", "verdict": "", "sha": ""}]
-    )
-    assert len(parse_rounds(raw)) == 1
+def test_a_skipped_round_is_not_reported_as_a_round() -> None:
+    """A skipped job still emits a row with every field empty. Counting them
+    produced "8 review · 8 resolve" for a run where three reviews ran and
+    nothing else did, then printed five blank rows implying work that never
+    happened."""
+    ran = {"number": 1, "phase": "review", "outcome": "reaim", "sha": "a" * 40}
+    skipped = {"number": 2, "phase": "resolve", "outcome": "", "verdict": "", "sha": ""}
+    assert len(parse_rounds(json.dumps([ran, skipped]))) == 1
     assert parse_rounds("not json") == []
+
+
+def test_a_reaim_streak_stops_the_run_before_it_eats_the_round_cap() -> None:
+    """A re-aim discards the round's work, so it is not progress and needs its
+    own budget. A live run burned three rounds on the identical mismatch, each
+    reporting `reaim` and advancing as though something had changed."""
+    assert not reaim_exhausted(0)
+    assert not reaim_exhausted(1)
+    assert reaim_exhausted(MAX_CONSECUTIVE_REAIMS)
+    assert MAX_CONSECUTIVE_REAIMS < MAX_ROUNDS, "must bite before the round cap"
