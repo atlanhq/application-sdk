@@ -217,6 +217,24 @@
       "symbol": "SqlQueryExtractor"
     },
     {
+      "kind": "method",
+      "marker_via": "decorator",
+      "message": "BaseE2ETest.client is deprecated and will be removed in v4.0. Use application_sdk.testing.harness.automation_engine.AEClient and application_sdk.testing.harness.atlas directly, reaching them from synchronous code through application_sdk.testing.harness.run_sync.",
+      "migration_target": true,
+      "module": "application_sdk.testing.e2e.base",
+      "removal_version": "4.0",
+      "symbol": "client"
+    },
+    {
+      "kind": "class",
+      "marker_via": "decorator",
+      "message": "AEWorkflowClient is deprecated and will be removed in v4.0. Use application_sdk.testing.harness.automation_engine.AEClient and application_sdk.testing.harness.atlas directly, reaching them from synchronous code through application_sdk.testing.harness.run_sync.",
+      "migration_target": true,
+      "module": "application_sdk.testing.e2e.client",
+      "removal_version": "4.0",
+      "symbol": "AEWorkflowClient"
+    },
+    {
       "kind": "class",
       "marker_via": "warn",
       "message": "application_sdk.testing.e2e.AppConfig is deprecated and will be removed in v4.0; use application_sdk.testing.harness.AppUnderTest instead. It collides by name with application_sdk.main.AppConfig, the runtime config object. app_module, image, worker_health_port and timeout are not carried over \u2014 nothing ever read them.",
@@ -228,7 +246,25 @@
     {
       "kind": "class",
       "marker_via": "warn",
-      "message": "application_sdk.testing.sdr.BaseSDRIntegrationTest is deprecated; use application_sdk.testing.e2e.BaseE2ETest with RunMode.AGENT \u2014 will be removed in v4.0",
+      "message": "application_sdk.testing.full_dag.BaseFullDAGE2ETest is deprecated; use application_sdk.testing.e2e.BaseE2ETest \u2014 will be removed in v4.0",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag.base",
+      "removal_version": "4.0",
+      "symbol": "BaseFullDAGE2ETest"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "application_sdk.testing.full_dag.SQLAppE2EFullTest is deprecated; use application_sdk.testing.e2e.SQLAppE2ETest \u2014 will be removed in v4.0",
+      "migration_target": true,
+      "module": "application_sdk.testing.full_dag.sql_app",
+      "removal_version": "4.0",
+      "symbol": "SQLAppE2EFullTest"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "application_sdk.testing.sdr.BaseSDRIntegrationTest is deprecated; SDR is a deployment mode, not a test tier, so there is no single replacement class \u2014 migrate each concern to where it belongs (auth/preflight: call the handler directly; credential resolution: already covered in application-sdk's tests/unit/credentials; a full DAG: tests/e2e with mode=RunMode.AGENT). See docs/standards/connector-ci-e2e.md \u2014 will be removed in v4.0",
       "migration_target": true,
       "module": "application_sdk.testing.sdr.base",
       "removal_version": "4.0",

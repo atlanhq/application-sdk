@@ -1631,7 +1631,15 @@ class TestFindRunCreatedSince:
     def test_polls_until_the_run_becomes_searchable(self):
         """AE serves this list from Elasticsearch, so a run committed just
         before the connection died can take a moment to appear. One empty
-        answer is not the end of the search."""
+        answer is not the end of the search.
+
+        Under ``fake_clock`` rather than ``patch(_SLEEP)``: this loop is a
+        *deadline* loop, so it sleeps through ``_poll``'s swappable default and
+        never touches ``sleep_async``. Patching the retry seam here left the two
+        ``interval_seconds`` gaps running on the real clock — twenty seconds of
+        the unit suite spent proving nothing the fake does not prove. See
+        FND-962.
+        """
         client = _make_client()
         late = {"data": [{"guid": "r-late", "created_at": "2026-08-20T13:58:46Z"}]}
         with (
@@ -1640,13 +1648,16 @@ class TestFindRunCreatedSince:
                 "_request",
                 side_effect=[(200, {"data": []}), (200, {"data": []}), (200, late)],
             ) as mock_req,
-            patch(_SLEEP),
+            fake_clock() as clock,
         ):
             lookup = client.find_run_created_since(
                 "slug-x", self._SINCE, timeout_seconds=60, interval_seconds=10
             )
         assert lookup.run_id == "r-late"
         assert mock_req.call_count == 3
+        # The cadence itself, which the inert patch could not see: two full
+        # intervals between the three reads.
+        assert clock.slept == [10, 10]
 
     def test_clock_skew_window_admits_a_slightly_earlier_run(self):
         """The runner's clock and the tenant's are compared directly, so a run

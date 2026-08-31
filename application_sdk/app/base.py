@@ -2051,10 +2051,14 @@ async def _run_preflight_gate(
         from application_sdk.credentials.ref import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
             CredentialResolvable,
         )
+        from application_sdk.errors.categories import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
+            Audience,
+        )
         from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
             CHECK_MATRIX_KEY,
             CLASSIFICATION_GATE_BROKEN,
             EMPTY_CHECK_MATRIX,
+            FAILURE_AUDIENCE_KEY,
             PREFLIGHT_OUTCOME_EVENT,
             PreflightGateInput,
             gate_retry_policy,
@@ -2104,24 +2108,22 @@ async def _run_preflight_gate(
         if is_preflight_block(e):
             raise
         # Fail-open: only the workflow knows a no-verdict failure happened, so it
-        # owns the no_verdict row (plus the loud ERROR line).
+        # owns the no_verdict row — one record, at ERROR (FND-901): the gate's
+        # own plumbing broke and the run proceeded unverified, which is the app
+        # team's fault to fix, hence the APP_OWNER audience.
         _safe_log(
             "error",
-            "Preflight gate could not produce a verdict; proceeding without source "
-            "verification (fail-open)",
-            app_name=app_name,
-            entrypoint=entry,
-            exc_info=True,
-        )
-        _safe_log(
-            "info",
             PREFLIGHT_OUTCOME_EVENT,
             app_name=app_name,
             entrypoint=entry,
             outcome="no_verdict",
             reason=underlying_error_type(e),
             gate_classification=CLASSIFICATION_GATE_BROKEN,
-            **{CHECK_MATRIX_KEY: EMPTY_CHECK_MATRIX},
+            exc_info=True,
+            **{
+                CHECK_MATRIX_KEY: EMPTY_CHECK_MATRIX,
+                FAILURE_AUDIENCE_KEY: Audience.APP_OWNER.value,
+            },
         )
         return
 

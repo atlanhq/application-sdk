@@ -13,6 +13,7 @@ from temporalio.exceptions import ActivityError
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import task
+from application_sdk.constants import SHUTDOWN_DRAIN_DELAY_SECONDS
 from application_sdk.contracts.base import Input, Output
 from application_sdk.errors.leaves import (
     AppTimeoutError,
@@ -31,10 +32,6 @@ from application_sdk.execution._temporal.worker import (
     create_worker,
     describe_exception_chain,
     read_core_poller_counts,
-)
-
-DRAIN_DELAY_PATCH = (
-    "application_sdk.execution._temporal.worker.SHUTDOWN_DRAIN_DELAY_SECONDS"
 )
 
 _MINIMAL_START_PARAMS = {
@@ -88,9 +85,15 @@ def _make_mock_client() -> mock.MagicMock:
     return client
 
 
-def _WorkerWrapperForDrain():
+def _WorkerWrapperForDrain(*, shutdown_drain_delay_seconds: float = 0.0):
     """A real ``AppWorker`` with its worker and pusher stubbed, so the test drives
     the production ``__aexit__`` — a fake would pass while shutdown stayed broken.
+
+    The drain delay defaults to zero here. These tests are about what
+    ``__aexit__`` flushes, not about the yield that precedes it, and the
+    production default of five seconds is five real seconds of sleep per test
+    (FND-962). The delay itself is asserted by
+    ``TestShutdownDrainDelay`` below, which is the only place that cares.
     """
     from application_sdk.execution._temporal.worker import AppWorker
 
@@ -103,6 +106,7 @@ def _WorkerWrapperForDrain():
     w._worker = _NullWorker()
     w._pusher = None
     w._start_event_params = {}
+    w._shutdown_drain_delay_seconds = shutdown_drain_delay_seconds
     return w
 
 
@@ -950,8 +954,20 @@ class TestShutdownDrainDelay:
     """
 
     @staticmethod
-    def _make_app_worker(inner: mock.AsyncMock) -> AppWorker:
-        return AppWorker(inner, start_event_params=_MINIMAL_START_PARAMS)
+    def _make_app_worker(inner: mock.AsyncMock, *, drain_delay: float) -> AppWorker:
+        """Build the wrapper with the delay under test.
+
+        Set through the constructor rather than by patching
+        ``SHUTDOWN_DRAIN_DELAY_SECONDS``: the delay is a parameter
+        ``AppWorker`` binds at construction (FND-962), so a patch of the module
+        constant would leave every one of these tests running on the production
+        five-second default.
+        """
+        return AppWorker(
+            inner,
+            start_event_params=_MINIMAL_START_PARAMS,
+            shutdown_drain_delay_seconds=drain_delay,
+        )
 
     @pytest.mark.asyncio
     async def test_without_drain_delay_activity_completion_preempted(self) -> None:
@@ -964,7 +980,7 @@ class TestShutdownDrainDelay:
         """
         inner = mock.AsyncMock()
         inner.__aexit__ = mock.AsyncMock(return_value=None)
-        app_worker = self._make_app_worker(inner)
+        app_worker = self._make_app_worker(inner, drain_delay=0)
 
         activity_completed = False
 
@@ -975,8 +991,7 @@ class TestShutdownDrainDelay:
 
         asyncio.create_task(inflight_activity())
 
-        with mock.patch(DRAIN_DELAY_PATCH, 0):
-            await app_worker.__aexit__(None, None, None)
+        await app_worker.__aexit__(None, None, None)
 
         # PROVES THE BUG: activity completion never ran before shutdown
         assert activity_completed is False
@@ -993,7 +1008,7 @@ class TestShutdownDrainDelay:
         """
         inner = mock.AsyncMock()
         inner.__aexit__ = mock.AsyncMock(return_value=None)
-        app_worker = self._make_app_worker(inner)
+        app_worker = self._make_app_worker(inner, drain_delay=0.01)
 
         activity_completed = False
 
@@ -1004,8 +1019,7 @@ class TestShutdownDrainDelay:
 
         asyncio.create_task(inflight_activity())
 
-        with mock.patch(DRAIN_DELAY_PATCH, 0.01):
-            await app_worker.__aexit__(None, None, None)
+        await app_worker.__aexit__(None, None, None)
 
         # PROVES THE FIX: activity completion ran before shutdown
         assert activity_completed is True
@@ -1017,7 +1031,7 @@ class TestShutdownDrainDelay:
         not just one."""
         inner = mock.AsyncMock()
         inner.__aexit__ = mock.AsyncMock(return_value=None)
-        app_worker = self._make_app_worker(inner)
+        app_worker = self._make_app_worker(inner, drain_delay=0.01)
 
         completions: list[str] = []
 
@@ -1029,8 +1043,7 @@ class TestShutdownDrainDelay:
         asyncio.create_task(inflight_activity("activity_2"))
         asyncio.create_task(inflight_activity("activity_3"))
 
-        with mock.patch(DRAIN_DELAY_PATCH, 0.01):
-            await app_worker.__aexit__(None, None, None)
+        await app_worker.__aexit__(None, None, None)
 
         assert set(completions) == {"activity_1", "activity_2", "activity_3"}
 
@@ -1040,12 +1053,23 @@ class TestShutdownDrainDelay:
         no pending completions."""
         inner = mock.AsyncMock()
         inner.__aexit__ = mock.AsyncMock(return_value=None)
-        app_worker = self._make_app_worker(inner)
+        app_worker = self._make_app_worker(inner, drain_delay=0)
 
-        with mock.patch(DRAIN_DELAY_PATCH, 0):
-            await app_worker.__aexit__(None, None, None)
+        await app_worker.__aexit__(None, None, None)
 
         inner.__aexit__.assert_called_once()
+
+    def test_the_default_delay_is_the_configured_one(self) -> None:
+        """Every test above sets the delay, so nothing else pins what a worker
+        built by ``create_worker`` actually waits. Without this, dropping the
+        default to zero would be invisible — and the deadlock this whole class
+        documents would be back with a green suite.
+        """
+        app_worker = AppWorker(
+            mock.AsyncMock(), start_event_params=_MINIMAL_START_PARAMS
+        )
+        assert app_worker._shutdown_drain_delay_seconds == SHUTDOWN_DRAIN_DELAY_SECONDS
+        assert SHUTDOWN_DRAIN_DELAY_SECONDS > 0
 
 
 class TestWorkerPoolQueueResolution:

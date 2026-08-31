@@ -97,13 +97,18 @@ human audit):
   - `class X(BaseMetadataExtractor)` → migrate to `application_sdk.templates.SqlApp`
     per the notice; this is a structural change — draft it and let the test gate
     decide.
-  - **SDR test → agent-mode e2e**: a finding naming `BaseSDRIntegrationTest`
+  - **SDR test → split by concern**: a finding naming `BaseSDRIntegrationTest`
     (import / subclass from `application_sdk.testing.sdr`) means the app's
     `tests/sdr/test_*_sdr.py` (or `tests/integration/test_sdr.py`) still uses the
-    legacy SDR harness. Migrate to the agnostic e2e harness — a `BaseE2ETest`
-    subclass, normally via the generated `*GeneratedE2EBase`, with a class-level
-    `mode = RunMode.AGENT` (agent mode *is* the self-deployed-runtime path). Shape
-    it after `atlan-openapi-app` / `atlan-metabase-app` `tests/e2e/`:
+    legacy SDR harness. There is no single replacement — SDR is a deployment
+    mode, not a test tier — so route `api="auth"` / `api="preflight"` scenarios to
+    direct handler calls in the app's own unit or integration tests, leave
+    credential resolution to application-sdk's `tests/unit/credentials` (per-app,
+    fake secret stores), and move only `api="workflow"` / full-DAG scenarios to
+    `tests/e2e/`. The agent-mode e2e below is what satisfies T002 (agent-mode
+    credential routing and upload behaviour genuinely differ by mode); it is not
+    a wholesale replacement for the suite. Shape it after `atlan-openapi-app` /
+    `atlan-metabase-app` `tests/e2e/`:
     ```python
     from application_sdk.testing.e2e import RunMode
     from app.generated._e2e_base import MyAppGeneratedE2EBase
