@@ -923,11 +923,20 @@ def run_agent(
         # WHY the agent stalled — which is the point, since that cause is still
         # unproven.
         deadline = [time.monotonic()]
+        # TWO events, not one. `stop` means "the watcher may exit"; `stalled`
+        # means "the idle deadline actually fired". Conflating them made every
+        # clean run append the stall marker, because the reader loop's `finally`
+        # sets the stop event on the happy path too — caught by
+        # test_the_agent_transcript_streams_rather_than_buffering.
+        stop = threading.Event()
         stalled = threading.Event()
 
         def watch() -> None:
             start = time.monotonic()
-            while process.poll() is None:
+            # `stop.wait` returns True once set, which is the loop's exit — so
+            # the watcher never needs to poll the process, and a caller's fake
+            # process object needs no extra methods to be testable.
+            while not stop.wait(10):
                 now = time.monotonic()
                 if now - deadline[0] > idle_timeout_s:
                     stalled.set()
@@ -936,15 +945,11 @@ def run_agent(
                 if now - start > timeout_s:
                     process.kill()
                     return
-                # Coarse on purpose: a 10s tick costs nothing against deadlines
-                # measured in minutes, and re-arming a Timer per output line
-                # would churn a thread thousands of times per phase.
-                stalled.wait(10)
 
         watcher = threading.Thread(target=watch, daemon=True)
         watcher.start()
         follower = threading.Thread(
-            target=_follow_opencode_log, args=(stalled, emit, started_at), daemon=True
+            target=_follow_opencode_log, args=(stop, emit, started_at), daemon=True
         )
         follower.start()
         try:
@@ -956,8 +961,8 @@ def run_agent(
                 emit(line)
             process.wait()
         finally:
-            stalled.set()  # release the watcher's wait() immediately
-        if stalled.is_set() and process.returncode is not None and lines:
+            stop.set()  # release both helper threads immediately
+        if stalled.is_set():
             # Say so IN the transcript. A silent death and a killed stall look
             # identical downstream otherwise, and the caller reports whichever
             # it guesses.

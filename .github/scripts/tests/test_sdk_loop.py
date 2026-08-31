@@ -416,12 +416,24 @@ def test_the_phase_two_agents_are_registered_so_the_fan_out_can_happen() -> None
         assert set(cfg["agent"]) == set(PHASE2_AGENTS)
         for name, spec in cfg["agent"].items():
             assert spec["mode"] == "subagent"
-            # Prompts are the EXISTING files by reference, never copied.
-            assert (
-                spec["prompt"] == f"{{file:./.mothership/pr-review/agents/{name}.md}}"
-            )
+            # Still the EXISTING file and no second copy in the repo — but read
+            # in Python rather than handed over as `{file:./.mothership/...}`.
+            # That template's resolution against a dot-directory was never
+            # verified here, and the same path returns zero matches through the
+            # agent's own Glob; a template that quietly resolved to nothing
+            # would give a domain agent no instructions while it still emitted
+            # a verdict. Asserting against the file's real bytes also proves
+            # the brief exists, which the string form never did.
+            brief = pathlib.Path(f".mothership/pr-review/agents/{name}.md")
+            assert spec["prompt"] == brief.read_text(encoding="utf-8")
+            assert spec["prompt"].strip(), f"{name} brief is empty"
             # Read-only in the agent as well as in the credential.
             assert spec["permission"]["edit"] == "deny"
+            # And every tool the primary enumerates, because an unlisted tool
+            # is an "ask" that headless opencode cannot answer.
+            for tool in ("read", "glob", "grep", "bash"):
+                assert spec["permission"][tool] == "allow"
+            assert spec["maxSteps"] > 0
         # Resolve gets none — it does not run Phase 2.
         assert "agent" not in opencode_config(RESOLVE_MODEL)
     finally:
