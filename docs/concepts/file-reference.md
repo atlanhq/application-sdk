@@ -349,6 +349,13 @@ Both fields end up with the same `local_path` after materialization. A
 `file_ref.materialize.dedup_hit` DEBUG event is emitted for the second ref. You
 do not need to deduplicate manually.
 
+The same holds *across* activities. `local_path` is a deterministic function of
+(run, stage, entity), so concurrent activities dispatched together can hand the
+SDK the same destination. The materialise-and-verify step holds a per-path lock
+and every download stages in `.sdk-partial/` before an atomic `os.replace`
+publish, so the second activity waits and reuses the file, and a reader never
+observes a partial download at `local_path` (CONNECT-1126).
+
 ---
 
 ## Part 2 — App.upload()

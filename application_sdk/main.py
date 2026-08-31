@@ -66,7 +66,8 @@ _worker_event_loop: asyncio.AbstractEventLoop | None = None
 def _debug_dump_handler(signum: int, frame: object) -> None:
     """Dump thread stacks and asyncio tasks to /tmp/debug-dump-<pid>.txt on SIGUSR1."""
     dump_path = os.path.join("/tmp", f"debug-dump-{os.getpid()}.txt")
-    fd = os.open(dump_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    # conformance: ignore[P050] single-consumer diagnostic dump — an operator reads it after the signal handler returns; no concurrent SDK reader exists for this path
+    fd = os.open(dump_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
         os.write(fd, b"\n===== DEBUG DUMP (SIGUSR1) =====\n")
         os.write(fd, f"PID: {os.getpid()}\n\n".encode())

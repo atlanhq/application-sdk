@@ -436,9 +436,11 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     }, app_scoped
     # SDK-only rules: the SDK must keep Temporal contained behind its seam
     # (P006/P007, BLDX-1417), declare its deprecations correctly (B002–B004),
-    # and keep its text file IO locale-independent (P046) — the SDK repo is the
+    # keep its text file IO locale-independent (P046) — the SDK repo is the
     # only one in the fleet that runs a Windows CI leg, where the platform
-    # default codec is cp1252 rather than UTF-8.
+    # default codec is cp1252 rather than UTF-8 — and publish destination
+    # files atomically (P050, CONNECT-1126): the transfer and writer seams
+    # live in the SDK, so the in-place-write hazard does too.
     sdk_scoped = {r.id for r in rules if r.scope == RuleScope.SDK}
     assert sdk_scoped == {
         "B002",
@@ -447,6 +449,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P006",
         "P007",
         "P046",
+        "P050",
     }, sdk_scoped
     both = {r.id for r in rules if r.scope == RuleScope.BOTH}
     assert both == {r.id for r in rules} - app_scoped - sdk_scoped
@@ -657,6 +660,7 @@ def test_catalog_p_series_present() -> None:
         "P047",
         "P048",
         "P049",
+        "P050",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"

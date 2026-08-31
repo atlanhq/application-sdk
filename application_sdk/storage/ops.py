@@ -36,10 +36,12 @@ to target a specific store instead.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import math
 import os
+import tempfile
 import time
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
@@ -68,7 +70,9 @@ if TYPE_CHECKING:
 
     JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 
+from application_sdk._runtime.offload import run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
+from application_sdk.common._listing import PARTIAL_DIRNAME
 from application_sdk.observability.logger_adaptor import get_logger
 
 # Transfer integrity validation (FND-306). ``integrity`` holds no top-level
@@ -882,6 +886,18 @@ async def download_file(
     key and both digests, instead of letting a truncated file reach a parser
     and surface as an unattributable ``Malformed JSON`` deep inside DuckDB.
 
+    **Atomic publish (CONNECT-1126).** The bytes stream into a uniquely-named
+    temp file inside the ``.sdk-partial`` staging directory beside the
+    destination (created 0o600 by ``mkstemp``: owner-only, since downloaded
+    artifacts can contain extracted customer metadata; staged there so no SDK
+    tree walk can adopt it) and land at *local_path* via ``os.replace``. The
+    destination therefore never holds a partial file — a concurrent reader,
+    or a second download of the same shared ``local_path``, sees only the
+    previous complete content or the new complete content. On Windows the
+    publish additionally requires that no other handle holds the destination
+    open: ``os.replace`` raises ``PermissionError`` rather than succeeding,
+    so a concurrent reader turns a corrupt read into a failed write.
+
     Args:
         key: Source object key.  Normalised by default.
         local_path: Destination path (file will be created or overwritten).
@@ -967,54 +983,80 @@ async def download_file(
         ) from exc
 
     bytes_written = 0
+    tmp_name: str | None = None
+    published = False
     try:
-        # 0o600 on creation: owner-only — downloaded artifacts can contain
-        # extracted customer metadata; don't rely on the process umask to keep
-        # them private. Mirrors the chunked pre-allocation path. (Mode applies
-        # only when the file is newly created; pre-existing perms are untouched.)
-        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        from application_sdk.constants import (  # noqa: PLC0415
-            STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
-        )
+        try:
+            staging_dir = path.parent / PARTIAL_DIRNAME
+            # mode hardens only the first creation (ignored when the directory
+            # exists) — it keeps a staging dir under a shared temp root private.
+            os.makedirs(staging_dir, mode=0o700, exist_ok=True)
+            fd, tmp_name = tempfile.mkstemp(
+                dir=str(staging_dir), prefix=path.name + "."
+            )
+            from application_sdk.constants import (  # noqa: PLC0415
+                STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
+            )
 
-        last_progress = started
-        with os.fdopen(fd, "wb") as fh:
-            async for chunk in result.stream(min_chunk_size=min_chunk_size):
-                raw = bytes(chunk)
-                fh.write(raw)
-                bytes_written += len(raw)
-                if h is not None:
-                    h.update(raw)
-                # One streamed chunk landed on disk — see the matching mark in
-                # upload_file for why this is per chunk and ungated.
-                current_progress_tracker().mark_progress("storage.download_chunk")
-                if _progress_interval > 0:
-                    now = time.monotonic()
-                    if now - last_progress >= _progress_interval:
-                        _log_transfer_progress(
-                            "download",
-                            key,
-                            bytes_so_far=bytes_written,
-                            elapsed_ms=(now - started) * 1000.0,
-                        )
-                        last_progress = now
-    # conformance: ignore[E004] file-write error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
-    except Exception as exc:
-        elapsed_ms = (time.monotonic() - started) * 1000.0
-        _log_storage_event(
-            logging.WARNING,
-            "download",
-            key,
-            outcome="failure",
-            elapsed_ms=elapsed_ms,
-            size_bytes=bytes_written,
-            error_class=_exc_class_name(exc),
-        )
-        from application_sdk.storage.errors import StorageError  # noqa: PLC0415
+            last_progress = started
+            with os.fdopen(fd, "wb") as fh:
+                async for chunk in result.stream(min_chunk_size=min_chunk_size):
+                    raw = bytes(chunk)
+                    fh.write(raw)
+                    bytes_written += len(raw)
+                    if h is not None:
+                        h.update(raw)
+                    # One streamed chunk landed on disk — see the matching mark in
+                    # upload_file for why this is per chunk and ungated.
+                    current_progress_tracker().mark_progress("storage.download_chunk")
+                    if _progress_interval > 0:
+                        now = time.monotonic()
+                        if now - last_progress >= _progress_interval:
+                            _log_transfer_progress(
+                                "download",
+                                key,
+                                bytes_so_far=bytes_written,
+                                elapsed_ms=(now - started) * 1000.0,
+                            )
+                            last_progress = now
+                # fsync before the publish: on a delayed-allocation filesystem
+                # ENOSPC can surface only at writeback, and without this a
+                # short file would be published as complete (the FND-318
+                # argument). Offloaded so a large flush does not hold the
+                # event loop and the activity heartbeat with it.
+                fh.flush()
+                await run_in_thread(os.fsync, fh.fileno())
+            os.replace(tmp_name, path)
+            published = True
+        # conformance: ignore[E004] file-write error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
+        except Exception as exc:
+            elapsed_ms = (time.monotonic() - started) * 1000.0
+            _log_storage_event(
+                logging.WARNING,
+                "download",
+                key,
+                outcome="failure",
+                elapsed_ms=elapsed_ms,
+                size_bytes=bytes_written,
+                error_class=_exc_class_name(exc),
+            )
+            from application_sdk.storage.errors import StorageError  # noqa: PLC0415
 
-        raise StorageError(
-            f"Failed to write downloaded file to '{local_path}'", key=key, cause=exc
-        ) from exc
+            raise StorageError(
+                f"Failed to write downloaded file to '{local_path}'", key=key, cause=exc
+            ) from exc
+    finally:
+        # BaseException-safe: a Temporal cancel or worker shutdown must not
+        # strand a uniquely-named staging file per attempt.
+        #
+        # Suppressed, like common.atomic._discard and the chunked path's
+        # _discard_transfer_state: `missing_ok` covers only FileNotFoundError,
+        # and a raise out of this `finally` would replace whatever the caller
+        # was about to receive — a completed download, or the typed
+        # StorageError above — with a bare OSError about the temp file.
+        if not published and tmp_name is not None:
+            with contextlib.suppress(OSError):
+                Path(tmp_name).unlink(missing_ok=True)
 
     elapsed_ms = (time.monotonic() - started) * 1000.0
     _log_storage_event(
@@ -1048,7 +1090,8 @@ async def download_file(
             # The corrupt file is deliberately left on disk: byte-stability
             # across fresh downloads is what distinguishes "corrupt at source"
             # from "flaky transfer", and an operator cannot check that against
-            # a file we deleted. A retry re-downloads over it (O_TRUNC).
+            # a file we deleted. A retry atomically publishes a fresh download
+            # over it.
             integrity.check_transfer_digest(
                 "download",
                 key,

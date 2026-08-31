@@ -93,3 +93,125 @@ class TestUseServerSideCursor:
         finally:
             importlib.reload(constants)
             importlib.reload(sql_client_mod)
+
+
+class TestStorageLockWaitProgressSeconds:
+    """Cover the ``ATLAN_STORAGE_LOCK_WAIT_PROGRESS_SECONDS`` clamp.
+
+    The value is load-bearing config, not a cosmetic interval: a waiter queued
+    behind another activity's multi-GB download makes no transfer progress of
+    its own, so it marks progress on this interval to avoid being killed by the
+    stall watchdog. The interval must therefore stay under the watchdog budget
+    an operator configured — which is why the default is capped at a quarter of
+    ``ATLAN_MAX_NO_PROGRESS_SECONDS`` rather than a bare 30. Evaluated at import
+    time, so each case reloads the module under a patched environment.
+    (CONNECT-1126)
+    """
+
+    @pytest.fixture(autouse=True)
+    def _restore_constants(self):
+        yield
+        importlib.reload(constants)
+
+    def _reload(self, monkeypatch: pytest.MonkeyPatch, **env: str | None) -> float:
+        for name in (
+            "ATLAN_STORAGE_LOCK_WAIT_PROGRESS_SECONDS",
+            "ATLAN_MAX_NO_PROGRESS_SECONDS",
+        ):
+            monkeypatch.delenv(name, raising=False)
+        for name, value in env.items():
+            if value is not None:
+                monkeypatch.setenv(name, value)
+        return importlib.reload(constants).STORAGE_LOCK_WAIT_PROGRESS_SECONDS
+
+    def test_default_when_unset(self, monkeypatch: pytest.MonkeyPatch):
+        # 30 sits well under a quarter of the 900s default budget, so the cap
+        # is inactive and the documented default survives.
+        assert self._reload(monkeypatch) == 30.0
+
+    def test_custom_value_under_the_cap_is_honoured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        assert (
+            self._reload(monkeypatch, ATLAN_STORAGE_LOCK_WAIT_PROGRESS_SECONDS="10")
+            == 10.0
+        )
+
+    def test_lowered_watchdog_budget_pulls_the_interval_down(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        # The invariant this constant exists for: an operator who lowers the
+        # budget below the interval would otherwise get the exact failure the
+        # marking prevents — a correctly-waiting activity killed as stalled.
+        assert self._reload(monkeypatch, ATLAN_MAX_NO_PROGRESS_SECONDS="20") == 5.0
+
+    def test_explicit_value_above_the_cap_is_clamped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        assert (
+            self._reload(
+                monkeypatch,
+                ATLAN_STORAGE_LOCK_WAIT_PROGRESS_SECONDS="600",
+                ATLAN_MAX_NO_PROGRESS_SECONDS="120",
+            )
+            == 30.0
+        )
+
+    @pytest.mark.parametrize("value", ["0", "-5", "0.25"])
+    def test_sub_second_values_are_floored(
+        self, monkeypatch: pytest.MonkeyPatch, value: str
+    ):
+        # A zero or negative timeout on the guard's ``asyncio.wait_for`` would
+        # turn the queued wait into a busy spin.
+        assert (
+            self._reload(monkeypatch, ATLAN_STORAGE_LOCK_WAIT_PROGRESS_SECONDS=value)
+            == 1.0
+        )
+
+    def test_tiny_watchdog_budget_still_floors_at_one_second(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        # The floor wins over the cap: better a waiter that marks too often
+        # than one that spins.
+        assert self._reload(monkeypatch, ATLAN_MAX_NO_PROGRESS_SECONDS="2") == 1.0
+
+    async def test_a_contended_guard_marks_progress_at_the_interval(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The clamp is only worth anything if the guard actually uses it.
+
+        Pins the wiring end to end: a second caller blocked on a held lock
+        marks progress once per interval rather than waiting silently.
+        """
+        import asyncio
+        from unittest.mock import MagicMock, patch
+
+        from application_sdk.storage._locks import PathLockRegistry
+
+        registry = PathLockRegistry("test.lock_wait")
+        tracker = MagicMock()
+
+        with (
+            patch.object(constants, "STORAGE_LOCK_WAIT_PROGRESS_SECONDS", 0.01),
+            patch(
+                "application_sdk.storage._locks.current_progress_tracker",
+                return_value=tracker,
+            ),
+        ):
+            async with registry.guard("/tmp/contended"):
+                waiter = asyncio.create_task(
+                    self._hold_briefly(registry, "/tmp/contended")
+                )
+                await asyncio.sleep(0.1)
+                assert tracker.mark_progress.call_count >= 2, (
+                    "a queued waiter marked progress "
+                    f"{tracker.mark_progress.call_count} times in ~10 intervals — "
+                    "the stall watchdog would kill it"
+                )
+                assert tracker.mark_progress.call_args[0][0] == "test.lock_wait"
+            await waiter
+
+    @staticmethod
+    async def _hold_briefly(registry, path: str) -> None:
+        async with registry.guard(path):
+            pass
