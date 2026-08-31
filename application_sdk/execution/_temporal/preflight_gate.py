@@ -62,7 +62,6 @@ with workflow.unsafe.imports_passed_through():
         PreflightStatus,
     )
     from application_sdk.infrastructure.context import get_infrastructure
-    from application_sdk.storage.errors import StorageBucketRelocationError
 
     # Stable log bodies for the gate's two events — the contract connector-pulse
     # queries on. They live in the shared event-name registry and their values are
@@ -89,6 +88,7 @@ with workflow.unsafe.imports_passed_through():
         AtlanLoggerAdapter,
         get_logger,
     )
+    from application_sdk.storage.errors import StorageBucketRelocationError
 
 logger = get_logger(__name__)
 
