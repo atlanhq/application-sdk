@@ -629,6 +629,28 @@ def format_usd(amount: float | None) -> str:
     return "unavailable" if amount is None else f"${amount:,.4f}"
 
 
+#: A ripgrep config that makes hidden paths searchable.
+#:
+#: opencode's Glob and Grep are ripgrep-backed, and ripgrep skips dot-paths.
+#: The whole playbook lives under `.mothership/`, so on the first complete run
+#: the reviewer got 0 matches TWICE: once globbing its own agent definitions,
+#: and once grepping the reference rules for prior art on the finding it was
+#: about to raise. It then raised that finding without the rules that exist to
+#: inform it — no error, no mention in the verdict.
+#:
+#: ripgrep reads flags from the file named by RIPGREP_CONFIG_PATH, so this is
+#: a structural fix rather than a prompt asking the model to remember.
+RG_CONFIG_NAME = ".sdk-loop-rgcfg"
+
+
+def write_rg_config(cwd: str) -> str:
+    """Write the ripgrep config and return its path."""
+    path = os.path.join(cwd, RG_CONFIG_NAME)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("--hidden\n")
+    return path
+
+
 #: Env the agent process inherits. An allowlist, not the runner's whole
 #: environment: every other GitHub Actions secret stays out of a process that
 #: is reading untrusted PR content.
@@ -640,6 +662,7 @@ AGENT_ENV_PASSTHROUGH = (
     "LC_ALL",
     "LITELLM_API_KEY",
     "LITELLM_BASE_URL",
+    "RIPGREP_CONFIG_PATH",
     "GH_TOKEN",
     "GITHUB_REPOSITORY",
 )
@@ -734,6 +757,7 @@ def run_agent(
     if shutil.which("opencode") is None:
         raise RuntimeError("opencode is not installed on this runner")
     emit = sink or (lambda line: print(line, flush=True))
+    os.environ["RIPGREP_CONFIG_PATH"] = write_rg_config(cwd)
     config_path = os.path.join(cwd, "opencode.json")
     with open(config_path, "w", encoding="utf-8") as handle:
         json.dump(opencode_config(model, with_subagents=subagents), handle, indent=2)
@@ -768,10 +792,11 @@ def run_agent(
             timer.cancel()
     finally:
         # Never leave the pinned config in a tree the resolve phase might commit.
-        try:
-            os.unlink(config_path)
-        except FileNotFoundError:
-            pass
+        for stray in (config_path, os.path.join(cwd, RG_CONFIG_NAME)):
+            try:
+                os.unlink(stray)
+            except FileNotFoundError:
+                pass
 
     transcript = "\n".join(lines)
     if transcript_path:

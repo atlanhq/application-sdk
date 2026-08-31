@@ -538,7 +538,7 @@ def main(argv: list[str] | None = None) -> int:
             for line in _sh(
                 ["git", "status", "--porcelain"], cwd=workspace
             ).stdout.splitlines()
-            if "sdk-loop-" not in line
+            if "sdk-loop-" not in line and ".sdk-loop-rgcfg" not in line
         ).strip()
         after = live_head(repo, head_ref)
         dismissals = parse_dismissals(f"{result.stdout}\n{result.stderr}")

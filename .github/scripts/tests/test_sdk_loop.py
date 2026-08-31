@@ -27,6 +27,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from _gha_expr import evaluate  # noqa: E402
 from sdk_loop_common import (  # noqa: E402
+    AGENT_ENV_PASSTHROUGH,
     ALLOWED_MODELS,
     DEFAULT_MAX_USD,
     MAX_CONSECUTIVE_REAIMS,
@@ -48,6 +49,7 @@ from sdk_loop_common import (  # noqa: E402
     reaim_exhausted,
     run_agent,
     run_budget,
+    write_rg_config,
 )
 from sdk_loop_fence import (  # noqa: E402
     MARK_DECLINE,
@@ -1031,6 +1033,22 @@ def test_every_job_has_a_name_a_human_can_read() -> None:
     assert jobs["resolve-8"]["name"] == "Resolve 8"
     assert jobs["fence"]["name"] == "Fence"
     assert jobs["finalize"]["name"] == "Summary"
+
+
+def test_hidden_paths_are_searchable_structurally(tmp_path: pathlib.Path) -> None:
+    """opencode's Glob/Grep are ripgrep-backed and ripgrep skips dot-paths.
+
+    On the first complete run the reviewer got 0 matches TWICE — globbing its
+    own agent definitions, and grepping the reference rules for prior art on
+    the finding it was about to raise. It raised that finding anyway, without
+    the rules that exist to inform it, and said nothing about it.
+
+    ripgrep reads flags from RIPGREP_CONFIG_PATH, so this is fixed in the
+    environment rather than by asking the model to remember a prompt line.
+    """
+    path = write_rg_config(str(tmp_path))
+    assert pathlib.Path(path).read_text().strip() == "--hidden"
+    assert "RIPGREP_CONFIG_PATH" in AGENT_ENV_PASSTHROUGH
 
 
 def test_token_usage_is_parsed_and_a_cache_miss_is_called_out() -> None:
