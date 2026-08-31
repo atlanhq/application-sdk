@@ -27,6 +27,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from application_sdk.errors.base import sanitize_cause_repr
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
@@ -309,9 +310,14 @@ async def _probe_store_structured(
 
             Note on cost: a probe cancelled mid-initiate (timeout) can leave a
             hidden, unfinished multipart upload behind; providers charge for
-            those parts until aborted. The payload is a few bytes; buckets
-            should carry an abort-incomplete-multipart lifecycle rule — verify
-            that for the deployment's buckets, it is not asserted here.
+            those parts until aborted. The payload is a few bytes, but the
+            parts are not cleaned up here and cannot be: ``obstore`` owns the
+            upload id inside ``put_async`` and exposes no abort call, so a
+            cancelled probe leaves nothing to cancel against. The bucket must
+            carry an abort-incomplete-multipart lifecycle rule instead — a
+            deployment prerequisite surfaced on
+            ``App.preflight_verify_storage`` and in the app docs, asserted
+            neither here nor anywhere else in the SDK.
 
     Returns:
         An :class:`ObjectStoreCheckResult`.  Never raises for obstore-level
@@ -356,7 +362,7 @@ async def _probe_store_structured(
             "SDR preflight: write probe failed for %s store (binding: %s): %s",
             label,
             binding_name,
-            exc,
+            sanitize_cause_repr(exc),
             exc_info=True,
         )
         error_class, hint = _classify_access_error(exc)
@@ -365,7 +371,7 @@ async def _probe_store_structured(
             binding_name=binding_name,
             passed=False,
             error_class=error_class,
-            cause=str(exc),
+            cause=sanitize_cause_repr(exc),
             hint=hint,
             failed_operation="write",
         )
@@ -380,7 +386,7 @@ async def _probe_store_structured(
             "SDR preflight: read/head probe failed for %s store (binding: %s): %s",
             label,
             binding_name,
-            exc,
+            sanitize_cause_repr(exc),
             exc_info=True,
         )
         error_class, hint = _classify_access_error(exc)
@@ -389,7 +395,7 @@ async def _probe_store_structured(
             binding_name=binding_name,
             passed=False,
             error_class=error_class,
-            cause=str(exc),
+            cause=sanitize_cause_repr(exc),
             hint=hint,
             failed_operation="read/head",
         )
@@ -415,7 +421,7 @@ async def _probe_store_structured(
                 "(binding: %s): %s",
                 label,
                 binding_name,
-                exc,
+                sanitize_cause_repr(exc),
                 exc_info=True,
             )
             error_class, hint = _classify_access_error(exc)
@@ -424,7 +430,7 @@ async def _probe_store_structured(
                 binding_name=binding_name,
                 passed=False,
                 error_class=error_class,
-                cause=str(exc),
+                cause=sanitize_cause_repr(exc),
                 hint=hint,
                 failed_operation="write-multipart",
             )

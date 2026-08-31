@@ -508,6 +508,16 @@ class MyConnector(App):
     preflight_verify_storage = True   # a run that cannot upload should not extract
 ```
 
+!!! warning "Deployment prerequisite: abort-incomplete-multipart lifecycle rule"
+
+    Every probed bucket must carry an abort-incomplete-multipart-upload lifecycle rule before
+    you set this `True`. A probe cancelled between multipart initiate and complete — which the
+    gate's own timeout does — leaves hidden partial parts the provider bills until they are
+    aborted, and with this opt-in that happens once per run rather than once per worker boot.
+    The SDK cannot clean them up: `obstore` owns the upload id inside `put_async` and exposes no
+    abort call, so there is no handle to cancel against. The SDK neither checks this rule nor
+    reports its absence — confirm it out of band.
+
 A failed probe appends a typed, platform-attributed check (`objectStoreAccess:<store>`, with a
 relocation rejection stamped `DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION`) and downgrades a
 `READY` or `PARTIAL` verdict to `NOT_READY` — so `preflight_gate_mode` still decides whether it

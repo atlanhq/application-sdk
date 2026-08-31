@@ -846,7 +846,17 @@ class App(ABC):
     costs under a second per run against healthy storage, but a hard-mode app
     turning this on is trusting a storage canary to abort real runs — and the
     probe is stricter than a small-artifact-only workload's real writes, which
-    never touch multipart at all."""
+    never touch multipart at all.
+
+    **Deployment prerequisite.** The probed buckets must carry an
+    abort-incomplete-multipart-upload lifecycle rule. A probe cancelled between
+    multipart initiate and complete — the gate's own timeout does exactly this —
+    leaves hidden partial parts that the provider bills until they are aborted,
+    and now once per run rather than once per worker boot. The SDK cannot clean
+    them up itself: ``obstore`` owns the upload id inside ``put_async`` and
+    exposes no abort call, so there is nothing to cancel against. Confirm the
+    lifecycle rule on every bucket in the deployment before setting this
+    ``True``; the SDK neither checks nor reports it."""
 
     artifact_validation_mode: ClassVar[Literal["hard", "soft"]] = "soft"
     """Artifact-validation posture (ADR-0020). ``"soft"`` (default) never blocks.

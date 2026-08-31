@@ -250,6 +250,30 @@ def _resolve_gate_enforcement(app_cls: type | None) -> bool:
     return str(declared).strip().lower() == "hard"
 
 
+def _resolve_verify_storage(app_cls: type | None) -> bool:
+    """Whether this app opted the gate into verifying its artifact storage.
+
+    Reads :attr:`App.preflight_verify_storage` directly rather than through a
+    ``getattr`` default: the base class declares it, so a default here could
+    only paper over the SDK renaming its own attribute — the one failure worth
+    surfacing loudly at boot.
+
+    ``app_cls`` is ``None`` for a worker with no SDR-registered app, where
+    ``name_to_app_cls`` is empty and the gate still registers under the resolved
+    service name. An app the worker cannot see cannot have opted in, so that
+    resolves to ``False`` rather than raising.
+
+    What this deliberately cannot do is catch a *consumer* typo
+    (``preflight_verify_storag = True`` on a subclass): the misspelt name is a
+    different attribute and the real one still resolves to the base's ``False``,
+    for direct access and ``getattr`` alike. No read at this layer can see that;
+    a conformance rule over App subclasses is where it belongs.
+    """
+    if app_cls is None:
+        return False
+    return bool(app_cls.preflight_verify_storage)
+
+
 class AppWorker:
     """Wraps Temporal Worker to emit worker_start on startup and to push
     metrics on shutdown for short-lived deployments.
@@ -722,9 +746,7 @@ def create_worker(
                 enforce=enforce,
                 budget_seconds=budget_seconds,
                 attempts=attempts,
-                verify_storage=bool(
-                    getattr(app_cls, "preflight_verify_storage", False)
-                ),
+                verify_storage=_resolve_verify_storage(app_cls),
             )
         )
     task_activities = [*task_activities, *gate_activities]

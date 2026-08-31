@@ -743,3 +743,50 @@ async def test_probe_writes_with_binding_put_attributes() -> None:
 def test_relocation_error_exported_from_package_root() -> None:
     """StorageBucketRelocationError is importable like its eight siblings."""
     from application_sdk.storage import StorageBucketRelocationError  # noqa: F401
+
+
+# ---------------------------------------------------------------------------
+# Cause sanitisation
+# ---------------------------------------------------------------------------
+
+_SIGNED_URL_ERROR = (
+    "Generic S3 error: error sending request for url "
+    "(https://bucket.s3.amazonaws.com/artifacts/x?X-Amz-Signature=deadbeefcafe"
+    "&X-Amz-Credential=AKIAEXAMPLE%2F20260831%2Fus-east-1%2Fs3%2Faws4_request)"
+)
+
+
+@pytest.mark.parametrize("failing_phase", ["write", "read/head", "write-multipart"])
+@pytest.mark.asyncio
+async def test_probe_cause_is_sanitised(failing_phase: str) -> None:
+    """No probe may put a raw object-store error into user-facing text.
+
+    ``ObjectStoreCheckResult.cause`` flows into ``.message``, which the boot
+    formatter and the gate's ``_storage_failure_details`` both render for a
+    human. Object-store errors carry the request URL, and for a presigned
+    request that URL carries the signature — so every phase must route its
+    cause through ``sanitize_cause_repr``.
+    """
+    exc = Exception(_SIGNED_URL_ERROR)
+    puts: list = [None, None]
+    head = None
+    if failing_phase == "write":
+        puts = [exc]
+    elif failing_phase == "read/head":
+        head = exc
+    else:
+        puts = [None, exc]
+
+    result, _ = await _run_probe_structured(
+        _fake_store(),
+        include_multipart_probe=True,
+        put_side_effects=puts,
+        head_side_effect=head,
+    )
+    assert result.passed is False
+    assert result.failed_operation == failing_phase
+    assert result.cause is not None
+    assert "X-Amz-Signature=deadbeefcafe" not in result.cause
+    assert "X-Amz-Signature=***" in result.cause
+    # The rendered, user-facing string is the thing that actually leaks.
+    assert "deadbeefcafe" not in result.message
