@@ -1070,7 +1070,7 @@ Include the delta status in the review summary (and inline body
 where applicable) so the author sees at a glance what was fixed vs
 what remains.
 
-### 2e′. Nit convergence — keep the write-side resolver's loop terminating
+### 2e′. Nit convergence — keep the loop terminating AND the verdict reachable
 
 `@sdk-resolve` (the write counterpart, `.mothership/pr-resolve/`) drives a PR by
 looping review→fix→push until `### Findings` is **empty** (nits included). That
@@ -1079,6 +1079,12 @@ actionable**. A reviewer that surfaces a fresh batch of pre-existing optional
 nits every pass — or lists observations it recommends no action on — makes that
 loop non-terminating: it spins round after round until the sandbox dies with no
 hand-off. The three rules below keep nits convergent.
+
+Since `READY_TO_MERGE` now requires an empty `### Findings` (§2h), these rules
+carry a second load: an unconvergent nit stream no longer just wastes resolver
+rounds, it withholds the approval indefinitely. A `Nit` that survives these
+three rules is one the resolver can clear; anything else must not be listed as a
+finding at all.
 
 **They apply to `Nit`-tier findings ONLY.** Critical / High / Important
 findings — and any regression a pushed fix introduces — are ALWAYS raised, on
@@ -1138,8 +1144,8 @@ MEDIUM/LOW/INFO findings: one-line suggested_fix only. No path_forward.
 | BLOCKED | G1/G2/G3/G5 violation | REJECT |
 | NEEDS_HUMAN | DESIGN_CHANGE scope | REQUEST_CHANGES |
 | NEEDS_HUMAN | `review_scope` is `contract-toolkit` or `mixed-sdk-toolkit`, and non-empty `/tmp/TOOLKIT_ROVER_NOTE.md` exists or `/tmp/TOOLKIT_VALIDATION.md` has any mandatory toolkit compatibility check with status `needs rerun` | REQUEST_CHANGES |
-| NEEDS_FIXES | Critical, G4/G6, **any Important** | REQUEST_CHANGES |
-| READY_TO_MERGE | **0 Critical AND 0 Important** | APPROVE |
+| NEEDS_FIXES | Critical, G4/G6, **any Important, any Nit** | REQUEST_CHANGES |
+| READY_TO_MERGE | **`### Findings` is empty — 0 Critical, 0 Important AND 0 Nit** | APPROVE |
 
 CI is deliberately NOT a verdict input. `sdk-review-downgrade-on-ci-failure.yml`
 strips an approval event-driven the moment any non-review check fails —
@@ -1147,13 +1153,30 @@ the only race-free enforcement, since CI legs routinely finish after the
 review posts. The reviewer reports CI state on the `**CI:**` summary line
 (from the single Phase 0 step 9 read) and nothing more.
 
-`READY_TO_MERGE` is strict: a single Important finding forces
-`NEEDS_FIXES`. Nits do not block. If you believe an Important should
-be downgraded, downgrade it explicitly in §2e with a one-line reason
-— do not silently approve over the top of it. Before listing any
-`Nit`, apply the §2e′ convergence rules (diff-scope, re-review
-monotonicity, actionability) — they keep the write-side resolver's
-`### Findings`-empty loop terminating.
+`READY_TO_MERGE` is strict: **any** finding still listed under
+`### Findings` forces `NEEDS_FIXES`, whatever its tier. A single
+Important does it; so does a single `Nit`. The verdict and the
+write-side resolver now agree on one bar — §2e′ already promises that
+"once the author's real fixes land, a re-review of the same substantive
+change returns an **empty** `### Findings` with `READY_TO_MERGE`", and
+the resolver has always looped until every finding "nits included" is
+cleared. Approving over an open nit made the reviewer the looser of the
+two and left the resolver still working on a PR that was already
+stamped.
+
+The load this puts on `Nit` discipline is the point, and §2e′ is what
+carries it: a `Nit` you list must be one the resolver can actually
+clear, or the loop wedges. **Before listing any `Nit`, apply the §2e′
+convergence rules** (diff-scope, re-review monotonicity, actionability).
+An observation that fails them is not a finding — put it in
+`### Strengths` or prose, never under `### Findings`. That was already
+the rule; it is now load-bearing for the verdict too.
+
+If you believe an Important should be downgraded, downgrade it
+explicitly in §2e with a one-line reason — do not silently approve over
+the top of it. Downgrading an Important to a `Nit` no longer buys an
+approval, so a finding you genuinely accept must be dropped with its
+reason, not demoted.
 
 Print: `[Phase 2 complete] <N> findings across <C> classes, verdict=<verdict>`
 then `bash /tmp/budget.sh`.
