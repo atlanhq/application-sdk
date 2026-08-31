@@ -60,17 +60,22 @@ MAX_ROUNDS = 8
 #: (`.mothership/pr-resolve/ORCHESTRATION.md` §3d, "Fix every finding (or prove
 #: it false)"), so a separate adversarial reviewer would pay twice for one job.
 #:
-#: Written `grok-4-6`, not `grok-4.6`. Two live rounds died 11ms in with
+#: `grok-4.6`, dotted — that is the alias the gateway serves. The undotted
+#: form was tried and rejected: "Invalid model name passed in
+#: model=xai/grok-4-6", and `/v1/models` lists `xai/grok-4.6` and no variant.
+#:
+#: Superseded note, kept because it recorded a real finding: two live rounds
+#: died 11ms in with
 #: `Error: [DecimalError] Invalid argument: [object Object]` — decimal.js
 #: refusing a non-numeric argument — before the agent read anything. The
-#: dotted form is the one shape this lane has that connector-pulse's working
-#: config does not: its aliases (`gpt-5.6-luna`, `kimi-k3`) carry no dot in a
-#: position a decimal parser would try to consume.
+#: dot was blamed. It was the wrong culprit — swapping it merely moved the
+#: failure from a crash to a 400. The real cause was an unpriced model; see
+#: `opencode_config`.
 #:
 #: The alias also contains a slash. opencode splits `--model` on the FIRST
-#: slash only, so `gateway/xai/grok-4-6` resolves to provider `gateway`, model
-#: `xai/grok-4-6` — the key in the config's `models` map is the full alias.
-REVIEW_MODEL = "xai/grok-4-6"
+#: slash only, so `gateway/xai/grok-4.6` resolves to provider `gateway`, model
+#: `xai/grok-4.6` — the key in the config's `models` map is the full alias.
+REVIEW_MODEL = "xai/grok-4.6"
 
 #: Resolve runs on the mechanical model — the same role split connector-pulse
 #: uses for its mechanical lane.
@@ -272,7 +277,58 @@ def gateway_base() -> str:
     return base.rstrip("/")
 
 
-def opencode_config(model: str) -> dict[str, Any]:
+#: The playbook's Phase 2 agents, registered so opencode's Task tool can
+#: dispatch them. §2a says "dispatch agents via the Agent tool" — Claude Code's
+#: name for it; opencode calls the same mechanism `Task`, and it runs them in
+#: parallel just the same. Without registering them the primary agent has
+#: nothing to delegate TO, and Phase 2's whole fan-out silently collapses into
+#: one agent doing everything: a review that still produces a verdict, just a
+#: worse one, with nothing in the output to say so.
+#:
+#: The prompts are the EXISTING files, loaded by reference. Nothing is copied,
+#: so the agents stay owned by `.mothership/pr-review/agents/` and keep the
+#: reference rules #3530 gave them.
+#: Audited against both playbooks on 2026-08-31: `Agent tool` (ORCHESTRATION
+#: lines 556 and 918) is the ONLY harness-specific capability either one names.
+#: No Skills, no MCP, no glean, no WebFetch, no TodoWrite — everything else is
+#: bash, gh, git and file reads, all of which opencode has. So subagent
+#: registration was the whole gap, and the resolve playbook needs nothing: it
+#: has no agents directory and dispatches none.
+#:
+#: `adversarial.md` is deliberately absent from this list — Wave 2 is skipped
+#: in this lane (see the review prompt), so registering it would advertise a
+#: capability the phase is told not to use.
+PHASE2_AGENTS = (
+    "correctness",
+    "quality",
+    "structure",
+    "reachability",
+    "conformance",
+    "ci-config",
+    "toolkit-review",
+)
+
+
+def review_subagents(model: str) -> dict[str, Any]:
+    """opencode subagent entries for the playbook's Phase 2 agents.
+
+    Each is read-only by construction: the review lane holds a token with no
+    write scope, and denying `edit` here makes that true of the agent as well
+    as the credential rather than relying on either alone.
+    """
+    return {
+        name: {
+            "description": f"SDK review — {name} domain agent (Phase 2 Wave 1).",
+            "mode": "subagent",
+            "model": f"{PROVIDER}/{model}",
+            "prompt": f"{{file:./.mothership/pr-review/agents/{name}.md}}",
+            "permission": {"edit": "deny", "read": "allow", "bash": "allow"},
+        }
+        for name in PHASE2_AGENTS
+    }
+
+
+def opencode_config(model: str, with_subagents: bool = False) -> dict[str, Any]:
     """`opencode.json` pinning the only provider and models this lane may use.
 
     Shell and network stay ALLOWED here, unlike the conformance fast lane which
@@ -296,7 +352,41 @@ def opencode_config(model: str) -> dict[str, Any]:
                     "baseURL": f"{base}/v1",
                     "apiKey": "{env:LITELLM_API_KEY}",
                 },
-                "models": {name: {} for name in ALLOWED_MODELS},
+                # Cost is DECLARED rather than left empty. This is a
+                # HYPOTHESIS under test, not a diagnosis, for the crash that
+                # killed the first three live runs:
+                #
+                #   Error: [DecimalError] Invalid argument: [object Object]
+                #
+                # What is PROVEN: it dies 11ms in, before any network call —
+                # the undotted alias got as far as a real 400 from the
+                # gateway, so the crash is local to opencode's model
+                # resolution. `[object Object]` reaching decimal.js means an
+                # OBJECT was passed where a number was wanted, and an
+                # unpopulated cost table is the obvious candidate for that
+                # object. connector-pulse's aliases resolve in opencode's
+                # bundled registry; a gateway-only alias like `xai/grok-4.6`
+                # does not, which fits.
+                #
+                # What is NOT proven: that cost is the object in question. If
+                # this run still crashes, the next suspects are opencode
+                # parsing `4.6` out of the id as a version, and the nested
+                # slash in `gateway/xai/grok-4.6`.
+                #
+                # Zeroes rather than real prices: this lane bills through the
+                # gateway key and reads spend from /key/info, so opencode's own
+                # accounting is unused. Declaring it only stops it guessing.
+                "models": {
+                    name: {
+                        "cost": {
+                            "input": 0,
+                            "output": 0,
+                            "cache_read": 0,
+                            "cache_write": 0,
+                        }
+                    }
+                    for name in ALLOWED_MODELS
+                },
             }
         },
         "model": f"{PROVIDER}/{model}",
@@ -304,6 +394,7 @@ def opencode_config(model: str) -> dict[str, Any]:
         # unanswered ask as a rejection — a connector-pulse run starved exactly
         # that way when its skill reads were auto-rejected. So everything a
         # phase legitimately does is allowed outright.
+        **({"agent": review_subagents(model)} if with_subagents else {}),
         "permission": {
             "read": "allow",
             "glob": "allow",
@@ -522,6 +613,7 @@ def run_agent(
     timeout_s: int,
     transcript_path: str | None = None,
     sink: Any = None,
+    subagents: bool = False,
 ) -> AgentResult:
     """Invoke one agent phase, STREAMING its output to the job log.
 
@@ -544,7 +636,7 @@ def run_agent(
     emit = sink or (lambda line: print(line, flush=True))
     config_path = os.path.join(cwd, "opencode.json")
     with open(config_path, "w", encoding="utf-8") as handle:
-        json.dump(opencode_config(model), handle, indent=2)
+        json.dump(opencode_config(model, with_subagents=subagents), handle, indent=2)
 
     lines: list[str] = []
     try:

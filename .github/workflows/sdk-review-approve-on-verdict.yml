@@ -55,14 +55,24 @@ permissions:
 
 jobs:
   sdk-review-approve:
-    # Fire only when the verdict comment was posted by the mothership
-    # bot on a PR (issue_comment also fires on Issues; the PR-side has
+    # Fire only when the verdict comment was posted by one of our review
+    # bots on a PR (issue_comment also fires on Issues; the PR-side has
     # `issue.pull_request` populated). The marker filter accepts both
     # `<!-- SDK_REVIEW -->` and the legacy `<!-- TEST_SDK_REVIEW -->`
     # for in-flight PRs.
+    #
+    # `atlan-app-fleet[bot]` is the @sdk-loop lane: its review phase posts the
+    # identical marker set using a token minted from the fleet App, so without
+    # it here a loop verdict of READY_TO_MERGE never became an atlan-ci
+    # approval and the PR stayed blocked with nothing saying why. Identity is
+    # still the gate — this widens WHO may produce a verdict, not what counts
+    # as one.
     if: >-
       github.event.issue.pull_request != null
-      && github.event.comment.user.login == 'mothership-ai[bot]'
+      && (
+        github.event.comment.user.login == 'mothership-ai[bot]'
+        || github.event.comment.user.login == 'atlan-app-fleet[bot]'
+      )
       && (
         contains(github.event.comment.body, '<!-- SDK_REVIEW -->')
         || contains(github.event.comment.body, '<!-- TEST_SDK_REVIEW -->')
