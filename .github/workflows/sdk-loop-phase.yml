@@ -108,6 +108,10 @@ permissions:
 
 jobs:
   phase:
+    # GitHub renders a reusable-workflow job as "<caller job> / <inner job>".
+    # The caller already says "Review 3"; repeating "phase" after it only adds
+    # noise to a 18-row job list, so the inner name echoes the phase instead.
+    name: ${{ inputs.phase }}
     runs-on: ubuntu-latest
     # Review is the slower phase: it walks the whole playbook, sub-agents
     # included. The headroom is for checkout and token minting, not the agent —
@@ -161,19 +165,32 @@ jobs:
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: '3.14'
 
       # A loop is up to 17 phase jobs, each on a fresh runner, so anything
       # installed per job is paid for 17 times. Cache the global npm store so
       # only the first job of a run pays the download.
+      # 1.18.22, matching connector-pulse — the only lane with this pattern
+      # working in production. The first pin here was 0.6.3, an ancient release
+      # picked without checking, and it crashed before every single request:
+      #
+      #   Error: [DecimalError] Invalid argument: [object Object]
+      #
+      # Three theories were chased through three PRs — the dot in grok-4.6, the
+      # slash, an unpopulated cost table — before running the exact CI config
+      # against 1.18.22 locally, where it works untouched. The version was the
+      # whole bug.
+      #
+      # Installed from npm rather than opencode.ai's install script, which is
+      # `curl | bash` and barred by the org baseline.
       - name: Cache the opencode install
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.npm
-          key: opencode-${{ runner.os }}-0.6.3
+          key: opencode-${{ runner.os }}-1.18.22
 
       - name: Install opencode
-        run: npm install -g --prefer-offline opencode-ai@0.6.3
+        run: npm install -g --prefer-offline opencode-ai@1.18.22
 
       - name: Configure git identity for the resolve phase
         if: inputs.phase == 'resolve'

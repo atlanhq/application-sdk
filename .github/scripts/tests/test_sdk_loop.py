@@ -31,6 +31,7 @@ from sdk_loop_common import (  # noqa: E402
     DEFAULT_MAX_USD,
     MAX_CONSECUTIVE_REAIMS,
     MAX_ROUNDS,
+    PHASE2_AGENTS,
     PROVIDER,
     RESOLVE_MODEL,
     REVIEW_MODEL,
@@ -395,6 +396,56 @@ def test_the_delta_range_never_narrows_the_review() -> None:
     assert "any line of the PR" in prompt
 
 
+def test_the_phase_two_agents_are_registered_so_the_fan_out_can_happen() -> None:
+    """§2a dispatches domain agents via a delegation tool. Claude Code calls it
+    the Agent tool; opencode calls it Task and supports the same parallel
+    dispatch — but only to agents it knows about. Unregistered, the primary
+    agent has nothing to delegate to and Phase 2's fan-out silently collapses
+    into one agent covering every domain: still a verdict, just a worse one,
+    with nothing in the output saying so.
+    """
+    monkey = pytest.MonkeyPatch()
+    monkey.setenv("LITELLM_BASE_URL", "https://gateway.example")
+    try:
+        cfg = opencode_config(REVIEW_MODEL, with_subagents=True)
+        assert set(cfg["agent"]) == set(PHASE2_AGENTS)
+        for name, spec in cfg["agent"].items():
+            assert spec["mode"] == "subagent"
+            # Prompts are the EXISTING files by reference, never copied.
+            assert (
+                spec["prompt"] == f"{{file:./.mothership/pr-review/agents/{name}.md}}"
+            )
+            # Read-only in the agent as well as in the credential.
+            assert spec["permission"]["edit"] == "deny"
+        # Resolve gets none — it does not run Phase 2.
+        assert "agent" not in opencode_config(RESOLVE_MODEL)
+    finally:
+        monkey.undo()
+
+
+def test_every_agent_the_playbook_dispatches_is_registered() -> None:
+    """Both `Agent tool` sites in ORCHESTRATION.md must be satisfiable: §2a's
+    Wave 1 domain agents and the reachability dispatch at line 556."""
+    agents_dir = (
+        pathlib.Path(__file__).resolve().parents[3]
+        / ".mothership"
+        / "pr-review"
+        / "agents"
+    )
+    on_disk = {p.stem for p in agents_dir.glob("*.md")}
+    # Everything on disk is registered except adversarial, which Wave 2 uses
+    # and this lane skips — registering it would advertise a capability the
+    # phase is explicitly told not to use.
+    assert on_disk - set(PHASE2_AGENTS) == {"adversarial"}
+    assert "reachability" in PHASE2_AGENTS, "line 556 dispatches it by name"
+
+
+def test_the_review_prompt_names_the_delegation_tool_for_this_runtime() -> None:
+    prompt = review_prompt(42, 1, "a" * 40, DismissalLedger())
+    assert "`Task`" in prompt
+    assert "Do NOT do their work yourself" in prompt
+
+
 def test_the_review_prompt_references_the_playbook_and_never_restates_it() -> None:
     """The prompt may say what is DIFFERENT about this lane; it must not carry
     a copy of the review rules, which would be a second thing to keep in sync
@@ -664,7 +715,7 @@ def test_no_gateway_hostname_is_committed_in_this_lane() -> None:
 def test_the_review_model_matches_what_the_existing_lanes_use() -> None:
     # All three lanes reviewing on one model means a finding difference between
     # them is about the harness, not the model.
-    assert REVIEW_MODEL == "xai/grok-4-6"
+    assert REVIEW_MODEL == "xai/grok-4.6"
 
 
 def test_a_slash_bearing_alias_composes_into_provider_and_model(
@@ -675,7 +726,7 @@ def test_a_slash_bearing_alias_composes_into_provider_and_model(
     `xai/grok-4.6`, and the config's `models` key must carry the full alias."""
     monkeypatch.setenv("LITELLM_BASE_URL", "https://gateway.example")
     cfg = opencode_config(REVIEW_MODEL)
-    assert cfg["model"] == "gateway/xai/grok-4-6"
+    assert cfg["model"] == "gateway/xai/grok-4.6"
     assert cfg["model"].split("/", 1) == [PROVIDER, REVIEW_MODEL]
     assert REVIEW_MODEL in cfg["provider"][PROVIDER]["models"]
 
@@ -695,7 +746,7 @@ def test_the_lane_reaches_exactly_two_models_and_has_no_fallback() -> None:
     reason about across rounds. Pinned so a future edit adding a ladder has to
     change this test and say why.
     """
-    assert ALLOWED_MODELS == ("xai/grok-4-6", "gpt-5.6-luna")
+    assert ALLOWED_MODELS == ("xai/grok-4.6", "gpt-5.6-luna")
     assert len(set(ALLOWED_MODELS)) == 2
 
 
@@ -703,11 +754,43 @@ def test_review_and_resolve_run_on_different_models() -> None:
     assert REVIEW_MODEL != RESOLVE_MODEL
 
 
+def test_every_tool_the_playbooks_use_is_permitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Headless opencode auto-REJECTS an ask, and an unlisted tool is an ask.
+
+    A live round died with "The user rejected permission to use this specific
+    tool call" and no indication which tool. `task` was missing: subagents were
+    registered but the primary agent was never allowed to dispatch them, so
+    Phase 2 could not fan out even with the registration in place.
+    """
+    monkeypatch.setenv("LITELLM_BASE_URL", "https://gateway.example")
+    perms = opencode_config(REVIEW_MODEL, with_subagents=True)["permission"]
+    for tool in ("task", "skill", "bash", "read", "edit", "glob", "grep", "lsp"):
+        assert perms[tool] == "allow", f"{tool} would be auto-rejected"
+    # Defaults are not uniform — these two ask unless listed, and the review
+    # playbook legitimately does both.
+    assert perms["external_directory"] == "allow"
+    assert perms["doom_loop"] == "allow"
+
+
+def test_subagents_are_read_only_and_offline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_BASE_URL", "https://gateway.example")
+    for spec in opencode_config(REVIEW_MODEL, with_subagents=True)["agent"].values():
+        assert spec["permission"]["edit"] == "deny"
+        assert spec["permission"]["webfetch"] == "deny"
+
+
 def test_the_agent_cannot_reach_the_web(monkeypatch: pytest.MonkeyPatch) -> None:
     # It reads untrusted PR content; an injected prompt must not meet an
     # outbound channel it can choose freely.
     monkeypatch.setenv("LITELLM_BASE_URL", "https://gateway.example")
-    assert opencode_config(RESOLVE_MODEL)["permission"]["webfetch"] == "deny"
+    perms = opencode_config(RESOLVE_MODEL)["permission"]
+    # Both outbound channels, and they must beat the wildcard: last rule wins.
+    assert perms["webfetch"] == "deny"
+    assert perms["websearch"] == "deny"
 
 
 # ---------------------------------------------------------------------------
@@ -891,6 +974,69 @@ def test_the_action_pins_in_the_generator_match_the_generated_file() -> None:
     ):
         drift = set(re.findall(pattern, gen)) - set(re.findall(pattern, wf))
         assert not drift, f"{label} in generator but not in output: {sorted(drift)}"
+
+
+APPROVE_WF = WORKFLOW.parent / "sdk-review-approve-on-verdict.yml"
+
+
+def test_a_loop_verdict_can_become_an_atlan_ci_approval() -> None:
+    """The gate is on identity, and the loop posts as a different bot.
+
+    Its review phase emits the identical marker set using a token minted from
+    the fleet App, so without its login here a READY_TO_MERGE from the loop
+    never became an approval — the PR stayed blocked with nothing saying why.
+    """
+    jobs = yaml.safe_load(APPROVE_WF.read_text(encoding="utf-8"))["jobs"]
+    gate = next(j["if"] for j in jobs.values() if "if" in j)
+
+    def ctx(login: str) -> dict:
+        return {
+            "github": {
+                "event": {
+                    "issue": {"pull_request": {"n": 1}},
+                    "comment": {
+                        "user": {"login": login},
+                        "body": "<!-- SDK_REVIEW -->",
+                    },
+                }
+            }
+        }
+
+    assert evaluate(gate, ctx("atlan-app-fleet[bot]")) is True
+    # The existing lane must keep working.
+    assert evaluate(gate, ctx("mothership-ai[bot]")) is True
+    # Identity is still the gate — this widened who, not what.
+    assert evaluate(gate, ctx("some-random[bot]")) is False
+
+
+def test_the_trigger_comment_gets_an_acknowledgement() -> None:
+    """An emoji within seconds, before any verdict exists. The other two lanes
+    do this and its absence made the loop feel dead on invocation."""
+    fence = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["fence"]
+    react = next(
+        s for s in fence["steps"] if s.get("name") == "React to the trigger comment"
+    )
+    assert react["run"].endswith("react_to_comment.py")
+    # always(): the helper exits 0 by design, and a missing emoji must not take
+    # down the run it decorates.
+    assert "always()" in react["if"]
+
+
+def test_every_job_has_a_name_a_human_can_read() -> None:
+    """18 rows of `review-1 / phase` is not a progress display."""
+    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    assert jobs["review-1"]["name"] == "Review 1"
+    assert jobs["resolve-8"]["name"] == "Resolve 8"
+    assert jobs["fence"]["name"] == "Fence"
+    assert jobs["finalize"]["name"] == "Summary"
+
+
+def test_opencode_is_pinned_to_the_version_that_works() -> None:
+    """0.6.3 crashed before every request with a DecimalError. 1.18.22 is what
+    connector-pulse runs in production, and the exact CI config works against
+    it locally. Three PRs chased the model name before the version was checked.
+    """
+    assert "opencode-ai@1.18.22" in PHASE_WF.read_text(encoding="utf-8")
 
 
 def test_the_committed_workflow_matches_its_generator() -> None:
