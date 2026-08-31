@@ -399,12 +399,28 @@ def interpret_resolve(
     head_before: str,
     head_after: str,
     dismissals: list[dict[str, str]] | None = None,
+    local_head: str = "",
 ) -> ResolveOutcome:
     """Success is an observed effect, never an exit code.
 
     A resolve round counts only when the branch actually moved. A round that
     changed the tree but failed to push is a FAILURE, not progress: the loop
     must not report a fix that no one can see.
+
+    "Moved" has to mean moved BY US, though, and two remote reads cannot tell
+    the difference. `moved_by_other` guards this, but only once, before the
+    agent launches — so a push landing during the two to five minutes the
+    resolver runs (Renovate, a base merge, a person) shows up here as
+    `head_after != head_before` and is claimed as our own fix. *local_head* is
+    the discriminator: if this phase committed and pushed, the workspace HEAD
+    is what GitHub now has; if somebody else pushed, ours is stale. Passing it
+    empty keeps the old remote-only behaviour for callers that have no
+    workspace.
+
+    A push of ours followed by someone else's reads as not-ours and re-aims.
+    That is the safe direction to be wrong in: the next review re-reads the
+    real head either way, so the cost is one round, and the alternative is
+    reporting a fix that is not there.
     """
     dismissed = tuple(dismissals or ())
     if not result.looks_authenticated:
@@ -412,6 +428,15 @@ def interpret_resolve(
             OUTCOME_FAILED, detail="the gateway rejected the request (auth or model)"
         )
     if head_after != head_before:
+        if local_head and head_after != local_head:
+            return ResolveOutcome(
+                OUTCOME_REAIM,
+                dismissals=dismissed,
+                detail=(
+                    f"head moved to {head_after[:8]} while this round ran, and it "
+                    "is not our commit"
+                ),
+            )
         return ResolveOutcome(OUTCOME_OK, pushed_sha=head_after, dismissals=dismissed)
     if tree_changed:
         return ResolveOutcome(
@@ -555,8 +580,13 @@ def main(argv: list[str] | None = None) -> int:
             if "sdk-loop-" not in line and ".sdk-loop-rgcfg" not in line
         ).strip()
         after = live_head(repo, head_ref)
+        # Read from OUR checkout, so "the branch moved" can be told apart from
+        # "we moved the branch".
+        local = _sh(["git", "rev-parse", "HEAD"], cwd=workspace).stdout.strip()
         dismissals = parse_dismissals(f"{result.stdout}\n{result.stderr}")
-        outcome = interpret_resolve(result, bool(dirty), before, after, dismissals)
+        outcome = interpret_resolve(
+            result, bool(dirty), before, after, dismissals, local_head=local
+        )
         # Measured here rather than inherited: `cost` and `usage` were only
         # ever assigned inside the review branch, so every resolve phase
         # reached `emit_outputs` with both names unbound and died on a
@@ -570,7 +600,11 @@ def main(argv: list[str] | None = None) -> int:
         emit_outputs(
             outcome=outcome.outcome,
             pushed_sha=outcome.pushed_sha,
-            reaims="0",
+            # A resolve that re-aimed has to advance the counter for the same
+            # reason the pre-flight re-aim does: `reaim_exhausted` is what
+            # stops the loop chasing a branch somebody keeps pushing to, and a
+            # counter reset to zero on every re-aim can never reach its cap.
+            reaims=str(reaims + 1) if outcome.outcome == OUTCOME_REAIM else "0",
             new_base_sha=after,
             ledger=ledger.to_json(),
             detail=outcome.detail,

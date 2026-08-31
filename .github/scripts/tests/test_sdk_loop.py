@@ -73,6 +73,7 @@ from sdk_loop_phase import (  # noqa: E402
     OUTCOME_FAILED,
     OUTCOME_NO_PROGRESS,
     OUTCOME_OK,
+    OUTCOME_REAIM,
     OUTCOME_TERMINAL_VERDICT,
     interpret_resolve,
     interpret_review,
@@ -596,6 +597,39 @@ def test_an_empty_ledger_adds_nothing_to_the_prompt() -> None:
 # ---------------------------------------------------------------------------
 # Observability — a running phase must not look identical to a stalled one
 # ---------------------------------------------------------------------------
+
+
+def test_a_push_by_someone_else_mid_resolve_is_not_claimed_as_our_fix() -> None:
+    """ "The branch moved" and "we moved the branch" are different claims.
+
+    `moved_by_other` catches an outside push, but only once, before the agent
+    launches. A resolve runs two to five minutes, and a push landing inside
+    that window (Renovate, a base merge, a person) leaves head_after !=
+    head_before with nothing of ours in it. Read remotely-only, that is
+    indistinguishable from a successful fix — so the round reports a commit it
+    never made, and any unpushed work it did have is discarded as "success".
+
+    The workspace HEAD is what separates the two: ours is stale exactly when
+    somebody else pushed.
+    """
+    ok = AgentResult(exit_code=0, stdout="", stderr="")
+
+    ours = interpret_resolve(ok, True, "a" * 40, "b" * 40, local_head="b" * 40)
+    assert ours.outcome == OUTCOME_OK
+    assert ours.pushed_sha == "b" * 40
+
+    theirs = interpret_resolve(ok, False, "a" * 40, "c" * 40, local_head="a" * 40)
+    assert theirs.outcome == OUTCOME_REAIM
+    assert theirs.pushed_sha == "", "never attribute someone else's commit to us"
+
+    # Our commit exists locally but the push lost the race to theirs. Not ours:
+    # the fix is not on the branch, whatever the tree says.
+    lost = interpret_resolve(ok, True, "a" * 40, "c" * 40, local_head="b" * 40)
+    assert lost.outcome == OUTCOME_REAIM
+
+    # No workspace to read (unit callers): old remote-only behaviour stands.
+    legacy = interpret_resolve(ok, True, "a" * 40, "b" * 40)
+    assert legacy.outcome == OUTCOME_OK
 
 
 def test_a_quiet_sub_agent_is_not_killed_while_its_internal_log_moves() -> None:
