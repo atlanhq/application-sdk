@@ -82,11 +82,28 @@ def _permissions(source: str) -> dict[str, str]:
     """The scopes in force for the `upload` job.
 
     A job-level block replaces the workflow-level one outright rather than
-    merging with it, so the job's own block wins where it exists.
+    merging with it, so the job's own block wins wherever the key is
+    present. Selection is by key presence, not truthiness: `permissions:
+    {}` parses to an empty mapping, which GitHub reads as the strongest
+    possible replacement — every scope `none` — while `or` would treat it
+    as absent and fall back to the workflow block, reporting grants the
+    job does not have.
     """
-    workflow = yaml.safe_load(source)
-    job_level = _job(source).get("permissions")
-    return dict(job_level or workflow.get("permissions") or {})
+    job = _job(source)
+    block = (
+        job["permissions"]
+        if "permissions" in job
+        else yaml.safe_load(source).get("permissions")
+    )
+    if isinstance(block, dict):
+        return dict(block)
+    # The scalar shorthands are neither a mapping nor absent. Expanded to
+    # what they actually grant for the one scope asserted below, rather
+    # than dropped — reporting `read-all` as "no grants" would red a
+    # workflow that does have contents access, and a guard that lies in
+    # that direction gets deleted rather than fixed. Anything else
+    # (`none`, absent) yields no grants, which is what GitHub does too.
+    return {"contents": "read"} if block in ("read-all", "write-all") else {}
 
 
 def _step_by_id(steps: list[dict], step_id: str) -> dict:  # type: ignore[type-arg]
@@ -238,3 +255,69 @@ def test_token_can_read_contents(label: str, source: str) -> None:
         f"private repo and the probe script never lands, so the workflow "
         f"fails where it is most needed. Add `contents: read`."
     )
+
+
+# ---------------------------------------------------------------------------
+# The resolver behind that assertion
+#
+# `_permissions` decides which block is in force, and every way of getting
+# that wrong makes the guard above pass on a workflow whose token cannot
+# read the repo. The empty-mapping case is the sharp one: `permissions: {}`
+# is falsy, so selecting the block with `or` falls back to the
+# workflow-level grants and reports access the job does not have — while
+# GitHub reads it as the strongest possible replacement, every scope
+# `none`. These pin the resolver directly rather than through the rendered
+# file, which declares only one of these shapes.
+# ---------------------------------------------------------------------------
+
+_WORKFLOW_GRANTS = "permissions:\n  contents: read\n  actions: read\n"
+
+
+def _synthetic(workflow_block: str, job_block: str) -> str:
+    """A minimal two-level workflow with the given permissions blocks."""
+    return (
+        f"on: push\n{workflow_block}jobs:\n"
+        f"  upload:\n"
+        f"    runs-on: ubuntu-latest\n"
+        f"{job_block}"
+        f"    steps:\n"
+        f"      - run: 'true'\n"
+    )
+
+
+def test_permissions_falls_back_to_workflow_level_when_job_declares_none() -> None:
+    """No job block at all: the workflow's grants are the ones in force."""
+    source = _synthetic(_WORKFLOW_GRANTS, "")
+    assert _permissions(source) == {"contents": "read", "actions": "read"}
+
+
+def test_permissions_job_block_replaces_rather_than_merges() -> None:
+    """A job block is exhaustive: the workflow's other scopes do not survive."""
+    source = _synthetic(_WORKFLOW_GRANTS, "    permissions:\n      contents: read\n")
+    assert _permissions(source) == {"contents": "read"}
+
+
+def test_empty_job_block_revokes_everything() -> None:
+    """`permissions: {}` is a grant of nothing, not an absent block.
+
+    This is the case a truthiness check gets wrong, and it fails open:
+    the resolver would report the workflow-level `contents: read` and
+    `test_token_can_read_contents` would stay green on a job whose
+    checkout cannot read a private repo.
+    """
+    source = _synthetic(_WORKFLOW_GRANTS, "    permissions: {}\n")
+    assert _permissions(source) == {}
+    with pytest.raises(AssertionError, match="leaves `contents` at `none`"):
+        test_token_can_read_contents("empty-job-block", source)
+
+
+@pytest.mark.parametrize("shorthand", ["read-all", "write-all"])
+def test_permissions_expands_the_scalar_shorthands(shorthand: str) -> None:
+    """`read-all`/`write-all` do grant contents; do not red them."""
+    source = _synthetic("", f"    permissions: {shorthand}\n")
+    assert _permissions(source)["contents"] == "read"
+
+
+def test_permissions_treats_scalar_none_as_no_grants() -> None:
+    source = _synthetic(_WORKFLOW_GRANTS, "    permissions: none\n")
+    assert _permissions(source) == {}
