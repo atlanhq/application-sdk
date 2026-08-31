@@ -144,10 +144,15 @@ BUDGET
    - `.mothership/pr-review/CLAUDE.md`
    - `.mothership/pr-review/severity-rubric.yaml` (includes severity
      calibration + confidence floors — the single source for both)
-   - `.mothership/pr-review/references/*.md`
    - `.mothership/pr-review/agents/*.md`
    - `.mothership/review-policy.md`
    - `.mothership/review.yaml`
+
+   **`references/*.md` is NOT read here.** It is ~125 KB — over half
+   everything this step would otherwise load — and it is consumed by the
+   Phase 2 agents, which receive their reference rules when dispatched
+   (§2a). Reading it up front pays for it twice, and pays for it at all on
+   reviews where no agent ever runs. Defer it to §6d.
 
 6b. **Load prior review into context (re-review continuity)** — if a
     previous `<!-- SDK_REVIEW -->` summary comment exists on this
@@ -327,6 +332,24 @@ BUDGET
     marker, or an unfetchable `PRIOR_HEAD`) means **unknown**, not "nothing
     changed" — skip delta scoping and run the full review. Only
     `DELTA_KNOWN=1` activates step 11b.
+
+6d. **Read `references/*.md` — unless no agent will run.** Skip this read
+    entirely when Phase 2 is going to be skipped, because the files exist to
+    inform agents and there will be no agent to inform:
+
+    - `review_scope` is `docs-only` (§2a: "SKIP Phase 2 entirely"), or
+    - `DELTA_KNOWN=1` and `DELTA_LINES == 0` (§11b: a verification-only
+      re-review "skip[s] Wave 1 and Wave 2 discovery entirely").
+
+    Otherwise read them as before. This is a load-ordering change only — the
+    same files reach the same agents on every review that dispatches one, so
+    no finding this review could have made becomes unreachable.
+
+    Why it is worth a step of its own: at ~125 KB these files are the single
+    largest input to a review, they are resent on every agentic turn, and the
+    two cases above are exactly the cheap reviews that currently pay the most
+    for work they do not do. In a multi-round `@sdk-loop` drive the
+    zero-delta case is the common one, not the exception.
 
 7. **Always run a standard review.** There is a single mode. Ignore any
    free-form text after `@sdk-review` (`COMMENTER_INTENT`) — there are no
