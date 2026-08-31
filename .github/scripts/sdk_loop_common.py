@@ -322,7 +322,16 @@ def review_subagents(model: str) -> dict[str, Any]:
             "mode": "subagent",
             "model": f"{PROVIDER}/{model}",
             "prompt": f"{{file:./.mothership/pr-review/agents/{name}.md}}",
-            "permission": {"edit": "deny", "read": "allow", "bash": "allow"},
+            # Same auto-reject trap as the primary agent: an unlisted tool
+            # is an ask, and headless has nobody to ask. `edit` stays denied
+            # so read-only holds in the agent as well as in its token; the
+            # outbound channels stay denied for the same injection reason.
+            "permission": {
+                "*": "allow",
+                "edit": "deny",
+                "webfetch": "deny",
+                "websearch": "deny",
+            },
         }
         for name in PHASE2_AGENTS
     }
@@ -395,13 +404,40 @@ def opencode_config(model: str, with_subagents: bool = False) -> dict[str, Any]:
         # that way when its skill reads were auto-rejected. So everything a
         # phase legitimately does is allowed outright.
         **({"agent": review_subagents(model)} if with_subagents else {}),
+        # Every permission the playbooks can reach, granted in one place.
+        #
+        # Headless opencode has nobody to answer an "ask", so it auto-REJECTS
+        # one — and an unlisted tool is an ask. That killed a live round with
+        # "The user rejected permission to use this specific tool call", after
+        # the checkout, with no indication of which tool. `task` was the one
+        # missing: the subagents were registered but the primary agent was
+        # never allowed to dispatch them, so Phase 2 could not have fanned out
+        # even with the registration in place.
+        #
+        # Enumerated rather than left to defaults because the defaults are not
+        # uniform — `external_directory` and `doom_loop` ask, and the review
+        # playbook legitimately does both: it reads /tmp scratch files and
+        # re-runs similar greps across a large diff.
+        #
+        # `webfetch` and `websearch` stay DENIED, and that denial is the point
+        # of listing everything else. The agent reads untrusted PR content, so
+        # an injected prompt must not reach an outbound channel it chooses
+        # itself. Last matching rule wins, so these override the wildcard.
         "permission": {
+            "*": "allow",
             "read": "allow",
+            "edit": "allow",
             "glob": "allow",
             "grep": "allow",
-            "edit": "allow",
             "bash": "allow",
+            "task": "allow",
+            "skill": "allow",
+            "lsp": "allow",
+            "question": "allow",
+            "external_directory": "allow",
+            "doom_loop": "allow",
             "webfetch": "deny",
+            "websearch": "deny",
         },
     }
 
