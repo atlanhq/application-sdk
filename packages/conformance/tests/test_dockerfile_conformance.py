@@ -350,6 +350,80 @@ def test_i003_fires_on_unresolved_build_arg() -> None:
     assert "I003" in _ids(src)
 
 
+def test_i003_fires_on_global_arg_reference_without_default() -> None:
+    # Global ARG, no default, no re-import: nothing to expand.
+    src = (
+        "ARG APP_MODULE\n"
+        "FROM registry.atlan.com/public/app-runtime-base:3\n"
+        "ENV ATLAN_APP_MODULE=${APP_MODULE}\n"
+    )
+    assert "I003" in _ids(src)
+
+
+def test_i003_silent_on_final_stage_arg_default() -> None:
+    # The production shape: ARG with a concrete default declared *after* FROM,
+    # so Docker bakes it into ATLAN_APP_MODULE at build time.
+    src = (
+        "FROM registry.atlan.com/public/app-runtime-base:3\n"
+        "ARG APP_MODULE=app.connector:MyApp\n"
+        "ENV ATLAN_APP_MODULE=${APP_MODULE}\n"
+    )
+    assert "I003" not in _ids(src)
+
+
+def test_i003_fires_on_global_arg_default_without_stage_redeclare() -> None:
+    # A default declared before the first FROM is a *global* ARG.  Docker does
+    # not expose it inside a stage, so the ENV expands to an empty value.
+    src = (
+        "ARG APP_MODULE=app.connector:MyApp\n"
+        "FROM registry.atlan.com/public/app-runtime-base:3\n"
+        "ENV ATLAN_APP_MODULE=${APP_MODULE}\n"
+    )
+    assert "I003" in _ids(src)
+
+
+def test_i003_silent_on_global_arg_default_with_stage_redeclare() -> None:
+    # A bare "ARG APP_MODULE" in the final stage re-imports the global default.
+    src = (
+        "ARG APP_MODULE=app.connector:MyApp\n"
+        "FROM registry.atlan.com/public/app-runtime-base:3\n"
+        "ARG APP_MODULE\n"
+        "ENV ATLAN_APP_MODULE=${APP_MODULE}\n"
+    )
+    assert "I003" not in _ids(src)
+
+
+def test_i003_fires_when_stage_arg_is_declared_below_the_env() -> None:
+    # Docker expands in instruction order: the ENV runs before the ARG exists.
+    src = (
+        "FROM registry.atlan.com/public/app-runtime-base:3\n"
+        "ENV ATLAN_APP_MODULE=${APP_MODULE}\n"
+        "ARG APP_MODULE=app.connector:MyApp\n"
+    )
+    assert "I003" in _ids(src)
+
+
+def test_i003_fires_on_builder_stage_arg_default() -> None:
+    # A builder stage's ARG default does not carry into the final stage.
+    src = (
+        "FROM python:3.12 AS builder\n"
+        "ARG APP_MODULE=app.connector:MyApp\n"
+        "FROM registry.atlan.com/public/app-runtime-base:3\n"
+        "ENV ATLAN_APP_MODULE=${APP_MODULE}\n"
+    )
+    assert "I003" in _ids(src)
+
+
+def test_i003_fires_on_arg_reference_with_empty_default() -> None:
+    # "ARG APP_MODULE=" resolves to an empty value, not a module:Class.
+    src = (
+        "FROM registry.atlan.com/public/app-runtime-base:3\n"
+        "ARG APP_MODULE=\n"
+        "ENV ATLAN_APP_MODULE=${APP_MODULE}\n"
+    )
+    assert "I003" in _ids(src)
+
+
 def test_i003_fires_on_bad_shape_no_colon() -> None:
     src = "FROM registry.atlan.com/public/app-runtime-base:3\nENV ATLAN_APP_MODULE=myapp\n"
     assert "I003" in _ids(src)
