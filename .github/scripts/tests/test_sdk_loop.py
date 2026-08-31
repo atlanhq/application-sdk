@@ -555,6 +555,46 @@ def test_the_run_title_actually_carries_the_pr_number() -> None:
     assert "#" in run_name and "github.event.issue.number" in run_name
 
 
+PHASE_WF = WORKFLOW.parent / "sdk-loop-phase.yml"
+
+
+def test_the_review_phase_token_cannot_push() -> None:
+    """The read-only contract is a property of the credential, not the prompt.
+
+    An injection riding the PR diff cannot make the reviewer push, because the
+    token it holds has no write scope to push with.
+    """
+    text = PHASE_WF.read_text(encoding="utf-8")
+    assert (
+        "permission-contents: ${{ inputs.phase == 'resolve' && 'write' || 'read' }}"
+        in text
+    )
+
+
+def test_the_minted_token_is_narrowed_not_the_apps_full_grant() -> None:
+    """atlan-app-fleet also carries actions, administration, checks, packages
+    and statuses. Naming permissions scopes the token to those alone, so a
+    phase never holds the rest — assert the narrowing is present and that the
+    scopes we do take are only the three the lane uses."""
+    text = PHASE_WF.read_text(encoding="utf-8")
+    named = {
+        line.split(":")[0].strip("- ").strip()
+        for line in text.splitlines()
+        if line.strip().startswith("permission-")
+    }
+    assert named == {
+        "permission-contents",
+        "permission-pull-requests",
+        "permission-issues",
+    }
+
+
+def test_issues_scope_is_present_for_pr_comments() -> None:
+    # PR comments are an Issues-scope resource; without this the review phase
+    # 403s posting its verdict, after the model has already been paid for.
+    assert "permission-issues: write" in PHASE_WF.read_text(encoding="utf-8")
+
+
 def test_finalize_reports_even_when_the_loop_died() -> None:
     # A loop that stopped without saying why is worse than one that fails loudly.
     assert "always()" in _gate("finalize")

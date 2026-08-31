@@ -69,8 +69,9 @@ HEADER = """# @sdk-loop — drive a PR to merge-ready without supervision.
 #
 # Required configuration:
 #   secrets.LITELLM_API_KEY           gateway key allowing kimi-k3 + gpt-5.6-luna
-#   secrets.SDK_LOOP_APP_ID           GitHub App, so each phase mints a fresh
-#   secrets.SDK_LOOP_APP_PRIVATE_KEY  scoped installation token
+#   secrets.FLEET_APP_ID              atlan-app-fleet — already configured for
+#   secrets.FLEET_APP_PRIVATE_KEY     the existing lanes. Each phase mints its
+#                                     own narrowed installation token from it.
 #   secrets.LITELLM_BASE_URL          gateway base URL. Required — there is no
 #                                     default and the endpoint is never in-repo.
 #   vars.SDK_LOOP_ALLOWED             comma-separated GitHub handles permitted

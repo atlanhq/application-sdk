@@ -60,9 +60,9 @@ on:
       # fails closed rather than defaulting to a guess.
       LITELLM_BASE_URL:
         required: true
-      SDK_LOOP_APP_ID:
+      FLEET_APP_ID:
         required: true
-      SDK_LOOP_APP_PRIVATE_KEY:
+      FLEET_APP_PRIVATE_KEY:
         required: true
     outputs:
       outcome:
@@ -101,15 +101,25 @@ jobs:
     steps:
       - name: Mint a scoped App token
         id: app-token
+        # atlan-app-fleet, the same App the existing lanes use. It is granted
+        # far more than this lane needs — actions, administration, checks,
+        # packages, statuses — so every `permission-*` below is a NARROWING:
+        # naming any of them scopes the minted token to those alone and drops
+        # the rest. A phase never holds the App's full grant.
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
-          app-id: ${{ secrets.SDK_LOOP_APP_ID }}
-          private-key: ${{ secrets.SDK_LOOP_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           # The whole read-only guarantee for the review phase is this line.
           permission-contents: ${{ inputs.phase == 'resolve' && 'write' || 'read' }}
           permission-pull-requests: write
+          # PR comments are an Issues-scope resource, which the existing lane
+          # learned the hard way (see "Mint fleet App token" in sdk-review.yml).
+          # The review phase posts its verdict as one, so without this it 403s
+          # after the model has already been paid for.
+          permission-issues: write
 
       - name: Checkout the PR head
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
