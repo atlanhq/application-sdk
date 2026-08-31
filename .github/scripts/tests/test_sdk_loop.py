@@ -375,11 +375,17 @@ def test_an_empty_ledger_adds_nothing_to_the_prompt() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_default_ceiling_is_sized_from_real_runs() -> None:
-    # 61 stamped sdk-review runs in this repo: median $8.24 a review. 8
-    # unbounded round-pairs is ~$130 on one PR; 25 buys the 2-3 rounds the
-    # playbook says convergence typically takes.
-    assert DEFAULT_MAX_USD == 25.0
+def test_the_default_ceiling_lets_a_healthy_loop_finish() -> None:
+    """Sized so a converging run completes and only a runaway is stopped.
+
+    61 stamped sdk-review runs: median $8.24. Typical convergence is 2-3
+    rounds, so ~3 reviews is ~$25 of review alone before any resolve. A
+    ceiling at $25 would guillotine a healthy loop at round 2 and teach people
+    to raise it blindly — worse than no ceiling at all.
+    """
+    median_review = 8.24
+    assert DEFAULT_MAX_USD > 3 * median_review, "must clear three reviews"
+    assert DEFAULT_MAX_USD < 130, "must still stop the eight-round runaway"
 
 
 def test_the_ceiling_is_tunable_without_a_code_change(
@@ -399,9 +405,9 @@ def test_a_nonsense_ceiling_falls_back_rather_than_disabling_the_guard(
 
 
 def test_a_run_at_its_ceiling_is_refused() -> None:
-    assert budget_exceeded(25.0, 25.0)
-    assert budget_exceeded(26.0, 25.0)
-    assert not budget_exceeded(24.99, 25.0)
+    assert budget_exceeded(50.0, 50.0)
+    assert budget_exceeded(51.0, 50.0)
+    assert not budget_exceeded(49.99, 50.0)
 
 
 def test_unmeasurable_spend_never_blocks_the_loop() -> None:

@@ -360,13 +360,27 @@ def spend_delta(before: float | None, after: float | None) -> float | None:
     return delta if delta >= 0 else None
 
 
-#: Default ceiling on what one loop may spend, in USD. Sized from 61 real
-#: sdk-review runs in this repo: median $8.24 a review, and cost is almost
-#: uncorrelated with PR size (r=0.20) because the fixed playbook and the
-#: per-finding verification dominate, not the diff. At that rate 8 unbounded
-#: round-pairs is ~$130 on one PR. 25 buys the 2-3 rounds the playbook says
-#: convergence typically takes, and stops the runaway.
-DEFAULT_MAX_USD = 25.0
+#: Default ceiling on what one loop may spend, in USD.
+#:
+#: Sized to let a HEALTHY loop finish and stop a runaway — not the other way
+#: round. A ceiling that cuts off a converging run makes the lane look broken
+#: and teaches people to raise it blindly, which is worse than no ceiling.
+#:
+#: From 61 stamped sdk-review runs in this repo: median $8.24 a review, mean
+#: $11.59. Cost is almost uncorrelated with PR size (r=0.20) — a 12-line PR
+#: cost $7.95, an 8033-line PR $2.64, a 31-line PR $27.29 — because the fixed
+#: ~200KB playbook, the Phase 2 sub-agents and the per-finding Phase 4
+#: verification dominate. Findings drive cost, not lines.
+#:
+#: The playbook puts typical convergence at 2-3 rounds, so a healthy loop is
+#: ~3 reviews + 2 resolves. At the median that is ~$25 of review alone, and
+#: 50 leaves room for the resolves plus a PR on the expensive tail. Eight
+#: unbounded round-pairs would be ~$130+.
+#:
+#: The resolve half of that arithmetic is INFERRED: there are no stamped
+#: @sdk-resolve costs in this repo to measure, because the lane has barely
+#: run. Re-tune this from the first real loops rather than trusting it.
+DEFAULT_MAX_USD = 50.0
 
 
 def run_budget() -> float:
