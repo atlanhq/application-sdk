@@ -454,8 +454,8 @@ drafting.
   `SafeFileOps.rmtree`/`SafeFileOps.move` wrappers), tree traversal (`os.walk`/
   `glob.glob`/`Path.glob`/`Path.rglob`), data-scale I/O (pandas and pyarrow
   readers and writers, whole-file `Path.read_text`/`write_bytes`/…, file-handle
-  `json.load`/`json.dump`/`pickle`/`yaml`), or a `subprocess.*` call runs inside
-  an `async def`.  Draft per category:
+  `json.load`/`json.dump`/`pickle`/`tomllib`), or a `subprocess.*` call runs
+  inside an `async def`.  Draft per category:
 
   - *bridge* — `await` the coroutine directly instead of re-entering a loop.
   - *blocking network / sleep* — `await` an async equivalent, or offload via

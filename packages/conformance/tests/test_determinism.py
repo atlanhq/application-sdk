@@ -509,6 +509,46 @@ def test_p023_silent_for_in_memory_json_string_forms() -> None:
     assert _rule(body, "P023") == []
 
 
+def test_p023_silent_for_serializers_with_no_load_loads_split() -> None:
+    """Only (de)serializers whose *name* guarantees a file object are matched.
+
+    PyYAML and `csv` have no `load`/`loads` split — `yaml.safe_load` and
+    `csv.reader` take a string or a plain iterable as readily as a handle — so
+    matching them by name would flag exactly the in-memory parsing that
+    `json.loads` is deliberately allowed to do.  Neither appeared in the fleet
+    sweep either.  This pins the exclusion so the names cannot drift back into
+    the exact set without a file-handle heuristic to justify them.
+    """
+    body = (
+        "import csv\n"
+        "import yaml\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def parse(self, input):\n"
+        "        cfg = yaml.safe_load(blob)\n"
+        "        out = yaml.dump(cfg)\n"
+        "        rows = list(csv.reader(lines))\n"
+        "        return cfg, out, rows\n"
+    )
+    assert _rule(body, "P023") == []
+
+
+def test_p023_flags_serializers_that_require_a_handle() -> None:
+    """The counterpart: `pickle.load` and `tomllib.load` have no string form
+    that shares their name, so a match is always file work."""
+    body = (
+        "import pickle\n"
+        "import tomllib\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def read(self, input):\n"
+        "        a = pickle.load(handle)\n"
+        "        b = tomllib.load(handle)\n"
+        "        return a, b\n"
+    )
+    assert len(_rule(body, "P023")) == 2
+
+
 def test_p023_flags_subprocess() -> None:
     body = (
         "import subprocess\n"

@@ -33,14 +33,16 @@ code — the second half of the user's async-correctness ask.  Two patterns:
   ``read_parquet``, ``read_csv``, ``DataFrame.to_parquet``, ``pq.read_table``,
   …), whole-file ``pathlib`` accessors (``Path.read_text`` / ``write_bytes`` /
   …), file-handle (de)serialization (``json.load`` / ``json.dump`` /
-  ``pickle`` / ``yaml``), and ``subprocess.*``.  Same property as tree-scale FS
-  work: duration scales with the data.
+  ``pickle`` / ``tomllib``), and ``subprocess.*``.  Same property as tree-scale
+  FS work: duration scales with the data.
 
   Deliberately **not** flagged: single-syscall operations (``os.remove``,
   ``os.unlink``, ``os.rmdir``, ``os.path.*``).  One inode operation does not
   earn a thread hop, and flagging them would bury the findings that matter.
   Nor the in-memory string forms ``json.loads`` / ``json.dumps`` — they are CPU,
-  not I/O, and are used for small payloads everywhere.
+  not I/O, and are used for small payloads everywhere.  PyYAML and ``csv`` are
+  absent for that same reason: they have no ``load``/``loads`` split, so
+  matching them by name would flag string parsing, not file work.
 
 Calls that are the direct operand of ``await`` are skipped throughout: an
 ``await``-ed ``path.read_text()`` is ``anyio.Path``, not ``pathlib.Path``, and
@@ -131,24 +133,25 @@ _WHOLE_FILE_SUFFIXES = (
     ".write_bytes",
 )
 
-# (De)serialization against a file handle. The string forms (`loads`/`dumps`)
-# are deliberately absent -- CPU, not I/O, and used for small payloads
-# everywhere.
+# (De)serialization against a file handle. Only APIs whose *name* guarantees a
+# file object: `json.load` takes a stream and `json.loads` takes a string, so
+# matching the former never touches in-memory work.
+#
+# PyYAML and `csv` are deliberately absent even though they are the same class
+# of cost, because they have no such split -- `yaml.safe_load` and `csv.reader`
+# each accept a string/iterable as readily as a handle. Matching them by name
+# would flag exactly the in-memory parsing that `json.loads` is deliberately
+# allowed to do, and neither appeared in the fleet sweep. They come back if a
+# file-handle heuristic (argument is an `open(...)` result or a `with` target)
+# is ever worth the machinery.
 _SERIALIZE_EXACT = frozenset(
     {
         "json.load",
         "json.dump",
         "pickle.load",
         "pickle.dump",
-        "yaml.load",
-        "yaml.safe_load",
-        "yaml.full_load",
-        "yaml.dump",
-        "yaml.safe_dump",
         "tomllib.load",
         "toml.load",
-        "csv.reader",
-        "csv.writer",
     }
 )
 
