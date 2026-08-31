@@ -211,6 +211,69 @@ def test_redact_secrets_userinfo_and_params() -> None:
     assert "abc123" not in out and "hunter2" not in out
 
 
+def test_redact_secrets_masks_client_secret_in_dict_repr() -> None:
+    """AUT-1113: a credentials dict rendered into a string (e.g. loguru diagnose
+    of a token payload) must have its secret value masked, key and shape kept."""
+    from application_sdk.errors import redact_secrets
+
+    payload = (
+        "{'client_id': 'atlan-argo', 'client_secret': 'sYnth3ticSecret', "
+        "'grant_type': 'client_credentials'}"
+    )
+    out = redact_secrets(payload)
+    assert "sYnth3ticSecret" not in out
+    assert "'client_secret': '***'" in out
+    # client_id is a public identifier — it stays visible for debugging.
+    assert "atlan-argo" in out
+
+
+def test_redact_secrets_masks_json_form_secrets() -> None:
+    from application_sdk.errors import redact_secrets
+
+    out = redact_secrets('{"api_key": "abc123", "user": "sa"}')
+    assert "abc123" not in out
+    assert '"api_key": "***"' in out
+    assert "sa" in out
+
+
+def test_redact_secrets_masks_secret_value_with_embedded_quote() -> None:
+    """A secret value containing a quote (which ``repr`` escapes) must be fully
+    masked — the escaped quote must not end the match early and leak the tail."""
+    from application_sdk.errors import redact_secrets
+
+    # repr({"password": "a'b\"c-SECRET"}) -> {'password': 'a\'b"c-SECRET'}
+    rendered = repr({"password": "a'b\"c-SECRET"})
+    out = redact_secrets(rendered)
+    assert "SECRET" not in out
+    assert "a'b" not in out  # no tail after the escaped quote leaks
+    assert "'password': '***'" in out
+
+
+def test_redact_secrets_is_linear_on_backslash_runs() -> None:
+    """Regression: ``_SECRET_MAPPING_RE`` must not backtrack exponentially on an
+    unterminated quoted value with a long backslash run. ``redact_secrets`` runs
+    on semi-untrusted driver-error text on the logging path, so a hang here
+    takes the log call with it. A regressed (ambiguous) pattern would blow past
+    the subprocess timeout and be killed; the fixed pattern returns instantly.
+
+    Run in a subprocess because a catastrophic-backtracking ``re`` match is a
+    C-level loop that Python signals cannot interrupt — only killing the process
+    reliably bounds it.
+    """
+    import subprocess
+    import sys
+
+    # Child builds `{'password': '` + 64 backslashes (unterminated). chr(92) is
+    # a backslash — avoids escaping the run through two string layers.
+    code = (
+        "from application_sdk.errors import redact_secrets; "
+        "redact_secrets(\"{'password': '\" + chr(92) * 64)"
+    )
+    # ~phi**64 for an ambiguous pattern (astronomically slow); the fixed one is
+    # sub-millisecond. 10s is a wide margin that still fails a real regression.
+    subprocess.run([sys.executable, "-c", code], timeout=10, check=True)
+
+
 def test_redact_secrets_consumes_at_in_password() -> None:
     """A raw `@` inside the password must not leave the tail exposed."""
     from application_sdk.errors import redact_secrets
