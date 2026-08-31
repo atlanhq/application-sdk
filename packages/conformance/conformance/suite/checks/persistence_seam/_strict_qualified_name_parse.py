@@ -21,16 +21,28 @@ Detection shape
 ---------------
 A function that
 
-* takes a ``…qualified_name`` parameter,
-* splits it apart itself (any ``.split(...)`` in the body), and
-* can ``raise`` out of that body,
+* takes a ``connection_qualified_name`` parameter (that exact suffix — a table,
+  column or asset qualified name has a different owner and different segment
+  semantics),
+* calls ``.split(...)`` on a value that traces back to that parameter, and
+* can ``raise`` out of its own body,
 
-while the module imports nothing from ``application_sdk.common.incremental``.
+**and does not itself reach the SDK seam.**
 
-The seam-import gate is what keeps the *fixed* shape silent: the post-fix module
-in CONNECT-1136 still raises its own typed error, but only after delegating the
-parse to the SDK and catching the SDK's error — which is correct, and is exactly
-what the gate encodes.
+Why the gate is per-function, not per-module
+--------------------------------------------
+An earlier cut skipped any module importing ``application_sdk.common.incremental``
+wholesale.  That reads as delegation today, when almost no app module imports the
+seam — but the whole point of P048 and the published seam is that they all
+should.  A module-level gate therefore goes blind exactly as adoption succeeds,
+and "module imports the seam *and* one function still hand-rolls a strict parse"
+is the most likely shape of the next recurrence.  For a permanent BLOCK-tier
+recurrence guard that is a hole, not a nit.
+
+So delegation is judged per function: a function that calls a seam symbol is
+deriving the value through the SDK and stays silent — including the correct
+post-fix shape, which catches the SDK's typed error and re-raises its own.  A
+sibling function in the same module that parses by hand is still caught.
 
 ``raise`` statements inside nested function definitions are not attributed to the
 enclosing function; a nested helper is scanned in its own right if it takes the
@@ -41,26 +53,37 @@ from __future__ import annotations
 
 import ast
 
-from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
+from conformance.suite.checks._ast_common import (
+    _IgnoreDirective,
+    collect_import_origins,
+    make_finding,
+    qualify_chained_attr_call,
+)
 from conformance.suite.schema.findings import Finding
-
-from ._derived_persistent_prefix import _imports_seam
 
 # Parameter suffix identifying the value whose parsing the SDK owns.
 #
 # Deliberately ``connection_qualified_name`` and not the looser
 # ``qualified_name``: the SDK helper governs the *connection* qualified name
-# specifically.  A table/column/asset qualified name has a different owner and
-# different segment semantics, and matching those produced a false positive on
-# a mapper that splits an asset's qualifiedName and raises about an unrelated
-# missing field.
+# specifically.  Matching the looser form produced a false positive on a mapper
+# that splits an asset's qualifiedName and raises about an unrelated missing
+# field.
 _PARAM_SUFFIX = "connection_qualified_name"
+
+# The seam that owns this parse. A function reaching anything beneath it is
+# delegating, so it is not the target of this rule.
+_SEAM_MODULE = "application_sdk.common.incremental"
 
 _FUNC_DEFS = (ast.FunctionDef, ast.AsyncFunctionDef)
 
 
+def _is_seam_origin(origin: str) -> bool:
+    """True if a resolved import origin is the seam or a symbol beneath it."""
+    return origin == _SEAM_MODULE or origin.startswith(_SEAM_MODULE + ".")
+
+
 def _takes_qualified_name(func: ast.FunctionDef | ast.AsyncFunctionDef) -> str | None:
-    """Return the first ``…qualified_name`` parameter of *func*, else ``None``."""
+    """Return the first ``…connection_qualified_name`` parameter, else ``None``."""
     a = func.args
     for arg in (*a.posonlyargs, *a.args, *a.kwonlyargs):
         if arg.arg.endswith(_PARAM_SUFFIX):
@@ -86,6 +109,37 @@ def _own_body(func: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.AST]:
     return own
 
 
+def _reaches_seam(body: list[ast.AST], origins: dict[str, str]) -> bool:
+    """True if any call in *body* resolves to a symbol under the SDK seam.
+
+    Resolves the three call spellings ``collect_import_origins`` covers: a bare
+    name (``get_persistent_s3_prefix(...)``), a single-level attribute on an
+    imported module (``marker.fetch_marker_from_storage(...)``), and a bare
+    dotted chain (``application_sdk.common.incremental.helpers.f(...)``).
+    """
+    for node in body:
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name):
+            origin = origins.get(func.id)
+        elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+            # ``helpers.get_persistent_s3_prefix()`` — resolve the receiver
+            # through its import origin. qualify_chained_attr_call returns the
+            # *as-written* path, which for an aliased module is not the real
+            # one, so the single-level case is resolved here instead.
+            base = origins.get(func.value.id)
+            origin = f"{base}.{func.attr}" if base else None
+        elif isinstance(func, ast.Attribute):
+            # Bare dotted chain: ``application_sdk.common.incremental.helpers.f()``
+            origin = qualify_chained_attr_call(func, origins)
+        else:
+            continue
+        if origin and _is_seam_origin(origin):
+            return True
+    return False
+
+
 def _traces_to_param(expr: ast.expr, param: str) -> bool:
     """True if *expr* is built from *param* through call/attribute wrapping.
 
@@ -106,9 +160,7 @@ def _traces_to_param(expr: ast.expr, param: str) -> bool:
         return _traces_to_param(expr.func, param) or any(
             _traces_to_param(a, param) for a in expr.args
         )
-    if isinstance(expr, ast.Attribute):
-        return _traces_to_param(expr.value, param)
-    if isinstance(expr, ast.Subscript):
+    if isinstance(expr, ast.Attribute | ast.Subscript):
         return _traces_to_param(expr.value, param)
     return False
 
@@ -130,12 +182,9 @@ def check_p049(
     directives: dict[int, _IgnoreDirective],
 ) -> list[Finding]:
     """Emit P049 where an app parses a qualified name itself and raises on it."""
-    if _imports_seam(tree):
-        # Delegating to the SDK — a typed re-raise around the SDK's own error is
-        # the correct shape, not a divergence.
-        return []
-
+    origins = collect_import_origins(tree)
     findings: list[Finding] = []
+
     for func in ast.walk(tree):
         if not isinstance(func, _FUNC_DEFS):
             continue
@@ -147,6 +196,10 @@ def check_p049(
             continue
         raises = [n for n in body if isinstance(n, ast.Raise)]
         if not raises:
+            continue
+        if _reaches_seam(body, origins):
+            # This function derives the value through the SDK; a typed re-raise
+            # around the SDK's own error is the correct shape, not a divergence.
             continue
         # Anchor at the earliest raise in source order: ``_own_body`` walks with a
         # stack, so its order is not the file's, and a SARIF fingerprint that
@@ -160,9 +213,9 @@ def check_p049(
                 message=(
                     f"'{func.name}' parses {param} itself and raises on it. The SDK's "
                     "extract_epoch_id_from_qualified_name "
-                    "(application_sdk.common.incremental.helpers) warns and proceeds "
-                    "when the last segment is not an epoch, so an app that raises on "
-                    "the same input is more brittle than the SDK for connections whose "
+                    "(application_sdk.common.incremental) warns and proceeds when the "
+                    "last segment is not an epoch, so an app that raises on the same "
+                    "input is more brittle than the SDK for connections whose "
                     "qualified name ends in a name rather than a timestamp — the "
                     "CONNECT-1136 failure. Derive the value through the SDK "
                     "(get_persistent_s3_prefix / extract_epoch_id_from_qualified_name) "

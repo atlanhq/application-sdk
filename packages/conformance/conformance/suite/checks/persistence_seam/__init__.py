@@ -3,11 +3,12 @@
 Enforces that a connection's persistent-artifacts object-store layout is derived
 from the SDK rather than assembled by the app:
 
-* ``P048`` AppDerivedPersistentArtifactPrefix (app) — a ``persistent-artifacts``
-  path segment in a string literal in a module that imports nothing from
-  ``application_sdk.common.incremental``.
+* ``P048`` AppDerivedPersistentArtifactPrefix (app) — app code assembling the
+  connection-scoped layout ``persistent-artifacts/apps/<app>/connection/…``
+  instead of deriving it from ``get_persistent_s3_prefix``.
 * ``P049`` StrictConnectionQualifiedNameParse (app) — a function that parses a
-  ``…qualified_name`` itself and raises on it, where the SDK warns and proceeds.
+  ``connection_qualified_name`` itself and raises on it, where the SDK warns and
+  proceeds, and that does not itself reach the SDK seam.
 
 This is a fourth check registered under series letter ``P`` (alongside
 ``prescriptions``, ``orchestration`` and ``client_seam``), the established
@@ -21,8 +22,8 @@ own modules define the layout and would otherwise flag themselves.
 
 Inline suppression
 ------------------
-Add ``# conformance: ignore[P048] <reason>`` on the offending line (or the
-comment-only line directly above it).
+Add ``# conformance: ignore[P048] <reason>`` or ``# conformance: ignore[P049]
+<reason>`` on the offending line (or the comment-only line directly above it).
 """
 
 from __future__ import annotations

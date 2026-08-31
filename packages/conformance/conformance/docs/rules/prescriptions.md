@@ -1879,7 +1879,7 @@ functions the method calls are not followed.
 
 **Tier:** `warn` · **Scope:** `app` · **Category:** `persistence-seam` · **Autofixable:** — · **Since:** 0.24.0
 
-> App builds a 'persistent-artifacts' object-store path itself instead of deriving it from the SDK's get_persistent_s3_prefix
+> App builds the connection-scoped persistent-artifacts layout itself instead of deriving it from the SDK's get_persistent_s3_prefix
 
 **Rationale:** The persistent-artifacts object-store layout for a connection is owned by
 application_sdk.common.incremental.helpers.get_persistent_s3_prefix. An app that
@@ -1890,9 +1890,9 @@ CONNECT-1136 is that failure: a miner hard-failed on name-based connection quali
 names that the crawler accepted, breaking a tenant that provisions connections
 programmatically.
 
-A string literal in app code carries the `persistent-artifacts` path segment while the
-module imports nothing from `application_sdk.common.incremental` — the app is deriving
-the connection's persistent-state location itself rather than asking the SDK for it.
+App code assembles the connection-scoped layout
+`persistent-artifacts/apps/<app>/connection/…` itself rather than asking the SDK where a
+connection's persistent state lives.
 
 Use the SDK seam instead:
 
@@ -1910,12 +1910,22 @@ the last, and **raised** where the SDK warns and proceeds.  Connections whose qu
 name ends in a word rather than an epoch crawled fine and mined not at all, in one
 tenant, with every test passing.
 
-This rule is a **heuristic** with two signals ANDed: the literal segment and the absent
-seam import.  A module that imports the seam is treated as delegating and stays silent,
-so a file that both delegates *and* hand- rolls a second path is an accepted
-false-negative.  Path segments are matched exactly (`persistent-artifacts-backup` does
-not match), and docstrings, comments, and bare string statements are never flagged —
-only strings in value position.
+The match is the segment *sequence* the helper produces, not the `persistent-artifacts`
+root: a path that diverges at the fourth segment (`state/`, `workflows/`, `skills`) or
+the second (the Argo `{cqn}/parquet/...` layout) is one the helper cannot produce and
+does not own, so flagging it would prescribe a remedy that does not apply.
+
+The path is assembled across the whole expression — `str.join`, f-strings and `+`
+concatenation — with runtime pieces standing in as a wildcard segment.  That matters:
+the CONNECT-1136 defect built its key from six separate constants joined by `/`, and the
+only literal in that file carrying the whole layout was its *docstring*.  A check
+testing one literal at a time would have missed the defect it exists for.  Segments are
+matched exactly (`persistent-artifacts-backup` does not match), and docstrings, comments
+and bare string statements are never flagged.
+
+Unlike `P049` there is no seam-import gate: a module that imports the seam and *still*
+hand-rolls the connection layout is exactly a finding worth making, and four of the five
+fleet sites are in such a module.
 
 Land as `WARN`: apps that write under this prefix on paths the SDK helper does not model
 (Argo-layout compatibility, e.g. `persistent-artifacts/{cqn}/parquet/markers/{phase}`)
@@ -1945,8 +1955,8 @@ written, and query-based lineage and popularity go silently missing for as long 
 takes someone to notice.
 
 A function takes a `connection_qualified_name`, calls `.split(...)` on a value derived
-from it, and can `raise` out of that body — while the module imports nothing from
-`application_sdk.common.incremental`.
+from it, and can `raise` out of its own body — while that function does not itself reach
+the SDK seam.
 
 The app has taken over a decision the SDK already makes, and made it stricter.
 `extract_epoch_id_from_qualified_name` logs a warning and returns the segment when it is
@@ -1964,9 +1974,15 @@ from application_sdk.common.incremental.helpers import (
 prefix = get_persistent_s3_prefix(connection_qualified_name, app_name)
 ```
 
-Raising a typed app error *around* the SDK call is correct and not flagged: importing
-the seam is read as delegation, so a module that catches the SDK's error and re-raises
-its own stays silent.
+Raising a typed app error *around* the SDK call is correct and not flagged: a function
+that calls a seam symbol is delegating, so one that catches the SDK's error and
+re-raises its own stays silent.
+
+Delegation is judged **per function**, not per module.  A module-level gate reads as
+delegation today, when almost no app module imports the seam — but the point of P048 and
+the published seam is that they all should, so such a gate would go blind exactly as
+adoption succeeds, and 'module imports the seam and one function still hand-rolls a
+strict parse' is the likeliest shape of the next recurrence.
 
 This rule is a **heuristic**.  The `.split` receiver must trace syntactically to the
 parameter (through `str()`, `.strip()`, subscripting), so a function that splits some

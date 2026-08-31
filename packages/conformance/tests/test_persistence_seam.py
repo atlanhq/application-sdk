@@ -24,12 +24,13 @@ def test_series_letter() -> None:
     assert SERIES == "P"
 
 
-# ── P048 — fires (app builds the prefix, no seam import) ─────────────────────
+# ── P048 — fires (app assembles the connection-scoped layout) ───────────────
 
 
 def test_p048_fires_on_joined_path_segments() -> None:
-    # The CONNECT-1136 shape: segments in a list joined by "/", so the prefix
-    # appears as a bare constant rather than inside a full path string.
+    # The CONNECT-1136 shape: no single literal carries the layout — it exists
+    # only once the join is assembled. The only literal in that file containing
+    # both "apps" and "connection" was its docstring.
     src = (
         "def key(app, conn):\n"
         '    return "/".join(["persistent-artifacts", "apps", app, "connection", conn])\n'
@@ -43,73 +44,95 @@ def test_p048_fires_on_full_path_literal() -> None:
     assert len(_rule(src)) == 1
 
 
-def test_p048_fires_on_fstring_with_runtime_segment() -> None:
-    src = 'def p(cqn):\n    return f"persistent-artifacts/{cqn}/parquet/markers/mine"\n'
+def test_p048_fires_on_fstring_with_runtime_app_name() -> None:
+    src = 'def p(app, cid):\n    return f"persistent-artifacts/apps/{app}/connection/{cid}"\n'
     assert len(_rule(src)) == 1
 
 
-def test_p048_fires_on_module_level_template_constant() -> None:
-    src = '_ROOT = "persistent-artifacts/apps/{app_name}/skills"\n'
+def test_p048_fires_on_string_concatenation() -> None:
+    src = (
+        'def p(app):\n    return "persistent-artifacts/apps/" + app + "/connection/x"\n'
+    )
     assert len(_rule(src)) == 1
 
 
-def test_p048_fires_on_prefix_in_middle_of_path() -> None:
-    src = 'def p(base):\n    return f"{base}/persistent-artifacts/x"\n'
+def test_p048_fires_on_tuple_join() -> None:
+    src = (
+        "def p(app, cid):\n"
+        '    return "/".join(("persistent-artifacts", "apps", app, "connection", cid))\n'
+    )
     assert len(_rule(src)) == 1
 
 
-def test_p048_reports_each_distinct_literal() -> None:
-    src = 'A = "persistent-artifacts/apps/x"\nB = "persistent-artifacts/apps/y"\n'
+def test_p048_fires_even_when_module_imports_the_seam() -> None:
+    # No import gate: a module that imports the seam and *still* hand-rolls the
+    # connection layout is exactly a finding worth making.
+    src = (
+        "from application_sdk.common.incremental import get_persistent_s3_prefix\n"
+        'KEY = "persistent-artifacts/apps/oracle/connection/1/marker.txt"\n'
+    )
+    assert len(_rule(src)) == 1
+
+
+def test_p048_reports_each_distinct_path() -> None:
+    src = (
+        'A = "persistent-artifacts/apps/x/connection/1"\n'
+        'B = "persistent-artifacts/apps/y/connection/2"\n'
+    )
     assert len(_rule(src)) == 2
 
 
-# ── P048 — silent (delegating, or not this layout) ───────────────────────────
-
-
-def test_p048_silent_when_seam_imported_from() -> None:
-    # The post-fix CONNECT-1136 shape: derive the prefix from the SDK helper.
+def test_p048_reports_an_assembled_path_once() -> None:
+    # The join and its element constants must not both be reported.
     src = (
-        "from application_sdk.common.incremental.helpers import get_persistent_s3_prefix\n"
-        "def key(cqn, app):\n"
-        '    return f"{get_persistent_s3_prefix(cqn, app)}/miner-marker.txt"\n'
-    )
-    assert _rule(src) == []
-
-
-def test_p048_silent_when_seam_imported_as_module() -> None:
-    src = (
-        "import application_sdk.common.incremental.marker as m\n"
-        'KEY = "persistent-artifacts/apps/x"\n'
-    )
-    assert _rule(src) == []
-
-
-def test_p048_silent_when_seam_submodule_imported() -> None:
-    src = (
-        "from application_sdk.common.incremental import marker\n"
-        'KEY = "persistent-artifacts/apps/x"\n'
-    )
-    assert _rule(src) == []
-
-
-def test_p048_silent_on_unrelated_sdk_import() -> None:
-    # Importing some *other* SDK module is not delegation — must still fire.
-    src = (
-        "from application_sdk.observability.logger_adaptor import get_logger\n"
-        'KEY = "persistent-artifacts/apps/x"\n'
+        "def p(app, cid):\n"
+        '    return "/".join(["persistent-artifacts", "apps", app, "connection", cid])\n'
     )
     assert len(_rule(src)) == 1
 
 
+# ── P048 — silent (paths the SDK helper does not own) ───────────────────────
+
+
+def test_p048_silent_on_publish_state_layout() -> None:
+    # Diverges at the 4th segment: the helper cannot produce ".../state/...".
+    src = '_BASE = "persistent-artifacts/apps/atlan-publish-app/state"\n'
+    assert _rule(src) == []
+
+
+def test_p048_silent_on_workflow_config_layout() -> None:
+    src = (
+        "def p(app, wid):\n"
+        '    return f"persistent-artifacts/apps/{app}/workflows/{wid}/config.json"\n'
+    )
+    assert _rule(src) == []
+
+
+def test_p048_silent_on_argo_layout() -> None:
+    # Diverges at the 2nd segment: {cqn} where the SDK layout has "apps".
+    src = 'def p(cqn):\n    return f"persistent-artifacts/{cqn}/parquet/markers/mine"\n'
+    assert _rule(src) == []
+
+
+def test_p048_silent_on_skills_layout() -> None:
+    src = '_ROOT = "persistent-artifacts/apps/{app_name}/skills"\n'
+    assert _rule(src) == []
+
+
+def test_p048_silent_on_bare_root_segment() -> None:
+    # The root alone is not the layout — this is what made the rule fire 65
+    # times fleet-wide with an inapplicable remedy.
+    src = 'ROOT = "persistent-artifacts"\n'
+    assert _rule(src) == []
+
+
 def test_p048_silent_on_lookalike_segment() -> None:
-    # Exact path-segment match: a longer segment that merely starts with the
-    # prefix is a different directory and not this rule's business.
-    src = 'KEY = "persistent-artifacts-backup/apps/x"\n'
+    src = 'KEY = "persistent-artifacts-backup/apps/x/connection/1"\n'
     assert _rule(src) == []
 
 
 def test_p048_silent_on_other_object_store_roots() -> None:
-    src = 'A = "artifacts/apps/x"\nB = "workflow_file_upload/y"\n'
+    src = 'A = "artifacts/apps/x/connection/1"\nB = "workflow_file_upload/y"\n'
     assert _rule(src) == []
 
 
@@ -128,15 +151,11 @@ def test_p048_silent_on_function_docstring() -> None:
 
 
 def test_p048_silent_on_comment() -> None:
-    # Comments never reach the AST — the fleet's many explanatory
-    # "# persistent-artifacts/..." notes cost nothing.
     src = "# layout: persistent-artifacts/apps/{app}/connection/{id}\nx = 1\n"
     assert _rule(src) == []
 
 
 def test_p048_silent_on_local_marker_filename() -> None:
-    # A local temp file named marker.txt is not the object-store layout; only
-    # the prefix segment is a signal.
     src = 'import os\ntmp = os.path.join(local_dir, "marker.txt")\n'
     assert _rule(src) == []
 
@@ -145,13 +164,13 @@ def test_p048_silent_on_syntax_error() -> None:
     assert scan_text("def broken(:\n", "app/x.py") == []
 
 
-# ── Suppression ──────────────────────────────────────────────────────────────
+# ── P048 suppression ────────────────────────────────────────────────────────
 
 
 def test_p048_suppressed_inline() -> None:
     src = (
-        'P = "persistent-artifacts/{cqn}/parquet/markers/mine"  '
-        "# conformance: ignore[P048] Argo-layout path the SDK helper does not model\n"
+        'P = "persistent-artifacts/apps/x/connection/1"  '
+        "# conformance: ignore[P048] legacy key, migration tracked separately\n"
     )
     fs = _rule(src)
     assert len(fs) == 1 and fs[0].suppressed
@@ -159,8 +178,8 @@ def test_p048_suppressed_inline() -> None:
 
 def test_p048_suppressed_by_comment_line_above() -> None:
     src = (
-        "# conformance: ignore[P048] Argo-layout compatibility\n"
-        'P = "persistent-artifacts/{cqn}/parquet/markers/mine"\n'
+        "# conformance: ignore[P048] legacy key\n"
+        'P = "persistent-artifacts/apps/x/connection/1"\n'
     )
     fs = _rule(src)
     assert len(fs) == 1 and fs[0].suppressed
@@ -227,12 +246,46 @@ def test_p049_anchors_at_the_earliest_raise() -> None:
 # ── P049 — silent ────────────────────────────────────────────────────────────
 
 
+def test_p049_fires_when_a_sibling_function_delegates() -> None:
+    """The gate is per-function, not per-module.
+
+    A module-level gate goes blind exactly as apps adopt the seam — which is the
+    goal — so "module imports the seam and one function still hand-rolls a strict
+    parse" would become undetectable at BLOCK tier.
+    """
+    src = (
+        "from application_sdk.common.incremental import get_persistent_s3_prefix\n"
+        "def good(connection_qualified_name, app_name):\n"
+        "    return get_persistent_s3_prefix(connection_qualified_name, app_name)\n"
+        "def bad(connection_qualified_name):\n"
+        '    parts = connection_qualified_name.split("/")\n'
+        "    if not parts[-1].isdigit():\n"
+        "        raise ValueError('not an epoch')\n"
+        "    return parts[-1]\n"
+    )
+    fs = _p049(src)
+    assert len(fs) == 1 and fs[0].line == 7
+
+
+def test_p049_silent_when_function_calls_seam_via_module_alias() -> None:
+    src = (
+        "from application_sdk.common.incremental import helpers\n"
+        "def key(connection_qualified_name):\n"
+        '    parts = connection_qualified_name.split("/")\n'
+        "    if not parts:\n"
+        "        raise ValueError('x')\n"
+        "    return helpers.get_persistent_s3_prefix(connection_qualified_name)\n"
+    )
+    assert _p049(src) == []
+
+
 def test_p049_silent_when_seam_imported() -> None:
     # Post-fix shape: delegate the parse, then raise a typed error around the
     # SDK's own. That is correct, not a divergence.
     src = (
         "from application_sdk.common.incremental.helpers import get_persistent_s3_prefix\n"
         "def key(connection_qualified_name, app_name):\n"
+        '    _ = connection_qualified_name.split("/")\n'
         "    try:\n"
         "        prefix = get_persistent_s3_prefix(connection_qualified_name, app_name)\n"
         "    except AppError as exc:\n"

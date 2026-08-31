@@ -44,18 +44,26 @@ either without the other, so neither rule subsumes the other:
   where the SDK warns.  This is the half that actually broke production.
 
 "Re-implements an SDK helper" is not statically decidable in general.  What *is*
-decidable is the fingerprint each half leaves: for ``P048``, the app spelling the
-``persistent-artifacts`` path segment out; for ``P049``, a ``raise`` reachable
-from a function that splits the qualified name apart itself.  Each is ANDed with
-"and this module does not import the SDK's incremental seam", giving the same
-two-signal heuristic shape as ``P019`` in ``client_seam.py``.
+decidable is the fingerprint each half leaves: for ``P048``, app code assembling
+the segment sequence ``persistent-artifacts/apps/<app>/connection``; for
+``P049``, a ``raise`` reachable from a function that splits the qualified name
+apart itself and does not reach the seam.
+
+``P048`` matched the bare ``persistent-artifacts`` root segment first.  Measured
+across the fleet that fired 65 times, of which **one** was the connection layout
+— the rest were paths the SDK helper cannot produce and does not own, so their
+only available action was a suppression in someone else's repo.  A rule whose
+prescribed remedy does not apply teaches people to reach for
+``# conformance: ignore`` reflexively.  Matching the layout instead collapses the
+fleet to 5 sites, every one of which hand-builds the SDK's own connection
+directory.
 
 Both were validated against the CONNECT-1136 before/after.  The pre-fix module
-fires both (a bare ``"persistent-artifacts"`` literal, and a
+fires both (a ``"/".join([...])`` assembling the connection layout, and a
 ``stable_marker_key`` that splits the qualified name and raises); the post-fix
 module fires neither, because it derives the prefix from
 ``get_persistent_s3_prefix`` and its remaining ``raise`` wraps the SDK's own
-error.  Across all connector apps, ``P048`` finds 65 sites and ``P049`` finds
+error.  Across all connector apps, ``P048`` finds 5 sites and ``P049`` finds
 none.
 
 Scope
@@ -70,13 +78,11 @@ Tier
 ----
 The two land differently, and the fleet measurement is the reason.
 
-``P048`` lands at ``WARN``.  Several apps legitimately write under this prefix
-for Argo layout compatibility, on paths the SDK helper does not model
-(``persistent-artifacts/{cqn}/parquet/markers/{phase}``).  Those take a
-justified ``# conformance: ignore[P048] <reason>``, which is the point: the rule
-converts an invisible fork into a written, reviewable decision.  Promotion to
-``BLOCK`` belongs in a later, evidence-based pass once the fleet is at zero
-unsuppressed.
+``P048`` lands at ``WARN``.  Its 5 findings are real — each builds the SDK's own
+connection directory by hand, one of them alongside a local re-derivation of the
+connection id — but they are existing sites in other repos that need a migration
+onto the seam, not a merge block on this PR.  Promotion to ``BLOCK`` belongs in a
+later, evidence-based pass once the fleet is at zero unsuppressed.
 
 ``P049`` lands at ``BLOCK``, against the usual convention for a new rule.  That
 convention exists so a new rule does not turn the fleet red overnight; ``P049``
@@ -118,15 +124,13 @@ RULES: tuple[RuleDefinition, ...] = (
             "accepted, breaking a tenant that provisions connections programmatically."
         ),
         short_description=(
-            "App builds a 'persistent-artifacts' object-store path itself instead of "
-            "deriving it from the SDK's get_persistent_s3_prefix"
+            "App builds the connection-scoped persistent-artifacts layout itself "
+            "instead of deriving it from the SDK's get_persistent_s3_prefix"
         ),
         full_description=(
-            "A string literal in app code carries the ``persistent-artifacts`` path\n"
-            "segment while the module imports nothing from\n"
-            "``application_sdk.common.incremental`` — the app is deriving the\n"
-            "connection's persistent-state location itself rather than asking the SDK\n"
-            "for it.\n"
+            "App code assembles the connection-scoped layout\n"
+            "``persistent-artifacts/apps/<app>/connection/…`` itself rather than asking\n"
+            "the SDK where a connection's persistent state lives.\n"
             "\n"
             "Use the SDK seam instead:\n"
             "\n"
@@ -145,13 +149,24 @@ RULES: tuple[RuleDefinition, ...] = (
             "in a word rather than an epoch crawled fine and mined not at all, in one\n"
             "tenant, with every test passing.\n"
             "\n"
-            "This rule is a **heuristic** with two signals ANDed: the literal segment\n"
-            "and the absent seam import.  A module that imports the seam is treated as\n"
-            "delegating and stays silent, so a file that both delegates *and* hand-\n"
-            "rolls a second path is an accepted false-negative.  Path segments are\n"
-            "matched exactly (``persistent-artifacts-backup`` does not match), and\n"
-            "docstrings, comments, and bare string statements are never flagged —\n"
-            "only strings in value position.\n"
+            "The match is the segment *sequence* the helper produces, not the\n"
+            "``persistent-artifacts`` root: a path that diverges at the fourth segment\n"
+            "(``state/``, ``workflows/``, ``skills``) or the second (the Argo\n"
+            "``{cqn}/parquet/...`` layout) is one the helper cannot produce and does\n"
+            "not own, so flagging it would prescribe a remedy that does not apply.\n"
+            "\n"
+            "The path is assembled across the whole expression — ``str.join``,\n"
+            "f-strings and ``+`` concatenation — with runtime pieces standing in as a\n"
+            "wildcard segment.  That matters: the CONNECT-1136 defect built its key\n"
+            "from six separate constants joined by ``/``, and the only literal in that\n"
+            "file carrying the whole layout was its *docstring*.  A check testing one\n"
+            "literal at a time would have missed the defect it exists for.  Segments\n"
+            "are matched exactly (``persistent-artifacts-backup`` does not match), and\n"
+            "docstrings, comments and bare string statements are never flagged.\n"
+            "\n"
+            "Unlike ``P049`` there is no seam-import gate: a module that imports the\n"
+            "seam and *still* hand-rolls the connection layout is exactly a finding\n"
+            "worth making, and four of the five fleet sites are in such a module.\n"
             "\n"
             "Land as ``WARN``: apps that write under this prefix on paths the SDK\n"
             "helper does not model (Argo-layout compatibility, e.g.\n"
@@ -194,8 +209,8 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         full_description=(
             "A function takes a ``connection_qualified_name``, calls ``.split(...)`` on\n"
-            "a value derived from it, and can ``raise`` out of that body — while the\n"
-            "module imports nothing from ``application_sdk.common.incremental``.\n"
+            "a value derived from it, and can ``raise`` out of its own body — while\n"
+            "that function does not itself reach the SDK seam.\n"
             "\n"
             "The app has taken over a decision the SDK already makes, and made it\n"
             "stricter.  ``extract_epoch_id_from_qualified_name`` logs a warning and\n"
@@ -213,8 +228,15 @@ RULES: tuple[RuleDefinition, ...] = (
             "    prefix = get_persistent_s3_prefix(connection_qualified_name, app_name)\n"
             "\n"
             "Raising a typed app error *around* the SDK call is correct and not\n"
-            "flagged: importing the seam is read as delegation, so a module that\n"
+            "flagged: a function that calls a seam symbol is delegating, so one that\n"
             "catches the SDK's error and re-raises its own stays silent.\n"
+            "\n"
+            "Delegation is judged **per function**, not per module.  A module-level\n"
+            "gate reads as delegation today, when almost no app module imports the\n"
+            "seam — but the point of P048 and the published seam is that they all\n"
+            "should, so such a gate would go blind exactly as adoption succeeds, and\n"
+            "'module imports the seam and one function still hand-rolls a strict\n"
+            "parse' is the likeliest shape of the next recurrence.\n"
             "\n"
             "This rule is a **heuristic**.  The ``.split`` receiver must trace\n"
             "syntactically to the parameter (through ``str()``, ``.strip()``,\n"
