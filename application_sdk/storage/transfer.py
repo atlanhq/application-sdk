@@ -170,8 +170,7 @@ async def _upload_from_store(
     Returns ``(transferred, reason)``.
     """
     from application_sdk.storage.chunked import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        _part_path,
-        _transfer_state_path,
+        _discard_transfer_state,
     )
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         download_file_chunked,
@@ -218,14 +217,15 @@ async def _upload_from_store(
     finally:
         tmp.unlink(missing_ok=True)
         # Belt-and-braces: never strand either staging file for a temp
-        # destination. Both live in `.sdk-partial/` beside it, so ask the
-        # helpers rather than rebuilding the names here — a local copy of the
-        # layout is how a cleanup site silently stops matching the writer
-        # (CONNECT-1126). The part file is the one that can actually survive
-        # `resume=False`: a publish failure leaves it on disk deliberately, and
-        # with a fresh mkstemp name no later attempt will ever claim it.
-        _part_path(tmp).unlink(missing_ok=True)
-        _transfer_state_path(tmp).unlink(missing_ok=True)
+        # destination. `_discard_transfer_state` is the writer's own cleanup —
+        # what it runs on a 412/404 — so this site cannot drift from the
+        # staging layout the way spelling out the two deletions here would
+        # (CONNECT-1126). It deliberately leaves the destination alone, hence
+        # the separate unlink of `tmp` above. The part file is the half that
+        # can actually survive `resume=False`: a publish failure leaves it on
+        # disk as a valid resume state, and with a fresh mkstemp name no later
+        # attempt will ever claim it.
+        _discard_transfer_state(tmp)
 
 
 async def _download_one(
@@ -902,16 +902,15 @@ async def download(
             if owns_temp:
                 try:
                     from application_sdk.storage.chunked import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-                        _part_path,
-                        _transfer_state_path,
+                        _discard_transfer_state,
                     )
 
                     dest.unlink(missing_ok=True)
                     # Belt-and-braces: never strand either staging file for a
                     # temp destination either — see the matching cleanup in
-                    # _upload_from_store for why these come from the helpers.
-                    _part_path(dest).unlink(missing_ok=True)
-                    _transfer_state_path(dest).unlink(missing_ok=True)
+                    # _upload_from_store for why this defers to the writer's
+                    # own discard rather than re-spelling the deletions.
+                    _discard_transfer_state(dest)
                 except OSError:  # conformance: ignore[E002] best-effort cleanup of partial download; original error re-raised below
                     pass
             raise

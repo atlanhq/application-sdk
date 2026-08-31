@@ -567,13 +567,14 @@ async def _materialize_single_file(
             # partial file or its checkpoint sidecar (best-effort).
             try:
                 from application_sdk.storage.chunked import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-                    _part_path,
-                    _transfer_state_path,
+                    _discard_transfer_state,
                 )
 
                 Path(out_path).unlink(missing_ok=True)
-                _part_path(Path(out_path)).unlink(missing_ok=True)
-                _transfer_state_path(Path(out_path)).unlink(missing_ok=True)
+                # The writer's own cleanup, so this site cannot drift from the
+                # staging layout; it leaves the destination alone, which is why
+                # that unlink is separate above.
+                _discard_transfer_state(Path(out_path))
             except OSError:  # conformance: ignore[E002] best-effort cleanup of an unusable temp; original error re-raised below
                 pass
         raise

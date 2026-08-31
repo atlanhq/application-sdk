@@ -242,6 +242,79 @@ def test_p048_enclosing_publish_clears_a_lambda_violator() -> None:
     assert _rule(src) == []
 
 
+def test_p048_nested_class_publish_does_not_clear_an_outer_violator() -> None:
+    """A ``class`` body is its own namespace, so its ``os.replace`` is not the
+    enclosing function's publish.
+
+    Same defect class as the lambda instance already fixed: excluding only
+    ``def`` / ``lambda`` from "own level" let an atomic helper parked in a
+    nested class clear a violating open beside it — a false negative on the
+    exact shape the rule exists to catch.
+    """
+    src = (
+        "import os\n"
+        "def f(target, tmp, path):\n"
+        "    os.open(target, os.O_WRONLY | os.O_TRUNC)\n"
+        "    class Helper:\n"
+        "        os.replace(tmp, path)\n"
+    )
+    findings = _rule(src)
+    assert [f.line for f in findings] == [3], findings
+
+
+def test_p048_comprehension_publish_does_not_clear_an_outer_violator() -> None:
+    """Comprehensions evaluate in a scope of their own, so a rename inside one
+    is not the enclosing function's publish either."""
+    src = (
+        "import os\n"
+        "def f(target, pairs):\n"
+        "    os.open(target, os.O_WRONLY | os.O_TRUNC)\n"
+        "    return [os.replace(a, b) for a, b in pairs]\n"
+    )
+    findings = _rule(src)
+    assert [f.line for f in findings] == [3], findings
+
+
+def test_p048_class_body_violator_is_still_cleared_by_an_enclosing_publish() -> None:
+    """Clearance stays inherited inward, uniformly with defs and lambdas — the
+    documented no-solver allowance, not something the scope widening changes."""
+    src = (
+        "import os\n"
+        "def f(tmp, path, target):\n"
+        "    class Helper:\n"
+        "        os.open(target, os.O_WRONLY | os.O_TRUNC)\n"
+        "    os.replace(tmp, path)\n"
+    )
+    assert _rule(src) == []
+
+
+def test_p048_bare_class_body_violator_fires() -> None:
+    """With no publish anywhere above it, an ``O_TRUNC`` open in a class body
+    is graded like any other — the widening must not make class bodies
+    invisible instead of merely non-publishing."""
+    src = (
+        "import os\n"
+        "class Writer:\n"
+        "    fd = os.open('artifact.json', os.O_WRONLY | os.O_TRUNC)\n"
+    )
+    findings = _rule(src)
+    assert [f.line for f in findings] == [3], findings
+
+
+def test_p048_comprehension_target_shadows_an_outer_tainted_name() -> None:
+    """A comprehension binds its targets, exactly like a lambda's parameters.
+
+    Without the shadow frame the module-level ``flags`` taint would reach in
+    and make this a false positive.
+    """
+    src = (
+        "import os\n"
+        "flags = os.O_WRONLY | os.O_TRUNC\n"
+        "fds = [os.open(p, flags) for p, flags in candidates]\n"
+    )
+    assert _rule(src) == []
+
+
 def test_p048_passes_without_o_trunc() -> None:
     src = "import os\nfd = os.open('x', os.O_WRONLY | os.O_CREAT, 0o600)\n"
     assert _rule(src) == []

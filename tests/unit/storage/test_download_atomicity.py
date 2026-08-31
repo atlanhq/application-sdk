@@ -449,10 +449,10 @@ class TestOwnedTempCleanupRemovesBothStagingFiles:
     deletes it (``_handle_chunk_failure``), but a *publish* failure leaves it
     on disk deliberately, as a valid resume state. With a fresh temp name per
     call that state is unreachable, so it strands under ``/tmp`` until the pod
-    restarts. Both cleanup sites in ``transfer.py`` derive the names from the
-    ``chunked`` helpers rather than rebuilding them, so a future move of the
-    staging layout cannot leave them silently pointing at nothing — which is
-    what happened when the checkpoint moved into ``.sdk-partial/``.
+    restarts. Both cleanup sites in ``transfer.py`` defer to the writer's own
+    ``_discard_transfer_state``, so a future move of the staging layout cannot
+    leave them silently pointing at nothing — which is what happened when the
+    checkpoint moved into ``.sdk-partial/``.
     """
 
     async def test_copy_leaves_no_staging_residue_when_publish_fails(
@@ -469,6 +469,11 @@ class TestOwnedTempCleanupRemovesBothStagingFiles:
 
         def failing_publish(src, dst, *args, **kwargs):
             staged.append(Path(src))
+            # `resume=False` means the transfer writes no checkpoint of its
+            # own, so without this the checkpoint half of the cleanup has
+            # nothing to remove and a regression that drops it would pass.
+            # A stale sidecar at a reused temp name is the shape being pinned.
+            _transfer_state_path(Path(dst)).write_bytes(b"{}")
             raise OSError("transient rename failure")
 
         # _upload_from_store passes no chunk_size_bytes, so a small object would
@@ -483,37 +488,54 @@ class TestOwnedTempCleanupRemovesBothStagingFiles:
                 await _upload_from_store(store, "copy/src.bin", target, "copy/dst.bin")
 
         assert staged, "the publish never reached os.replace — test proves nothing"
-        assert staged[0].parent.name == PARTIAL_DIRNAME, (
-            f"expected the chunked staging file, got {staged[0]} — the small-file "
+        part = staged[0]
+        assert part.parent.name == PARTIAL_DIRNAME, (
+            f"expected the chunked staging file, got {part} — the small-file "
             "delegate ran instead and this test is not exercising the leak"
         )
-        assert not staged[0].exists(), (
-            f"{staged[0]} survived the failed copy; with a fresh mkstemp name per "
+        assert not part.exists(), (
+            f"{part} survived the failed copy; with a fresh mkstemp name per "
             "call no later attempt can ever claim it, so it strands until the "
             "pod restarts"
         )
+        # Same destination the failing publish seeded the sidecar for: the
+        # `.part` name minus its suffix.
+        dest = part.parent.parent / part.name[: -len(".part")]
+        assert not _transfer_state_path(dest).exists(), (
+            "the checkpoint half of the cleanup was skipped — a stale sidecar "
+            "at a temp name strands exactly like the part file does"
+        )
         assert real_replace is os.replace  # patch scoped, not leaked
 
-    async def test_cleanup_paths_track_the_staging_layout(self, tmp_path) -> None:
-        """Both cleanup sites must derive names from the ``chunked`` helpers.
+    async def test_cleanup_paths_defer_to_the_writers_discard(self) -> None:
+        """Both cleanup sites must call ``_discard_transfer_state``.
 
-        Pinning the call, not just the effect: the previous spelling was
-        ``Path(str(tmp) + ".transfer-state")``, which kept passing every test
-        after the checkpoint moved into ``.sdk-partial/`` — it simply unlinked
-        a path that could no longer exist.
+        Pinning the call, not just the effect. The original spelling was
+        ``Path(str(tmp) + ".transfer-state")``, which kept passing every
+        behavioural test after the checkpoint moved into ``.sdk-partial/`` —
+        it simply unlinked a path that could no longer exist. Re-spelling the
+        two deletions from the helpers fixed that instance without removing
+        the class: a third site would drift the same way on the next move.
+        Calling the function the writer itself runs on 412/404 does.
         """
         import inspect
 
-        from application_sdk.storage import transfer
+        from application_sdk.storage import reference, transfer
 
-        for func in (transfer._upload_from_store, transfer.download):
+        for func in (
+            transfer._upload_from_store,
+            transfer.download,
+            reference._materialize_single_file,
+        ):
             source = inspect.getsource(func)
+            where = f"{func.__module__}.{func.__name__}"
             assert '+ ".transfer-state"' not in source, (
-                f"{func.__name__} rebuilds the checkpoint name by string "
-                "concatenation; use _transfer_state_path so the cleanup cannot "
-                "drift from the writer"
+                f"{where} rebuilds the checkpoint name by string concatenation; "
+                "call _discard_transfer_state so the cleanup cannot drift from "
+                "the writer"
             )
-            assert "_part_path(" in source, (
-                f"{func.__name__} cleans up a temp destination without removing "
-                "its .part file, which survives a publish failure"
+            assert "_discard_transfer_state(" in source, (
+                f"{where} cleans up an owned temp destination without the "
+                "writer's own discard, so it can silently stop matching the "
+                "staging layout"
             )

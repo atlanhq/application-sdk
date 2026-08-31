@@ -30,10 +30,12 @@ A call is flagged when **both** hold:
   requiring dataflow proof that the *same* path is renamed would trade a
   zero-noise heuristic for a solver.
 
-"Own level" governs only what counts as a scope *publishing*: nested ``def``
-/ ``async def`` / ``lambda`` bodies are excluded from it, so one atomic
-helper elsewhere in a module (a checkpoint writer with its own
-``os.replace``) cannot clear a violating ``os.open`` in a sibling function.
+"Own level" governs only what counts as a scope *publishing*: every construct
+with a namespace of its own — nested ``def`` / ``async def`` / ``lambda``
+bodies, ``class`` bodies, and the four comprehension forms — is excluded from
+it, so one atomic helper elsewhere in a module (a checkpoint writer with its
+own ``os.replace``) cannot clear a violating ``os.open`` in a sibling
+function.
 Clearance, by contrast, is inherited *inward*: a publish in any enclosing
 scope clears calls in nested defs and lambdas alike.  That is the closure
 allowance — workers writing through a descriptor while the outer function
@@ -112,19 +114,41 @@ def _call_mentions_o_trunc(node: ast.Call, tainted: frozenset[str]) -> bool:
     )
 
 
-def _own_level_nodes(scope: ast.AST) -> list[ast.AST]:
-    """Every node in *scope*'s subtree, excluding nested function bodies.
+#: Every construct that introduces a namespace of its own in Python, and so
+#: cannot count toward an enclosing scope's "own level".  Functions and
+#: lambdas are the obvious members; ``class`` bodies and the four
+#: comprehension forms are the easily-missed ones, and omitting them is a
+#: false *negative* — an ``os.replace`` inside a nested class body or a
+#: generator expression would clear a violating ``os.open`` in the enclosing
+#: function, which is exactly the "atomic helper elsewhere clears a sibling"
+#: leak the own-level rule exists to close.  ``ast.comprehension`` itself is
+#: NOT here: it is the ``for`` clause of the four nodes below, not a scope.
+_OWN_SCOPE_NODES: tuple[type[ast.AST], ...] = (
+    ast.FunctionDef,
+    ast.AsyncFunctionDef,
+    ast.Lambda,
+    ast.ClassDef,
+    ast.ListComp,
+    ast.SetComp,
+    ast.DictComp,
+    ast.GeneratorExp,
+)
 
-    Nested ``def`` / ``async def`` / ``lambda`` bodies are their own scopes —
-    a checkpoint writer's ``os.replace`` elsewhere in the module must not
-    clear a violating ``os.open`` in a sibling function, and the own-level
-    invariant is encoded here once for both scope analyses below.
+
+def _own_level_nodes(scope: ast.AST) -> list[ast.AST]:
+    """Every node in *scope*'s subtree, excluding nested scopes.
+
+    Nested ``def`` / ``async def`` / ``lambda`` / ``class`` bodies and
+    comprehensions are their own scopes (:data:`_OWN_SCOPE_NODES`) — a
+    checkpoint writer's ``os.replace`` elsewhere in the module must not clear
+    a violating ``os.open`` in a sibling function, and the own-level invariant
+    is encoded here once for both scope analyses below.
     """
     nodes: list[ast.AST] = []
     pending = list(ast.iter_child_nodes(scope))
     while pending:
         node = pending.pop()
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+        if isinstance(node, _OWN_SCOPE_NODES):
             continue
         nodes.append(node)
         pending.extend(ast.iter_child_nodes(node))
@@ -175,6 +199,13 @@ def _scope_shadowed_names(scope: ast.AST) -> frozenset[str]:
     must not inherit the module's taint.
     """
     shadowed: set[str] = set()
+    if isinstance(scope, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+        # `[os.open(p, flags) for flags in candidates]` binds `flags` here, so
+        # a module-level tainted `flags` of the same spelling does not reach in.
+        for generator in scope.generators:
+            for sub in ast.walk(generator.target):
+                if isinstance(sub, ast.Name):
+                    shadowed.add(sub.id)
     if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
         args = scope.args
         for arg in [
@@ -222,6 +253,25 @@ class _AtomicPublishChecker(ast.NodeVisitor):
         self._walk_scope(node)
 
     def visit_Lambda(self, node: ast.Lambda) -> None:
+        self._walk_scope(node)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self._walk_scope(node)
+
+    # The four comprehension forms each evaluate in a scope of their own, so
+    # they get a frame for the same reason lambdas do: a comprehension target
+    # must shadow an outer tainted name of the same spelling rather than
+    # inherit its taint.
+    def visit_ListComp(self, node: ast.ListComp) -> None:
+        self._walk_scope(node)
+
+    def visit_SetComp(self, node: ast.SetComp) -> None:
+        self._walk_scope(node)
+
+    def visit_DictComp(self, node: ast.DictComp) -> None:
+        self._walk_scope(node)
+
+    def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
         self._walk_scope(node)
 
     def _walk_scope(self, node: ast.AST) -> None:
