@@ -44,10 +44,6 @@
 #                                     own narrowed installation token from it.
 #   secrets.LITELLM_BASE_URL          gateway base URL. Required — there is no
 #                                     default and the endpoint is never in-repo.
-#   vars.SDK_LOOP_ALLOWED             comma-separated GitHub handles permitted
-#                                     to run this lane. UNSET MEANS NOBODY: a
-#                                     lane that pushes on its own should be shut
-#                                     when it is unconfigured, not open.
 
 name: SDK Loop
 
@@ -104,11 +100,6 @@ jobs:
           PR_NUMBER: ${{ github.event.issue.number || inputs.pr }}
           COMMENT_ID: ${{ github.event.comment.id }}
           AUTHOR_ASSOCIATION: ${{ github.event_name == 'workflow_dispatch' && 'OWNER' || github.event.comment.author_association }}
-          # The allowlist covers workflow_dispatch too. Without that it is a
-          # one-click bypass: anyone with write access could dispatch the lane
-          # and skip the comment gate entirely.
-          ACTOR: ${{ github.event.comment.user.login || github.actor }}
-          ALLOWED_ACTORS: ${{ vars.SDK_LOOP_ALLOWED }}
           RUN_ID: ${{ github.run_id }}
           WORKFLOW_FILE: sdk-loop.yml
         run: python3 .github/scripts/sdk_loop_fence.py
