@@ -144,10 +144,15 @@ BUDGET
    - `.mothership/pr-review/CLAUDE.md`
    - `.mothership/pr-review/severity-rubric.yaml` (includes severity
      calibration + confidence floors — the single source for both)
-   - `.mothership/pr-review/references/*.md`
    - `.mothership/pr-review/agents/*.md`
    - `.mothership/review-policy.md`
    - `.mothership/review.yaml`
+
+   **`references/*.md` is NOT read here.** It is ~125 KB — over half
+   everything this step would otherwise load — and it is consumed by the
+   Phase 2 agents, which receive their reference rules when dispatched
+   (§2a). Reading it up front pays for it twice, and pays for it at all on
+   reviews where no agent ever runs. Defer it to §6d.
 
 6b. **Load prior review into context (re-review continuity)** — if a
     previous `<!-- SDK_REVIEW -->` summary comment exists on this
@@ -327,6 +332,24 @@ BUDGET
     marker, or an unfetchable `PRIOR_HEAD`) means **unknown**, not "nothing
     changed" — skip delta scoping and run the full review. Only
     `DELTA_KNOWN=1` activates step 11b.
+
+6d. **Read `references/*.md` — unless no agent will run.** Skip this read
+    entirely when Phase 2 is going to be skipped, because the files exist to
+    inform agents and there will be no agent to inform:
+
+    - `review_scope` is `docs-only` (§2a: "SKIP Phase 2 entirely"), or
+    - `DELTA_KNOWN=1` and `DELTA_LINES == 0` (§11b: a verification-only
+      re-review "skip[s] Wave 1 and Wave 2 discovery entirely").
+
+    Otherwise read them as before. This is a load-ordering change only — the
+    same files reach the same agents on every review that dispatches one, so
+    no finding this review could have made becomes unreachable.
+
+    Why it is worth a step of its own: at ~125 KB these files are the single
+    largest input to a review, they are resent on every agentic turn, and the
+    two cases above are exactly the cheap reviews that currently pay the most
+    for work they do not do. In a multi-round `@sdk-loop` drive the
+    zero-delta case is the common one, not the exception.
 
 7. **Always run a standard review.** There is a single mode. Ignore any
    free-form text after `@sdk-review` (`COMMENTER_INTENT`) — there are no
@@ -1070,7 +1093,7 @@ Include the delta status in the review summary (and inline body
 where applicable) so the author sees at a glance what was fixed vs
 what remains.
 
-### 2e′. Nit convergence — keep the write-side resolver's loop terminating
+### 2e′. Nit convergence — keep the loop terminating AND the verdict reachable
 
 `@sdk-resolve` (the write counterpart, `.mothership/pr-resolve/`) drives a PR by
 looping review→fix→push until `### Findings` is **empty** (nits included). That
@@ -1079,6 +1102,12 @@ actionable**. A reviewer that surfaces a fresh batch of pre-existing optional
 nits every pass — or lists observations it recommends no action on — makes that
 loop non-terminating: it spins round after round until the sandbox dies with no
 hand-off. The three rules below keep nits convergent.
+
+Since `READY_TO_MERGE` now requires an empty `### Findings` (§2h), these rules
+carry a second load: an unconvergent nit stream no longer just wastes resolver
+rounds, it withholds the approval indefinitely. A `Nit` that survives these
+three rules is one the resolver can clear; anything else must not be listed as a
+finding at all.
 
 **They apply to `Nit`-tier findings ONLY.** Critical / High / Important
 findings — and any regression a pushed fix introduces — are ALWAYS raised, on
@@ -1138,8 +1167,8 @@ MEDIUM/LOW/INFO findings: one-line suggested_fix only. No path_forward.
 | BLOCKED | G1/G2/G3/G5 violation | REJECT |
 | NEEDS_HUMAN | DESIGN_CHANGE scope | REQUEST_CHANGES |
 | NEEDS_HUMAN | `review_scope` is `contract-toolkit` or `mixed-sdk-toolkit`, and non-empty `/tmp/TOOLKIT_ROVER_NOTE.md` exists or `/tmp/TOOLKIT_VALIDATION.md` has any mandatory toolkit compatibility check with status `needs rerun` | REQUEST_CHANGES |
-| NEEDS_FIXES | Critical, G4/G6, **any Important** | REQUEST_CHANGES |
-| READY_TO_MERGE | **0 Critical AND 0 Important** | APPROVE |
+| NEEDS_FIXES | Critical, G4/G6, **any Important, any Nit** | REQUEST_CHANGES |
+| READY_TO_MERGE | **`### Findings` is empty — 0 Critical, 0 Important AND 0 Nit** | APPROVE |
 
 CI is deliberately NOT a verdict input. `sdk-review-downgrade-on-ci-failure.yml`
 strips an approval event-driven the moment any non-review check fails —
@@ -1147,13 +1176,30 @@ the only race-free enforcement, since CI legs routinely finish after the
 review posts. The reviewer reports CI state on the `**CI:**` summary line
 (from the single Phase 0 step 9 read) and nothing more.
 
-`READY_TO_MERGE` is strict: a single Important finding forces
-`NEEDS_FIXES`. Nits do not block. If you believe an Important should
-be downgraded, downgrade it explicitly in §2e with a one-line reason
-— do not silently approve over the top of it. Before listing any
-`Nit`, apply the §2e′ convergence rules (diff-scope, re-review
-monotonicity, actionability) — they keep the write-side resolver's
-`### Findings`-empty loop terminating.
+`READY_TO_MERGE` is strict: **any** finding still listed under
+`### Findings` forces `NEEDS_FIXES`, whatever its tier. A single
+Important does it; so does a single `Nit`. The verdict and the
+write-side resolver now agree on one bar — §2e′ already promises that
+"once the author's real fixes land, a re-review of the same substantive
+change returns an **empty** `### Findings` with `READY_TO_MERGE`", and
+the resolver has always looped until every finding "nits included" is
+cleared. Approving over an open nit made the reviewer the looser of the
+two and left the resolver still working on a PR that was already
+stamped.
+
+The load this puts on `Nit` discipline is the point, and §2e′ is what
+carries it: a `Nit` you list must be one the resolver can actually
+clear, or the loop wedges. **Before listing any `Nit`, apply the §2e′
+convergence rules** (diff-scope, re-review monotonicity, actionability).
+An observation that fails them is not a finding — put it in
+`### Strengths` or prose, never under `### Findings`. That was already
+the rule; it is now load-bearing for the verdict too.
+
+If you believe an Important should be downgraded, downgrade it
+explicitly in §2e with a one-line reason — do not silently approve over
+the top of it. Downgrading an Important to a `Nit` no longer buys an
+approval, so a finding you genuinely accept must be dropped with its
+reason, not demoted.
 
 Print: `[Phase 2 complete] <N> findings across <C> classes, verdict=<verdict>`
 then `bash /tmp/budget.sh`.
