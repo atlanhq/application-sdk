@@ -55,6 +55,7 @@ from application_sdk.observability.logger_adaptor import (
     GATE_MODE_KEY,
     PREFLIGHT_SURFACE_KEY,
 )
+from application_sdk.testing.preflight import first_outcome_or_none, outcome_level
 
 _UNSET = object()
 
@@ -99,29 +100,10 @@ def _verdict_gate(output: PreflightOutput, *, enforce: bool = True):
     )
 
 
-def _outcome_event(mock_logger) -> dict | None:
-    """Return the kwargs of the single 'Preflight gate outcome' call, if any.
-
-    Scans info, warning and error: the outcome row is the level carrier
-    (FND-901) — blocks at error, advisory-failure proceeds at warning,
-    healthy rows at info.
-    """
-    for c in [
-        *mock_logger.info.call_args_list,
-        *mock_logger.warning.call_args_list,
-        *mock_logger.error.call_args_list,
-    ]:
-        if c.args and c.args[0] == "Preflight gate outcome":
-            return c.kwargs
-    return None
-
-
-def _outcome_level(mock_logger) -> str | None:
-    for level in ("info", "warning", "error"):
-        for c in getattr(mock_logger, level).call_args_list:
-            if c.args and c.args[0] == "Preflight gate outcome":
-                return level
-    return None
+# The scan itself is shared: application_sdk.testing.preflight owns it so a
+# connector suite reads the row the same way, at every level it can arrive at.
+_outcome_event = first_outcome_or_none
+_outcome_level = outcome_level
 
 
 _LOGGER = "application_sdk.execution._temporal.preflight_gate.logger"
