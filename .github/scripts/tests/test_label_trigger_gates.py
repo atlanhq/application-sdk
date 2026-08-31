@@ -277,12 +277,6 @@ def test_sdr_k8s_e2e_only_reacts_to_the_e2e_label_being_added() -> None:
     )
 
 
-def test_storage_integration_only_reacts_to_its_own_label_being_added() -> None:
-    _assert_gate(
-        _gate("pull_request.yaml", "storage-integration"), "storage-integration", {}
-    )
-
-
 # ── The paths the fix must not disturb ───────────────────────────────────────
 
 

@@ -1,6 +1,8 @@
 name: SDK tests (reusable)
 
-# Reusable workflow: the SDK's own unit + integration + storage-emulator tests.
+# Reusable workflow: the SDK's own unit + integration + storage tests, both
+# against emulators (every SDK PR) and against real S3 / Azure / GCS (merge
+# queue only — see the storage-integration job at the foot of this file).
 #
 # Invoked only by sdk-gate.yaml, which gates the *whole call* on
 # "SDK area changed OR force-all (release / version-bump / v* tag)".  Because
@@ -190,3 +192,92 @@ jobs:
       - name: Teardown emulators
         if: always()
         run: docker rm -f minio azurite gcs-testbench gcs-proxy 2>/dev/null || true
+
+  # Real-cloud storage integration tests (S3 / Azure / GCS) — exercise
+  # create_store_from_binding + CloudStore against real buckets/vaults using the
+  # *_integration markers (excluded from default addopts; conftest skips when a
+  # cloud's creds are absent). The emulator job above is the same code against
+  # fakes; this one is the only thing that exercises real IAM, real federation
+  # and real multipart behaviour. Nightly counterpart lives in schedule.yaml.
+  #
+  # Lives here, in the SDK Tests area, so it rolls up into the `SDK Gate`
+  # required check like every other SDK test — rather than as a standalone
+  # context nothing requires. It was previously a job in pull_request.yaml gated
+  # on a `storage-integration` label: opt-in, therefore ~never run, so a change
+  # that rewrote both download paths could reach main without one real-cloud
+  # request.
+  #
+  # merge_group only, and that `if:` is load-bearing in two directions:
+  #   - A fork PR's token cannot obtain OIDC federation into any of the three
+  #     clouds, so running this on `pull_request` would red the SDK Gate for
+  #     every external contributor.
+  #   - Even for internal PRs it would put shared buckets on the hot path of
+  #     every push. ~3 minutes once per merge-queue entry is the whole cost.
+  # A skipped job does not fail the reusable, so the PR-side gate stays green.
+  storage-integration:
+    name: Storage Integration Tests (S3 / Azure / GCS)
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Keyless: all three clouds authenticate via GitHub OIDC (no static secrets).
+    # Resource identifiers are non-secret repo variables (vars.*_INTEG_*).
+    #
+    # A job-level block REPLACES the workflow-level one rather than extending it,
+    # so contents:read is restated here for the checkout. id-token is never
+    # granted by a repo default at any setting — sdk-gate.yaml's `sdk-tests`
+    # calling job must also declare it, or these three logins fail with an
+    # opaque OIDC error rather than a permissions one.
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: "./.github/actions/setup-deps"
+      - name: AWS — assume the integration role (OIDC)
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
+        with:
+          role-to-assume: ${{ vars.AWS_INTEG_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_INTEG_REGION }}
+      - name: Azure — login (OIDC federated, no secret)
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3
+        with:
+          client-id: ${{ vars.AZURE_INTEG_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_INTEG_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_INTEG_SUBSCRIPTION_ID }}
+      - name: GCS — Workload Identity Federation (sets ADC)
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_INTEG_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_INTEG_SA }}
+      - name: Azure — write the federated token file for obstore WI auth
+        run: |
+          set -euo pipefail
+          # Mint into a throwaway file and only publish it on success, so a failed
+          # mint/parse can't leave a zero-byte token that yields an opaque AAD
+          # error downstream instead of a clear "OIDC mint failed". --fail-with-body
+          # makes curl exit non-zero on a non-2xx (still printing the body to debug).
+          tmp="$(mktemp)"
+          curl --fail-with-body -sS \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" \
+            | python3 -c 'import sys,json;sys.stdout.write(json.load(sys.stdin)["value"])' \
+            > "$tmp"
+          mv "$tmp" "${RUNNER_TEMP}/azure-federated-token"
+      - name: Run storage integration tests (keyless)
+        env:
+          # AWS: ambient creds (AWS_ACCESS_KEY_ID/SECRET/SESSION_TOKEN) set by the OIDC step.
+          S3_BUCKET: ${{ vars.S3_INTEG_BUCKET }}
+          AWS_DEFAULT_REGION: ${{ vars.AWS_INTEG_REGION }}
+          # Azure: federated workload identity (shared-key is disabled on the account).
+          AZURE_STORAGE_ACCOUNT: ${{ vars.AZURE_INTEG_STORAGE_ACCOUNT }}
+          AZURE_STORAGE_CONTAINER: ${{ vars.AZURE_INTEG_CONTAINER }}
+          AZURE_CLIENT_ID: ${{ vars.AZURE_INTEG_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_INTEG_TENANT_ID }}
+          AZURE_FEDERATED_TOKEN_FILE: ${{ runner.temp }}/azure-federated-token
+          # GCS: ADC (GOOGLE_APPLICATION_CREDENTIALS) set by the WIF step.
+          GCS_BUCKET: ${{ vars.GCS_INTEG_BUCKET }}
+          GCS_PROJECT_ID: ${{ vars.GCS_INTEG_PROJECT_ID }}
+        run: |
+          uv run pytest tests/integration/storage/ \
+            -m "s3_integration or azure_integration or gcs_integration" \
+            -v --timeout=60

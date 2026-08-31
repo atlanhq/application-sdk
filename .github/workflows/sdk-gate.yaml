@@ -4,7 +4,10 @@ name: SDK Gate
 #
 # Composes the three SDK test areas behind one always-concluding required
 # check:
-#   - SDK Tests        (sdk-tests-reusable.yaml)         — unit / integration / storage
+#   - SDK Tests        (sdk-tests-reusable.yaml)         — unit / integration /
+#                                                         storage emulators, plus
+#                                                         the real-cloud storage
+#                                                         suite on merge_group
 #   - Conformance      (conformance-reusable.yaml)       — C/E/P/O/D/L/I/T/B rule series
 #   - Contract Toolkit (contract-toolkit-reusable.yaml)  — PKL generate / lint / docs
 #
@@ -247,6 +250,16 @@ jobs:
     needs: changes
     if: needs.changes.outputs.sdk == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.force_sdk == 'true'
     uses: ./.github/workflows/sdk-tests-reusable.yaml
+    # A caller's permissions block is EXHAUSTIVE, not additive: it replaces the
+    # workflow-level grant for this call rather than adding to it, and a called
+    # workflow's jobs can never exceed what is granted here. contents:read is
+    # therefore restated for every checkout in the reusable, and id-token:write
+    # is what lets the storage-integration job federate into S3 / Azure / GCS —
+    # id-token is never granted by a repo default at any setting, so dropping
+    # this line does not degrade that job, it breaks it (and with it the gate).
+    permissions:
+      contents: read
+      id-token: write
     secrets: inherit
 
   conformance:
