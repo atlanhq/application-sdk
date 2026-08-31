@@ -21,6 +21,7 @@ from application_sdk.errors import (
     STORAGE_OPERATION,
     STORAGE_PERMISSION,
     STORAGE_PREFLIGHT,
+    STORAGE_RELOCATION,
     ErrorCode,
 )
 from application_sdk.errors.categories import Audience
@@ -91,6 +92,7 @@ class StorageBucketRelocationError(StorageError):
     after the relocation finishes.
     """
 
+    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_RELOCATION
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
 
     def __init__(

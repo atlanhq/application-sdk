@@ -198,14 +198,13 @@ async def test_multipart_forced_probe_round_trips_against_real_store(
 async def test_run_storage_access_check_against_real_store(tmp_path) -> None:
     """check_run_storage_access passes against a healthy real store and fails
     against one with rejected credentials."""
-    from unittest import mock
-
+    from application_sdk.infrastructure.context import InfrastructureContext
     from application_sdk.storage.preflight import check_run_storage_access
 
     good = _s3_store("run-check-good", _CUSTOMER_BUCKET, tmp_path)
-    infra = mock.MagicMock()
-    infra.storage = good
-    infra.upstream_storage = None
+    # Typed context, not a MagicMock: an attribute rename on
+    # InfrastructureContext must fail here, not be silently absorbed.
+    infra = InfrastructureContext(storage=good, upstream_storage=None)
     results = await check_run_storage_access(infra)
     assert [r.passed for r in results] == [True]
 

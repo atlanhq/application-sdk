@@ -2285,6 +2285,10 @@ class TestUploadFileRelocationClassification:
         assert err.code == "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
         assert err.suggested_action and "relocation" in err.suggested_action
         assert err.key == "test/column.json"
+        # The human-readable log line must carry the dedicated AAF code too —
+        # dashboards keyed on AAF-STR-* must be able to tell a relocation from
+        # the generic AAF-STR-004 the original incident was chased under.
+        assert "[AAF-STR-008]" in str(err)
 
     async def test_ordinary_failure_still_generic(self, store, tmp_path) -> None:
         from unittest import mock

@@ -509,10 +509,13 @@ class MyConnector(App):
 ```
 
 A failed probe appends a typed, platform-attributed check (`objectStoreAccess:<store>`, with a
-relocation rejection stamped `DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION`) and downgrades a `READY`
-verdict to `NOT_READY` — so `preflight_gate_mode` still decides whether it blocks; soft mode
-reports it as `would_block`. The probe is skipped when the handler already returned `NOT_READY`
-or consumed the budget, and a failure of the probe machinery itself fails open. Note the
+relocation rejection stamped `DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION`) and downgrades a
+`READY` or `PARTIAL` verdict to `NOT_READY` — so `preflight_gate_mode` still decides whether it
+blocks; soft mode reports it as `would_block`. The storage floor is reserved out of the budget
+advertised to the handler (`PreflightInput.timeout_seconds`); if the handler still consumes
+everything, the skip is visible as a failed `objectStoreAccess:skipped` advisory row rather than
+silent. The probe is skipped when the handler already returned `NOT_READY`, and a failure of the
+probe machinery itself fails open. Note the
 deliberate taxonomy choice: gate *plumbing* failures fail open, but a storage failure confirmed
 across the gate's retry attempts blocks in hard mode — a store rejecting every upload for hours
 is not the transient blip fail-open protects.

@@ -738,3 +738,8 @@ async def test_probe_writes_with_binding_put_attributes() -> None:
     assert fake_obstore.put_async.await_count == 2
     for call in fake_obstore.put_async.await_args_list:
         assert call.kwargs.get("attributes") == attrs
+
+
+def test_relocation_error_exported_from_package_root() -> None:
+    """StorageBucketRelocationError is importable like its eight siblings."""
+    from application_sdk.storage import StorageBucketRelocationError  # noqa: F401

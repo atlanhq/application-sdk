@@ -309,9 +309,9 @@ async def _probe_store_structured(
 
             Note on cost: a probe cancelled mid-initiate (timeout) can leave a
             hidden, unfinished multipart upload behind; providers charge for
-            those parts until aborted. The payload is a few bytes and buckets
-            should carry an abort-incomplete-multipart lifecycle rule, which
-            Atlan-managed buckets do.
+            those parts until aborted. The payload is a few bytes; buckets
+            should carry an abort-incomplete-multipart lifecycle rule — verify
+            that for the deployment's buckets, it is not asserted here.
 
     Returns:
         An :class:`ObjectStoreCheckResult`.  Never raises for obstore-level
