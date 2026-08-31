@@ -37,6 +37,7 @@ from application_sdk.handler.contracts import (
     SubscriptionConfig,
 )
 from application_sdk.handler.service import (
+    _CATEGORY_TO_HTTP,
     _flatten_to_pairs,
     _normalize_credentials,
     _normalize_preflight_request,
@@ -454,6 +455,56 @@ class TestPreflightEndpoint:
             json={"credentials": []},
         )
         assert response.status_code == 500
+
+    def test_unmeasured_duration_is_omitted_from_the_response(self) -> None:
+        # The -1.0 sentinel belongs to the telemetry row; the display payload
+        # shows no duration rather than a negative one.
+        from application_sdk.handler.contracts import PreflightCheck
+        from application_sdk.handler.service import _summarize_check
+
+        unmeasured = _summarize_check(PreflightCheck(name="auth", passed=True))
+        assert "duration_ms" not in unmeasured
+        measured = _summarize_check(
+            PreflightCheck(name="auth", passed=True, duration_ms=50.0)
+        )
+        assert measured["duration_ms"] == 50.0
+
+    def test_wrong_password_is_not_a_crash(self) -> None:
+        # AuthError -> 401: the response working as designed, the single most
+        # common preflight failure. It must never enter the crash series.
+        from application_sdk.errors.leaves import AuthError
+
+        class _WrongPasswordHandler(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                raise AuthError(message="wrong password")
+
+        client = _make_client(handler=_WrongPasswordHandler())
+        with patch("application_sdk.handler.service.logger") as ml:
+            response = client.post("/workflows/v1/check", json={"credentials": []})
+        assert response.status_code == 401
+        rows = [
+            c
+            for c in [
+                *ml.info.call_args_list,
+                *ml.warning.call_args_list,
+                *ml.error.call_args_list,
+            ]
+            if c.args and c.args[0] == "Preflight check outcome"
+        ]
+        assert rows == []
+
+    def test_client_fault_set_matches_the_http_mapping(self) -> None:
+        # The crash-row guard and the HTTP status mapping encode the same
+        # judgement ("is this the client's input, or our failure?"). Pin them
+        # together so neither can drift without this failing.
+        from application_sdk.errors.categories import FailureCategory
+        from application_sdk.execution._temporal.preflight_gate import (
+            _CLIENT_FAULT_CATEGORIES,
+        )
+
+        for category in FailureCategory:
+            maps_to_4xx = _CATEGORY_TO_HTTP.get(category, 500) < 500
+            assert (category in _CLIENT_FAULT_CATEGORIES) == maps_to_4xx, category
 
     def test_preflight_handler_crash_emits_outcome_row(self) -> None:
         client = _make_client(handler=_FailingHandler())

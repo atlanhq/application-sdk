@@ -371,10 +371,19 @@ GATE_ATTEMPTS_MAX = 3
 # and the mode decision — that is the CNCT-99 defect.
 GATE_ACTIVITY_HEADROOM_SECONDS = 5
 
-#: 1:6 with the interval so several slow ticks cannot kill a healthy attempt.
+#: Cap on the heartbeat timeout, matching the SDK-wide default ratio
+#: (``app/task.py``: 10s interval, 60s timeout). The effective values are
+#: derived per attempt by :func:`gate_heartbeat_timings` so they fit inside
+#: whatever ``start_to_close`` the app's budget produced — a fixed 60s against
+#: a floor-budget 10s window would be server-capped to ``start_to_close`` and
+#: could never fire first.
 GATE_HEARTBEAT_TIMEOUT_SECONDS = 60
-#: A sixth of the timeout; both knobs live here so they cannot drift apart.
-GATE_HEARTBEAT_INTERVAL_SECONDS = 10
+
+#: Skew allowance for the liveness deadline check: ``started_time`` is stamped
+#: by the Temporal server, ``now`` by the worker, and the two clocks are not
+#: guaranteed to agree to the second. Within the grace, cancellation delivery
+#: (no clocks involved) is the signal that catches an abandoned attempt.
+GATE_LIVENESS_CLOCK_GRACE_SECONDS = 5
 
 # Floor on what's left after credential resolution. Below this there is no point
 # calling the handler: resolution has eaten the budget, which is a plumbing
@@ -537,6 +546,21 @@ def gate_retry_policy(attempts: Any) -> RetryPolicy:
     return RetryPolicy(maximum_attempts=resolved, backoff_coefficient=2)
 
 
+def gate_heartbeat_timings(start_to_close_seconds: float) -> tuple[float, float]:
+    """``(heartbeat_timeout, interval)`` that fit inside ``start_to_close``.
+
+    The timeout is at most half the attempt window, so it always fires
+    meaningfully before Temporal's own deadline — at the 5s budget floor
+    (``start_to_close`` 10s) that means 5s, not a server-capped 60s that could
+    never fire first. The interval stays 1:6 with the timeout (floor 1s), so
+    several slow ticks cannot kill a healthy attempt at any legal budget. At
+    the default budget this reproduces the SDK-wide 10s/60s pair.
+    """
+    timeout = min(GATE_HEARTBEAT_TIMEOUT_SECONDS, start_to_close_seconds / 2)
+    interval = max(1.0, timeout / 6)
+    return timeout, interval
+
+
 def gate_timeouts(
     budget_seconds: Any, attempts: Any = None
 ) -> tuple[timedelta, timedelta]:
@@ -686,6 +710,25 @@ def _build_block_error(result: PreflightOutput, app_name: str) -> Any:
     )
 
 
+class PreflightRowOutcome(SerializableEnum):
+    """The ``outcome`` vocabulary the SDK's own machinery stamps on preflight rows.
+
+    Enumerated for the same reason :class:`PreflightSurface` is — dashboards
+    filter on these wire strings, so the set must be discoverable and pinned,
+    not scattered literals. The gate row (``Preflight gate outcome``) uses the
+    first five; the interactive row (``Preflight check outcome``) uses
+    :class:`PreflightStatus` values for verdicts and ``CRASHED`` for a handler
+    that raised. Values are shipped wire strings and must not be reworded.
+    """
+
+    PROCEEDED = "proceeded"
+    BLOCKED = "blocked"
+    WOULD_BLOCK = "would_block"
+    NO_VERDICT = "no_verdict"
+    SKIPPED = "skipped"
+    CRASHED = "crashed"
+
+
 class PreflightSurface(SerializableEnum):
     """Which surface ran ``Handler.preflight_check`` outside a gated run.
 
@@ -792,6 +835,40 @@ def emit_preflight_check_outcome(
     )
 
 
+#: Categories the HTTP boundary answers with a 4xx (``service.py``'s
+#: ``_CATEGORY_TO_HTTP``): the response working as designed, not a handler
+#: crash. A wrong password (AUTH → 401) is the single most common preflight
+#: failure; counting it as a crash would let setup-form typos dominate the
+#: crash series and the metric would stop measuring handler health. A
+#: consistency test pins this set against the HTTP mapping so the two
+#: judgements cannot drift.
+_CLIENT_FAULT_CATEGORIES = frozenset(
+    {
+        FailureCategory.AUTH,
+        FailureCategory.PERMISSION,
+        FailureCategory.NOT_FOUND,
+        FailureCategory.ALREADY_EXISTS,
+        FailureCategory.INVALID_INPUT,
+        FailureCategory.PRECONDITION,
+        FailureCategory.RATE_LIMITED,
+        FailureCategory.CANCELLED,
+    }
+)
+
+
+def _is_client_fault(exc: BaseException) -> bool:
+    """Whether ``exc`` is a client-facing input error, not a handler crash.
+
+    An explicit sub-500 ``http_status`` (a ``HandlerError`` the caller already
+    judged client-facing) or a typed category the HTTP boundary maps to a 4xx
+    means the failure is the response working as designed.
+    """
+    status = getattr(exc, "http_status", None)
+    if isinstance(status, int) and status < 500:
+        return True
+    return isinstance(exc, AppError) and type(exc).category in _CLIENT_FAULT_CATEGORIES
+
+
 def emit_preflight_crash_outcome(
     log: AtlanLoggerAdapter,
     app_name: str,
@@ -810,7 +887,14 @@ def emit_preflight_crash_outcome(
     surface, in addition to (never instead of) each surface's own boundary
     error handling. ``reason`` is the typed wire code for an ``AppError``, the
     class name otherwise.
+
+    Declines client-input errors (:func:`_is_client_fault`): a typed 4xx-class
+    failure already reaches the user as the response, and attributing it as a
+    crash would poison the series. The guard lives here, at the single emit
+    site, so every surface applies the same judgement.
     """
+    if _is_client_fault(exc):
+        return
     extra: dict[str, Any] = {}
     if isinstance(exc, AppError):
         extra[FAILURE_AUDIENCE_KEY] = type(exc).audience.value
@@ -818,7 +902,7 @@ def emit_preflight_crash_outcome(
         extra["request_id"] = request_id
     log.error(
         PREFLIGHT_CHECK_EVENT,
-        outcome="crashed",
+        outcome=PreflightRowOutcome.CRASHED.value,
         reason=exc.code if isinstance(exc, AppError) else type(exc).__name__,
         app_name=app_name,
         entrypoint=entrypoint or "<implicit>",
@@ -888,15 +972,28 @@ def _effective_budget(budget_seconds: float) -> float:
 
 
 def _attempt_is_live() -> bool:
-    """Whether this activity attempt is still within its Temporal deadline.
+    """Whether this activity attempt is still the one Temporal is waiting on.
 
-    An attempt whose ``start_to_close`` window has closed is one Temporal has
-    already abandoned (no heartbeat → cancellation was never delivered, so the
-    coroutine keeps running). Emitting a verdict row from it would corrupt the
+    An abandoned attempt (its ``start_to_close`` window closed, the retry
+    already scheduled) that emits a verdict row corrupts the
     ``(workflow_run_id, outcome)`` series the next attempt also writes to
-    (CONNECT-1170 gap 1). Tolerant of no activity context (direct calls, unit
-    tests) and of a missing/None timeout, mirroring ``_effective_budget``.
+    (CONNECT-1170 gap 1). Two signals, most reliable first: Temporal's own
+    cancellation flag — delivered in heartbeat responses, no clocks involved —
+    marks the abandoned attempt directly now that the gate beats. The deadline
+    check is the fallback for the attempt cancellation cannot reach (a worker
+    whose loop stopped yielding stops beating too); it compares a
+    server-stamped ``started_time`` to the worker's clock, so it carries
+    ``GATE_LIVENESS_CLOCK_GRACE_SECONDS`` of skew allowance rather than
+    trusting two clocks to agree — over-suppressing a *live* attempt's verdict
+    is the worse failure. Tolerant of no activity context (direct calls, unit
+    tests) and of missing fields, mirroring ``_effective_budget``.
     """
+    try:
+        cancelled = activity.is_cancelled()
+    except RuntimeError:  # no activity context
+        cancelled = False
+    if cancelled:
+        return False
     info = _activity_info()
     started_time = getattr(info, "started_time", None)
     start_to_close = getattr(info, "start_to_close_timeout", None)
@@ -906,7 +1003,11 @@ def _attempt_is_live() -> bool:
         return True
     if started_time.tzinfo is None:
         started_time = started_time.replace(tzinfo=timezone.utc)
-    deadline = started_time + start_to_close
+    deadline = (
+        started_time
+        + start_to_close
+        + timedelta(seconds=GATE_LIVENESS_CLOCK_GRACE_SECONDS)
+    )
     return datetime.now(timezone.utc) < deadline
 
 
@@ -1166,9 +1267,13 @@ def build_preflight_gate_activity(
             duration past the budget.
             """
             if not _attempt_is_live():
-                logger.debug(
-                    "Attempt %s is past its Temporal deadline; suppressing its "
-                    "outcome row",
+                # WARNING, not DEBUG: a handler outrunning its Temporal deadline
+                # is a real anomaly, and at DEBUG a suppressed orphan would be
+                # indistinguishable from a gate that never ran — in the series
+                # whose whole point is fidelity.
+                logger.warning(
+                    "Attempt %s was abandoned by Temporal (cancelled or past "
+                    "its deadline); suppressing its outcome row",
                     _current_attempt(),
                 )
                 return
@@ -1227,7 +1332,9 @@ def build_preflight_gate_activity(
             unverifiable = _unverifiable_result(exc, app_name)
             block_error = _build_block_error(unverifiable, app_name)
             _emit_outcome(
-                "blocked" if enforce else "would_block",
+                PreflightRowOutcome.BLOCKED.value
+                if enforce
+                else PreflightRowOutcome.WOULD_BLOCK.value,
                 block_error.details[0].code,
                 unverifiable.checks,
                 CLASSIFICATION_SOURCE_UNVERIFIABLE,
@@ -1250,10 +1357,21 @@ def build_preflight_gate_activity(
             stop_heartbeat_task,
         )
 
+        # Derive the beat interval from the real attempt window (same tolerant
+        # read _effective_budget uses), so it matches the heartbeat_timeout the
+        # workflow scheduled from the same geometry. Outside an activity
+        # context, fall back to the default budget's geometry.
+        real_s2c = getattr(_activity_info(), "start_to_close_timeout", None)
+        s2c_seconds = (
+            real_s2c.total_seconds()
+            if isinstance(real_s2c, timedelta)
+            else GATE_TIMEOUT_DEFAULT_SECONDS + GATE_ACTIVITY_HEADROOM_SECONDS
+        )
+        _, heartbeat_interval = gate_heartbeat_timings(s2c_seconds)
         heartbeat_stop = asyncio.Event()
         heartbeat_task = asyncio.ensure_future(
             auto_heartbeat_loop(
-                interval_seconds=GATE_HEARTBEAT_INTERVAL_SECONDS,
+                interval_seconds=heartbeat_interval,
                 heartbeat_fn=_gate_heartbeat,
                 stop_event=heartbeat_stop,
                 task_name=preflight_gate_activity_name(app_name),
@@ -1376,7 +1494,9 @@ def build_preflight_gate_activity(
             if result.status is PreflightStatus.NOT_READY:
                 block_error = _build_block_error(result, app_name)
                 _emit_outcome(
-                    "blocked" if enforce else "would_block",
+                    PreflightRowOutcome.BLOCKED.value
+                    if enforce
+                    else PreflightRowOutcome.WOULD_BLOCK.value,
                     block_error.details[0].code,
                     result.checks,
                     CLASSIFICATION_VERDICT,
@@ -1388,7 +1508,10 @@ def build_preflight_gate_activity(
                 # enforce it. The would_block row above is the loud record.
                 return result
             _emit_outcome(
-                "proceeded", result.status.value, result.checks, CLASSIFICATION_VERDICT
+                PreflightRowOutcome.PROCEEDED.value,
+                result.status.value,
+                result.checks,
+                CLASSIFICATION_VERDICT,
             )
             return result
         finally:

@@ -257,6 +257,11 @@ def _normalize_preflight_request(body: dict[str, Any]) -> dict[str, Any]:
 
 def _summarize_check(check: PreflightCheck) -> dict[str, Any]:
     dumped = check.model_dump(mode="json", exclude_none=True)
+    # The -1.0 "not measured" sentinel belongs to the telemetry row
+    # (check_matrix), not to this display payload — the frontend should see
+    # no duration rather than a negative one.
+    if dumped.get("duration_ms", 0) < 0:
+        del dumped["duration_ms"]
     dumped["message"] = check.resolved_message
     if check.resolved_suggested_action:
         dumped["suggested_action"] = check.resolved_suggested_action

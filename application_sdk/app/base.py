@@ -2059,9 +2059,10 @@ async def _run_preflight_gate(
             CLASSIFICATION_GATE_BROKEN,
             EMPTY_CHECK_MATRIX,
             FAILURE_AUDIENCE_KEY,
-            GATE_HEARTBEAT_TIMEOUT_SECONDS,
             PREFLIGHT_OUTCOME_EVENT,
             PreflightGateInput,
+            PreflightRowOutcome,
+            gate_heartbeat_timings,
             gate_retry_policy,
             gate_timeouts,
             is_preflight_block,
@@ -2077,7 +2078,7 @@ async def _run_preflight_gate(
             PREFLIGHT_OUTCOME_EVENT,
             app_name=app_name,
             entrypoint=entry,
-            outcome="skipped",
+            outcome=PreflightRowOutcome.SKIPPED.value,
             reason=reason,
             **{CHECK_MATRIX_KEY: EMPTY_CHECK_MATRIX},
         )
@@ -2095,13 +2096,14 @@ async def _run_preflight_gate(
         # *task* failure, which Temporal retries indefinitely (see
         # _validate_workflow_input). Nothing on the gate's own path may do that.
         start_to_close, schedule_to_close = gate_timeouts(budget_seconds, max_attempts)
+        heartbeat_timeout, _ = gate_heartbeat_timings(start_to_close.total_seconds())
         gate_input = PreflightGateInput.from_extraction_input(input_data, entrypoint)
         await workflow.execute_activity(
             preflight_gate_activity_name(app_name),
             gate_input,
             schedule_to_close_timeout=schedule_to_close,
             start_to_close_timeout=start_to_close,
-            heartbeat_timeout=timedelta(seconds=GATE_HEARTBEAT_TIMEOUT_SECONDS),
+            heartbeat_timeout=timedelta(seconds=heartbeat_timeout),
             retry_policy=gate_retry_policy(max_attempts),
         )
     except Exception as e:
@@ -2118,7 +2120,7 @@ async def _run_preflight_gate(
             PREFLIGHT_OUTCOME_EVENT,
             app_name=app_name,
             entrypoint=entry,
-            outcome="no_verdict",
+            outcome=PreflightRowOutcome.NO_VERDICT.value,
             reason=underlying_error_type(e),
             gate_classification=CLASSIFICATION_GATE_BROKEN,
             exc_info=True,

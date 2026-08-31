@@ -326,6 +326,59 @@ class TestBuildSdrActivities:
         assert event["preflight_surface"] == "sdr"
         assert event["reason"] == "RuntimeError"
 
+    async def test_client_fault_from_handler_emits_no_crash_row(self) -> None:
+        # A typed 4xx-class error (wrong password) is a client-facing outcome,
+        # not a handler crash — it must still raise, but never enter the
+        # crash series.
+        from application_sdk.errors.leaves import AuthError
+
+        class _WrongPasswordHandler(_StubHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                raise AuthError(message="wrong password")
+
+        activities = build_sdr_activities(_WrongPasswordHandler(), app_name="myapp")
+        by_name = {
+            getattr(a, "__temporal_activity_definition").name: a for a in activities
+        }
+        with (
+            mock.patch("application_sdk.execution._temporal.sdr.logger") as ml,
+            pytest.raises(AuthError),
+        ):
+            await by_name[SDR_PREFLIGHT_ACTIVITY](PreflightInput(credentials=[]))
+        rows = [
+            c
+            for c in ml.error.call_args_list
+            if c.args and c.args[0] == "Preflight check outcome"
+        ]
+        assert rows == []
+
+    async def test_crash_outside_the_handler_still_emits_crash_row(self) -> None:
+        # The crash boundary covers the whole surface, not only the handler
+        # call: a raise during agent-json credential resolution must also
+        # reach the funnel's denominator.
+        activities = build_sdr_activities(_StubHandler(), app_name="myapp")
+        by_name = {
+            getattr(a, "__temporal_activity_definition").name: a for a in activities
+        }
+        with (
+            mock.patch(
+                "application_sdk.execution._temporal.sdr.check_secret_store_access",
+                side_effect=RuntimeError("store probe exploded"),
+            ),
+            mock.patch("application_sdk.execution._temporal.sdr.logger") as ml,
+            pytest.raises(RuntimeError, match="store probe exploded"),
+        ):
+            await by_name[SDR_PREFLIGHT_ACTIVITY](
+                PreflightInput(agent_json={"agent-name": "acme", "secret-path": "p"})
+            )
+        event = next(
+            c.kwargs
+            for c in ml.error.call_args_list
+            if c.args and c.args[0] == "Preflight check outcome"
+        )
+        assert event["outcome"] == "crashed"
+        assert event["reason"] == "RuntimeError"
+
     async def test_fetch_metadata_activity_dispatches(self) -> None:
         handler = _StubHandler()
         activities = build_sdr_activities(handler, app_name="myapp")

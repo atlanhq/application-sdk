@@ -602,6 +602,24 @@ def build_sdr_activities(
 
     @activity.defn(name=SDR_PREFLIGHT_ACTIVITY)
     async def preflight_check(input: PreflightInput) -> PreflightOutput:
+        # One crash boundary for the whole surface: a raise anywhere on this
+        # path — the secret-store probe, credential resolution, or the handler
+        # itself — must reach the funnel's denominator, not only the handler
+        # call. emit_preflight_crash_outcome declines typed client-input
+        # errors itself, so a wrong credential stays a verdict, not a crash.
+        try:
+            return await _preflight_check_body(input)
+        except Exception as e:
+            emit_preflight_crash_outcome(
+                logger,
+                binding.app_name,
+                e,
+                surface=PreflightSurface.SDR,
+                entrypoint=input.entrypoint,
+            )
+            raise
+
+    async def _preflight_check_body(input: PreflightInput) -> PreflightOutput:
         secret_row: PreflightCheck | None = None
         if input.agent_json is not None and input.agent_json.is_populated():
             # SDR-only: verify the customer secret store first. A failure is
@@ -649,17 +667,7 @@ def build_sdr_activities(
             else:
                 input.credentials = await _resolve_agent_credentials(input.agent_json)
         with bind_invocation_context(binding.app_name, input.credentials):
-            try:
-                output = await binding.handler.preflight_check(input)
-            except Exception as e:
-                emit_preflight_crash_outcome(
-                    logger,
-                    binding.app_name,
-                    e,
-                    surface=PreflightSurface.SDR,
-                    entrypoint=input.entrypoint,
-                )
-                raise
+            output = await binding.handler.preflight_check(input)
         # SDR-only: fold the secret-store + object-store access checks into the
         # interactive preflight so they show up as UI check rows. Non-raising.
         if secret_row is not None:

@@ -475,7 +475,7 @@ class TestActivityBinding:
                 _ProgIn(name="x"),
             )
 
-        assert result is not None
+        assert result == _ProgOut(greeting="ok")
         assert current_progress_tracker() is before
 
     @pytest.mark.asyncio

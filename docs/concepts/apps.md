@@ -494,7 +494,8 @@ sizing probes to that field is sizing to the real deadline. Three rules follow:
 - **Size from the p99 of successful runs**, read off the SDK-measured `gate_duration_ms` on the
   outcome event. Sizing to the worst observed run makes the timeout decorative; sizing to p95
   blocks 5% of runs. Per-check `duration_ms` inside `check_matrix` is handler-authored and is not
-  a substitute.
+  a substitute — and a handler that never sets it publishes `-1.0`, the "not measured" sentinel,
+  never a plausible elapsed time.
 - **Pair a large budget with one attempt.** A retry rescues a transient by trying *again*, not by
   trying *longer*; at the 300s ceiling two attempts reserve a ~10 minute `schedule_to_close`.
 - **Keep probes awaitable.** Cancellation lands at an `await`; blocking synchronous I/O on the

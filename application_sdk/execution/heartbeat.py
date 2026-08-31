@@ -68,6 +68,7 @@ __all__ = [
     "TemporalHeartbeatController",
     "auto_heartbeat_loop",
     "current_progress_tracker",
+    "stop_heartbeat_task",
     "declared_hold_active",
     "record_no_progress_gap",
     "run_best_effort",
@@ -97,20 +98,35 @@ async def stop_heartbeat_task(
 
     This function deliberately catches ``BaseException``: the task being
     cleaned up may swallow the cancel and re-raise it on await, and a stuck
-    loop must not turn a completed activity into a failed one.
+    loop must not turn a completed activity into a failed one. The one
+    ``BaseException`` that must NOT be contained is a cancellation aimed at
+    the *caller* while it waits here — swallowing that would make a cancelled
+    activity report completion. The two are separable:
+    ``Task.cancelling()`` counts cancel requests made against the caller's own
+    task, and the heartbeat task re-raising its internal ``CancelledError``
+    never increments it.
     """
+
+    def _caller_is_being_cancelled() -> bool:
+        current = asyncio.current_task()
+        return current is not None and current.cancelling() > 0
+
     stop_event.set()
     try:
         await asyncio.wait_for(task, timeout=1.0)
         return
     # conformance: ignore[E002] cleanup must never outrank the payload; a stuck loop is not the caller's failure
     except BaseException:  # noqa: S110 — the cancel below is the handling
-        pass
+        if _caller_is_being_cancelled():
+            task.cancel()
+            raise
     task.cancel()
     try:
         await task
     # conformance: ignore[E002] the cancelled task's BaseException is the cleanup ending, not an error to act on
     except BaseException:
+        if _caller_is_being_cancelled():
+            raise
         logger.debug(
             "Heartbeat task '%s' did not stop cleanly", task_name, exc_info=True
         )

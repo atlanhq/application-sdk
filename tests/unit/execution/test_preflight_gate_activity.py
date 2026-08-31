@@ -38,12 +38,14 @@ from application_sdk.execution._temporal.preflight_gate import (
     build_preflight_gate_activity,
     emit_preflight_check_outcome,
     emit_preflight_crash_outcome,
+    gate_heartbeat_timings,
+    gate_timeouts,
     input_type_supports_gate,
     is_preflight_block,
     preflight_gate_activity_name,
 )
 from application_sdk.execution.errors import ApplicationError
-from application_sdk.handler.base import DefaultHandler, Handler
+from application_sdk.handler.base import DefaultHandler, Handler, HandlerError
 from application_sdk.handler.contracts import (
     AuthInput,
     AuthOutput,
@@ -1391,7 +1393,7 @@ class TestEmitPreflightCrashOutcome:
 
     def test_typed_error_crash_row_attributes(self) -> None:
         log = mock.MagicMock()
-        exc = AuthError(message="x")
+        exc = DependencyUnavailableError(message="x", service="warehouse")
         emit_preflight_crash_outcome(
             log,
             "myapp",
@@ -1403,12 +1405,30 @@ class TestEmitPreflightCrashOutcome:
         kwargs = log.error.call_args.kwargs
         assert log.error.call_args.args[0] == PREFLIGHT_CHECK_EVENT
         assert kwargs["outcome"] == "crashed"
-        assert kwargs["reason"] == AuthError.code
+        assert kwargs["reason"] == DependencyUnavailableError.code
         assert kwargs["checks"] == 0
         assert kwargs[CHECK_MATRIX_KEY] == EMPTY_CHECK_MATRIX
         assert kwargs[PREFLIGHT_SURFACE_KEY] == "http"
-        assert kwargs[FAILURE_AUDIENCE_KEY] == AuthError.audience.value
+        assert kwargs[FAILURE_AUDIENCE_KEY] == DependencyUnavailableError.audience.value
         assert kwargs["request_id"] == "r-1"
+
+    def test_client_fault_errors_emit_no_crash_row(self) -> None:
+        # A wrong password (AUTH -> 401) is the response working as designed,
+        # not a handler crash; counting it would let setup-form typos dominate
+        # the crash series. Same for an explicit sub-500 http_status.
+        log = mock.MagicMock()
+        emit_preflight_crash_outcome(
+            log, "myapp", AuthError(message="x"), surface=PreflightSurface.HTTP
+        )
+        emit_preflight_crash_outcome(
+            log,
+            "myapp",
+            HandlerError("bad request", http_status=400),
+            surface=PreflightSurface.HTTP,
+        )
+        log.error.assert_not_called()
+        log.warning.assert_not_called()
+        log.info.assert_not_called()
 
     def test_untyped_error_crash_row_attributes(self) -> None:
         log = mock.MagicMock()
@@ -1481,7 +1501,7 @@ class TestHeartbeatCleanupCannotOutrankTheVerdict:
                 "application_sdk.execution.heartbeat.auto_heartbeat_loop",
                 self._unstoppable_loop,
             ),
-            mock.patch(f"{_GATE}.GATE_HEARTBEAT_INTERVAL_SECONDS", 0.01),
+            mock.patch(f"{_GATE}.gate_heartbeat_timings", return_value=(60.0, 0.01)),
         ):
             with pytest.raises(BaseException) as excinfo:
                 await gate(PreflightGateInput())
@@ -1497,7 +1517,7 @@ class TestHeartbeatCleanupCannotOutrankTheVerdict:
                 "application_sdk.execution.heartbeat.auto_heartbeat_loop",
                 self._unstoppable_loop,
             ),
-            mock.patch(f"{_GATE}.GATE_HEARTBEAT_INTERVAL_SECONDS", 0.01),
+            mock.patch(f"{_GATE}.gate_heartbeat_timings", return_value=(60.0, 0.01)),
         ):
             result = await gate(PreflightGateInput())
         assert result.status is PreflightStatus.READY
@@ -1569,11 +1589,72 @@ class TestGateHeartbeat:
                 return PreflightOutput(status=PreflightStatus.READY, checks=[])
 
         gate = build_preflight_gate_activity(
-            _WaitingReadyHandler(), app_name="myapp", enforce=False
+            _WaitingReadyHandler(), app_name="myapp", enforce=False, budget_seconds=2
         )
         with (
-            mock.patch(f"{_GATE}.GATE_HEARTBEAT_INTERVAL_SECONDS", 0.01),
+            mock.patch(f"{_GATE}.gate_heartbeat_timings", return_value=(60.0, 0.01)),
             mock.patch(f"{_GATE}.activity.heartbeat", side_effect=_record_beat),
         ):
             result = await gate(PreflightGateInput())
         assert result.status is PreflightStatus.READY
+
+    async def test_min_budget_heartbeat_still_fits_inside_start_to_close(self) -> None:
+        # The knobs are derived, not fixed: at the 5s budget floor a fixed 60s
+        # timeout would be server-capped to start_to_close and never fire
+        # first, silently disabling stall detection for short-budget apps.
+        start_to_close, _ = gate_timeouts(5, 1)
+        timeout, interval = gate_heartbeat_timings(start_to_close.total_seconds())
+        assert timeout < start_to_close.total_seconds()
+        assert 0 < interval < timeout
+
+    async def test_default_budget_reproduces_the_sdk_wide_pair(self) -> None:
+        start_to_close, _ = gate_timeouts(None, None)
+        timeout, interval = gate_heartbeat_timings(start_to_close.total_seconds())
+        assert (timeout, interval) == (60.0, 10.0)
+
+
+class TestCancelledAttemptSuppression:
+    """Cancellation is the primary liveness signal — no clocks involved."""
+
+    async def test_cancelled_attempt_emits_no_verdict_row(self) -> None:
+        # Temporal delivers cancellation in heartbeat responses; a cancelled
+        # attempt is abandoned even while still inside its deadline window.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="connectivity", passed=False)],
+        )
+        gate = _verdict_gate(out, enforce=False)
+        inside_deadline = SimpleNamespace(
+            attempt=1,
+            start_to_close_timeout=timedelta(seconds=60),
+            started_time=datetime.now(timezone.utc),
+        )
+        with (
+            mock.patch(f"{_GATE}.activity.info", return_value=inside_deadline),
+            mock.patch(f"{_GATE}.activity.is_cancelled", return_value=True),
+            mock.patch(_LOGGER) as m,
+        ):
+            await gate(PreflightGateInput())
+        assert _outcome_event(m) is None
+
+    async def test_naive_started_time_live_and_expired(self) -> None:
+        # temporalio stamps aware datetimes today; the naive branch is the
+        # compatibility path and must judge liveness the same way.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="connectivity", passed=False)],
+        )
+        for age_seconds, expect_row in ((0, True), (300, False)):
+            gate = _verdict_gate(out, enforce=False)
+            naive = SimpleNamespace(
+                attempt=1,
+                start_to_close_timeout=timedelta(seconds=60),
+                started_time=datetime.now(timezone.utc).replace(tzinfo=None)
+                - timedelta(seconds=age_seconds),
+            )
+            with (
+                mock.patch(f"{_GATE}.activity.info", return_value=naive),
+                mock.patch(_LOGGER) as m,
+            ):
+                await gate(PreflightGateInput())
+            assert (_outcome_event(m) is not None) is expect_row
