@@ -12,6 +12,7 @@ from __future__ import annotations
 from ._cli import TOOL_VERSION, make_cli_main
 from ._directives import _IgnoreDirective, _parse_directives, parse_ignore_directive
 from ._discovery import EXCLUDE_DIRS, discover
+from ._exc_info import has_exc_info_traceback
 from ._findings import make_finding
 from ._imports import collect_import_origins, qualify_chained_attr_call
 from ._io import safe_read_json, safe_read_text
@@ -40,6 +41,7 @@ __all__ = [
     "_parse_directives",
     "collect_import_origins",
     "detect_scope",
+    "has_exc_info_traceback",
     "discover",
     "is_collectable_test_file",
     "is_sdk_package_name",

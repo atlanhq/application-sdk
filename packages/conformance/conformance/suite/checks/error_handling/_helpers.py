@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 from collections.abc import Iterator
 
+from .._ast_common._exc_info import has_exc_info_traceback
 from ._constants import _BROAD_EXCEPT_TYPES, _LOG_METHODS, BUILTIN_RAISES
 
 
@@ -56,14 +57,14 @@ def _any_logging_in(stmts: list[ast.stmt]) -> bool:
     return False
 
 
-def _has_exc_info(call: ast.Call) -> bool:
-    """True if *call* has ``exc_info=True`` among its keywords."""
-    for kw in call.keywords:
-        if kw.arg == "exc_info":
-            val = kw.value
-            if isinstance(val, ast.Constant) and val.value is True:
-                return True
-    return False
+def _has_exc_info(call: ast.Call, exception_name: str | None = None) -> bool:
+    """True if *call* passes an ``exc_info`` value that carries a traceback.
+
+    Thin alias over :func:`_ast_common.has_exc_info_traceback`, shared with
+    L004 — ``exc_info=<the except-as binding>`` attaches the same traceback as
+    ``exc_info=True`` and must not read as a discarded stack trace here either.
+    """
+    return has_exc_info_traceback(call, exception_name)
 
 
 def _body_is_only_pass(stmts: list[ast.stmt]) -> bool:

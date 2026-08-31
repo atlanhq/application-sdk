@@ -6,6 +6,7 @@ import ast
 from pathlib import PurePosixPath
 from typing import Literal
 
+from .._ast_common._exc_info import has_exc_info_traceback
 from ._constants import ADAPTER_MARKERS, LOG_METHODS, LOGGER_NAMES
 
 Framework = Literal["stdlib", "structlog", "loguru", "unknown"]
@@ -162,19 +163,11 @@ def get_logger_method(
 def has_exc_info_true(call: ast.Call, exception_name: str | None = None) -> bool:
     """True if the call has literal or current-exception ``exc_info``.
 
-    ``logging`` also accepts an exception value for ``exc_info``.  When the
-    value is the name bound by the surrounding ``except ... as`` clause, it is
-    truthy and carries the same traceback as ``exc_info=True``.
+    Thin alias over :func:`_ast_common.has_exc_info_traceback` — the E-series
+    shares the same predicate, and keeping one definition is what stops
+    ``exc_info=exc`` being silent for one series and a finding for the other.
     """
-    for kw in call.keywords:
-        if kw.arg == "exc_info":
-            val = kw.value
-            if isinstance(val, ast.Constant) and val.value is True:
-                return True
-            if exception_name is not None and isinstance(val, ast.Name):
-                return val.id == exception_name
-            return False
-    return False
+    return has_exc_info_traceback(call, exception_name)
 
 
 def has_exc_info_kwarg(call: ast.Call) -> bool:
