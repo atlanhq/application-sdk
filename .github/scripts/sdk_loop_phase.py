@@ -54,8 +54,10 @@ from sdk_loop_common import (
     gateway_spend,
     head_state,
     is_verdict_comment,
+    parse_answers_trigger,
     parse_reviewed_head,
     parse_verdict,
+    reaim_exhausted,
     run_agent,
     run_budget,
     spend_delta,
@@ -77,6 +79,8 @@ OUTCOME_TERMINAL_VERDICT = "terminal_verdict"
 OUTCOME_FAILED = "failed"
 #: Refused before starting, because the run has spent its allowance.
 OUTCOME_BUDGET = "budget_exhausted"
+#: Gave up re-aiming: the loop never got a clean pass at one commit.
+OUTCOME_REAIM_EXHAUSTED = "reaim_exhausted"
 
 
 def _as_float(raw: str | None) -> float | None:
@@ -183,13 +187,28 @@ def review_prompt(
 
 
 def newest_verdict(
-    comments: list[dict[str, Any]], since_id: str | None = None
+    comments: list[dict[str, Any]],
+    since_id: str | None = None,
+    answers_trigger: str | None = None,
 ) -> dict[str, Any] | None:
-    """The most recent verdict comment, optionally newer than a given id."""
+    """The verdict THIS phase produced — not merely the newest one present.
+
+    A PR usually already carries verdicts: from `@sdk-review`, from an earlier
+    loop, from a re-review days ago. Accepting the newest of those makes a
+    phase that produced nothing look like it produced whatever was lying
+    around. Not hypothetical — it is exactly how a crashed agent got reported
+    as a re-aim, four rounds running, with the stale verdict's older
+    REVIEWED_HEAD supplying the "the head moved" signal.
+
+    So the match is on `ANSWERS_TRIGGER` when this run's trigger id is known.
+    A verdict answering someone else's request is someone else's verdict.
+    """
     best: dict[str, Any] | None = None
     for comment in comments:
         body = comment.get("body") or ""
         if not is_verdict_comment(body) or parse_verdict(body) is None:
+            continue
+        if answers_trigger and parse_answers_trigger(body) != str(answers_trigger):
             continue
         if since_id and int(comment.get("id", 0)) <= int(since_id):
             continue
@@ -221,6 +240,11 @@ def interpret_review(
     silent findings-free pass unless it is caught here, which is the most
     dangerous false success this lane can produce.
     """
+    if not result.completed:
+        return ReviewOutcome(
+            outcome=OUTCOME_FAILED,
+            detail=f"the agent aborted: {result.abort_reason}",
+        )
     if verdict_comment is None:
         detail = (
             "the gateway rejected the request (auth or model)"
@@ -238,10 +262,12 @@ def interpret_review(
         and not expected_sha.startswith(stamped)
         and not stamped.startswith(expected_sha[:7])
     ):
-        # The reviewer stamped a different sha than the one it was pointed at.
-        # Treat as a re-aim rather than trusting it: something moved.
+        # Now that only THIS run's verdict is accepted, a stamp mismatch is the
+        # reviewer disobeying, not evidence the branch moved — main() already
+        # fences the head against the remote before we get here. Reporting it
+        # as a re-aim let a broken round masquerade as progress.
         return ReviewOutcome(
-            outcome=OUTCOME_REAIM,
+            outcome=OUTCOME_FAILED,
             verdict=verdict,
             reviewed_head=stamped,
             detail=f"verdict stamps {stamped[:8]}, round expected {expected_sha[:8]}",
@@ -394,12 +420,24 @@ def main(argv: list[str] | None = None) -> int:
     ledger = DismissalLedger.from_json(os.environ.get("LEDGER"))
 
     state = head_state(live_head(repo, head_ref), baseline, ours)
+    reaims = int(os.environ.get("REAIMS_SO_FAR") or 0)
+    if state.moved_by_other and reaim_exhausted(reaims):
+        # Stop rather than spend another round on a target that keeps moving.
+        emit_outputs(
+            outcome=OUTCOME_REAIM_EXHAUSTED,
+            new_base_sha=state.live,
+            reaims=str(reaims),
+            detail=f"{reaims} consecutive re-aims without a clean pass at one commit",
+        )
+        print(f"giving up after {reaims} consecutive re-aims")
+        return 0
     if state.moved_by_other:
         # Re-aim: discard whatever this round would have done and send the loop
         # back to review on the new head. Never resolve against a stale review.
         emit_outputs(
             outcome=OUTCOME_REAIM,
             new_base_sha=state.live,
+            reaims=str(reaims + 1),
             detail=f"head moved to {state.live[:8]} outside this run",
         )
         print(f"re-aim: head is {state.live[:8]}, expected {baseline[:8]}")
@@ -442,7 +480,11 @@ def main(argv: list[str] | None = None) -> int:
             ).stdout
             or "[]"
         )
-        outcome = interpret_review(result, newest_verdict(comments), state.live)
+        outcome = interpret_review(
+            result,
+            newest_verdict(comments, answers_trigger=os.environ.get("COMMENT_ID")),
+            state.live,
+        )
         cost = spend_delta(spend_before, gateway_spend())
         emit_outputs(
             outcome=outcome.outcome,
@@ -450,6 +492,7 @@ def main(argv: list[str] | None = None) -> int:
             reviewed_head=outcome.reviewed_head,
             verdict_url=outcome.verdict_url,
             detail=outcome.detail,
+            reaims="0",
             new_base_sha=state.live,
             cost="" if cost is None else f"{cost:.4f}",
             spent_total=(
@@ -490,6 +533,7 @@ def main(argv: list[str] | None = None) -> int:
         emit_outputs(
             outcome=outcome.outcome,
             pushed_sha=outcome.pushed_sha,
+            reaims="0",
             new_base_sha=after,
             ledger=ledger.to_json(),
             detail=outcome.detail,

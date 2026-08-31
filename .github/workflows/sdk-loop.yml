@@ -129,6 +129,7 @@ jobs:
       ledger: ''
       prior_sha: ''
       spent_so_far: ''
+      reaims_so_far: ''
 
   resolve-1:
     needs: [fence, review-1]
@@ -162,6 +163,7 @@ jobs:
       ledger: ${{ needs.resolve-1.outputs.ledger }}
       prior_sha: ${{ needs.review-1.outputs.reviewed_head }}
       spent_so_far: ${{ needs.resolve-1.outputs.spent_total || needs.review-1.outputs.spent_total }}
+      reaims_so_far: ${{ needs.review-1.outputs.reaims }}
 
   resolve-2:
     needs: [fence, review-2, resolve-1]
@@ -195,6 +197,7 @@ jobs:
       ledger: ${{ needs.resolve-2.outputs.ledger }}
       prior_sha: ${{ needs.review-2.outputs.reviewed_head }}
       spent_so_far: ${{ needs.resolve-2.outputs.spent_total || needs.review-2.outputs.spent_total }}
+      reaims_so_far: ${{ needs.review-2.outputs.reaims }}
 
   resolve-3:
     needs: [fence, review-3, resolve-2]
@@ -228,6 +231,7 @@ jobs:
       ledger: ${{ needs.resolve-3.outputs.ledger }}
       prior_sha: ${{ needs.review-3.outputs.reviewed_head }}
       spent_so_far: ${{ needs.resolve-3.outputs.spent_total || needs.review-3.outputs.spent_total }}
+      reaims_so_far: ${{ needs.review-3.outputs.reaims }}
 
   resolve-4:
     needs: [fence, review-4, resolve-3]
@@ -261,6 +265,7 @@ jobs:
       ledger: ${{ needs.resolve-4.outputs.ledger }}
       prior_sha: ${{ needs.review-4.outputs.reviewed_head }}
       spent_so_far: ${{ needs.resolve-4.outputs.spent_total || needs.review-4.outputs.spent_total }}
+      reaims_so_far: ${{ needs.review-4.outputs.reaims }}
 
   resolve-5:
     needs: [fence, review-5, resolve-4]
@@ -294,6 +299,7 @@ jobs:
       ledger: ${{ needs.resolve-5.outputs.ledger }}
       prior_sha: ${{ needs.review-5.outputs.reviewed_head }}
       spent_so_far: ${{ needs.resolve-5.outputs.spent_total || needs.review-5.outputs.spent_total }}
+      reaims_so_far: ${{ needs.review-5.outputs.reaims }}
 
   resolve-6:
     needs: [fence, review-6, resolve-5]
@@ -327,6 +333,7 @@ jobs:
       ledger: ${{ needs.resolve-6.outputs.ledger }}
       prior_sha: ${{ needs.review-6.outputs.reviewed_head }}
       spent_so_far: ${{ needs.resolve-6.outputs.spent_total || needs.review-6.outputs.spent_total }}
+      reaims_so_far: ${{ needs.review-6.outputs.reaims }}
 
   resolve-7:
     needs: [fence, review-7, resolve-6]
@@ -360,6 +367,7 @@ jobs:
       ledger: ${{ needs.resolve-7.outputs.ledger }}
       prior_sha: ${{ needs.review-7.outputs.reviewed_head }}
       spent_so_far: ${{ needs.resolve-7.outputs.spent_total || needs.review-7.outputs.spent_total }}
+      reaims_so_far: ${{ needs.review-7.outputs.reaims }}
 
   resolve-8:
     needs: [fence, review-8, resolve-7]
