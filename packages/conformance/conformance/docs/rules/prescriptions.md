@@ -2120,4 +2120,22 @@ then rebuild and redeploy the SDR worker image so the deployed agent reports the
 `sdk_version`.  A merged bump alone does not enable the interactive surfaces — the
 platform reads the version off the running worker.
 
+**The floor is necessary but not sufficient.**  Clearing it only lets the platform
+*offer* each surface; they are switched on in the app's own contract (`contract/app.pkl`
+→ `pkl eval` to regenerate):
+
+* **Preflight checks** — declare a `preflight-check` widget   (`Config.SageV2` with its
+`checks {}`) in the entrypoint's form and   list `"preflight-check"` in that
+entrypoint's `required` UIRule.   It is per entrypoint: one that omits the widget runs
+no preflight (a   miner may leave it out deliberately). * **Test authentication** — set
+`allowTestAuthentication = true` on the   credential / agent widget in the entrypoint
+form. The toolkit emits it   as `ui.showTestAuthentication` in the generated manifest,
+and the   setup UI shows the Test Authentication button only when that flag is set   AND
+the agent clears this floor. Emitting it needs an   `app-contract-toolkit` version that
+supports   `allowTestAuthentication`. * **Include / exclude metadata filters** — once
+the agent clears the floor   these render the interactive metadata picker; below it (or
+when the   version can't be read) the picker falls back to a plain text box. This
+follows the same floor gate automatically — no per-connector change   beyond declaring
+the filter widget.
+
 ---

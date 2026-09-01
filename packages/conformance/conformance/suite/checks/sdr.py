@@ -1264,7 +1264,7 @@ def _locked_sdk_version(root: Path) -> str | None:
     return None
 
 
-def _check_p046(root: Path) -> list[Finding]:
+def _check_p051(root: Path) -> list[Finding]:
     """P051: an SDR app must pin application-sdk >= 3.30.0 for interactive setup.
 
     The SDR interactive surfaces — test authentication, preflight checks, and
@@ -1338,7 +1338,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     findings.extend(_check_p037(paths, root))
     findings.extend(_check_p038(paths, root))
     findings.extend(_check_p039(manifests, root))
-    findings.extend(_check_p046(root))
+    findings.extend(_check_p051(root))
     return findings
 
 

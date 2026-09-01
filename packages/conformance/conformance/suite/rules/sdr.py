@@ -682,10 +682,32 @@ RULES: tuple[RuleDefinition, ...] = (
             "reports the new ``sdk_version``.  A merged bump alone does not enable the\n"
             "interactive surfaces — the platform reads the version off the running\n"
             "worker.\n"
+            "\n"
+            "**The floor is necessary but not sufficient.**  Clearing it only lets the\n"
+            "platform *offer* each surface; they are switched on in the app's own\n"
+            "contract (``contract/app.pkl`` → ``pkl eval`` to regenerate):\n"
+            "\n"
+            "* **Preflight checks** — declare a ``preflight-check`` widget\n"
+            "  (``Config.SageV2`` with its ``checks {}``) in the entrypoint's form and\n"
+            '  list ``"preflight-check"`` in that entrypoint\'s ``required`` UIRule.\n'
+            "  It is per entrypoint: one that omits the widget runs no preflight (a\n"
+            "  miner may leave it out deliberately).\n"
+            "* **Test authentication** — set ``allowTestAuthentication = true`` on the\n"
+            "  credential / agent widget in the entrypoint form. The toolkit emits it\n"
+            "  as ``ui.showTestAuthentication`` in the generated manifest, and the\n"
+            "  setup UI shows the Test Authentication button only when that flag is set\n"
+            "  AND the agent clears this floor. Emitting it needs an\n"
+            "  ``app-contract-toolkit`` version that supports\n"
+            "  ``allowTestAuthentication``.\n"
+            "* **Include / exclude metadata filters** — once the agent clears the floor\n"
+            "  these render the interactive metadata picker; below it (or when the\n"
+            "  version can't be read) the picker falls back to a plain text box. This\n"
+            "  follows the same floor gate automatically — no per-connector change\n"
+            "  beyond declaring the filter widget.\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/prescriptions.md#p046"
+            "packages/conformance/conformance/docs/rules/prescriptions.md#p051"
         ),
     ),
 )
