@@ -23,9 +23,10 @@ contract, the required module-discovery env var, and non-root execution.
   the deployment environment, not baked into the image — different deployments
   of the same image may require different modes.
 
-* ``I005`` — No ``USER`` instruction in the final stage may set the user to
-  ``root`` (``root`` or ``0``).  The base image already runs as ``appuser``;
-  ``USER root`` silently reverses that and exposes the container to
+* ``I005`` — The effective ``USER`` of the final stage must not be root
+  (``root`` or ``0``).  A temporary ``USER root`` is allowed when a later
+  ``USER`` restores a non-root user.  The base image already runs as
+  ``appuser``; leaving root as the effective user exposes the container to
   privilege-escalation risks.
 """
 
@@ -239,15 +240,16 @@ RULES: tuple[RuleDefinition, ...] = (
             "to root, violating the non-root execution policy"
         ),
         full_description=(
-            "No ``USER root`` or ``USER 0`` instruction may appear in the final "
-            "stage of the Dockerfile (after the last ``FROM``).  The base image "
-            "(``app-runtime-base``) already runs as ``appuser``; any instruction "
-            "that changes to root overrides this silently and violates the "
-            "non-root container execution policy.  ``USER root`` in intermediate "
-            "builder stages of a multi-stage build is not flagged — only the "
-            "final stage's user matters for the runtime container.  Inline "
-            "suppression: ``# conformance: ignore[I005] <reason>`` on the line "
-            "before the offending USER instruction."
+            "The effective ``USER`` of the final stage must not be root "
+            "(``root`` or ``0``).  A temporary ``USER root`` is allowed when a "
+            "later ``USER`` restores a non-root user.  The base image "
+            "(``app-runtime-base``) already runs as ``appuser``; leaving root "
+            "as the effective user violates the non-root container execution "
+            "policy.  ``USER root`` in intermediate builder stages of a "
+            "multi-stage build is not flagged — only the final stage's effective "
+            "user matters for the runtime container.  Inline suppression: "
+            "``# conformance: ignore[I005] <reason>`` on the line before the "
+            "offending USER instruction."
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
