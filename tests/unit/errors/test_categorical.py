@@ -44,7 +44,7 @@ _LEAVES = [
         FailureCategory.RATE_LIMITED,
         True,
         "RATE_LIMITED",
-        Audience.USER,
+        Audience.APP_OWNER,
         ["limit_type", "retry_after_seconds", "quota_name"],
     ),
     (

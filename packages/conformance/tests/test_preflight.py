@@ -570,3 +570,125 @@ def test_p047_suppressed(tmp_path: Path) -> None:
     findings = _scan(tmp_path, {"h.py": src})
     assert [f.rule_id for f in findings] == ["P047"]
     assert findings[0].suppressed is True
+
+
+# ── P041 GateBrokenCategoryUserAudience ───────────────────────────────────────
+
+_ERR_IMPORTS = (
+    "from typing import ClassVar\n"
+    "from application_sdk.errors.base import AppError\n"
+    "from application_sdk.errors.wire import Audience, FailureCategory\n"
+)
+
+
+def _leaf(body: str, *, name: str = "Boom", base: str = "AppError") -> str:
+    return f"{_ERR_IMPORTS}\n\nclass {name}({base}):\n{body}"
+
+
+def test_p041_rule_metadata() -> None:
+    """P041 is BOTH-scoped: the defect exists in the SDK's own leaves too."""
+    rule = get_rule("P041")
+    assert rule.scope is RuleScope.BOTH
+    assert rule.tier is EnforcementTier.WARN
+    assert rule.mechanism is RuleMechanism.STATIC
+
+
+def test_p041_fires_on_declared_gate_broken_category_with_user_audience(
+    tmp_path: Path,
+) -> None:
+    src = _leaf(
+        "    category: ClassVar[FailureCategory] = FailureCategory.RATE_LIMITED\n"
+        "    audience: ClassVar[Audience] = Audience.USER\n"
+    )
+    assert _ids(tmp_path, src) == ["P041"]
+
+
+def test_p041_fires_on_each_gate_broken_category(tmp_path: Path) -> None:
+    for cat in (
+        "DEPENDENCY_UNAVAILABLE",
+        "RATE_LIMITED",
+        "RESOURCE_EXHAUSTED",
+        "CANCELLED",
+    ):
+        src = _leaf(
+            f"    category: ClassVar[FailureCategory] = FailureCategory.{cat}\n"
+            "    audience: ClassVar[Audience] = Audience.USER\n"
+        )
+        assert _ids(tmp_path / cat, src) == ["P041"], cat
+
+
+def test_p041_fires_on_subclass_inheriting_category_from_sdk_leaf(
+    tmp_path: Path,
+) -> None:
+    """An app subclass inherits RATE_LIMITED and re-blames the customer."""
+    src = (
+        "from typing import ClassVar\n"
+        "from application_sdk.errors.leaves import RateLimitedError\n"
+        "from application_sdk.errors.wire import Audience\n"
+        "\n\nclass SourceThrottled(RateLimitedError):\n"
+        "    audience: ClassVar[Audience] = Audience.USER\n"
+    )
+    assert _ids(tmp_path, src) == ["P041"]
+
+
+def test_p041_fires_through_an_in_file_intermediate(tmp_path: Path) -> None:
+    src = (
+        "from typing import ClassVar\n"
+        "from application_sdk.errors.leaves import RateLimitedError\n"
+        "from application_sdk.errors.wire import Audience\n"
+        "\n\nclass Mid(RateLimitedError):\n    pass\n"
+        "\n\nclass Leaf(Mid):\n"
+        "    audience: ClassVar[Audience] = Audience.USER\n"
+    )
+    assert _ids(tmp_path, src) == ["P041"]
+
+
+def test_p041_silent_on_correct_audience(tmp_path: Path) -> None:
+    for aud in ("APP_OWNER", "PLATFORM"):
+        src = _leaf(
+            "    category: ClassVar[FailureCategory] = FailureCategory.RATE_LIMITED\n"
+            f"    audience: ClassVar[Audience] = Audience.{aud}\n"
+        )
+        assert _ids(tmp_path / aud, src) == [], aud
+
+
+def test_p041_silent_on_non_gate_broken_category(tmp_path: Path) -> None:
+    """AUTH is genuinely the customer's to fix — USER is correct there."""
+    src = _leaf(
+        "    category: ClassVar[FailureCategory] = FailureCategory.AUTH\n"
+        "    audience: ClassVar[Audience] = Audience.USER\n"
+    )
+    assert _ids(tmp_path, src) == []
+
+
+def test_p041_silent_when_audience_only_inherited(tmp_path: Path) -> None:
+    """Inheriting a corrected leaf is the right answer — do not flag it."""
+    src = (
+        "from application_sdk.errors.leaves import RateLimitedError\n"
+        "\n\nclass SourceThrottled(RateLimitedError):\n    pass\n"
+    )
+    assert _ids(tmp_path, src) == []
+
+
+def test_p041_silent_when_subclass_redeclares_a_safe_category(tmp_path: Path) -> None:
+    """Redeclaring category leaves the gate-broken set; P002 owns that call."""
+    src = (
+        "from typing import ClassVar\n"
+        "from application_sdk.errors.leaves import RateLimitedError\n"
+        "from application_sdk.errors.wire import Audience, FailureCategory\n"
+        "\n\nclass Rebranded(RateLimitedError):\n"
+        "    category: ClassVar[FailureCategory] = FailureCategory.AUTH\n"
+        "    audience: ClassVar[Audience] = Audience.USER\n"
+    )
+    assert _ids(tmp_path, src) == []
+
+
+def test_p041_suppressed(tmp_path: Path) -> None:
+    src = _leaf(
+        "    category: ClassVar[FailureCategory] = FailureCategory.RATE_LIMITED\n"
+        "    # conformance: ignore[P041] intentional: customer-set quota, they own it\n"
+        "    audience: ClassVar[Audience] = Audience.USER\n"
+    )
+    findings = _scan(tmp_path, {"m.py": src})
+    assert [f.rule_id for f in findings] == ["P041"]
+    assert findings[0].suppressed is True

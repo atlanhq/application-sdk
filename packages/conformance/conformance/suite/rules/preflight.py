@@ -7,8 +7,9 @@ These rules make the gate pattern statically enforceable across the fleet:
 they surface a boot-time collision at review time (P032), the app-owned duplicate
 that drifts from the gate (P033), untyped failure results that lose their wire
 metadata (P034), the silent metadata/contract drift that no runtime signal
-can catch (P035), and preflight failures logged below the customer's default
-ERROR filter (P047, FND-901).
+can catch (P035), preflight failures logged below the customer's default
+ERROR filter (P047, FND-901), and a typed leaf whose audience contradicts the
+gate's own treatment of its category (P041, CONNECT-812 PF-29).
 
 The detector lives in ``suite.checks.preflight``; these rules reuse the ``P``
 series so they run on the existing P leg of the fleet CI matrix with no workflow
@@ -217,5 +218,58 @@ RULES: tuple[RuleDefinition, ...] = (
             "not resolved, and helper functions the method calls are not followed."
         ),
         help_uri=f"{_HELP_BASE}#p047",
+    ),
+    RuleDefinition(
+        id="P041",
+        scope=RuleScope.BOTH,
+        name="GateBrokenCategoryUserAudience",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="preflight-gate",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.25.0",
+        rationale=(
+            "The preflight gate puts DEPENDENCY_UNAVAILABLE, RATE_LIMITED, "
+            "RESOURCE_EXHAUSTED and CANCELLED in _GATE_BROKEN_CATEGORIES so a "
+            "failure in one of them fails open — the gate could not form a verdict, "
+            "so the run proceeds rather than blaming the source. A leaf in one of "
+            "those categories that also declares audience=USER says the opposite: "
+            "that the customer caused it and must fix it. Both cannot be true. The "
+            "audience decides which SLA a failure lands in and who gets paged, so a "
+            "throttle attributed to the customer skews every ownership metric and "
+            "hands them a remediation only Atlan can perform (CONNECT-812 PF-29)."
+        ),
+        short_description=(
+            "Typed leaf declares audience=USER on a category the gate treats as plumbing"
+        ),
+        full_description=(
+            "``_GATE_BROKEN_CATEGORIES`` "
+            "(``application_sdk/execution/_temporal/preflight_gate.py``) marks the "
+            "failure categories the gate must **not** convert into a source verdict. "
+            "A typed leaf carrying one of those categories while declaring "
+            "``audience: ClassVar[Audience] = Audience.USER`` contradicts that "
+            "treatment: the gate says *not the source's fault*, the leaf says *the "
+            "customer's problem*.\n"
+            "\n"
+            "The check compares two constants the SDK already publishes — it makes no "
+            "judgement about whether a message matches a category, which is the part "
+            "that makes category-correctness undecidable in general.\n"
+            "\n"
+            "Remediation: ``Audience.APP_OWNER`` where the connector team owns the "
+            "posture that produced it (a 429 is Atlan's call rate against a "
+            "customer-owned endpoint — the customer cannot lower it), or "
+            "``Audience.PLATFORM`` where the unavailable dependency is Atlan-run. "
+            "``wire.py`` already resolves an unclear locus to ``APP_OWNER``.\n"
+            "\n"
+            "Only an ``audience`` bound in the class body is flagged. An inherited "
+            "``USER`` is not resolved across the SDK boundary: once the leaf itself "
+            "is correct, inheriting from it is the right answer, and modelling SDK "
+            "internals from an app repo is the false-positive surface the P series "
+            "avoids. A subclass that redeclares its own ``category`` leaves the "
+            "gate-broken set and is not flagged here — P002 governs that "
+            "redeclaration."
+        ),
+        help_uri=f"{_HELP_BASE}#p041",
     ),
 )
