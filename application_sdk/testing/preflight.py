@@ -41,9 +41,9 @@ import pytest
 if TYPE_CHECKING:
     from unittest.mock import MagicMock
 
-#: Levels the outcome row can be emitted at, in ascending severity. Kept in this
-#: order so :func:`outcome_level` reports the level actually used rather than the
-#: first one that happens to hold a call.
+#: Levels the outcome row can be emitted at, in ascending severity. Both entry
+#: points scan all of them, so a verdict that changes level cannot silently
+#: empty a suite's assertions.
 OUTCOME_LEVELS: tuple[str, ...] = ("info", "warning", "error")
 
 _GATE_LOGGER_PATH = "application_sdk.execution._temporal.preflight_gate.logger"
@@ -135,25 +135,34 @@ def capture_preflight_outcomes(
     yield capture
 
 
-def outcome_rows(mock_logger: MagicMock) -> list[dict[str, Any]]:
-    """Every outcome row a ``MagicMock`` gate logger was called with, oldest level first."""
+def _outcome_calls(mock_logger: MagicMock) -> list[tuple[str, dict[str, Any]]]:
+    """``(level, payload)`` per captured row, in emission order.
+
+    Read from ``mock_calls`` rather than each level's ``call_args_list`` so the
+    result is chronological — the same order :class:`PreflightOutcomeCapture`
+    keeps — and the two entry points cannot disagree on a double emission.
+    """
     name = _outcome_event_name()
     return [
-        call.kwargs
-        for level in OUTCOME_LEVELS
-        for call in getattr(mock_logger, level).call_args_list
-        if call.args and call.args[0] == name
+        (str(call[0]), dict(call.kwargs))
+        for call in mock_logger.mock_calls
+        if call[0] in OUTCOME_LEVELS and call.args and call.args[0] == name
     ]
 
 
+def outcome_rows(mock_logger: MagicMock) -> list[dict[str, Any]]:
+    """Every outcome row a ``MagicMock`` gate logger was called with, oldest first."""
+    return [payload for _level, payload in _outcome_calls(mock_logger)]
+
+
 def outcome_level(mock_logger: MagicMock) -> str | None:
-    """The level the outcome row was emitted at, or ``None`` if it never was."""
-    name = _outcome_event_name()
-    for level in OUTCOME_LEVELS:
-        for call in getattr(mock_logger, level).call_args_list:
-            if call.args and call.args[0] == name:
-                return level
-    return None
+    """The level the latest outcome row was emitted at, or ``None`` if no row was.
+
+    Matches :attr:`PreflightOutcomeCapture.level`: on the (anomalous) double
+    emission both report the most recent row's level.
+    """
+    calls = _outcome_calls(mock_logger)
+    return calls[-1][0] if calls else None
 
 
 def single_outcome(mock_logger: MagicMock) -> dict[str, Any]:

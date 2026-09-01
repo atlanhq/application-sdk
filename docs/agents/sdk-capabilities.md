@@ -3212,7 +3212,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `AppExecutor`
 
 - **Import:** `from application_sdk.testing.integration.fixtures import AppExecutor`
-- **Signature:** `class AppExecutor(backend: TemporalExecutorBackend, expected_infrastructure: object | None = None) -> None`
+- **Signature:** `class AppExecutor(backend: TemporalExecutorBackend, expected_infrastructure: InfrastructureContext | None = None) -> None`
 - **Summary:** Thin shim over :class:`TemporalExecutorBackend` for integration suites.
 - **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
@@ -5076,14 +5076,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Import:** `from application_sdk.testing import outcome_level`
 - **Signature:** `outcome_level(mock_logger: MagicMock)`
-- **Summary:** The level the outcome row was emitted at, or ``None`` if it never was.
+- **Summary:** The level the latest outcome row was emitted at, or ``None`` if no row was.
 - **Defined in:** `application_sdk/testing/preflight.py`
 
 #### `outcome_rows`
 
 - **Import:** `from application_sdk.testing import outcome_rows`
 - **Signature:** `outcome_rows(mock_logger: MagicMock)`
-- **Summary:** Every outcome row a ``MagicMock`` gate logger was called with, oldest level first.
+- **Summary:** Every outcome row a ``MagicMock`` gate logger was called with, oldest first.
 - **Defined in:** `application_sdk/testing/preflight.py`
 
 #### `parametrize_scenarios`

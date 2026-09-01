@@ -135,6 +135,7 @@ reference for that hand-written shape.
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import AsyncIterator, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -250,7 +251,7 @@ class AppExecutor:
     """
 
     backend: TemporalExecutorBackend
-    expected_infrastructure: object | None = None
+    expected_infrastructure: InfrastructureContext | None = None
     """The context :func:`infrastructure` installed, re-checked before each run.
 
     ``None`` disables the check, for an executor built outside the kit.
@@ -411,7 +412,7 @@ def _verify_app_name(app_cls: type[App], app_name: str) -> None:
     )
 
 
-def _verify_infrastructure(expected: object | None) -> None:
+def _verify_infrastructure(expected: InfrastructureContext | None) -> None:
     """Fail when something replaced the kit's infrastructure context before a run.
 
     :func:`infrastructure` is session-scoped and installs its context globally.
@@ -657,18 +658,30 @@ def temporary_path(
     does not still litters the working tree.
 
     Not autouse: requesting it is what opts a suite in, exactly as
-    ``store_root`` works. Consumers read the constant at call time
-    (``from application_sdk.constants import TEMPORARY_PATH`` inside the
-    function), so patching the module attribute reaches code already imported —
-    which is also why the patch is undone on teardown rather than left set.
+    ``store_root`` works. Most consumers bind the constant at import time
+    (``from application_sdk.constants import TEMPORARY_PATH`` at module top);
+    patching ``constants`` alone would miss every one of them already imported.
+    The fixture therefore patches ``constants.TEMPORARY_PATH`` — which covers
+    modules imported after it runs — and then every already-imported
+    ``application_sdk`` module carrying its own binding of the old value. All
+    patches are undone on teardown rather than left set.
     """
-    from application_sdk import (  # noqa: PLC0415 — deferred by convention; the constant is read off the module at call time
+    from application_sdk import (  # noqa: PLC0415 — deferred by convention only; sibling fixtures import it the same way
         constants,
     )
 
     path = tmp_path_factory.mktemp(integration_options.temporary_path_prefix)
+    previous = constants.TEMPORARY_PATH
     patcher = pytest.MonkeyPatch()
     patcher.setattr(constants, "TEMPORARY_PATH", str(path))
+    for name, module in list(sys.modules.items()):
+        if (
+            name.startswith("application_sdk")
+            and module is not None
+            and module is not constants
+            and getattr(module, "TEMPORARY_PATH", None) == previous
+        ):
+            patcher.setattr(module, "TEMPORARY_PATH", str(path))
     try:
         yield path
     finally:

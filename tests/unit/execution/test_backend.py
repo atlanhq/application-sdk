@@ -84,6 +84,9 @@ def _make_ep_meta(name: str, *, output_type: type = dict) -> Any:
 
 def _make_input_data(*, with_config_hash: bool = False) -> Any:
     inp = mock.MagicMock()
+    # The contract default: a MagicMock's auto-attribute is truthy and would
+    # read as a caller-supplied dispatch ID.
+    inp.workflow_id = ""
     if with_config_hash:
         inp.config_hash = mock.MagicMock(return_value="cfghash")
     else:
@@ -281,7 +284,10 @@ class TestTemporalExecutorBackendExecute:
         assert inp2.workflow_id != inp.workflow_id
 
     @pytest.mark.asyncio
-    async def test_execute_respects_caller_supplied_workflow_id(self) -> None:
+    async def test_execute_dispatches_under_caller_supplied_workflow_id(self) -> None:
+        # Production dispatches under an explicitly supplied workflow_id; the
+        # backend must too, or the input claims one identity while Temporal
+        # runs under another.
         class _WfInput:
             workflow_id: str = "caller-wf-id"
             correlation_id: str = ""
@@ -293,6 +299,7 @@ class TestTemporalExecutorBackendExecute:
         ctx = mock.MagicMock(app_name="my-app", correlation_id="c1")
         inp = _WfInput()
         await backend.execute(app_cls, inp, context=ctx, retry_policy=SdkRetryPolicy())
+        assert client.execute_workflow.await_args.kwargs["id"] == "caller-wf-id"
         assert inp.workflow_id == "caller-wf-id"
 
 

@@ -133,6 +133,25 @@ class TestMockLoggerHelpers:
 
         assert outcome_rows(logger) == []
 
+    def test_double_emission_reads_the_same_through_both_entry_points(self) -> None:
+        """The two mechanisms claim to be the same scan; feed both an info-then-
+        error double emission and they must agree — chronological rows, and the
+        latest row's level."""
+        logger = MagicMock()
+        logger.info(PREFLIGHT_OUTCOME_EVENT, outcome="proceeded")
+        logger.error(PREFLIGHT_OUTCOME_EVENT, outcome="blocked")
+
+        capture = PreflightOutcomeCapture()
+        capture.info(PREFLIGHT_OUTCOME_EVENT, outcome="proceeded")
+        capture.error(PREFLIGHT_OUTCOME_EVENT, outcome="blocked")
+
+        assert outcome_rows(logger) == capture.rows
+        assert outcome_rows(logger) == [
+            {"outcome": "proceeded"},
+            {"outcome": "blocked"},
+        ]
+        assert outcome_level(logger) == capture.level == "error"
+
 
 class TestFixture:
     def test_fixture_installs_the_capture_on_the_gate_logger(

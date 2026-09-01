@@ -153,23 +153,42 @@ def _stamp_start_correlation(input_data: Any, context: "AppContext") -> str:
     return correlation_id
 
 
-def _stamp_workflow_id(input_data: Any, workflow_id: str) -> None:
-    """Mirror the /start handler's dispatch-time ``workflow_id`` stamp.
+def _resolve_workflow_id(input_data: Any, context: "AppContext") -> str:
+    """Resolve the dispatch workflow ID, mirroring the /start handler.
 
-    Production populates ``Input.workflow_id`` before Temporal dispatch
-    (``application_sdk.handler.service``), so an input dispatched with the
-    field left at its ``""`` default is a shape production never sends —
-    apps that root artifact paths on the field then collapse every run of a
-    session onto one shared prefix. A caller-supplied value wins; the stamp
-    is best-effort for dict/frozen inputs, matching the correlation stamp.
+    Production (``application_sdk.handler.service``) dispatches under a
+    caller-supplied ``workflow_id`` when one is provided and mints one
+    otherwise, then stamps the dispatch ID onto ``Input.workflow_id`` — so
+    the input's field and Temporal's dispatch ID never diverge, and an input
+    left at the ``""`` default is a shape production never sends (apps that
+    root artifact paths on the field would collapse every run of a session
+    onto one shared prefix). This helper keeps ``execute``/``start`` on the
+    same contract: a caller-supplied ``input_data.workflow_id`` becomes the
+    dispatch ID; otherwise one is minted and stamped back. Unlike the
+    correlation stamp there is no memo fallback, so a dict/frozen input that
+    rejects the stamp is dispatched unchanged and keeps its ``""`` default —
+    such shapes are out of scope for the audited apps.
     """
-    if getattr(input_data, "workflow_id", None):
-        return
+    workflow_id = getattr(input_data, "workflow_id", "")
+    if not workflow_id:
+        from uuid import uuid4  # noqa: PLC0415 — stdlib uuid; lazy use
+
+        prefix = context.app_name
+        config_hash = (
+            input_data.config_hash() if hasattr(input_data, "config_hash") else ""
+        )
+        short_id = uuid4().hex[:8]
+        workflow_id = (
+            f"{prefix}-{config_hash}-{short_id}"
+            if config_hash
+            else f"{prefix}-{short_id}"
+        )
     try:
         input_data.workflow_id = workflow_id
     # conformance: ignore[E004] best-effort stamp; dict/frozen inputs are dispatched unchanged
     except Exception:  # noqa: S110 — attribute stamp is best-effort, matching _stamp_start_correlation
         pass
+    return workflow_id
 
 
 def _resolve_workflow_name(app_cls: Any, entry_point: str | None) -> tuple[str, Any]:
@@ -266,21 +285,8 @@ class TemporalExecutorBackend:
                 ``legacy_workflow_types`` alias, which is inbound-only. When
                 omitted, defaults to the app name (single-entry-point apps).
         """
-        from uuid import uuid4  # noqa: PLC0415 — stdlib uuid; lazy use
-
         correlation_id = _stamp_start_correlation(input_data, context)
-
-        prefix = context.app_name
-        config_hash = (
-            input_data.config_hash() if hasattr(input_data, "config_hash") else ""
-        )
-        short_id = uuid4().hex[:8]
-        workflow_id = (
-            f"{prefix}-{config_hash}-{short_id}"
-            if config_hash
-            else f"{prefix}-{short_id}"
-        )
-        _stamp_workflow_id(input_data, workflow_id)
+        workflow_id = _resolve_workflow_id(input_data, context)
 
         workflow_name, ep_meta = _resolve_workflow_name(app_cls, entry_point)
         output_type = (
@@ -322,21 +328,8 @@ class TemporalExecutorBackend:
                 ``legacy_workflow_types`` alias, which is inbound-only. When
                 omitted, defaults to the app name (single-entry-point apps).
         """
-        from uuid import uuid4  # noqa: PLC0415 — stdlib uuid; lazy use
-
         correlation_id = _stamp_start_correlation(input_data, context)
-
-        prefix = context.app_name
-        config_hash = (
-            input_data.config_hash() if hasattr(input_data, "config_hash") else ""
-        )
-        short_id = uuid4().hex[:8]
-        workflow_id = (
-            f"{prefix}-{config_hash}-{short_id}"
-            if config_hash
-            else f"{prefix}-{short_id}"
-        )
-        _stamp_workflow_id(input_data, workflow_id)
+        workflow_id = _resolve_workflow_id(input_data, context)
 
         workflow_name, _ = _resolve_workflow_name(app_cls, entry_point)
         handle = await self._client.start_workflow(
