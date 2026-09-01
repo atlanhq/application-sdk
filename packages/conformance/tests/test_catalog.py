@@ -610,7 +610,7 @@ def test_catalog_p_series_present() -> None:
     text-mode open() with no encoding= decode using the locale's codec, which is
     cp1252 on the Windows legs of the SDK's unit matrix and UTF-8 everywhere
     else (FND-924).
-    P051 is SdrBelowInteractiveSdkFloor — an SDR app whose uv.lock resolves
+    P051 is SdrPreflightUnavailable — an SDR app whose uv.lock resolves
     application-sdk below 3.30.0, the floor at which the interactive setup
     surfaces (test auth / preflight / metadata browsing) become available; a WARN
     readiness nudge, not a data-loss bug (DISTR-752).

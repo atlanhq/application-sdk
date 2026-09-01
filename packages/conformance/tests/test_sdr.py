@@ -1606,7 +1606,7 @@ def _uv_lock(sdk_version: str | None) -> str:
 
 def test_p051_rule_metadata() -> None:
     rule = get_rule("P051")
-    assert rule.name == "SdrBelowInteractiveSdkFloor"
+    assert rule.name == "SdrPreflightUnavailable"
     assert rule.tier == EnforcementTier.WARN
     assert rule.scope == RuleScope.APP
     assert rule.autofixable is False

@@ -617,7 +617,7 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P051",
         scope=RuleScope.APP,
-        name="SdrBelowInteractiveSdkFloor",
+        name="SdrPreflightUnavailable",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="sdr-readiness",
