@@ -301,6 +301,32 @@ def test_azure_missing_container_still_wins_over_status_routing() -> None:
     assert isinstance(err, StorageConfigError)
 
 
+def test_azure_missing_container_carries_the_same_evidence() -> None:
+    """Every branch carries evidence, including the one that short-circuits.
+
+    This branch previously returned a bare message: no ``key``, no ``cause``
+    (so no ``cause_repr`` at all), no ``target``. The docstring claimed
+    otherwise, and an operator debugging a missing container got less than one
+    debugging a generic failure. (FND-957 review)
+    """
+    exc = _GenericError(
+        "Generic MicrosoftAzure error: Error performing PUT "
+        "https://acct.blob.core.windows.net/c/k in 40ms - Server returned "
+        "non-2xx status code: 404 Not Found: <Error><Code>ContainerNotFound"
+        "</Code><Message>The specified container does not exist</Message></Error>"
+    )
+    fd = _storage_error_for(
+        exc, "artifacts/t.json", "upload failed", GCSStore("example-bucket")
+    ).to_failure_details()
+
+    assert fd.evidence["key"] == "artifacts/t.json"
+    assert fd.evidence["service"] == "object_store"
+    assert fd.evidence["target"] == "gs://example-bucket/artifacts/t.json"
+    assert fd.evidence["http_status"] == 404
+    assert fd.evidence["provider_code"] == "ContainerNotFound"
+    assert fd.cause_repr is not None and "ContainerNotFound" in fd.cause_repr
+
+
 # ── the human-readable form keeps the new fields ────────────────────────────
 
 

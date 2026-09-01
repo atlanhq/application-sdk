@@ -130,6 +130,82 @@ def test_cause_repr_truncates_long_messages() -> None:
     )
 
 
+def test_redacts_presigned_url_signature_params() -> None:
+    """Every cloud store's presigned-URL signature is bearer-equivalent material.
+
+    None of these matched the keyword list before, so a signed URL embedded in
+    a driver error survived redaction intact -- while the ``X-Goog-Credential``
+    sitting next to it *was* redacted, purely because it happens to end in
+    ``credential``. That inconsistency is what made the logged copy of a driver
+    error unsafe. (FND-957 review)
+    """
+    from application_sdk.errors import redact_secrets
+
+    gcs = redact_secrets(
+        "https://storage.googleapis.com/b/k"
+        "?X-Goog-Credential=svc%40p.iam&X-Goog-Signature=deadbeefcafe0123"
+    )
+    assert "deadbeefcafe0123" not in gcs
+    assert "X-Goog-Signature=***" in gcs
+
+    s3 = redact_secrets(
+        "https://b.s3.amazonaws.com/k"
+        "?X-Amz-Credential=AKIA%2F20260831&X-Amz-Signature=abc123def456"
+    )
+    assert "abc123def456" not in s3
+    assert "X-Amz-Signature=***" in s3
+
+    # Azure SAS names the signature ``sig``, which no longer-form keyword covers.
+    azure = redact_secrets(
+        "https://acct.blob.core.windows.net/c/k?sv=2021&sig=Zm9vYmFyc2ln%3D&se=2026"
+    )
+    assert "Zm9vYmFyc2ln" not in azure
+    assert "sig=***" in azure
+    # Non-secret SAS params stay readable -- they say which container and window.
+    assert "sv=2021" in azure
+    assert "se=2026" in azure
+
+
+def test_signature_redaction_does_not_eat_pagination_cursors() -> None:
+    """The keyword list is an enumeration, not a wildcard, and must stay one.
+
+    A generic ``token`` would redact the pagination cursors an on-call needs,
+    which is the same reason ``uid`` is deliberately absent. This pins the line.
+    """
+    from application_sdk.errors import redact_secrets
+
+    for diagnostic in (
+        "next_token=abc123&page_token=xyz",
+        "continuation_token=deadbeef",
+        "run_guid=01a0-sig-99",
+        "config=prod&design=v2&assign=me",
+        "uid=svc_account",
+    ):
+        assert redact_secrets(diagnostic) == diagnostic
+
+
+def test_logged_cause_of_a_signed_url_error_carries_no_signature() -> None:
+    """The log copy of a driver error is uncapped-ish (8000) and indexed.
+
+    ``storage.ops`` passes ``redact_secrets(str(exc))`` as the ``error_message``
+    log field, so whatever survives redaction is what gets indexed. A signed
+    URL in the driver string must not.
+    """
+    from application_sdk.errors import redact_secrets
+
+    driver_error = (
+        "Generic GCS error: Error performing PUT "
+        "https://storage.googleapis.com/bkt/artifacts%2Ft.json"
+        "?X-Goog-Signature=1a2b3c4d5e6f7890 in 53ms - "
+        "Server returned non-2xx status code: 500 Internal Server Error"
+    )
+    out = redact_secrets(driver_error)
+    assert "1a2b3c4d5e6f7890" not in out
+    # The rest of the diagnostic survives -- redaction must not cost the reason.
+    assert "500 Internal Server Error" in out
+    assert "artifacts%2Ft.json" in out
+
+
 def test_cause_repr_keeps_both_ends_of_a_long_message() -> None:
     """A backend error puts the request URL at the head and the reason at the tail.
 

@@ -58,8 +58,22 @@ _URL_USERINFO_RE = re.compile(r"([a-z][a-z0-9+.-]*://)(?:[^@\s]+@)+", re.IGNOREC
 # failure. It also has no word boundary in this alternation, so it would match
 # the tail of ``run_guid=`` and ``correlation_uuid=`` — redacting the exact
 # correlation IDs an on-call needs.
+# ``signature`` and ``sig`` cover the presigned-URL query params every cloud
+# store uses for bearer-equivalent material: ``X-Goog-Signature`` (GCS),
+# ``X-Amz-Signature`` (S3) and ``sig`` (Azure SAS). None of them matched the
+# keyword list before, so a signed URL embedded in a driver error survived
+# redaction intact — while ``X-Goog-Credential`` next to it was redacted,
+# because it happens to end in ``credential``. The alternation has no left-hand
+# word boundary, so bare ``signature`` also covers the ``X-Goog-``/``X-Amz-``
+# prefixed forms. ``signature`` precedes ``sig`` for readability only: the
+# mandatory ``=`` means a short alternative cannot shadow a longer one.
+#
+# A generic ``token`` is deliberately NOT here, for the same reason ``uid`` is
+# not: it would redact ``next_token=`` / ``page_token=`` /
+# ``continuation_token=``, which are the pagination cursors an on-call needs to
+# see. The list stays an enumeration of things that are only ever credentials.
 _SECRET_PARAM_RE = re.compile(
-    r"(?i)((?:api_key|access_token|auth_token|password|passwd|pwd|secret|credential|private_key)=)(?:\{[^}]*\}|[^\s&,;#]+)",
+    r"(?i)((?:api_key|access_token|auth_token|password|passwd|pwd|secret|credential|private_key|signature|sig)=)(?:\{[^}]*\}|[^\s&,;#]+)",
 )
 
 

@@ -496,11 +496,11 @@ def _storage_error_for(
 ) -> Exception:
     """Build the typed storage error for a failed write.
 
-    Order is load-bearing. The Azure container probe runs first because it is
-    the one case whose remediation is a config change rather than a retry. The
-    parsed status and provider code decide next, because they are structured;
-    the message-substring classifiers elsewhere in this module are heuristics
-    over prose and must not pre-empt them.
+    Order is load-bearing. The Azure container probe is consulted first because
+    it is the one case whose remediation is a config change rather than a
+    retry. The parsed status and provider code decide next, because they are
+    structured; the message-substring classifiers elsewhere in this module are
+    heuristics over prose and must not pre-empt them.
 
     Every branch carries the same evidence, so a consumer reads ``http_status``,
     ``provider_code`` and ``target`` off the envelope regardless of which leaf
@@ -512,9 +512,6 @@ def _storage_error_for(
         StoragePreconditionError,
     )
 
-    if _is_azure_container_not_found(exc):
-        return StorageConfigError(_azure_container_not_found_message(key))
-
     http_status, provider_code = _obstore_http_evidence(exc)
     evidence: dict[str, Any] = {
         "key": key,
@@ -523,6 +520,15 @@ def _storage_error_for(
         "provider_code": provider_code,
         "target": _store_target(store, key) if store is not None else None,
     }
+
+    # Checked before the status routing because its remediation is a config
+    # change rather than a retry, and Azure reports it as a plain 404 that
+    # would otherwise be indistinguishable from a missing blob. It carries the
+    # same evidence as every other branch: the container name is in ``target``
+    # and the 404/ContainerNotFound pair is what tells an operator the
+    # container, not the object, is what is absent.
+    if _is_azure_container_not_found(exc):
+        return StorageConfigError(_azure_container_not_found_message(key), **evidence)
     # 412 is the canonical precondition status; GCS also returns 400 with a
     # PreconditionFailed body, and either reading -- the condition did not
     # hold, or the condition itself was rejected as invalid -- fails
