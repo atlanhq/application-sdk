@@ -53,6 +53,7 @@ from sdk_loop_common import (
     dispatch_set,
     emit_outputs,
     format_usage,
+    format_usd,
     head_state,
     is_verdict_comment,
     opencode_usage,
@@ -64,6 +65,7 @@ from sdk_loop_common import (
     solo_scope,
     token_budget,
     token_budget_exceeded,
+    usage_cost_usd,
     usage_total,
 )
 from sdk_loop_prep import (  # noqa: E402
@@ -263,6 +265,42 @@ def review_prompt(
         "Do NOT do their work yourself in one pass: a single agent covering",
         "several domains still produces a verdict, just a worse one, and",
         "nothing in the output would say so.",
+        "",
+        # MEASURED WASTE. The #3529 review read correctness.md, quality.md,
+        # structure.md and reachability.md into its OWN context and then
+        # dispatched all four. Every brief is already inlined into that agent's
+        # registered prompt by `review_subagents`, so the parent paid to carry
+        # four copies of instructions it does not execute through every turn
+        # that followed — and a scope=full review registers seven.
+        "The specialist briefs under `.mothership/pr-review/agents/` are ALREADY",
+        "inlined into each registered agent's own prompt. Do NOT read the brief of",
+        "an agent you are going to dispatch — that loads instructions you never",
+        "execute into every turn that follows. Read a brief only for a domain you",
+        "are reviewing yourself because §2a registered no agent for it.",
+        "",
+        # The playbook is ~1700 lines. A default Read stops around line 1048, so
+        # every measured review spent a SECOND turn on `offset=1049` to fetch
+        # the remainder — one round trip, at whatever that round trip costs, for
+        # nothing.
+        f"Read {PLAYBOOK_REVIEW} in ONE call with an explicit `limit` well past",
+        "its end (5000 is safe at any size). A default read truncates near line",
+        "1048 and costs an extra round trip to fetch the rest. Do not cite a",
+        "line count here — the playbook is actively being trimmed and a stale",
+        "number invites a limit that truncates again.",
+        "",
+        # Turn count is this lane's cost driver, not tool time: measured review
+        # turns run ~10s early and 75-90s by turn 12 as context accumulates, so
+        # a step split across three turns costs three minutes where one would
+        # cost one. Phase 3 is where that is cheapest to fix — it is purely
+        # mechanical, and it runs last, where the turns are most expensive. It
+        # took 1-3.5 minutes against the playbook's own "~30s" on every measured
+        # run.
+        "Phase 3 is mechanical and runs where turns are slowest. Emit it as ONE",
+        "shell block: build the summary with a heredoc, stamp REVIEWED_HEAD and",
+        "ANSWERS_TRIGGER, query the review threads, resolve the bot-owned ones and",
+        "post the comment — in a single invocation. Do not use the Write tool for",
+        "the summary, and do not split the thread query from the resolve. Same",
+        "commands, same order, one round trip.",
         "",
         "**Your review_scope is already settled — do NOT re-derive it.** §11's",
         "classification is file-list arithmetic with no judgement in it, so the",
@@ -742,7 +780,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         counts = opencode_usage(workspace)
         usage, cost = format_usage(counts), usage_total(counts)
-        print(f"tokens: {usage}")
+        usd = usage_cost_usd(counts, REVIEW_MODEL)
+        print(f"tokens: {usage} · cost: {format_usd(usd)}")
         emit_outputs(
             outcome=outcome.outcome,
             verdict=outcome.verdict,
@@ -752,6 +791,7 @@ def main(argv: list[str] | None = None) -> int:
             reaims="0",
             new_base_sha=state.live,
             cost="" if cost is None else str(cost),
+            usd="" if usd is None else f"{usd:.6f}",
             usage=usage,
             spent_total=(
                 ""
@@ -792,7 +832,8 @@ def main(argv: list[str] | None = None) -> int:
         # landed, the round was reported as failed, and the loop stopped.
         counts = opencode_usage(workspace)
         usage, cost = format_usage(counts), usage_total(counts)
-        print(f"tokens: {usage}")
+        usd = usage_cost_usd(counts, RESOLVE_MODEL)
+        print(f"tokens: {usage} · cost: {format_usd(usd)}")
         for entry in outcome.dismissals:
             ledger.add(entry["id"], entry["rationale"], round_no)
         emit_outputs(
@@ -803,6 +844,7 @@ def main(argv: list[str] | None = None) -> int:
             ledger=ledger.to_json(),
             detail=outcome.detail,
             cost="" if cost is None else str(cost),
+            usd="" if usd is None else f"{usd:.6f}",
             usage=usage,
             spent_total=(
                 ""

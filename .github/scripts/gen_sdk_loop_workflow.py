@@ -109,7 +109,13 @@ permissions:
   # explicit permissions block makes everything unlisted `none`, so without
   # this the duplicate check 403s, the fence raises before it can post, and
   # the lane goes silent — the failure mode it exists to prevent.
-  actions: read
+  #
+  # `write` rather than `read` because a called workflow's permissions cannot
+  # exceed its CALLER's: sdk-loop-phase.yml asks for `actions: write` so
+  # actions/cache can actually save (see the comment there), and capping it
+  # here at `read` would silently keep the cache broken. The fence itself
+  # still only reads.
+  actions: write
   # Reactions are an Issues-scope resource, so the acknowledgement 403s
   # without this. Caught by test_react_to_comment.py, which asserts every
   # workflow calling the helper grants it — the same Issues-vs-PR distinction
@@ -346,8 +352,9 @@ def _rounds_expr() -> str:
                 '"sha":"${{ needs.%s.outputs.new_base_sha }}",'
                 '"detail":"${{ needs.%s.outputs.detail }}",'
                 '"cost":"${{ needs.%s.outputs.cost }}",'
+                '"usd":"${{ needs.%s.outputs.usd }}",'
                 '"usage":"${{ needs.%s.outputs.usage }}"}'
-                % (n, phase, job, job, job, job, job, job)
+                % (n, phase, job, job, job, job, job, job, job)
             )
     return "'[" + ",".join(rows) + "]'"
 

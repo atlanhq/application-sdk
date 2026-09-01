@@ -25,7 +25,7 @@ from dataclasses import dataclass
 
 # The one shared formatter. Finalize is otherwise stdlib-only, but duplicating
 # the token rendering is how the USD/token mismatch this fixes got in.
-from sdk_loop_common import format_tokens
+from sdk_loop_common import format_tokens, format_usd
 
 MARKER = "<!-- SDK_LOOP_SUMMARY -->"
 
@@ -87,6 +87,8 @@ class Round:
     #: Token counts from opencode itself — exact, and per-phase unlike the
     #: shared gateway key. Carries the cache-hit signal.
     usage: str = ""
+    #: List-price dollars for this phase, or None when it could not be priced.
+    usd: float | None = None
 
 
 def parse_rounds(raw: str | None) -> list[Round]:
@@ -118,6 +120,7 @@ def parse_rounds(raw: str | None) -> list[Round]:
                 detail=str(item.get("detail", "")),
                 cost=_as_cost(item.get("cost")),
                 usage=str(item.get("usage", "")),
+                usd=_as_cost(item.get("usd")),
             )
         )
     return rounds
@@ -139,10 +142,23 @@ def _as_cost(raw: object) -> float | None:
 
 
 def total_cost(rounds: list[Round]) -> tuple[float, int]:
-    """Summed spend, and how many phases could not be measured."""
+    """Summed tokens, and how many phases could not be measured."""
     measured = [r.cost for r in rounds if r.cost is not None]
     unmeasured = sum(1 for r in rounds if r.outcome and r.cost is None)
     return sum(measured), unmeasured
+
+
+def total_usd(rounds: list[Round]) -> tuple[float, int]:
+    """Summed list-price dollars, and how many phases carried no price.
+
+    Separate from `total_cost` rather than folded into it: a phase can report
+    tokens and no price (an unpriced model) or a price and no tokens (never,
+    today, but the field is independent), and collapsing the two counters
+    would let one silently stand in for the other.
+    """
+    measured = [r.usd for r in rounds if r.usd is not None]
+    unpriced = sum(1 for r in rounds if r.outcome and r.usd is None)
+    return sum(measured), unpriced
 
 
 def _cell(text: str) -> str:
@@ -154,32 +170,38 @@ def render_rounds(rounds: list[Round]) -> str:
     if not rounds:
         return "_No round completed._\n"
     lines = [
-        "| Round | Phase | Outcome | Verdict | Head | Tokens | Breakdown | Detail |",
-        "|---|---|---|---|---|--:|---|---|",
+        "| Round | Phase | Outcome | Verdict | Head | Tokens | Cost | "
+        "Breakdown | Detail |",
+        "|---|---|---|---|---|--:|--:|---|---|",
     ]
     for r in rounds:
         cost = "—" if r.cost is None else format_tokens(int(r.cost))
+        usd = "—" if r.usd is None else format_usd(r.usd)
         lines.append(
             f"| {r.number} | {r.phase} | `{r.outcome}` | {_cell(r.verdict)} "
-            f"| `{r.sha[:8] or '—'}` | {cost} | {_cell(r.usage)} | {_cell(r.detail)} |"
+            f"| `{r.sha[:8] or '—'}` | {cost} | {usd} | {_cell(r.usage)} "
+            f"| {_cell(r.detail)} |"
         )
     return "\n".join(lines) + "\n"
 
 
 def render_cost(rounds: list[Round]) -> str:
-    """The run's token total, with the caveat that keeps it honest.
+    """The run's tokens AND dollars, each with the caveat that keeps it honest.
 
-    Tokens, not dollars: the gateway's /key/info is unreadable with this lane's
-    non-admin key, and the key is shared, so a spend delta was an upper bound
-    over other lanes' traffic as well as this run's. `opencode stats` is
-    per-phase and exact by comparison.
+    Dollars are back, by a route that needs no gateway permission. The old plan
+    read spend from /key/info, which 403s with this lane's non-admin key and,
+    when it did not, summed every lane sharing that key. This figure is instead
+    the phase's own token counts priced at `MODEL_PRICES_USD_PER_MTOK` — list
+    price, stated as such, but attributable to one phase, which /key/info never
+    was.
 
-    The caveat that matters now is a different one. Two complete runs reported
-    a few hundred tokens for reviews lasting twenty and forty-five minutes,
-    because `opencode stats` does not attribute what a DISPATCHED SUB-AGENT
-    spends — and on a real review that is most of it. So this figure is a
-    floor, not a total, and it is labelled as one rather than presented as a
-    bill someone might reconcile against.
+    Two caveats travel with the number and both are printed:
+
+    * It is a LIST-price estimate, not the gateway's bill.
+    * It is a FLOOR. `opencode stats` does not attribute what a DISPATCHED
+      SUB-AGENT spends, and on a real review that is most of it — which is how
+      two complete runs reported a few hundred tokens for reviews lasting
+      twenty and forty-five minutes.
     """
     total, unmeasured = total_cost(rounds)
     measured = sum(1 for r in rounds if r.cost is not None)
@@ -191,10 +213,24 @@ def render_cost(rounds: list[Round]) -> str:
     line = f"\n**Tokens:** {format_tokens(int(total))} across {measured} phases"
     if unmeasured:
         line += f" ({unmeasured} phase(s) unmeasured)"
+    line += (
+        ". Billable input + output from `opencode stats`. Sub-agent usage is "
+        "NOT attributed by that source, so read this as a floor.\n"
+    )
+    spend, unpriced = total_usd(rounds)
+    priced = sum(1 for r in rounds if r.usd is not None)
+    if not priced:
+        return line + ("\n**Cost:** unavailable — no phase carried a priced model.\n")
+    cost_line = f"\n**Cost:** {format_usd(spend)} across {priced} phases"
+    if unpriced:
+        cost_line += f" ({unpriced} phase(s) unpriced)"
     return (
         line
-        + ". Billable input + output from `opencode stats`. Sub-agent usage is "
-        + "NOT attributed by that source, so read this as a floor.\n"
+        + cost_line
+        + (
+            ". List price from `MODEL_PRICES_USD_PER_MTOK`, not the gateway's bill,"
+            " and a floor for the same sub-agent reason as the token figure.\n"
+        )
     )
 
 
