@@ -20,6 +20,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import release_guard
 
 PYPROJECT = "packages/conformance/pyproject.toml"
+PKLPROJECT = "contract-toolkit/src/PklProject"
+PKLPROJECT_VERSION = 'package {\n  version = "0.23.0"\n}\n'
 
 
 def _fake_git(monkeypatch, *, show: dict[str, str] | None = None, fetch_rc: int = 0):
@@ -50,6 +52,16 @@ def _fake_git(monkeypatch, *, show: dict[str, str] | None = None, fetch_rc: int 
 
 
 class TestGuardFires:
+    def test_indented_pklproject_version_is_already_released(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _fake_git(monkeypatch, show={f"origin/main:{PKLPROJECT}": PKLPROJECT_VERSION})
+
+        skip, remote = release_guard.already_released(PKLPROJECT, "0.23.0")
+
+        assert skip is True
+        assert remote == "0.23.0"
+
     def test_equal_version_is_already_released(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -247,7 +259,8 @@ class TestParsing:
             ('version = "1.2.3"', "1.2.3"),
             ("version = '1.2.3'", None),  # single quotes are not the spelling used
             ('name = "x"\nversion = "0.1.0"\n', "0.1.0"),
-            ('amends "../App.pkl"\nversion = "9.9.9"\n', "9.9.9"),  # PklProject
+            ('amends "../App.pkl"\n  version = "9.9.9"\n', "9.9.9"),  # PklProject
+            (PKLPROJECT_VERSION, "0.23.0"),
             ("no version at all", None),
             ("", None),
         ],

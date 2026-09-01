@@ -53,7 +53,7 @@ from __future__ import annotations
 import re
 import subprocess
 
-VERSION_RE = re.compile(r'^version\s*=\s*"([^"]+)"', re.MULTILINE)
+VERSION_RE = re.compile(r'^\s*version\s*=\s*"([^"]+)"', re.MULTILINE)
 TRIPLE_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
 
