@@ -177,3 +177,28 @@ def test_the_mandatory_read_list_stays_deduplicated() -> None:
     # And CLAUDE.md must not resurrect its blanket references/*.md read.
     claude = (PLAYBOOK_DIR / "CLAUDE.md").read_text(encoding="utf-8")
     assert "4. `.mothership/pr-review/references/*.md`" not in claude
+
+
+def test_the_toolkit_section_is_gated_on_lane_not_just_scope() -> None:
+    """Run 33500595871 (a contract-toolkit PR on @sdk-loop) followed 1b-toolkit
+    into cloning five private consumer repos. The lane's App token is scoped to
+    this repository, git has no other credential helper on the runner, so all
+    five died with `could not read Username` — and the phase was later killed
+    by the idle watchdog with no verdict. A scope-only gate re-creates that run
+    on the next toolkit PR; the pointer must also gate on lane and hand the
+    loop lane its fallback.
+    """
+    router = _router()
+    idx = router.index("sections/toolkit-consumer-setup.md")
+    stanza = router[max(0, idx - 400) : idx + 1800]
+    assert "mothership sandbox" in stanza, (
+        "the 1b-toolkit pointer no longer restricts consumer cloning to the "
+        "sandbox lane"
+    )
+    assert "TOOLKIT_ROVER_NOTE" in stanza, (
+        "the loop lane lost its fallback — without the Rover note, a toolkit "
+        "PR on @sdk-loop either dies cloning or approves without saying the "
+        "cross-repo validation never ran"
+    )
+    section = (SECTIONS / "toolkit-consumer-setup.md").read_text(encoding="utf-8")
+    assert "mothership sandbox only" in section
