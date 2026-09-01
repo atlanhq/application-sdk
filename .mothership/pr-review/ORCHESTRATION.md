@@ -364,19 +364,14 @@ BUDGET
    `<!-- VERDICT: NEEDS_REBASE -->`); the GHA layer applies the
    `sdk-review-needs-rebase` label from there. EXIT.
 
-9. **CI status read** (summary line ONLY — CI is not a verdict input):
-   ```bash
-   FAILING=$(gh pr checks "$PR_NUMBER" --repo "$REPO" \
-     --json name,conclusion --jq '.[] | select(.conclusion=="failure") | .name' 2>/dev/null)
-   ```
-   Record `FAILING` for the `**CI:**` summary line and nothing else. CI is
-   NOT a verdict input.
-   `sdk-review-downgrade-on-ci-failure.yml` enforces CI event-driven and
-   race-free: CI legs routinely finish AFTER the review posts, so a
-   reviewer-side CI gate is both racy (it reads a snapshot) and redundant
-   (the workflow strips any approval the moment a non-review check fails).
-   This is the only CI read in the review — there is no post-review
-   re-check.
+9. **Do not read CI.** Removed, not moved: the review cannot act on a check
+   either way — it holds no write scope on this lane — and
+   `sdk-review-downgrade-on-ci-failure.yml` already enforces CI against the
+   verdict event-driven, which is the only race-free way to do it. CI legs
+   routinely finish AFTER a review posts, so a reviewer-side snapshot was
+   always a stale fact reported next to a verdict it could not influence.
+   Under `@sdk-loop` the prep phase owns branch and check state before the
+   first review starts. Spend no turn on `gh pr checks`.
 
 10. Read the repo's `CLAUDE.md` for project conventions.
 
@@ -1146,11 +1141,9 @@ MEDIUM/LOW/INFO findings: one-line suggested_fix only. No path_forward.
 | NEEDS_FIXES | Critical, G4/G6, **any Important, any Nit** | REQUEST_CHANGES |
 | READY_TO_MERGE | **`### Findings` is empty — 0 Critical, 0 Important AND 0 Nit** | APPROVE |
 
-CI is deliberately NOT a verdict input. `sdk-review-downgrade-on-ci-failure.yml`
-strips an approval event-driven the moment any non-review check fails —
-the only race-free enforcement, since CI legs routinely finish after the
-review posts. The reviewer reports CI state on the `**CI:**` summary line
-(from the single Phase 0 step 9 read) and nothing more.
+CI is not a verdict input and is not reported. `sdk-review-downgrade-on-ci-failure.yml`
+strips an approval event-driven the moment any non-review check fails — the only
+race-free enforcement, since CI legs routinely finish after the review posts.
 
 `READY_TO_MERGE` is strict: **any** finding still listed under
 `### Findings` forces `NEEDS_FIXES`, whatever its tier. A single
@@ -1398,9 +1391,7 @@ scopes.
 <contents of /tmp/TOOLKIT_ROVER_NOTE.md>
 
 ---
-**CI:** all passing | N failing
-**Models:** <primary review model> (review) + <adversarial model — or "adversarial skipped (<reason>)">
-**Cross-model agreement:** X/Y confirmed by both
+**Models:** <primary review model>
 **Run:** [view workflow logs + cost](<GHA_RUN_URL>)
 ```
 
@@ -1532,9 +1523,8 @@ Retry once on 5xx from the GitHub API. On 422 (malformed inline
 comment because the line is not in the diff), drop that one finding
 and continue with the rest.
 
-There is no post-review CI re-check: the `**CI:**` line comes from the
-single Phase 0 step 9 read, and `sdk-review-downgrade-on-ci-failure.yml`
-owns enforcement for anything that finishes after the review posts.
+The review reads no CI state at all — see Phase 0 step 9.
+`sdk-review-downgrade-on-ci-failure.yml` owns that entirely.
 
 Print: `[Phase 3 complete] Review submitted`
 

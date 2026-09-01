@@ -64,6 +64,15 @@ from sdk_loop_common import (
     token_budget_exceeded,
     usage_total,
 )
+from sdk_loop_prep import (  # noqa: E402
+    OUTCOME_UPDATED,
+    PrepResult,
+    decide,
+    failing_checks,
+    needs_agent,
+    pr_state,
+    update_branch,
+)
 
 #: Wall-clock per phase. Review is the slower of the two: it walks the whole
 #: five-phase playbook including sub-agents, where a resolve round is mostly
@@ -74,6 +83,9 @@ from sdk_loop_common import (
 # talking. Cutting them would trade a real (if slow) review for no review.
 TIMEOUT_REVIEW_S = 45 * 60
 TIMEOUT_RESOLVE_S = 30 * 60
+#: Prep is bookkeeping, not review. If a mechanical fix has not landed in ten
+#: minutes it is not mechanical, and the review will say so far more cheaply.
+TIMEOUT_PREP_S = 10 * 60
 
 #: Outcomes a phase can report to the next job. Only `ok` continues to the
 #: paired phase; `reaim` sends the loop back to review on the new head.
@@ -132,6 +144,49 @@ def live_head(
 #: it in .mothership/pr-review/ORCHESTRATION.md — the string is shared with
 #: that file and a test asserts they still match.
 LANE_MARKER = "LANE: sdk-loop"
+
+
+def prep_prompt(pr: int, failing: tuple[str, ...]) -> str:
+    """Brief for the ONE case prep hands to a model: red checks, before review.
+
+    Deliberately narrow. Everything prep normally does is deterministic and
+    already done by the time this runs, so the model is not being asked to
+    orchestrate — it is being asked whether a specific red check is the kind
+    tooling can fix, and to fix it if so.
+
+    The hard part of this brief is what it refuses. "Make CI green" has no
+    terminating condition when a test is genuinely broken by the PR, and a
+    phase with write scope chasing that is strictly worse than a review
+    saying so in one line.
+    """
+    names = "\n".join(f"  - {n}" for n in failing[:10])
+    return "\n".join(
+        [
+            f"PR #{pr} has failing checks before its review has run:",
+            names,
+            "",
+            "Fix ONLY what is mechanical — the class where the tooling, not",
+            "judgement, determines the answer:",
+            "",
+            "  * formatting and lint (`uv run pre-commit run --files <changed>`)",
+            "  * generated-artifact drift, by re-running the generator",
+            "  * an obviously stale lockfile the repo's own command regenerates",
+            "",
+            "Everything else — a failing test, a type error, a real behavioural",
+            "break — STOP and change nothing. Those are findings, and the review",
+            "that runs after you exists to raise them properly. A fix you push",
+            "here arrives with no review behind it.",
+            "",
+            "Do NOT resolve merge conflicts. Do NOT wait for checks to go green;",
+            "you cannot, and the run does not need you to. Do NOT re-run checks",
+            "hoping for a different answer.",
+            "",
+            "If you fix something: run the repo's pre-commit over the files you",
+            "touched, commit with a `ci:` or `chore:` conventional prefix, and",
+            "push. If you fix nothing, say so in one line and exit — that is a",
+            "perfectly good outcome and costs the run nothing.",
+        ]
+    )
 
 
 def review_prompt(
@@ -345,6 +400,16 @@ def resolve_prompt(pr: int, round_no: int, sha: str, verdict_url: str) -> str:
         "   and a finding you disprove is recorded so the next review cannot",
         "   simply re-raise it.",
         "3. Stop when the findings are cleared. Do not merge; do not approve.",
+        "4. You are the ONLY phase in this loop that can push, so you own the",
+        "   state you leave behind. Before you finish: run the repo's",
+        "   pre-commit over the files you touched and push the result, and",
+        "   update the branch if it has fallen behind base while you worked.",
+        "   The review that runs next holds NO write scope — anything you",
+        "   leave untidy it can only report, spending its budget on something",
+        "   one command would have settled here.",
+        "   Do NOT wait for CI and do NOT re-run checks: you cannot make them",
+        "   finish, the next round reads the real state anyway, and waiting",
+        "   has no terminating condition when a check is genuinely broken.",
         "",
         "Emit your dismissals as a JSON array on a line beginning",
         '`SDK_LOOP_DISMISSED:` — each entry {"id": ..., "rationale": ...}.',
@@ -488,6 +553,61 @@ def main(argv: list[str] | None = None) -> int:
 
     workspace = os.environ.get("GITHUB_WORKSPACE", ".")
     transcript = os.path.join(workspace, f"sdk-loop-{phase}-{round_no}.log")
+    if phase == "prep":
+        # Deterministic pass first, and for a healthy PR that is the WHOLE
+        # phase — no agent, no gateway call, a handful of `gh` reads. A model
+        # cannot improve on "is mergeStateStatus BEHIND", and most PRs enter
+        # the loop current and green, so paying one to confirm that would be
+        # the same waste this phase exists to remove from the review.
+        state = pr_state(repo, pr)
+        updated = ""
+        if state.get("mergeStateStatus") == "BEHIND":
+            updated = update_branch(repo, pr, head_ref, state.get("headRefOid", ""))
+            if updated:
+                state = pr_state(repo, pr)
+        failing = failing_checks(repo, pr)
+        result = decide(state, failing, baseline, updated)
+
+        if needs_agent(result):
+            # The one case worth a model: red checks a mechanical fix might
+            # clear. Bounded hard, because this phase must never become the
+            # thing that spends an hour on a genuinely broken test — that is
+            # the review-and-resolve loop's job, and it does it properly.
+            print("::group::prep — mechanical fix attempt")
+            agent = run_agent(
+                RESOLVE_MODEL,
+                prep_prompt(pr, result.failing),
+                workspace,
+                TIMEOUT_PREP_S,
+                transcript_path=transcript,
+            )
+            print("::endgroup::")
+            after = live_head(repo, head_ref)
+            if after and after != result.new_base_sha:
+                result = PrepResult(
+                    OUTCOME_UPDATED,
+                    new_base_sha=after,
+                    pushed_sha=after,
+                    ci_state="rechecking",
+                    detail=f"pushed a mechanical fix for: {', '.join(result.failing[:3])}",
+                )
+            elif not agent.completed:
+                print(f"prep agent aborted: {agent.abort_reason}")
+
+        emit_outputs(
+            outcome=result.outcome,
+            new_base_sha=result.new_base_sha,
+            pushed_sha=result.pushed_sha,
+            ci_state=result.ci_state,
+            detail=result.detail,
+            reaims="0",
+        )
+        print(f"prep: {result.outcome} — {result.detail}")
+        # NEVER fails the run. A prep that could not tidy the branch must not
+        # cost the review: a branch left behind still reviews correctly, and
+        # a conflict is the author's to resolve.
+        return 0
+
     if phase == "review":
         print(f"::group::review round {round_no} — agent transcript")
         result = run_agent(
