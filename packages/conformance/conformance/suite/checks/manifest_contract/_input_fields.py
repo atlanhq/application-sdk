@@ -9,8 +9,18 @@ by the entrypoint's ``Input`` contract.
 A key the contract cannot receive is dropped by Pydantic before ``model_dump()``
 and the entrypoint runs on the field's default. For a filter that default is
 empty, and an empty include-filter means *crawl everything* — the failure is
-fail-open, so it surfaces as a catalogue flood rather than an error
-(CONNECT-1318).
+fail-open, so it surfaces as a catalogue flood rather than an error.
+
+**Scope — one of two paths, and only this one is visible from an app repo.**
+The same contract-toolkit flattening also breaks config *upstream* of the app:
+the workflow re-render in ``atlan-local-marketplace-app`` recovers values by
+matching template paths (``build_allparams_flat``, whose own docstring records
+that relocated fields are not recovered), so a moved key is stripped from the
+published DAG before any payload is built. That is CONNECT-1318, it is platform
+code, and no app-repo check can see it — it needs an identity-keyed read-merge
+on the write path (APPPLAT-371). K018 checks the other half: given whatever
+payload the Automation Engine does send, can the entrypoint receive it.
+Passing K018 says nothing about the upstream path.
 
 Three shapes all satisfy the contract, and the rule must accept every one —
 flagging any of them is how a WARN rule earns a reputation for noise and never
@@ -474,7 +484,7 @@ def _make_finding(
             "base/mixin — and defines no @model_validator(mode='before'). Pydantic "
             "drops the key before model_dump(), so the entrypoint runs on the "
             f"field's default. For a filter that default is empty, and an empty "
-            "include-filter means crawl everything (CONNECT-1318). Declare "
+            "include-filter means crawl everything. Declare "
             f"'{arg_key}' on '{input_rec.name}', mix in the SDK base that supplies "
             "it (e.g. 'ExtractionInput' for the filter fields), or add a "
             "@model_validator(mode='before') folding flat keys into 'metadata' — "

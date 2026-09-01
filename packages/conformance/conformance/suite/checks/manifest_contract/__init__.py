@@ -8,7 +8,7 @@
 * ``K015`` LegacyWorkflowTypeContractDrift (CONNECT-1081) — the manifest's
   ``legacy_workflow_types`` block and the SDK's ``App.legacy_workflow_types``
   class attribute must declare the same aliases and the same expiry.
-* ``K018`` ManifestArgNotDeclaredOnInputContract (CONNECT-1318) — the Input-side
+* ``K018`` ManifestArgNotDeclaredOnInputContract — the Input-side
   mirror of K006: an ``extract``-node arg the entrypoint's ``Input`` contract
   cannot receive is dropped by Pydantic, and the run silently falls back to the
   field's default.
@@ -67,7 +67,7 @@ main = make_cli_main(
         "$.<node>.outputs.<field> refs against the Python Output contract "
         "(BLDX-1527); K015 verifies the legacy_workflow_types block against the "
         "SDK App declaration (CONNECT-1081); K018 verifies the extract node's "
-        "args against the Python Input contract (CONNECT-1318); K019 verifies "
+        "args against the Python Input contract; K019 verifies "
         "uiConfig form keys are wired into the args template (WARE-1323)."
     ),
 )

@@ -109,12 +109,12 @@ def test_k018_rule_metadata() -> None:
 
 
 # ---------------------------------------------------------------------------
-# K018 — the motivating incident (CONNECT-1318)
+# K018 — the app-side flattening break (verified on a live connector app)
 # ---------------------------------------------------------------------------
 
 
 def test_k018_fires_when_flat_arg_not_declared(tmp_path: Path) -> None:
-    """The exact CONNECT-1318 shape: flat filter args, contract declares neither."""
+    """Flat filter args, contract declares neither — keys drop before model_dump."""
     paths = _write_py(tmp_path, {"app.py": _app_src("    connection: str = ''\n")})
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
@@ -209,7 +209,7 @@ def test_k018_allow_unbounded_fields_does_not_satisfy(tmp_path: Path) -> None:
 
     It does not set Pydantic ``extra='allow'``, so undeclared keys are still
     dropped before ``model_dump()``. Treating it as protection is the original
-    misreading behind CONNECT-1318.
+    misreading this rule exists to catch.
 
     Uses the real declaration from the incident app — inheriting
     ``ExtractionInput`` (so the filter fields *are* covered) while an app-specific

@@ -893,11 +893,19 @@ it invisible is that allow_unbounded_fields=True looks like protection but is no
 suppresses the SDK's unknown-key error without setting extra='allow', so the keys are
 still dropped. Nothing in either language's own tooling notices: pkl compiles the
 manifest with no visibility into the Python model, and the model validates happily
-against a payload missing nothing it knows about. The failure is fail-open — an empty
+against a payload missing nothing it knows about. Measured directly on a connector app:
+feeding it the flat args its own manifest declares logs 'Unknown keys in payload ...
+silently dropped by Pydantic: [extraction_method, fetch_partitions, include_filter,
+temp_table_regex]' and yields metadata == {}. The failure is fail-open — an empty
 include-filter means crawl everything — so it reaches the customer as a catalogue flood
-rather than an error. In CONNECT-1318 an Athena crawler created 7,539 tables, 7,537 of
-them in schemas the customer had explicitly excluded, and the stored connection config
-still held the exclude-filter the run never saw.
+rather than an error.  The same flattening has a second, platform-side failure path that
+this rule cannot see and must not be confused with: the workflow re-render in
+atlan-local-marketplace-app recovers config by matching template paths, so a relocated
+key is dropped from the published DAG before the payload ever reaches the app
+(CONNECT-1318, and its own build_allparams_flat docstring documents the limitation). An
+app that passes K018 is still exposed to that one; it needs an identity-keyed read-merge
+on the platform write paths, tracked separately in APPPLAT-371. K018's scope is strictly
+what the app itself controls — whether the payload it *is* sent can be received.
 
 A key in the `extract` node's `inputs.args` of a committed
 `app/generated/**/manifest.json` — at either nesting depth, `args.<key>` or
@@ -910,7 +918,13 @@ The Automation Engine sends the key at runtime; Pydantic drops it before `model_
 and the entrypoint runs on the field's default. For an include/exclude filter that
 default is empty, and an empty include-filter means crawl everything — the failure is
 fail-open, so it surfaces as unexpected assets in the catalogue rather than as a
-workflow error (CONNECT-1318).
+workflow error.
+
+**Scope.** This rule checks only that the app can *receive* the payload the Automation
+Engine sends it. A filter can also be lost upstream, in the platform's workflow
+re-render, before the payload is built at all (CONNECT-1318 / APPPLAT-371) — same
+fail-open symptom, different failing step, not detectable from an app repo. Passing K018
+does not clear an app of that one.
 
 **Fix** — any one of:
 
