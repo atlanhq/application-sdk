@@ -223,6 +223,33 @@ def test_p049_fires_on_direct_split() -> None:
     assert len(_p049(src)) == 1
 
 
+def test_p049_silent_on_connector_shape_validation_and_rewrite() -> None:
+    # Validating the known three-part Anomalo shape and rewriting its connector
+    # segment is not parsing the connection id's epoch semantics.
+    src = (
+        "def key(anomalo_connection_qualified_name):\n"
+        '    parts = anomalo_connection_qualified_name.split("/")\n'
+        '    if len(parts) != 3 or parts[1] != CONNECTOR_NAME:\n'
+        "        raise ValueError('bad qualified name')\n"
+        "    tenant, _, conn_id = parts\n"
+        '    return f"{tenant}/{S3_CONNECTOR_NAME}/{conn_id}"\n'
+    )
+    assert _p049(src) == []
+
+
+def test_p049_fires_when_connector_shape_validation_also_rejects_id() -> None:
+    src = (
+        "def key(anomalo_connection_qualified_name):\n"
+        '    parts = anomalo_connection_qualified_name.split("/")\n'
+        '    if len(parts) != 3 or parts[1] != CONNECTOR_NAME:\n'
+        "        raise ValueError('bad qualified name')\n"
+        "    if not parts[2].isdigit():\n"
+        "        raise ValueError('bad connection id')\n"
+        "    return parts[2]\n"
+    )
+    assert len(_p049(src)) == 1
+
+
 def test_p049_fires_on_async_function() -> None:
     src = (
         "async def key(connection_qualified_name):\n"

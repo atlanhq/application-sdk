@@ -215,6 +215,107 @@ def _splits_the_name(body: list[ast.AST], param: str) -> bool:
     )
 
 
+def _is_three_part_connector_shape_check(test: ast.expr, parts_name: str) -> bool:
+    """True for the Anomalo-style shape validation, not epoch validation.
+
+    This deliberately recognizes only the compound guard that validates a
+    three-part qualified name and its connector segment.  A numeric check (or
+    any other additional condition) remains a P049 finding.
+    """
+    if not isinstance(test, ast.BoolOp) or not isinstance(test.op, ast.Or):
+        return False
+    if len(test.values) != 2:
+        return False
+
+    has_length_check = False
+    has_connector_check = False
+    for value in test.values:
+        if not isinstance(value, ast.Compare) or len(value.ops) != 1:
+            return False
+        if not isinstance(value.ops[0], ast.NotEq) or len(value.comparators) != 1:
+            return False
+        left = value.left
+        right = value.comparators[0]
+        if (
+            isinstance(left, ast.Call)
+            and isinstance(left.func, ast.Name)
+            and left.func.id == "len"
+            and len(left.args) == 1
+            and isinstance(left.args[0], ast.Name)
+            and left.args[0].id == parts_name
+            and isinstance(right, ast.Constant)
+            and right.value == 3
+        ):
+            has_length_check = True
+        elif (
+            isinstance(left, ast.Subscript)
+            and isinstance(left.value, ast.Name)
+            and left.value.id == parts_name
+            and isinstance(left.slice, ast.Constant)
+            and left.slice.value == 1
+        ):
+            has_connector_check = True
+    return has_length_check and has_connector_check
+
+
+def _validates_connector_shape(body: list[ast.AST], param: str) -> bool:
+    """True when the split is used only to validate and rewrite its shape."""
+    split_names = {
+        target.id
+        for node in body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Attribute)
+        and node.value.func.attr == "split"
+        and _traces_to_param(node.value.func.value, param)
+        for target in node.targets
+    }
+    for node in body:
+        if not isinstance(node, ast.If):
+            continue
+        if not any(
+            _is_three_part_connector_shape_check(node.test, parts_name)
+            for parts_name in split_names
+        ):
+            continue
+        # An additional raise, such as a numeric connection-id check, still
+        # represents the strict parsing P049 is intended to catch.  The shape
+        # guard's own raise is allowed; every raise must be inside that guard.
+        raises = {id(n) for n in body if isinstance(n, ast.Raise)}
+        shape_raises = {id(n) for n in ast.walk(node) if isinstance(n, ast.Raise)}
+        if raises != shape_raises:
+            return False
+        # The cited shape then rewrites the connector segment while retaining
+        # the connection id.  Requiring that use keeps this exemption from
+        # swallowing unrelated three-part validation.
+        unpacked_id_names = {
+            element.id
+            for statement in body
+            if isinstance(statement, ast.Assign)
+            and len(statement.targets) == 1
+            and isinstance(statement.targets[0], ast.Tuple)
+            and len(statement.targets[0].elts) == 3
+            and isinstance(statement.value, ast.Name)
+            and statement.value.id in split_names
+            for element in [statement.targets[0].elts[2]]
+            if isinstance(element, ast.Name)
+        }
+        return any(
+            isinstance(statement, ast.Return)
+            and isinstance(statement.value, ast.JoinedStr)
+            and any(
+                isinstance(value, ast.FormattedValue)
+                and isinstance(value.value, ast.Name)
+                and value.value.id in unpacked_id_names
+                for value in statement.value.values
+            )
+            for statement in body
+        )
+    return False
+
+
 def check_p049(
     tree: ast.AST,
     filename: str,
@@ -235,6 +336,8 @@ def check_p049(
             continue
         raises = [n for n in body if isinstance(n, ast.Raise)]
         if not raises:
+            continue
+        if _validates_connector_shape(body, param):
             continue
         if _delegates_the_parse(body, origins):
             # This function derives the value through the SDK; a typed re-raise
