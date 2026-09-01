@@ -3212,7 +3212,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `AppExecutor`
 
 - **Import:** `from application_sdk.testing.integration.fixtures import AppExecutor`
-- **Signature:** `class AppExecutor(backend: TemporalExecutorBackend) -> None`
+- **Signature:** `class AppExecutor(backend: TemporalExecutorBackend, expected_infrastructure: object | None = None) -> None`
 - **Summary:** Thin shim over :class:`TemporalExecutorBackend` for integration suites.
 - **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
@@ -4566,7 +4566,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `executor`
 
 - **Import:** `from application_sdk.testing.integration.fixtures import executor`
-- **Signature:** `executor(temporal_client: Client, worker: None, integration_task_queue: str) -> AppExecutor`
+- **Signature:** `executor(temporal_client: Client, ...)`
 - **Summary:** Executor submitting to the running worker's task queue.
 - **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
@@ -5287,6 +5287,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Import:** `from application_sdk.testing.integration.fixtures import temporal_client`
 - **Signature:** `temporal_client(embedded_temporal: EmbeddedRuntime, ...)`
 - **Summary:** Connect to the embedded dev server, in its namespace.
+- **Defined in:** `application_sdk/testing/integration/fixtures.py`
+
+#### `temporary_path`
+
+- **Import:** `from application_sdk.testing.integration.fixtures import temporary_path`
+- **Signature:** `temporary_path(tmp_path_factory: pytest.TempPathFactory, integration_options: KitOptions) -> Iterator[Path]`
+- **Summary:** Point ``constants.TEMPORARY_PATH`` at a session temp dir, and yield it.
 - **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
 #### `validate_asset`
