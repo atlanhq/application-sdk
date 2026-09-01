@@ -5,7 +5,7 @@
 
 # Contract-Toolkit Conformance Rules (K-series)
 
-**19 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006/K015, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts and the SDK ``App``'s ``legacy_workflow_types`` declaration)
+**20 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006/K015, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts and the SDK ``App``'s ``legacy_workflow_types`` declaration)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -34,6 +34,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [K017](#k017) | `ArtifactSchemaWriterMismatch` | `warn` | `app` | `contract-toolkit` | — | 0.23.0 |
 | [K018](#k018) | `ManifestArgNotDeclaredOnInputContract` | `warn` | `app` | `contract-toolkit` | — | 0.24.0 |
 | [K019](#k019) | `FormKeyMissingFromManifestArgs` | `warn` | `app` | `contract-toolkit` | — | 0.24.0 |
+| [K020](#k020) | `ManifestArgsLegacyNestedEnvelope` | `warn` | `app` | `contract-toolkit` | — | 0.24.0 |
 
 ---
 
@@ -1004,5 +1005,64 @@ eval` output and the next toolkit run reverts the edit.
 **Suppress** with `// conformance: ignore[K019] <reason>` on the widget's line in
 `contract/app.pkl` (or the comment-only line directly above it) — for example a field
 the frontend consumes directly and deliberately never sends to the workflow.
+
+---
+
+## K020 — `ManifestArgsLegacyNestedEnvelope` {#k020}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.24.0
+
+> the extract node still emits the legacy args.metadata{} envelope instead of flat top-level args
+
+**Rationale:** Flat top-level args are the contract, and every layer of the stack already agrees on
+that: contract-toolkit's flatManifestArgs defaults to true ('Set to false only for
+legacy apps that intentionally consume args.metadata'), ExtractionInput declares the
+standard config set flat, and the SDK's _normalize_ae_payload canonicalises a nested
+payload up into those flat fields. An app still emitting args.metadata{} is the only
+layer holding the old shape, and it pays for it twice: its Input contract cannot be
+checked by K018 (the keys are not where the contract says they are), and it is carrying
+an unexploded migration. Measured 2026-09-01 across 34 apps: 6 entrypoints across 5 apps
+still nest. Three set flatManifestArgs = false explicitly; two do not set it at all and
+would render flat today, so their committed manifest simply predates the flattening —
+proved by a third app on the same toolkit with the same unset flag that renders flat.
+That second group is the dangerous one: the next regeneration flips nested to flat, and
+that transition is exactly where the platform re-render drops config, because it
+recovers values by matching template paths and a relocated key resolves to nothing. The
+migration has to happen; the rule exists so it happens deliberately, with the published
+workflows checked, instead of as a side effect of someone's unrelated regenerate.
+
+The `extract` node of a committed `app/generated/**/manifest.json` carries an
+`args.metadata{}` block instead of flat top-level args.
+
+`flatManifestArgs` defaults to `true` in the toolkit, so a modern contract renders flat
+with no configuration at all. There are two ways to end up nested, and the fix differs:
+
+* **Explicit opt-out** — `contract/app.pkl` sets `flatManifestArgs = false`. Remove the
+override rather than setting it `true` (the default already is), move whatever the app
+reads out of `args.metadata` onto declared flat fields on its `Input` contract, and
+regenerate with `pkl eval -m . contract/app.pkl`. A contract that also sets
+`manifestMetadataArgs` is pinning specific keys into the envelope and has to unpick that
+in the same change. * **Stale artifact** — the contract does not set the flag, so it
+would render flat today; the committed manifest predates the flattening and was never
+regenerated. Regenerate and commit the result.
+
+**Regenerating is the risky moment, so do it deliberately.** Published workflow versions
+carry the nested shape. The platform's workflow re-render recovers config by matching
+template *paths*, so a key moving from `args.metadata.x` to `args.x` resolves to nothing
+and is stripped from the published DAG — the failure is fail-open, so an emptied
+include-filter means the next crawl takes everything (CONNECT-1318 / APPPLAT-371). After
+the first re-render, verify published workflows still carry their filters instead of
+assuming. Coordinate with the platform-side read-merge work if the app has live tenants
+with non-trivial filters.
+
+Once flat, declare the migrated keys on the entrypoint's `Input` contract so K018 covers
+them from then on.
+
+**Never hand-edit** `app/generated/manifest.json` to flatten it by hand — it is a `pkl
+eval` output and the next toolkit run reverts the edit.
+
+**Suppress** with `// conformance: ignore[K020] <reason>` in `contract/app.pkl` when an
+app is deliberately staying on the legacy envelope for now — a suppression here is a
+statement that the migration is scheduled, not that the shape is fine.
 
 ---

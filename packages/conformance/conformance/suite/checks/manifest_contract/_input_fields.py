@@ -433,7 +433,9 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
 
         findings.extend(
             _make_finding(manifest, arg_key, input_rec, directives)
-            for arg_key in sorted(manifest.keys() - declared - _PLATFORM_INJECTED_ARGS)
+            for arg_key in sorted(
+                manifest.flat_keys() - declared - _PLATFORM_INJECTED_ARGS
+            )
         )
 
     return findings

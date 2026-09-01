@@ -15,6 +15,10 @@
 * ``K019`` FormKeyMissingFromManifestArgs (WARE-1323) — a ``uiConfig`` form key
   with no ``{{...}}`` placeholder in any manifest never reaches the run *and*
   never persists, because the args template doubles as the persistence schema.
+* ``K020`` ManifestArgsLegacyNestedEnvelope — the ``extract`` node still emits
+  the legacy ``args.metadata{}`` envelope instead of flat top-level args, either
+  because the contract opts out via ``flatManifestArgs = false`` or because the
+  committed manifest is a stale pre-flattening artifact.
 
 Both are **cross-file + cross-artifact** checks: they scan all Python files, then
 read the committed ``app/generated/`` tree. Per-file scanning has no meaning
@@ -34,6 +38,7 @@ from ._check import scan_all as _scan_field_mismatch
 from ._form_keys import scan_all as _scan_form_keys
 from ._input_fields import scan_all as _scan_input_fields
 from ._legacy_aliases import scan_all as _scan_legacy_aliases
+from ._nested_envelope import scan_all as _scan_nested_envelope
 
 SERIES = "K"
 
@@ -57,6 +62,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         *_scan_legacy_aliases(paths, root),
         *_scan_input_fields(paths, root),
         *_scan_form_keys(paths, root),
+        *_scan_nested_envelope(paths, root),
     ]
 
 
@@ -68,7 +74,8 @@ main = make_cli_main(
         "(BLDX-1527); K015 verifies the legacy_workflow_types block against the "
         "SDK App declaration (CONNECT-1081); K018 verifies the extract node's "
         "args against the Python Input contract; K019 verifies "
-        "uiConfig form keys are wired into the args template (WARE-1323)."
+        "uiConfig form keys are wired into the args template (WARE-1323); "
+        "K020 flags a manifest still nesting args under metadata."
     ),
 )
 

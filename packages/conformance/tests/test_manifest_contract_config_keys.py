@@ -323,27 +323,8 @@ def test_k018_ignores_platform_injected_credential_arg(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# K018 — false-positive trap: the fleet runs both arg shapes
+# K018 — arg-shape handling
 # ---------------------------------------------------------------------------
-
-
-def test_k018_fires_for_nested_metadata_envelope(tmp_path: Path) -> None:
-    """Pre-0.9.0 apps still nest args under ``metadata`` — check that depth too."""
-    paths = _write_py(tmp_path, {"app.py": _app_src("    connection: str = ''\n")})
-    _write_manifest(
-        tmp_path / "app" / "generated" / "manifest.json",
-        {
-            "extract": _extract_node(
-                {
-                    "connection": "{{connection}}",
-                    "metadata": {"include_filter": "{{include-filter}}"},
-                }
-            )
-        },
-    )
-    findings = _only(scan_all(paths, tmp_path), "K018")
-    assert findings
-    assert "args.metadata.include_filter" in findings[0].message
 
 
 def test_k018_ignores_cross_node_wiring(tmp_path: Path) -> None:
@@ -796,3 +777,131 @@ def test_k019_finding_carries_discriminator(tmp_path: Path) -> None:
         "include-filter",
         "include-database-regex",
     }
+
+
+# ---------------------------------------------------------------------------
+# K020 — the legacy args.metadata{} envelope
+# ---------------------------------------------------------------------------
+
+
+def _write_bare_pkl(tmp_path: Path, body: str) -> None:
+    p = tmp_path / "contract" / "app.pkl"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(
+        'amends "@app-contract-toolkit/App.pkl"\n\nname = "myapp"\n' + body,
+        encoding="utf-8",
+    )
+
+
+_NESTED_ARGS = {
+    "connection": "{{connection}}",
+    "metadata": {
+        "include_filter": "{{include-filter}}",
+        "exclude_filter": "{{exclude-filter}}",
+    },
+}
+
+
+def test_k020_rule_metadata() -> None:
+    rule = get_rule("K020")
+    assert rule.tier is EnforcementTier.WARN
+    assert rule.scope is RuleScope.APP
+    assert rule.category == "contract-toolkit"
+    assert rule.rationale
+
+
+def test_k020_fires_on_explicit_opt_out(tmp_path: Path) -> None:
+    """flatManifestArgs = false is a deliberate legacy choice — nudge to flat."""
+    paths = _write_py(tmp_path, {"app.py": _MINIMAL_APP})
+    _write_bare_pkl(tmp_path, "\nflatManifestArgs = false\n")
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {"extract": _extract_node(_NESTED_ARGS)},
+    )
+    findings = _only(scan_all(paths, tmp_path), "K020")
+    assert len(findings) == 1
+    assert "flatManifestArgs = false" in findings[0].message
+    assert findings[0].file == "contract/app.pkl"
+    assert findings[0].line > 1  # anchored on the flag line, not line 1
+
+
+def test_k020_fires_on_stale_artifact_when_flag_unset(tmp_path: Path) -> None:
+    """Flag unset means the contract renders flat today — the manifest is stale."""
+    paths = _write_py(tmp_path, {"app.py": _MINIMAL_APP})
+    _write_bare_pkl(tmp_path, "")
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {"extract": _extract_node(_NESTED_ARGS)},
+    )
+    findings = _only(scan_all(paths, tmp_path), "K020")
+    assert len(findings) == 1
+    assert "predates the flattening" in findings[0].message
+    assert "flatManifestArgs = false" not in findings[0].message
+
+
+def test_k020_calls_out_manifest_metadata_args(tmp_path: Path) -> None:
+    """manifestMetadataArgs pins keys into the envelope and must be unpicked too."""
+    paths = _write_py(tmp_path, {"app.py": _MINIMAL_APP})
+    _write_bare_pkl(
+        tmp_path,
+        "\nflatManifestArgs = false\nmanifestMetadataArgs {\n"
+        '  ["include_filter"] = "include-filter"\n}\n',
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {"extract": _extract_node(_NESTED_ARGS)},
+    )
+    findings = _only(scan_all(paths, tmp_path), "K020")
+    assert findings and "manifestMetadataArgs" in findings[0].message
+
+
+def test_k020_warns_about_the_republish_transition(tmp_path: Path) -> None:
+    """The migration is also the moment config gets dropped — say so."""
+    paths = _write_py(tmp_path, {"app.py": _MINIMAL_APP})
+    _write_bare_pkl(tmp_path, "\nflatManifestArgs = false\n")
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {"extract": _extract_node(_NESTED_ARGS)},
+    )
+    msg = _only(scan_all(paths, tmp_path), "K020")[0].message
+    assert "Verify published workflows" in msg
+
+
+def test_k020_silent_on_a_flat_manifest(tmp_path: Path) -> None:
+    paths = _write_py(tmp_path, {"app.py": _MINIMAL_APP})
+    _write_bare_pkl(tmp_path, "")
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {"extract": _extract_node(_FLAT_FILTER_ARGS)},
+    )
+    assert _only(scan_all(paths, tmp_path), "K020") == []
+
+
+def test_k020_suppression(tmp_path: Path) -> None:
+    paths = _write_py(tmp_path, {"app.py": _MINIMAL_APP})
+    _write_bare_pkl(
+        tmp_path,
+        "\n// conformance: ignore[K020] migration scheduled for next quarter\n"
+        "flatManifestArgs = false\n",
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {"extract": _extract_node(_NESTED_ARGS)},
+    )
+    findings = _only(scan_all(paths, tmp_path), "K020")
+    assert findings and all(f.suppressed for f in findings)
+    assert _unsuppressed(scan_all(paths, tmp_path), "K020") == []
+
+
+def test_k018_ignores_keys_still_inside_the_metadata_envelope(tmp_path: Path) -> None:
+    """K018 is flat-only: a legacy app consumes args.metadata until K020 moves it.
+
+    Demanding flat declarations of nested keys would false-positive on every app
+    that has not migrated yet — K020 is the one finding for those instead.
+    """
+    paths = _write_py(tmp_path, {"app.py": _app_src("    connection: str = ''\n")})
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {"extract": _extract_node(_NESTED_ARGS)},
+    )
+    assert _flagged(scan_all(paths, tmp_path), "K018") == set()

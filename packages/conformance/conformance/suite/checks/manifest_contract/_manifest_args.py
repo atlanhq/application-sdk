@@ -63,6 +63,20 @@ class ManifestArgs:
         """Every arg key, at either depth."""
         return {a.key for a in self.args}
 
+    def flat_keys(self) -> set[str]:
+        """Only the top-level arg keys — the shape the contract must declare.
+
+        Keys under ``args.metadata`` are deliberately excluded. A manifest that
+        still emits that envelope is itself the defect (K020), and its app
+        legitimately consumes ``args.metadata`` until it migrates, so demanding
+        flat declarations of those keys would be wrong while it is still legacy.
+        """
+        return {a.key for a in self.args if not a.nested}
+
+    def nested_keys(self) -> set[str]:
+        """Only the keys under the legacy ``args.metadata`` envelope."""
+        return {a.key for a in self.args if a.nested}
+
     def form_keys(self) -> set[str]:
         """Every ``{{form-key}}`` referenced by an arg slot."""
         return {a.form_key for a in self.args if a.form_key is not None}

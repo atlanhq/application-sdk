@@ -30,15 +30,16 @@ description: >
   schema its own writer contradicts) are the artifact-schema pair: K016 is fixed by
   declaring the shape in contract/app.pkl and regenerating; K017 is fixed on
   whichever side is wrong -- the declaration or the writer.
-  K018 (the extract node sends an arg the entrypoint's Input contract cannot
-  receive) and K019 (a uiConfig form key with no matching {{...}} placeholder) are
-  the inbound-config pair, and both are **detect-only: they route to residue and
-  carry no prescription.**  Neither has a single mechanical fix.  K018 offers three
-  (declare the field, or set extra="allow") and choosing between them -- plus the
-  field's type and default -- is design judgment.  K019's fix is either wiring the key into contract/app.pkl or deleting
-  a control the product deliberately shows; the loop cannot tell which is wanted.
-  Both also sit on surfaces the loop must not write blind: an entrypoint contract
-  and a generated-artifact source.
+  K018 (the extract node sends a flat arg the entrypoint's Input contract cannot
+  receive), K019 (a uiConfig form key with no matching {{...}} placeholder) and
+  K020 (the extract node still nests args under a legacy metadata envelope) are
+  the inbound-config trio, all remediable.  K018 is fixed on the Python side by
+  declaring the field or mixing in ExtractionInput -- never by folding flat keys
+  back into a metadata dict -- and verified by the test-suite gate.  K019 is fixed
+  by wiring the form key into contract/app.pkl and regenerating.  K020 is fixed by
+  removing a flatManifestArgs = false override, or simply regenerating a stale
+  manifest; the edit is small but it flips the wire shape for live published
+  workflows, so it always routes to residue as well.
   K009, K011, K012, and K015 are
   BLOCK-tier (they fail the gate in default mode); the rest of the K-series is WARN.
 ---
@@ -60,11 +61,10 @@ K009 (unresolved scaffold placeholder), K011 (missing `app_id`), K012
 finding is present — those are FAILING results
 that fail the gate and must be remediated in default mode.  In **strict** mode
 the fingerprint-set also includes the unsuppressed WARNING results
-(K004/K005/K007/K008/K010/K014/K016/K017/K018/K019), which is where the rest of
-K-series remediation runs — K018 and K019 surface there but route straight to
-residue rather than to a prescription.
+(K004/K005/K007/K008/K010/K014/K016/K017/K018/K019/K020), which is where the rest
+of K-series remediation runs.
 
-The active scope decides which rules can appear: K001–K019 are all `scope=APP`,
+The active scope decides which rules can appear: K001–K020 are all `scope=APP`,
 so they surface only on consumer app repos.  The runner auto-detects scope, so
 the SDK repo sees 0 findings.
 
@@ -764,34 +764,141 @@ with the proposed change in the note rather than hand-editing the generated file
 
 ---
 
-**K018 ManifestArgNotDeclaredOnInputContract** and
-**K019 FormKeyMissingFromManifestArgs** — **detect-only. Do not propose a fix;
-route every finding straight to residue with the rule's message.**
+**K018 ManifestArgNotDeclaredOnInputContract** — the `extract` node sends a flat
+arg the entrypoint's `Input` contract cannot receive, so Pydantic drops it and the
+run falls back to the field's default. `classification = "mechanical"` when the
+missing keys are all supplied by an SDK contract base the class can mix in;
+`"judgment"` when a field has to be declared by hand and its type or default is
+not obvious. **Does not require `pkl`** — a pure Python edit, verified by the
+test-suite gate.
 
-These are reported for a human because neither has one mechanical answer, and a
-wrong guess is worse than the finding. K018 has two valid remedies — declare the
-field on the `Input` contract, or set `model_config = ConfigDict(extra="allow")`
-— and picking between them is an app-design decision, as are the field's type
-and default. Declaring is nearly always right; `extra="allow"` is for an app that
-deliberately reads arbitrary AE-supplied keys off `model_extra`.
+`finding.discriminator` is the arg key; `finding.message` names the manifest path,
+the depth it was sent at, and the `Input` class. Read the actual class at
+`finding.line` in `finding.file` before proposing an edit.
 
-Never propose a `@model_validator(mode="before")` that folds flat keys into a
-`metadata` dict. The value becomes reachable, so it passes a naive read, but it
-rebuilds the nested envelope the platform moved away from and leaves the contract
-still not describing what the app consumes — the next key relocation breaks it
-identically. Flat args are the contract.
+*Procedure:*
 
-K019's two remedies point opposite ways: wire the key into the `extract` node's
-args in `contract/app.pkl` and regenerate, *or* delete a control the product
-deliberately shows. Nothing in the finding says which the team wants.
+1. **Check whether an SDK contract base already supplies the key(s).**
+   `application_sdk.templates.contracts.sql_metadata.ExtractionInput` carries the
+   standard config set — `include_filter`, `exclude_filter`, `temp_table_regex`,
+   `extraction_method`, plus the connection/credential triple. If the class does
+   not already derive from it and the missing keys are in that set, add it to the
+   bases — `classification = "mechanical"`. Prefer this to hand-declaring: the
+   base also carries the validators that normalise these values.
+2. **Otherwise declare the missing field(s) directly** on the `Input` model.
+   The Automation Engine substitutes `{{...}}` placeholders as strings, and the
+   fleet convention for these config args is a plain `str` with an empty or
+   documented default (`use_source_schema_filtering: str = "false"`). Match the
+   surrounding fields' style. `classification = "judgment"` — confirm the type
+   and default against how the app actually reads the value.
+3. **Never propose a `@model_validator(mode="before")` that folds flat keys into
+   a `metadata` dict.** The value becomes reachable, so it passes a naive read,
+   but it rebuilds the nested envelope the platform moved away from: the app goes
+   on reading `workflow_args["metadata"]["some-kebab-key"]` instead of a typed
+   field, the contract still does not describe what it consumes, and the next key
+   relocation breaks it identically. Flat args are the contract. If a fold already
+   exists, removing it is part of the fix, not a separate change.
+4. **`model_config = ConfigDict(extra="allow")` is a valid but narrow answer** —
+   only for an app that deliberately reads arbitrary AE-supplied keys off
+   `model_extra`. Do not reach for it to silence a finding; declaring the field is
+   nearly always right. `classification = "judgment"`, and say why in the residue
+   entry.
+5. **Do not edit `app/generated/manifest.json`** to drop the arg — it is a
+   `pkl eval` output. If the arg genuinely should not be sent, remove the widget
+   from `contract/app.pkl` and regenerate; that is a K019-shaped change, route it
+   there.
+6. **Verification is the standard test-suite gate**, not `pkl-eval`. Re-running
+   `atlan-application-sdk-conformance detect --series K` re-checks the key is now
+   visible, including through an inherited base.
+7. If the mismatch is understood and deliberately deferred, suppress with
+   `# conformance: ignore[K018] <reason>` on the `Input` class definition and
+   route to residue. Findings carry a discriminator, so
+   `# conformance: ignore[K018:<arg key>]` suppresses one key without hiding its
+   siblings.
 
-Both also sit on surfaces the loop must not write blind — a live entrypoint
-contract and a generated-artifact source — and K019's anchor is
-`contract/app.pkl`, where the only sanctioned change is a regenerate.
+---
 
-A justified inline suppression is still allowed in strict mode (`# conformance:
-ignore[K018]` on the `Input` class, `// conformance: ignore[K019]` on the
-widget), and like every suppression it routes to residue for human audit.
+**K019 FormKeyMissingFromManifestArgs** — a `uiConfig` widget in
+`contract/app.pkl` has no matching `{{form-key}}` placeholder in any generated
+manifest, so its value never reaches the run *and* is never persisted (the args
+template doubles as the connection's `DefaultParameters` schema).
+`classification = "mechanical"` for the wire-it-up fix; `"judgment"` when the
+control looks genuinely unwanted. **Requires `pkl`** — verified by the
+`pkl-eval` gate.
+
+`finding.discriminator` is the form key; `finding.line` is the widget's
+declaration in `contract/app.pkl`.
+
+*Procedure:*
+
+1. **Default to wiring the key up, not deleting the control.** A widget the
+   product deliberately shows is the more likely intent, and a user setting a
+   value that silently vanishes is the bug being reported. The toolkit emits an
+   arg for a form field when its `includeInManifest` is set, so the fix is
+   normally to set `includeInManifest = true` on that widget in
+   `contract/app.pkl`, then regenerate with `pkl eval -m . contract/app.pkl`.
+   Read the widget first — a field routed through `manifestTopLevelArgs` or
+   `manifestMetadataArgs` is wired differently and needs the mapping entry
+   instead. `classification = "mechanical"`.
+2. **Deleting the widget is the other valid fix and is not the loop's call.**
+   Removing a control changes what the product offers. If the field looks
+   genuinely dead, propose nothing and route to residue with that reading stated
+   — `classification = "judgment"`.
+3. **Do not hand-edit `app/generated/**/manifest.json`** to add the placeholder.
+   It is a `pkl eval` output; the next toolkit run reverts the edit and K004/K005
+   catch the tampering.
+4. **Verification is the `pkl-eval` gate** — the contract must compile and
+   regenerate cleanly — plus re-detection, which confirms the placeholder now
+   exists. Commit the regenerated artifacts with the contract change.
+5. Non-value widgets are already excluded by the detector (`InfoBanner`,
+   `Sage`/`SageV2`), so a finding here is a real config control. If one is
+   nonetheless intentionally frontend-only, suppress with
+   `// conformance: ignore[K019] <reason>` on the widget's line and route to
+   residue.
+
+---
+
+**K020 ManifestArgsLegacyNestedEnvelope** — the `extract` node still emits the
+legacy `args.metadata{}` envelope instead of flat top-level args.
+`classification = "judgment"` in every case, despite the edit itself being
+small. **Requires `pkl`** — verified by the `pkl-eval` gate.
+
+**Read this before proposing anything: the fix is safe in the repo and risky in
+production.** Published workflow versions carry the nested shape. The platform's
+workflow re-render recovers config by matching template *paths*, so a key moving
+from `args.metadata.x` to `args.x` resolves to nothing and is stripped from the
+published DAG — fail-open, so an emptied include-filter means the next crawl
+takes everything (CONNECT-1318 / APPPLAT-371). The migration is correct and
+necessary; it must not happen as a side effect of an automated sweep.
+
+*Procedure:*
+
+1. **Determine which of the two causes applies** — `finding.message` says which.
+   *Opt-out:* `contract/app.pkl` sets `flatManifestArgs = false`. *Stale
+   artifact:* the flag is unset, so the contract would render flat today and the
+   committed manifest simply predates the flattening.
+2. **Stale artifact** — regenerate with `pkl eval -m . contract/app.pkl` and
+   commit the result. No contract edit needed. This is the smallest change and
+   still flips the wire shape, so step 5 applies in full.
+3. **Opt-out** — *remove* the `flatManifestArgs = false` line rather than setting
+   it `true`; the default is already `true`, and an explicit re-statement is one
+   more thing to drift. If the contract also sets `manifestMetadataArgs`, unpick
+   that in the same change: it pins specific keys into the envelope. Then move
+   whatever the app reads out of `args.metadata` onto declared flat fields on its
+   `Input` contract (a K018-shaped edit) so the app still receives them, and
+   regenerate.
+4. **Never hand-flatten `app/generated/manifest.json`** — `pkl eval` output.
+5. **Always route to residue, even on a clean gate.** State in the residue entry
+   that the app has live tenants whose published workflows carry the nested
+   shape, that the first re-render after this lands is the moment config can be
+   dropped, and that someone must verify published workflows still carry their
+   filters afterwards. A green `pkl-eval` gate proves the contract compiles; it
+   proves nothing about tenant state.
+6. Suppress with `// conformance: ignore[K020] <reason>` in `contract/app.pkl`
+   when the migration is scheduled rather than declined — a suppression here
+   states that the work is tracked, not that the nested shape is fine.
+
+---
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**: the model may
 propose an inline suppression comment — `// conformance: ignore[Kxxx]
