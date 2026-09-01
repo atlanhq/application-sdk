@@ -2,7 +2,7 @@
 """Generated-artifact freshness check driver (BLDX-1414).
 
 Invoked by ``.github/workflows/generated-freshness.yaml`` on app pull requests.
-Regenerates the contract artifacts from the *committed* ``contract/app.pkl`` +
+Regenerates the contract artifacts from the *committed* pkl root(s) +
 lock and fails if the working tree changed — i.e. the committed
 ``app/generated/**`` / ``atlan.yaml`` / ``app.yaml`` are stale or were
 hand-edited relative to what ``pkl eval`` produces today.
@@ -21,12 +21,12 @@ drift decision) and is unit-tested in
 
 Exit codes:
   * 0 — artifacts are fresh, OR the check is genuinely not-applicable (no
-        ``contract/app.pkl``, ``pkl`` not installed, or a ``git`` invocation
+        an evaluable pkl root, ``pkl`` not installed, or a ``git`` invocation
         failed — all infra/absence, not a broken contract), OR opted out
         (``--check-freshness false``).
   * 1 — the contract cannot be verified fresh: either drift (regeneration
         changed tracked files or produced untracked ones under the
-        generated-output paths) OR ``contract/app.pkl`` exists but ``pkl eval``
+        generated-output paths) OR an evaluable root exists but ``pkl eval``
         failed, so it does not regenerate at all. The latter used to degrade to
         exit 0, which silently shipped stale artifacts on every toolkit bump
         (the failure mode this gate exists to catch); it now fails red. The
@@ -49,7 +49,7 @@ from pathlib import Path
 # Reuse the exact regeneration primitive + output list the renovate sync uses,
 # so "regenerate" means the same thing in both places.
 sys.path.insert(0, str(Path(__file__).parent))
-from renovate_pkl_sync import OUTPUT_PATHS, regenerate  # noqa: E402
+from renovate_pkl_sync import OUTPUT_PATHS, eval_roots, regenerate  # noqa: E402
 
 
 def _changed_output_paths() -> list[str] | None:
@@ -100,14 +100,23 @@ def check_freshness(contract_dir: str = "contract") -> tuple[str, list[str]]:
     ``status`` is one of:
       * ``"clean"``       — regeneration produced no changes.
       * ``"drift"``       — regeneration changed/created output files (``changed_paths``).
-      * ``"eval_failed"`` — ``contract/app.pkl`` exists but ``pkl eval`` failed,
+      * ``"eval_failed"`` — an evaluable contract exists but ``pkl eval`` failed,
                             so it does not regenerate. A real breakage → fails red.
-      * ``"na"``          — genuinely nothing to check: no ``contract/app.pkl``,
+      * ``"na"``          — genuinely nothing to check: no evaluable pkl root,
                             ``pkl`` not installed (``OSError``), or a ``git``
                             invocation failed. Infra/absence, treated as pass.
     """
-    if not (Path(contract_dir) / "app.pkl").exists():
-        print(f"::notice::No {contract_dir}/app.pkl — no generated artifacts to check.")
+    # Ask for ROOTS, not for app.pkl. An app with one root per entrypoint
+    # (crawler.pkl + miner.pkl) has no app.pkl and used to return "na" here —
+    # a silent pass — before regenerate() was ever called. The skip has to be
+    # decided by the same discovery the regeneration uses, or the two disagree
+    # about what "nothing to generate" means.
+    roots = eval_roots(contract_dir)
+    if not roots:
+        print(
+            f"::notice::No evaluable pkl root in {contract_dir}/ — "
+            "no generated artifacts to check."
+        )
         return ("na", [])
 
     try:
@@ -123,7 +132,7 @@ def check_freshness(contract_dir: str = "contract") -> tuple[str, list[str]]:
         return ("na", [])
 
     if not regenerated:
-        # app.pkl exists (checked above) and regenerate() did not raise OSError
+        # a root exists (checked above) and regenerate() did not raise OSError
         # (pkl is runnable), so the only remaining reason it returned False is
         # that `pkl eval` itself failed — the committed contract does not
         # regenerate. That is the exact silent-degrade this gate must catch, not
@@ -144,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--contract-dir",
         default="contract",
-        help="Directory containing PklProject and app.pkl (default: contract).",
+        help="Directory containing PklProject and the pkl root(s) (default: contract).",
     )
     parser.add_argument(
         "--check-freshness",
@@ -166,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if status == "eval_failed":
         print(
-            "::error::contract/app.pkl exists but 'pkl eval' failed — the "
+            "::error::the contract has an evaluable pkl root but 'pkl eval' failed — the "
             "committed generated artifacts cannot be verified and are almost "
             "certainly stale (a toolkit bump merged without regenerating). Fix "
             "the contract so 'pkl eval -m . contract/app.pkl' (or "
