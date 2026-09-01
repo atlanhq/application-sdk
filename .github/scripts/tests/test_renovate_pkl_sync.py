@@ -833,3 +833,44 @@ def test_no_roots_at_all_is_still_a_skip(repo):
     (repo / "contract" / "credentials.pkl").write_text('name = "creds"\n')
     assert mod.eval_roots("contract") == []
     assert mod.regenerate("contract") is False
+
+
+def test_multi_root_swap_gets_a_per_root_baseline(repo, monkeypatch):
+    """Without a baseline the swap overwrites every app-maintained generated
+    file on a toolkit bump — protection the single-root path has always had.
+    Each root's baseline must be its OWN pre-bump eval, not app.pkl's."""
+    _multi_root_contract(repo)
+    seen: list[tuple[str, object]] = []
+
+    def fake_baseline(contract_dir, root_name):
+        return (Path("/tmp/base") / Path(root_name).stem, None)
+
+    def fake_swap(out_dir, generated_dir=mod.GENERATED_DIR, baseline_dir=None):
+        seen.append((generated_dir, baseline_dir))
+        return True
+
+    monkeypatch.setattr(mod, "_baseline_output_for_root", fake_baseline)
+    monkeypatch.setattr(mod, "swap_outputs", fake_swap)
+    monkeypatch.setattr(
+        mod,
+        "run",
+        lambda cmd, *, check=False: subprocess.CompletedProcess(cmd, 0, "", ""),
+    )
+    monkeypatch.setattr(mod, "run_post_generate", lambda d: None)
+    monkeypatch.setattr(mod, "_format_generated", lambda: None)
+
+    assert mod.regenerate("contract") is True
+    assert seen == [
+        ("app/generated/crawler", Path("/tmp/base/crawler")),
+        ("app/generated/miner", Path("/tmp/base/miner")),
+    ]  # per-root target AND per-root baseline
+
+
+def test_multi_root_baseline_absent_root_is_not_a_failure(repo, monkeypatch):
+    """A root that is new in this revision has nothing committed from it, so
+    there is nothing to preserve — None baseline, no warning-worthy failure."""
+    _multi_root_contract(repo)
+    monkeypatch.setattr(mod, "baseline_contract_ref", lambda d: "abc123")
+    monkeypatch.setattr(mod, "export_contract_at", lambda ref, d, dest: True)
+    out, work = mod._baseline_output_for_root("contract", "crawler.pkl")
+    assert out is None and work is not None  # workdir returned for cleanup

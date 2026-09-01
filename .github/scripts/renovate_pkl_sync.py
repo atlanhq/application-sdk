@@ -194,6 +194,7 @@ def regenerate_multi_root(contract_dir: str, roots: list[Path]) -> bool:
     placed = False
     for root in roots:
         tmp = Path(tempfile.mkdtemp())
+        base_work: Path | None = None
         try:
             if not _eval_root(root, contract_dir, tmp):
                 print(
@@ -202,13 +203,16 @@ def regenerate_multi_root(contract_dir: str, roots: list[Path]) -> bool:
                 )
                 continue
             target = f"{GENERATED_DIR}/{root.stem}"
-            if swap_outputs(tmp, generated_dir=target):
+            base_out, base_work = _baseline_output_for_root(contract_dir, root.name)
+            if swap_outputs(tmp, generated_dir=target, baseline_dir=base_out):
                 placed = True
                 print(f"Regenerated {target} from {root.name}.")
             else:
                 print(f"::warning::swap refused the output layout for {root.name}.")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+            if base_work is not None:
+                shutil.rmtree(base_work, ignore_errors=True)
     if placed:
         run_post_generate(contract_dir)
         _format_generated()
@@ -294,6 +298,56 @@ def regenerate(contract_dir: str) -> bool:
         shutil.rmtree(tmp, ignore_errors=True)
         if baseline_work is not None:
             shutil.rmtree(baseline_work, ignore_errors=True)
+
+
+def _baseline_output_for_root(
+    contract_dir: str, root_name: str
+) -> tuple[Path | None, Path | None]:
+    """``_baseline_output`` for ONE root of a multi-root contract.
+
+    Same contract and the same failure semantics: ``(eval_output, workdir)``,
+    output None whenever there is no baseline or producing one failed, never
+    raises. Without this the multi-root swap ran with ``baseline_dir=None``
+    and overwrote every app-maintained generated file on a toolkit bump —
+    the single-root path has protected those since it was written.
+    """
+    ref = baseline_contract_ref(contract_dir)
+    if ref is None:
+        return (None, None)  # no pin change in flight — nothing to protect
+    work = Path(tempfile.mkdtemp())
+    if not export_contract_at(ref, contract_dir, work):
+        print(
+            f"::warning::Could not export {contract_dir}/ at {ref[:12]} — "
+            f"app-maintained files under {GENERATED_DIR}/{Path(root_name).stem} "
+            "cannot be detected, so regeneration will overwrite them."
+        )
+        return (None, work)
+    base_root = work / contract_dir / root_name
+    if not base_root.exists():
+        # The root is new in this revision: nothing committed came from it, so
+        # there is nothing to preserve. Not a failure.
+        return (None, work)
+    out = work / "out"
+    out.mkdir()
+    result = run(
+        [
+            "pkl",
+            "eval",
+            "--project-dir",
+            str(work / contract_dir),
+            "-m",
+            str(out),
+            str(base_root),
+        ]
+    )
+    if result.returncode != 0:
+        print(
+            f"::warning::Baseline pkl eval (pre-bump toolkit pin) failed for "
+            f"{root_name} — app-maintained generated files cannot be detected, "
+            "so regeneration will overwrite them."
+        )
+        return (None, work)
+    return (out, work)
 
 
 def _baseline_output(contract_dir: str) -> tuple[Path | None, Path | None]:
