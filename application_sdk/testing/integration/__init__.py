@@ -304,7 +304,9 @@ def __dir__() -> list[str]:
 # attribute. ``lazy`` stays in ``_LAZY_EXPORTS`` (and the ``TYPE_CHECKING``
 # block) so the three parallel lists keep matching; its entry is simply never
 # consulted at runtime.
-from .lazy import lazy as lazy  # noqa: E402
+from .lazy import (  # noqa: E402 — eager bind: export/submodule name collision
+    lazy as lazy,
+)
 
 # =============================================================================
 # Public API
