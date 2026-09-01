@@ -56,6 +56,26 @@ def test_p001_fires_with_mixin_and_other_bases() -> None:
     assert _ids(src) == ["P001"]
 
 
+def test_p001_fires_on_multiline_contract_declaration() -> None:
+    src = (
+        "class FetchQueryHistoryOutput(\n"
+        "    Output, allow_unbounded_fields=True\n"
+        "):\n"
+        "    pass\n"
+    )
+    assert _ids(src) == ["P001"]
+
+
+def test_p001_silent_on_multiline_unrelated_declaration() -> None:
+    src = (
+        "class FetchQueryHistoryOutput(\n"
+        "    SourceSpecificOutput, allow_unbounded_fields=True\n"
+        "):\n"
+        "    pass\n"
+    )
+    assert _ids(src) == []
+
+
 def test_p001_silent_on_plain_contract() -> None:
     assert _ids("class MyInput(Input):\n    pass\n") == []
 

@@ -17,6 +17,15 @@ from conformance.suite.schema.findings import Finding
 class UnboundedContractFieldsChecker(ast.NodeVisitor):
     """Walk a module AST and emit P001 findings."""
 
+    _CONTRACT_BASES = frozenset(
+        {
+            "Input",
+            "Output",
+            "ExtractionInput",
+            "ExtractionTaskInput",
+        }
+    )
+
     def __init__(
         self,
         filename: str,
@@ -27,6 +36,14 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
         self._findings: list[Finding] = []
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        # ``allow_unbounded_fields`` is an SDK contract option.  Other classes
+        # may use the same keyword for their own purposes and are outside P001.
+        if not any(
+            isinstance(base, ast.Name) and base.id in self._CONTRACT_BASES
+            for base in node.bases
+        ):
+            self.generic_visit(node)
+            return
         for kw in node.keywords:
             if kw.arg != "allow_unbounded_fields":
                 continue
