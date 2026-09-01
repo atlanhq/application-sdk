@@ -1602,9 +1602,7 @@ def test_d010_fires_when_plural_lock_extra_does_not_resolve_duckdb(
         tmp_path,
         pyproject=_D010_PYPROJECT_SQL_AMONG_MULTIPLE_EXTRAS,
         source=_D010_TRANSFORMER_IMPORT,
-        uv_lock=_D010_LOCK_SQL_EXTRA_PLURAL.replace(
-            '    { name = "duckdb" },\n', ""
-        ),
+        uv_lock=_D010_LOCK_SQL_EXTRA_PLURAL.replace('    { name = "duckdb" },\n', ""),
     )
     assert len(findings) == 1
 
