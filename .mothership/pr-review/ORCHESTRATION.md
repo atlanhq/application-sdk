@@ -18,6 +18,7 @@ is pointed to from the step that owns it, with the condition for reading it.
 | `branch-freshness.md` | your lane holds a write scope |
 | `scope-classification.md` | your lane must derive `review_scope` itself |
 | `toolkit-consumer-setup.md` | `review_scope` is `contract-toolkit` or `mixed-sdk-toolkit` |
+| `verdict-stamp-mechanics.md` | diagnosing a verdict that produced no label/approval |
 
 This is not tidying. Everything you read stays in context for every turn that
 follows, and measured turn latency on the review model climbs from ~10s early
@@ -214,8 +215,13 @@ BUDGET
      an agent that searches the reference rules for prior art, gets nothing,
      and concludes there is none will raise a finding the rules already
      answer. That is the expensive failure; the wasted turn is the cheap one.
-   - `.mothership/review-policy.md`
-   - `.mothership/review.yaml`
+
+   `review-policy.md` and `review.yaml` are gone from this list on purpose.
+   The by-design patterns that lived in `review-policy.md` are now part of
+   `references/retro-log.md` — the single do-not-flag source, consulted by
+   whoever raises findings — and `review.yaml`'s rules were a paraphrase of
+   the rubric and CLAUDE.md, which this step already loads. Two files, two
+   tool calls, ~750 tokens on every review, zero unique content.
 
    **`references/*.md` is NOT read here.** It is ~125 KB — over half
    everything this step would otherwise load — and it is consumed by the
@@ -870,46 +876,19 @@ For BLOCKING/CRITICAL/HIGH findings, create inline comments:
 
 ### 3c. Verdict-Stamp: Owned by the GHA runner (sandbox does nothing)
 
-There is no mothership-side handler, and the sandbox **does not post
-`gh pr review`** and **does not apply labels**. Both happen outside
-the sandbox:
+Do **not** post `gh pr review`, `gh pr edit --add-label`, or any approval
+from inside the orchestration — on either lane. The verdict flows out via the
+structured marker in the §3e summary comment; the GHA layer parses it and
+owns the label, the commit status, and the `atlan-ci` approval.
 
-- **Approval**: `sdk-review-approve-on-verdict.yml` fires on
-  `issue_comment: created` from `mothership-ai[bot]` with the
-  `<!-- SDK_REVIEW -->` marker (within ~5s of the verdict comment
-  landing). It parses the verdict from the structured
-  `<!-- VERDICT: X -->` marker in §3e, applies the
-  `sdk-review-approved` / `sdk-review-needs-human` /
-  `sdk-review-needs-rebase` labels, sets the `sdk-review` commit
-  status, and posts the formal `atlan-ci` approval if the verdict is
-  `READY_TO_MERGE`. `sdk-review.yml`'s "Approve PR as atlan-ci" step
-  runs the same logic after the SSE stream ends as a fallback —
-  idempotency guards (label present + no existing approval) prevent
-  double-approval. atlan-ci is in CODEOWNERS, so its approval
-  satisfies `require_code_owner_review` on `main`;
-  `mothership-ai[bot]` is a GitHub App and can't be.
-- **Dismiss on human activity**: `sdk-review-dismiss-on-human.yml`
-  fires on `issue_comment` / `pull_request_review` from humans and
-  dismisses the atlan-ci approval + strips the label. So the bot can
-  unblock merges by itself until a human pushes back.
-- **Reset on push**: `sdk-review-reset-on-push.yml` fires on
-  `pull_request: synchronize` and strips the label + flips the
-  `sdk-review` status to pending on the new HEAD. Branch protection
-  separately auto-dismisses the approval (`dismiss_stale_reviews_on_push`).
-- **CI-failure downgrade**: `sdk-review-downgrade-on-ci-failure.yml`
-  fires on `check_suite: completed`; if a non-sdk-review check
-  failed on a HEAD that carries `sdk-review-approved`, it strips
-  the label, dismisses the approval, and flips status to failure.
-
-**Implication for the sandbox**: don't `gh pr edit --add-label` or
-`gh pr review --approve` from inside the orchestration. The verdict
-flows out via the structured marker in the summary comment in §3e;
-the GHA layer reads that and does the rest.
-
-The structured verdict marker is the contract. Keep
-`<!-- VERDICT: X -->` in sync with `### Verdict: ...` in the summary
-template. The token must be one of:
+The marker is the contract. Keep `<!-- VERDICT: X -->` in sync with
+`### Verdict: ...` in the summary template. The token must be one of:
 `READY_TO_MERGE`, `NEEDS_FIXES`, `BLOCKED`, `NEEDS_HUMAN`, `NEEDS_REBASE`.
+
+**Read only when:** a posted verdict did not produce the label or approval
+you expected and you are diagnosing why — `sections/verdict-stamp-mechanics.md`
+inventories the four workflows that react to the marker. Emitting the marker
+correctly requires none of it.
 
 ### 3d. Resolve Inline Threads (on APPROVE)
 

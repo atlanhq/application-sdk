@@ -2,25 +2,17 @@ review_guidelines: |
   This is the Atlan application-sdk v3 Python library.
   Built on Temporal workflows + Dapr infrastructure abstractions.
 
-  Critical rules:
-  - BLOCKING: Non-deterministic operation in run()/@entrypoint
-  - BLOCKING: Contract field removal/rename/retype on Input/Output
-  - BLOCKING: Hardcoded secrets or credentials in logs
-  - CRITICAL: New public API without tests
-  - CRITICAL: Breaking API change without deprecation shim
+  This file is no longer part of the review's mandatory context
+  (ORCHESTRATION.md Phase 0 step 6 stopped listing it): every rule it
+  carried was a paraphrase of .mothership/pr-review/severity-rubric.yaml
+  (severities, confidence floors) or .mothership/pr-review/CLAUDE.md
+  (architecture), and a paraphrase read alongside its source is a drift
+  risk that costs a tool call on every review. The file remains for any
+  external reader; the rules live in those two files.
 
-  Architecture:
-  - Dependency direction: app/ -> execution/ -> infrastructure/
-  - No direct temporalio/dapr imports outside private modules
-  - All I/O in @task methods, never in run()
-  - Use self.run_in_thread() for blocking operations in @task
-  - CredentialRef in contracts, CredentialResolver in @task only
-
-  Ignore:
-  - The single do-not-flag source is
-    .mothership/pr-review/references/retro-log.md, plus the by-design
-    patterns in .mothership/review-policy.md. Consult those; this file
-    does not maintain its own list.
+  The single do-not-flag source is
+  .mothership/pr-review/references/retro-log.md (which now includes the
+  by-design patterns formerly in .mothership/review-policy.md).
 
 ignore_patterns:
   - "*.md"
