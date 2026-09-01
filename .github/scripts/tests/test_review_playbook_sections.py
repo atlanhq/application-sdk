@@ -103,3 +103,27 @@ def test_the_sections_index_lists_every_section() -> None:
             f"{name} is missing from the 'Conditional sections' index at the top "
             "of ORCHESTRATION.md"
         )
+
+
+def test_the_context_budget_binds_whoever_reviews() -> None:
+    """§1c's ceiling was written as "per agent call", from when every review
+    fanned out. §2a now routes a single-specialist scope to the primary agent,
+    and on twelve of fourteen measured @sdk-loop runs nothing was dispatched at
+    all — so the only input cap in the playbook governed a code path those
+    reviews never took and the primary's context went unbounded.
+
+    That matters twice over, and both are measured: turn latency on the review
+    model climbs from ~10s to 75-90s by turn 12 as context accumulates, and
+    xai/grok-4.6 doubles its per-token rate above a 200K context.
+    """
+    router = _router()
+    budget = router[router.index("### 1c.") : router.index("## Phase 2")]
+    assert (
+        "dispatched agent or not" in budget
+    ), "§1c's budget must bind the inline reviewer, not only a dispatched agent"
+    # The ceiling exists because of latency and price, not because of the
+    # model's window. Losing that reasoning is how it gets raised to the window.
+    assert "200K" in budget and "75-90s" in budget, (
+        "§1c must keep the measured reasons for the ceiling — without them the "
+        "next reader raises it to the model's context window"
+    )

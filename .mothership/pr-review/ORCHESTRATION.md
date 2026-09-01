@@ -357,7 +357,30 @@ does not touch, and on a two-file conformance PR it is the single largest
 block of context you would carry for no reason.
 ### 1c. Prepare Context by Tier
 
-**Token budgets per agent call (hard limits — never exceed):**
+**Token budgets (hard limits — never exceed). These bind the context of
+WHOEVER reviews, dispatched agent or not.**
+
+Written as "per agent call" when every review fanned out. It no longer does:
+§2a routes a single-specialist scope to the primary agent, and on twelve of
+fourteen measured `@sdk-loop` runs nothing was dispatched at all — so the only
+cap in this playbook applied to a code path those reviews never took, and the
+primary's own context went unbounded. Apply the same ceiling to yourself when
+you are the one reviewing.
+
+The ceiling is not the model's window and must not be raised to it. Two
+measured reasons:
+
+* **Latency.** Turn latency on the review model climbs with accumulated
+  context — ~10s early in a phase, 75-90s by turn 12 — so every token carried
+  is charged again on each of the remaining turns.
+* **Price.** `xai/grok-4.6` doubles its per-token rate above a 200K context.
+  A review that drifts over that line costs twice as much per token for the
+  rest of the phase, silently.
+
+Independently, PR-Agent caps its own input at 32K against models with far
+larger windows, on the stated grounds that "the AI model degrades in
+performance when the input is too long". Ours is deliberately looser than
+that; it is not looser than the numbers above.
 
 | Content | Max tokens (approx) |
 |---------|-------------------|
@@ -373,7 +396,7 @@ block of context you would carry for no reason.
 Read ALL changed source + test files completely. Send full diff.
 This fits within budget for most PRs.
 
-**Safety check:** Before sending to agents, measure total context:
+**Safety check:** Before reviewing — before dispatching, or before starting Phase 2 yourself if nothing is dispatched — measure total context:
 ```bash
 DIFF_CHARS=$(wc -c < /tmp/DIFF.patch)
 FILE_CHARS=0
@@ -403,7 +426,7 @@ grep -A 9999 "^diff --git a/<file>" /tmp/DIFF.patch | \
   sed '/^diff --git a\//q' | head -n -1
 ```
 
-**Per-agent safety check:** If a partition still exceeds 100K tokens:
+**Per-reviewer safety check:** If a partition — or your own context, when you are reviewing inline — still exceeds 100K tokens:
 - Truncate the LARGEST files: send first 500 lines + last 100 lines + function index
 - Format truncated files as:
   ```
