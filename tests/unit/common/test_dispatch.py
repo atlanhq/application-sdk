@@ -10,6 +10,9 @@ from __future__ import annotations
 import re
 from unittest import mock
 
+import pytest
+from pydantic import BaseModel, ConfigDict, ValidationError
+
 from application_sdk.common.dispatch import resolve_dispatch_workflow_id
 
 
@@ -73,9 +76,54 @@ class TestResolveDispatchWorkflowId:
         with mock.patch(
             "application_sdk.observability.logger_adaptor.get_logger"
         ) as get_logger:
-            resolved = resolve_dispatch_workflow_id(_Frozen(), "my-app")
+            resolved = resolve_dispatch_workflow_id(
+                _Frozen(), "my-app", on_stamp_failure="warn"
+            )
 
         assert re.fullmatch(r"my-app-[0-9a-f]{8}", resolved)
         warning = get_logger.return_value.warning
         warning.assert_called_once()
         assert "rejected the workflow_id stamp" in warning.call_args.args[0]
+
+
+class TestStampFailurePolicy:
+    """The handler refuses a dispatch it cannot stamp; the kit backend
+    tolerates the test doubles it deliberately accepts. Warning on both would
+    let the production path dispatch a run whose ``workflow_id`` diverges from
+    the ID Temporal runs it under — the divergence this module exists to close,
+    downgraded to a log line."""
+
+    def test_default_propagates_an_attribute_error(self) -> None:
+        class _Frozen:
+            __slots__ = ()
+
+        with pytest.raises(AttributeError):
+            resolve_dispatch_workflow_id(_Frozen(), "my-app")
+
+    def test_default_propagates_a_validation_error(self) -> None:
+        class _FrozenModel(BaseModel):
+            model_config = ConfigDict(frozen=True)
+
+            workflow_id: str = ""
+
+        with pytest.raises(ValidationError):
+            resolve_dispatch_workflow_id(_FrozenModel(), "my-app")
+
+    def test_warn_dispatches_a_frozen_model_unchanged(self) -> None:
+        class _FrozenModel(BaseModel):
+            model_config = ConfigDict(frozen=True)
+
+            workflow_id: str = ""
+
+        inp = _FrozenModel()
+
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.get_logger"
+        ) as get_logger:
+            resolved = resolve_dispatch_workflow_id(
+                inp, "my-app", on_stamp_failure="warn"
+            )
+
+        assert resolved.startswith("my-app-")
+        assert inp.workflow_id == ""
+        get_logger.return_value.warning.assert_called_once()

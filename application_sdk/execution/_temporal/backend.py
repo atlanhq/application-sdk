@@ -249,7 +249,9 @@ class TemporalExecutorBackend:
                 omitted, defaults to the app name (single-entry-point apps).
         """
         correlation_id = _stamp_start_correlation(input_data, context)
-        workflow_id = resolve_dispatch_workflow_id(input_data, context.app_name)
+        workflow_id = resolve_dispatch_workflow_id(
+            input_data, context.app_name, on_stamp_failure="warn"
+        )
 
         workflow_name, ep_meta = _resolve_workflow_name(app_cls, entry_point)
         output_type = (
@@ -292,7 +294,9 @@ class TemporalExecutorBackend:
                 omitted, defaults to the app name (single-entry-point apps).
         """
         correlation_id = _stamp_start_correlation(input_data, context)
-        workflow_id = resolve_dispatch_workflow_id(input_data, context.app_name)
+        workflow_id = resolve_dispatch_workflow_id(
+            input_data, context.app_name, on_stamp_failure="warn"
+        )
 
         workflow_name, _ = _resolve_workflow_name(app_cls, entry_point)
         handle = await self._client.start_workflow(

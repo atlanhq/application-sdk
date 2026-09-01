@@ -12,13 +12,17 @@ collapse every run of a session onto one shared prefix).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import ValidationError
 
 
 def resolve_dispatch_workflow_id(
-    input_data: Any, app_name: str, *, explicit_workflow_id: str = ""
+    input_data: Any,
+    app_name: str,
+    *,
+    explicit_workflow_id: str = "",
+    on_stamp_failure: Literal["raise", "warn"] = "raise",
 ) -> str:
     """Resolve the Temporal dispatch ID and stamp it onto ``input_data``.
 
@@ -30,10 +34,27 @@ def resolve_dispatch_workflow_id(
     ``{app_name}-{short_id}`` instead. Either way the resolved ID is stamped
     back onto ``input_data.workflow_id``.
 
-    Unlike the correlation stamp there is no memo fallback, so an input that
-    rejects the stamp (dict/frozen shapes) is dispatched with its field
-    unchanged — logged at WARNING, because that run's field diverges from its
-    dispatch ID, which is exactly the shape this function exists to rule out.
+    Unlike the correlation stamp there is no memo fallback, so a rejected
+    stamp cannot be repaired: that run's field diverges from its dispatch ID,
+    which is exactly the shape this function exists to rule out. The two
+    dispatch paths answer that differently, and ``on_stamp_failure`` makes the
+    asymmetry deliberate:
+
+    - ``"raise"`` (default, the ``/workflows/v1/start`` handler) lets the
+      assignment error propagate untouched, so the handler's own boundary
+      clauses answer it as they always have — ``ValidationError`` → 500,
+      ``TypeError`` → 400 — and the workflow is never dispatched.
+    - ``"warn"`` (``TemporalExecutorBackend``) tolerates the dict/frozen test
+      doubles the integration kit accepts: the input is dispatched with its
+      field unchanged and the divergence is logged at WARNING, so a suite that
+      hits the path can find out it did.
+
+    Two shapes are accepted here that the handler's previous inline copy would
+    have rejected, both unreachable through a real ``Input``: an input carrying
+    a non-empty ``workflow_id`` of its own (the handler pops the caller's value
+    from the body before validation, so the field is always at its ``""``
+    default there unless a subclass declares another), and an input without
+    ``config_hash`` (every real ``Input`` has it).
     """
     workflow_id = explicit_workflow_id or getattr(input_data, "workflow_id", "")
     if not workflow_id:
@@ -48,6 +69,9 @@ def resolve_dispatch_workflow_id(
             if config_hash
             else f"{app_name}-{short_id}"
         )
+    if on_stamp_failure == "raise":
+        input_data.workflow_id = workflow_id
+        return workflow_id
     try:
         input_data.workflow_id = workflow_id
     except (AttributeError, TypeError, ValidationError):
