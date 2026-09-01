@@ -679,6 +679,24 @@ def temporary_path(
     patches are undone on teardown rather than left set. The scan matches by
     value, so a module that stored a *derived* path at import time (say, a
     pre-computed abspath) would be missed — no current consumer does that.
+
+    **The redirect is session-wide, and that reaches other tiers.** Scope is
+    ``session`` because the consumers are class-scoped run fixtures, which
+    cannot depend on a function-scoped one — so once any test requests this, the
+    constant stays redirected for every test that follows in the same process,
+    integration and unit alike. ``pytest tests/`` is one process.
+
+    A unit test asserting on a default-rooted path therefore starts failing the
+    moment an integration test earlier in the session opts in, and the failure
+    names that unit test rather than this fixture. Such a test should pin the
+    constant itself instead of leaning on the ambient default::
+
+        monkeypatch.setattr(constants, "TEMPORARY_PATH", "local/tmp")
+
+    Not hypothetical in either direction: it broke two path-normalising unit
+    tests in a connector suite, and this repo's own guard tests had to stop
+    consuming the fixture — they drive ``__wrapped__`` function-scoped — for the
+    same reason.
     """
     from application_sdk import (  # noqa: PLC0415 — deferred by convention only; sibling fixtures import it the same way
         constants,
@@ -696,6 +714,11 @@ def temporary_path(
             and getattr(module, "TEMPORARY_PATH", None) == previous
         ):
             patcher.setattr(module, "TEMPORARY_PATH", str(path))
+    logger.info(
+        "TEMPORARY_PATH redirected to %s for the rest of this session; a later "
+        "test asserting on a default-rooted path must pin the constant itself",
+        path,
+    )
     try:
         yield path
     finally:
