@@ -4,6 +4,30 @@ Follow these phases EXACTLY. Do not skip phases. Do not reorder.
 Print `[Phase N complete]` after each phase, followed by `bash /tmp/budget.sh`
 (see Time Budgets — the elapsed number is measured, never estimated).
 
+## Conditional sections — read only what your lane and scope select
+
+Six blocks of this playbook live under `sections/` instead of inline, and each
+is pointed to from the step that owns it, with the condition for reading it.
+**Do not read a section whose condition you do not meet.**
+
+| `sections/…` | Read it when |
+|---|---|
+| `sandbox-guards.md` | mothership sandbox lane |
+| `adversarial-wave-2.md` | mothership sandbox lane |
+| `prior-review-and-delta.md` | your lane computes its own prior review + delta |
+| `branch-freshness.md` | your lane holds a write scope |
+| `scope-classification.md` | your lane must derive `review_scope` itself |
+| `toolkit-consumer-setup.md` | `review_scope` is `contract-toolkit` or `mixed-sdk-toolkit` |
+
+This is not tidying. Everything you read stays in context for every turn that
+follows, and measured turn latency on the review model climbs from ~10s early
+in a phase to 75-90s by turn 12 as that context grows — so a section you load
+and never use is charged to every remaining turn of the review. On a
+conformance-only `@sdk-loop` review all six conditions are false, which is
+~7.7K tokens not carried. Nothing has been deleted: each file holds its
+original text verbatim, and a test asserts every one of them is still reachable
+from a pointer here.
+
 ## Runtime
 
 Two lanes run this playbook, and they differ in what the SURROUNDING system
@@ -199,90 +223,13 @@ BUDGET
    (§2a). Reading it up front pays for it twice, and pays for it at all on
    reviews where no agent ever runs. Defer it to §6d.
 
-6b. **Load prior review into context (re-review continuity)** — if a
-    previous `<!-- SDK_REVIEW -->` summary comment exists on this
-    PR, read its full body and write it to `/tmp/PRIOR_REVIEW.md`. The
-    body becomes **input** to Phase 2 reasoning (not just a labeling
-    reference for §2e at the end): it tells the agents what was flagged
-    before, what the author said in response, and what should be
-    carried forward, downgraded, or re-checked given the current HEAD.
+6b/6c. **Prior review and the re-review delta.**
 
-    ```bash
-    # S5: use --paginate --slurp and pipe into standalone jq. The naive
-    # --paginate --jq idiom runs the jq filter once PER PAGE, so `last`
-    # picks the last match on the FIRST page, not the last match across all
-    # pages. On PRs with many comments spanning multiple API pages this
-    # would silently load an older review. --slurp collapses pages into one
-    # outer array; `.[][]` flattens into a single stream before `last`.
-    PRIOR_REVIEW=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
-      --paginate --slurp 2>/dev/null \
-      | jq -r '[.[][] | select(.body | contains("<!-- SDK_REVIEW -->"))] | last | .body // ""')
-
-    if [ -n "$PRIOR_REVIEW" ]; then
-      printf '%s\n' "$PRIOR_REVIEW" > /tmp/PRIOR_REVIEW.md
-      echo "[bootstrap] prior sdk-review summary found — loaded into /tmp/PRIOR_REVIEW.md"
-    else
-      : > /tmp/PRIOR_REVIEW.md
-      echo "[bootstrap] no prior sdk-review summary — fresh review"
-    fi
-    ```
-
-    **CRITICAL — jq idiom:** two mistakes to avoid:
-    - `--jq '.[] | select(...) | .body' | head -1` collapses the raw
-      multiline body to its first line (the `<!-- SDK_REVIEW -->`
-      HTML marker) and silently drops the entire review content.
-    - `--paginate --jq '[.[] | select(...)] | last'` runs the jq filter
-      ONCE PER PAGE, so `last` picks the final match on page 1, not
-      across all pages. On a PR with enough comments to span pages,
-      this returns a stale older review. Always use `--paginate --slurp`
-      and pipe into standalone `jq -r '[.[][] | select(...)] | last'`.
-
-    Every subsequent phase that reasons about the PR (Phase 2 agents,
-    cross-model debias, verdict determination) should treat
-    `/tmp/PRIOR_REVIEW.md` as additional context when non-empty —
-    not because it's authoritative, but because it captures both the
-    prior bot's reasoning and (often, in author replies on inline
-    threads) the human's response, which materially changes what
-    counts as a "new" finding vs a known-and-discussed one.
-
-    **Replay and duplicate-trigger guards are sandbox-only** — Appendix A.
-    They exist because mothership recovers a dropped stream by re-running
-    this prompt from the top in the SAME sandbox, and because a bot can
-    re-trigger a review of a HEAD already reviewed. `@sdk-loop` has neither
-    shape: opencode is invoked once per job, and its Fence job decides
-    duplicate triggers before any model runs.
-
-6c. **Compute the re-review delta (scope-cutter).** Each review summary
-    stamps the HEAD it reviewed as `<!-- REVIEWED_HEAD: <sha> -->` (§3e).
-    On a re-review, use it to scope Phase 1–2 to what actually changed —
-    re-deriving conclusions about unchanged hunks is the single largest
-    waste in multi-round reviews. If step 8 updates the branch (BEHIND),
-    re-run this computation after it — the HEAD changes.
-
-    ```bash
-    PRIOR_HEAD=$(grep -oE '<!-- REVIEWED_HEAD: [0-9a-f]{40} -->' /tmp/PRIOR_REVIEW.md \
-      | grep -oE '[0-9a-f]{40}' || true)
-
-    DELTA_KNOWN=0
-    : > /tmp/DELTA.patch
-    : > /tmp/DELTA_FILES.txt
-    if [ -n "$PRIOR_HEAD" ] && git cat-file -e "$PRIOR_HEAD" 2>/dev/null; then
-      DELTA_KNOWN=1
-      # Restrict to the PR's own files so base-branch merges between rounds
-      # don't inflate the delta. A PR file also touched by a base merge shows
-      # base churn — acceptable: it errs toward MORE review, never less.
-      gh pr view "$PR_NUMBER" --repo "$REPO" --json files --jq '.files[].path' > /tmp/PR_FILES.txt
-      git diff "$PRIOR_HEAD".."$HEAD_SHA" -- $(cat /tmp/PR_FILES.txt) > /tmp/DELTA.patch || true
-      git diff --name-only "$PRIOR_HEAD".."$HEAD_SHA" -- $(cat /tmp/PR_FILES.txt) > /tmp/DELTA_FILES.txt || true
-    fi
-    DELTA_LINES=$(grep -cE '^[+-]' /tmp/DELTA.patch 2>/dev/null || echo 0)
-    ```
-
-    `DELTA_KNOWN=0` (no prior review, a pre-rollout summary without the
-    marker, or an unfetchable `PRIOR_HEAD`) means **unknown**, not "nothing
-    changed" — skip delta scoping and run the full review. Only
-    `DELTA_KNOWN=1` activates step 11b.
-
+    * `LANE: sdk-loop` — both are **handed to you in the dispatch prompt**: the
+      prior verdict, and the incremental range as `git diff <prior>..<head>`.
+      Verify them; do not recompute them.
+    * mothership sandbox — **read only when:** you are on that lane; then
+      follow 6b, 6c and 11b in `sections/prior-review-and-delta.md`.
 6d. **Do NOT read `references/*.md`. The agents that use them read them.**
 
     Each Phase 2 agent now names the reference files it owns, at the top of
@@ -332,38 +279,13 @@ BUDGET
    is cut to that delta per step 11b — the continuity rules are unchanged.
 
 
-8. **Branch freshness + conflict resolution** (before reviewing):
-   ```bash
-   MERGE_STATUS=$(jq -r '.mergeStateStatus' /tmp/PR.json)
-   ```
+8. **Branch freshness + conflict resolution.**
 
-   If `BEHIND` — **sandbox only.** `update-branch` writes to the PR branch and
-   needs `contents: write`; the `@sdk-loop` review phase holds a token without
-   it, so this 403s. On that lane, review the branch as it is and note it in
-   the summary — a base merge cannot introduce a finding in the PR's own
-   hunks, which is what the review is about. Do not retry, and do not report
-   the 403 as a defect.
-
-   ```bash
-   # Tier 1: GitHub-side update (merges base into the PR branch)
-   gh api "repos/$REPO/pulls/$PR_NUMBER/update-branch" \
-     -X PUT -f update_method=merge 2>/dev/null
-   sleep 10
-   # Re-fetch — SHA changed after merge
-   git fetch origin "$HEAD_REF" && git reset --hard "origin/$HEAD_REF"
-   # Re-fetch authoritative PR metadata and diff after the update
-   gh pr view "$PR_NUMBER" --repo "$REPO" --json number,state,isDraft,mergeable,mergeStateStatus,headRefName,baseRefName,headRefOid,title,body,labels > /tmp/PR.json
-   gh pr diff "$PR_NUMBER" --repo "$REPO" > /tmp/DIFF.patch
-   ```
-
-   If `CONFLICTING`: do NOT attempt a local merge or push — the review is
-   read-only (see Runtime). A conflict-resolution merge is the author's
-   decision, not the reviewer's. Submit minimal review: "PR has merge conflicts. Please
-   rebase or comment `@sdk-review` after resolving conflicts." Set the
-   verdict in §3e to `NEEDS_REBASE` (the structured marker is
-   `<!-- VERDICT: NEEDS_REBASE -->`); the GHA layer applies the
-   `sdk-review-needs-rebase` label from there. EXIT.
-
+    * `LANE: sdk-loop` — your token carries no write scope. **Report a behind
+      or conflicted branch as a finding and attempt nothing.** A push fails
+      with a 403 after the turn has already been paid for.
+    * mothership sandbox — **read only when:** you are on that lane; then
+      follow `sections/branch-freshness.md`.
 9. **Do not read CI.** Removed, not moved: the review cannot act on a check
    either way — it holds no write scope on this lane — and
    `sdk-review-downgrade-on-ci-failure.yml` already enforces CI against the
@@ -375,102 +297,21 @@ BUDGET
 
 10. Read the repo's `CLAUDE.md` for project conventions.
 
-11. **Smart agent routing** — classify the PR by which area it touches, and
-    dispatch only the matching specialist(s):
-    ```bash
-    gh pr view "$PR_NUMBER" --repo "$REPO" --json files --jq '.files[].path' > /tmp/PR_FILES.txt
-    TOTAL_FILES=$(wc -l < /tmp/PR_FILES.txt)
-    CT_FILES=$(grep -cE '^contract-toolkit/' /tmp/PR_FILES.txt || true)
-    SDK_FILES=$(grep -cE '^application_sdk/' /tmp/PR_FILES.txt || true)
-    CONF_FILES=$(grep -cE '^(packages/conformance/|remediation/)' /tmp/PR_FILES.txt || true)
-    TEST_FILES=$(grep -cE '^(tests/|contract-toolkit/tests/)' /tmp/PR_FILES.txt || true)
-    DOC_FILES=$(grep -cE '^(docs/|contract-toolkit/docs/|.*README\.md$)' /tmp/PR_FILES.txt || true)
-    CONFIG_FILES=$(grep -cE '^(pyproject\.toml|uv\.lock|\.pre-commit|\.github/|helm/)' /tmp/PR_FILES.txt || true)
-    # Agent-prompt / operational-meta files with NO Temporal/Dapr code surface:
-    # the mothership review+resolve playbooks, Claude Code config, and
-    # AGENTS/CLAUDE instruction files. Excluded from SOURCE_FILES below so a
-    # prompt-only PR is never routed into the full 3-agent SDK panel (the SDK
-    # correctness/quality/structure agents have no rules for reviewing prompts).
-    META_FILES=$(grep -cE '^(\.mothership/|\.claude/)|(^|/)(AGENTS|CLAUDE)\.md$' /tmp/PR_FILES.txt || true)
-    # SOURCE_FILES = files in NONE of the non-source buckets (conformance, tests,
-    # docs, config, meta). Computed by exclusion (grep -vc) rather than
-    # TOTAL - sum(buckets): a file matching two buckets (e.g. docs/CLAUDE.md is
-    # both DOC and META) would be subtracted twice by the arithmetic and could
-    # zero out a real source count, silently skipping code review. Mirrors the
-    # bucket patterns above (contract-toolkit is intentionally NOT excluded — CT
-    # PRs are routed by the first two rules before SOURCE_FILES is consulted).
-    SOURCE_FILES=$(grep -vcE '^(packages/conformance/|remediation/|tests/|contract-toolkit/tests/|docs/|contract-toolkit/docs/|pyproject\.toml|uv\.lock|\.pre-commit|\.github/|helm/|\.mothership/|\.claude/)|.*README\.md$|(^|/)(AGENTS|CLAUDE)\.md$' /tmp/PR_FILES.txt || true)
-    CHANGED_LINES=$(grep -cE '^[+-]' /tmp/DIFF.patch 2>/dev/null || echo 0)
-    # Security-sensitive paths NEVER take the fast path (a 3-line auth/secret
-    # change is exactly where a subtle blocker hides).
-    SECURITY_PATHS=$(grep -cE '(credential|secret|auth|token|_dapr|_temporal)' /tmp/PR_FILES.txt || true)
-    ```
-   This file-list based classification includes deleted files; do not classify
-   only from `+++ b/` diff headers. Apply in order; **first match wins**:
-   - If `CT_FILES > 0 && SDK_FILES == 0 && CONF_FILES == 0 && CONFIG_FILES == 0` → `review_scope=contract-toolkit`
-     (toolkit-review.md only; mandatory private consumer validation based on affected surface)
-   - If `CT_FILES > 0 && (SDK_FILES > 0 || CONFIG_FILES > 0)` → `review_scope=mixed-sdk-toolkit`
-     (standard SDK review agents + toolkit-review.md)
-   - If `META_FILES > 0 && SOURCE_FILES == 0 && CONFIG_FILES == 0 && CONF_FILES == 0
-     && CT_FILES == 0 && TEST_FILES == 0 && DOC_FILES == 0` → `review_scope=docs-only`
-     (agent-prompt / operational-meta files only — `.mothership/**`, `.claude/**`,
-     `AGENTS.md`, `CLAUDE.md` — carry no Temporal/Dapr code surface, so the SDK
-     domain agents have nothing to review. Take the docs-only skip path: submit
-     APPROVE, no Phase 2. Because META is excluded from `SOURCE_FILES`, a PR that
-     ALSO touches code routes on the real code — `config-only`, `full`, etc. — so
-     the meta files never drag prompt/markdown into the SDK correctness agents,
-     and code is never skipped just because prompts changed alongside it.)
-   - If `SOURCE_FILES == 0 && CONF_FILES > 0 && CT_FILES == 0` → `review_scope=conformance-only`
-     (`conformance.md` agent only — the conformance-suite specialist for
-     `packages/conformance/**` + `remediation/**`: SARIF detector correctness,
-     rule-catalog consistency, rule scope (sdk/app/both), the two CI gates, and
-     the paired remediation program in the SAME PR. NOT the SDK CORRECTNESS
-     agent — conformance code is AST/rule logic, not Temporal/Dapr runtime.
-     If `CONFIG_FILES > 0` too, also dispatch `ci-config.md` on the config slice.)
-   - If `SOURCE_FILES == 0 && TEST_FILES > 0` → `review_scope=tests-only`
-     (QUALITY agent only — focused on test patterns, coverage, assertions)
-   - If `SOURCE_FILES == 0 && DOC_FILES > 0 && TEST_FILES == 0` → `review_scope=docs-only`
-     (Skip Phase 2 — submit APPROVE with "Docs/meta-only PR, no code review needed")
-   - If `SOURCE_FILES == 0 && CONFIG_FILES > 0` → `review_scope=config-only`
-     (`ci-config.md` agent only — the CI/workflow/deps/infra specialist, NOT
-     the SDK CORRECTNESS agent. Reviews GHA injection/permissions/pinning,
-     shell robustness, dependency/supply-chain, and `helm/**`.)
-   - If `SOURCE_FILES <= 2 && TEST_FILES >= SOURCE_FILES * 3` → `review_scope=tests-focused`
-     (QUALITY agent + lightweight CORRECTNESS — mostly tests with a few source changes)
-   - If `SOURCE_FILES >= 1 && TOTAL_FILES <= 2 && CHANGED_LINES < 50 && CONF_FILES == 0
-     && CT_FILES == 0 && CONFIG_FILES == 0 && SECURITY_PATHS == 0` → `review_scope=minor`
-     (**fast path** for a tiny source change: CORRECTNESS agent only — it always
-     keeps guardrail coverage G1-G5 — skipping the heavier QUALITY/STRUCTURE
-     waves and the adversarial Wave 2, on the Small time budget. NEVER matches
-     credential/secret/auth or `_dapr`/`_temporal` seam paths; those fall through
-     to `full`.)
-   - Otherwise → `review_scope=full` (correctness + quality + structure)
+11. **Smart agent routing.** `review_scope` decides which specialists §2a
+    dispatches.
 
-11b. **Re-review delta scoping** (only when `DELTA_KNOWN=1` from step 6c).
-    Step 11 decides *which* specialists could run; on a re-review the delta
-    decides *how much work actually remains*:
+    * `LANE: sdk-loop` — **you are told your scope. Do NOT derive it.** The
+      harness computed it in Python before the phase started, from the same
+      file-list arithmetic, and re-running that classification spends a turn to
+      reach the answer you already have.
+    * mothership sandbox — **read only when:** you are on that lane; then
+      follow `sections/scope-classification.md` to derive `review_scope`.
 
-    - `DELTA_LINES == 0` (re-trigger on the same HEAD, or only base merges
-      since the prior round) → **verification-only re-review**: skip Wave 1
-      and Wave 2 discovery entirely. Phase 2 reduces to §2e labeling of the
-      prior findings against the current HEAD plus the §2h verdict — no new
-      hunks means no new findings can exist.
-    - `0 < DELTA_LINES < 2000` → **delta-scoped re-review**: re-run the
-      step 11 bucket classification over `/tmp/DELTA_FILES.txt` (not the
-      full PR file list) and dispatch only the matching specialists. Agents
-      receive `/tmp/DELTA.patch` as the diff, `/tmp/PRIOR_REVIEW.md`, and
-      full file contents for delta files only. Prior findings on unchanged
-      hunks carry forward per §2e without re-deriving them; prior findings
-      whose lines the delta touched are re-verified (that IS the delta work).
-    - `DELTA_LINES >= 2000` → full review — a delta that large is a new PR
-      in all but name, and hunk-local reasoning stops being sound.
-
-    Guardrail floor: if ANY delta file is source (per the step 11 buckets),
-    the CORRECTNESS agent is always dispatched regardless of what the delta
-    classification says — the same G1–G5 floor the `minor` fast path keeps.
-    Toolkit delta files additionally keep the Phase 1b-toolkit obligations
-    (the carry-forward fast path there handles the unchanged-artifact case).
-
+    §2a's routing table below is the authority for scope-to-agent mapping on
+    both lanes, and stays here.
+11b. **Re-review delta scoping** — **read only when:** `DELTA_KNOWN=1` from
+    step 6c, which only the sandbox lane computes. It lives at the end of
+    `sections/prior-review-and-delta.md`.
 12. Check diff size for tier, and raise the budget cap to match it
     (step 1b defaulted to the Small hard stop):
     - < 2000 lines → `review_tier = "full"` → `echo 900 > /tmp/REVIEW_HARD_STOP_S`
@@ -507,213 +348,13 @@ internal, test, or dead.
 Skip if review_scope is contract-toolkit, conformance-only, tests-only, docs-only, or config-only.
 On a delta-scoped re-review (step 11b), run it over the delta files only.
 
-### 1b-toolkit. Private Toolkit Consumer Setup (if review_scope=contract-toolkit or mixed-sdk-toolkit)
+### 1b-toolkit. Private Toolkit Consumer Setup
 
-Read:
-
-- `contract-toolkit/AGENTS.md`
-- `.mothership/pr-review/agents/toolkit-review.md`
-- `.mothership/pr-review/references/toolkit-consumer-registry.md`
-
-Classify the affected toolkit surfaces from `/tmp/DIFF.patch`. Then clone or
-reuse every mandatory consumer target from the registry. This validation setup
-is mandatory for affected surfaces; do not approve if a required check cannot
-run.
-
-Reset and create the private validation ledger (these files are written only
-here, so the reset lives here — not in Phase 0). It is the source of truth
-for toolkit compatibility status and verdict gating:
-
-```bash
-rm -f /tmp/TOOLKIT_ROVER_NOTE.md
-: > /tmp/TOOLKIT_PR_ARTIFACTS.txt
-: > /tmp/TOOLKIT_CHANGED_FILES.txt
-: > /tmp/TOOLKIT_CONSUMERS.md
-: > /tmp/TOOLKIT_VALIDATION.md
-printf '## Toolkit Validation Ledger\n\n' >> /tmp/TOOLKIT_VALIDATION.md
-```
-
-**Do not re-run what CI already ran.** The `Contract Toolkit /` CI legs on
-this HEAD run the same commands the reviewer used to re-run wholesale
-(`PKL tests and invariants`, `Verify generated output`, `Generated Python
-lint and SDK imports`). Read them instead:
-
-```bash
-# `bucket`, NOT `conclusion`. `gh pr checks --json` has no `conclusion`
-# field: it prints "Unknown JSON field" to stderr, EXITS 0, and writes
-# nothing to stdout — so this file would be empty and every leg would read
-# as missing. Buckets are pass / fail / skipping / pending.
-gh pr checks "$PR_NUMBER" --repo "$REPO" --json name,bucket \
-  --jq '.[] | select(.name | startswith("Contract Toolkit")) | .name + " " + .bucket' \
-  > /tmp/TOOLKIT_CI_LEGS.txt
-```
-
-- Every leg `pass` → record the legs as the local-check evidence in the
-  ledger. Run a local command ONLY as the substrate for probing CI cannot
-  express — guard ablations, scratch collision contracts, comparing
-  PR-generated artifacts against a consumer's expectations.
-- Any leg missing / pending / failed → run that leg's command locally and
-  treat a failure caused by PR code or stale generated output as a finding:
-
-```bash
-contract-toolkit/scripts/regenerate-all.sh     # ↔ Verify generated output
-contract-toolkit/scripts/check-invariants.sh   # ↔ PKL tests and invariants
-(cd contract-toolkit && pkl test tests/*.pkl)  # ↔ PKL tests and invariants
-uv run --extra workflows python contract-toolkit/scripts/test-sdk-import.py  # ↔ Generated Python lint and SDK imports
-git diff --check
-```
-
-If a required command cannot run due to Rover environment/tooling failure,
-create `/tmp/TOOLKIT_ROVER_NOTE.md` with the sanitized note below.
-
-Record the evidence privately:
-
-```bash
-printf -- '- Generated SDK input contract: validated (CI toolkit legs green on this HEAD; PR-bound probing ran locally)\n' >> /tmp/TOOLKIT_VALIDATION.md
-```
-
-Capture PR-generated artifacts as the input to downstream checks. Do not use a
-consumer repository's released toolkit dependency as proof for this PR:
-
-```bash
-find contract-toolkit/examples -path '*/generated/*' -type f | sort > /tmp/TOOLKIT_PR_ARTIFACTS.txt
-git diff --name-only -- contract-toolkit/examples contract-toolkit/src > /tmp/TOOLKIT_CHANGED_FILES.txt
-```
-
-**Carry-forward fast path (re-reviews).** Hash the PR-generated artifacts
-and compare against the hash the prior review stamped (§3e stamps
-`<!-- TOOLKIT_ARTIFACT_HASH: ... -->` on toolkit-scope summaries):
-
-```bash
-ARTIFACT_HASH=$(cat /tmp/TOOLKIT_PR_ARTIFACTS.txt | xargs shasum -a 256 | shasum -a 256 | cut -d' ' -f1)
-PRIOR_HASH=$(grep -oE '<!-- TOOLKIT_ARTIFACT_HASH: [0-9a-f]{64} -->' /tmp/PRIOR_REVIEW.md \
-  | grep -oE '[0-9a-f]{64}' || true)
-```
-
-If `PRIOR_HASH` is non-empty and equals `ARTIFACT_HASH`, the generated
-artifacts are byte-identical to a commit whose downstream compatibility was
-already validated: mark every artifact-derived capability
-`validated (carried forward — artifacts byte-identical to previously
-validated commit)` in the ledger and **skip the consumer clone loop
-entirely**. Carry-forward covers the *consumer-side* checks only — new
-toolkit-source behavior the committed examples don't exercise (a new
-invariant, a changed codegen skip-list) still needs PR-bound local probing
-(scratch contracts, ablations), which requires no clones. Hash mismatch or
-no prior hash → full validation below.
-
-Use `/tmp/toolkit-review-consumers` for scratch clones:
-
-```bash
-mkdir -p /tmp/toolkit-review-consumers
-
-# Core consumers. Use existing /workspace checkout if present; otherwise clone.
-# Record branch and SHA privately in /tmp/TOOLKIT_CONSUMERS.md.
-for spec in \
-  "atlan-frontend beta" \
-  "blaze main" \
-  "heracles beta" \
-  "atlan-automation-engine-app main"
-do
-  repo="${spec% *}"
-  branch="${spec#* }"
-  if [ -d "/workspace/${repo}/.git" ]; then
-    target="/workspace/${repo}"
-  else
-    target="/tmp/toolkit-review-consumers/${repo}"
-    if [ ! -d "${target}/.git" ] && ! git clone "https://github.com/atlanhq/${repo}.git" "${target}"; then
-      printf '%s\n' "Review note: one required compatibility check could not be completed due to a Rover execution issue. Please re-run @sdk-review or request human review before merge." > /tmp/TOOLKIT_ROVER_NOTE.md
-      continue
-    fi
-  fi
-  if ! git -C "${target}" fetch origin "${branch}"; then
-    printf '%s\n' "Review note: one required compatibility check could not be completed due to a Rover execution issue. Please re-run @sdk-review or request human review before merge." > /tmp/TOOLKIT_ROVER_NOTE.md
-    continue
-  fi
-  printf '%s %s %s\n' "${repo}" "origin/${branch}" "$(git -C "${target}" rev-parse "origin/${branch}")" >> /tmp/TOOLKIT_CONSUMERS.md
-done
-```
-
-Cloning/fetching only establishes the validation target. It is not validation.
-For each affected capability, run the corresponding minimum actionable check in
-the registry using PR-generated artifacts or a scratch contract rewritten to
-amend/import `/workspace/application-sdk/contract-toolkit/src/*.pkl`. If no
-PR-bound command or inspection is possible, mark that capability `needs rerun`
-and do not approve.
-
-Each mandatory capability must append exactly one private status line to
-`/tmp/TOOLKIT_VALIDATION.md`:
-
-```text
-- UI rendering compatibility: validated (<private evidence recorded>)
-- Manifest substitution compatibility: validated (<private evidence recorded>)
-- Workflow execution contract: validated (<private evidence recorded>)
-- Generated SDK input contract: validated (<private evidence recorded>)
-- Representative app pattern: not applicable (<why>)
-```
-
-Allowed statuses are `validated`, `not applicable`, and `needs rerun`. Any
-`needs rerun` status forces `NEEDS_HUMAN`.
-The public review must mirror these as a `### Cross-Repo Validation` section
-using only capability aliases and status values. Do not include private
-consumer repository names, package names, branch names, SHAs, local paths, or
-system-app implementation details in the public section.
-
-For representative app patterns, inspect PR title, body, and diff for trigger
-terms from the registry. Clone/fetch only the matching pattern repos. Optional
-field additions do not require adoption in the representative app unless the PR
-claims compatibility or changes required generated/runtime behavior.
-
-Use these pattern specs after a trigger match:
-
-```bash
-# Pattern specs: "<pattern> <repo> <branch>"
-# query-intelligence atlan-query-intelligence-app main
-# publish atlan-publish-app main
-# popularity atlan-popularity-app main
-# lineage atlan-lineage-app main
-```
-
-For each matched pattern, reuse `/workspace/<repo>` if present, otherwise clone
-to `/tmp/toolkit-review-consumers/<repo>`, fetch the listed branch, and append
-the private SHA to `/tmp/TOOLKIT_CONSUMERS.md`.
-
-When validating a representative app contract, work only in a scratch copy. If
-the contract imports `@app-contract-toolkit/...`, rewrite that scratch copy to
-import the PR checkout source under
-`/workspace/application-sdk/contract-toolkit/src/` before running `pkl eval`.
-
-Scratch rewrite pattern:
-
-```bash
-scratch="/tmp/toolkit-review-consumers/scratch/<pattern>"
-mkdir -p "$scratch"
-cp -R "<consumer-contract-dir>"/. "$scratch"/
-rg -l '@app-contract-toolkit/' "$scratch" \
-  | xargs perl -0pi -e 's#@app-contract-toolkit/#/workspace/application-sdk/contract-toolkit/src/#g'
-pkl eval -m "$scratch/generated" "$scratch/app.pkl"
-```
-
-If the representative app does not have a contract yet, do not fail adoption.
-Validate the generic PR-generated artifact shape and record the representative
-pattern as `not applicable` with the reason.
-
-All consumer repo names, local paths, and SHAs are private evidence. Public PR
-comments may only use capability aliases:
-
-- `UI rendering compatibility`
-- `Manifest substitution compatibility`
-- `Workflow execution contract`
-- `Generated SDK input contract`
-- `Representative app pattern`
-
-If clone/fetch/auth/network fails for a mandatory target, create
-`/tmp/TOOLKIT_ROVER_NOTE.md` with exactly this public note and continue to
-Phase 2 so the review can request a rerun or human review:
-
-```text
-Review note: one required compatibility check could not be completed due to a Rover execution issue. Please re-run @sdk-review or request human review before merge.
-```
-
+**Read only when:** `review_scope` is `contract-toolkit` or
+`mixed-sdk-toolkit` — then read `sections/toolkit-consumer-setup.md`.
+Skip it entirely on every other scope — it is private-repo clone-and-validate setup for surfaces your scope
+does not touch, and on a two-file conformance PR it is the single largest
+block of context you would carry for no reason.
 ### 1c. Prepare Context by Tier
 
 **Token budgets per agent call (hard limits — never exceed):**
@@ -938,43 +579,14 @@ CORRECTNESS is ALWAYS kept — it carries guardrail coverage G1-G5.
 
 Parse JSON findings from each agent response.
 
-### 2b. Wave 2 — GPT-5.3-codex Adversarial (via proxy)
+### 2b. Wave 2 — cross-model adversarial (via proxy)
 
-After Wave 1, call GPT to challenge your findings.
-
-**Skip conditions** (no adversarial):
-- `review_scope` is tests-only, conformance-only, config-only, docs-only, or minor
-- `review_scope` is contract-toolkit and toolkit-review.md produced zero findings
-- `review_tier` is "staged" (massive PR — too much context for one GPT call)
-- Wave 1 produced zero findings (nothing to challenge)
-- Time budget already over 70% consumed — run `bash /tmp/budget.sh` here
-  and skip whenever it prints `OVER 70%` or `OVER HARD STOP`. This is the
-  single most expensive optional step in the run (a full GPT-5.3-codex
-  call over the whole diff plus every Wave 1 finding), so it is the first
-  thing an over-budget run must give up.
-
-If not skipped:
-
-```bash
-curl -s "$PROXY_BASE/proxy/litellm/chat/completions" \
-  -H "Authorization: Bearer $PROXY_JWT" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-5.3-codex",
-    "temperature": 0.2,
-    "max_tokens": 16000,
-    "messages": [
-      {"role": "system", "content": "<agents/adversarial.md content>"},
-      {"role": "user", "content": "<Wave 1 findings + PR diff + annotations>"}
-    ]
-  }'
-```
-
-GPT challenges every Opus finding. GPT also discovers findings Opus missed.
-
-If GPT unavailable or skipped: keep all Opus findings >= 80%.
-Note in review: "Cross-model adversarial: <skipped (reason) | ran | unavailable>."
-
+**Read only when:** you are on the mothership sandbox lane.
+On `LANE: sdk-loop`, skip `sections/adversarial-wave-2.md` entirely. It curls
+`$PROXY_BASE/proxy/litellm/...` with `$PROXY_JWT`; both are sandbox variables
+that do not exist on a GitHub Actions runner, so on the loop lane the step
+cannot succeed and reading it only pays for context. That lane's resolve phase
+contests every finding instead, so the challenge still happens.
 ### 2c. De-Bias (deterministic)
 
 | Opus (Wave 1) | GPT (Wave 2) | Action |
@@ -1555,134 +1167,9 @@ Submit minimal:
 
 ## Appendix A: Sandbox-only run guards
 
-Everything here is for the **mothership sandbox**. `@sdk-loop` skips this
-section entirely — its harness does the same jobs in Python, before any model
-runs, which is both cheaper and not subject to an agent deciding to skip a
-step. Kept out of the main flow so the common path stays readable rather than
-carrying ~120 lines that two thirds of runs must reason past.
-
-A1. **Reset per-run review artifacts** — these files are load-bearing signals
-    across later phases, so never let a prior iteration in the same sandbox
-    affect the current verdict or public post:
-    ```bash
-    mkdir -p /tmp/inline-comments
-    find /tmp/inline-comments -type f \( -name '*.md' -o -name '*.json' \) -delete
-    ```
-    The toolkit ledger files (`/tmp/TOOLKIT_*.md|txt`) are reset at the top of
-    Phase 1b-toolkit — the only place that writes them — so non-toolkit scopes
-    don't touch them at all.
-
-A2. **Stale SHA guard** — bail if the PR has moved since dispatch:
-   ```bash
-   CURRENT_SHA=$(jq -r '.headRefOid' /tmp/PR.json)
-   if [ "$CURRENT_SHA" != "$HEAD_SHA" ]; then
-     echo "PR moved from $HEAD_SHA to $CURRENT_SHA since dispatch — aborting cleanly."
-     # Submit a minimal review so the status check doesn't stay pending,
-     # then exit. A fresh @sdk-review on the new HEAD gets a new session.
-     exit 0
-   fi
-   ```
-
-
-**A3. Same-run replay guard — run this immediately after loading
-`/tmp/PRIOR_REVIEW.md`, before anything else.** When the Claude
-stream drops mid-run (sandbox VPN reconnect, container eviction,
-transient API error), mothership recovers by re-running this prompt
-**from the top in the same sandbox** — a fresh run, not a `--resume`.
-If the first pass had already posted its summary, that retry loads
-its own summary as `PRIOR_REVIEW`, sees an empty delta, and posts a
-SECOND summary for the same HEAD. The PR then shows two reviews with
-different wording from a single `@sdk-review` trigger, and the
-workflow's soft-success check passes because *a* summary exists.
-
-Every summary's footer carries the run URL that produced it (§3e),
-and §3f posts the summary **last**, after the inline comments and the
-commit status — so a summary bearing this run's URL means this run's
-submission completed in full. Check *every* summary on the PR, not
-just the one 6b loaded: that one is only the latest, and an unrelated
-review landing between the first pass and the replay would hide this
-run's footer behind it.
-
-```bash
-# GHA_RUN_URL is given in the session prompt — substitute it literally,
-# shell variables do not persist between Bash calls.
-gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate --slurp 2>/dev/null \
-  | jq -r '[.[][] | select(.body | contains("<!-- SDK_REVIEW -->")) | .body] | join("\n")' \
-  | grep -qF '<GHA_RUN_URL>' \
-  && echo "REPLAY: this run already posted its review summary"
-```
-
-If that prints `REPLAY`, **stop the entire run here**: post nothing,
-set no commit status, resolve no threads, do not continue to Phase 1.
-The review was already delivered by the pass that died.
-
-Key the guard on the run URL, never on `HEAD_SHA` alone — a genuine
-re-trigger against an unchanged HEAD comes from a *different* run and
-must still produce a review.
-
-This guard only catches a replay that re-enters the prompt from the top.
-A provider-level retry that replays a single assistant *turn* re-executes
-the `gh api … /comments -f body=…` call directly, with no prompt to
-re-read — that is how #3276 collected the identical summary five times.
-Nothing you can write here prevents it, so the workflow cleans up after
-it: `sdk_review_dedupe_verdicts.py` runs once the stream closes, keeps the
-newest summary this run posted and minimizes the rest (FND-636). It
-identifies "this run's" summaries by the `<GHA_RUN_URL>` in the §3e
-footer, the same key this guard greps — which is another reason that line
-is not optional. Drop it and the collapse silently stops working.
-
-**A4. Bot-trigger dedupe guard — run immediately after the replay guard.**
-This is now a *backstop*, not the authority. Since FND-636 the
-authoritative check is the `Dedupe check` step at the top of
-`sdk-review-dispatch`, which runs under the per-PR concurrency lock and
-declines before a sandbox is booted at all — deciding it here meant the
-sandbox had to start and reason before it could decline, so the run was
-paid for either way, and a degraded model skipped the check entirely
-(five duplicate triggers on #3285 became five runs). Keep this guard: it
-costs one API call, and it still catches the case where the comment
-landed between the workflow's read and the sandbox's start.
-
-Check: if `COMMENTER` is an automated trigger (`mothership-ai[bot]`
-or `atlan-ci`) **and** the newest summary's `<!-- REVIEWED_HEAD -->`
-equals `HEAD_SHA`, this run is a duplicate. Stop without posting.
-Humans (`COMMENTER` is any other login) are never stopped by this
-guard — re-reading the same diff is a legitimate human request.
-
-Use "newest summary" (the body already in `/tmp/PRIOR_REVIEW.md`),
-never the oldest.
-
-```bash
-# COMMENTER and HEAD_SHA are from the prompt header.
-BOT_TRIGGERS="mothership-ai[bot] atlan-ci"
-if echo "$BOT_TRIGGERS" | grep -qF "$COMMENTER"; then
-  NEWEST_REVIEWED_HEAD=$(grep -oE '<!-- REVIEWED_HEAD: [0-9a-f]{40} -->' /tmp/PRIOR_REVIEW.md \
-    | grep -oE '[0-9a-f]{40}' || true)
-  if [ -n "$NEWEST_REVIEWED_HEAD" ] && [ "$NEWEST_REVIEWED_HEAD" = "$HEAD_SHA" ]; then
-    echo "SKIP: bot-trigger dedupe — @${COMMENTER} re-triggered on HEAD ${HEAD_SHA} which the newest summary already reviewed. Backstop for the workflow's locked dedupe check. Stopping without posting."
-    # S4: Restore the commit status so the dispatch run's pending state
-    # does not linger after this no-op. The dispatch run always sets
-    # sdk-review to "pending" before the sandbox starts. If the sandbox
-    # exits here without posting a new verdict comment, the fast-path
-    # approve workflow never fires, and the pending status persists —
-    # which is misleading (the review was already delivered). Re-apply
-    # the status implied by the prior verdict.
-    PRIOR_VERDICT=$(grep -oE '<!-- VERDICT: [A-Z_]+ -->' /tmp/PRIOR_REVIEW.md \
-      | grep -oE '[A-Z_]+' | head -1 || true)
-    case "$PRIOR_VERDICT" in
-      "READY_TO_MERGE")
-        gh api "repos/${REPO}/statuses/${HEAD_SHA}" -X POST \
-          -f state=success -f context=sdk-review \
-          -f description="Approved (bot-retrigger skipped: already reviewed this HEAD)" 2>/dev/null || true;;
-      "")
-        : # No prior verdict found — leave status as-is to avoid stomping
-        ;;
-      *)
-        gh api "repos/${REPO}/statuses/${HEAD_SHA}" -X POST \
-          -f state=failure -f context=sdk-review \
-          -f description="Verdict: ${PRIOR_VERDICT} (bot-retrigger skipped: already reviewed this HEAD)" 2>/dev/null || true;;
-    esac
-    exit 0
-  fi
-fi
-```
-
+**Read only when:** you are on the mothership sandbox lane.
+On `LANE: sdk-loop`, skip `sections/sandbox-guards.md` entirely. The
+Runtime table above already records why the loop lane has no use for it: the
+Fence job dismisses duplicate triggers before any model runs, each phase is
+one invocation on a fresh runner, and the harness re-aims a moved HEAD. Every
+guard in that file answers a problem the loop lane does not have.
