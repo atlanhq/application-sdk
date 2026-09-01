@@ -253,6 +253,60 @@ def fetch(heartbeat_fn):
     )
 
 
+def test_p002_documented_heartbeat_dispatcher_is_silent() -> None:
+    _none(
+        """\
+def dispatch(callback, value):
+    '''Best-effort heartbeat dispatch.'''
+    try:
+        callback(value)
+    except RuntimeError:
+        pass
+"""
+    )
+
+
+def test_p002_undocumented_heartbeat_dispatcher_fires() -> None:
+    _single(
+        """\
+def dispatch(callback, value):
+    try:
+        callback(value)
+    except RuntimeError:
+        pass
+""",
+        "E002",
+    )
+
+
+def test_p002_documented_conditional_heartbeat_is_silent() -> None:
+    _none(
+        """\
+def fetch(self, count, heartbeat_fn):
+    '''Best-effort heartbeat reporting.'''
+    try:
+        if count % 20 == 0 and heartbeat_fn:
+            self.heartbeat_fn(count)
+    except RuntimeError:
+        pass
+"""
+    )
+
+
+def test_p002_undocumented_conditional_heartbeat_fires() -> None:
+    _single(
+        """\
+def fetch(self, count, heartbeat_fn):
+    try:
+        if count % 20 == 0 and heartbeat_fn:
+            self.heartbeat_fn(count)
+    except RuntimeError:
+        pass
+""",
+        "E002",
+    )
+
+
 def test_p002_documented_json_fallback_is_silent() -> None:
     _none(
         """\

@@ -100,10 +100,17 @@ class SilentSwallowMixin:
         if not documented:
             return False
 
-        # Heartbeat/rate-reporting callbacks are optional side effects.
-        if len(try_node.body) == 1 and isinstance(try_node.body[0], ast.Expr):
-            call = try_node.body[0].value
-            if isinstance(call, ast.Call) and _get_name(call.func) == "heartbeat_fn":
+        # Heartbeat/rate-reporting callbacks are optional side effects. Keep
+        # this structural: a single callback call, optionally guarded by one
+        # if, rather than a callee-name exemption.
+        callback_stmt = try_node.body
+        if len(callback_stmt) == 1 and isinstance(callback_stmt[0], ast.If):
+            callback_stmt = callback_stmt[0].body
+        if len(callback_stmt) == 1 and isinstance(callback_stmt[0], ast.Expr):
+            call = callback_stmt[0].value
+            if isinstance(call, ast.Call) and isinstance(
+                call.func, (ast.Name, ast.Attribute)
+            ):
                 return True
 
         # JSON list parsing may retain the original value when decoding fails.
