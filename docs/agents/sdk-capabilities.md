@@ -3907,6 +3907,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** The scenario's starting state could not be read, so nothing was dispatched.
 - **Defined in:** `application_sdk/testing/harness/_errors.py`
 
+#### `PreflightOutcomeCapture`
+
+- **Import:** `from application_sdk.testing import PreflightOutcomeCapture`
+- **Signature:** `class PreflightOutcomeCapture()`
+- **Summary:** A stand-in for the gate's logger that keeps the rows it was handed.
+- **Defined in:** `application_sdk/testing/preflight.py`
+
 #### `PublishedVersion`
 
 - **Import:** `from application_sdk.testing.e2e.client import PublishedVersion`
@@ -4360,6 +4367,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Deprecated (v4.0) — seed-version DAG; use ``application_sdk.testing.e2e.payload``.
 - **Defined in:** `application_sdk/testing/full_dag/payload.py`
 
+#### `capture_preflight_outcomes`
+
+- **Import:** `from application_sdk.testing import capture_preflight_outcomes`
+- **Signature:** `capture_preflight_outcomes(monkeypatch: pytest.MonkeyPatch)`
+- **Summary:** Patch the gate's logger with a :class:`PreflightOutcomeCapture` and yield it.
+- **Defined in:** `application_sdk/testing/preflight.py`
+
 #### `check_no_stale_pollers`
 
 - **Import:** `from application_sdk.testing.harness import check_no_stale_pollers`
@@ -4562,6 +4576,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `exists(*, description: str | None = None)`
 - **Summary:** Assert that the actual value is not None.
 - **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `first_outcome_or_none`
+
+- **Import:** `from application_sdk.testing import first_outcome_or_none`
+- **Signature:** `first_outcome_or_none(mock_logger: MagicMock)`
+- **Summary:** The first outcome row, or ``None`` — for paths asserting no row was emitted.
+- **Defined in:** `application_sdk/testing/preflight.py`
 
 #### `format_validation_report`
 
@@ -5051,6 +5072,20 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Assert that the actual value is one of the given options.
 - **Defined in:** `application_sdk/testing/integration/assertions.py`
 
+#### `outcome_level`
+
+- **Import:** `from application_sdk.testing import outcome_level`
+- **Signature:** `outcome_level(mock_logger: MagicMock)`
+- **Summary:** The level the outcome row was emitted at, or ``None`` if it never was.
+- **Defined in:** `application_sdk/testing/preflight.py`
+
+#### `outcome_rows`
+
+- **Import:** `from application_sdk.testing import outcome_rows`
+- **Signature:** `outcome_rows(mock_logger: MagicMock)`
+- **Summary:** Every outcome row a ``MagicMock`` gate logger was called with, oldest level first.
+- **Defined in:** `application_sdk/testing/preflight.py`
+
 #### `parametrize_scenarios`
 
 - **Import:** `from application_sdk.testing.integration import parametrize_scenarios`
@@ -5197,6 +5232,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `secrets_from_environment(environ: Mapping[str, str], *, also: Sequence[str] = ()) -> tuple[str, ...]`
 - **Summary:** Collect the literal values a run is holding, for :func:`redact`'s ``secrets``.
 - **Defined in:** `application_sdk/testing/harness/evidence.py`
+
+#### `single_outcome`
+
+- **Import:** `from application_sdk.testing import single_outcome`
+- **Signature:** `single_outcome(mock_logger: MagicMock)`
+- **Summary:** The single outcome row from a ``MagicMock`` gate logger, asserting exactly one.
+- **Defined in:** `application_sdk/testing/preflight.py`
 
 #### `stale_version_pollers`
 
@@ -5412,6 +5454,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `Outcome: TypeAlias`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/outcome.py`
+
+#### `OUTCOME_LEVELS`
+
+- **Import:** `from application_sdk.testing import OUTCOME_LEVELS`
+- **Signature:** `OUTCOME_LEVELS: tuple[str, ...]`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/preflight.py`
 
 #### `PLACEHOLDER`
 

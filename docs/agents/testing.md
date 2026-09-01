@@ -6,6 +6,30 @@
 - For how a *consumer app's* tests should be laid out, read `docs/agents/canonical-apps.md` and then the app itself — not an arbitrary `atlan-*-app`, which may be mid-migration or carry deprecated patterns.
 - For consumer apps built on this SDK, the conformance suite's T-series (`packages/conformance/conformance/docs/rules/tests.md`) enforces the agreed per-connector testing-tier architecture (unit + integration required, e2e recommended, UI optional except for top connectors) plus test-quality checks — assertion-free tests, uncollectable test files, disabled coverage gates, and more. Run it with `/remediate` or `uv run atlan-application-sdk-conformance detect --series T`.
 
+## Asserting a Preflight Gate Verdict
+
+The gate emits one `Preflight gate outcome` row per invocation and picks the log
+level from the verdict (FND-901): `error` for a block or an unverifiable source,
+`warning` when it proceeded with a failed advisory check, `info` otherwise. Read
+the row through the shared capture rather than patching
+`preflight_gate.logger` by hand — a reader that watches `info` alone returns an
+empty list on exactly the runs it was written to pin, and keeps passing:
+
+```python
+from application_sdk.testing import capture_preflight_outcomes  # in conftest.py
+
+
+async def test_block_names_the_failing_check(capture_preflight_outcomes):
+    ...
+    assert capture_preflight_outcomes.level == "error"
+    assert capture_preflight_outcomes.matrix[0]["name"] == "credentialScopes"
+```
+
+Suites that patch the logger with a `MagicMock` themselves can use
+`outcome_rows` / `outcome_level` / `single_outcome` over the mock instead. Both
+paths assert *exactly one* row, because returning the first match hides a double
+emission.
+
 ## What SDK Review Checks for Tests
 
 The reviewer enforces these test rules (G4 guardrail):
