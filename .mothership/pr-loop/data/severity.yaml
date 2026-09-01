@@ -1,0 +1,321 @@
+# Canonical severity data for the @sdk-loop lane.
+#
+# THIS FILE IS NEVER READ BY A MODEL. `sdk_loop_findings.py` loads it; the
+# reviewer only ever sees the short vocabulary line in its argv prompt. That
+# is deliberate: `.mothership/pr-review/severity-rubric.yaml` was ~9 KB of the
+# reviewer's context on every round, and every byte of it describes a decision
+# the runner is better placed to make.
+#
+# It is also the canonical source for pr-review's copy. `gen_review_assets.py`
+# renders `.mothership/pr-review/severity-rubric.yaml` from the `categories`
+# and `calibration` blocks below and `--check` fails CI on drift, so the two
+# lanes cannot disagree about what a pattern means.
+#
+# How the runner uses it:
+#   - the model picks `pattern_id` and supplies evidence + attack_path
+#   - the runner looks up canonical_severity / max_severity and clamps DOWN
+#     when the model went higher
+#   - `required_conditions_for_*` must be substantiated in evidence or
+#     attack_path before the higher tier is allowed
+#   - `override_allowed: false` means no policy may soften the pattern
+#   - `confidence_floors` are applied PER SEVERITY, never as a flat number
+
+# --------------------------------------------------------------------------
+# display — the emitted -> rendered mapping
+# --------------------------------------------------------------------------
+#
+# The corpus this lane inherits carries THREE severity spellings with no
+# mapping between them: the payload vocabulary below, the reference files'
+# `Critical | Important | Minor`, and the verdict template's
+# `Critical | Important | Nit`. `sdk_loop_finalize.py` keys only on whether
+# `### Findings` is empty and never on a tier name, so the taxonomy was
+# decorative to the gate and load-bearing to the model — the worst
+# combination, and the reason one brief emits a fourth spelling ("IMPORTANT")
+# that belongs to none of them.
+#
+# Resolution: the model emits exactly one vocabulary (the six keys here,
+# which carry the real machinery above) and the runner maps it to the three
+# tiers the summary renders. The map is total. An emitted severity that is
+# not a key here is a schema violation that fails the phase, so a fourth
+# spelling fails loudly instead of vanishing.
+#
+# `in_findings: false` means the finding is reported in prose and does NOT
+# appear under `### Findings`. Read that deliberately: an empty `### Findings`
+# means READY_TO_MERGE and is the resolve loop's termination condition, so
+# every tier that renders into Findings BLOCKS the merge. Routing LOW and
+# INFO to prose narrows what blocks in exchange for a loop that terminates —
+# and it matches `calibration.severity_meanings`, which already calls
+# MEDIUM/LOW/INFO "summary body only".
+display:
+  BLOCKING: {tier: Critical, in_findings: true, inline_comment: true}
+  CRITICAL: {tier: Critical, in_findings: true, inline_comment: true}
+  HIGH: {tier: Important, in_findings: true, inline_comment: true}
+  MEDIUM: {tier: Nit, in_findings: true, inline_comment: false}
+  LOW: {tier: null, in_findings: false, inline_comment: false}
+  INFO: {tier: null, in_findings: false, inline_comment: false}
+
+#: Order the rendered tiers sort in, within a file.
+tier_order: [Critical, Important, Nit]
+
+# --------------------------------------------------------------------------
+# guardrails — the verdict-forcing subset
+# --------------------------------------------------------------------------
+#
+# G1-G7 live in prose in three places today (pr-review's CLAUDE.md table and
+# a partial restatement in four briefs). Here they are the data the verdict
+# function reads. `verdict` is what the guardrail forces regardless of every
+# other finding; a guardrail violation is never dropped by a confidence floor.
+guardrails:
+  G1: {name: Security Blockers, verdict: BLOCKED, patterns: [credential-in-log]}
+  G2:
+    name: Contract Safety
+    verdict: BLOCKED
+    patterns: [field-removed, field-renamed, field-type-changed]
+  G3:
+    name: Determinism
+    verdict: BLOCKED
+    patterns: [io-in-workflow, non-deterministic-in-workflow]
+  G4: {name: Test Coverage, verdict: NEEDS_FIXES, patterns: [public-api-no-test]}
+  G5: {name: Secret Safety, verdict: BLOCKED, patterns: [raw-credential-in-contract]}
+  G6:
+    name: Breaking API
+    verdict: NEEDS_FIXES
+    patterns: [breaking-change-no-deprecation]
+  # G7 (branch mergeable) is not a finding — the runner decides it from
+  # mergeStateStatus before the model is called at all, and CONFLICTING short
+  # circuits to NEEDS_REBASE with no model call.
+
+categories:
+  - id: temporal-determinism
+    description: "Temporal workflow replay safety violations"
+    patterns:
+      - pattern_id: io-in-workflow
+        canonical_severity: BLOCKING
+        max_severity: BLOCKING
+        description: "I/O operation (network, file, database) in run()/@entrypoint method body"
+        override_allowed: false
+
+      - pattern_id: non-deterministic-in-workflow
+        canonical_severity: BLOCKING
+        max_severity: BLOCKING
+        description: "datetime.now/utcnow, uuid4, random.*, or time.time in run()/@entrypoint"
+        override_allowed: false
+
+      - pattern_id: blocking-call-in-workflow
+        canonical_severity: HIGH
+        max_severity: CRITICAL
+        description: "Blocking synchronous call in async run()/@entrypoint without @task"
+        required_conditions_for_critical:
+          - "Call is long-running (>1s typical)"
+        override_allowed: true
+
+  - id: contract-safety
+    description: "Temporal payload contract evolution violations"
+    patterns:
+      - pattern_id: field-removed
+        canonical_severity: BLOCKING
+        max_severity: BLOCKING
+        description: "Field removed from Input/Output contract (breaks in-flight replay)"
+        override_allowed: false
+
+      - pattern_id: field-renamed
+        canonical_severity: BLOCKING
+        max_severity: BLOCKING
+        description: "Field renamed on Input/Output contract (breaks in-flight replay)"
+        override_allowed: false
+
+      - pattern_id: field-type-changed
+        canonical_severity: BLOCKING
+        max_severity: BLOCKING
+        description: "Field type changed on Input/Output contract (breaks in-flight replay)"
+        override_allowed: false
+
+      - pattern_id: mutable-default
+        canonical_severity: HIGH
+        max_severity: CRITICAL
+        description: "Mutable default on Input/Output field — use Field(default_factory=...)"
+        required_conditions_for_critical:
+          - "Field is used in workflow orchestration (not just task I/O)"
+        override_allowed: true
+
+      - pattern_id: missing-default-new-field
+        canonical_severity: HIGH
+        max_severity: HIGH
+        description: "New field on Input/Output without a default value (breaks existing callers)"
+        override_allowed: true
+
+  - id: blocking-operations
+    description: "Heartbeat and event loop safety in @task methods"
+    patterns:
+      - pattern_id: blocking-in-task
+        canonical_severity: HIGH
+        max_severity: CRITICAL
+        description: "Blocking operation in @task without self.run_in_thread()"
+        required_conditions_for_critical:
+          - "Task has heartbeat enabled"
+          - "Blocking operation is long-running (>5s)"
+        override_allowed: true
+
+      - pattern_id: sync-http-in-async
+        canonical_severity: HIGH
+        max_severity: HIGH
+        description: "Synchronous HTTP call (requests.get etc.) in async context"
+        override_allowed: true
+
+  - id: infrastructure-abstraction
+    description: "ADR-0005 infrastructure abstraction layer violations"
+    patterns:
+      - pattern_id: direct-temporal-import
+        canonical_severity: HIGH
+        max_severity: HIGH
+        description: "Direct temporalio import outside execution/_temporal/ module"
+        override_allowed: false
+
+      - pattern_id: direct-dapr-import
+        canonical_severity: HIGH
+        max_severity: HIGH
+        description: "Direct dapr import outside infrastructure/_dapr/ module"
+        override_allowed: false
+
+      - pattern_id: direct-redis-import
+        canonical_severity: MEDIUM
+        max_severity: HIGH
+        description: "Direct redis import outside infrastructure/_redis/ module"
+        override_allowed: true
+
+  - id: api-surface
+    description: "Public API stability and test coverage"
+    patterns:
+      - pattern_id: public-api-no-test
+        canonical_severity: CRITICAL
+        max_severity: CRITICAL
+        description: "New public API (exported in __init__.py) without corresponding test"
+        override_allowed: false
+
+      - pattern_id: breaking-change-no-deprecation
+        canonical_severity: CRITICAL
+        max_severity: CRITICAL
+        description: "Public export removed or signature changed without deprecation shim with warnings.warn()"
+        override_allowed: false
+
+      - pattern_id: missing-type-annotation
+        canonical_severity: MEDIUM
+        max_severity: MEDIUM
+        description: "Public method missing return type annotation"
+        override_allowed: true
+
+  - id: credential-safety
+    description: "Credential handling patterns"
+    patterns:
+      - pattern_id: raw-credential-in-contract
+        canonical_severity: HIGH
+        max_severity: CRITICAL
+        description: "Raw credential value passed in Input/Output (use CredentialRef instead)"
+        required_conditions_for_critical:
+          - "Credential passes through Temporal payload (visible in workflow history)"
+        override_allowed: false
+
+      - pattern_id: credential-in-log
+        canonical_severity: BLOCKING
+        max_severity: BLOCKING
+        description: "Credential, secret, token, or API key logged via logger or print"
+        override_allowed: false
+
+      - pattern_id: credential-resolve-outside-task
+        canonical_severity: HIGH
+        max_severity: HIGH
+        description: "CredentialResolver used outside @task method (no retry/heartbeat protection)"
+        override_allowed: true
+
+  - id: error-handling
+    description: "Exception handling patterns"
+    patterns:
+      - pattern_id: bare-except
+        canonical_severity: MEDIUM
+        max_severity: HIGH
+        description: "Bare except clause swallowing all exceptions"
+        required_conditions_for_high:
+          - "In a @task method or run() orchestration"
+        override_allowed: true
+
+      - pattern_id: silent-exception
+        canonical_severity: HIGH
+        max_severity: HIGH
+        description: "Exception caught, logged, but not re-raised — caller never knows about failure"
+        override_allowed: true
+
+      - pattern_id: missing-exception-chain
+        canonical_severity: LOW
+        max_severity: MEDIUM
+        description: "Exception re-raised without 'from e' — original traceback lost"
+        override_allowed: true
+
+  - id: dependency-direction
+    description: "ADR layer dependency violations"
+    patterns:
+      - pattern_id: reverse-dependency
+        canonical_severity: HIGH
+        max_severity: HIGH
+        description: "Import from infrastructure/ into app/ or execution/ into app/ (wrong direction)"
+        override_allowed: false
+
+      - pattern_id: cross-layer-skip
+        canonical_severity: MEDIUM
+        max_severity: HIGH
+        description: "app/ importing directly from infrastructure/ (should go through execution/)"
+        required_conditions_for_high:
+          - "Import is for runtime behavior (not just types)"
+        override_allowed: true
+
+  - id: v2-patterns
+    description: "Legacy v2 SDK patterns that should be migrated"
+    patterns:
+      - pattern_id: v2-import
+        canonical_severity: HIGH
+        max_severity: HIGH
+        description: "Import from application_sdk.workflows, .activities, or .handlers (removed in v3)"
+        override_allowed: false
+
+      - pattern_id: v2-interface
+        canonical_severity: HIGH
+        max_severity: HIGH
+        description: "Subclass of ActivitiesInterface, WorkflowInterface, or HandlerInterface"
+        override_allowed: false
+
+      - pattern_id: v2-decorator
+        canonical_severity: MEDIUM
+        max_severity: HIGH
+        description: "@workflow.defn or @activity.defn decorator (use @task instead)"
+        required_conditions_for_high:
+          - "In non-deprecated module"
+        override_allowed: true
+
+      - pattern_id: dataclass-on-contract
+        canonical_severity: MEDIUM
+        max_severity: MEDIUM
+        description: "@dataclass on Input/Output subclass (should be plain Pydantic BaseModel)"
+        override_allowed: true
+
+# Severity calibration + confidence floors — the single source (absorbed from
+# the deleted modes/standard.md; BLDX-1605). Do not restate these in agent
+# prompts or mode files.
+#
+# The floors are PER SEVERITY and that matters: six pr-review briefs restate
+# them as a flat `>= 0.80`, and one as a flat `0.85`. The harm is suppression,
+# not drift — a flat 0.80 discards every valid MEDIUM (floor 0.55) and LOW
+# (0.40), and a flat 0.85 additionally discards every valid HIGH (0.80). The
+# runner applies the table; no brief restates it.
+calibration:
+  severity_meanings:
+    BLOCKING: "Use pattern_id above when applicable; guardrail-class"
+    CRITICAL: "Use pattern_id above when applicable; guardrail-class"
+    HIGH: "Issues users will hit in common flows (inline comment REQUIRED)"
+    MEDIUM: "Issues users rarely hit (summary body only)"
+    LOW: "Defensive notes (summary body only)"
+    INFO: "Pattern observation (summary body only)"
+  confidence_floors:
+    BLOCKING: 0.85
+    CRITICAL: 0.85
+    HIGH: 0.80
+    MEDIUM: 0.55
+    LOW: 0.40
