@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.30.0
-source-sha:    a57bfceb669bc59667ae66948b6e8de3dd9959e2
-source-date:   2026-08-31T19:14:25Z
+sdk-version:   3.31.0
+source-sha:    d2f5da30fa83bd5052aa327fe8a49bc87b89e847
+source-date:   2026-09-01T13:01:56+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 44 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 319 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 327 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -3212,7 +3212,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `AppExecutor`
 
 - **Import:** `from application_sdk.testing.integration.fixtures import AppExecutor`
-- **Signature:** `class AppExecutor(backend: TemporalExecutorBackend, expected_infrastructure: InfrastructureContext | None = None) -> None`
+- **Signature:** `class AppExecutor(backend: TemporalExecutorBackend, ...)`
 - **Summary:** Thin shim over :class:`TemporalExecutorBackend` for integration suites.
 - **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
