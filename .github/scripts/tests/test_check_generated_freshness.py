@@ -208,3 +208,38 @@ def test_untracked_output_ignored_by_gitignore_still_caught(repo, monkeypatch):
 
     monkeypatch.setattr(sync, "run", fake_run)
     assert mod.main([]) == 1
+
+
+# ── multi-root contracts reach the gate ──────────────────────────────────────
+
+
+def test_multi_root_app_is_checked_not_skipped(repo, monkeypatch):
+    """A one-root-per-entrypoint app (crawler.pkl + miner.pkl) has no app.pkl.
+    The gate used to return "na" on that — a silent pass — before regenerate()
+    was ever called, which is the exact failure this check exists to catch.
+    """
+    (repo / "contract" / "app.pkl").unlink()
+    (repo / "contract" / "crawler.pkl").write_text(
+        'amends "@app-contract-toolkit/NativeApp.pkl"\n'
+    )
+    called: list[str] = []
+
+    def fake_regenerate(contract_dir):
+        called.append(contract_dir)
+        (repo / "app" / "generated" / "crawler").mkdir(parents=True, exist_ok=True)
+        (repo / "app" / "generated" / "crawler" / "_input.py").write_text("drifted\n")
+        return True
+
+    monkeypatch.setattr(mod, "regenerate", fake_regenerate)
+    status, changed = mod.check_freshness("contract")
+    assert called == ["contract"]  # regenerate() actually ran
+    assert status == "drift"
+    assert any("crawler" in c for c in changed)
+
+
+def test_no_evaluable_root_is_still_na(repo, monkeypatch):
+    """An imported module is not a root: nothing to generate, still a pass."""
+    (repo / "contract" / "app.pkl").unlink()
+    (repo / "contract" / "credentials.pkl").write_text('name = "creds"\n')
+    monkeypatch.setattr(mod, "regenerate", lambda d: pytest.fail("must not regenerate"))
+    assert mod.check_freshness("contract") == ("na", [])
