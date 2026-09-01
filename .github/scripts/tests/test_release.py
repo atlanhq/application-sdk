@@ -397,3 +397,81 @@ class TestApplyFirstReleaseFloor:
             )
             == "0.2.0"
         )
+
+
+class TestMainAlreadyReleasedGuard:
+    """release.main() must not bump to a version the target branch already has.
+
+    Reproduces application-sdk#3570 in the lane shared by the SDK's own release
+    and all app repos: a run whose checkout is a frozen merge ref predating the
+    release merge recomputes the version that just shipped.
+    """
+
+    def _wire(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        guard_result: tuple,
+        branch: str = "main",
+        new_version: str = "1.3.0",
+    ) -> tuple[list, dict, dict]:
+        monkeypatch.setattr(sys, "argv", ["release.py", branch, "1.2.0"])
+        monkeypatch.setattr(release, "get_commits_since_last_tag", lambda: ["feat: x"])
+        monkeypatch.setattr(release, "last_release_tag", lambda: "v1.2.0")
+        monkeypatch.setattr(release, "calculate_version_bump", lambda **_k: new_version)
+
+        written: list = []
+        monkeypatch.setattr(
+            release,
+            "update_pyproject_version",
+            lambda **kw: written.append(kw["new_version"]),
+        )
+
+        outputs: dict = {}
+        monkeypatch.setattr(release, "_set_output", lambda k, v: outputs.update({k: v}))
+
+        seen: dict = {}
+
+        def fake_guard(path, version, **kwargs):
+            seen["path"] = path
+            seen["version"] = version
+            seen["branch"] = kwargs.get("branch")
+            return guard_result
+
+        monkeypatch.setattr(release.release_guard, "already_released", fake_guard)
+        return written, outputs, seen
+
+    def test_skips_without_writing_pyproject(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        written, outputs, _ = self._wire(monkeypatch, guard_result=(True, "1.3.0"))
+
+        release.main()
+
+        # The callers gate their changelog and commit steps on this output.
+        assert outputs["skip"] == "true"
+        assert "new" not in outputs
+        assert written == []
+
+    def test_normal_release_proceeds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        written, outputs, _ = self._wire(monkeypatch, guard_result=(False, "1.2.0"))
+
+        release.main()
+
+        assert outputs["skip"] == "false"
+        assert outputs["new"] == "1.3.0"
+        assert written == ["1.3.0"]
+
+    def test_guard_is_asked_about_the_target_branch(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """App repos may release off a branch other than main."""
+        _w, _o, seen = self._wire(
+            monkeypatch, guard_result=(False, None), branch="release-2.x"
+        )
+
+        release.main()
+
+        assert seen["branch"] == "release-2.x"
+        assert seen["version"] == "1.3.0"
+        assert seen["path"] == "pyproject.toml"
