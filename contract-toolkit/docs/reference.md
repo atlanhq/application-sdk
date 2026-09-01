@@ -650,9 +650,28 @@ The auth-type radio's `ui.hidden` is auto-derived from `credentialAuthOptions.le
 
 `deploy: DeployConfig? = null` — leave unset (null, the default) to let Heracles apply platform defaults. Set to `new DeployConfig { … }` to emit a `deploy:` block (and `pools:` when pools are configured) in `atlan.yaml`.
 
-Singleton fields (`executionMode`, `splitDeployment`, `dapr`) apply to the whole deployment. Per-pool scaling (KEDA, resources, env) goes inside `deploy.pools`.
+Singleton fields (`executionMode`, `splitDeployment`, `dapr`) apply to the whole deployment. Per-pool scaling (KEDA, resources, VPA, env) goes inside `deploy.pools`.
 
-All deployment classes (`DeployConfig`, `Pool`, `DaprComponents`, `KedaConfig`, `KedaTemporalConfig`, `ResourceConfig`) are defined in `Deployment.pkl` and re-exported by `App.pkl` — amending contracts do not need a supplemental import.
+All deployment classes (`DeployConfig`, `Pool`, `DaprComponents`, `KedaConfig`, `KedaTemporalConfig`, `ResourceConfig`, `VpaConfig`) are defined in `Deployment.pkl` and re-exported by `App.pkl` — amending contracts do not need a supplemental import.
+
+#### What `deploy.pools` generates
+
+`pools` is a mapping, but the `atlan-app` Helm chart reads a **list** of dedicated pools under `deploy.workerPools`, with a **flat** `keda` block. The toolkit owns that translation — a contract never writes `workerPools` by hand:
+
+| Contract | Generated `atlan.yaml` | Read by |
+|---|---|---|
+| the **first** `pools` key | `deploy:` — `keda`, `resources`, `vpa`, `env` synthesised from it | chart, as the app's main worker |
+| **every key after the first** | one `deploy.workerPools[]` entry, `name` = the pool key | chart, as a dedicated pool: its own TemporalWorkerDeployment, ScaledObject, VPA, task queue |
+| the whole map | top-level `pools:` mirror | tooling reading the contract shape directly |
+
+Two consequences worth knowing:
+
+- **The first pool is the main worker, not an extra one.** A single-pool contract emits no `workerPools` at all. Order therefore matters: putting a scale-to-zero pool first synthesises a scale-to-zero `deploy:` block.
+- **The pool key is the only source of the pool's task queue.** No `taskQueue` is ever generated. The chart renders `atlan-<app>-<deploymentName>-<key>` and `application_sdk`'s `resolve_pool_queue()` derives the same string from `ATLAN_APPLICATION_NAME` + `ATLAN_DEPLOYMENT_NAME`, so the routing target and the pool worker's poll target cannot drift. `ATLAN_POOL_<POOL>_QUEUE` remains an explicit override for local dev.
+
+`replicaCount`, `env`, `envOverrides`, and `keda.enabled` are generated into `workerPools[]` entries but **not yet honored per-pool by the chart**, which reads only `name`, `taskQueue`, `resources`, `keda`, `vpa`, `capacityType`, `maxConcurrentActivities`, and `terminationGracePeriodSeconds`. They are emitted rather than dropped so the contract stays the declaration of intent and the gap is visible in the generated manifest. Tracked in ARUN-1041.
+
+Generated `deploy` blocks are validated in CI against the platform's infra ceilings (`.github/scripts/config_validator.py`), including per-pool resources, VPA, and KEDA bounds.
 
 | Property | Type | Default | Description |
 |---|---|---|---|
@@ -666,7 +685,7 @@ All deployment classes (`DeployConfig`, `Pool`, `DaprComponents`, `KedaConfig`, 
 | `deploy.splitDeployment` | Boolean | `true` | Emitted as `splitDeploymentEnabled`. |
 | `deploy.dapr` | DaprComponents | `new DaprComponents {}` | Dapr sidecar toggles — app-wide, not per-pool. Emitted under `dapr:` when any component is enabled. |
 | `deploy.overrides` | Mapping<String, Any> | `{}` | Global escape hatch. Deep-merged on top of the rendered `deploy:` block after first-pool `overrides`. |
-| `deploy.pools` | Mapping<KebabCase, Pool> | `{}` | Named worker-pool map. Pool keys must be lowercase kebab-case and match `@task(pool="…")` in Python. When non-empty, emits `deploy:` (synthesised from the first pool's keda/resources/env) and `pools:`. |
+| `deploy.pools` | Mapping<KebabCase, Pool> | `{}` | Named worker-pool map. Pool keys must be lowercase kebab-case and match `@task(pool="…")` in Python. When non-empty, emits `deploy:` (synthesised from the first pool), one `deploy.workerPools[]` entry per pool after the first, and the top-level `pools:` mirror. See [What `deploy.pools` generates](#what-deploypools-generates). |
 
 **Pool class:**
 
@@ -675,11 +694,14 @@ class Pool {
   replicaCount: Int? = null     // static replica count (ignored when keda.enabled = true)
   keda: KedaConfig = new KedaConfig {}
   resources: ResourceConfig? = null
+  vpa: VpaConfig? = null        // per-pool VPA; the chart gates a pool's VPA on THIS block alone
   env: Mapping<String, String> = new Mapping {}
   envOverrides: Mapping<String, Mapping<String, String>> = new Mapping {}
   overrides: Mapping<String, Any> = new Mapping {}  // deep-merged last (escape hatch)
 }
 ```
+
+There is deliberately no `taskQueue` field — see [What `deploy.pools` generates](#what-deploypools-generates).
 
 **DaprComponents:**
 
@@ -702,13 +724,14 @@ class DaprComponents {
 class KedaConfig {
   enabled: Boolean = true
   minReplicaCount: Int = 0
+  maxReplicaCount: Int? = null  // replica ceiling; omit to inherit the chart's chain
   cooldownPeriod: Int? = null  // seconds to wait after queue drains before scaling to zero
   temporal: KedaTemporalConfig = new { targetQueueSize = 5 }
 }
 class KedaTemporalConfig { targetQueueSize: Int }
 ```
 
-`targetQueueSize` must be set via `keda.temporal.targetQueueSize`. `cooldownPeriod` is omitted from the rendered output when not set (Helm chart default applies).
+`targetQueueSize` must be set via `keda.temporal.targetQueueSize` — in a generated `workerPools[]` entry it lands flat, as `keda.targetQueueSize`, because that is the shape the chart reads. `cooldownPeriod` and `maxReplicaCount` are omitted from the rendered output when not set (Helm chart defaults apply).
 
 **ResourceConfig:**
 
@@ -719,7 +742,25 @@ class ResourceConfig {
 }
 ```
 
-Example — two pools, hot always-on + cold scale-to-zero:
+**VpaConfig:**
+
+```pkl
+class VpaConfig {
+  enabled: Boolean = false
+  updateMode: String? = null   // "Off" | "Initial" | "Recreate" | "Auto"
+  minAllowed: Mapping<String, String>
+  maxAllowed: Mapping<String, String>
+}
+```
+
+`updateMode` is constrained to the four casings the Kubernetes VPA accepts, so a contract cannot emit the lowercase `off` that YAML 1.1 loaders coerce to boolean `false`.
+
+Two chart behaviours to know when setting this on a `Pool`:
+
+- A pool's VPA is gated on **its own** `enabled`. The chart does not fall back to an app-level VPA flag, so a pool that omits this block is never clamped.
+- `maxAllowed` is swapped as a **whole dict** at each chart fallback step, not merged key-by-key. Declaring only `memory` leaves cpu on the chart default (`2000m`), not on any app-level value.
+
+Example — two pools, hot always-on + cold scale-to-zero. `hot` is first, so it is the app's main worker; `cold` becomes a dedicated `workerPools[]` entry:
 
 ```pkl
 deploy = new DeployConfig {
@@ -728,13 +769,18 @@ deploy = new DeployConfig {
       keda { minReplicaCount = 1; cooldownPeriod = 300 }
     }
     ["cold"] = new Pool {
-      keda { minReplicaCount = 0; cooldownPeriod = 30 }
+      keda { minReplicaCount = 0; maxReplicaCount = 4; cooldownPeriod = 30 }
+      vpa = new VpaConfig {
+        enabled = true
+        updateMode = "Auto"
+        maxAllowed { ["cpu"] = "2"; ["memory"] = "4Gi" }
+      }
     }
   }
 }
 ```
 
-Example — single pool with Dapr sidecars and a VPA override:
+Example — single pool with Dapr sidecars and a VPA:
 
 ```pkl
 deploy = new DeployConfig {
@@ -746,14 +792,14 @@ deploy = new DeployConfig {
         requests { ["cpu"] = "500m"; ["memory"] = "1Gi" }
         limits { ["cpu"] = "2"; ["memory"] = "4Gi" }
       }
+      vpa = new VpaConfig { enabled = true; updateMode = "Auto" }
       env { ["LOG_LEVEL"] = "INFO" }
-      overrides {
-        ["verticalPodAutoscaler"] = new Mapping { ["enabled"] = true; ["updateMode"] = "Auto" }
-      }
     }
   }
 }
 ```
+
+Use the typed `vpa` field rather than `overrides`: the chart key is `vpa`, and an `overrides` entry naming anything else is silently ignored at render.
 
 For the single-pool case use key `"default"`. See `examples/deploy/` for the full single-pool example and `examples/pools/` for the two-pool example.
 

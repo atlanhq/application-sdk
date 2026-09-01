@@ -1,0 +1,213 @@
+/// `deploy.workerPools` rendering — the chart-shape projection of the contract's
+/// `pools:` map.
+///
+/// The `atlan-app` chart reads a LIST keyed by `name` with a FLAT `keda` block.
+/// The contract declares a MAPPING keyed by pool name with
+/// `keda.temporal.targetQueueSize`. These tests pin that translation, plus the
+/// first-pool-is-the-main-worker rule that keeps single-pool apps byte-identical.
+///
+/// Assertions read the rendered `atlan.yaml` VALUE rather than its text: the
+/// point of the projection is its structure, and a text match cannot tell a flat
+/// `keda.targetQueueSize` from the nested one in the `pools:` mirror.
+amends "pkl:test"
+
+import "../src/App.pkl" as App
+
+// ── Fixtures ────────────────────────────────────────────────────────────────
+
+local function appWith(deployCfg: App.DeployConfig?) = (App) {
+  name = "wp-test"
+  displayName = "Worker Pools Test"
+  icon = "https://assets.atlan.com/assets/dummy.svg"
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  deploy = deployCfg
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Settings"] {
+        inputs {
+          ["target"] = new App.TextInput { title = "Target" }
+        }
+      }
+    }
+  }
+}
+
+local function atlanYaml(a) = a.output.files["atlan.yaml"].value
+local function deployOf(a) = atlanYaml(a)["deploy"]
+
+local singlePool = appWith(new App.DeployConfig {
+  pools {
+    ["default"] = new App.Pool {
+      keda { minReplicaCount = 1 }
+    }
+  }
+})
+
+local threePools = appWith(new App.DeployConfig {
+  pools {
+    ["main"] = new App.Pool {
+      keda { minReplicaCount = 1; cooldownPeriod = 300; temporal { targetQueueSize = 10 } }
+      resources = new App.ResourceConfig {
+        requests { ["cpu"] = "500m"; ["memory"] = "1Gi" }
+      }
+      env { ["WORKER_TYPE"] = "main" }
+    }
+    ["heavy"] = new App.Pool {
+      keda {
+        minReplicaCount = 0
+        maxReplicaCount = 4
+        cooldownPeriod = 30
+        temporal { targetQueueSize = 1 }
+      }
+      resources = new App.ResourceConfig {
+        requests { ["cpu"] = "250m"; ["memory"] = "4Gi" }
+        limits { ["cpu"] = "2"; ["memory"] = "16Gi" }
+      }
+      vpa = new App.VpaConfig {
+        enabled = true
+        updateMode = "Auto"
+        maxAllowed { ["cpu"] = "2"; ["memory"] = "16Gi" }
+      }
+      env { ["WORKER_TYPE"] = "heavy" }
+    }
+    ["cold-tier"] = new App.Pool {
+      keda { minReplicaCount = 0 }
+    }
+  }
+})
+
+local noPools = appWith(new App.DeployConfig {})
+local noDeploy = appWith(null)
+
+local threeWorkerPools = deployOf(threePools)["workerPools"].toList()
+local heavy = threeWorkerPools.findOrNull((p) -> p["name"] == "heavy")
+local coldTier = threeWorkerPools.findOrNull((p) -> p["name"] == "cold-tier")
+
+facts {
+  // ── First pool is the main worker, not a workerPools entry ────────────────
+
+  ["a single pool emits NO workerPools block — it IS the app's main worker"] {
+    !deployOf(singlePool).containsKey("workerPools")
+  }
+
+  ["a single pool still drives the synthesised deploy: block"] {
+    deployOf(singlePool)["keda"]["minReplicaCount"] == 1
+  }
+
+  ["an empty pools map emits no workerPools block"] {
+    !deployOf(noPools).containsKey("workerPools")
+  }
+
+  ["no deploy block at all emits no deploy and no pools"] {
+    !atlanYaml(noDeploy).containsKey("deploy") && !atlanYaml(noDeploy).containsKey("pools")
+  }
+
+  ["three pools render exactly two workerPools entries"] {
+    threeWorkerPools.length == 2
+  }
+
+  ["the first pool never appears as a workerPools entry"] {
+    threeWorkerPools.every((p) -> p["name"] != "main")
+  }
+
+  ["every pool after the first does appear, keyed by its contract key"] {
+    heavy != null && coldTier != null
+  }
+
+  ["the first pool still drives deploy:, so its config is not lost"] {
+    deployOf(threePools)["keda"]["temporal"]["targetQueueSize"] == 10 &&
+      deployOf(threePools)["env"]["WORKER_TYPE"] == "main"
+  }
+
+  // ── keda: nested contract shape → flat chart shape ────────────────────────
+
+  ["a workerPools entry carries targetQueueSize FLAT"] {
+    heavy["keda"]["targetQueueSize"] == 1
+  }
+
+  ["a workerPools entry has NO nested temporal block"] {
+    !heavy["keda"].containsKey("temporal")
+  }
+
+  ["the contract's pools: mirror keeps the NESTED temporal shape"] {
+    atlanYaml(threePools)["pools"]["heavy"]["keda"]["temporal"]["targetQueueSize"] == 1
+  }
+
+  ["minReplicaCount, maxReplicaCount and cooldownPeriod reach the entry"] {
+    heavy["keda"]["minReplicaCount"] == 0 &&
+      heavy["keda"]["maxReplicaCount"] == 4 &&
+      heavy["keda"]["cooldownPeriod"] == 30
+  }
+
+  ["an undeclared maxReplicaCount is omitted rather than guessed"] {
+    !coldTier["keda"].containsKey("maxReplicaCount")
+  }
+
+  // ── taskQueue is never emitted: the pool key is the only source ───────────
+
+  ["no workerPools entry declares a taskQueue"] {
+    // The chart derives atlan-<app>-<deploymentName>-<pool>, and
+    // application_sdk's resolve_pool_queue() derives the same string. A
+    // generated taskQueue would be a second source that can drift from it.
+    threeWorkerPools.every((p) -> !p.containsKey("taskQueue"))
+  }
+
+  // ── resources / vpa ───────────────────────────────────────────────────────
+
+  ["a pool's resources reach its entry, requests and limits both"] {
+    heavy["resources"]["requests"]["memory"] == "4Gi" &&
+      heavy["resources"]["limits"]["memory"] == "16Gi"
+  }
+
+  ["a pool declaring no resources emits no resources key"] {
+    !coldTier.containsKey("resources")
+  }
+
+  ["a pool's VPA reaches its entry"] {
+    heavy["vpa"]["enabled"] == true &&
+      heavy["vpa"]["updateMode"] == "Auto" &&
+      heavy["vpa"]["maxAllowed"]["memory"] == "16Gi"
+  }
+
+  ["a pool that declares no VPA emits no vpa key — the chart then never clamps it"] {
+    !coldTier.containsKey("vpa")
+  }
+
+  // ── Emitted-but-not-yet-honored keys (ARUN-1041) ──────────────────────────
+
+  ["per-pool env is emitted rather than silently dropped"] {
+    // The chart does not read workerPools[].env yet. Emitting it keeps the
+    // contract the declaration of intent and makes the gap visible in the
+    // generated manifest instead of vanishing at render time.
+    heavy["env"]["WORKER_TYPE"] == "heavy"
+  }
+
+  // ── VpaConfig constrains updateMode to the K8s casings ────────────────────
+
+  ["VpaConfig rejects the lowercase off that YAML 1.1 coerces to false"] {
+    module.catch(() -> (new App.VpaConfig { updateMode = "off" }).updateMode) != null
+  }
+
+  ["VpaConfig accepts each canonical K8s casing"] {
+    (new App.VpaConfig { updateMode = "Off" }).updateMode == "Off" &&
+      (new App.VpaConfig { updateMode = "Initial" }).updateMode == "Initial" &&
+      (new App.VpaConfig { updateMode = "Recreate" }).updateMode == "Recreate" &&
+      (new App.VpaConfig { updateMode = "Auto" }).updateMode == "Auto"
+  }
+
+  ["VpaConfig defaults to disabled with no updateMode"] {
+    (new App.VpaConfig {}).enabled == false && (new App.VpaConfig {}).updateMode == null
+  }
+
+  // ── pool keys stay kebab-case, so derived queue names stay valid ──────────
+
+  ["a non-kebab-case pool key is rejected — the chart builds metadata.name from it"] {
+    module.catch(() -> appWith(new App.DeployConfig {
+      pools {
+        ["main"] = new App.Pool {}
+        ["Heavy_Pool"] = new App.Pool {}
+      }
+    }).output.files["atlan.yaml"].value) != null
+  }
+}
