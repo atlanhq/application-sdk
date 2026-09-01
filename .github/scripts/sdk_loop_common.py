@@ -883,11 +883,25 @@ def format_usage(usage: dict[str, int]) -> str:
 SUBAGENT_MAX_STEPS = 25
 
 #: Kill an agent that has printed nothing for this long. Sized off measurement,
-#: not taste: across observed runs the longest gap between two output lines in a
-#: HEALTHY phase was well under a minute, while a stalled one produced 43
-#: minutes of nothing. Five minutes sits far above the former and far below the
-#: latter, so it cannot fire on a slow-but-working phase.
-IDLE_TIMEOUT_S = 5 * 60
+#: not taste — and RE-sized when the measurement moved.
+#:
+#: The original figure (5 minutes) rested on "the longest gap between two
+#: output lines in a HEALTHY phase was well under a minute". That premise is
+#: now falsified: across the 14 runs of 2026-09-01, healthy review turns on
+#: the review model routinely gapped 60-267s, and the maximum measured gap in
+#: a phase that went on to POST A CLEAN VERDICT was 304.7s — five seconds over
+#: the old bound. Run 33500595871 is the kill this caused: mid-Phase-1 greps
+#: returned, one long model turn followed, and the watchdog shot a working
+#: phase at exactly 300s with no verdict to show for the eight minutes before
+#: it. (The internal opencode log also refreshes the deadline, but during a
+#: single long generation it too can go quiet.)
+#:
+#: Ten minutes clears the worst measured healthy gap by ~2x and still sits far
+#: below the 43-minute genuine stall this bound exists to catch. The cost of a
+#: too-high bound is a few wasted minutes at the tail of a truly dead phase;
+#: the cost of a too-low one is a finished review discarded at its most
+#: expensive moment.
+IDLE_TIMEOUT_S = 10 * 60
 
 MAX_CONSECUTIVE_REAIMS = 2
 

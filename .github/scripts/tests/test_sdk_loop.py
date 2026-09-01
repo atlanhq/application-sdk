@@ -33,6 +33,7 @@ from sdk_loop_common import (  # noqa: E402
     AGENT_ENV_PASSTHROUGH,
     ALLOWED_MODELS,
     DEFAULT_MAX_TOKENS,
+    IDLE_TIMEOUT_S,
     MAX_CONSECUTIVE_REAIMS,
     MAX_ROUNDS,
     MODEL_PRICES_USD_PER_MTOK,
@@ -1545,3 +1546,15 @@ def test_the_review_prompt_bounds_its_own_turn_count() -> None:
     assert "in ONE call with an explicit `limit`" in prompt
     # Phase 3 measured 1-3.5 min against the playbook's own "~30s".
     assert "Emit it as ONE" in prompt
+
+
+def test_the_idle_bound_clears_the_worst_measured_healthy_turn() -> None:
+    """Run 33500595871: the watchdog killed a working toolkit review at
+    exactly 300s of silence — while the measured maximum gap in a phase that
+    went on to post a clean verdict was 304.7s. An idle bound below the
+    healthy maximum converts the lane's slowest successes into failures, at
+    the end of the phase, where the spend is already sunk. The genuine stall
+    this bound exists for measured 43 minutes; anything in [400s, 2000s]
+    separates the two populations."""
+    assert IDLE_TIMEOUT_S > 305, "below the measured max healthy turn gap"
+    assert IDLE_TIMEOUT_S < 2000, "no longer catches the 43-minute stall class"
