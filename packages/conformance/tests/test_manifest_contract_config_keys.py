@@ -1,19 +1,32 @@
-"""Tests for K018 ManifestArgNotDeclaredOnInputContract and K019
-FormKeyMissingFromManifestArgs.
+"""Tests for the inbound-config trio: K018 ManifestArgNotDeclaredOnInputContract,
+K019 FormKeyMissingFromManifestArgs and K020 ManifestArgsLegacyNestedEnvelope.
 
-Both rules guard the *inbound* config path — the direction that loses customer
-configuration — where K006 guards the outbound one.
+All three guard the path config takes *into* a run — the direction that loses
+customer configuration — where K006 guards the outbound one.
 
-The two false-positive traps each rule must survive are pinned explicitly,
-because getting either wrong makes the rule noisy enough that it never
-graduates past WARN:
+**Flat args are the contract**, and the tests pin that policy from both sides:
 
-* K018 must accept a ``@model_validator(mode="before")`` in place of declared
-  fields (the prescribed remedy folds flat keys into ``metadata`` without
-  declaring them), and must handle the ``args.metadata.<key>`` envelope as well
-  as flat args — the fleet runs both shapes simultaneously.
-* K019 must not flag a form key whose placeholder appears on a *downstream*
-  node, and must not flag SDK-injected placeholders that have no form key.
+* K018 checks flat keys only. A ``@model_validator(mode="before")`` that folds
+  flat keys back into ``metadata`` does **not** satisfy it — that rebuilds the
+  envelope the platform moved away from. Validators are not inspected at all;
+  the rule keys purely on declared fields.
+* Keys still inside ``args.metadata`` are deliberately *not* K018 findings. An
+  app still emitting the envelope consumes it by design until it migrates, so
+  flagging its keys would be a false positive. The envelope itself is K020,
+  which reports one finding per entrypoint and distinguishes an explicit
+  ``flatManifestArgs = false`` opt-out from a stale pre-flattening artifact.
+
+The false-positive exclusions each rule must honour are pinned explicitly,
+because getting any of them wrong makes a rule noisy enough that it never
+graduates past WARN — real Pydantic ``extra="allow"`` (but not
+``allow_unbounded_fields``), the platform-injected ``credential`` arg, fields
+inherited through an SDK base, a form key wired on a *downstream* node,
+SDK-injected placeholders with no form key, and non-value widgets
+(``InfoBanner``, ``Sage``/``SageV2``).
+
+Assert on ``finding.discriminator``, never on message substrings: K018's message
+names ``ExtractionInput``'s fields as remediation advice, so
+``"include_filter" in message`` is true even for a finding about another key.
 """
 
 from __future__ import annotations
