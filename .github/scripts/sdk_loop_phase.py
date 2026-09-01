@@ -282,9 +282,11 @@ def review_prompt(
         # every measured review spent a SECOND turn on `offset=1049` to fetch
         # the remainder — one round trip, at whatever that round trip costs, for
         # nothing.
-        f"Read {PLAYBOOK_REVIEW} in ONE call with an explicit `limit` past its",
-        "end (it is ~1700 lines). A default read truncates it and costs an extra",
-        "round trip to fetch the rest.",
+        f"Read {PLAYBOOK_REVIEW} in ONE call with an explicit `limit` well past",
+        "its end (5000 is safe at any size). A default read truncates near line",
+        "1048 and costs an extra round trip to fetch the rest. Do not cite a",
+        "line count here — the playbook is actively being trimmed and a stale",
+        "number invites a limit that truncates again.",
         "",
         # Turn count is this lane's cost driver, not tool time: measured review
         # turns run ~10s early and 75-90s by turn 12 as context accumulates, so
