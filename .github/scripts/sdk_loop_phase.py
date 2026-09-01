@@ -43,7 +43,6 @@ from typing import Any, Callable
 
 from sdk_loop_common import (
     MAX_ROUNDS,
-    PHASE2_AGENTS,
     PLAYBOOK_RESOLVE,
     PLAYBOOK_REVIEW,
     RESOLVE_MODEL,
