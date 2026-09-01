@@ -9,6 +9,8 @@ just fails later, with "no files", pointing at the App instead of the fixture.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import suppress
 from pathlib import Path
 from unittest import mock
 
@@ -39,17 +41,19 @@ class _App:
 
 
 class TestVerifyAppName:
-    def test_passes_when_the_env_matches_the_registered_name(
+    def test_passes_when_the_snapshot_matches_the_registered_name(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv(APPLICATION_NAME_ENV, "power-bi-app")
+        monkeypatch.setattr(constants, "APPLICATION_NAME", "power-bi-app")
 
         _verify_app_name(_App, "power-bi-app")
 
-    def test_raises_when_the_env_disagrees(
+    def test_raises_when_the_snapshot_disagrees(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv(APPLICATION_NAME_ENV, "powerbi")
+        monkeypatch.setattr(constants, "APPLICATION_NAME", "powerbi")
 
         with pytest.raises(AppNameMismatchError) as excinfo:
             _verify_app_name(_App, "power-bi-app")
@@ -58,10 +62,23 @@ class TestVerifyAppName:
         assert "'powerbi'" in message
         assert "'power-bi-app'" in message
 
+    def test_compares_the_snapshot_not_the_live_environment(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The artifact root is built from constants.APPLICATION_NAME; an env
+        var changed mid-session must not make the guard compare a value the
+        SDK is no longer using."""
+        monkeypatch.setenv(APPLICATION_NAME_ENV, "power-bi-app")
+        monkeypatch.setattr(constants, "APPLICATION_NAME", "powerbi")
+
+        with pytest.raises(AppNameMismatchError):
+            _verify_app_name(_App, "power-bi-app")
+
     def test_ignores_an_unset_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The SDK default is ``"default"``; failing every suite that never set
         the variable is a different conversation, not this guard's job."""
         monkeypatch.delenv(APPLICATION_NAME_ENV, raising=False)
+        monkeypatch.setattr(constants, "APPLICATION_NAME", "default")
 
         _verify_app_name(_App, "power-bi-app")
 
@@ -157,32 +174,80 @@ class TestGuardsOnTheCallPath:
             "power-bi-app", "1.0.0", _RegisteredApp, _KitInput, _KitOutput
         )
         monkeypatch.setenv(APPLICATION_NAME_ENV, "powerbi")
+        monkeypatch.setattr(constants, "APPLICATION_NAME", "powerbi")
 
         with pytest.raises(AppNameMismatchError):
             _verify_registration(_RegisteredApp)
 
 
+@pytest.fixture
+def scoped_temporary_path(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[Path]:
+    """Drive the kit's session-scoped fixture function-scoped.
+
+    Requesting the real ``temporary_path`` fixture from this suite would hold
+    its global patch until *session* teardown — every test that runs after this
+    module in the same worker would see the redirected path, a latent flake for
+    any module that binds ``./local/tmp/`` at import. Driving ``__wrapped__``
+    directly undoes the patch per test; the session-scoped fixture stays as is
+    for kit adopters, whose whole session opts in.
+    """
+    from application_sdk.testing.integration import fixtures as kit_fixtures
+    from application_sdk.testing.integration.fixtures import KitOptions
+
+    gen = kit_fixtures.temporary_path.__wrapped__(tmp_path_factory, KitOptions())
+    path = next(gen)
+    try:
+        yield path
+    finally:
+        with suppress(StopIteration):
+            next(gen)
+
+
 class TestTemporaryPath:
     def test_redirects_the_constant_at_the_yielded_directory(
-        self, temporary_path: Path
+        self, scoped_temporary_path: Path
     ) -> None:
-        assert constants.TEMPORARY_PATH == str(temporary_path)
-        assert temporary_path.is_dir()
+        assert constants.TEMPORARY_PATH == str(scoped_temporary_path)
+        assert scoped_temporary_path.is_dir()
 
-    def test_is_not_the_repo_relative_default(self, temporary_path: Path) -> None:
+    def test_is_not_the_repo_relative_default(
+        self, scoped_temporary_path: Path
+    ) -> None:
         """The point of the fixture: run files leave the working tree, and two
         runs of the same suite do not read each other's artifacts."""
-        assert not str(temporary_path).startswith("./local")
+        assert not str(scoped_temporary_path).startswith("./local")
         assert Path(constants.TEMPORARY_PATH).is_absolute()
 
-    def test_redirect_reaches_import_time_binders(self, temporary_path: Path) -> None:
+    def test_redirect_reaches_import_time_binders(
+        self, scoped_temporary_path: Path
+    ) -> None:
         """Most consumers bind TEMPORARY_PATH at module import; the fixture must
         reach those bindings, not just the constants module, or the run writes
         ./local/tmp/ while the suite asserts on the temp dir."""
-        assert observability_utils.TEMPORARY_PATH == str(temporary_path)
+        assert observability_utils.TEMPORARY_PATH == str(scoped_temporary_path)
 
     def test_a_consumer_builds_paths_under_the_redirect(
-        self, temporary_path: Path
+        self, scoped_temporary_path: Path
     ) -> None:
         built = observability_utils.get_observability_dir()
-        assert built.startswith(str(temporary_path))
+        assert built.startswith(str(scoped_temporary_path))
+
+    def test_undoes_every_patch_on_teardown(
+        self, tmp_path_factory: pytest.TempPathFactory
+    ) -> None:
+        """The leak Chris reproduced: a global patch outliving its scope reds
+        whichever unlucky test binds ./local/tmp/ at import after this module."""
+        from application_sdk.testing.integration import fixtures as kit_fixtures
+        from application_sdk.testing.integration.fixtures import KitOptions
+
+        before_constant = constants.TEMPORARY_PATH
+        before_binder = observability_utils.TEMPORARY_PATH
+        gen = kit_fixtures.temporary_path.__wrapped__(tmp_path_factory, KitOptions())
+        next(gen)
+        with suppress(StopIteration):
+            next(gen)
+
+        assert constants.TEMPORARY_PATH == before_constant
+        assert observability_utils.TEMPORARY_PATH == before_binder

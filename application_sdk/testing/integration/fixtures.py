@@ -387,24 +387,36 @@ def _verify_app_name(app_cls: type[App], app_name: str) -> None:
     files under one identity and reports itself under another, and the suite
     looks for artifacts where they were never written.
 
-    Only an explicitly set variable is compared. An adopter who never sets it
-    gets the SDK default (``"default"``), which is a different conversation and
-    not one to fail a session over.
+    Only a suite that explicitly set the variable is checked — an adopter who
+    never sets it gets the SDK default (``"default"``), which is a different
+    conversation and not one to fail a session over. The value *compared* is
+    ``constants.APPLICATION_NAME``, the import-time snapshot, because that is
+    what actually builds the artifact root — the live environment is only the
+    opt-in signal, so the guard stays correct even if something changes the
+    variable mid-session (``_verify_env_ordering`` pins the two equal at
+    import, but by construction beats by side effect).
     """
-    configured = os.environ.get(APPLICATION_NAME_ENV)
-    if configured is None or configured == app_name:
+    if os.environ.get(APPLICATION_NAME_ENV) is None:
+        return
+    from application_sdk import (  # noqa: PLC0415 — deferred by convention only; sibling guards import it the same way
+        constants,
+    )
+
+    configured = constants.APPLICATION_NAME
+    if configured == app_name:
         return
     raise AppNameMismatchError(
         message=(
-            f"{APPLICATION_NAME_ENV} is {configured!r} but {app_cls.__name__} is "
-            f"registered as {app_name!r}. The run's local artifact root is built "
-            f"from the former and its task queue and observability tags from the "
-            f"latter, so artifacts land under {configured!r} while the run reports "
+            f"{APPLICATION_NAME_ENV} snapshotted into constants.APPLICATION_NAME "
+            f"as {configured!r} but {app_cls.__name__} is registered as "
+            f"{app_name!r}. The run's local artifact root is built from the "
+            f"former and its task queue and observability tags from the latter, "
+            f"so artifacts land under {configured!r} while the run reports "
             f"itself as {app_name!r}."
         ),
         resource=app_cls.__name__,
-        expected_state=f"{APPLICATION_NAME_ENV} == {app_name!r}",
-        actual_state=f"{APPLICATION_NAME_ENV} == {configured!r}",
+        expected_state=f"constants.APPLICATION_NAME == {app_name!r}",
+        actual_state=f"constants.APPLICATION_NAME == {configured!r}",
         suggested_action=(
             f"Set os.environ.setdefault({APPLICATION_NAME_ENV!r}, {app_name!r}) in "
             "conftest.py, above the application_sdk imports."

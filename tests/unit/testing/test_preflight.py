@@ -48,12 +48,16 @@ class TestCaptureObject:
         assert capture.rows == []
         assert capture.level is None
 
-    def test_other_logger_methods_are_no_ops(self) -> None:
+    def test_debug_is_a_declared_no_op(self) -> None:
         capture = PreflightOutcomeCapture()
         capture.debug("noise")
-        capture.exception("noise")
 
         assert capture.rows == []
+
+    def test_a_typo_raises_instead_of_yielding_a_callable(self) -> None:
+        """No ``__getattr__`` catch-all: a misspelled assertion must fail loudly."""
+        with pytest.raises(AttributeError):
+            _ = PreflightOutcomeCapture().rowz
 
     def test_one_asserts_a_single_row(self) -> None:
         capture = PreflightOutcomeCapture()

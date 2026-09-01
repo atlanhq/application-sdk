@@ -1,11 +1,25 @@
 """Reading the preflight gate's outcome row from a test.
 
-The gate emits exactly one ``Preflight gate outcome`` row per invocation and
-levels it from the verdict (FND-901): ``error`` when the run is blocked or the
-source is unverifiable, ``warning`` when it proceeded with a failed advisory
-check, ``info`` otherwise. A test that reads the row therefore has to scan all
-three levels — one that watches ``info`` alone sees an empty list on exactly the
-runs it was written to pin, and passes silently until a verdict changes level.
+The gate *activity* emits exactly one ``Preflight gate outcome`` row per
+invocation and levels it from the verdict (FND-901): ``error`` when the run is
+blocked or the source is unverifiable, ``warning`` when it proceeded with a
+failed advisory check, ``info`` otherwise. A test that reads the row therefore
+has to scan all three levels — one that watches ``info`` alone sees an empty
+list on exactly the runs it was written to pin, and passes silently until a
+verdict changes level.
+
+**Boundary — what this module does and does not see.** Everything here reads
+the gate activity's logger
+(``application_sdk.execution._temporal.preflight_gate.logger``). The workflow
+wrapper in ``application_sdk.app.base`` emits outcome rows of its own —
+``skipped`` (``pre_gate_replay``, ``input_not_credential_resolvable``) and
+``no_verdict`` — through Temporal's ``workflow.logger``, which this capture
+does not patch (it is temporalio's module-level logger; replacing it globally
+would swallow every workflow's logging, and its stdlib fallback repacks
+structured fields into ``extra=``). A test pinning those paths must assert on
+``workflow.logger`` directly; one that reaches for this capture there gets an
+empty list — flagged here so that absence reads as "wrong logger", not "no
+outcome".
 
 That is not hypothetical. ``atlan-powerbi-app`` shipped an ``info``-only reader
 twelve days before FND-901 moved blocks to ``error``; four block-path tests then
@@ -62,8 +76,8 @@ class PreflightOutcomeCapture:
 
     Records at every level in :data:`OUTCOME_LEVELS` and remembers which one
     carried each row, so a suite can assert the severity as well as the payload.
-    Any other logger method is a no-op, so a gate that logs progress or debug
-    detail does not pollute the capture.
+    ``debug`` is a declared no-op, so gate progress logging does not pollute the
+    capture; the gate calls nothing else on its logger.
     """
 
     def __init__(self) -> None:
@@ -82,8 +96,13 @@ class PreflightOutcomeCapture:
     def error(self, message: str, *_args: Any, **kwargs: Any) -> None:
         self._record("error", message, **kwargs)
 
-    def __getattr__(self, _name: str) -> Any:
-        return lambda *_a, **_k: None
+    def debug(self, *_args: Any, **_kwargs: Any) -> None:
+        """Deliberately dropped — the outcome row never arrives at debug.
+
+        Declared explicitly rather than via a ``__getattr__`` catch-all: a
+        catch-all answers *every* attribute (typos, protocol probes) with a
+        callable, so a misspelled assertion silently passes.
+        """
 
     @property
     def rows(self) -> list[dict[str, Any]]:
@@ -128,7 +147,9 @@ def capture_preflight_outcomes(
 
     Use this instead of patching ``preflight_gate.logger`` by hand: the capture
     reads every level the outcome row can arrive at, so a verdict that changes
-    level does not silently empty the suite's assertions.
+    level does not silently empty the suite's assertions. It covers the rows the
+    gate *activity* emits; the workflow-emitted ``skipped``/``no_verdict`` rows
+    go through ``workflow.logger`` instead — see the module docstring.
     """
     capture = PreflightOutcomeCapture()
     monkeypatch.setattr(_GATE_LOGGER_PATH, capture)

@@ -30,6 +30,11 @@ Suites that patch the logger with a `MagicMock` themselves can use
 paths assert *exactly one* row, because returning the first match hides a double
 emission.
 
+Boundary: the capture covers rows the gate **activity** emits. The workflow
+wrapper's `skipped` / `no_verdict` rows go through Temporal's `workflow.logger`
+(`app/base.py`), which the capture does not patch — pin those paths against
+`workflow.logger` directly.
+
 ## What SDK Review Checks for Tests
 
 The reviewer enforces these test rules (G4 guardrail):
