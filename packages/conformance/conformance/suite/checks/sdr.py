@@ -1,7 +1,7 @@
-"""P-series SDR-readiness checks (P029, P030, P037, P038, P039, P042).
+"""P-series SDR-readiness checks (P029, P030, P037, P038, P039, P042, P051).
 
 Cross-artifact checks that gate on ``self_deployed_runtime: true`` in
-``atlan.yaml`` and verify six structural invariants:
+``atlan.yaml`` and verify seven structural invariants:
 
 * ``P029`` — an agent extraction manifest under ``app/generated/`` must surface
   ``agent_json`` AND ``extraction_method`` at the TOP LEVEL of
@@ -66,6 +66,16 @@ Cross-artifact checks that gate on ``self_deployed_runtime: true`` in
   ``*ExtractionInput`` family (which declares ``agent_json``) or set
   ``allow_unbounded_fields=True`` / ``extra="allow"`` are exempt.  WARN.
 
+* ``P051`` — an SDR app whose ``uv.lock`` resolves ``atlan-application-sdk``
+  *below* ``3.30.0``, the floor at which the SDR interactive setup surfaces —
+  test authentication, preflight checks, and metadata browsing (the ``sdr:*``
+  worker activities) — become available. heracles rejects interactive dispatch
+  to a worker below this floor and the frontend hides the widgets, so onboarding
+  such an app in a self-deployed runtime offers none of them. Reads the *locked*
+  version (what actually ships), not the pyproject specifier; an unresolvable
+  version is left silent (D-series governs a missing/unbounded declaration).
+  WARN.
+
 
 P026–P028 are reserved by a concurrent PR (GetattrOnTypedContractField,
 AppStateAsCrossTaskChannel, ManualQualifiedNameFString — PR #2417).
@@ -83,9 +93,11 @@ import ast
 import json
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import discover, make_cli_main
+from conformance.suite.checks._version import parse_version, version_reached
 from conformance.suite.schema.findings import Finding
 
 SERIES = "P"
@@ -95,6 +107,7 @@ RULE_P037 = "P037"
 RULE_P038 = "P038"
 RULE_P039 = "P039"
 RULE_P042 = "P042"
+RULE_P051 = "P051"
 
 _SDR_FLAG_RE = re.compile(
     r"^self_deployed_runtime:\s*(true|false)\b",
@@ -1205,6 +1218,95 @@ def _check_p039(manifests: list[Path], root: Path) -> list[Finding]:
     return findings
 
 
+# ── P051: SDR app below the interactive-setup SDK floor ─────────────────────
+
+#: application-sdk floor at which the SDR interactive setup surfaces —
+#: ``sdr:test_auth`` / ``sdr:preflight_check`` / ``sdr:fetch_metadata`` — are
+#: available on the worker. heracles rejects interactive dispatch below this
+#: (its BelowFloorError guard) and the frontend hides the widgets, so an SDR app
+#: pinned lower can offer no preflight, test-authentication, or metadata browsing
+#: during onboarding.
+_SDR_INTERACTIVE_SDK_FLOOR = (3, 30, 0)
+_SDR_INTERACTIVE_SDK_FLOOR_STR = "3.30.0"
+
+#: The SDK distribution an app depends on. Matched name-normalised against the
+#: ``[[package]]`` entries in the app's ``uv.lock``.
+_SDK_PACKAGE = "atlan-application-sdk"
+
+
+def _normalise_pkg_name(name: str) -> str:
+    """PEP 503 name normalisation — runs of ``-``/``_``/``.`` fold to one ``-``."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _locked_sdk_version(root: Path) -> str | None:
+    """Return the ``atlan-application-sdk`` version locked in ``root/uv.lock``.
+
+    ``None`` means "can't confirm" — no lock, an unparseable lock, or no such
+    package in it. A version we cannot read is never treated as a violation
+    (mirrors heracles' own below-floor guard, which fails open on an unreadable
+    ``sdk_version`` rather than hard-blocking).
+    """
+    lock = root / "uv.lock"
+    if not lock.is_file():
+        return None
+    try:
+        doc = tomllib.loads(lock.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return None
+    target = _normalise_pkg_name(_SDK_PACKAGE)
+    for pkg in doc.get("package", []):
+        if not isinstance(pkg, dict):
+            continue
+        if _normalise_pkg_name(str(pkg.get("name", ""))) == target:
+            version = pkg.get("version")
+            return str(version) if version is not None else None
+    return None
+
+
+def _check_p046(root: Path) -> list[Finding]:
+    """P051: an SDR app must pin application-sdk >= 3.30.0 for interactive setup.
+
+    The SDR interactive surfaces — test authentication, preflight checks, and
+    metadata browsing (the ``sdr:*`` worker activities) — first ship in
+    application-sdk 3.30.0. heracles rejects interactive dispatch to a worker
+    below that floor and the frontend hides the widgets, so an SDR app whose
+    ``uv.lock`` resolves application-sdk below 3.30.0 offers none of the
+    onboarding experience the customer expects.
+
+    Reads the *locked* version from ``uv.lock`` — the version that actually
+    ships — not the pyproject specifier. An unresolvable version (no lock, not in
+    it, or unparseable) is left silent: it can't be confirmed below the floor,
+    and D-series already governs a missing / unbounded SDK declaration.
+    """
+    locked = _locked_sdk_version(root)
+    if locked is None:
+        return []
+    parsed = parse_version(locked)
+    if parsed is None or version_reached(_SDR_INTERACTIVE_SDK_FLOOR, parsed):
+        return []
+    return [
+        Finding(
+            rule_id=RULE_P051,
+            file="uv.lock",
+            line=1,
+            column=1,
+            message=(
+                f"uv.lock resolves {_SDK_PACKAGE} to {locked}, below the "
+                f"{_SDR_INTERACTIVE_SDK_FLOOR_STR} floor at which the SDR interactive "
+                "setup surfaces — test authentication, preflight checks, and metadata "
+                "browsing (the sdr:* worker activities) — are available. Heracles "
+                "rejects interactive dispatch to a worker below this floor and the "
+                "frontend hides the widgets, so onboarding this app in a self-deployed "
+                "runtime offers none of them. Raise the "
+                f"{_SDK_PACKAGE} pin to >= {_SDR_INTERACTIVE_SDK_FLOOR_STR} in "
+                "pyproject.toml and re-lock (uv lock), then redeploy the SDR worker on "
+                "the new image."
+            ),
+        )
+    ]
+
+
 def scan_path(path: Path, root: Path) -> list[Finding]:  # noqa: ARG001
     """No-op: the SDR checks require cross-artifact analysis; use scan_all."""
     return []
@@ -1236,6 +1338,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     findings.extend(_check_p037(paths, root))
     findings.extend(_check_p038(paths, root))
     findings.extend(_check_p039(manifests, root))
+    findings.extend(_check_p046(root))
     return findings
 
 
@@ -1245,7 +1348,8 @@ main = make_cli_main(
         "SDR-readiness checks — manifest agent_json slot (P029), "
         "upload call presence / no-op bridge stubs (P030), agent-aware "
         "credential resolution (P037), object-store prefix rooting (P038), "
-        "and agent_json input-contract consumption (P039)."
+        "agent_json input-contract consumption (P039), and interactive-setup "
+        "SDK floor (P051)."
     ),
 )
 
