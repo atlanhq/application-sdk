@@ -45,8 +45,16 @@ _URL_USERINFO_RE = re.compile(r"([a-z][a-z0-9+.-]*://)(?:[^@\s]+@)+", re.IGNOREC
 # failure. It also has no word boundary in this alternation, so it would match
 # the tail of ``run_guid=`` and ``correlation_uuid=`` — redacting the exact
 # correlation IDs an on-call needs.
+# ``signature`` and ``sig`` cover presigned object-store URLs, which object-store
+# errors quote verbatim in their message: AWS SigV4 ``X-Amz-Signature``, GCS
+# ``X-Goog-Signature``, and Azure SAS ``sig``. ``credential`` already matched
+# ``X-Amz-Credential`` (an access-key id plus scope), but the signature is the
+# part that actually authorises the request, so redacting only the credential
+# left the usable half in the string. ``sig`` carries a lookbehind because it is
+# short enough to appear as the tail of a longer word; the other tokens are
+# distinctive enough not to need one.
 _SECRET_PARAM_RE = re.compile(
-    r"(?i)((?:api_key|access_token|auth_token|password|passwd|pwd|secret|credential|private_key)=)(?:\{[^}]*\}|[^\s&,;#]+)",
+    r"(?i)((?:api_key|access_token|auth_token|password|passwd|pwd|secret|credential|private_key|signature|(?<![a-z0-9_])sig)=)(?:\{[^}]*\}|[^\s&,;#]+)",
 )
 
 

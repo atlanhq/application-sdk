@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "atlan-application-sdk-conformance"
-version = "0.24.0"
+version = "0.25.0"
 description = "Conformance suite, remediation programs, and CLI for the Atlan Application SDK"
 license = "Apache-2.0"
 authors = [
@@ -65,7 +65,7 @@ testpaths = ["tests"]
 # Pinned exactly — an unpinned linter makes that guard's verdict a
 # function of cache age rather than of the files it checks.
 [dependency-groups]
-dev = ["ruff==0.16.4"]
+dev = ["ruff==0.16.5"]
 
 [tool.ruff.format]
 exclude = ["conformance/bootstrap/templates/renovate.json"]

@@ -76,8 +76,8 @@ from __future__ import annotations
 
 import os
 import warnings
-from collections.abc import Awaitable, Callable, Mapping, Sequence
-from contextlib import AbstractAsyncContextManager
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager, contextmanager
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
@@ -98,6 +98,7 @@ from application_sdk.contracts.types import ConnectionRef
 from application_sdk.errors.base import safe_traceback
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.e2e._errors import (
+    AmbiguousDAGRunError,
     AtlasReadIndeterminateError,
     DAGProgressStalledError,
     DeployedManifestMismatchError,
@@ -443,6 +444,95 @@ class FullDAGOutcome:
         )
 
 
+@dataclass(frozen=True)
+class DAGSpec:
+    """One entrypoint DAG run, as a suite *declares* it.
+
+    A suite is not bound to one DAG. ``entrypoint`` and ``manifest_path`` are
+    still ``ClassVar``\\s, and a suite that declares nothing here runs exactly
+    the one DAG they name — but a suite whose entrypoint *consumes an artifact
+    another entrypoint produces* has to run that other entrypoint first, and
+    there is no way to do that across CI jobs without sharing a connection
+    between two independently-torn-down legs. So the number of DAG runs is a
+    property of the suite: see :attr:`BaseE2ETest.dag_runs`.
+
+    The motivating case is a query-history miner whose lineage resolution reads
+    an entity cache that only a *crawl of the same connection* writes. Seeding
+    Atlas through :meth:`BaseE2ETest.seed_connection` cannot produce it — the
+    cache is an object-store artifact, and the only thing that writes it is a
+    real crawler DAG run.
+
+    Every field is ``None`` by default and ``None`` means *inherit the class
+    attribute of the same name*, so a spec declares only what differs. That is
+    what keeps a suite's own run identical whether it is expressed as the
+    implicit default or as an explicit ``DAGSpec()``.
+
+    Both halves of a run are per-spec, deliberately. Identity (which DAG) is the
+    obvious half; the expectations are the load-bearing one, because they decide
+    which Atlas probes *run at all* — ``expect_connection`` gates the connection
+    poll and every count under it, ``expect_lineage`` gates both the lineage
+    count and the DAG gate's strictness, and the three asset maps decide which
+    types are counted. A crawl run graded with a miner's expectations would
+    therefore not merely be graded leniently: the readings its grading needs
+    would never be taken.
+
+    Attributes:
+        entrypoint: App-entrypoint for AE's manifest fetch. ``""`` means
+            "derive from this spec's ``manifest_path``", the same as the class
+            attribute.
+        manifest_path: Path to the manifest whose ``dag`` seeds this run.
+        expect_connection: Whether this run is expected to land a Connection.
+        expect_lineage: Whether this run is expected to land lineage.
+        require_nonempty_assets: Whether a run that lands zero assets fails.
+        required_dag_nodes: Nodes that must genuinely succeed under the
+            skip-tolerant gate.
+        expected_min_asset_counts: Per-type floors.
+        expected_exact_counts: Per-type exact-count parity.
+        expected_asset_qn_depth: Per-type qualifiedName depth below the
+            connection.
+        label: Short name for this run, used in logs, in the failure evidence
+            bundle and — for any run that is not the suite's own default — in
+            the AE workflow name, so N runs in one leg stay N distinguishable
+            AE workflows. Defaults to the resolved entrypoint, else
+            ``"default"``.
+    """
+
+    entrypoint: str | None = None
+    manifest_path: str | None = None
+    expect_connection: bool | None = None
+    expect_lineage: bool | None = None
+    require_nonempty_assets: bool | None = None
+    required_dag_nodes: tuple[str, ...] | None = None
+    expected_min_asset_counts: Mapping[str, int] | None = None
+    expected_exact_counts: Mapping[str, int] | None = None
+    expected_asset_qn_depth: Mapping[str, int] | None = None
+    label: str = ""
+
+
+@dataclass(frozen=True)
+class ResolvedDAG:
+    """A :class:`DAGSpec` with every field settled against the class attributes.
+
+    What the harness actually reads during a run. Separate from ``DAGSpec``
+    because a declaration is allowed to say nothing (``None`` everywhere) and
+    the run is not: every value here is the one this run is submitted and graded
+    with, so a diagnostic can print it and a suite's
+    :meth:`BaseE2ETest.assert_dag_outcome` override can branch on it without
+    re-deriving anything.
+    """
+
+    label: str
+    entrypoint: str
+    manifest_path: str
+    expect_connection: bool
+    expect_lineage: bool
+    require_nonempty_assets: bool
+    required_dag_nodes: tuple[str, ...]
+    expected_min_asset_counts: Mapping[str, int]
+    expected_exact_counts: Mapping[str, int]
+    expected_asset_qn_depth: Mapping[str, int]
+
+
 class BaseE2ETest:
     """Pytest base — subclass per connector, set class attrs.
 
@@ -479,8 +569,17 @@ class BaseE2ETest:
 
         ``agent_spec() -> AgentSpec | None``
         ``connection_spec() -> ConnectionSpec``
+        ``seed_prerequisites() -> None``
+        ``assert_dag_outcome(ResolvedDAG, FullDAGOutcome) -> None``
         ``_mustache_substitutions() -> MustacheSubstitutions``
         ``_credential_body() -> CredentialBody | None``
+
+    **A suite is not bound to one DAG.** :attr:`dag_runs` declares an ordered
+    list of :class:`DAGSpec` runs — each its own entrypoint, its own AE submit
+    and its own graded :class:`FullDAGOutcome` — all against the one connection
+    this suite mints and its one ``teardown_method`` purge. Left empty (the
+    default) the suite runs the single DAG its class attributes name, exactly as
+    every suite did before. See :class:`DAGSpec` for when that is worth doing.
     """
 
     # --- required class attrs (must be overridden) ---------------------
@@ -648,6 +747,48 @@ class BaseE2ETest:
     # or the entrypoint name differs from the manifest subdir. Empty resolved value
     # => single-entrypoint app, no selector sent (AE fetches the bare manifest).
     entrypoint: ClassVar[str] = ""
+    # Ordered DAG runs this suite performs, against ONE seeded connection.
+    #
+    # Empty (the default) means one run, from the ``entrypoint`` /
+    # ``manifest_path`` / expectation ClassVars above — i.e. every suite that
+    # existed before this attribute behaves exactly as it did. Declare specs
+    # here only when one entrypoint has to run before another *within the same
+    # pytest process*, because it consumes something that entrypoint produces:
+    #
+    # .. code-block:: python
+    #
+    #     dag_runs = (
+    #         DAGSpec(
+    #             manifest_path="app/generated/crawler/manifest.json",
+    #             expect_lineage=False,
+    #             expected_min_asset_counts={"Table": 1},
+    #         ),
+    #         DAGSpec(),  # this suite's own entrypoint, from the ClassVars
+    #     )
+    #
+    # Each spec is submitted, polled and graded on its own — one
+    # :class:`FullDAGOutcome` per run, through :meth:`assert_dag_outcome`, in
+    # order. They are never merged into a composite verdict: a crawl and a mine
+    # assert different things, and a single "did the suite pass" boolean is
+    # exactly the shape that lets one of them stop meaning anything.
+    #
+    # All runs share this suite's minted ``connection_qualified_name`` — that
+    # sharing is the point, and it is why this is a list on one suite rather
+    # than two ordered CI legs, which would have to move teardown out of
+    # ``teardown_method`` (guaranteed on pass, fail AND error) into an
+    # ``if: always()`` job a cancelled workflow can still skip, on a leased
+    # shared tenant. Teardown stays one purge here however many runs there are.
+    #
+    # Cost: the runs are serial by nature, so each one adds its own wall clock
+    # to the leg (a crawl is minutes, a miner plus its lineage poll is minutes
+    # more). Chain a run only when a later one genuinely cannot work without it.
+    dag_runs: ClassVar[tuple[DAGSpec, ...]] = ()
+
+    #: One :class:`FullDAGOutcome` per completed run, in run order. Populated by
+    #: :meth:`test_full_dag_runs_end_to_end` (a single-element list on a
+    #: single-DAG suite), for a suite that wants to assert across runs after
+    #: each has been graded on its own. Never reduced to a composite verdict.
+    dag_outcomes: list[FullDAGOutcome]
     # Deployment name the tenant's SYSTEM apps (publish, quality, lineage) are
     # registered under, substituted for ``{deployment_name}`` when the harness
     # addresses them. Read via :meth:`resolved_tenant_deployment_name` rather
@@ -857,6 +998,13 @@ class BaseE2ETest:
         self._expected_node_identities = {}
         self._seed_version = None
         self._admin_reading = None
+        # No run is active until run_full_dag activates one, so everything
+        # resolves to the class's own DAG — which is the whole of what a
+        # single-DAG suite ever sees.
+        self._active_dag = None
+        self.dag_outcomes = []
+        self._connection_seeded = False
+        self._validate_dag_runs()
 
         # A pinned progress-stall window that is not strictly below the poll
         # ceiling is a disabled watchdog (see ProgressWatchdogUnreachableError).
@@ -987,6 +1135,55 @@ class BaseE2ETest:
         self._auto_admin_users = ()
         async with self._atlas_client() as client:
             await self._resolve_run_identity(client)
+
+    def _validate_dag_runs(self) -> None:
+        """Reject a ``dag_runs`` declaration whose runs cannot stay distinct.
+
+        Two static errors, both of which otherwise surface as a confusing
+        result rather than as a message:
+
+        * Two runs resolving to the same label but not to the same run. The
+          label names the AE workflow (see :meth:`_ae_workflow_name_suffix`), so
+          a collision publishes one run's seed DAG over the other's and leaves
+          one AE workflow carrying two graphs.
+        * Several runs with ``ae_workflow_slug`` pinned. A pinned slug means
+          "submit against a workflow this suite does not own, and seed nothing
+          over it" — there is exactly one such workflow, so it cannot express N
+          different DAGs.
+
+        Raises:
+            AmbiguousDAGRunError: Either of the above.
+        """
+        if len(self.dag_runs) < 2:
+            return
+        if self.ae_workflow_slug:
+            raise AmbiguousDAGRunError(
+                message=(
+                    f"{type(self).__name__} declares {len(self.dag_runs)} dag_runs "
+                    f"and pins ae_workflow_slug={self.ae_workflow_slug!r}. A pinned "
+                    "slug is submitted against as-is and never seeded over, so all "
+                    "the runs would execute whatever single DAG that workflow "
+                    "carries. Drop the pin, or drop the extra runs."
+                ),
+                field="ae_workflow_slug",
+            )
+        by_label: dict[str, ResolvedDAG] = {}
+        for spec in self.dag_runs:
+            resolved = self.resolve_dag(spec)
+            clash = by_label.get(resolved.label)
+            if clash is not None and clash != resolved:
+                raise AmbiguousDAGRunError(
+                    message=(
+                        f"{type(self).__name__} declares two different dag_runs "
+                        f"that both resolve to the label {resolved.label!r}. The "
+                        "label names this run's AE workflow, so both would publish "
+                        "their seed DAG over one workflow and the AE run list "
+                        "could not tell them apart. Set a distinct DAGSpec.label "
+                        "on at least one of them."
+                    ),
+                    field="dag_runs",
+                )
+            by_label[resolved.label] = resolved
 
     async def _resolve_run_identity(self, client: AsyncAtlanClient) -> None:
         """Resolve whatever tenant-side identity this suite needs before it runs.
@@ -1379,6 +1576,14 @@ class BaseE2ETest:
         survives to green a later run that should have failed. Do not point a
         suite at a long-lived shared connection to dodge the seeding work — a
         half-set-up left-over is precisely the false pass this design prevents.
+
+        This hook writes to Atlas, so it can only seed what pyatlan can write.
+        An entrypoint that consumes an *artifact another entrypoint produces* —
+        a miner resolving lineage against the entity cache a crawl writes to
+        object storage — cannot be seeded from here at all: nothing but a real
+        crawler DAG run produces that artifact. Declare the crawl as a run in
+        :attr:`dag_runs` instead, and it executes against this same connection
+        before the entrypoint that needs it.
         """
 
     def seed_connection(self, probe: Callable[[], object] | None = None) -> str:
@@ -1452,6 +1657,20 @@ class BaseE2ETest:
             SeededConnectionNotSearchableError: See :meth:`seed_connection`.
         """
         qualified_name = self.connection_qualified_name
+        if getattr(self, "_connection_seeded", False):
+            # One connection per suite, however many DAG runs it performs (see
+            # ``dag_runs``): the second call is the seeding hook being reached
+            # again, not a second connection being asked for. Creating it twice
+            # would leave a duplicate that teardown's single purge does not
+            # reach. The probe still runs — it is a wait, and a caller that
+            # passed one is entitled to it.
+            logger.info(
+                "e2e seed: connection %s is already seeded — reusing it",
+                qualified_name,
+            )
+            if probe is not None:
+                await self._retry_seed_probe_async(probe)
+            return qualified_name
         async with self._atlas_client() as client:
             await atlas.create_connection(
                 client,
@@ -1479,6 +1698,8 @@ class BaseE2ETest:
                     actual_state=f"not returned by Atlas search ({searchable.label})",
                     cause=getattr(searchable, "cause", None),
                 )
+
+        self._connection_seeded = True
 
         if probe is not None:
             await self._retry_seed_probe_async(probe)
@@ -1759,20 +1980,146 @@ class BaseE2ETest:
             or self.tenant_deployment_name
         )
 
-    def _resolved_entrypoint(self) -> str:
-        """App-entrypoint for AE's manifest fetch: explicit ``entrypoint`` if set,
-        else derived from ``manifest_path`` (``.../generated/<ep>/manifest.json`` ->
-        ``<ep>``). Empty means single-entrypoint (no selector sent)."""
-        if self.entrypoint:
-            return self.entrypoint
-        mp = self.manifest_path or ""
+    # ------------------------------------------------------------------
+    # Per-run DAG identity and expectations
+    # ------------------------------------------------------------------
+    #
+    # Everything the harness reads about *which* DAG this run submits and *what*
+    # it is graded against goes through :attr:`_dag`, never through the
+    # ClassVars directly. With no spec in play that resolves to the ClassVars
+    # and nothing changes; inside :meth:`run_full_dag` with a spec, it resolves
+    # to that spec. That indirection is the whole of what lets one suite run N
+    # entrypoint DAGs: the alternative — reading the ClassVars at each call site
+    # — makes "the class" and "this run" the same thing by construction.
+
+    @staticmethod
+    def _derive_entrypoint(manifest_path: str) -> str:
+        """The entrypoint a bundle manifest path names, or ``""``.
+
+        Args:
+            manifest_path: ``.../generated/<ep>/manifest.json`` for a bundle
+                entrypoint, ``.../generated/manifest.json`` for a single-
+                entrypoint app.
+
+        Returns:
+            ``<ep>`` when the path carries an entrypoint subdir, else ``""`` —
+            which the submit reads as "single-entrypoint app, send no selector".
+        """
         marker = "/generated/"
+        mp = manifest_path or ""
         if marker in mp and mp.endswith("/manifest.json"):
             tail = mp.split(marker, 1)[1]  # "<ep>/manifest.json" or "manifest.json"
             parts = tail.split("/")
             if len(parts) == 2:  # a subdir <ep> is present
                 return parts[0]
         return ""
+
+    def resolve_dag(self, spec: DAGSpec | None) -> ResolvedDAG:
+        """Settle *spec* against this suite's class attributes.
+
+        Args:
+            spec: The declaration, or ``None`` for "the class's own run". Each
+                ``None`` field inherits the class attribute of the same name, so
+                ``None`` and ``DAGSpec()`` resolve identically — which is what
+                makes an explicitly-declared default run indistinguishable from
+                the implicit one, in the AE workflow name included.
+
+        Returns:
+            The values this run is submitted and graded with.
+        """
+        spec = spec or DAGSpec()
+        manifest_path = (
+            self.manifest_path if spec.manifest_path is None else spec.manifest_path
+        )
+        entrypoint = self.entrypoint if spec.entrypoint is None else spec.entrypoint
+        entrypoint = entrypoint or self._derive_entrypoint(manifest_path)
+        return ResolvedDAG(
+            label=spec.label or entrypoint or "default",
+            entrypoint=entrypoint,
+            manifest_path=manifest_path,
+            expect_connection=(
+                self.expect_connection
+                if spec.expect_connection is None
+                else spec.expect_connection
+            ),
+            expect_lineage=(
+                self.expect_lineage
+                if spec.expect_lineage is None
+                else spec.expect_lineage
+            ),
+            require_nonempty_assets=(
+                self.require_nonempty_assets
+                if spec.require_nonempty_assets is None
+                else spec.require_nonempty_assets
+            ),
+            required_dag_nodes=(
+                tuple(self.required_dag_nodes)
+                if spec.required_dag_nodes is None
+                else tuple(spec.required_dag_nodes)
+            ),
+            expected_min_asset_counts=dict(
+                self.expected_min_asset_counts
+                if spec.expected_min_asset_counts is None
+                else spec.expected_min_asset_counts
+            ),
+            expected_exact_counts=dict(
+                self.expected_exact_counts
+                if spec.expected_exact_counts is None
+                else spec.expected_exact_counts
+            ),
+            expected_asset_qn_depth=dict(
+                self.expected_asset_qn_depth
+                if spec.expected_asset_qn_depth is None
+                else spec.expected_asset_qn_depth
+            ),
+        )
+
+    @property
+    def _dag(self) -> ResolvedDAG:
+        """The DAG this run is submitting and grading — the class's by default.
+
+        ``getattr`` rather than an attribute read: a good deal of this class is
+        unit-tested on an instance that never ran ``setup_method``, and the
+        default has to be the class's own run there too.
+        """
+        active = getattr(self, "_active_dag", None)
+        return active if active is not None else self.resolve_dag(None)
+
+    @contextmanager
+    def _dag_run(self, spec: DAGSpec | None) -> Iterator[ResolvedDAG]:
+        """Make *spec* the active run for the duration of the block.
+
+        ``None`` is a no-op that yields whatever is already active, so
+        ``run_full_dag()`` called with no spec from inside an outer block runs
+        that block's DAG rather than resetting to the class's.
+
+        Args:
+            spec: The run to activate, or ``None`` to leave the active one
+                alone.
+
+        Yields:
+            The resolved run in force inside the block.
+        """
+        if spec is None:
+            yield self._dag
+            return
+        previous = getattr(self, "_active_dag", None)
+        self._active_dag = self.resolve_dag(spec)
+        try:
+            yield self._active_dag
+        finally:
+            self._active_dag = previous
+
+    def _resolved_entrypoint(self) -> str:
+        """App-entrypoint for AE's manifest fetch: explicit ``entrypoint`` if set,
+        else derived from ``manifest_path`` (``.../generated/<ep>/manifest.json`` ->
+        ``<ep>``). Empty means single-entrypoint (no selector sent).
+
+        Both halves are per-run since FND-1157: a suite running several
+        entrypoint DAGs resolves this against the run in flight, not against the
+        class.
+        """
+        return self._dag.entrypoint
 
     def _database_spec_connector_config_name(self) -> str:
         """The legacy ``DatabaseSpec.connector_config_name``, or ``""``.
@@ -1928,7 +2275,7 @@ class BaseE2ETest:
     def _seed_dag_from_manifest(self, extract_task_queue: str) -> dict:
         """Load the connector's manifest.json and use it as the seed DAG."""
 
-        path = Path(self.manifest_path)
+        path = Path(self._dag.manifest_path)
         if not path.is_absolute():
             path = Path.cwd() / path
         if not path.is_file():
@@ -2069,7 +2416,7 @@ class BaseE2ETest:
         approximation of the app's graph, not a copy of it, so there is nothing
         to compare and the identities stay empty.
         """
-        if not self.manifest_path:
+        if not self._dag.manifest_path:
             logger.info(
                 "manifest_path empty — the deployed-manifest identity check has "
                 "no committed DAG to compare against and will self-skip"
@@ -2093,7 +2440,7 @@ class BaseE2ETest:
                 fallback).
         """
         extract_queue = self._extract_task_queue()
-        if self.manifest_path:
+        if self._dag.manifest_path:
             seed_dag = self._seed_dag_from_manifest(extract_queue)
         else:
             logger.info("manifest_path empty — falling back to _build_legacy_seed_dag")
@@ -2101,6 +2448,27 @@ class BaseE2ETest:
         self._capture_node_dispatch(seed_dag)
         self._capture_expected_node_identities(seed_dag)
         return seed_dag
+
+    def _ae_workflow_name_suffix(self) -> str:
+        """``-<label>`` for a run that is not this suite's own, else ``""``.
+
+        ``create_workflow`` reuses an existing workflow of the same name, so
+        without this every run in a multi-DAG suite would publish its seed over
+        the previous run's — one AE workflow carrying two different graphs, and
+        an AE run list in which a crawl and a mine are indistinguishable.
+
+        The suffix is keyed off the *resolved* run rather than off "was a spec
+        passed", so a suite that spells its own run out as an explicit
+        ``DAGSpec()`` gets the same workflow name it would have got implicitly.
+        That is what keeps every pre-existing suite's AE workflow name byte-identical.
+
+        Returns:
+            The suffix, or ``""`` when this run resolves to the class's own.
+        """
+        dag = self._dag
+        if dag == self.resolve_dag(None):
+            return ""
+        return f"-{dag.label}"
 
     def _ae_workflow_spec(self) -> AEWorkflowSpec:
         """Describe the AE workflow this run seeds and submits against.
@@ -2124,7 +2492,8 @@ class BaseE2ETest:
             name=(
                 self.ae_workflow_name_override
                 or f"{self.connector_short_name}-{self.connection_name_prefix}-{self.run_id}"
-            ),
+            )
+            + self._ae_workflow_name_suffix(),
             description=f"Full-DAG e2e harness — {self.connector_short_name}",
             slug=self.ae_workflow_slug,
             seed_dag=self._build_seed_dag() if not self.ae_workflow_slug else {},
@@ -2297,12 +2666,12 @@ class BaseE2ETest:
         The Atlas-side floors + non-empty backstop still run afterwards, so a
         crawl that passes this gate but silently landed nothing still fails.
         """
-        if self.expect_lineage:
+        if self._dag.expect_lineage:
             return ae_result.all_nodes_succeeded
         by_name = {n.name: n for n in ae_result.nodes}
         required_ok = all(
             name in by_name and by_name[name].status.is_success
-            for name in self.required_dag_nodes
+            for name in self._dag.required_dag_nodes
         )
         no_hard_failure = not any(
             n.status in _HARD_FAIL_NODE_STATUSES or n.error_message
@@ -2475,7 +2844,7 @@ class BaseE2ETest:
         raise DeployedManifestMismatchError(
             message=(
                 f"The DAG AE published at submit is not the DAG "
-                f"{type(self).__name__} built from {self.manifest_path}.\n"
+                f"{type(self).__name__} built from {self._dag.manifest_path}.\n"
                 f"At submit, Heracles re-fetches the manifest from the "
                 f"tenant-deployed pod and publishes it over the harness's seed "
                 f"version, so this is the graph that will actually run — and it "
@@ -2491,14 +2860,24 @@ class BaseE2ETest:
             location=f"AE workflow slug {slug}",
         )
 
-    def run_full_dag(self) -> FullDAGOutcome:
+    def run_full_dag(self, spec: DAGSpec | None = None) -> FullDAGOutcome:
         """Submit, poll AE, poll Atlas, return the combined outcome.
+
+        Args:
+            spec: Which entrypoint DAG to run, and what to grade it against.
+                ``None`` (the default, and the only value any suite passed
+                before FND-1157) runs the DAG this suite's ClassVars name — or,
+                inside :meth:`_dag_run`, the run that block activated. A spec
+                overrides only the fields it sets; see :class:`DAGSpec`.
 
         Returns:
             What the run produced. Subclasses build their own assertions on it —
-            see :meth:`_assert_full_dag_outcome` for the default ladder.
+            see :meth:`_assert_full_dag_outcome` for the default ladder. One
+            outcome per call, never a composite: a crawl and a mine assert
+            different things.
         """
-        return run_sync(self._run_full_dag_async())
+        with self._dag_run(spec):
+            return run_sync(self._run_full_dag_async())
 
     async def _run_full_dag_async(self) -> FullDAGOutcome:
         """Seed, submit, poll, then read Atlas.
@@ -2529,8 +2908,9 @@ class BaseE2ETest:
             payload.setdefault("metadata", {})["entrypoint"] = resolved_entrypoint
 
         logger.info(
-            "Submitting AE workflow: connector=%s mode=%s qn=%s",
+            "Submitting AE workflow: connector=%s dag=%s mode=%s qn=%s",
             self.connector_short_name,
+            self._dag.label,
             self.mode.value,
             self.connection_qualified_name,
         )
@@ -2737,7 +3117,7 @@ class BaseE2ETest:
             reading the assertion ladder grades — so an unreadable search stays
             distinguishable from a zero all the way to the verdict.
         """
-        if not self.expect_connection:
+        if not self._dag.expect_connection:
             # This entrypoint publishes no connection inventory, so every Atlas
             # probe below would assert against something it never produces. Skip
             # them and let _core_dag_ok be the verdict.
@@ -2812,11 +3192,12 @@ class BaseE2ETest:
         # makes total > 0). The real wait-for-this-type safeguard is pairing each
         # expected_asset_qn_depth type with an expected_min_asset_counts floor —
         # see that attr's docstring.
+        dag = self._dag
         probe_types = tuple(
             {
-                *self.expected_min_asset_counts,
-                *self.expected_exact_counts,
-                *self.expected_asset_qn_depth,
+                *dag.expected_min_asset_counts,
+                *dag.expected_exact_counts,
+                *dag.expected_asset_qn_depth,
             }
         )
         count_reads: Mapping[str, CountRead] = {}
@@ -2838,7 +3219,7 @@ class BaseE2ETest:
         # it gets the same treatment: a settled zero stays an assertion failure,
         # an unreadable read is ungraded.
         lineage_read: bool | Unreadable | None = None
-        if self.expect_lineage:
+        if dag.expect_lineage:
             lineage = await atlas.count_lineage(
                 client, self.connection_qualified_name, probe_types
             )
@@ -2863,14 +3244,14 @@ class BaseE2ETest:
         # Only the declared types are probed, so connectors that don't set
         # expected_asset_qn_depth pay no extra Atlas call.
         sample_reads: Mapping[str, SampleRead] = {}
-        if self.expected_asset_qn_depth:
+        if dag.expected_asset_qn_depth:
             sample_reads = as_samples(
                 await atlas.sample_qualified_names(
                     client,
                     self.connection_qualified_name,
-                    tuple(self.expected_asset_qn_depth),
+                    tuple(dag.expected_asset_qn_depth),
                 ),
-                tuple(self.expected_asset_qn_depth),
+                tuple(dag.expected_asset_qn_depth),
             )
             logger.info(
                 "Atlas qualifiedName samples under %s: %s",
@@ -2932,7 +3313,7 @@ class BaseE2ETest:
             # indexing is eventually consistent and a transient match could end
             # polling before late-arriving over-extracted assets land. Keeping
             # the loop alive to the deadline is what surfaces over-extraction.
-            if self.expected_exact_counts:
+            if self._dag.expected_exact_counts:
                 return False
             return not self._asset_findings(counts)
 
@@ -2993,7 +3374,7 @@ class BaseE2ETest:
             asset_count_reads=counts,
             total_asset_read=total_read,
             asset_qn_reads=samples,
-            connection_expected=self.expect_connection,
+            connection_expected=self._dag.expect_connection,
         )
 
     # ------------------------------------------------------------------
@@ -3009,11 +3390,12 @@ class BaseE2ETest:
             these two checks required — a composer that is not a subclass can
             then grade the same expectations.
         """
+        dag = self._dag
         return AssetExpectations(
-            floors=dict(self.expected_min_asset_counts),
-            exacts=dict(self.expected_exact_counts),
-            depths=dict(self.expected_asset_qn_depth),
-            require_nonempty=self.require_nonempty_assets,
+            floors=dict(dag.expected_min_asset_counts),
+            exacts=dict(dag.expected_exact_counts),
+            depths=dict(dag.expected_asset_qn_depth),
+            require_nonempty=dag.require_nonempty_assets,
             # getattr, because the count half of this is a pure function of the
             # class attributes and is unit-tested on an instance that never ran
             # setup_method. An empty prefix makes the location half a no-op,
@@ -3237,14 +3619,23 @@ class BaseE2ETest:
     # ------------------------------------------------------------------
 
     def test_full_dag_runs_end_to_end(self) -> None:
-        """Submit, run, assert success.
+        """Submit, run, assert success — once per declared DAG run.
 
         Calls :meth:`seed_prerequisites` first (a no-op unless the suite
         overrides it), so an entrypoint that consumes state rather than creating
         it — a query-history miner — can put that state in place without
         replacing this whole method and losing the assertion ladder below.
 
-        Asserts (in order):
+        Then one run per entry in :attr:`dag_runs`, in order, against the one
+        connection this suite minted — or, when ``dag_runs`` is empty (the
+        default), the single implicit run against the class attributes that is
+        all this method ever did. Each run is graded on its own through
+        :meth:`assert_dag_outcome` as soon as it finishes, and the first failure
+        stops the sequence: a mine whose prerequisite crawl did not land has
+        nothing left to prove, and running it anyway would report the crawl's
+        failure as the miner's.
+
+        Asserts (in order), per run:
           1. Every DAG node succeeded.
           2. The Connection asset exists in Atlas.
           3. Asset-count expectations: ``expected_min_asset_counts`` floors,
@@ -3258,7 +3649,9 @@ class BaseE2ETest:
         Assertions 2-5 are all about published inventory, so ``expect_connection
         = False`` drops them and leaves assertion 1 as the verdict. That is the
         whole gate for an entrypoint that publishes nothing; such a suite is
-        expected to add its own terminal evidence on top.
+        expected to add its own terminal evidence on top. Every expectation the
+        ladder reads is resolved per run, so a crawl declared inside a miner
+        suite is graded as a crawl.
 
         When no extraction source is provisioned (``source_available`` False),
         this degrades to a worker-up-only check — see :meth:`assert_worker_up`.
@@ -3294,14 +3687,53 @@ class BaseE2ETest:
         # a collection call at each of the six exits. The exits are what a
         # future assertion is added *between*, and an evidence hook per exit is
         # one a new assertion silently does not get.
-        outcome: FullDAGOutcome | None = None
-        try:
-            outcome = self.run_full_dag()
-            self._assert_full_dag_outcome(outcome)
-        # conformance: ignore[E004] re-raised unchanged on the next line; this collects evidence for a failure it does not handle, and swallowing it would replace a real verdict with a green run
-        except Exception as failure:
-            self._collect_failure_evidence(failure, outcome)
-            raise
+        #
+        # ``dag_runs`` empty is the single-run path every suite had before
+        # FND-1157: one implicit run against the ClassVars, graded once. A suite
+        # that declares runs gets each one submitted, polled and graded in
+        # order, against the SAME seeded connection — and stops at the first
+        # that fails, because a run whose prerequisite did not produce what it
+        # consumes has nothing left to prove.
+        self.dag_outcomes = []
+        for spec in self.dag_runs or (None,):
+            # Inside the run's own block, so the bundle names the run that
+            # failed rather than the class's default — on a suite running
+            # several DAGs that is the only thing in it that says which.
+            # ``outcome`` is per iteration for the same reason: a later run's
+            # failure must not be evidenced with an earlier run's readings.
+            with self._dag_run(spec) as dag:
+                outcome: FullDAGOutcome | None = None
+                try:
+                    outcome = self.run_full_dag()
+                    self.dag_outcomes.append(outcome)
+                    self.assert_dag_outcome(dag, outcome)
+                # conformance: ignore[E004] re-raised unchanged on the next line; this collects evidence for a failure it does not handle, and swallowing it would replace a real verdict with a green run
+                except Exception as failure:
+                    self._collect_failure_evidence(failure, outcome)
+                    raise
+
+    def assert_dag_outcome(self, dag: ResolvedDAG, outcome: FullDAGOutcome) -> None:
+        """Grade one run of one entrypoint DAG.
+
+        Called once per run, in order, with the run that produced *outcome*
+        already resolved — so the default ladder below grades a crawl against
+        the crawl's expectations and a mine against the mine's, and never
+        against a merged verdict over both.
+
+        Override it on a suite whose runs need different assertions than the
+        ladder gives, branching on ``dag.label``; call ``super()`` for the runs
+        that want the ladder. The outcomes accumulate on ``self.dag_outcomes``
+        in run order, for a suite that wants to assert across them afterwards.
+
+        Args:
+            dag: The run being graded, with every field settled.
+            outcome: What that run produced.
+
+        Raises:
+            AssertionError: On the first unmet expectation — see
+                :meth:`_assert_full_dag_outcome`.
+        """
+        self._assert_full_dag_outcome(outcome)
 
     def _assert_full_dag_outcome(self, outcome: FullDAGOutcome) -> None:
         """The assertion ladder, split out so one wrapper can cover all of it.
@@ -3324,7 +3756,9 @@ class BaseE2ETest:
         # inventory. With expect_connection False the Atlas probes never ran, so
         # consulting connection_in_atlas here would fail every such run.
         dag_ok = self._core_dag_ok(outcome.ae_result)
-        if not (dag_ok and (outcome.connection_in_atlas or not self.expect_connection)):
+        if not (
+            dag_ok and (outcome.connection_in_atlas or not self._dag.expect_connection)
+        ):
             ae_result = outcome.ae_result
             nodes_msg = (
                 self._describe_dag_nodes(ae_result)
@@ -3336,7 +3770,7 @@ class BaseE2ETest:
             # exist. Say so instead.
             connection_line = (
                 f"Connection in Atlas? {outcome.connection_in_atlas}\n"
-                if self.expect_connection
+                if self._dag.expect_connection
                 else "Connection in Atlas? not applicable (expect_connection=False)\n"
             )
             raise AssertionError(
@@ -3347,7 +3781,7 @@ class BaseE2ETest:
                 f"DAG nodes:\n{nodes_msg}"
             )
 
-        if not self.expect_connection:
+        if not self._dag.expect_connection:
             # Assertions 2-5 are all about published inventory, and the probes
             # that feed them never ran. Evaluating them against empty counts
             # would fail every run — the zero-asset backstop in
@@ -3399,7 +3833,7 @@ class BaseE2ETest:
         # `lineage_present` is False for both "no Process exists" and "never
         # probed"; an unreadable read can no longer reach here, because
         # _unreadable_probe_findings raised on it above.
-        if self.expect_lineage and not outcome.lineage_present:
+        if self._dag.expect_lineage and not outcome.lineage_present:
             raise AssertionError(
                 "No lineage Process/ColumnProcess assets found under "
                 f"{outcome.connection_qualified_name}. The DAG's qi + "
@@ -3574,6 +4008,11 @@ class BaseE2ETest:
         readings: dict[str, object] = {
             "connector": self.connector_short_name,
             "entrypoint": self._resolved_entrypoint(),
+            # Which of the suite's runs this was. Identical to the entrypoint on
+            # a single-DAG suite; on a suite running several, it is the only
+            # thing in the bundle that says which run failed.
+            "dag": self._dag.label,
+            "dag_runs_completed": len(getattr(self, "dag_outcomes", ())),
             "mode": self.mode.value,
             "run_id": self.run_id,
             "connection_qualified_name": getattr(self, "connection_qualified_name", ""),

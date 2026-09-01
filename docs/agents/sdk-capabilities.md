@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.30.0
-source-sha:    17caa4a9026ff1093521f9cc70e722c574150e7c
-source-date:   2026-08-29T17:15:36+01:00
+source-sha:    a57bfceb669bc59667ae66948b6e8de3dd9959e2
+source-date:   2026-08-31T19:14:25Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -20,11 +20,11 @@ do-not-edit:   re-run the skill instead of hand-editing
 |---|---|---|
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 43 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 20 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 27 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 34 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 45 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 63 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 64 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 45 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
@@ -32,9 +32,9 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 29 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 42 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 44 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 297 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 319 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -509,6 +509,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Yield an open handle whose contents land at *path* only if the block succeeds.
 - **Defined in:** `application_sdk/common/atomic.py`
 
+#### `create_next_marker`
+
+- **Import:** `from application_sdk.common.incremental import create_next_marker`
+- **Signature:** `create_next_marker()`
+- **Summary:** Generate next marker timestamp for the current extraction run.
+- **Defined in:** `application_sdk/common/incremental/marker.py`
+
 #### `disk_full_guard`
 
 - **Import:** `from application_sdk.common.atomic import disk_full_guard`
@@ -522,6 +529,20 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `ensure_free_space(path: str | Path, required_bytes: int, *, operation: str) -> None`
 - **Summary:** Fail before a large write that the filesystem plainly cannot hold.
 - **Defined in:** `application_sdk/common/atomic.py`
+
+#### `extract_epoch_id_from_qualified_name`
+
+- **Import:** `from application_sdk.common.incremental import extract_epoch_id_from_qualified_name`
+- **Signature:** `extract_epoch_id_from_qualified_name(connection_qualified_name: str)`
+- **Summary:** Extract the connection ID (epoch) from a connection qualified name.
+- **Defined in:** `application_sdk/common/incremental/helpers.py`
+
+#### `fetch_marker_from_storage`
+
+- **Import:** `from application_sdk.common.incremental import fetch_marker_from_storage`
+- **Signature:** `fetch_marker_from_storage(connection_qualified_name: str, ...)`
+- **Summary:** Fetch and process the incremental marker from storage.
+- **Defined in:** `application_sdk/common/incremental/marker.py`
 
 #### `filter_matches`
 
@@ -544,6 +565,20 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `get_backfill_tables(current_transformed_dir: Path, previous_current_state_dir: Path | None)`
 - **Summary:** Use DuckDB to compare current tables vs previous current-state.
 - **Defined in:** `application_sdk/common/incremental/column_extraction/backfill.py`
+
+#### `get_persistent_artifacts_path`
+
+- **Import:** `from application_sdk.common.incremental import get_persistent_artifacts_path`
+- **Signature:** `get_persistent_artifacts_path(connection_qualified_name: str, artifact_subpath: str, application_name: str = '')`
+- **Summary:** Get local filesystem path for connection-scoped persistent artifacts.
+- **Defined in:** `application_sdk/common/incremental/helpers.py`
+
+#### `get_persistent_s3_prefix`
+
+- **Import:** `from application_sdk.common.incremental import get_persistent_s3_prefix`
+- **Signature:** `get_persistent_s3_prefix(connection_qualified_name: str, application_name: str = '')`
+- **Summary:** Get the S3 key prefix for connection-scoped persistent artifacts.
+- **Defined in:** `application_sdk/common/incremental/helpers.py`
 
 #### `get_safe_num_threads`
 
@@ -573,6 +608,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Normalize filter dict to fully-anchored ``db.schema`` regex patterns.
 - **Defined in:** `application_sdk/common/sql_filters.py`
 
+#### `persist_marker_to_storage`
+
+- **Import:** `from application_sdk.common.incremental import persist_marker_to_storage`
+- **Signature:** `persist_marker_to_storage(connection_qualified_name: str, marker_value: str, application_name: str = '')`
+- **Summary:** Persist marker timestamp to S3 storage.
+- **Defined in:** `application_sdk/common/incremental/marker.py`
+
 #### `prepare_filters`
 
 - **Import:** `from application_sdk.common import prepare_filters`
@@ -586,6 +628,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `prepare_query(query: str | None, ...)`
 - **Summary:** Prepare a SQL query by applying include/exclude filters.
 - **Defined in:** `application_sdk/common/sql_filters.py`
+
+#### `process_marker_timestamp`
+
+- **Import:** `from application_sdk.common.incremental import process_marker_timestamp`
+- **Signature:** `process_marker_timestamp(marker: str, prepone_enabled: bool = False, prepone_hours: float = 0)`
+- **Summary:** Process and optionally prepone a marker timestamp.
+- **Defined in:** `application_sdk/common/incremental/marker.py`
 
 #### `read_sql_files`
 
@@ -1646,6 +1695,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 
 - **Import:** `from application_sdk.errors import STORAGE_PREFLIGHT`
 - **Signature:** `STORAGE_PREFLIGHT`
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `STORAGE_RELOCATION`
+
+- **Import:** `from application_sdk.errors import STORAGE_RELOCATION`
+- **Signature:** `STORAGE_RELOCATION`
 - **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
@@ -2790,6 +2846,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Summary:** No Dapr component with the given name exists in the components directory.
 - **Defined in:** `application_sdk/storage/errors.py`
 
+#### `StorageBucketRelocationError`
+
+- **Import:** `from application_sdk.storage import StorageBucketRelocationError`
+- **Signature:** `class StorageBucketRelocationError(message: str, ...)`
+- **Summary:** A write was rejected because the bucket is being relocated.
+- **Defined in:** `application_sdk/storage/errors.py`
+
 #### `StorageConfigError`
 
 - **Import:** `from application_sdk.storage import StorageConfigError`
@@ -2832,6 +2895,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Import:** `from application_sdk.storage import check_object_store_access`
 - **Signature:** `check_object_store_access(infra: InfrastructureContext | None)`
 - **Summary:** Non-raising object-store access probe for the interactive SDR preflight.
+- **Defined in:** `application_sdk/storage/preflight.py`
+
+#### `check_run_storage_access`
+
+- **Import:** `from application_sdk.storage import check_run_storage_access`
+- **Signature:** `check_run_storage_access(infra: InfrastructureContext | None, *, timeout_seconds: float | None = None)`
+- **Summary:** Non-raising probe of every store a workflow run will upload artifacts to.
 - **Defined in:** `application_sdk/storage/preflight.py`
 
 #### `create_local_store`
@@ -3183,6 +3253,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** What a run is expected to have landed in Atlas.
 - **Defined in:** `application_sdk/testing/harness/expectations.py`
 
+#### `AssetMismatch`
+
+- **Import:** `from application_sdk.testing import AssetMismatch`
+- **Also importable from:** `application_sdk.testing.golden`
+- **Signature:** `class AssetMismatch(key: str, field_diffs: tuple[FieldDiff, ...])`
+- **Summary:** An asset present on both sides whose fields differ.
+- **Defined in:** `application_sdk/testing/golden.py`
+
 #### `AssetValidationFailure`
 
 - **Import:** `from application_sdk.testing.integration import AssetValidationFailure`
@@ -3319,6 +3397,21 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** The read verbs this backend uses from ``CoreV1Api``.
 - **Defined in:** `application_sdk/testing/harness/cluster/kube.py`
 
+#### `CursorPage`
+
+- **Import:** `from application_sdk.testing import CursorPage`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `class CursorPage(items: Sequence[T], limit: int, total: int, next_cursor: str | None)`
+- **Summary:** One page of a cursor scheme; ``next_cursor`` is opaque, as a real one is.
+- **Defined in:** `application_sdk/testing/fake_source.py`
+
+#### `CursorPageLimitError`
+
+- **Import:** `from application_sdk.testing.fake_source import CursorPageLimitError`
+- **Signature:** `class CursorPageLimitError(*, ...)`
+- **Summary:** ``cursor_page`` was configured with a non-positive page limit.
+- **Defined in:** `application_sdk/testing/_errors.py`
+
 #### `CustomObjectReads`
 
 - **Import:** `from application_sdk.testing.harness.cluster.kube import CustomObjectReads`
@@ -3379,6 +3472,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Top-level status of an AE workflow run.
 - **Defined in:** `application_sdk/testing/harness/automation_engine/wire.py`
 
+#### `DAGSpec`
+
+- **Import:** `from application_sdk.testing.e2e import DAGSpec`
+- **Signature:** `class DAGSpec(entrypoint: str | None = None, ...)`
+- **Summary:** One entrypoint DAG run, as a suite *declares* it.
+- **Defined in:** `application_sdk/testing/e2e/base.py`
+
 #### `DataForgeSource`
 
 - **Import:** `from application_sdk.testing.integration import DataForgeSource`
@@ -3392,6 +3492,22 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class DeploymentState(*, name: str, namespace: str, desired_replicas: int, ready_replicas: int, updated_replicas: int)`
 - **Summary:** One Deployment's replica counts.
 - **Defined in:** `application_sdk/testing/harness/cluster/_states.py`
+
+#### `DiffPolicy`
+
+- **Import:** `from application_sdk.testing import DiffPolicy`
+- **Also importable from:** `application_sdk.testing.golden`
+- **Signature:** `class DiffPolicy`
+- **Summary:** How strictly a typename's diff is gated.
+- **Defined in:** `application_sdk/testing/golden.py`
+
+#### `DuplicateKeyPolicy`
+
+- **Import:** `from application_sdk.testing import DuplicateKeyPolicy`
+- **Also importable from:** `application_sdk.testing.golden`
+- **Signature:** `class DuplicateKeyPolicy`
+- **Summary:** What a non-unique join key on either side does to the comparison.
+- **Defined in:** `application_sdk/testing/golden.py`
 
 #### `EvidenceBundle`
 
@@ -3447,10 +3563,11 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 #### `FieldDiff`
 
-- **Import:** `from application_sdk.testing.parity import FieldDiff`
-- **Signature:** `class FieldDiff(field_path: str, baseline_value: Any, candidate_value: Any)`
-- **Summary:** A single field-level difference between baseline and candidate.
-- **Defined in:** `application_sdk/testing/parity/models.py`
+- **Import:** `from application_sdk.testing import FieldDiff`
+- **Also importable from:** `application_sdk.testing.golden`, `application_sdk.testing.parity`
+- **Signature:** `class FieldDiff(field_path: str, golden_value: Any, ours_value: Any)`
+- **Summary:** One field whose value differs between the golden fixture and ours.
+- **Defined in:** `application_sdk/testing/golden.py`
 
 #### `Finding`
 
@@ -3487,6 +3604,46 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class GateReport(*, verdict: Verdict, outcomes: tuple[Outcome[Any], ...] = tuple())`
 - **Summary:** What the gate observed, and the one verdict it reduces to.
 - **Defined in:** `application_sdk/testing/harness/preconditions.py`
+
+#### `GoldenCorpus`
+
+- **Import:** `from application_sdk.testing.integration import GoldenCorpus`
+- **Also importable from:** `application_sdk.testing.integration.corpus`
+- **Signature:** `class GoldenCorpus(root: Path, layout: GoldenLayout = GoldenLayout(), tenant: str | None = None)`
+- **Summary:** A resolved golden corpus rooted at an existing directory.
+- **Defined in:** `application_sdk/testing/integration/corpus.py`
+
+#### `GoldenDuplicateKeyError`
+
+- **Import:** `from application_sdk.testing import GoldenDuplicateKeyError`
+- **Also importable from:** `application_sdk.testing.golden`
+- **Signature:** `class GoldenDuplicateKeyError(*, ...)`
+- **Summary:** A golden-diff join key is not unique on one side — a wrong test, not a diff.
+- **Defined in:** `application_sdk/testing/integration/_errors.py`
+
+#### `GoldenLayout`
+
+- **Import:** `from application_sdk.testing.integration import GoldenLayout`
+- **Also importable from:** `application_sdk.testing.integration.corpus`
+- **Signature:** `class GoldenLayout(stages: tuple[str, ...)`
+- **Summary:** The stage names and tenant axis a connector's corpus declares.
+- **Defined in:** `application_sdk/testing/integration/corpus.py`
+
+#### `GoldenReport`
+
+- **Import:** `from application_sdk.testing import GoldenReport`
+- **Also importable from:** `application_sdk.testing.golden`
+- **Signature:** `class GoldenReport(diffs: tuple[TypenameDiff, ...] = (), produced_skipped: int = 0, golden_skipped: int = 0)`
+- **Summary:** The full golden comparison across every typename.
+- **Defined in:** `application_sdk/testing/golden.py`
+
+#### `GoldenRuleError`
+
+- **Import:** `from application_sdk.testing import GoldenRuleError`
+- **Also importable from:** `application_sdk.testing.golden`
+- **Signature:** `class GoldenRuleError(*, ...)`
+- **Summary:** A TypenameRule combines settings that contradict each other.
+- **Defined in:** `application_sdk/testing/integration/_errors.py`
 
 #### `HarnessNotBuiltError`
 
@@ -3794,6 +3951,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Whether a failed HTTP request can have taken effect at the origin.
 - **Defined in:** `application_sdk/testing/harness/automation_engine/_errors.py`
 
+#### `ResolvedDAG`
+
+- **Import:** `from application_sdk.testing.e2e import ResolvedDAG`
+- **Signature:** `class ResolvedDAG(label: str, ...)`
+- **Summary:** A :class:`DAGSpec` with every field settled against the class attributes.
+- **Defined in:** `application_sdk/testing/e2e/base.py`
+
 #### `ResourceRef`
 
 - **Import:** `from application_sdk.testing.harness.cluster import ResourceRef`
@@ -3961,6 +4125,22 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class TenantAuth(base_url: str, ...)`
 - **Summary:** How a run authenticates against the tenant under test.
 - **Defined in:** `application_sdk/testing/harness/identity.py`
+
+#### `TypenameDiff`
+
+- **Import:** `from application_sdk.testing import TypenameDiff`
+- **Also importable from:** `application_sdk.testing.golden`
+- **Signature:** `class TypenameDiff(typename: str, ...)`
+- **Summary:** The diff for a single typename, and whether it gates.
+- **Defined in:** `application_sdk/testing/golden.py`
+
+#### `TypenameRule`
+
+- **Import:** `from application_sdk.testing import TypenameRule`
+- **Also importable from:** `application_sdk.testing.golden`
+- **Signature:** `class TypenameRule(policy: DiffPolicy = DiffPolicy.STRICT, ...)`
+- **Summary:** The gating decision for one typename.
+- **Defined in:** `application_sdk/testing/golden.py`
 
 #### `UnknownConnectorTypeError`
 
@@ -4136,6 +4316,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Raise unless every precondition was met.
 - **Defined in:** `application_sdk/testing/harness/preconditions.py`
 
+#### `assert_matches_golden`
+
+- **Import:** `from application_sdk.testing import assert_matches_golden`
+- **Also importable from:** `application_sdk.testing.golden`
+- **Signature:** `assert_matches_golden(produced: Iterable[Mapping[str, *, ...)`
+- **Summary:** Assert produced records match a golden fixture, per typename rules.
+- **Defined in:** `application_sdk/testing/golden.py`
+
 #### `assert_settled`
 
 - **Import:** `from application_sdk.testing.harness import assert_settled`
@@ -4289,12 +4477,28 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Create a Connection at an exact qualified name, and return that name.
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
+#### `cursor_page`
+
+- **Import:** `from application_sdk.testing import cursor_page`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `cursor_page(items: Sequence[T], *, ...)`
+- **Summary:** Slice ``items`` per the request's cursor/limit parameters.
+- **Defined in:** `application_sdk/testing/fake_source.py`
+
 #### `custom`
 
 - **Import:** `from application_sdk.testing.integration import custom`
 - **Signature:** `custom(fn: Callable[[Any], bool], description: str = 'custom')`
 - **Summary:** Create a custom assertion from a user-provided function.
 - **Defined in:** `application_sdk/testing/integration/assertions.py`
+
+#### `diff_golden`
+
+- **Import:** `from application_sdk.testing import diff_golden`
+- **Also importable from:** `application_sdk.testing.golden`
+- **Signature:** `diff_golden(produced: Iterable[Mapping[str, *, ...)`
+- **Summary:** Compare produced records against a golden fixture without asserting.
+- **Defined in:** `application_sdk/testing/golden.py`
 
 #### `discover_categories`
 
@@ -4899,6 +5103,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Delete every asset under *connection_qualified_name*, then the connection.
 - **Defined in:** `application_sdk/testing/harness/teardown.py`
 
+#### `read_records`
+
+- **Import:** `from application_sdk.testing.integration import read_records`
+- **Also importable from:** `application_sdk.testing.integration.corpus`
+- **Signature:** `read_records(path: Path)`
+- **Summary:** Read one corpus file as a list of records.
+- **Defined in:** `application_sdk/testing/integration/corpus.py`
+
 #### `read_tenant_auth`
 
 - **Import:** `from application_sdk.testing.harness.identity import read_tenant_auth`
@@ -4919,6 +5131,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `redact_text(text: str, *, secrets: Sequence[str] = ()) -> str`
 - **Summary:** Return *text* with credential-shaped and literally-known values blanked.
 - **Defined in:** `application_sdk/testing/harness/evidence.py`
+
+#### `require_golden_corpus`
+
+- **Import:** `from application_sdk.testing.integration import require_golden_corpus`
+- **Also importable from:** `application_sdk.testing.integration.corpus`
+- **Signature:** `require_golden_corpus(*, *, ...)`
+- **Summary:** Resolve the corpus, or skip the test when none is configured.
+- **Defined in:** `application_sdk/testing/integration/corpus.py`
 
 #### `reset_http_fake_sources`
 
@@ -5153,6 +5373,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Attributes holding nested reference objects with environment-scoped contents.
 - **Defined in:** `application_sdk/testing/volatile_fields.py`
 
+#### `GOLDEN_ROOT_ENV`
+
+- **Import:** `from application_sdk.testing.integration import GOLDEN_ROOT_ENV`
+- **Also importable from:** `application_sdk.testing.integration.corpus`
+- **Signature:** `GOLDEN_ROOT_ENV`
+- **Summary:** Single env var overriding the corpus root.
+- **Defined in:** `application_sdk/testing/integration/corpus.py`
+
 #### `Handler`
 
 - **Import:** `from application_sdk.testing import Handler`
@@ -5168,6 +5396,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `HandlerResult`
 - **Summary:** Everything :func:`_coerce` accepts from a handler or authorizer.
 - **Defined in:** `application_sdk/testing/fake_source.py`
+
+#### `NO_TYPENAME`
+
+- **Import:** `from application_sdk.testing import NO_TYPENAME`
+- **Also importable from:** `application_sdk.testing.golden`
+- **Signature:** `NO_TYPENAME`
+- **Summary:** Fallback bucket for records without a ``typeName``.
+- **Defined in:** `application_sdk/testing/golden.py`
 
 #### `Outcome`
 
@@ -5227,6 +5463,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `SECRET_KEY_FRAGMENTS: tuple[str, ...]`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/evidence.py`
+
+#### `SUPPORTED_SUFFIXES`
+
+- **Import:** `from application_sdk.testing.integration import SUPPORTED_SUFFIXES`
+- **Also importable from:** `application_sdk.testing.integration.corpus`
+- **Signature:** `SUPPORTED_SUFFIXES`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/integration/corpus.py`
 
 #### `UNREADABLE`
 

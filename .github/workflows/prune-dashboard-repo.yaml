@@ -3,13 +3,20 @@
 # Use when a repo is being removed from a central dashboard
 # (k.atlan.dev/<dashboard_path>/). Triggered manually via workflow_dispatch.
 #
-# Two modes:
+# Three modes:
 #   Single slug (repo_slug set): remove exactly that repo from one prefix.
 #   Archived sweep (sweep_archived: true): find every repo in the named
 #     prefixes that GitHub reports as archived and remove those.
+#   Unlisted sweep (sweep_unlisted: true): find every repo on ONE prefix
+#     (unlisted_prefix) that is NOT on the current fleet roster and remove those.
+#     For repos that are alive and well but were never supposed to be on the
+#     panel — the archived sweep cannot reach them, and a slug-at-a-time prune
+#     does not scale past a handful. One prefix per run is enforced, not advised:
+#     the panels do not share a publish scope, so a roster applied to the wrong
+#     one names legitimate rows for deletion.
 #
-# The sweep exists because a manifest is rebuilt by LISTING the bucket, which has
-# no deletion path — so a repo that leaves the fleet keeps being enumerated
+# The sweeps exist because a manifest is rebuilt by LISTING the bucket, which has
+# no deletion path — so a repo that does not belong keeps being enumerated
 # forever. publish_fleet_dashboard.py now omits departed repos on full-fleet
 # runs, but the per-repo publishers (security / conformance / test-readiness,
 # driven from each app repo's own update-dashboard.yml) have no full-fleet view
@@ -24,6 +31,15 @@
 # Usage:
 #   gh workflow run prune-dashboard-repo.yaml \
 #     -f repo_slug=atlanhq_atlan-mongodb-app
+#
+#   # Dry run first, always. 449 of the renovate dashboard's 616 stored repos
+#   # were never consumers, so that cleanup needs the cap raised past its 0.2
+#   # default — state the blast radius, then repeat with sweep_dry_run=false.
+#   gh workflow run prune-dashboard-repo.yaml \
+#     -f sweep_unlisted=true \
+#     -f unlisted_prefix=renovate-dashboard \
+#     -f sweep_max_fraction=0.8 \
+#     -f sweep_dry_run=true
 #
 name: Prune Dashboard Repo
 
@@ -40,16 +56,36 @@ on:
         required: false
         default: false
         type: boolean
+      sweep_unlisted:
+        description: "Sweep every repo NOT on the current fleet roster out of unlisted_prefix. For a publisher that wrote repos it never should have (live repos, so the archived sweep cannot reach them)."
+        required: false
+        default: false
+        type: boolean
       sweep_prefixes:
-        description: "Prefixes to sweep, comma-separated. Only used when sweep_archived is true."
+        description: "Prefixes to sweep, comma-separated. sweep_archived only — the archived criterion is true of a repo regardless of which panel it sits on, so it is safe to fan out."
         required: false
         default: "conformance-dashboard,security-dashboard,test-readiness-dashboard,gate-enforcement-dashboard,renovate-dashboard"
+        type: string
+      unlisted_prefix:
+        description: "sweep_unlisted only: the ONE prefix to sweep. Deliberately separate from sweep_prefixes — a roster describes one publisher's scope, and the panels do not share one (gate-enforcement spans ~166 repos, renovate ~80), so a roster fanned across prefixes deletes rows that belong."
+        required: false
+        default: "renovate-dashboard"
         type: string
       sweep_dry_run:
         description: "Sweep mode: report what would be removed and change nothing"
         required: false
         default: true
         type: boolean
+      sweep_max_fraction:
+        description: "Refuse to sweep more than this fraction of a prefix. Raise it deliberately for a large one-off cleanup — it is the stated blast radius, and the rail that catches a bad token or a truncated roster."
+        required: false
+        default: "0.2"
+        type: string
+      sweep_roster_name_pattern:
+        description: "sweep_unlisted only: regex a repo's bare name must match to belong on the panel. The default matches the renovate dashboard's own publish scope, so it goes with unlisted_prefix=renovate-dashboard. Sweeping a different panel means setting BOTH — a pattern narrower than the panel deletes rows that belong."
+        required: false
+        default: "^(atlan-[a-z0-9-]+-app|application-sdk)$"
+        type: string
       dashboard_path:
         description: "S3 prefix under kryptonite-store"
         required: false
@@ -74,9 +110,19 @@ jobs:
       # Mode selection lives entirely in `if:` expressions — no branching inside
       # a run: block, per docs/standards/ci.md.
       - name: Refuse a dispatch that names nothing to do
-        if: inputs.repo_slug == '' && !inputs.sweep_archived
+        if: inputs.repo_slug == '' && !inputs.sweep_archived && !inputs.sweep_unlisted
         run: |
-          echo "::error::pass repo_slug=<slug> for a single prune, or sweep_archived=true"
+          echo "::error::pass repo_slug=<slug> for a single prune, or sweep_archived=true / sweep_unlisted=true"
+          exit 1
+
+      # The two sweeps use different deletion criteria against the same prefixes.
+      # Running both in one dispatch would apply them in sequence, with the
+      # second's fraction cap measured against a prefix the first already
+      # shrank — so the combined blast radius is larger than either cap states.
+      - name: Refuse both sweeps in one dispatch
+        if: inputs.sweep_archived && inputs.sweep_unlisted
+        run: |
+          echo "::error::pick one sweep per dispatch: the caps are per-invocation, so running both understates the blast radius"
           exit 1
 
       - name: Validate slug
@@ -94,13 +140,13 @@ jobs:
           echo "Pruning slug: $SLUG"
 
       - name: Setup AWS Credentials
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6
         with:
           aws-region: ap-south-1
           role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
 
       - name: Delete per-repo data + history
-        if: inputs.repo_slug != '' && !inputs.sweep_archived
+        if: inputs.repo_slug != '' && !inputs.sweep_archived && !inputs.sweep_unlisted
         env:
           SLUG: ${{ inputs.repo_slug }}
           PREFIX: ${{ inputs.dashboard_path }}
@@ -113,7 +159,7 @@ jobs:
           aws s3 rm "$HIST_KEY" || echo "(history JSONL was not present)"
 
       - name: Rebuild repos.json manifest
-        if: inputs.repo_slug != '' && !inputs.sweep_archived
+        if: inputs.repo_slug != '' && !inputs.sweep_archived && !inputs.sweep_unlisted
         env:
           PREFIX: ${{ inputs.dashboard_path }}
         run: |
@@ -130,16 +176,17 @@ jobs:
       # Sweep mode runs a script out of this repo; the single-slug path above
       # only needs the AWS CLI, so the checkout is scoped to the sweep.
       - name: Checkout application-sdk
-        if: inputs.sweep_archived
+        if: inputs.sweep_archived || inputs.sweep_unlisted
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Org-wide read so the sweep can ask GitHub whether each stored repo is
-      # archived. No `repositories:` list — the manifest spans the whole fleet,
-      # and a token scoped to one repo would report every other repo as
-      # unreadable, which the script correctly refuses to act on.
+      # Org-wide read so the archived sweep can ask GitHub whether each stored
+      # repo is archived, and so the unlisted sweep can build its roster. No
+      # `repositories:` list — the manifest spans the whole fleet, and a token
+      # scoped to one repo would report every other repo as unreadable, which
+      # the script correctly refuses to act on.
       - name: Mint fleet App token
         id: app-token
-        if: inputs.sweep_archived
+        if: inputs.sweep_archived || inputs.sweep_unlisted
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
@@ -152,6 +199,47 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PREFIXES: ${{ inputs.sweep_prefixes }}
           DRY_RUN: ${{ inputs.sweep_dry_run && '--dry-run' || '' }}
+          MAX_FRACTION: ${{ inputs.sweep_max_fraction }}
         run: |
-          python3 .github/scripts/sweep_archived_dashboard_repos.py \
-            --prefixes "$PREFIXES" $DRY_RUN
+          python3 .github/scripts/sweep_dashboard_repos.py \
+            --prefixes "$PREFIXES" \
+            --max-fraction "$MAX_FRACTION" $DRY_RUN
+
+      # The roster is the deletion criterion, so it comes from the same
+      # deterministic discovery the dashboards publish from — never from a hand
+      # -maintained list that would drift out of agreement with the publisher.
+      # --fail-on-empty matters more here than anywhere: an empty roster names
+      # every stored repo for deletion, and the script refuses it, but failing
+      # at the source says why.
+      - name: Build the fleet roster
+        id: roster
+        if: inputs.sweep_unlisted
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          NAME_PATTERN: ${{ inputs.sweep_roster_name_pattern }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/discover_org_consumers.py \
+            --owner atlanhq \
+            --name-pattern "$NAME_PATTERN" \
+            --fail-on-empty
+
+      # One prefix, from its own input — never sweep_prefixes, whose default
+      # names all five panels. The script refuses more than one anyway; passing
+      # the dedicated input means an operator following the header's cleanup
+      # recipe (raise the cap, turn off dry-run) cannot reach the other panels
+      # by leaving a default alone.
+      - name: Sweep repos that are not on the roster
+        if: inputs.sweep_unlisted
+        env:
+          PREFIX: ${{ inputs.unlisted_prefix }}
+          DRY_RUN: ${{ inputs.sweep_dry_run && '--dry-run' || '' }}
+          MAX_FRACTION: ${{ inputs.sweep_max_fraction }}
+          ROSTER: ${{ steps.roster.outputs.repos }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$ROSTER" > /tmp/fleet-roster.json
+          python3 .github/scripts/sweep_dashboard_repos.py \
+            --prefixes "$PREFIX" \
+            --roster-file /tmp/fleet-roster.json \
+            --max-fraction "$MAX_FRACTION" $DRY_RUN

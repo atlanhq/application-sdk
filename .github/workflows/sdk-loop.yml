@@ -1,0 +1,456 @@
+# @sdk-loop — drive a PR to merge-ready without supervision.
+#
+#   fence -> review 1 -> resolve 1 -> review 2 -> ... -> review 8 -> finalize
+#
+# One workflow run, one job per phase, up to 8 review/resolve pairs. The review
+# phase runs on xai/grok-4.6 — the same model the existing lanes review with
+# — and the resolve phase on gpt-5.6-luna via opencode, both
+# through the Atlan AI gateway — a public edge, so no VPN and no mothership
+# sandbox. Its URL is a secret and is deliberately not written anywhere in
+# this repo. Every phase reads the EXISTING playbooks from this checkout:
+# .mothership/pr-review/ORCHESTRATION.md and .mothership/pr-resolve/. Neither
+# file is copied or edited by this lane.
+#
+# This lane is ADDITIVE. @sdk-review and @sdk-resolve are untouched and keep
+# working exactly as they do today. All three speak one verdict vocabulary, so
+# sdk_review_approve.py, the dedupe, the reconcile and the downgrade/dismiss
+# workflows consume a loop verdict with no change.
+#
+# There is no adversarial review pass. The resolve phase opens by contesting
+# the findings it was handed (pr-resolve ORCHESTRATION §3d, "Fix every finding
+# or prove it false"), so a second reviewer would be paying twice for one job.
+# Contested findings ride a ledger into the next round, which is what lets a
+# disagreement converge without a human.
+#
+# Concurrency, deliberately asymmetric:
+#   * Across PRs — none. Different PRs are different branches with no shared
+#     mutable state, so loops run fully in parallel. Throttling would make one
+#     slow PR delay every other for no correctness gain.
+#   * Within one PR — the FIRST run wins. A second @sdk-loop is dismissed by
+#     the fence, not queued: a queued run would start against a branch the live
+#     loop had already advanced and would be answering a stale request.
+#
+# A commit landing mid-loop re-aims the loop rather than stopping it: in-flight
+# work is discarded, the loop re-baselines on the new head and re-enters
+# REVIEW. Nothing is ever fixed against a review of a different sha, and the
+# loop never rebases or force-pushes over anyone.
+#
+# GENERATED FILE — edit .github/scripts/gen_sdk_loop_workflow.py and run it.
+# CI staleness: python3 .github/scripts/gen_sdk_loop_workflow.py --check
+#
+# Required configuration:
+#   secrets.LITELLM_API_KEY           gateway key entitled to BOTH xai/grok-4.6
+#                                     and gpt-5.6-luna. An unentitled model is a
+#                                     fast 400 with real cost, so check first.
+#   secrets.FLEET_APP_ID              atlan-app-fleet — already configured for
+#   secrets.FLEET_APP_PRIVATE_KEY     the existing lanes. Each phase mints its
+#                                     own narrowed installation token from it.
+#   secrets.LITELLM_BASE_URL          gateway base URL. Required — there is no
+#                                     default and the endpoint is never in-repo.
+
+name: SDK Loop
+
+# The PR number has to be IN the title: the fence matches a live run to a PR
+# through `display_title` whenever GitHub leaves `pull_requests` empty, which
+# it does for fork runs. Without this, a duplicate loop on a fork PR would not
+# be detected and two loops would push to one branch.
+run-name: "SDK Loop #${{ github.event.issue.number || inputs.pr }}"
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'PR number to drive'
+        required: true
+
+# Keyed on the PR alone: loops on different PRs never contend. `cancel-in-
+# progress: false` because cancelling could kill a resolve phase mid-push —
+# the fence dismisses duplicates instead, which is safe at any moment.
+concurrency:
+  group: sdk-loop-pr-${{ github.event.issue.number || inputs.pr }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pull-requests: write
+  # The fence runs `gh run list` to find a loop already working this PR. An
+  # explicit permissions block makes everything unlisted `none`, so without
+  # this the duplicate check 403s, the fence raises before it can post, and
+  # the lane goes silent — the failure mode it exists to prevent.
+  actions: read
+  # Reactions are an Issues-scope resource, so the acknowledgement 403s
+  # without this. Caught by test_react_to_comment.py, which asserts every
+  # workflow calling the helper grants it — the same Issues-vs-PR distinction
+  # the fleet App token needed for posting the verdict comment.
+  issues: write
+
+jobs:
+  fence:
+    name: Fence
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.issue.pull_request &&
+       startsWith(github.event.comment.body, '@sdk-loop'))
+    outputs:
+      proceed: ${{ steps.fence.outputs.proceed }}
+      pr: ${{ steps.fence.outputs.pr }}
+      head_ref: ${{ steps.fence.outputs.head_ref }}
+      base_sha: ${{ steps.fence.outputs.base_sha }}
+      reason: ${{ steps.fence.outputs.reason }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+      - name: Authorize, dismiss duplicates, pin the baseline
+        id: fence
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number || inputs.pr }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          AUTHOR_ASSOCIATION: ${{ github.event_name == 'workflow_dispatch' && 'OWNER' || github.event.comment.author_association }}
+          RUN_ID: ${{ github.run_id }}
+          GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          WORKFLOW_FILE: sdk-loop.yml
+        run: python3 .github/scripts/sdk_loop_fence.py
+
+      # The same acknowledgement the other two lanes give: an emoji within
+      # seconds, long before any verdict exists, so whoever typed @sdk-loop
+      # knows it registered. Runs after the fence so it can reflect the
+      # decision, and always() because the script exits 0 by design — a
+      # missing emoji must never take down the run it is decorating.
+      - name: React to the trigger comment
+        if: always() && github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          REACTION: ${{ steps.fence.outputs.proceed == 'true' && 'eyes' || 'confused' }}
+        run: python3 .github/scripts/react_to_comment.py
+
+  prep:
+    name: Prep
+    needs: [fence]
+    if: needs.fence.outputs.proceed == 'true'
+    uses: ./.github/workflows/sdk-loop-phase.yml
+    secrets: inherit
+    with:
+      phase: prep
+      round: 0
+      pr: ${{ needs.fence.outputs.pr }}
+      head_ref: ${{ needs.fence.outputs.head_ref }}
+      base_sha: ${{ needs.fence.outputs.base_sha }}
+
+  review-1:
+    name: Review 1
+    needs: [fence, prep]
+    if: >-
+      !cancelled() && needs.fence.outputs.proceed == 'true'
+    uses: ./.github/workflows/sdk-loop-phase.yml
+    secrets: inherit
+    with:
+      phase: review
+      round: 1
+      pr: ${{ needs.fence.outputs.pr }}
+      head_ref: ${{ needs.fence.outputs.head_ref }}
+      base_sha: ${{ needs.prep.outputs.new_base_sha || needs.fence.outputs.base_sha }}
+      ours: ${{ needs.prep.outputs.pushed_sha }}
+      ledger: ''
+      prior_sha: ''
+      spent_so_far: ''
+      reaims_so_far: ''
+
+  resolve-1:
+    name: Resolve 1
+    needs: [fence, review-1]
+    if: >-
+      !cancelled() && needs.review-1.outputs.outcome == 'ok'
+    uses: ./.github/workflows/sdk-loop-phase.yml
+    secrets: inherit
+    with:
+      phase: resolve
+      round: 1
+      pr: ${{ needs.fence.outputs.pr }}
+      head_ref: ${{ needs.fence.outputs.head_ref }}
+      base_sha: ${{ needs.review-1.outputs.new_base_sha }}
+      verdict_url: ${{ needs.review-1.outputs.verdict_url }}
+      spent_so_far: ${{ needs.review-1.outputs.spent_total }}
+      ledger: ''
+
+  review-2:
+    name: Review 2
+    needs: [fence, review-1, resolve-1]
+    if: >-
+      !cancelled() && needs.fence.outputs.proceed == 'true' && (needs.resolve-1.outputs.outcome == 'ok' || needs.resolve-1.outputs.outcome == 'reaim' || needs.review-1.outputs.outcome == 'reaim')
+    uses: ./.github/workflows/sdk-loop-phase.yml
+    secrets: inherit
+    with:
+      phase: review
+      round: 2
+      pr: ${{ needs.fence.outputs.pr }}
+      head_ref: ${{ needs.fence.outputs.head_ref }}
+      base_sha: ${{ needs.resolve-1.outputs.new_base_sha || needs.review-1.outputs.new_base_sha }}
+      ours: ${{ needs.resolve-1.outputs.pushed_sha }}
+      ledger: ${{ needs.resolve-1.outputs.ledger }}
+      prior_sha: ${{ needs.review-1.outputs.reviewed_head }}
+      spent_so_far: ${{ needs.resolve-1.outputs.spent_total || needs.review-1.outputs.spent_total }}
+      reaims_so_far: ${{ needs.review-1.outputs.reaims }}
+
+  resolve-2:
+    name: Resolve 2
+    needs: [fence, review-2, resolve-1]
+    if: >-
+      !cancelled() && needs.review-2.outputs.outcome == 'ok'
+    uses: ./.github/workflows/sdk-loop-phase.yml
+    secrets: inherit
+    with:
+      phase: resolve
+      round: 2
+      pr: ${{ needs.fence.outputs.pr }}
+      head_ref: ${{ needs.fence.outputs.head_ref }}
+      base_sha: ${{ needs.review-2.outputs.new_base_sha }}
+      verdict_url: ${{ needs.review-2.outputs.verdict_url }}
+      spent_so_far: ${{ needs.review-2.outputs.spent_total }}
+      ledger: ${{ needs.resolve-1.outputs.ledger }}
+
+  review-3:
+    name: Review 3
+    needs: [fence, review-2, resolve-2]
+    if: >-
+      !cancelled() && needs.fence.outputs.proceed == 'true' && (needs.resolve-2.outputs.outcome == 'ok' || needs.resolve-2.outputs.outcome == 'reaim' || needs.review-2.outputs.outcome == 'reaim')
+    uses: ./.github/workflows/sdk-loop-phase.yml
+    secrets: inherit
+    with:
+      phase: review
+      round: 3
+      pr: ${{ needs.fence.outputs.pr }}
+      head_ref: ${{ needs.fence.outputs.head_ref }}
+      base_sha: ${{ needs.resolve-2.outputs.new_base_sha || needs.review-2.outputs.new_base_sha }}
+      ours: ${{ needs.resolve-2.outputs.pushed_sha }}
+      ledger: ${{ needs.resolve-2.outputs.ledger }}
+      prior_sha: ${{ needs.review-2.outputs.reviewed_head }}
+      spent_so_far: ${{ needs.resolve-2.outputs.spent_total || needs.review-2.outputs.spent_total }}
+      reaims_so_far: ${{ needs.review-2.outputs.reaims }}
+
+  resolve-3:
+    name: Resolve 3
+    needs: [fence, review-3, resolve-2]
+    if: >-
+      !cancelled() && needs.review-3.outputs.outcome == 'ok'
+    uses: ./.github/workflows/sdk-loop-phase.yml
+    secrets: inherit
+    with:
+      phase: resolve
+      round: 3
+      pr: ${{ needs.fence.outputs.pr }}
+      head_ref: ${{ needs.fence.outputs.head_ref }}
+      base_sha: ${{ needs.review-3.outputs.new_base_sha }}
+      verdict_url: ${{ needs.review-3.outputs.verdict_url }}
+      spent_so_far: ${{ needs.review-3.outputs.spent_total }}
+      ledger: ${{ needs.resolve-2.outputs.ledger }}
+
+  review-4:
+    name: Review 4
+    needs: [fence, review-3, resolve-3]
+    if: >-
+      !cancelled() && needs.fence.outputs.proceed == 'true' && (needs.resolve-3.outputs.outcome == 'ok' || needs.resolve-3.outputs.outcome == 'reaim' || needs.review-3.outputs.outcome == 'reaim')
+    uses: ./.github/workflows/sdk-loop-phase.yml
+    secrets: inherit
+    with:
+      phase: review
+      round: 4
+      pr: ${{ needs.fence.outputs.pr }}
+      head_ref: ${{ needs.fence.outputs.head_ref }}
+      base_sha: ${{ needs.resolve-3.outputs.new_base_sha || needs.review-3.outputs.new_base_sha }}
+      ours: ${{ needs.resolve-3.outputs.pushed_sha }}
+      ledger: ${{ needs.resolve-3.outputs.ledger }}
+      prior_sha: ${{ needs.review-3.outputs.reviewed_head }}
+      spent_so_far: ${{ needs.resolve-3.outputs.spent_total || needs.review-3.outputs.spent_total }}
+      reaims_so_far: ${{ needs.review-3.outputs.reaims }}
+
+  resolve-4:
+    name: Resolve 4
+    needs: [fence, review-4, resolve-3]
+    if: >-
+      !cancelled() && needs.review-4.outputs.outcome == 'ok'
+    uses: ./.github/workflows/sdk-loop-phase.yml
+    secrets: inherit
+    with:
+      phase: resolve
+      round: 4
+      pr: ${{ needs.fence.outputs.pr }}
+      head_ref: ${{ needs.fence.outputs.head_ref }}
+      base_sha: ${{ needs.review-4.outputs.new_base_sha }}
+      verdict_url: ${{ needs.review-4.outputs.verdict_url }}
+      spent_so_far: ${{ needs.review-4.outputs.spent_total }}
+      ledger: ${{ needs.resolve-3.outputs.ledger }}
+
+  review-5:
+    name: Review 5
+    needs: [fence, review-4, resolve-4]
+    if: >-
+      !cancelled() && needs.fence.outputs.proceed == 'true' && (needs.resolve-4.outputs.outcome == 'ok' || needs.resolve-4.outputs.outcome == 'reaim' || needs.review-4.outputs.outcome == 'reaim')
+    uses: ./.github/workflows/sdk-loop-phase.yml
+    secrets: inherit
+    with:
+      phase: review
+      round: 5
+      pr: ${{ needs.fence.outputs.pr }}
+      head_ref: ${{ needs.fence.outputs.head_ref }}
+      base_sha: ${{ needs.resolve-4.outputs.new_base_sha || needs.review-4.outputs.new_base_sha }}
+      ours: ${{ needs.resolve-4.outputs.pushed_sha }}
+      ledger: ${{ needs.resolve-4.outputs.ledger }}
+      prior_sha: ${{ needs.review-4.outputs.reviewed_head }}
+      spent_so_far: ${{ needs.resolve-4.outputs.spent_total || needs.review-4.outputs.spent_total }}
+      reaims_so_far: ${{ needs.review-4.outputs.reaims }}
+
+  resolve-5:
+    name: Resolve 5
+    needs: [fence, review-5, resolve-4]
+    if: >-
+      !cancelled() && needs.review-5.outputs.outcome == 'ok'
+    uses: ./.github/workflows/sdk-loop-phase.yml
+    secrets: inherit
+    with:
+      phase: resolve
+      round: 5
+      pr: ${{ needs.fence.outputs.pr }}
+      head_ref: ${{ needs.fence.outputs.head_ref }}
+      base_sha: ${{ needs.review-5.outputs.new_base_sha }}
+      verdict_url: ${{ needs.review-5.outputs.verdict_url }}
+      spent_so_far: ${{ needs.review-5.outputs.spent_total }}
+      ledger: ${{ needs.resolve-4.outputs.ledger }}
+
+  review-6:
+    name: Review 6
+    needs: [fence, review-5, resolve-5]
+    if: >-
+      !cancelled() && needs.fence.outputs.proceed == 'true' && (needs.resolve-5.outputs.outcome == 'ok' || needs.resolve-5.outputs.outcome == 'reaim' || needs.review-5.outputs.outcome == 'reaim')
+    uses: ./.github/workflows/sdk-loop-phase.yml
+    secrets: inherit
+    with:
+      phase: review
+      round: 6
+      pr: ${{ needs.fence.outputs.pr }}
+      head_ref: ${{ needs.fence.outputs.head_ref }}
+      base_sha: ${{ needs.resolve-5.outputs.new_base_sha || needs.review-5.outputs.new_base_sha }}
+      ours: ${{ needs.resolve-5.outputs.pushed_sha }}
+      ledger: ${{ needs.resolve-5.outputs.ledger }}
+      prior_sha: ${{ needs.review-5.outputs.reviewed_head }}
+      spent_so_far: ${{ needs.resolve-5.outputs.spent_total || needs.review-5.outputs.spent_total }}
+      reaims_so_far: ${{ needs.review-5.outputs.reaims }}
+
+  resolve-6:
+    name: Resolve 6
+    needs: [fence, review-6, resolve-5]
+    if: >-
+      !cancelled() && needs.review-6.outputs.outcome == 'ok'
+    uses: ./.github/workflows/sdk-loop-phase.yml
+    secrets: inherit
+    with:
+      phase: resolve
+      round: 6
+      pr: ${{ needs.fence.outputs.pr }}
+      head_ref: ${{ needs.fence.outputs.head_ref }}
+      base_sha: ${{ needs.review-6.outputs.new_base_sha }}
+      verdict_url: ${{ needs.review-6.outputs.verdict_url }}
+      spent_so_far: ${{ needs.review-6.outputs.spent_total }}
+      ledger: ${{ needs.resolve-5.outputs.ledger }}
+
+  review-7:
+    name: Review 7
+    needs: [fence, review-6, resolve-6]
+    if: >-
+      !cancelled() && needs.fence.outputs.proceed == 'true' && (needs.resolve-6.outputs.outcome == 'ok' || needs.resolve-6.outputs.outcome == 'reaim' || needs.review-6.outputs.outcome == 'reaim')
+    uses: ./.github/workflows/sdk-loop-phase.yml
+    secrets: inherit
+    with:
+      phase: review
+      round: 7
+      pr: ${{ needs.fence.outputs.pr }}
+      head_ref: ${{ needs.fence.outputs.head_ref }}
+      base_sha: ${{ needs.resolve-6.outputs.new_base_sha || needs.review-6.outputs.new_base_sha }}
+      ours: ${{ needs.resolve-6.outputs.pushed_sha }}
+      ledger: ${{ needs.resolve-6.outputs.ledger }}
+      prior_sha: ${{ needs.review-6.outputs.reviewed_head }}
+      spent_so_far: ${{ needs.resolve-6.outputs.spent_total || needs.review-6.outputs.spent_total }}
+      reaims_so_far: ${{ needs.review-6.outputs.reaims }}
+
+  resolve-7:
+    name: Resolve 7
+    needs: [fence, review-7, resolve-6]
+    if: >-
+      !cancelled() && needs.review-7.outputs.outcome == 'ok'
+    uses: ./.github/workflows/sdk-loop-phase.yml
+    secrets: inherit
+    with:
+      phase: resolve
+      round: 7
+      pr: ${{ needs.fence.outputs.pr }}
+      head_ref: ${{ needs.fence.outputs.head_ref }}
+      base_sha: ${{ needs.review-7.outputs.new_base_sha }}
+      verdict_url: ${{ needs.review-7.outputs.verdict_url }}
+      spent_so_far: ${{ needs.review-7.outputs.spent_total }}
+      ledger: ${{ needs.resolve-6.outputs.ledger }}
+
+  review-8:
+    name: Review 8
+    needs: [fence, review-7, resolve-7]
+    if: >-
+      !cancelled() && needs.fence.outputs.proceed == 'true' && (needs.resolve-7.outputs.outcome == 'ok' || needs.resolve-7.outputs.outcome == 'reaim' || needs.review-7.outputs.outcome == 'reaim')
+    uses: ./.github/workflows/sdk-loop-phase.yml
+    secrets: inherit
+    with:
+      phase: review
+      round: 8
+      pr: ${{ needs.fence.outputs.pr }}
+      head_ref: ${{ needs.fence.outputs.head_ref }}
+      base_sha: ${{ needs.resolve-7.outputs.new_base_sha || needs.review-7.outputs.new_base_sha }}
+      ours: ${{ needs.resolve-7.outputs.pushed_sha }}
+      ledger: ${{ needs.resolve-7.outputs.ledger }}
+      prior_sha: ${{ needs.review-7.outputs.reviewed_head }}
+      spent_so_far: ${{ needs.resolve-7.outputs.spent_total || needs.review-7.outputs.spent_total }}
+      reaims_so_far: ${{ needs.review-7.outputs.reaims }}
+
+  resolve-8:
+    name: Resolve 8
+    needs: [fence, review-8, resolve-7]
+    if: >-
+      !cancelled() && needs.review-8.outputs.outcome == 'ok'
+    uses: ./.github/workflows/sdk-loop-phase.yml
+    secrets: inherit
+    with:
+      phase: resolve
+      round: 8
+      pr: ${{ needs.fence.outputs.pr }}
+      head_ref: ${{ needs.fence.outputs.head_ref }}
+      base_sha: ${{ needs.review-8.outputs.new_base_sha }}
+      verdict_url: ${{ needs.review-8.outputs.verdict_url }}
+      spent_so_far: ${{ needs.review-8.outputs.spent_total }}
+      ledger: ${{ needs.resolve-7.outputs.ledger }}
+
+  finalize:
+    name: Summary
+    needs: [fence, prep, review-1, resolve-1, review-2, resolve-2, review-3, resolve-3, review-4, resolve-4, review-5, resolve-5, review-6, resolve-6, review-7, resolve-7, review-8, resolve-8]
+    if: always() && needs.fence.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+      - name: Post the run summary
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.fence.outputs.pr }}
+          GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          STOP_REASON: ${{ needs.resolve-8.outputs.outcome || needs.review-8.outputs.outcome || needs.resolve-7.outputs.outcome || needs.review-7.outputs.outcome || needs.resolve-6.outputs.outcome || needs.review-6.outputs.outcome || needs.resolve-5.outputs.outcome || needs.review-5.outputs.outcome || needs.resolve-4.outputs.outcome || needs.review-4.outputs.outcome || needs.resolve-3.outputs.outcome || needs.review-3.outputs.outcome || needs.resolve-2.outputs.outcome || needs.review-2.outputs.outcome || needs.resolve-1.outputs.outcome || needs.review-1.outputs.outcome || 'failed' }}
+          ROUNDS_JSON: '[{"number":1,"phase":"review","outcome":"${{ needs.review-1.outputs.outcome }}","verdict":"${{ needs.review-1.outputs.verdict }}","sha":"${{ needs.review-1.outputs.new_base_sha }}","detail":"${{ needs.review-1.outputs.detail }}","cost":"${{ needs.review-1.outputs.cost }}","usage":"${{ needs.review-1.outputs.usage }}"},{"number":1,"phase":"resolve","outcome":"${{ needs.resolve-1.outputs.outcome }}","verdict":"${{ needs.resolve-1.outputs.verdict }}","sha":"${{ needs.resolve-1.outputs.new_base_sha }}","detail":"${{ needs.resolve-1.outputs.detail }}","cost":"${{ needs.resolve-1.outputs.cost }}","usage":"${{ needs.resolve-1.outputs.usage }}"},{"number":2,"phase":"review","outcome":"${{ needs.review-2.outputs.outcome }}","verdict":"${{ needs.review-2.outputs.verdict }}","sha":"${{ needs.review-2.outputs.new_base_sha }}","detail":"${{ needs.review-2.outputs.detail }}","cost":"${{ needs.review-2.outputs.cost }}","usage":"${{ needs.review-2.outputs.usage }}"},{"number":2,"phase":"resolve","outcome":"${{ needs.resolve-2.outputs.outcome }}","verdict":"${{ needs.resolve-2.outputs.verdict }}","sha":"${{ needs.resolve-2.outputs.new_base_sha }}","detail":"${{ needs.resolve-2.outputs.detail }}","cost":"${{ needs.resolve-2.outputs.cost }}","usage":"${{ needs.resolve-2.outputs.usage }}"},{"number":3,"phase":"review","outcome":"${{ needs.review-3.outputs.outcome }}","verdict":"${{ needs.review-3.outputs.verdict }}","sha":"${{ needs.review-3.outputs.new_base_sha }}","detail":"${{ needs.review-3.outputs.detail }}","cost":"${{ needs.review-3.outputs.cost }}","usage":"${{ needs.review-3.outputs.usage }}"},{"number":3,"phase":"resolve","outcome":"${{ needs.resolve-3.outputs.outcome }}","verdict":"${{ needs.resolve-3.outputs.verdict }}","sha":"${{ needs.resolve-3.outputs.new_base_sha }}","detail":"${{ needs.resolve-3.outputs.detail }}","cost":"${{ needs.resolve-3.outputs.cost }}","usage":"${{ needs.resolve-3.outputs.usage }}"},{"number":4,"phase":"review","outcome":"${{ needs.review-4.outputs.outcome }}","verdict":"${{ needs.review-4.outputs.verdict }}","sha":"${{ needs.review-4.outputs.new_base_sha }}","detail":"${{ needs.review-4.outputs.detail }}","cost":"${{ needs.review-4.outputs.cost }}","usage":"${{ needs.review-4.outputs.usage }}"},{"number":4,"phase":"resolve","outcome":"${{ needs.resolve-4.outputs.outcome }}","verdict":"${{ needs.resolve-4.outputs.verdict }}","sha":"${{ needs.resolve-4.outputs.new_base_sha }}","detail":"${{ needs.resolve-4.outputs.detail }}","cost":"${{ needs.resolve-4.outputs.cost }}","usage":"${{ needs.resolve-4.outputs.usage }}"},{"number":5,"phase":"review","outcome":"${{ needs.review-5.outputs.outcome }}","verdict":"${{ needs.review-5.outputs.verdict }}","sha":"${{ needs.review-5.outputs.new_base_sha }}","detail":"${{ needs.review-5.outputs.detail }}","cost":"${{ needs.review-5.outputs.cost }}","usage":"${{ needs.review-5.outputs.usage }}"},{"number":5,"phase":"resolve","outcome":"${{ needs.resolve-5.outputs.outcome }}","verdict":"${{ needs.resolve-5.outputs.verdict }}","sha":"${{ needs.resolve-5.outputs.new_base_sha }}","detail":"${{ needs.resolve-5.outputs.detail }}","cost":"${{ needs.resolve-5.outputs.cost }}","usage":"${{ needs.resolve-5.outputs.usage }}"},{"number":6,"phase":"review","outcome":"${{ needs.review-6.outputs.outcome }}","verdict":"${{ needs.review-6.outputs.verdict }}","sha":"${{ needs.review-6.outputs.new_base_sha }}","detail":"${{ needs.review-6.outputs.detail }}","cost":"${{ needs.review-6.outputs.cost }}","usage":"${{ needs.review-6.outputs.usage }}"},{"number":6,"phase":"resolve","outcome":"${{ needs.resolve-6.outputs.outcome }}","verdict":"${{ needs.resolve-6.outputs.verdict }}","sha":"${{ needs.resolve-6.outputs.new_base_sha }}","detail":"${{ needs.resolve-6.outputs.detail }}","cost":"${{ needs.resolve-6.outputs.cost }}","usage":"${{ needs.resolve-6.outputs.usage }}"},{"number":7,"phase":"review","outcome":"${{ needs.review-7.outputs.outcome }}","verdict":"${{ needs.review-7.outputs.verdict }}","sha":"${{ needs.review-7.outputs.new_base_sha }}","detail":"${{ needs.review-7.outputs.detail }}","cost":"${{ needs.review-7.outputs.cost }}","usage":"${{ needs.review-7.outputs.usage }}"},{"number":7,"phase":"resolve","outcome":"${{ needs.resolve-7.outputs.outcome }}","verdict":"${{ needs.resolve-7.outputs.verdict }}","sha":"${{ needs.resolve-7.outputs.new_base_sha }}","detail":"${{ needs.resolve-7.outputs.detail }}","cost":"${{ needs.resolve-7.outputs.cost }}","usage":"${{ needs.resolve-7.outputs.usage }}"},{"number":8,"phase":"review","outcome":"${{ needs.review-8.outputs.outcome }}","verdict":"${{ needs.review-8.outputs.verdict }}","sha":"${{ needs.review-8.outputs.new_base_sha }}","detail":"${{ needs.review-8.outputs.detail }}","cost":"${{ needs.review-8.outputs.cost }}","usage":"${{ needs.review-8.outputs.usage }}"},{"number":8,"phase":"resolve","outcome":"${{ needs.resolve-8.outputs.outcome }}","verdict":"${{ needs.resolve-8.outputs.verdict }}","sha":"${{ needs.resolve-8.outputs.new_base_sha }}","detail":"${{ needs.resolve-8.outputs.detail }}","cost":"${{ needs.resolve-8.outputs.cost }}","usage":"${{ needs.resolve-8.outputs.usage }}"}]'
+        run: python3 .github/scripts/sdk_loop_finalize.py

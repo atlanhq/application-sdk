@@ -21,6 +21,7 @@ import orjson
 import pytest
 
 from application_sdk.storage import batch, integrity, transfer
+from application_sdk.storage.chunked import _part_path, _transfer_state_path
 from application_sdk.storage.errors import StorageError, StorageIntegrityError
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.ops import (
@@ -758,7 +759,8 @@ class TestChunkedDownloadValidation:
         """
         await _put("np/data.bin", self.CONTENT, store, normalize=False)
         out = tmp_path / "o.bin"
-        state = Path(str(out) + ".transfer-state")
+        state = _transfer_state_path(out)
+        state.parent.mkdir(parents=True, exist_ok=True)
 
         # A checkpoint from a hypothetical earlier attempt, matching this
         # object's generation as far as an unpinned download could tell.
@@ -802,8 +804,10 @@ class TestChunkedDownloadValidation:
             pytest.skip("store does not provide etags; nothing to pin")
 
         out = tmp_path / "o.bin"
-        state = Path(str(out) + ".transfer-state")
-        out.write_bytes(b"\x00" * len(self.CONTENT))
+        state = _transfer_state_path(out)
+
+        _part_path(out).parent.mkdir(parents=True, exist_ok=True)
+        _part_path(out).write_bytes(b"\x00" * len(self.CONTENT))
         state.write_bytes(
             orjson.dumps(
                 {
