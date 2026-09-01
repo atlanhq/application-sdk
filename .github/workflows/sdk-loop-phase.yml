@@ -201,7 +201,14 @@ jobs:
       - name: Cache the opencode install
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/.npm
+          # `~/.npm` is the package; `~/.local/share/opencode` is the ripgrep
+          # binary opencode downloads from GitHub Releases the first time an
+          # agent uses Glob or Grep. That download happened on EVERY job — up
+          # to 18 per run — and it is a network fetch on the critical path of
+          # the first search the reviewer makes.
+          path: |
+            ~/.npm
+            ~/.local/share/opencode/bin
           key: opencode-${{ runner.os }}-1.18.22
 
       - name: Install opencode
