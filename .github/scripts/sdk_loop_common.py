@@ -662,18 +662,15 @@ def opencode_config(
                 # parsing `4.6` out of the id as a version, and the nested
                 # slash in `gateway/xai/grok-4.6`.
                 #
-                # Zeroes rather than real prices: this lane bills through the
-                # gateway key and reads spend from /key/info, so opencode's own
-                # accounting is unused. Declaring it only stops it guessing.
+                # REAL prices, not zeroes. The zeroes were collateral from the
+                # DecimalError fix above and they made opencode's own
+                # `Total Cost` $0.00 BY CONSTRUCTION — so when the /key/info
+                # fallback turned out to 403, there was no dollar figure left
+                # anywhere. Declaring the list price costs nothing and makes
+                # opencode's accounting agree with `usage_cost_usd`, which is
+                # what the summary actually prints.
                 "models": {
-                    name: {
-                        "cost": {
-                            "input": 0,
-                            "output": 0,
-                            "cache_read": 0,
-                            "cache_write": 0,
-                        }
-                    }
+                    name: {"cost": dict(MODEL_PRICES_USD_PER_MTOK[name])}
                     for name in ALLOWED_MODELS
                 },
             }
@@ -727,6 +724,43 @@ def opencode_config(
 # --------------------------------------------------------------------------
 
 
+#: List price per MILLION tokens, in USD, for every model this lane may reach.
+#:
+#: Units and values are models.dev's, which is the catalog opencode itself
+#: ships — `xai.models["grok-4.6"].cost` is `{input: 2, output: 6,
+#: cache_read: 0.5}` and `openai.models["gpt-5.6-luna"].cost` is
+#: `{input: 0.2, output: 1.2, cache_read: 0.02, cache_write: 0.25}`. Copied
+#: rather than read at runtime so a phase never depends on a cache file or a
+#: network fetch to report what it spent.
+#:
+#: These are LIST prices, not the gateway's billed rate. The lane says so
+#: wherever it prints a dollar figure. A list-price estimate that is
+#: attributable to one phase beats the alternative this replaced — the shared
+#: key's /key/info total, which 403s and, when it did not, summed every lane's
+#: traffic together.
+#:
+#: Both models charge double above a context threshold (grok-4.6 over 200K,
+#: gpt-5.6-luna over 272K). Not modelled: `opencode stats` reports totals, not
+#: a per-request context size, so there is nothing to apply the tier to. A
+#: phase that spends most of its turns over the threshold is UNDER-reported.
+MODEL_PRICES_USD_PER_MTOK: dict[str, dict[str, float]] = {
+    "xai/grok-4.6": {
+        "input": 2.0,
+        "output": 6.0,
+        "cache_read": 0.5,
+        # xai bills no separate cache-write rate. Zero is the real price here,
+        # not a placeholder.
+        "cache_write": 0.0,
+    },
+    "gpt-5.6-luna": {
+        "input": 0.2,
+        "output": 1.2,
+        "cache_read": 0.02,
+        "cache_write": 0.25,
+    },
+}
+
+
 def parse_opencode_usage(text: str) -> dict[str, int]:
     """Token counts from `opencode stats`, which is the authoritative source.
 
@@ -736,22 +770,54 @@ def parse_opencode_usage(text: str) -> dict[str, int]:
     whether the fixed ~90KB playbook prefix is being re-paid for on every one
     of a phase's ~24 turns, which is where this lane's cost actually lives.
 
-    Dollars are deliberately NOT taken from here: the model entries declare
-    zero cost (see `opencode_config`), so opencode's own total is $0.00 by
-    construction. Tokens are unaffected by that and are exact.
+    The suffix handling is not defensive coding. opencode renders every token
+    cell through `n >= 1e6 ? (n/1e6).toFixed(1)+"M" : n >= 1000 ?
+    (n/1000).toFixed(1)+"K" : String(n)`, so a real 258,300 prints as
+    `258.3K`. The previous pattern was `([\\d,]+)`, which stops at the decimal
+    point and never sees the suffix — it stored 258. Every token figure this
+    lane has ever published was the leading digits of a rounded string,
+    understated by three orders of magnitude, and the tell was that across
+    twelve measured phases no value ever reached 1,000.
     """
+    number = r"([\d,]+(?:\.\d+)?)\s*([KM])?"
     fields = {
-        "input": r"Input\s+([\d,]+)",
-        "output": r"Output\s+([\d,]+)",
-        "cache_read": r"Cache Read\s+([\d,]+)",
-        "cache_write": r"Cache Write\s+([\d,]+)",
+        "input": rf"Input\s+{number}",
+        "output": rf"Output\s+{number}",
+        "cache_read": rf"Cache Read\s+{number}",
+        "cache_write": rf"Cache Write\s+{number}",
     }
+    scale = {None: 1, "": 1, "K": 1_000, "M": 1_000_000}
     out: dict[str, int] = {}
     for key, pattern in fields.items():
         match = re.search(pattern, text or "")
         if match:
-            out[key] = int(match.group(1).replace(",", ""))
+            digits = float(match.group(1).replace(",", ""))
+            out[key] = int(round(digits * scale[match.group(2)]))
     return out
+
+
+def usage_cost_usd(usage: dict[str, int], model: str) -> float | None:
+    """Dollars for one phase, priced locally from the parsed token counts.
+
+    Computed here rather than read back from `opencode stats` even though
+    `opencode_config` now declares the same prices. Two reasons: the arithmetic
+    stays visible and testable in this repo, and it survives a stats line that
+    reports tokens but no cost.
+
+    None, never 0.0, when the model is unpriced or nothing was measured — a
+    phase that reports free is worse than one that reports unknown.
+    """
+    prices = MODEL_PRICES_USD_PER_MTOK.get(model)
+    if not prices or not usage:
+        return None
+    return sum(usage.get(field, 0) * rate / 1_000_000 for field, rate in prices.items())
+
+
+def format_usd(amount: float | None) -> str:
+    """Four decimals: a resolve phase can land under a cent and $0.00 reads
+    as "free", which is the exact misreading this whole change exists to end.
+    """
+    return "unavailable" if amount is None else f"${amount:,.4f}"
 
 
 def opencode_usage(cwd: str, runner: Any = subprocess.run) -> dict[str, int]:
@@ -948,6 +1014,59 @@ def agent_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     return env
 
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text or "")
+
+
+#: opencode brackets a dispatched sub-agent with two stdout lines and prints
+#: nothing between them. Stripped of colour they read:
+#:
+#:   • correctness domain review Correctness Agent
+#:   ✓ correctness domain review Correctness Agent
+#:
+#: The captured token is the registered agent name as the renderer title-cases
+#: it (`correctness` -> `Correctness`, `ci-config` -> `Ci-Config`). Both halves
+#: render identically, so start and finish match on the same string.
+#:
+#: The trailing ` Agent` is load-bearing, not decoration: `gh auth login` also
+#: prints a line beginning with `✓` — "✓ Logged in to github.com account
+#: atlan-app-fleet[bot] (GH_TOKEN)" — in every single transcript. Anchoring on
+#: the bullet alone would read that as a sub-agent finishing and mask a real
+#: outstanding one.
+_SUBAGENT_START_RE = re.compile(r"^\s*•\s+.*\s(\S+)\s+Agent\s*$", re.MULTILINE)
+_SUBAGENT_DONE_RE = re.compile(r"^\s*✓\s+.*\s(\S+)\s+Agent\s*$", re.MULTILINE)
+
+
+def outstanding_subagents(stdout: str) -> list[str]:
+    """Sub-agents this phase dispatched and never got an answer from.
+
+    Exists because of a measured loss. PR #3529 dispatched correctness,
+    quality, structure and reachability in one wave; three printed `✓` and
+    `correctness` never did. The parent then went silent, the idle watchdog
+    fired, and the phase reported only "the phase did not finish" — twice, on
+    two separate runs, with nothing in either summary naming the specialist
+    that hung. Both runs cost ~30 minutes and produced no verdict.
+
+    opencode exposes no per-dispatch deadline, so this does NOT prevent the
+    hang. It makes the hang attributable, which is what turns "@sdk-loop is
+    flaky on SDK PRs" into one named agent to go and look at.
+
+    Order-preserving and duplicate-safe: a wave can dispatch the same agent
+    name only once, but a later round can dispatch it again, and a name that
+    has been answered at any point is not outstanding.
+    """
+    started = _SUBAGENT_START_RE.findall(_strip_ansi(stdout or ""))
+    done = set(_SUBAGENT_DONE_RE.findall(_strip_ansi(stdout or "")))
+    seen: list[str] = []
+    for name in started:
+        if name not in done and name not in seen:
+            seen.append(name)
+    return seen
+
+
 #: opencode prints a fatal error as a line starting `Error:` and then exits 0.
 #: Seen live: `Error: [DecimalError] Invalid argument: [object Object]`, 11ms
 #: into round 1, after which the phase did nothing for four rounds while the
@@ -971,10 +1090,14 @@ class AgentResult:
     def abort_reason(self) -> str:
         """The agent's own fatal error, if it printed one."""
         if self.stalled:
-            return (
+            reason = (
                 "agent produced no output for the idle timeout and was killed "
                 "as stalled — no verdict from this phase is trustworthy"
             )
+            hung = outstanding_subagents(self.stdout)
+            if hung:
+                reason += f"; sub-agent(s) never returned: {', '.join(hung)}"
+            return reason
         match = _ABORT_RE.search(f"{self.stdout}\n{self.stderr}")
         return match.group(1).strip() if match else ""
 
