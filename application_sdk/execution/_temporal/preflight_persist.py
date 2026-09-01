@@ -26,9 +26,11 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
-from application_sdk.errors.base import redact_secrets
+from application_sdk.contracts.base import SerializableEnum
+from application_sdk.contracts.types import ConnectionRef
+from application_sdk.errors.base import redact_wire_value
 from application_sdk.handler.contracts import PreflightOutput
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -37,11 +39,28 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-#: What this caller is. The store declares the set it accepts and rejects the rest.
-ORIGIN_ACTIVITY = "activity"
 
-METHOD_AGENT = "agent"
-METHOD_DIRECT = "direct"
+class PreflightResultOrigin(SerializableEnum):
+    """Which interface produced a stored check.
+
+    A closed vocabulary the store validates against. Only :attr:`ACTIVITY` is
+    written from here; the other interfaces write their own rows.
+    """
+
+    ACTIVITY = "activity"
+
+
+class ExtractionMethod(SerializableEnum):
+    """How the checked source was reached.
+
+    A closed vocabulary the store validates against. It records agent-or-not
+    rather than the connector's own method, so a value such as ``s3`` or
+    ``offline`` is :attr:`DIRECT`.
+    """
+
+    AGENT = "agent"
+    DIRECT = "direct"
+
 
 #: Keys an agent check may arrive under. Only presence is ever read — the value
 #: holds credential material.
@@ -66,9 +85,12 @@ class PreflightCheckResult(BaseModel):
     Attributes:
         workflow_slug: AE's slug for the checked workflow. Never empty — a row
             without one is not built at all.
-        origin: Which interface produced the check. Always :data:`ORIGIN_ACTIVITY`
-            from here.
+        origin: Which interface produced the check. Always
+            :attr:`PreflightResultOrigin.ACTIVITY` from here.
         payload: The verdict, inside its ``preflight`` envelope, secret-redacted.
+            Kept as ``dict[str, Any]``: this is a relay boundary, and the store
+            derives its own columns from it, so typing it here would bind the
+            SDK to that schema.
         extraction_method: Whether the source was reached through a customer-hosted
             agent.
         connection_qualified_name: The checked workflow's connection asset. Absent
@@ -84,9 +106,9 @@ class PreflightCheckResult(BaseModel):
     """
 
     workflow_slug: str
-    origin: str = ORIGIN_ACTIVITY
+    origin: PreflightResultOrigin = PreflightResultOrigin.ACTIVITY
     payload: dict[str, Any]
-    extraction_method: str = METHOD_DIRECT
+    extraction_method: ExtractionMethod = ExtractionMethod.DIRECT
     connection_qualified_name: str | None = None
     app_id: str | None = None
     app_version: str | None = None
@@ -100,11 +122,15 @@ def _or_none(value: str | None) -> str | None:
 def verdict_payload(result: PreflightOutput) -> dict[str, Any]:
     """*result* as the ``preflight`` block the store reads, secret-redacted.
 
-    Checks go through the gate's own ``_dump_check``, which stamps each check's
+    Checks go through :meth:`PreflightCheck.to_wire`, which stamps each check's
     *resolved* message — a failed check's typed error wins over its deprecated
     ``message`` field. That is what the frontend path records, so both writers
     put the same string in the same place, and it is the SDK's existing
     convention for putting a check on a wire rather than a second one.
+
+    The whole dump is walked by :func:`~application_sdk.errors.base.redact_wire_value`
+    rather than named fields, because ``message``, ``suggested_action`` and
+    ``evidence`` are handler-authored and are not redacted where they are built.
 
     Args:
         result: The verdict the handler reached.
@@ -112,70 +138,44 @@ def verdict_payload(result: PreflightOutput) -> dict[str, Any]:
     Returns:
         ``{"preflight": ...}``, ready to send.
     """
-    from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — avoid import cycle at module load
-        _dump_check,
-    )
-
     block = result.model_dump(mode="json", exclude_none=True)
-    block["checks"] = [_dump_check(check) for check in result.checks]
-    return {_PREFLIGHT_KEY: redact(block)}
+    block["checks"] = [check.to_wire() for check in result.checks]
+    return {_PREFLIGHT_KEY: redact_wire_value(block)}
 
 
-def redact(value: Any) -> Any:
-    """*value* with every string in it secret-redacted, structure unchanged.
-
-    ``FailureDetails.cause_repr`` is already redacted where it is built, but
-    ``message`` and ``suggested_action`` are handler-authored and are not — and a
-    driver exception routinely carries a connection string. This row lands in a
-    table a human queries, so the whole dump is walked rather than named fields.
-
-    Args:
-        value: Any JSON-shaped value.
-
-    Returns:
-        The same shape, with strings passed through
-        :func:`~application_sdk.errors.base.redact_secrets`.
-    """
-    if isinstance(value, str):
-        return redact_secrets(value)
-    if isinstance(value, dict):
-        return {k: redact(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [redact(v) for v in value]
-    return value
-
-
-def extraction_method(input: PreflightGateInput) -> str:
+def extraction_method(input: PreflightGateInput) -> ExtractionMethod:
     """Whether *input*'s source was reached through a customer-hosted agent.
 
     Two signals, either sufficient, matching what the frontend path records: the
     declared method, and the presence of an agent spec — an agent check can carry
     the spec without setting the method. ``"s3"`` and ``"offline"`` are neither, and
-    correctly answer ``direct``: the column records agent-or-not, not a copy of the
-    connector's own field.
+    correctly answer :attr:`ExtractionMethod.DIRECT`.
 
     Args:
         input: The gate's routing envelope.
 
     Returns:
-        :data:`METHOD_AGENT` or :data:`METHOD_DIRECT`.
+        The method this check reached its source by.
     """
-    if input.extraction_method.strip().lower() == METHOD_AGENT:
-        return METHOD_AGENT
+    if input.extraction_method.strip().lower() == ExtractionMethod.AGENT:
+        return ExtractionMethod.AGENT
     if input.agent_json is not None:
-        return METHOD_AGENT
+        return ExtractionMethod.AGENT
     snapshot = input.extraction_snapshot
     if any(snapshot.get(key) for key in _AGENT_HINT_KEYS):
-        return METHOD_AGENT
-    return METHOD_DIRECT
+        return ExtractionMethod.AGENT
+    return ExtractionMethod.DIRECT
 
 
 def connection_qualified_name(snapshot: dict[str, Any]) -> str | None:
     """The checked workflow's connection, from either shape AE sends.
 
-    The connection asset, whose qualified name sits under ``attributes`` in either
-    the camelCase wire form or the snake_case Python one; and the bare qualified
-    name, itself either a string or a single-element list.
+    The connection asset is read through :class:`ConnectionRef`, which models
+    that wire shape and resolves the camelCase/snake_case duality itself. A
+    shape it rejects falls through to the bare qualified name — itself either a
+    string or a single-element list, which has no typed model.
+
+    A workflow naming no connection is legal, not an error.
 
     Args:
         snapshot: The raw extraction-input dump the gate carries.
@@ -183,13 +183,15 @@ def connection_qualified_name(snapshot: dict[str, Any]) -> str | None:
     Returns:
         The qualified name, or ``None`` when the workflow names no connection.
     """
-    connection = snapshot.get("connection")
-    if isinstance(connection, dict):
-        attributes = connection.get("attributes")
-        if isinstance(attributes, dict):
-            for key in ("qualifiedName", "qualified_name"):
-                if name := _or_none(attributes.get(key)):
-                    return name
+    if connection := snapshot.get("connection"):
+        try:
+            ref = ConnectionRef.model_validate(connection)
+        except ValidationError:
+            # Not the asset shape; the bare-name fallback below still applies.
+            logger.debug("connection did not fit ConnectionRef; trying the bare name")
+        else:
+            if name := _or_none(ref.attributes.qualified_name):
+                return name
 
     for key in ("connection_qualified_name", "connection-qualified-name"):
         raw = snapshot.get(key)
@@ -231,7 +233,7 @@ def build_check_result(
 
     return PreflightCheckResult(
         workflow_slug=slug,
-        origin=ORIGIN_ACTIVITY,
+        origin=PreflightResultOrigin.ACTIVITY,
         payload=verdict_payload(result),
         extraction_method=extraction_method(input),
         connection_qualified_name=connection_qualified_name(input.extraction_snapshot),
@@ -273,18 +275,18 @@ async def post_check_result(
             headers={"Content-Type": "application/json"},
         )
     if response.is_success:
-        logger.info(
-            "preflight result persisted",
-            workflow_slug=row.workflow_slug,
-            origin=row.origin,
+        logger.debug(
+            "preflight result persisted workflow_slug=%s origin=%s",
+            row.workflow_slug,
+            row.origin,
         )
         return
     # Status only. See the docstring: the body carries the verdict back.
     logger.warning(
-        "preflight result rejected by the store; continuing",
-        workflow_slug=row.workflow_slug,
-        origin=row.origin,
-        status=response.status_code,
+        "preflight result rejected by the store; continuing workflow_slug=%s origin=%s status=%s",
+        row.workflow_slug,
+        row.origin,
+        response.status_code,
     )
 
 
@@ -329,8 +331,8 @@ def persist_check_result(
         return None
     if row is None:
         logger.debug(
-            "preflight result not persisted: this run carries no workflow slug",
-            entrypoint=input.entrypoint,
+            "preflight result not persisted: this run carries no workflow slug; entrypoint=%s",
+            input.entrypoint,
         )
         return None
 
@@ -338,8 +340,9 @@ def persist_check_result(
         loop = asyncio.get_running_loop()
     except RuntimeError:
         logger.debug(
-            "preflight result not persisted: no running event loop to schedule the write",
-            workflow_slug=row.workflow_slug,
+            "preflight result not persisted: no running event loop to schedule the "
+            "write; workflow_slug=%s",
+            row.workflow_slug,
         )
         return None
 
@@ -357,7 +360,7 @@ def _log_write_failure(task: asyncio.Task[None], workflow_slug: str) -> None:
         return
     if (error := task.exception()) is not None:
         logger.warning(
-            "preflight result not persisted; continuing",
-            workflow_slug=workflow_slug,
-            error=str(error),
+            "preflight result not persisted; continuing workflow_slug=%s error=%s",
+            workflow_slug,
+            error,
         )

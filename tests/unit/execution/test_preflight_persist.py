@@ -7,6 +7,7 @@ from unittest import mock
 
 import pytest
 
+from application_sdk import constants
 from application_sdk.contracts.base import Input
 from application_sdk.errors.categories import FailureCategory
 from application_sdk.errors.leaves import AuthError
@@ -99,7 +100,7 @@ class TestTheRow:
     def test_it_declares_itself_as_the_activity_origin(self):
         row = persist.build_check_result(_gate(workflow_slug=SLUG), _verdict())
         assert row is not None
-        assert row.origin == persist.ORIGIN_ACTIVITY
+        assert row.origin == persist.PreflightResultOrigin.ACTIVITY
 
     def test_the_verdict_travels_inside_the_preflight_envelope(self):
         row = persist.build_check_result(_gate(workflow_slug=SLUG), _verdict())
@@ -140,12 +141,12 @@ class TestWhatTheRowSaysAboutTheSource:
     )
     def test_an_agent_is_recognised_from_either_signal(self, gate_kwargs):
         gate = _gate(workflow_slug=SLUG, **gate_kwargs)
-        assert persist.extraction_method(gate) == persist.METHOD_AGENT
+        assert persist.extraction_method(gate) == persist.ExtractionMethod.AGENT
 
     @pytest.mark.parametrize("declared", ["", "direct", "s3", "offline"])
     def test_everything_else_is_direct(self, declared):
         gate = _gate(workflow_slug=SLUG, extraction_method=declared)
-        assert persist.extraction_method(gate) == persist.METHOD_DIRECT
+        assert persist.extraction_method(gate) == persist.ExtractionMethod.DIRECT
 
     @pytest.mark.parametrize(
         "snapshot",
@@ -273,7 +274,7 @@ class TestNothingSecretReachesTheStore:
 
     def test_redaction_leaves_the_shape_alone(self):
         value = {"a": ["x", {"b": 1}], "c": True, "d": None}
-        assert persist.redact(value) == value
+        assert persist.redact_wire_value(value) == value
 
 
 class TestTheWriteNeverFailsTheGate:
@@ -404,3 +405,69 @@ class TestTheWriteIsOffTheCallersPath:
             assert elapsed < 0.02, f"scheduling cost {elapsed:.4f}s"
 
         asyncio.run(scenario())
+
+
+class TestThePreflightResultsRouteContract:
+    """Pins the address, route path and request shape the store expects.
+
+    The write is fire-and-forget, so a mismatch drops rows without failing a
+    run and nothing else here would catch it. See
+    ``docs/standards/cross-repo-contracts.md`` before changing these.
+    """
+
+    def test_the_endpoint_is_the_whole_url_the_serving_app_publishes(self):
+        """Host and path are frozen for every already-deployed SDK version."""
+        assert constants.PREFLIGHT_RESULTS_ENDPOINT == (
+            "http://system-workflows.system-workflows-app.svc.cluster.local:8000"
+            "/continuous-preflight/check-results"
+        )
+
+    def test_the_row_carries_exactly_the_fields_the_route_accepts(self):
+        """Field names are the wire contract; the receiver validates on them."""
+        assert set(persist.PreflightCheckResult.model_fields) == {
+            "workflow_slug",
+            "origin",
+            "payload",
+            "extraction_method",
+            "connection_qualified_name",
+            "app_id",
+            "app_version",
+        }
+
+    def test_the_closed_vocabularies_match_the_receivers(self):
+        """A value the route's enums reject is a 422 and a dropped row."""
+        assert {o.value for o in persist.PreflightResultOrigin} <= {
+            "frontend",
+            "continuous",
+            "activity",
+        }
+        assert {m.value for m in persist.ExtractionMethod} == {"direct", "agent"}
+
+    def test_no_authorization_header_is_sent(self):
+        """The route is unauthenticated; putting auth on it drops every row."""
+        sent: dict[str, object] = {}
+
+        class _Response:
+            is_success = True
+            status_code = 201
+
+        class _Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def post(self, url, **kwargs):
+                sent.update(kwargs)
+                return _Response()
+
+        row = persist.PreflightCheckResult(
+            workflow_slug=SLUG, payload={"preflight": {}}
+        )
+        with mock.patch.object(persist.httpx, "AsyncClient", lambda **_: _Client()):
+            asyncio.run(
+                persist.post_check_result(row, endpoint="http://store/x", timeout=1)
+            )
+
+        assert "Authorization" not in sent.get("headers", {})

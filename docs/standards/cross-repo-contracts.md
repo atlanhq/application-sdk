@@ -86,3 +86,45 @@ Two consequences for changes here:
   went missing with every test green. The one rejected case is an *empty* last
   segment, which is not a name and would collapse every such connection onto a
   single shared directory.
+
+## The preflight-results write route
+
+The one entry here that runs the other way: the SDK is the **caller**, not the
+producer. It holds another repo's address, route path and request shape.
+
+| | |
+|---|---|
+| **Produced by** | `PREFLIGHT_RESULTS_ENDPOINT` in `application_sdk/constants.py`; the row is built by `build_check_result()` and sent by `post_check_result()` in `application_sdk/execution/_temporal/preflight_persist.py`, from the injected preflight gate |
+| **Sent to** | `POST http://system-workflows.system-workflows-app.svc.cluster.local:8000/continuous-preflight/check-results` — the **whole URL is one constant**, never composed from a base plus a path |
+| **Body** | `PreflightCheckResult`: `workflow_slug`, `origin`, `payload`, `extraction_method`, `connection_qualified_name`, `app_id`, `app_version`. Field names must match the receiver's request model exactly; `origin` and `extraction_method` are validated server-side against closed enums |
+| **Read by** | The `system-workflows` app (`atlanhq/atlan-system-workflows-app`, `app/continuous_preflight/api.py`), which holds the only writer principal for the tenant's `apps.system-workflows` Iceberg namespace and derives the table's own columns from `payload` |
+| **Pinned by** | `TestThePreflightResultsRouteContract` in `tests/unit/execution/test_preflight_persist.py` |
+
+The SDK ships the **whole URL, path included**, because the route belongs to the
+app that serves it: holding a base address and appending a path here would
+hardcode another repo's route layout and ship it stale the day that entrypoint's
+prefix changes. The host is safe to pin — the receiving app cannot be renamed
+without moving the Iceberg namespace its table lives in, so its name, and
+therefore its Service DNS, cannot change. The **path** carries no such
+protection, which is exactly why it is written down here.
+
+Three consequences, and the first two are silent by construction — the write is
+scheduled and abandoned, its response is never recorded beyond a status code, and
+nothing retries. A break costs rows, not runs, and nothing goes red:
+
+- **Renaming the route path is a breaking change** for every already-deployed SDK
+  version, not just the next release. That app's own docs describe the prefix as
+  "the entrypoint's own name", a locally-chosen convention it has renamed once
+  before; from this constant's first release it is frozen. Coordinate it, and
+  serve both paths until the old SDK versions retire.
+- **The route is unauthenticated, and this caller depends on that.**
+  `post_check_result` deliberately sends no `Authorization` header — forwarding
+  the run's token to a service that does not check it would widen that token's
+  reach for nothing. Putting auth in front of that route therefore drops every
+  row the fleet writes, with no error anywhere. It needs the header added here,
+  released, and the fleet bumped **first**.
+- **The two enum vocabularies must stay in step.** `PreflightResultOrigin` and
+  `ExtractionMethod` are validated against the receiver's own enums; a value it
+  does not accept is a 422 and a dropped row, visible only as one WARNING
+  carrying a status code. Adding a member on either side is additive; renaming
+  one is not.

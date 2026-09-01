@@ -610,12 +610,6 @@ def _config_from_snapshot(
     return config
 
 
-def _dump_check(check: PreflightCheck) -> dict[str, Any]:
-    dumped = check.model_dump(mode="json", exclude_none=True)
-    dumped["message"] = check.resolved_message
-    return dumped
-
-
 def _check_matrix_json(checks: list[PreflightCheck]) -> str:
     """Compact per-check matrix for the outcome event, as one JSON string.
 
@@ -689,7 +683,7 @@ def _build_block_error(result: PreflightOutput, app_name: str) -> Any:
         or joined
         or "Preflight check failed; aborting before extraction"
     )
-    checks_payload = {"checks": [_dump_check(c) for c in result.checks]}
+    checks_payload = {"checks": [c.to_wire() for c in result.checks]}
     return ApplicationError(
         f"Preflight failed: {reason}",
         details,
@@ -1429,9 +1423,10 @@ def build_preflight_gate_activity(
                 )
             except Exception:
                 logger.warning(
-                    "preflight result not persisted; the run is unaffected",
-                    app_name=app_name,
-                    entrypoint=entry,
+                    "preflight result not persisted; the run is unaffected "
+                    "app_name=%s entrypoint=%s",
+                    app_name,
+                    entry,
                     exc_info=True,
                 )
 

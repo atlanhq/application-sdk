@@ -24,8 +24,11 @@ import asyncio
 from contextlib import asynccontextmanager
 
 import pytest
+from pydantic import Field
 
 from application_sdk.contracts.base import Input
+from application_sdk.contracts.types import ConnectionRef
+from application_sdk.credentials.spec import AgentCredentialSpec
 from application_sdk.execution._temporal import preflight_persist as persist
 from application_sdk.execution._temporal.preflight_gate import PreflightGateInput
 from application_sdk.handler.contracts import PreflightOutput, PreflightStatus
@@ -36,12 +39,16 @@ SLUG = "example-source-aBcD1234"
 
 
 class _ExtractionInput(Input):
-    """A minimal gate-eligible input, shaped like a connector's."""
+    """A minimal gate-eligible input, shaped and typed like a connector's.
+
+    Using the real field types means this exercises the same validation path a
+    connector's own input does.
+    """
 
     extraction_method: str = ""
     credential_guid: str = ""
-    agent_json: object | None = None
-    connection: dict = {}
+    agent_json: AgentCredentialSpec | None = None
+    connection: ConnectionRef = Field(default_factory=ConnectionRef)
 
 
 def _gate(**overrides) -> PreflightGateInput:
