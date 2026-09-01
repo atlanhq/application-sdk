@@ -23,6 +23,8 @@ import subprocess
 import sys
 from datetime import date
 
+import release_guard
+
 REPO = os.environ.get("GITHUB_REPOSITORY", "atlanhq/application-sdk")
 PKLPROJECT = "contract-toolkit/src/PklProject"
 CHANGELOG = "contract-toolkit/CHANGELOG.md"
@@ -244,6 +246,18 @@ def main():
     bump = compute_bump(subjects, bodies)
     new_version = bump_version(current, bump)
     new_tag = f"{TAG_PREFIX}{new_version}"
+
+    # This run may be looking at a frozen merge ref that predates an already
+    # merged-and-published release, in which case `current` is stale and we are
+    # about to mint a version that already exists. See release_guard for the
+    # incident (application-sdk#3570) and for why the check reads the version on
+    # origin/main rather than testing whether new_tag exists. Must run before
+    # any file is touched.
+    skip, main_version = release_guard.already_released(PKLPROJECT, new_version)
+    if skip:
+        print(release_guard.skip_message(PKLPROJECT, new_version, main_version))
+        _set_output("skip", "true")
+        return
 
     print(f"Version: {current} -> {new_version} ({bump} bump)")
 

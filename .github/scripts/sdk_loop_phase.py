@@ -39,17 +39,18 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 from sdk_loop_common import (
     MAX_ROUNDS,
-    PHASE2_AGENTS,
     PLAYBOOK_RESOLVE,
     PLAYBOOK_REVIEW,
     RESOLVE_MODEL,
     REVIEW_MODEL,
     AgentResult,
     DismissalLedger,
+    classify_scope,
+    dispatch_set,
     emit_outputs,
     format_usage,
     head_state,
@@ -60,9 +61,18 @@ from sdk_loop_common import (
     parse_verdict,
     reaim_exhausted,
     run_agent,
+    solo_scope,
     token_budget,
     token_budget_exceeded,
     usage_total,
+)
+from sdk_loop_prep import (  # noqa: E402
+    OUTCOME_UPDATED,
+    PrepResult,
+    decide,
+    failing_checks,
+    needs_agent,
+    pr_state,
 )
 
 #: Wall-clock per phase. Review is the slower of the two: it walks the whole
@@ -74,6 +84,9 @@ from sdk_loop_common import (
 # talking. Cutting them would trade a real (if slow) review for no review.
 TIMEOUT_REVIEW_S = 45 * 60
 TIMEOUT_RESOLVE_S = 30 * 60
+#: Prep is bookkeeping, not review. If a mechanical fix has not landed in ten
+#: minutes it is not mechanical, and the review will say so far more cheaply.
+TIMEOUT_PREP_S = 10 * 60
 
 #: Outcomes a phase can report to the next job. Only `ok` continues to the
 #: paired phase; `reaim` sends the loop back to review on the new head.
@@ -134,12 +147,84 @@ def live_head(
 LANE_MARKER = "LANE: sdk-loop"
 
 
+def prep_prompt(pr: int, failing: tuple[str, ...]) -> str:
+    """Brief for the ONE case prep hands to a model: red checks, before review.
+
+    Deliberately narrow. Everything prep normally does is deterministic and
+    already done by the time this runs, so the model is not being asked to
+    orchestrate — it is being asked whether a specific red check is the kind
+    tooling can fix, and to fix it if so.
+
+    The hard part of this brief is what it refuses. "Make CI green" has no
+    terminating condition when a test is genuinely broken by the PR, and a
+    phase with write scope chasing that is strictly worse than a review
+    saying so in one line.
+    """
+    names = "\n".join(f"  - {n}" for n in failing[:10])
+    return "\n".join(
+        [
+            f"PR #{pr} has failing checks before its review has run:",
+            names,
+            "",
+            "Fix ONLY what is mechanical — the class where the tooling, not",
+            "judgement, determines the answer:",
+            "",
+            "  * formatting and lint (`uv run pre-commit run --files <changed>`)",
+            "  * generated-artifact drift, by re-running the generator",
+            "  * an obviously stale lockfile the repo's own command regenerates",
+            "",
+            "Everything else — a failing test, a type error, a real behavioural",
+            "break — STOP and change nothing. Those are findings, and the review",
+            "that runs after you exists to raise them properly. A fix you push",
+            "here arrives with no review behind it.",
+            "",
+            "Do NOT resolve merge conflicts. Do NOT wait for checks to go green;",
+            "you cannot, and the run does not need you to. Do NOT re-run checks",
+            "hoping for a different answer.",
+            "",
+            "If you fix something: run the repo's pre-commit over the files you",
+            "touched, commit with a `ci:` or `chore:` conventional prefix, and",
+            "push. If you fix nothing, say so in one line and exit — that is a",
+            "perfectly good outcome and costs the run nothing.",
+        ]
+    )
+
+
+def pr_files(repo: str, pr: int) -> list[str]:
+    """Paths the PR touches. Deleted files included — classifying from
+    `+++ b/` diff headers alone would miss them, as §11 warns."""
+    out = _sh(
+        [
+            "gh",
+            "pr",
+            "view",
+            str(pr),
+            "--repo",
+            repo,
+            "--json",
+            "files",
+            "--jq",
+            ".files[].path",
+        ]
+    ).stdout
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+def diff_lines(repo: str, pr: int) -> int:
+    """Added + removed lines, for the `minor` fast-path threshold."""
+    out = _sh(["gh", "pr", "diff", str(pr), "--repo", repo]).stdout
+    return sum(1 for line in out.splitlines() if line[:1] in "+-")
+
+
 def review_prompt(
     pr: int,
     round_no: int,
     sha: str,
     ledger: DismissalLedger,
     prior_sha: str = "",
+    scope: str = "",
+    solo: str = "",
+    agents: Sequence[str] = (),
 ) -> str:
     """Point the agent at the playbook. The playbook is NOT restated here.
 
@@ -169,12 +254,30 @@ def review_prompt(
         "You are READ-ONLY. Your token carries no write scope — do not attempt",
         "to push, and do not treat a push failure as something to work around.",
         "",
-        "§2a says to dispatch the domain agents via the Agent tool. On this runtime",
-        "that tool is called `Task`, and the agents are already registered —",
-        f"{', '.join(PHASE2_AGENTS)}. Dispatch them in parallel exactly as §2a",
-        "routes them by review_scope. Do NOT do their work yourself in one pass:",
-        "a single agent covering every domain still produces a verdict, just a",
-        "worse one, and nothing in the output would say so.",
+        "§2a dispatches domain agents via the Agent tool. On this runtime that",
+        "tool is called `Task`. Only the agents §2a routes YOUR scope to are",
+        "registered — never all of them — so `Task` cannot reach a specialist",
+        "the routing did not choose.",
+        "",
+        "When two or more ARE registered, dispatch them in parallel.",
+        "Do NOT do their work yourself in one pass: a single agent covering",
+        "several domains still produces a verdict, just a worse one, and",
+        "nothing in the output would say so.",
+        "",
+        "**Your review_scope is already settled — do NOT re-derive it.** §11's",
+        "classification is file-list arithmetic with no judgement in it, so the",
+        "harness computed it before you started. Running that sixty-line bash",
+        "block again spends a turn to reach the same answer.",
+        "",
+        "The second rule is measured, not stylistic. A dispatch with one agent",
+        "buys no parallelism — there is nothing to run alongside — and costs a",
+        "cold start: you have already read the playbook, the diff and every",
+        "changed file, and the sub-agent begins with none of it and re-reads",
+        "its way back. Three `config-only`/`conformance-only` reviews spent",
+        "904s, ~9min and 26min inside that one call, with per-step latency",
+        "climbing 4s → 58s → 185s → 526s as the re-read context accumulated.",
+        "The 26-minute one reached step 11 of 25 before it was killed. The",
+        "parent reaches the same point in under a minute.",
         "",
         "SKIP §2b (the Wave 2 cross-model adversarial). Two reasons, and either",
         "alone is sufficient:",
@@ -193,6 +296,37 @@ def review_prompt(
         "phase contests findings)`, NOT as unavailable.",
         "",
     ]
+    if solo:
+        parts += [
+            f"review_scope = `{scope}`, which §2a routes to exactly ONE",
+            f"specialist: `{solo}`.",
+            "",
+            "**Do not dispatch it.** No sub-agents are registered for this run —",
+            "`Task` has nothing to delegate to. Read",
+            f"`.mothership/pr-review/agents/{solo}.md`, adopt that brief as your",
+            "own, review as that specialist, and go straight to §2c.",
+            "",
+            "A dispatch runs agents CONCURRENTLY. With one agent there is nothing",
+            "to run alongside, so it buys no parallelism and costs a cold start:",
+            "you have already read the playbook, the diff and every changed file,",
+            "and a sub-agent would begin with none of it and re-read its way back.",
+            "Three single-agent reviews spent 904s, ~9 minutes and 26 minutes",
+            "inside that one call, per-step latency climbing 4s to 526s as the",
+            "re-read context piled up. The 26-minute one reached step 11 of 25",
+            "before it was killed.",
+            "",
+        ]
+    elif scope:
+        # The REGISTERED set, which is §2a's row plus §1b's reachability and
+        # any mixed-partition specialist — not the markdown table alone.
+        named = ", ".join(agents)
+        parts += [
+            f"review_scope = `{scope}`. Registered for this PR: "
+            f"{named or 'no agents'}.",
+            "Those, and only those, can be dispatched — do them in parallel.",
+            "",
+        ]
+
     if prior_sha:
         # Handed over so §2e labelling and the §2e′ nit rules do not have to
         # re-derive the range. It is ADDITIONAL context, never a substitute for
@@ -345,6 +479,16 @@ def resolve_prompt(pr: int, round_no: int, sha: str, verdict_url: str) -> str:
         "   and a finding you disprove is recorded so the next review cannot",
         "   simply re-raise it.",
         "3. Stop when the findings are cleared. Do not merge; do not approve.",
+        "4. You are the ONLY phase in this loop that can push, so you own the",
+        "   state you leave behind. Before you finish: run the repo's",
+        "   pre-commit over the files you touched and push the result, and",
+        "   update the branch if it has fallen behind base while you worked.",
+        "   The review that runs next holds NO write scope — anything you",
+        "   leave untidy it can only report, spending its budget on something",
+        "   one command would have settled here.",
+        "   Do NOT wait for CI and do NOT re-run checks: you cannot make them",
+        "   finish, the next round reads the real state anyway, and waiting",
+        "   has no terminating condition when a check is genuinely broken.",
         "",
         "Emit your dismissals as a JSON array on a line beginning",
         '`SDK_LOOP_DISMISSED:` — each entry {"id": ..., "rationale": ...}.',
@@ -488,17 +632,101 @@ def main(argv: list[str] | None = None) -> int:
 
     workspace = os.environ.get("GITHUB_WORKSPACE", ".")
     transcript = os.path.join(workspace, f"sdk-loop-{phase}-{round_no}.log")
+    if phase == "prep":
+        # Deterministic pass first, and for a healthy PR that is the WHOLE
+        # phase — no agent, no gateway call, a handful of `gh` reads. A model
+        # cannot improve on "is mergeStateStatus BEHIND", and most PRs enter
+        # the loop current and green, so paying one to confirm that would be
+        # the same waste this phase exists to remove from the review.
+        state = pr_state(repo, pr)
+        # Conflicts short-circuit BEFORE the checks read. There is nothing
+        # useful to say about CI on a branch that cannot merge, and the read
+        # is a round trip spent to reach an answer that changes nothing.
+        conflicted = state is not None and (
+            state.get("mergeStateStatus") == "CONFLICTING"
+            or state.get("mergeable") == "CONFLICTING"
+        )
+        result = decide(state, () if conflicted else failing_checks(repo, pr), baseline)
+
+        if needs_agent(result):
+            # The one case worth a model: red checks a mechanical fix might
+            # clear. Bounded hard, because this phase must never become the
+            # thing that spends an hour on a genuinely broken test — that is
+            # the review-and-resolve loop's job, and it does it properly.
+            print("::group::prep — mechanical fix attempt")
+            agent = run_agent(
+                RESOLVE_MODEL,
+                prep_prompt(pr, result.failing),
+                workspace,
+                TIMEOUT_PREP_S,
+                transcript_path=transcript,
+            )
+            print("::endgroup::")
+            after = live_head(repo, head_ref)
+            if after and after != result.new_base_sha:
+                result = PrepResult(
+                    OUTCOME_UPDATED,
+                    new_base_sha=after,
+                    pushed_sha=after,
+                    ci_state="rechecking",
+                    detail=f"pushed a mechanical fix for: {', '.join(result.failing[:3])}",
+                )
+            elif not agent.completed:
+                print(f"prep agent aborted: {agent.abort_reason}")
+
+        emit_outputs(
+            outcome=result.outcome,
+            new_base_sha=result.new_base_sha,
+            pushed_sha=result.pushed_sha,
+            ci_state=result.ci_state,
+            detail=result.detail,
+            reaims="0",
+        )
+        print(f"prep: {result.outcome} — {result.detail}")
+        # NEVER fails the run. A prep that could not tidy the branch must not
+        # cost the review: a branch left behind still reviews correctly, and
+        # a conflict is the author's to resolve.
+        return 0
+
     if phase == "review":
+        # Classify BEFORE the model starts. §11's routing is pure file-list
+        # arithmetic, so the harness can settle it deterministically — and it
+        # has to, because whether registering sub-agents makes any sense is
+        # decided by the answer. A scope that routes to ONE agent gets none
+        # registered: `Task` then has nothing to dispatch to, and the rule
+        # holds by construction rather than by the model choosing to follow a
+        # paragraph. It did not follow the comparable "fetch once" paragraph.
+        files = pr_files(repo, pr)
+        scope = classify_scope(files, diff_lines(repo, pr))
+        # `dispatch_set`, not SCOPE_AGENTS: the table is only §2a's Wave 1 row.
+        # §1b adds `reachability` on full/mixed, and §2a's mixed-partition rule
+        # adds a `ci-config` or `conformance` specialist when the PR also
+        # carries those files. Registering the table alone left the parent
+        # instructed to dispatch agents that did not exist.
+        fan_out = dispatch_set(scope, files)
+        solo = solo_scope(scope, files)
+        print(
+            f"scope={scope} agents={len(fan_out)}" + (f" solo={solo}" if solo else "")
+        )
+
         print(f"::group::review round {round_no} — agent transcript")
         result = run_agent(
             REVIEW_MODEL,
             review_prompt(
-                pr, round_no, state.live, ledger, os.environ.get("PRIOR_SHA", "")
+                pr,
+                round_no,
+                state.live,
+                ledger,
+                os.environ.get("PRIOR_SHA", ""),
+                scope=scope,
+                solo=solo,
+                agents=fan_out,
             ),
             workspace,
             TIMEOUT_REVIEW_S,
             transcript_path=transcript,
-            subagents=True,
+            subagents=not solo and bool(fan_out),
+            subagent_names=fan_out,
         )
         print("::endgroup::")
         comments = json.loads(

@@ -198,17 +198,16 @@ jobs:
             --stage-dir /tmp/renovate-stage \
             --single-repo "${SINGLE_REPO:-}"
 
-          # Up in one pass. No --delete: this prefix is additive, and a partial
-          # run must never remove another run's repo files.
+          # Up in one pass, manifest included. No --delete: this prefix is
+          # additive, and a partial run must never remove another run's repo
+          # files.
+          #
+          # repos.json is staged by the script above (full-fleet runs only) and
+          # rides along in this sync. It used to be rebuilt here from an
+          # `aws s3 ls` of the prefix, which cannot express fleet membership on
+          # an additive prefix: every repo that ever published stayed listed
+          # forever. That left 619 entries against a fleet of 80 (FND-960).
           aws s3 sync /tmp/renovate-stage/ "s3://kryptonite-store/${PREFIX}/"
-
-          # Regenerate manifest of all repo files present in S3.
-          aws s3 ls "s3://kryptonite-store/${PREFIX}/repos/" \
-            | grep '\.json$' | awk '{print $4}' \
-            | python3 -c "import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))" \
-            > /tmp/renovate-output/repos.json
-          aws s3 cp /tmp/renovate-output/repos.json \
-            "s3://kryptonite-store/${PREFIX}/repos.json"
 
           echo "Renovate dashboard updated: https://k.atlan.dev/${PREFIX}/"
 
