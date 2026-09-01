@@ -623,7 +623,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="sdr-readiness",
         autofixable=False,
         orthogonal_gate="tests",
-        since="0.24.0",
+        since="0.25.0",
         rationale=(
             "The SDR interactive setup surfaces — test authentication, preflight "
             "checks, and metadata browsing (the sdr:* worker activities) — first "

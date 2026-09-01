@@ -72,7 +72,7 @@ reassigned.
 | [P048](#p048) | `AppDerivedPersistentArtifactPrefix` | `warn` | `app` | `persistence-seam` | — | 0.24.0 |
 | [P049](#p049) | `StrictConnectionQualifiedNameParse` | `block` | `app` | `persistence-seam` | — | 0.24.0 |
 | [P050](#p050) | `NonAtomicDestinationWrite` | `warn` | `sdk` | `storage-atomicity` | — | 0.25.0 |
-| [P051](#p051) | `SdrPreflightUnavailable` | `warn` | `app` | `sdr-readiness` | — | 0.24.0 |
+| [P051](#p051) | `SdrPreflightUnavailable` | `warn` | `app` | `sdr-readiness` | — | 0.25.0 |
 
 ---
 
@@ -2071,7 +2071,7 @@ SARIF.
 
 ## P051 — `SdrPreflightUnavailable` {#p051}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.24.0
+**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.25.0
 
 > SDR app locks application-sdk below the 3.30.0 floor for interactive setup (test auth / preflight / metadata browsing)
 
