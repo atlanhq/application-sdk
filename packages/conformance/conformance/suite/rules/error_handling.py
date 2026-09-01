@@ -62,6 +62,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "Acceptable only for truly trivial best-effort operations where failure is\n"
             "100% expected AND the surrounding code handles the missing result, AND\n"
             "there is a comment explaining the reasoning.\n"
+            "\n\nExempt: a narrow typed catch (no ``Exception``/``BaseException``\n"
+            "member) whose innermost enclosing function's docstring declares the\n"
+            "operation a deliberate no-op in the failure context (e.g. ``no-op in\n"
+            "tests``) — the docstring IS the required explanatory comment.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e002",
     ),

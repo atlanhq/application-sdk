@@ -225,6 +225,57 @@ except ConnectionError:
     )
 
 
+def test_p002_no_finding_docstring_declares_noop() -> None:
+    # Shape from atlan-system-workflows-app app/sq_enricher/drain.py:782-787 —
+    # the function docstring ("Heartbeat when inside an activity; no-op in
+    # tests / the register script.") is the explanatory comment the rule
+    # requires: RuntimeError from activity.heartbeat() is the expected outcome
+    # outside an activity context, and the operation is pure.
+    _none(
+        '''\
+def heartbeat() -> None:
+    """Heartbeat when inside an activity; no-op in tests / the register script."""
+    try:
+        activity.heartbeat()
+    except RuntimeError:
+        pass
+'''
+    )
+
+
+def test_p002_still_fires_when_docstring_does_not_declare_noop() -> None:
+    # Same shape, but the docstring does not declare the no-op semantics — no
+    # explanatory comment anywhere, so the silent discard must still fire.
+    _single(
+        '''\
+def heartbeat() -> None:
+    """Heartbeat when inside an activity."""
+    try:
+        activity.heartbeat()
+    except RuntimeError:
+        pass
+''',
+        "E002",
+    )
+
+
+def test_p002_still_fires_broad_except_with_noop_docstring() -> None:
+    # The exemption is scoped to narrow catches: a broad `except Exception:
+    # pass` still fires E002 (and E004) even when the enclosing docstring
+    # declares a no-op.
+    findings = _findings(
+        '''\
+def heartbeat() -> None:
+    """Heartbeat when inside an activity; no-op in tests / the register script."""
+    try:
+        activity.heartbeat()
+    except Exception:
+        pass
+'''
+    )
+    assert "E002" in findings
+
+
 # ── E003 — BroadContextlibSuppress ────────────────────────────────────────────
 
 

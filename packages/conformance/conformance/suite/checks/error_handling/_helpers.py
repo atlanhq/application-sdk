@@ -81,6 +81,34 @@ def _body_is_only_pass(stmts: list[ast.stmt]) -> bool:
     return len(real) == 1 and isinstance(real[0], ast.Pass)
 
 
+def _is_narrow_typed_except(exc_type: ast.expr | None) -> bool:
+    """True when *exc_type* is a typed catch with no broad member.
+
+    ``except (KeyError, ValueError):`` is narrow; ``except Exception:`` and
+    ``except (KeyError, Exception):`` are not.  A bare ``except:`` (``None``)
+    is not a typed catch at all.
+    """
+    if exc_type is None:
+        return False
+    elts = exc_type.elts if isinstance(exc_type, ast.Tuple) else [exc_type]
+    return all((_get_name(e) or "") not in _BROAD_EXCEPT_TYPES for e in elts)
+
+
+def _docstring_declares_noop(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """True when *func*'s docstring declares the operation a deliberate no-op
+    in the failure context — e.g. "Heartbeat when inside an activity; no-op in
+    tests / the register script."
+
+    E002 tolerates a typed ``except …: pass`` only when "there is a comment
+    explaining the reasoning"; for a small best-effort helper whose failure
+    outcome is 100% expected, the function docstring *is* that comment.
+    Recognition is deliberately textual: the docstring must say "no-op"
+    (matched case-insensitively).
+    """
+    docstring = ast.get_docstring(func)
+    return docstring is not None and "no-op" in docstring.lower()
+
+
 def _body_is_only_loop_control_no_logging(stmts: list[ast.stmt]) -> bool:
     """True if body only has continue/break/pass with no logging."""
     if _any_logging_in(stmts):

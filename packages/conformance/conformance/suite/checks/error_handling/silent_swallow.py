@@ -12,12 +12,14 @@ from ._helpers import (
     _body_has_bypassing_exit,
     _body_is_only_loop_control_no_logging,
     _body_is_only_pass,
+    _docstring_declares_noop,
     _filter_body_wrapped,
     _find_filter_method,
     _get_name,
     _has_exc_info,
     _inherits_logging_filter,
     _is_gather_call,
+    _is_narrow_typed_except,
     _iter_shallow,
 )
 
@@ -48,6 +50,22 @@ class SilentSwallowMixin:
                     "Use 'except Exception:' at minimum.",
                 )
         elif is_pass_only:
+            # Documented no-op exemption: a *narrow* typed pass-only handler
+            # whose innermost enclosing function's docstring declares the
+            # operation a deliberate no-op in the failure context — e.g.
+            # atlan-system-workflows-app app/sq_enricher/drain.py:782-787,
+            # where "Heartbeat when inside an activity; no-op in tests / the
+            # register script." documents that RuntimeError from
+            # activity.heartbeat() (outside an activity context) is the
+            # expected outcome of a pure best-effort call.  The docstring is
+            # the explanatory comment the rule requires.  Broad catches stay
+            # flagged (they also remain E004's concern).
+            if (
+                _is_narrow_typed_except(node.type)
+                and self._function_stack
+                and _docstring_declares_noop(self._function_stack[-1])
+            ):
+                return
             if isinstance(node.type, ast.Tuple):
                 names = [_get_name(e) or "?" for e in node.type.elts]
                 exc_type = "(" + ", ".join(names) + ")"

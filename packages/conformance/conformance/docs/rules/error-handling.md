@@ -85,6 +85,10 @@ only for truly trivial best-effort operations where failure is 100% expected AND
 surrounding code handles the missing result, AND there is a comment explaining the
 reasoning.
 
+Exempt: a narrow typed catch (no `Exception`/`BaseException` member) whose innermost
+enclosing function's docstring declares the operation a deliberate no-op in the failure
+context (e.g. `no-op in tests`) — the docstring IS the required explanatory comment.
+
 ---
 
 ## E003 — `BroadContextlibSuppress` {#e003}
