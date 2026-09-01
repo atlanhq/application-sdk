@@ -42,6 +42,7 @@ Environment:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -91,7 +92,7 @@ def pr_state(repo: str, pr: int, runner=_sh) -> dict[str, str] | None:
             "--repo",
             repo,
             "--json",
-            "mergeStateStatus,headRefOid,mergeable",
+            "mergeStateStatus,headRefOid,mergeable,baseRefName",
         ]
     )
     if done.returncode != 0:
@@ -230,6 +231,285 @@ def needs_agent(result: PrepResult) -> bool:
     unrequested merge commit the playbook forbids.
     """
     return result.outcome == OUTCOME_RED and bool(result.failing)
+
+
+# ---------------------------------------------------------------------------
+# Fast track — a re-trigger over a contribution nobody changed
+# ---------------------------------------------------------------------------
+#
+# A merge from base moves the head sha without changing a line the PR author
+# wrote. `sdk-review-reset-on-push.yml` then strips the verdict labels and
+# branch protection dismisses the approval, both correctly — they are keyed to
+# a sha, and the sha moved. But the REVIEW is not keyed to a sha; it is keyed
+# to a diff. Re-reading an identical diff to reach an identical verdict is the
+# one cost in this lane with no upside at all.
+#
+# So prep asks a question the review cannot: has this PR's own contribution
+# changed since the last verdict? When the answer is no, the verdict is
+# re-stamped on the live head and the round chain never starts.
+#
+# It does not post its own approval. It posts a verdict comment, and
+# `sdk-review-approve-on-verdict.yml` — which already accepts this App's
+# login — does the approving under the one identity that is a CODEOWNER. That
+# keeps a single approval path with a single set of guards, and spends no
+# extra `atlan-ci` request beyond the one APPROVE.
+
+OUTCOME_FAST_TRACK = "fast_track"
+
+#: GitHub's compare endpoint caps `files` at 300 and paginates past it. A
+#: truncated list cannot prove two contributions are identical, so a PR that
+#: large falls through to a full review rather than being fast-tracked on
+#: partial evidence.
+COMPARE_FILE_CAP = 300
+
+#: Reviewers that are not people. `type == "Bot"` catches the App identities;
+#: `atlan-ci` is a PAT-backed *user* account, so it has to be named — it is
+#: the identity the approval path itself posts under, and reading its own
+#: approval as human activity would make the fast track decline every time it
+#: had previously succeeded.
+NON_HUMAN_REVIEWERS = frozenset({"atlan-ci"})
+
+
+@dataclass(frozen=True)
+class FastTrackDecision:
+    """Whether the round chain can be skipped, and the sentence explaining it.
+
+    `reason` is written to be read by the PR author, because it is: it goes
+    into the comment when the fast track fires, and into the phase log when it
+    does not. "Declined" is the common and unremarkable case — most loop runs
+    are triggered because something really did change.
+    """
+
+    fires: bool
+    reason: str
+    head: str = ""
+    reviewed_head: str = ""
+
+
+def contribution_digest(repo: str, base_ref: str, head: str, runner=_sh) -> str | None:
+    """Digest of the PR's OWN contribution at `head`, or None if unreadable.
+
+    `compare/{base}...{head}` is the three-dot form: GitHub diffs `head`
+    against its MERGE BASE with `base`, so the answer is what this branch
+    contributes and nothing base has done since. That is the whole property
+    the fast track rests on — a merge from base advances the head sha and the
+    merge base together, leaving this digest untouched.
+
+    The digest is over patch TEXT, deliberately, and not over the blob shas at
+    head. A blob at head is the MERGED result, so a base-side edit anywhere in
+    a file this PR also touches would flip it and decline to fast-track the
+    exact case this exists for. Patch text moves only when base edits inside
+    the context of one of our own hunks, which is worth re-reading.
+
+    Fails closed. Every unreadable answer is None rather than an empty digest,
+    because two empty digests compare equal and would fast-track a PR nobody
+    successfully looked at. A file whose patch GitHub omits (binary, or too
+    large to inline) falls back to its blob sha, which is stricter than patch
+    text rather than looser: it can only decline a fast track, never grant one.
+    """
+    done = runner(["gh", "api", f"repos/{repo}/compare/{base_ref}...{head}"])
+    if done.returncode != 0:
+        return None
+    try:
+        payload = json.loads(done.stdout or "")
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    files = payload.get("files")
+    # A compare with no files is not a contribution this function can identify.
+    # Returning a digest here would let two unrelated empty answers match.
+    if not isinstance(files, list) or not files:
+        return None
+    if len(files) >= COMPARE_FILE_CAP:
+        return None
+    parts = []
+    for entry in files:
+        if not isinstance(entry, dict):
+            return None
+        patch = entry.get("patch")
+        if patch is None:
+            blob = str(entry.get("sha") or "")
+            if not blob:
+                return None
+            patch = f"blob:{blob}"
+        parts.append(
+            "\n".join(
+                [
+                    str(entry.get("filename") or ""),
+                    str(entry.get("status") or ""),
+                    str(patch),
+                ]
+            )
+        )
+    return hashlib.sha256("\x00".join(sorted(parts)).encode("utf-8")).hexdigest()
+
+
+def human_review_after(repo: str, pr: int, when: str, runner=_sh) -> bool | None:
+    """Whether a person reviewed after `when`. None when it cannot be read.
+
+    ANY human review counts, not only CHANGES_REQUESTED.
+    `sdk-review-dismiss-on-human.yml` exists because human review activity of
+    any kind invalidates a bot approval, and a person leaving a COMMENT review
+    to raise a concern must not be fast-tracked straight past.
+
+    Fails closed: None is returned on an unreadable listing and the caller
+    treats it as "assume somebody did", because the cost of being wrong here
+    is re-stamping an approval over a human's objection.
+    """
+    done = runner(
+        [
+            "gh",
+            "api",
+            f"repos/{repo}/pulls/{pr}/reviews",
+            "--paginate",
+            "--jq",
+            '.[] | [(.submitted_at // ""), (.user.login // ""), (.user.type // "")] | @tsv',
+        ]
+    )
+    if done.returncode != 0:
+        return None
+    for line in (done.stdout or "").splitlines():
+        if not line.strip():
+            continue
+        fields = line.split("\t")
+        if len(fields) < 3:
+            return None
+        submitted, login, kind = fields[0], fields[1], fields[2]
+        if kind == "Bot" or login in NON_HUMAN_REVIEWERS:
+            continue
+        # String compare is correct for ISO-8601 UTC timestamps, which is what
+        # both the reviews and the comments endpoints return.
+        if submitted and submitted > when:
+            return True
+    return False
+
+
+def fast_track_decision(
+    *,
+    repo: str,
+    pr: int,
+    head: str,
+    base_ref: str,
+    verdict_comment: dict | None,
+    verdict: str | None,
+    reviewed_head: str | None,
+    ready: str,
+    runner=_sh,
+) -> FastTrackDecision:
+    """Decide whether an unchanged contribution can carry its verdict forward.
+
+    The verdict itself is passed in already extracted rather than parsed here,
+    so this module never grows a second verdict parser alongside
+    `sdk_review_approve.py`'s — one of those going stale against the other is
+    how a lane starts approving on a verdict it misread.
+
+    Every guard below declines rather than raises. A fast track that cannot
+    prove itself is simply a normal loop run, which is the behaviour this
+    repo had before the check existed.
+    """
+    if verdict_comment is None:
+        return FastTrackDecision(
+            False, "no previous verdict on this PR to carry forward"
+        )
+    if verdict != ready:
+        return FastTrackDecision(
+            False,
+            f"the last verdict was {verdict or 'unreadable'}, not {ready} — "
+            "its findings still stand",
+        )
+    if not reviewed_head:
+        return FastTrackDecision(
+            False, "the last verdict does not record which head it reviewed"
+        )
+    if not head:
+        return FastTrackDecision(False, "could not read the PR's live head")
+
+    created = str(verdict_comment.get("created_at") or "")
+    if not created:
+        return FastTrackDecision(False, "the last verdict has no timestamp to age")
+    reviewed_since = human_review_after(repo, pr, created, runner=runner)
+    if reviewed_since is None:
+        return FastTrackDecision(
+            False, "could not read the PR's reviews — assuming a human has weighed in"
+        )
+    if reviewed_since:
+        return FastTrackDecision(
+            False, "a human reviewed after the last verdict — their read wins"
+        )
+
+    # The cheap case, and a real one: the head never moved. The verdict still
+    # describes it exactly, and the loop is being re-triggered because the
+    # approval was lost rather than because anything changed.
+    if reviewed_head == head:
+        return FastTrackDecision(
+            True,
+            "the head has not moved since that verdict, so it still describes "
+            "this PR exactly",
+            head=head,
+            reviewed_head=reviewed_head,
+        )
+
+    before = contribution_digest(repo, base_ref, reviewed_head, runner=runner)
+    after = contribution_digest(repo, base_ref, head, runner=runner)
+    if before is None or after is None:
+        return FastTrackDecision(
+            False, "could not read both diffs to compare them — reviewing properly"
+        )
+    if before != after:
+        return FastTrackDecision(False, "the diff has changed since the last verdict")
+    return FastTrackDecision(
+        True,
+        "every commit since that verdict came from base — this PR's own diff is "
+        "byte-identical to the one already reviewed",
+        head=head,
+        reviewed_head=reviewed_head,
+    )
+
+
+def fast_track_comment(
+    pr: int, decision: FastTrackDecision, ready: str, run_url: str = ""
+) -> str:
+    """The verdict comment that carries a review forward onto a new head.
+
+    Shaped like every other verdict comment on purpose. `<!-- SDK_REVIEW -->`
+    plus `<!-- VERDICT: ... -->` plus `<!-- REVIEWED_HEAD: ... -->` is the
+    contract `sdk_review_approve.py`, the reconcile sweep and the dismiss and
+    downgrade lanes all read, and an empty `### Findings` is what the loop's
+    own summary checks to call a round merge-ready. The extra
+    `SDK_LOOP_FAST_TRACK` marker is additive: it lets a human — or a later
+    audit — tell a carried verdict from a freshly computed one, which reading
+    the prose alone would not.
+    """
+    lines = [
+        "<!-- SDK_REVIEW -->",
+        f"<!-- VERDICT: {ready} -->",
+        f"<!-- REVIEWED_HEAD: {decision.head} -->",
+        "<!-- SDK_LOOP_FAST_TRACK -->",
+        f"<!-- FAST_TRACKED_FROM: {decision.reviewed_head} -->",
+        f"## SDK Review (@sdk-loop fast track): PR #{pr}",
+        "",
+        "### Verdict: READY TO MERGE",
+        "",
+        f"> Fast-tracked without a review: {decision.reason}.",
+        "",
+        "---",
+        "",
+        "### Findings",
+        "",
+        "---",
+        "",
+        f"Carried forward from the review of `{decision.reviewed_head[:8]}`, "
+        f"re-stamped on `{decision.head[:8]}`.",
+        "",
+        "No model ran and nothing was re-read: the review that produced this "
+        "verdict read the same diff, so reviewing it again could only reach "
+        "the same answer more slowly. Push a change and the next `@sdk-loop` "
+        "reviews it properly.",
+    ]
+    if run_url:
+        lines += ["", f"**Run:** [view workflow logs]({run_url})"]
+    return "\n".join(lines)
 
 
 def main(argv: list[str] | None = None) -> int:
