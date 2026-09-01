@@ -1,5 +1,12 @@
 # 1b-toolkit. Private Toolkit Consumer Setup
 
+**mothership sandbox only.** On `LANE: sdk-loop` this file must not be
+followed: the consumer clones below need credentials for private atlanhq
+repos that the loop lane's scoped App token does not carry, and every clone
+fails with `could not read Username`. The router's 1b-toolkit pointer gives
+that lane its fallback (a Rover note + static surface review). Measured on a
+live run: five clone failures, then an idle-watchdog kill with no verdict.
+
 ### 1b-toolkit. Private Toolkit Consumer Setup (if review_scope=contract-toolkit or mixed-sdk-toolkit)
 
 Read:

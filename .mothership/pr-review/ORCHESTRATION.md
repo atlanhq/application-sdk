@@ -377,8 +377,33 @@ On a delta-scoped re-review (step 11b), run it over the delta files only.
 ### 1b-toolkit. Private Toolkit Consumer Setup
 
 **Read only when:** `review_scope` is `contract-toolkit` or
-`mixed-sdk-toolkit` — then read `sections/toolkit-consumer-setup.md`.
-Skip it entirely on every other scope — it is private-repo clone-and-validate setup for surfaces your scope
+`mixed-sdk-toolkit` AND you are on the mothership sandbox — then read
+`sections/toolkit-consumer-setup.md`.
+
+**On `LANE: sdk-loop`, do not read it and do not attempt any of it, even on a
+toolkit scope.** Its consumer validation clones private atlanhq repos, and
+this lane's credential cannot: `GH_TOKEN` is an App token scoped to THIS
+repository, and git has no other helper on the runner — so every clone dies
+with `fatal: could not read Username for 'https://github.com'`. A live
+toolkit-scope run (PR #3594) failed all five clones exactly this way, kept
+going, and was killed by the idle watchdog with no verdict after ~8 minutes.
+Instead, on this lane:
+
+```bash
+cat > /tmp/TOOLKIT_ROVER_NOTE.md <<'NOTE'
+Review note: private-consumer compatibility validation cannot run on the
+@sdk-loop lane (no credentials for consumer repos). Reviewed the toolkit
+surfaces statically. Re-run @sdk-review (mothership) or request human review
+for cross-repo validation before merge.
+NOTE
+```
+
+then review the toolkit surfaces from this repo's own diff and generated
+artifacts, and let §3e's Review Note block carry that note into the summary.
+The note downgrades confidence honestly; five guaranteed clone failures
+followed by a dead phase reports nothing at all.
+
+Skip the section entirely on every other scope — it is private-repo clone-and-validate setup for surfaces your scope
 does not touch, and on a two-file conformance PR it is the single largest
 block of context you would carry for no reason.
 ### 1c. Prepare Context by Tier
