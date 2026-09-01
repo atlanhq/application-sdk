@@ -683,6 +683,54 @@ def test_p025_suppressed_by_inline_directive(tmp_path: Path) -> None:
     assert all(f.suppressed for f in p025), "P025 findings should be suppressed"
 
 
+def test_p025_multiline_class_identity_mismatch_fires_without_suppression(
+    tmp_path: Path,
+) -> None:
+    """A multiline App declaration still reports an intentional-name mismatch."""
+    py = {
+        "app/oracle.py": dedent("""\
+            from application_sdk.app import App
+            class OracleApp(
+                App,
+            ):
+                pass
+        """),
+    }
+    findings = _run(
+        tmp_path,
+        py,
+        atlan_yaml="name: oracle\n",
+        env_example="ATLAN_APPLICATION_NAME=oracle\n",
+    )
+    p025 = _p025(findings)
+    assert len(p025) == 2
+    assert all(not finding.suppressed for finding in p025)
+
+
+def test_p025_multiline_class_identity_mismatch_can_be_suppressed(
+    tmp_path: Path,
+) -> None:
+    """A trailing directive on the multiline class header suppresses both findings."""
+    py = {
+        "app/oracle.py": dedent("""\
+            from application_sdk.app import App
+            class OracleApp(  # conformance: ignore[P025] App.name "oracle-app" is the deployment/workflow identity; atlan.yaml is the connector type
+                App,
+            ):
+                pass
+        """),
+    }
+    findings = _run(
+        tmp_path,
+        py,
+        atlan_yaml="name: oracle\n",
+        env_example="ATLAN_APPLICATION_NAME=oracle\n",
+    )
+    p025 = _p025(findings)
+    assert len(p025) == 2
+    assert all(finding.suppressed for finding in p025)
+
+
 # ---------------------------------------------------------------------------
 # Alias imports
 # ---------------------------------------------------------------------------

@@ -59,6 +59,12 @@ jobs:
           echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
 
       - name: Update version.py
+        # release.py sets skip=true when main already carries the version it
+        # computed — this run is looking at a frozen merge ref that predates a
+        # release which has already merged and published, so bumping again
+        # would open a duplicate release PR (application-sdk#3570). Guarding
+        # the mutating steps leaves the job green having done nothing.
+        if: steps.version_update.outputs.skip != 'true'
         # In-place edit the ``__version__`` line only. The previous block
         # truncated the file and re-emitted a fixed 5-line template, which
         # wiped out anything else living alongside ``__version__`` (the
@@ -92,11 +98,13 @@ jobs:
 
       - name: Generate changelog
         id: changelog
+        if: steps.version_update.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: python .github/scripts/update_changelog.py "${{ env.CURRENT_VERSION }}" "${{ env.NEW_VERSION }}"
 
       - name: Commit version bump and changelog
+        if: steps.version_update.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           TARGET_BRANCH: ${{ github.ref_name }}
