@@ -748,6 +748,12 @@ AGENT_ENV_PASSTHROUGH = (
     "RIPGREP_CONFIG_PATH",
     "GH_TOKEN",
     "GITHUB_REPOSITORY",
+    # The agent reaches for these BEFORE the GHA_RUN_URL below — a live
+    # transcript shows it printing `GITHUB_RUN_ID=` and `GITHUB_SERVER_URL=`
+    # empty and spending a turn on it. They cost nothing to forward and the
+    # runner already has them.
+    "GITHUB_RUN_ID",
+    "GITHUB_SERVER_URL",
     # The playbook's own variables. Their absence was VISIBLE in a live
     # transcript — the agent's very first shell block printed `REPO env:
     # unset`, `PR_NUMBER env: unset`, `GHA_RUN_URL env: unset` and four more,
