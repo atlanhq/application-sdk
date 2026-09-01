@@ -359,7 +359,174 @@ def _agent_prompt(name: str) -> str:
         return handle.read()
 
 
-def review_subagents(model: str) -> dict[str, Any]:
+# --------------------------------------------------------------------------
+# Review scope — which specialists §2a routes a PR to
+# --------------------------------------------------------------------------
+
+#: §2a's routing table, mirrored. The playbook stays authoritative and
+#: `test_the_scope_table_matches_the_playbook` parses the markdown table and
+#: fails if these drift — so this is a cache of that table, not a second
+#: opinion about it.
+SCOPE_AGENTS: dict[str, tuple[str, ...]] = {
+    "full": ("correctness", "quality", "structure"),
+    "minor": ("correctness",),
+    "contract-toolkit": ("toolkit-review",),
+    "mixed-sdk-toolkit": ("correctness", "quality", "structure", "toolkit-review"),
+    "tests-only": ("quality",),
+    "tests-focused": ("quality", "correctness"),
+    "conformance-only": ("conformance",),
+    "config-only": ("ci-config",),
+    "docs-only": (),
+}
+
+
+#: §11's bucket patterns, mirrored. Classification is pure file-list
+#: arithmetic with no judgement in it, so it belongs in Python: the agent
+#: currently spends a turn on a sixty-line bash block to reach an answer the
+#: harness can compute before the model starts, and — more importantly — the
+#: harness needs the answer FIRST, to decide whether registering sub-agents
+#: makes sense at all.
+_BUCKETS: tuple[tuple[str, str], ...] = (
+    ("ct", r"^contract-toolkit/"),
+    ("sdk", r"^application_sdk/"),
+    ("conf", r"^(packages/conformance/|remediation/)"),
+    ("test", r"^(tests/|contract-toolkit/tests/)"),
+    ("doc", r"^(docs/|contract-toolkit/docs/)|.*README\.md$"),
+    ("config", r"^(pyproject\.toml|uv\.lock|\.pre-commit|\.github/|helm/)"),
+    ("meta", r"^(\.mothership/|\.claude/)|(^|/)(AGENTS|CLAUDE)\.md$"),
+    ("security", r"(credential|secret|auth|token|_dapr|_temporal)"),
+)
+
+#: A file in NONE of the non-source buckets. Computed by exclusion rather than
+#: TOTAL - sum(buckets), because a path in two buckets (docs/CLAUDE.md is both
+#: DOC and META) would be subtracted twice and could zero out a real source
+#: count — silently skipping code review. §11 makes the same point.
+_NON_SOURCE = (
+    r"^(packages/conformance/|remediation/|tests/|contract-toolkit/tests/|"
+    r"docs/|contract-toolkit/docs/|pyproject\.toml|uv\.lock|\.pre-commit|"
+    r"\.github/|helm/|\.mothership/|\.claude/)|.*README\.md$|"
+    r"(^|/)(AGENTS|CLAUDE)\.md$"
+)
+
+
+def classify_scope(files: Sequence[str], changed_lines: int = 0) -> str:
+    """`review_scope` for a PR, by §11's rules, first match wins.
+
+    Mirrors `.mothership/pr-review/ORCHESTRATION.md` §11. Kept in step by
+    `test_the_scope_table_matches_the_playbook`, which parses §2a's routing
+    table — the playbook stays authoritative.
+    """
+    paths = [f.strip() for f in files if f and f.strip()]
+    n = {name: sum(1 for p in paths if re.search(pat, p)) for name, pat in _BUCKETS}
+    source = sum(1 for p in paths if not re.search(_NON_SOURCE, p))
+    total = len(paths)
+
+    if n["ct"] and not n["sdk"] and not n["conf"] and not n["config"]:
+        return "contract-toolkit"
+    if n["ct"] and (n["sdk"] or n["config"]):
+        return "mixed-sdk-toolkit"
+    if n["meta"] and not any(
+        (source, n["config"], n["conf"], n["ct"], n["test"], n["doc"])
+    ):
+        return "docs-only"
+    if not source and n["conf"] and not n["ct"]:
+        return "conformance-only"
+    if not source and n["test"]:
+        return "tests-only"
+    if not source and n["doc"] and not n["test"]:
+        return "docs-only"
+    if not source and n["config"]:
+        return "config-only"
+    if source <= 2 and n["test"] >= source * 3 and n["test"]:
+        return "tests-focused"
+    if (
+        source >= 1
+        and total <= 2
+        and changed_lines < 50
+        and not n["conf"]
+        and not n["ct"]
+        and not n["config"]
+        and not n["security"]
+    ):
+        return "minor"
+    return "full"
+
+
+#: Config paths that justify a `ci-config` partition agent. `uv.lock` alone
+#: does NOT: §2a skips the extra when the only config churn is an incidental
+#: lock bump with no `.github/`, `helm/` or `pyproject` change.
+_SUBSTANTIVE_CONFIG = r"^(\.github/|helm/|pyproject\.toml|\.pre-commit)"
+
+
+def dispatch_set(scope: str, files: Sequence[str] = ()) -> tuple[str, ...]:
+    """Every agent the playbook may `Task` for this PR — the registration set.
+
+    NOT just §2a's routing table. Registering exactly that table looked right
+    and was wrong in two ways, because the table is only the Wave 1 row:
+
+      * §1b dispatches `reachability` on `full` and `mixed-sdk-toolkit`. It is
+        named nowhere in §2a's table, so a table-only registration left the
+        parent instructed to dispatch an agent that did not exist.
+      * §2a's "Mixed partitions" rule and §11's `conformance-only` note add a
+        partition specialist when a PR ALSO touches config or conformance
+        files — `ci-config` or `conformance`, scoped to that slice only.
+
+    The invariant is "register exactly what the playbook will try to
+    dispatch", and these extras are part of that. They are deliberately kept
+    OUT of SCOPE_AGENTS: that mirrors §2a's markdown table and is asserted
+    against it, so stuffing derived agents in would break the very drift check
+    that keeps it honest.
+    """
+    agents = list(SCOPE_AGENTS.get(scope, ()))
+    paths = [f.strip() for f in files if f and f.strip()]
+
+    if scope in ("full", "mixed-sdk-toolkit") and "reachability" not in agents:
+        agents.append("reachability")
+
+    has_config = any(re.search(_SUBSTANTIVE_CONFIG, p) for p in paths)
+    has_conf = any(
+        re.search(r"^(packages/conformance/|remediation/)", p) for p in paths
+    )
+
+    if scope in ("full", "tests-focused"):
+        if has_config and "ci-config" not in agents:
+            agents.append("ci-config")
+        if has_conf and "conformance" not in agents:
+            agents.append("conformance")
+    elif scope == "conformance-only" and has_config and "ci-config" not in agents:
+        # §11: a conformance PR that also carries config files gets the CI
+        # specialist on that slice — so this scope is NOT always solo.
+        agents.append("ci-config")
+
+    return tuple(agents)
+
+
+def solo_scope(scope: str, files: Sequence[str] = ()) -> str:
+    """The one agent this PR routes to, or '' when it routes to 0 or 2+.
+
+    Computed from `dispatch_set`, never from SCOPE_AGENTS alone: a
+    `conformance-only` PR that also touches `.github/` picks up `ci-config`
+    and is a two-agent review, and treating it as solo would silently drop
+    the CI specialist from a PR that changes CI.
+
+    A dispatch exists to run agents CONCURRENTLY. With one agent there is
+    nothing to run alongside, so `Task` buys no parallelism and costs a cold
+    start: the parent has already read the playbook, the diff and every
+    changed file, and the sub-agent begins with none of it and re-reads its
+    way back. Measured on three single-agent reviews — 904s, ~9min, and 26min
+    inside that one call, per-step latency climbing 4s to 526s as the re-read
+    context accumulated. The 26-minute one reached step 11 of 25 before it was
+    killed; the parent covers the same ground in under a minute.
+
+    Two or more is a different trade and dispatch stays: a single agent
+    covering several domains produces a worse verdict, and nothing in the
+    output would say so.
+    """
+    agents = dispatch_set(scope, files)
+    return agents[0] if len(agents) == 1 else ""
+
+
+def review_subagents(model: str, only: Sequence[str] = ()) -> dict[str, Any]:
     """opencode subagent entries for the playbook's Phase 2 agents.
 
     Each is read-only by construction: the review lane holds a token with no
@@ -442,11 +609,15 @@ def review_subagents(model: str) -> dict[str, Any]:
                 "doom_loop": "deny",
             },
         }
-        for name in PHASE2_AGENTS
+        for name in (tuple(only) or PHASE2_AGENTS)
     }
 
 
-def opencode_config(model: str, with_subagents: bool = False) -> dict[str, Any]:
+def opencode_config(
+    model: str,
+    with_subagents: bool = False,
+    subagents: Sequence[str] = (),
+) -> dict[str, Any]:
     """`opencode.json` pinning the only provider and models this lane may use.
 
     Shell and network stay ALLOWED here, unlike the conformance fast lane which
@@ -512,7 +683,7 @@ def opencode_config(model: str, with_subagents: bool = False) -> dict[str, Any]:
         # unanswered ask as a rejection — a connector-pulse run starved exactly
         # that way when its skill reads were auto-rejected. So everything a
         # phase legitimately does is allowed outright.
-        **({"agent": review_subagents(model)} if with_subagents else {}),
+        **({"agent": review_subagents(model, subagents)} if with_subagents else {}),
         # Every permission the playbooks can reach, in one place.
         #
         # Headless opencode has nobody to answer an "ask", so it auto-REJECTS
@@ -954,6 +1125,7 @@ def run_agent(
     transcript_path: str | None = None,
     sink: Any = None,
     subagents: bool = False,
+    subagent_names: Sequence[str] = (),
     idle_timeout_s: int = IDLE_TIMEOUT_S,
 ) -> AgentResult:
     """Invoke one agent phase, STREAMING its output to the job log.
@@ -978,7 +1150,11 @@ def run_agent(
     os.environ["RIPGREP_CONFIG_PATH"] = write_rg_config(cwd)
     config_path = os.path.join(cwd, "opencode.json")
     with open(config_path, "w", encoding="utf-8") as handle:
-        json.dump(opencode_config(model, with_subagents=subagents), handle, indent=2)
+        json.dump(
+            opencode_config(model, with_subagents=subagents, subagents=subagent_names),
+            handle,
+            indent=2,
+        )
 
     lines: list[str] = []
     # Stamped BEFORE launch so the follower can tell this run's log file from
