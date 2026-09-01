@@ -20,6 +20,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+import sdk_loop_phase as phase  # noqa: E402
 import sdk_review_approve as approve  # noqa: E402
 from sdk_loop_finalize import STOP_TEXT  # noqa: E402
 from sdk_loop_prep import (  # noqa: E402
@@ -361,3 +362,91 @@ def test_both_reviewer_bots_may_author_a_verdict_and_nobody_else() -> None:
     assert not approve._is_verdict_comment(
         {**marked, "user": {"login": "a-person"}}
     ), "a forged verdict comment must not be actionable"
+
+
+# ---------------------------------------------------------------------------
+# The wiring, which is the only link that can fail in production alone
+# ---------------------------------------------------------------------------
+
+
+def _drive_prep(monkeypatch, tmp_path, *, fires: bool, posted: bool) -> dict[str, str]:
+    """Run the real prep branch of `main()` and return the step outputs it wrote.
+
+    The decision functions above are unit-tested; this covers the wiring
+    between them, which nothing else does. `emit_outputs` is a no-op when
+    `GITHUB_OUTPUT` is unset, so without a test that sets it, nothing ever
+    proved this block writes the value `review-1`'s gate reads. If it did not,
+    the gate would see '' and the chain would run — paying for the review AND
+    leaving a stray verdict comment, which is worse than not fast-tracking.
+    """
+    out = tmp_path / "gh_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    monkeypatch.setenv("PHASE", "prep")
+    monkeypatch.setenv("ROUND", "0")
+    monkeypatch.setenv("REPO", "o/r")
+    monkeypatch.setenv("PR_NUMBER", "1")
+    monkeypatch.setenv("HEAD_REF", "a-branch")
+    monkeypatch.setenv("BASE_SHA", LIVE)
+
+    monkeypatch.setattr(phase, "live_head", lambda *a, **k: LIVE)
+    monkeypatch.setattr(
+        phase,
+        "pr_state",
+        lambda *a, **k: {
+            "mergeStateStatus": "CLEAN",
+            "headRefOid": LIVE,
+            "baseRefName": "main",
+        },
+    )
+    monkeypatch.setattr(phase, "failing_checks", lambda *a, **k: ())
+    monkeypatch.setattr(
+        phase,
+        "_fast_track",
+        lambda *a, **k: type(_decide())(
+            fires=fires,
+            reason="every commit since came from base",
+            head=LIVE,
+            reviewed_head=REVIEWED,
+        ),
+    )
+    monkeypatch.setattr(phase, "_post_fast_track", lambda *a, **k: posted)
+
+    assert phase.main() == 0, "prep must never fail the run"
+    written = {}
+    for line in out.read_text(encoding="utf-8").splitlines():
+        if "=" in line:
+            key, _, value = line.partition("=")
+            written[key] = value
+    return written
+
+
+def test_a_fired_fast_track_writes_the_outcome_the_gate_reads(
+    monkeypatch, tmp_path
+) -> None:
+    """`review-1`'s `if:` tests `needs.prep.outputs.outcome != 'fast_track'`.
+    This is the write that has to produce that exact string."""
+    written = _drive_prep(monkeypatch, tmp_path, fires=True, posted=True)
+    assert written.get("outcome") == OUTCOME_FAST_TRACK
+    assert (
+        written.get("new_base_sha") == LIVE
+    ), "the review, if any, runs on the live head"
+    assert (
+        written.get("pushed_sha") == ""
+    ), "prep pushed nothing, so it must claim nothing"
+    # `emit_outputs` writes one `key=value` line per value, so a newline in any
+    # of them corrupts every output after it.
+    assert "\n" not in written.get("detail", "")
+
+
+def test_a_verdict_comment_that_did_not_post_is_not_reported_as_a_fast_track(
+    monkeypatch, tmp_path
+) -> None:
+    """The comment IS the mechanism — it is what the approval path reads. If it
+    did not land there is nothing to approve, so the run must fall through and
+    review the PR rather than cancel the chain on a fast track that left no
+    trace anywhere."""
+    written = _drive_prep(monkeypatch, tmp_path, fires=True, posted=False)
+    assert written.get("outcome") != OUTCOME_FAST_TRACK
+    assert (
+        written.get("outcome") == "clean"
+    ), "it falls through to the ordinary prep result"
