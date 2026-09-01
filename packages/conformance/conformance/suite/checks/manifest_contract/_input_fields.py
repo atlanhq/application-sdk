@@ -453,8 +453,11 @@ def _make_finding(
         if a.key == arg_key
     )
     # discriminator = the arg key, so several findings anchored on the same
-    # Input class stay distinct fingerprints and can be suppressed one at a
-    # time via '# conformance: ignore[K018:<key>]'.
+    # Input class stay distinct fingerprints. Note there is no per-key
+    # suppression: the ':subject' grammar lives in _toml_suppress (T025) only,
+    # and _parse_directives keeps the whole bracket token, so
+    # 'ignore[K018:include_filter]' matches no rule and suppresses nothing.
+    # '# conformance: ignore[K018]' suppresses every key on the class.
     return dataclasses.replace(
         make_finding(
             filename=input_rec.file,

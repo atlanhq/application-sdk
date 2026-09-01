@@ -812,9 +812,11 @@ the depth it was sent at, and the `Input` class. Read the actual class at
    visible, including through an inherited base.
 7. If the mismatch is understood and deliberately deferred, suppress with
    `# conformance: ignore[K018] <reason>` on the `Input` class definition and
-   route to residue. Findings carry a discriminator, so
-   `# conformance: ignore[K018:<arg key>]` suppresses one key without hiding its
-   siblings.
+   route to residue. There is **no per-key form** — the `:subject` grammar
+   exists only for TOML-anchored rules (T025), so `ignore[K018:include_filter]`
+   matches no rule and suppresses nothing while looking like it worked. One
+   suppression covers every key on that class; if only some are deliberate, fix
+   the rest rather than suppressing the lot.
 
 ---
 
