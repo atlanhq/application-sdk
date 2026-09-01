@@ -449,14 +449,41 @@ drafting.
   residue for human confirmation.
 
 - **P023 BlockingCallInAsyncDef** — an event-loop re-entry bridge (`asyncio.run`/
-  `run_until_complete`), a blocking sync call (`requests.*`, `time.sleep`), or
+  `run_until_complete`), a blocking sync call (`requests.*`, `time.sleep`),
   tree-scale filesystem work (`shutil.rmtree`/`copytree`/`move`, incl. the
-  `SafeFileOps.rmtree`/`SafeFileOps.move` wrappers) runs inside an `async def`.  Draft: for a bridge,
-  `await` the coroutine directly instead of re-entering a loop; for blocking I/O,
-  `await` an async equivalent or offload it via `App.run_in_thread()` inside a
-  `@task`; for a tree op, `await run_in_thread(shutil.rmtree, path)` — the
-  callable is *passed*, not called, so the offloaded form is silent.  All are
-  restructures — route to residue with the proposed shape.
+  `SafeFileOps.rmtree`/`SafeFileOps.move` wrappers), tree traversal (`os.walk`/
+  `glob.glob`/`Path.glob`/`Path.rglob`), data-scale I/O (pandas and pyarrow
+  readers and writers, whole-file `Path.read_text`/`write_bytes`/…, file-handle
+  `json.load`/`json.dump`/`pickle`/`tomllib`), or a `subprocess.*` call runs
+  inside an `async def`.  Draft per category:
+
+  - *bridge* — `await` the coroutine directly instead of re-entering a loop.
+  - *blocking network / sleep* — `await` an async equivalent, or offload via
+    `App.run_in_thread()` inside a `@task`.
+  - *tree op, data-scale I/O, whole-file, serialization* — offload with the
+    callable *passed*, not called: `await run_in_thread(shutil.rmtree, path)`,
+    `await run_in_thread(pd.read_parquet, path)`,
+    `await run_in_thread(json.load, handle)`.  The offloaded form is silent
+    because the check only matches a call.
+  - *traversal* — same hop, but **materialise inside the thread**:
+    `await run_in_thread(lambda: list(root.rglob("*")))`.  Offloading the bare
+    `root.rglob("*")` returns a lazy generator and moves every syscall straight
+    back onto the loop, so the finding disappears while the defect does not.
+    Never propose the bare form.  The detector treats a `lambda` body as a sync
+    scope (as it does a nested `def`), so this proposal verifies clean — check
+    that before proposing any *other* shape, since a fix the rule re-flags is
+    worse than none.
+  - *subprocess* — prefer `asyncio.create_subprocess_exec` and `await` it;
+    offload only when the sync API is unavoidable.
+
+  Two conditions make the offload proposal wrong, and both must be checked
+  before drafting one: the call is already inside a sync `def` that is itself
+  handed to an offloader (it is the fix, not the defect — such a call is not
+  flagged, so a finding here means the closure is invoked directly), and the
+  enclosing function is a workflow method (P021's territory; P023 does not fire
+  there).  All of these are restructures — route to residue with the proposed
+  shape, and name the import the patch needs
+  (`from application_sdk.execution.heartbeat import run_in_thread`).
 
 - **P024 SyncAtlanClientInApp** — app code constructs pyatlan's sync `AtlanClient`
   (or a factory like `AtlanClient.from_token(...)`).  Draft a swap to the async

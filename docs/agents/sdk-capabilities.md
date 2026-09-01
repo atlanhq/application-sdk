@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.30.0
-source-sha:    c5e4da35f2291c9fc646030b73679c7050ec4837
-source-date:   2026-09-01T03:04:50+05:30
+source-sha:    a57bfceb669bc59667ae66948b6e8de3dd9959e2
+source-date:   2026-08-31T19:14:25Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -25,7 +25,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 45 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 64 |
-| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 46 |
+| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 45 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 44 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 6 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 317 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 319 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 78 |
 
 ## Subpackage Details
@@ -2010,13 +2010,6 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Summary:** Last-resort escape hatch: run a blocking function in a thread pool.
 - **Defined in:** `application_sdk/_runtime/offload.py`
 
-#### `stop_heartbeat_task`
-
-- **Import:** `from application_sdk.execution.heartbeat import stop_heartbeat_task`
-- **Signature:** `stop_heartbeat_task(task: asyncio.Task, stop_event: asyncio.Event, task_name: str) -> None`
-- **Summary:** Stop an ``auto_heartbeat_loop`` task, letting nothing escape.
-- **Defined in:** `application_sdk/execution/heartbeat.py`
-
 #### `submit_in_thread`
 
 - **Import:** `from application_sdk.execution.heartbeat import submit_in_thread`
@@ -3479,6 +3472,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Top-level status of an AE workflow run.
 - **Defined in:** `application_sdk/testing/harness/automation_engine/wire.py`
 
+#### `DAGSpec`
+
+- **Import:** `from application_sdk.testing.e2e import DAGSpec`
+- **Signature:** `class DAGSpec(entrypoint: str | None = None, ...)`
+- **Summary:** One entrypoint DAG run, as a suite *declares* it.
+- **Defined in:** `application_sdk/testing/e2e/base.py`
+
 #### `DataForgeSource`
 
 - **Import:** `from application_sdk.testing.integration import DataForgeSource`
@@ -3950,6 +3950,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class RequestDelivery`
 - **Summary:** Whether a failed HTTP request can have taken effect at the origin.
 - **Defined in:** `application_sdk/testing/harness/automation_engine/_errors.py`
+
+#### `ResolvedDAG`
+
+- **Import:** `from application_sdk.testing.e2e import ResolvedDAG`
+- **Signature:** `class ResolvedDAG(label: str, ...)`
+- **Summary:** A :class:`DAGSpec` with every field settled against the class attributes.
+- **Defined in:** `application_sdk/testing/e2e/base.py`
 
 #### `ResourceRef`
 
@@ -6425,7 +6432,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `passed: bool` `= False` — Whether the check passed.
   - `message: str` `= ''` — Deprecated: prefer :attr:`error`. Human-facing line shown when ``error``
   - `error: FailureDetails | None` — Typed failure for a failed check — set only on failed checks.
-  - `duration_ms: float` `= -1.0` — How long the check took in milliseconds. ``-1.0`` means not measured —
+  - `duration_ms: float` `= 0.0` — How long the check took in milliseconds.
   - `resolved_message: str` — Message under the precedence rule: a failed check's ``error`` wins.
   - `resolved_suggested_action: str` — Suggested action from a failed check's ``error``; empty otherwise.
 - **Defined in:** `application_sdk/handler/contracts.py`

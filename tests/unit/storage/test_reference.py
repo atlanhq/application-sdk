@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from pathlib import Path
 from unittest.mock import patch
@@ -53,6 +54,53 @@ class TestWriteLocalSidecar:
         bogus = str(tmp_path / "no_such_dir" / "x.txt")
         # Should NOT raise
         _write_local_sidecar(bogus, "abc")
+
+
+class TestConcurrentMaterialize:
+    """Concurrent activities sharing one local_path must not race (CONNECT-1126).
+
+    ``local_path`` is a deterministic function of (run, stage, entity), so two
+    activities of one run dispatched together hand the SDK the same
+    destination. The materialise-and-verify step must hold a per-path lock:
+    the second caller waits, re-checks, and reuses the file — it must not
+    start a second download under the first.
+    """
+
+    async def test_shared_local_path_downloads_once(self, store, tmp_path) -> None:
+        content = b'{"row": 1}\n'
+        digest = _hash_bytes(content)
+        await _put("runs/raw/records.json", content, store, normalize=False)
+        await _put(
+            "runs/raw/records.json.sha256", digest.encode(), store, normalize=False
+        )
+
+        local = tmp_path / "records.json"
+
+        def make_ref() -> FileReference:
+            return FileReference(
+                local_path=str(local),
+                storage_path="runs/raw/records.json",
+                is_durable=True,
+            )
+
+        calls = 0
+
+        async def slow_download(key, out_path, st, **kw):
+            nonlocal calls
+            calls += 1
+            await asyncio.sleep(0.05)
+            Path(out_path).write_bytes(content)
+            return digest
+
+        with patch("application_sdk.storage.ops.download_file", new=slow_download):
+            ref_a, ref_b = await asyncio.gather(
+                materialize_file_reference(store, make_ref()),
+                materialize_file_reference(store, make_ref()),
+            )
+
+        assert calls == 1, "second concurrent materialise started a duplicate download"
+        assert local.read_bytes() == content
+        assert ref_a.local_path == ref_b.local_path == str(local)
 
 
 # ---------------------------------------------------------------------------

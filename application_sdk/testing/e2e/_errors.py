@@ -42,6 +42,7 @@ from application_sdk.testing.harness.automation_engine._errors import (
 
 __all__ = [
     "AdminRoleNotResolvedError",
+    "AmbiguousDAGRunError",
     "AgentSpecRequiredError",
     "AtlasReadIndeterminateError",
     "AppNotReadyError",
@@ -130,6 +131,23 @@ class AdminRoleNotResolvedError(PreconditionError):
 
     code: ClassVar[str] = "PRECONDITION_ADMIN_ROLE_NOT_RESOLVED"
     expected_state: str | None = "role $admin present in role cache"
+
+
+@dataclass(kw_only=True)
+class AmbiguousDAGRunError(InvalidInputError):
+    """A suite's ``dag_runs`` declaration cannot resolve to distinct runs.
+
+    Either two runs resolve to the same label without being the same run — the
+    label names the AE workflow each run seeds, so a collision would publish one
+    run's DAG over the other's — or the suite pins ``ae_workflow_slug`` while
+    declaring several runs, which cannot be honoured because a pinned slug is
+    submitted against as-is and never seeded over.
+
+    Static, so it is raised from ``setup_method`` rather than discovered as a
+    confusing AE run list halfway through a leg.
+    """
+
+    code: ClassVar[str] = "INVALID_INPUT_AMBIGUOUS_DAG_RUN"
 
 
 @dataclass(kw_only=True)

@@ -15,12 +15,18 @@ K8s utilities (existing)::
 Full-DAG AE harness (new — subclass per connector)::
 
     from application_sdk.testing.e2e import BaseE2ETest, RunMode
+    from application_sdk.testing.e2e import DAGSpec  # N DAG runs in one suite
     from application_sdk.testing.e2e import SQLAppE2ETest          # SQL connectors
     from application_sdk.testing.e2e.payload import AgentSpec, ConnectionSpec
     from application_sdk.testing.e2e.client import AEWorkflowClient
 """
 
-from application_sdk.testing.e2e.base import BaseE2ETest, FullDAGOutcome
+from application_sdk.testing.e2e.base import (
+    BaseE2ETest,
+    DAGSpec,
+    FullDAGOutcome,
+    ResolvedDAG,
+)
 from application_sdk.testing.e2e.config import AppConfig
 from application_sdk.testing.e2e.logs import LogCollector
 from application_sdk.testing.e2e.payload import RunMode
@@ -39,7 +45,9 @@ __all__ = [
     "wait_for_workflow",
     # Full-DAG AE harness
     "BaseE2ETest",
+    "DAGSpec",
     "FullDAGOutcome",
+    "ResolvedDAG",
     "RunMode",
     "SQLAppE2ETest",
 ]

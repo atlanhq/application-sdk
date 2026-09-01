@@ -30,6 +30,7 @@ from application_sdk.constants import (
 )
 from application_sdk.contracts.types import FileReference
 from application_sdk.storage.batch import download_prefix
+from application_sdk.storage.chunked import _part_path, _transfer_state_path
 from application_sdk.storage.errors import StorageError
 from application_sdk.storage.ops import download_file_chunked, upload_file
 from application_sdk.storage.reference import materialize_file_reference
@@ -73,7 +74,7 @@ async def test_single_file_upload_then_chunked_download(local_store, tmp_path):
     assert dl_sha == src_sha
     assert dest.stat().st_size == LOAD_SIZE_BYTES
     # Success removes the resume checkpoint — the file is observably complete.
-    assert not (tmp_path / "dest.bin.transfer-state").exists()
+    assert not _transfer_state_path(dest).exists()
 
 
 async def test_interrupted_download_resumes_only_missing_ranges(local_store, tmp_path):
@@ -117,8 +118,11 @@ async def test_interrupted_download_resumes_only_missing_ranges(local_store, tmp
             normalize=False,
         )
 
-    state_path = tmp_path / "dest.bin.transfer-state"
-    assert dest.exists() and state_path.exists()  # partial + checkpoint survive
+    state_path = _transfer_state_path(dest)
+    # Partial + checkpoint survive in staging; the destination stays
+    # unpublished until the retry completes (CONNECT-1126).
+    assert _part_path(dest).exists() and state_path.exists()
+    assert not dest.exists()
 
     import orjson
 
