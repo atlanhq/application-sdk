@@ -24,7 +24,7 @@ on:
       phase:
         type: string
         required: true
-        description: 'review | resolve'
+        description: 'prep | review | resolve'
       round:
         type: number
         required: true
@@ -96,6 +96,8 @@ on:
         value: ${{ jobs.phase.outputs.ledger }}
       detail:
         value: ${{ jobs.phase.outputs.detail }}
+      ci_state:
+        value: ${{ jobs.phase.outputs.ci_state }}
       cost:
         value: ${{ jobs.phase.outputs.cost }}
       usage:
@@ -128,6 +130,7 @@ jobs:
       pushed_sha: ${{ steps.run.outputs.pushed_sha }}
       ledger: ${{ steps.run.outputs.ledger }}
       detail: ${{ steps.run.outputs.detail }}
+      ci_state: ${{ steps.run.outputs.ci_state }}
       cost: ${{ steps.run.outputs.cost }}
       usage: ${{ steps.run.outputs.usage }}
       reaims: ${{ steps.run.outputs.reaims }}
@@ -147,7 +150,12 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           # The whole read-only guarantee for the review phase is this line.
-          permission-contents: ${{ inputs.phase == 'resolve' && 'write' || 'read' }}
+          # `prep` joins `resolve` on the write side: it exists precisely to
+          # do the things the review cannot — update a branch that is behind,
+          # push a mechanical fix. The review keeps `read`, which is what
+          # makes its read-only contract a property of the credential rather
+          # than a promise in a prompt.
+          permission-contents: ${{ (inputs.phase == 'resolve' || inputs.phase == 'prep') && 'write' || 'read' }}
           permission-pull-requests: write
           # PR comments are an Issues-scope resource, which the existing lane
           # learned the hard way (see "Mint fleet App token" in sdk-review.yml).
@@ -211,7 +219,7 @@ jobs:
           enable-cache: true
 
       - name: Configure git identity for the resolve phase
-        if: inputs.phase == 'resolve'
+        if: inputs.phase == 'resolve' || inputs.phase == 'prep'
         # Commit as the App whose token is doing the pushing, not as atlan-ci.
         # atlan-ci is a CODEOWNER and the identity that mints approvals, so
         # attributing loop commits to it blurs "who wrote this" with "who
