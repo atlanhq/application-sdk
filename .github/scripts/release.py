@@ -1,10 +1,28 @@
 import argparse
 import logging
+import os
 import re
 import subprocess
 import sys
 
+import release_guard
 import semver
+
+PYPROJECT = "pyproject.toml"
+
+
+def _set_output(key, value):
+    """Write a step output for the calling workflow.
+
+    Falls back to stdout for local runs, where GITHUB_OUTPUT is unset.
+    """
+    gho = os.environ.get("GITHUB_OUTPUT")
+    if gho:
+        with open(gho, "a") as f:
+            f.write(f"{key}={value}\n")
+    else:
+        logging.info(f"OUTPUT: {key}={value}")
+
 
 # Commits scoped to sub-packages that manage their own versioning are dropped
 # from the SDK bump walk. Path-only exclusion in git log doesn't cover mixed
@@ -311,6 +329,30 @@ def main():
         has_release_tag=last_release_tag() is not None,
     )
 
+    # This job may be running against a frozen `pull_request` merge ref that
+    # predates an already merged-and-published release, in which case
+    # `current_version` is stale and `new_version` is one that already shipped.
+    # See release_guard for the incident (application-sdk#3570) and for why the
+    # check reads the version on the target branch rather than testing for a
+    # tag. Must run before pyproject.toml is touched.
+    #
+    # Callers gate their changelog and commit steps on this output. A caller
+    # pinned to an older sdk_scripts_ref never sets it, and an unset output
+    # reads as empty, so those steps simply run as they always did.
+    skip, remote_version = release_guard.already_released(
+        PYPROJECT, new_version, branch=current_branch
+    )
+    if skip:
+        logging.warning(
+            release_guard.skip_message(
+                PYPROJECT, new_version, remote_version, branch=current_branch
+            )
+        )
+        _set_output("skip", "true")
+        return
+
+    _set_output("skip", "false")
+    _set_output("new", new_version)
     update_pyproject_version(new_version=new_version)
 
 
