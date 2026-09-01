@@ -720,3 +720,116 @@ def test_resolve_failure_is_fatal(repo, monkeypatch):
 
     with pytest.raises(subprocess.CalledProcessError):
         mod.main(["--regenerate", "false"])
+
+
+# ── multi-root contracts: one pkl root per entrypoint ────────────────────────
+
+
+def _multi_root_contract(repo: Path) -> None:
+    """synapse's shape: no app.pkl, one amending root per entrypoint, plus an
+    imported (non-root) module."""
+    (repo / "contract" / "app.pkl").unlink(missing_ok=True)
+    (repo / "contract" / "crawler.pkl").write_text(
+        'amends "@app-contract-toolkit/NativeApp.pkl"\nimport "./credentials.pkl"\n'
+    )
+    (repo / "contract" / "miner.pkl").write_text(
+        'amends "@app-contract-toolkit/NativeApp.pkl"\n'
+    )
+    # imported, never evaluated on its own
+    (repo / "contract" / "credentials.pkl").write_text('name = "creds"\n')
+
+
+def test_eval_roots_finds_amending_roots_not_imported_modules(repo):
+    _multi_root_contract(repo)
+    assert [r.name for r in mod.eval_roots("contract")] == [
+        "crawler.pkl",
+        "miner.pkl",
+    ]  # credentials.pkl imports nothing and amends nothing — not a root
+
+
+def test_eval_roots_prefers_app_pkl_alone(repo):
+    """The single-root convention wins outright: app.pkl's outputs land at the
+    generated dir itself, never in a per-root subdir."""
+    (repo / "contract" / "extra.pkl").write_text(
+        'amends "@app-contract-toolkit/NativeApp.pkl"\n'
+    )
+    assert [r.name for r in mod.eval_roots("contract")] == ["app.pkl"]
+
+
+def test_multi_root_gives_each_root_its_own_eval_base(repo, monkeypatch):
+    """Every root emits the SAME unprefixed key names, so a shared `pkl eval
+    -m` base lets the last root clobber the others (measured on synapse: 4 of
+    5 filenames collide). Each root must get its own base and its own target.
+    """
+    _multi_root_contract(repo)
+    bases: list[str] = []
+
+    def fake_run(cmd, *, check=False):
+        if cmd[0] == "pkl" and cmd[1] == "eval":
+            out = Path(cmd[cmd.index("-m") + 1])
+            bases.append(str(out))
+            root = Path(cmd[-1]).stem
+            out.mkdir(parents=True, exist_ok=True)
+            # identical key names from both roots — the collision under test
+            (out / "_input.py").write_text(f"# {root}\n")
+            (out / "manifest.json").write_text(f'{{"entrypoint": "{root}"}}\n')
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(mod, "run", fake_run)
+    assert mod.regenerate("contract") is True
+    assert len(bases) == 2 and len(set(bases)) == 2  # never a shared base
+
+    crawler = repo / "app" / "generated" / "crawler"
+    miner = repo / "app" / "generated" / "miner"
+    assert "crawler" in (crawler / "_input.py").read_text()
+    assert "miner" in (miner / "_input.py").read_text()  # not clobbered
+
+
+def test_multi_root_never_writes_repo_root_files(repo, monkeypatch):
+    """No per-entrypoint root emits atlan.yaml/app.yaml, so anything at the
+    repo root is hand-authored and must survive (a prior incident clobbered
+    exactly that)."""
+    _multi_root_contract(repo)
+    (repo / "atlan.yaml").write_text("hand: authored\n")
+
+    def fake_run(cmd, *, check=False):
+        if cmd[0] == "pkl" and cmd[1] == "eval":
+            out = Path(cmd[cmd.index("-m") + 1])
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "_input.py").write_text("x = 1\n")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(mod, "run", fake_run)
+    assert mod.regenerate("contract") is True
+    assert (repo / "atlan.yaml").read_text() == "hand: authored\n"
+
+
+def test_multi_root_one_bad_root_does_not_sink_the_others(repo, monkeypatch):
+    """A partial regeneration beats none: the caller diffs the result."""
+    _multi_root_contract(repo)
+
+    def fake_run(cmd, *, check=False):
+        if cmd[0] == "pkl" and cmd[1] == "eval":
+            if Path(cmd[-1]).stem == "miner":
+                return subprocess.CompletedProcess(cmd, 1, "", "boom")
+            out = Path(cmd[cmd.index("-m") + 1])
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "_input.py").write_text("ok = 1\n")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(mod, "run", fake_run)
+    monkeypatch.setattr(mod.time, "sleep", lambda _s: None)
+    assert mod.regenerate("contract") is True
+    assert (repo / "app" / "generated" / "crawler" / "_input.py").exists()
+    assert not (repo / "app" / "generated" / "miner").exists()
+
+
+def test_no_roots_at_all_is_still_a_skip(repo):
+    """An app with a PklProject but no evaluable root regenerates nothing."""
+    (repo / "contract" / "app.pkl").unlink(missing_ok=True)
+    (repo / "contract" / "credentials.pkl").write_text('name = "creds"\n')
+    assert mod.eval_roots("contract") == []
+    assert mod.regenerate("contract") is False
