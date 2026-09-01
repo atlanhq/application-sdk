@@ -164,7 +164,16 @@ jobs:
           NEW=$(uvx --from=toml-cli toml get --toml-path=pyproject.toml project.version)
           echo "new=${NEW}" >> "$GITHUB_OUTPUT"
 
+      # release.py sets skip=true when the target branch already carries the
+      # version it computed — this run is looking at a frozen merge ref that
+      # predates a release which has already merged and published, so bumping
+      # again would open a duplicate release PR (application-sdk#3570).
+      # Guarding the two mutating steps is enough: `uv lock` above is a no-op
+      # when the version did not change, and the job then ends green having
+      # done nothing. A caller pinned to an older sdk_scripts_ref never sets
+      # this output, and an unset output is empty, so it behaves as before.
       - name: Generate changelog
+        if: steps.bump.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -177,6 +186,7 @@ jobs:
         run: git config --global --unset-all url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf
 
       - name: Commit and open PR
+        if: steps.bump.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
           TARGET_BRANCH: ${{ inputs.target_branch }}

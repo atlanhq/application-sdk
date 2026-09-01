@@ -646,6 +646,25 @@ def test_i005_fires_on_root_in_final_stage_of_multistage() -> None:
     assert findings[0].line == 6
 
 
+def test_i005_fires_when_root_is_final_effective_user() -> None:
+    src = (
+        "FROM registry.atlan.com/public/app-runtime-base:3\n"
+        "USER root\n"
+        "RUN install-jdk\n"
+    )
+    assert "I005" in _ids(src)
+
+
+def test_i005_silent_when_appuser_restores_runtime_user() -> None:
+    src = (
+        "FROM registry.atlan.com/public/app-runtime-base:3\n"
+        "USER root\n"
+        "RUN install-jdk\n"
+        "USER appuser\n"
+    )
+    assert "I005" not in _ids(src)
+
+
 def test_i005_pointing_at_user_line() -> None:
     src = (
         "FROM registry.atlan.com/public/app-runtime-base:3\n"

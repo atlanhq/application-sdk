@@ -18,12 +18,23 @@ Layout produced under --stage-dir, mirroring s3://<bucket>/renovate-dashboard/:
     repos/<slug>.json       every per-repo summary the scanner emitted
     history/<slug>.jsonl    existing history + this run's rows, deduplicated
     fleet.json              full-fleet runs only
+    repos.json              full-fleet runs only — the manifest, built from the
+                            staged repo files rather than from an `aws s3 ls`
 
-Single-repo mode writes no fleet.json and no fleet history: the scanner only has
-data for one repo, so publishing either would overwrite the real fleet aggregate
-with a partial view. That decision lives here rather than in the workflow because
-`docs/standards/ci.md` keeps branching logic out of YAML, where it cannot be
-regression-tested.
+Single-repo mode writes no fleet.json, no fleet history and no manifest: the
+scanner only has data for one repo, so publishing any of them would overwrite a
+fleet-wide artifact with a partial view. That decision lives here rather than in
+the workflow because `docs/standards/ci.md` keeps branching logic out of YAML,
+where it cannot be regression-tested.
+
+The manifest is built from what this run staged, replacing an `aws s3 ls` of the
+prefix in the workflow. Listing the bucket cannot express fleet membership: the
+prefix is deliberately additive (no `--delete`, so a partial run can never drop
+another run's files), so every repo that has EVER published stays listed. On
+2026-08-31 that left 619 entries against a real consumer fleet of 80 — 452 of
+them repos that were never consumers, written while discovery was broken, and
+frozen ever since. Nothing deletes them, and nothing needs to: a manifest built
+from the scan simply stops naming them. FND-960.
 
 Usage:
     renovate_dashboard_stage.py --output-dir /tmp/renovate-output \\
@@ -34,6 +45,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -91,7 +103,17 @@ def stage(
         merged += 1
 
     fleet_written = 0
+    manifest_written = 0
     if not single_repo:
+        if not repo_files:
+            # Same fail-closed reasoning as the missing aggregate below, and the
+            # same rule publish_fleet_dashboard.py applies: a manifest built from
+            # nothing empties every panel at once, which reads as a catastrophic
+            # regression rather than as the failed scan it is.
+            raise RuntimeError(
+                f"no per-repo files in {output_dir / 'repos'} on a full-fleet run "
+                "— refusing to stage a manifest that would empty the dashboard"
+            )
         fleet_json = output_dir / "fleet.json"
         if not fleet_json.is_file():
             # Fail closed, matching publish_fleet_dashboard.py. Staging the
@@ -112,10 +134,22 @@ def stage(
                 merge_history(existing, fleet_history), encoding="utf-8"
             )
 
+        # The manifest names exactly what this run staged. Deliberately NO
+        # fraction-based rail on how far it may shrink: the first run after a
+        # broken discovery legitimately drops the manifest from 619 to 80, which
+        # any such cap would block — and #3516 removed that class of heuristic
+        # from this scan for the same reason. The emptiness guard above is the
+        # rail; a shrink is visible in the log line either way.
+        (stage_dir / "repos.json").write_text(
+            json.dumps(sorted(path.name for path in repo_files)), encoding="utf-8"
+        )
+        manifest_written = 1
+
     return {
         "repos": len(repo_files),
         "histories": merged,
         "fleet_json": fleet_written,
+        "manifest": manifest_written,
     }
 
 
@@ -147,7 +181,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 1
     print(
         f"staged {counts['repos']} repo files, {counts['histories']} histories, "
-        f"fleet.json={'yes' if counts['fleet_json'] else 'no'}"
+        f"fleet.json={'yes' if counts['fleet_json'] else 'no'}, "
+        f"manifest={'yes' if counts['manifest'] else 'no'} "
+        f"({counts['repos']} repos)"
     )
     return 0
 
