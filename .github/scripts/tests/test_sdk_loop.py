@@ -28,7 +28,7 @@ import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from _gha_expr import evaluate  # noqa: E402
+from _gha_expr import evaluate, evaluate_operand  # noqa: E402
 from sdk_loop_common import (  # noqa: E402
     AGENT_ENV_PASSTHROUGH,
     ALLOWED_MODELS,
@@ -551,6 +551,9 @@ def test_every_agent_the_playbook_dispatches_is_registered() -> None:
 def test_the_review_prompt_names_the_delegation_tool_for_this_runtime() -> None:
     prompt = review_prompt(42, 1, "a" * 40, DismissalLedger())
     assert "`Task`" in prompt
+    # The multi-domain invariant, which survives the solo-scope change: when
+    # several agents ARE registered, collapsing them into one pass yields a
+    # worse verdict and says nothing about having done so.
     assert "Do NOT do their work yourself" in prompt
 
 
@@ -1318,10 +1321,23 @@ def test_the_review_phase_token_cannot_push() -> None:
     token it holds has no write scope to push with.
     """
     text = PHASE_WF.read_text(encoding="utf-8")
-    assert (
-        "permission-contents: ${{ inputs.phase == 'resolve' && 'write' || 'read' }}"
-        in text
-    )
+    line = next(x for x in text.splitlines() if "permission-contents:" in x)
+    expr = line.split("permission-contents:", 1)[1].strip()
+
+    # EVALUATED, not string-matched. The previous form pinned one exact
+    # spelling, so adding `prep` to the write side failed it for a reason
+    # unrelated to what it protects — and the tempting repair is to paste in
+    # the new spelling, which pins the next one just as blindly. What must
+    # hold is the OUTCOME per phase, and only `review` has a claim to make.
+    for phase, expected in (
+        ("review", "read"),
+        ("resolve", "write"),
+        # prep updates a behind branch and pushes mechanical fixes; that is
+        # the whole reason it exists as a separate phase.
+        ("prep", "write"),
+    ):
+        got = evaluate_operand(expr, {"inputs": {"phase": phase}})
+        assert got == expected, f"{phase} must mint a {expected} token, got {got!r}"
 
 
 def test_the_minted_token_is_narrowed_not_the_apps_full_grant() -> None:

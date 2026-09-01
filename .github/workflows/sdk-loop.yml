@@ -133,11 +133,24 @@ jobs:
           REACTION: ${{ steps.fence.outputs.proceed == 'true' && 'eyes' || 'confused' }}
         run: python3 .github/scripts/react_to_comment.py
 
+  prep:
+    name: Prep
+    needs: [fence]
+    if: needs.fence.outputs.proceed == 'true'
+    uses: ./.github/workflows/sdk-loop-phase.yml
+    secrets: inherit
+    with:
+      phase: prep
+      round: 0
+      pr: ${{ needs.fence.outputs.pr }}
+      head_ref: ${{ needs.fence.outputs.head_ref }}
+      base_sha: ${{ needs.fence.outputs.base_sha }}
+
   review-1:
     name: Review 1
-    needs: [fence]
+    needs: [fence, prep]
     if: >-
-      needs.fence.outputs.proceed == 'true'
+      !cancelled() && needs.fence.outputs.proceed == 'true'
     uses: ./.github/workflows/sdk-loop-phase.yml
     secrets: inherit
     with:
@@ -145,8 +158,8 @@ jobs:
       round: 1
       pr: ${{ needs.fence.outputs.pr }}
       head_ref: ${{ needs.fence.outputs.head_ref }}
-      base_sha: ${{ needs.fence.outputs.base_sha }}
-      ours: ''
+      base_sha: ${{ needs.prep.outputs.new_base_sha || needs.fence.outputs.base_sha }}
+      ours: ${{ needs.prep.outputs.pushed_sha }}
       ledger: ''
       prior_sha: ''
       spent_so_far: ''
@@ -423,7 +436,7 @@ jobs:
 
   finalize:
     name: Summary
-    needs: [fence, review-1, resolve-1, review-2, resolve-2, review-3, resolve-3, review-4, resolve-4, review-5, resolve-5, review-6, resolve-6, review-7, resolve-7, review-8, resolve-8]
+    needs: [fence, prep, review-1, resolve-1, review-2, resolve-2, review-3, resolve-3, review-4, resolve-4, review-5, resolve-5, review-6, resolve-6, review-7, resolve-7, review-8, resolve-8]
     if: always() && needs.fence.outputs.proceed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 6
