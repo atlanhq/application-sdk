@@ -11,11 +11,16 @@ import yaml
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from sdk_loop_prep import (  # noqa: E402
+    BUCKET_FAIL,
+    CHECK_FIELDS,
     OUTCOME_CLEAN,
     OUTCOME_CONFLICTS,
     OUTCOME_RED,
+    OUTCOME_UNKNOWN,
     decide,
+    failing_checks,
     needs_agent,
+    pr_state,
 )
 
 
@@ -113,3 +118,95 @@ def test_the_generated_chain_wires_prep_without_stranding_review_one() -> None:
     assert "prep.result" not in str(r1["if"])
 
     assert "prep" in jobs["finalize"]["needs"]
+
+
+# ---------------------------------------------------------------------------
+# The gh boundary — where the first version of this file was silently wrong
+# ---------------------------------------------------------------------------
+
+
+class _Done:
+    def __init__(self, returncode: int = 0, stdout: str = "") -> None:
+        self.returncode = returncode
+        self.stdout = stdout
+
+
+def test_the_check_reader_asks_for_fields_gh_actually_has() -> None:
+    """This file shipped asking for `conclusion`, which `gh pr checks --json`
+    does not have. gh writes "Unknown JSON field" to stderr, EXITS 0, and
+    prints nothing — so a reader that trusts stdout sees no failures and
+    reports green on a red PR. Nothing anywhere raised.
+
+    The tuple-injecting tests could not catch it: they start after the parse.
+    This one pins the wire vocabulary, which is the only place the mistake
+    was visible.
+    """
+    seen: list[list[str]] = []
+
+    def runner(args: list[str]) -> _Done:
+        seen.append(args)
+        return _Done(0, "[]")
+
+    failing_checks("o/r", 1, runner=runner)
+    fields = seen[0][seen[0].index("--json") + 1].split(",")
+    assert "conclusion" not in fields, "gh has no `conclusion` field on pr checks"
+    assert set(fields) <= {
+        "bucket",
+        "completedAt",
+        "description",
+        "event",
+        "link",
+        "name",
+        "startedAt",
+        "state",
+        "workflow",
+    }, "asked gh for a field it does not expose — it will exit 0 and print nothing"
+    assert "bucket" in fields, "bucket carries pass/fail; state/conclusion do not"
+
+
+def test_a_failing_check_is_actually_detected() -> None:
+    """The end-to-end shape, in gh's real vocabulary. #3575 had one `fail`
+    bucket at the time this was written, and the shipped reader called it
+    green."""
+    payload = (
+        '[{"name":"SDK Tests","state":"FAILURE","bucket":"fail"},'
+        '{"name":"Conformance","state":"SUCCESS","bucket":"pass"},'
+        '{"name":"E2E","state":"SKIPPED","bucket":"skipping"}]'
+    )
+    got = failing_checks("o/r", 1, runner=lambda a: _Done(0, payload))
+    assert got == ("SDK Tests",)
+    assert BUCKET_FAIL == "fail"
+    assert "conclusion" not in CHECK_FIELDS
+
+    out = decide({"mergeStateStatus": "CLEAN", "headRefOid": "a" * 40}, got, "a" * 40)
+    assert out.outcome == OUTCOME_RED
+    assert needs_agent(out), "a real failure must reach the mechanical-fix path"
+
+
+def test_an_unreadable_state_is_unknown_and_never_green() -> None:
+    """Fail CLOSED. Every layer of the first version degraded into the most
+    optimistic answer: gh exited 0, `stdout or "[]"` made empty look like an
+    empty list, and an empty list looked like a healthy PR."""
+    for bad in (_Done(1, ""), _Done(0, ""), _Done(0, "not json")):
+        assert failing_checks("o/r", 1, runner=lambda a, b=bad: b) is None
+        assert pr_state("o/r", 1, runner=lambda a, b=bad: b) is None
+
+    # Shape-specific: a JSON object is not a check list, and a state object
+    # with no headRefOid is not a state — both would otherwise read as
+    # "nothing wrong".
+    assert failing_checks("o/r", 1, runner=lambda a: _Done(0, '{"a":1}')) is None
+    assert pr_state("o/r", 1, runner=lambda a: _Done(0, '{"a":1}')) is None
+    assert pr_state("o/r", 1, runner=lambda a: _Done(0, '{"headRefOid":"abc"}')) == {
+        "headRefOid": "abc"
+    }
+
+    unknown_checks = decide(
+        {"mergeStateStatus": "CLEAN", "headRefOid": "a" * 40}, None, "a" * 40
+    )
+    assert unknown_checks.outcome == OUTCOME_UNKNOWN
+    assert unknown_checks.ci_state != "green"
+
+    unknown_state = decide(None, None, "a" * 40)
+    assert unknown_state.outcome == OUTCOME_UNKNOWN
+    assert unknown_state.new_base_sha == "a" * 40, "the review still runs"
+    assert unknown_state.outcome != OUTCOME_CLEAN

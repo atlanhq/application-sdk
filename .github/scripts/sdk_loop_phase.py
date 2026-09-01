@@ -562,12 +562,11 @@ def main(argv: list[str] | None = None) -> int:
         # Conflicts short-circuit BEFORE the checks read. There is nothing
         # useful to say about CI on a branch that cannot merge, and the read
         # is a round trip spent to reach an answer that changes nothing.
-        if state.get("mergeStateStatus") == "CONFLICTING" or (
-            state.get("mergeable") == "CONFLICTING"
-        ):
-            result = decide(state, (), baseline)
-        else:
-            result = decide(state, failing_checks(repo, pr), baseline)
+        conflicted = state is not None and (
+            state.get("mergeStateStatus") == "CONFLICTING"
+            or state.get("mergeable") == "CONFLICTING"
+        )
+        result = decide(state, () if conflicted else failing_checks(repo, pr), baseline)
 
         if needs_agent(result):
             # The one case worth a model: red checks a mechanical fix might

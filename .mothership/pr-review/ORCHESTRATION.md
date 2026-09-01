@@ -539,12 +539,16 @@ this HEAD run the same commands the reviewer used to re-run wholesale
 lint and SDK imports`). Read them instead:
 
 ```bash
-gh pr checks "$PR_NUMBER" --repo "$REPO" --json name,conclusion \
-  --jq '.[] | select(.name | startswith("Contract Toolkit")) | .name + " " + (.conclusion // "pending")' \
+# `bucket`, NOT `conclusion`. `gh pr checks --json` has no `conclusion`
+# field: it prints "Unknown JSON field" to stderr, EXITS 0, and writes
+# nothing to stdout — so this file would be empty and every leg would read
+# as missing. Buckets are pass / fail / skipping / pending.
+gh pr checks "$PR_NUMBER" --repo "$REPO" --json name,bucket \
+  --jq '.[] | select(.name | startswith("Contract Toolkit")) | .name + " " + .bucket' \
   > /tmp/TOOLKIT_CI_LEGS.txt
 ```
 
-- Every leg `success` → record the legs as the local-check evidence in the
+- Every leg `pass` → record the legs as the local-check evidence in the
   ledger. Run a local command ONLY as the substrate for probing CI cannot
   express — guard ablations, scratch collision contracts, comparing
   PR-generated artifacts against a consumer's expectations.

@@ -191,9 +191,12 @@ FOOTER = """
 def prep_job() -> str:
     """Branch and check hygiene, once, before the first review.
 
-    Holds write scope, which is the entire reason it exists: the review
-    cannot update a behind branch or re-run a check, so asking it to look at
-    either produced a fact it was powerless to act on.
+    Holds write scope so it can push a MECHANICAL fix — formatting, lint,
+    generated drift — for a check the review could only have reported. It
+    does not update a behind branch and does not resolve conflicts: both are
+    changes to somebody's PR that they did not ask for, and neither is needed
+    to review, since the review reads the diff against base. Both are
+    reported and left alone.
 
     Deterministic for a healthy PR — a few `gh` reads and no model at all.
     """

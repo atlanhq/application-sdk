@@ -26,11 +26,11 @@ WHAT IT DELIBERATELY DOES NOT DO:
     somebody's PR that they did not ask for. Neither is needed to review
     either — the review reads the diff against base, which is well-defined
     whether or not base has moved. Both are REPORTED and left alone.
-  * Wait for green. "Wait until CI passes" has no terminating condition when
-    a check is genuinely broken by the PR, and the failure mode is a phase
-    that burns an hour discovering what the review would have said in one
-    line. Red CI is a fact to hand forward, not this phase's problem to
-    solve.
+  * Wait for green, or re-run a check hoping for a different answer. "Wait
+    until CI passes" has no terminating condition when a check is genuinely
+    broken by the PR, and the failure mode is a phase that burns an hour
+    discovering what the review would have said in one line. Red CI is a
+    fact to hand forward, not this phase's problem to solve.
   * Fix real test failures. That is the resolve phase's job, informed by a
     review. Prep clears MECHANICAL red only — formatting, lint, generated
     drift — the class where the fix is determined by the tooling rather than
@@ -46,16 +46,14 @@ import json
 import subprocess
 from dataclasses import dataclass, field
 
-#: Checks whose failure is mechanical often enough to be worth one automatic
-#: re-run. Everything else is left alone: re-running a genuine test failure
-#: just spends CI minutes to reach the same answer more slowly.
-RERUNNABLE_HINTS = ("flake", "timeout", "network", "rate limit")
-
 OUTCOME_CLEAN = "clean"
 OUTCOME_UPDATED = "updated"
 OUTCOME_CONFLICTS = "conflicts"
 OUTCOME_RED = "red"
 OUTCOME_FAILED = "failed"
+#: Prep could not read the PR's state. NOT the same as "nothing wrong" — the
+#: distinction this file previously lost.
+OUTCOME_UNKNOWN = "unknown"
 
 
 @dataclass(frozen=True)
@@ -76,8 +74,13 @@ def _sh(args: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(args, capture_output=True, text=True, check=False)
 
 
-def pr_state(repo: str, pr: int, runner=_sh) -> dict[str, str]:
-    """Merge state and head sha, straight from the API."""
+def pr_state(repo: str, pr: int, runner=_sh) -> dict[str, str] | None:
+    """Merge state and head sha, or None when they could not be read.
+
+    None rather than `{}` for the same reason `failing_checks` returns None:
+    an empty dict reads as "no conflicts, not behind", which is the most
+    optimistic possible reading of a failed API call.
+    """
     done = runner(
         [
             "gh",
@@ -90,51 +93,89 @@ def pr_state(repo: str, pr: int, runner=_sh) -> dict[str, str]:
             "mergeStateStatus,headRefOid,mergeable",
         ]
     )
+    if done.returncode != 0:
+        return None
     try:
-        payload = json.loads(done.stdout or "{}")
-    except json.JSONDecodeError:
-        return {}
+        payload = json.loads(done.stdout or "")
+    except (json.JSONDecodeError, TypeError):
+        return None
+    # `headRefOid` is the field every caller depends on. A dict without it is
+    # not a state this phase can reason about, and treating it as one means
+    # `decide` falls back to the baseline sha and calls the PR clean — the
+    # same optimistic collapse this whole function exists to avoid.
+    if not isinstance(payload, dict) or not payload.get("headRefOid"):
+        return None
     return {k: str(v) for k, v in payload.items()}
 
 
-def failing_checks(repo: str, pr: int, runner=_sh) -> tuple[str, ...]:
-    """Named failing checks. Read ONCE — this is a fact, not a poll."""
+#: `gh pr checks --json` field names, pinned because getting them wrong is
+#: SILENT. `conclusion` — the obvious guess, and what this file shipped with
+#: — is not a field: gh prints "Unknown JSON field" to stderr, exits 0, and
+#: writes nothing to stdout. A reader that trusts stdout then sees no failing
+#: checks and reports green on a PR that is red. That is exactly what
+#: happened, and the same idiom is still in the toolkit playbook.
+CHECK_FIELDS = "name,state,bucket"
+
+#: The bucket value gh uses for a failed check. The vocabulary is
+#: pass / fail / skipping / pending, NOT the GitHub API's conclusion strings.
+BUCKET_FAIL = "fail"
+
+
+def failing_checks(repo: str, pr: int, runner=_sh) -> tuple[str, ...] | None:
+    """Named failing checks, or None when the state could not be read.
+
+    None is not the same as "nothing is failing", and collapsing the two is
+    how this function shipped broken. It asked for a field gh does not have;
+    gh exits 0 and prints nothing; `json.loads(stdout or "[]")` turned that
+    into an empty list; and prep reported green. Every layer degraded quietly
+    into the most optimistic answer.
+
+    So this fails CLOSED: a non-zero exit, unparseable output, or a payload
+    that is not a list all return None, and the caller says "unknown" rather
+    than "green".
+    """
     done = runner(
-        [
-            "gh",
-            "pr",
-            "checks",
-            str(pr),
-            "--repo",
-            repo,
-            "--json",
-            "name,conclusion",
-        ]
+        ["gh", "pr", "checks", str(pr), "--repo", repo, "--json", CHECK_FIELDS]
     )
+    if done.returncode != 0:
+        return None
     try:
-        rows = json.loads(done.stdout or "[]")
-    except json.JSONDecodeError:
-        return ()
+        rows = json.loads(done.stdout or "")
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(rows, list):
+        return None
     return tuple(
         str(r.get("name", ""))
         for r in rows
-        if isinstance(r, dict) and r.get("conclusion") == "failure"
+        if isinstance(r, dict) and r.get("bucket") == BUCKET_FAIL
     )
 
 
-def decide(state: dict[str, str], failing: tuple[str, ...], before: str) -> PrepResult:
+def decide(
+    state: dict[str, str] | None,
+    failing: tuple[str, ...] | None,
+    before: str,
+) -> PrepResult:
     """What prep concluded, from facts alone. No model involved.
 
-    Conflicts short-circuit: there is nothing useful to say about checks on a
-    branch that cannot merge, and the review posts NEEDS_REBASE regardless.
+    Both inputs are optional because both reads can fail, and an unread state
+    must never render as a clean one. That collapse is precisely how the
+    first version of this file reported green on a red PR.
 
-    A branch that is merely BEHIND is REPORTED, never updated. Updating it
-    means pushing a merge commit into someone's PR on the loop's initiative,
-    which is a change to their branch they did not ask for — and it is not
-    needed to review: the diff against base is what the review reads, and
-    that is well-defined whether or not base has moved. `mergeStateStatus`
-    lands in the detail line so a human can act on it if they want to.
+    A branch that is merely BEHIND is REPORTED, never updated. Merging base
+    into someone's PR is a change to their branch they did not ask for, and
+    it is not needed to review: the review reads the diff against base, which
+    is well-defined whether or not base has moved.
     """
+    if state is None:
+        return PrepResult(
+            OUTCOME_UNKNOWN,
+            new_base_sha=before,
+            ci_state="unknown",
+            detail="could not read PR state — reporting unknown rather than clean",
+        )
+
     merge_state = state.get("mergeStateStatus", "")
     head = state.get("headRefOid", "") or before
 
@@ -152,12 +193,23 @@ def decide(state: dict[str, str], failing: tuple[str, ...], before: str) -> Prep
         else ""
     )
 
+    if failing is None:
+        return PrepResult(
+            OUTCOME_UNKNOWN,
+            new_base_sha=head,
+            ci_state="unknown",
+            detail=f"could not read check state — reporting unknown, not green{behind}",
+        )
+
     if failing:
         return PrepResult(
             OUTCOME_RED,
             new_base_sha=head,
             ci_state="red",
-            detail=f"{len(failing)} failing check(s) — a fact for the review, not a blocker{behind}",
+            detail=(
+                f"{len(failing)} failing check(s) — a fact for the review, "
+                f"not a blocker{behind}"
+            ),
             failing=failing,
         )
     return PrepResult(
