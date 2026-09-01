@@ -153,6 +153,25 @@ def _stamp_start_correlation(input_data: Any, context: "AppContext") -> str:
     return correlation_id
 
 
+def _stamp_workflow_id(input_data: Any, workflow_id: str) -> None:
+    """Mirror the /start handler's dispatch-time ``workflow_id`` stamp.
+
+    Production populates ``Input.workflow_id`` before Temporal dispatch
+    (``application_sdk.handler.service``), so an input dispatched with the
+    field left at its ``""`` default is a shape production never sends —
+    apps that root artifact paths on the field then collapse every run of a
+    session onto one shared prefix. A caller-supplied value wins; the stamp
+    is best-effort for dict/frozen inputs, matching the correlation stamp.
+    """
+    if getattr(input_data, "workflow_id", None):
+        return
+    try:
+        input_data.workflow_id = workflow_id
+    # conformance: ignore[E004] best-effort stamp; dict/frozen inputs are dispatched unchanged
+    except Exception:  # noqa: S110 — attribute stamp is best-effort, matching _stamp_start_correlation
+        pass
+
+
 def _resolve_workflow_name(app_cls: Any, entry_point: str | None) -> tuple[str, Any]:
     """Resolve the registered Temporal workflow type for an app + entry point.
 
@@ -261,6 +280,7 @@ class TemporalExecutorBackend:
             if config_hash
             else f"{prefix}-{short_id}"
         )
+        _stamp_workflow_id(input_data, workflow_id)
 
         workflow_name, ep_meta = _resolve_workflow_name(app_cls, entry_point)
         output_type = (
@@ -316,6 +336,7 @@ class TemporalExecutorBackend:
             if config_hash
             else f"{prefix}-{short_id}"
         )
+        _stamp_workflow_id(input_data, workflow_id)
 
         workflow_name, _ = _resolve_workflow_name(app_cls, entry_point)
         handle = await self._client.start_workflow(
