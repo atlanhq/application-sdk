@@ -15,7 +15,7 @@ there. If a rule looks arbitrary, this file says which incident made it.
 Three rounds of measured trimming (FND-1232):
 
 1. Six conditional blocks moved to `sections/` behind lane/scope gates
-   (~7.7K tokens off a conformance review).
+   (~8.0K tokens off a conformance review).
 2. Satellite reads collapsed: `review-policy.md` merged into `retro-log.md`
    (one do-not-flag list, as CLAUDE.md always claimed); `review.yaml`
    delisted (paraphrase of the rubric + CLAUDE.md).
@@ -59,11 +59,21 @@ Three rounds of measured trimming (FND-1232):
   @sdk-loop would draw ordinary findings and the loop would spend rounds on a
   branch no resolve phase can move. Pinned by
   `test_the_conflicting_rule_stays_in_the_router`.
-- **`update-branch` tension (sections/branch-freshness.md)**: it writes to
-  the PR branch while Runtime states the review never writes on either lane.
-  Both sentences are live; moot on @sdk-loop (no write scope; FND-1185 moved
-  branch duty to prep), unresolved on the sandbox. A human decision, not a
-  reviewer's.
+- **`update-branch` retired (step 8)**: step 8 told the sandbox to merge base
+  into a BEHIND branch while Runtime stated the review never writes on either
+  lane. Both sentences were live, so the exception is gone rather than
+  documented — BEHIND is now report-never-update on both lanes, the
+  branch-freshness section is deleted, and the `write-branch` capability went
+  with its only consumer (an ungated capability left in the matrix invites the
+  next step to gate on it again). `sdk_loop_prep.py` holds write scope and
+  still refuses, for the reason that settles it on either lane: merging base
+  into someone's PR is a change to their branch they did not ask for, and it
+  is not needed to review — the review reads the diff against base, which is
+  well-defined whether or not base has moved. FND-1185 had already moved
+  branch duty to prep on @sdk-loop; the sandbox had no better claim to it.
+  Pinned by `test_the_review_never_updates_a_behind_branch`, which asserts
+  absence of the CALL, not of the word: step 8 names `update-branch` in order
+  to forbid it.
 - **"Do not read CI" (step 9)**: the review cannot act on a check, CI legs
   routinely finish AFTER a review posts (so a reviewer-side snapshot was a
   stale fact next to a verdict it could not influence), and

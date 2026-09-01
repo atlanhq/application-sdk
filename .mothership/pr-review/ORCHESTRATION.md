@@ -15,7 +15,6 @@ is pointed to from the step that owns it, with the condition for reading it.
 | `sandbox-guards.md` | mothership sandbox lane |
 | `adversarial-wave-2.md` | mothership sandbox lane |
 | `prior-review-and-delta.md` | your lane computes its own prior review + delta |
-| `branch-freshness.md` | your lane holds a write scope |
 | `scope-classification.md` | your lane must derive `review_scope` itself |
 | `toolkit-consumer-setup.md` | `review_scope` is `contract-toolkit` or `mixed-sdk-toolkit` |
 | `verdict-stamp-mechanics.md` | diagnosing a verdict that produced no label/approval |
@@ -25,7 +24,7 @@ follows, and measured turn latency on the review model climbs from ~10s early
 in a phase to 75-90s by turn 12 as that context grows — so a section you load
 and never use is charged to every remaining turn of the review. On a
 conformance-only `@sdk-loop` review all six conditions are false, which is
-~7.7K tokens not carried. Nothing has been deleted: each file holds its
+~8.0K tokens not carried. Nothing has been deleted: each file holds its
 original text verbatim, and a test asserts every one of them is still reachable
 from a pointer here.
 
@@ -43,7 +42,6 @@ costs a turn and can be wrong.
 
 | Capability | mothership sandbox | `@sdk-loop` |
 |---|---|---|
-| `write-branch` — push, update-branch, set commit status | yes | **no** (403) |
 | `clone-private` — clone other atlanhq repos | yes | **no** (no credential) |
 | `reach-proxy` — `$PROXY_BASE` / `$PROXY_JWT` | yes | **no** (unset) |
 | `given-scope` — `review_scope` arrives in the prompt | no — derive it | **yes** |
@@ -58,11 +56,12 @@ identically on both lanes.
 
 **Two rules that hold on BOTH lanes regardless of capability:**
 
-* **The review never writes to the branch.** It posts a summary comment and
-  inline findings; it does not commit, push, run `pre-commit`, run tests, or
-  fix CI. On `@sdk-loop` the credential enforces this — a token with no
-  `contents` and no `statuses` scope. Do not treat such a 403 as something to
-  work around.
+* **The review never writes to the branch — no exceptions.** It posts a
+  summary comment and inline findings; it does not commit, push, update a
+  behind branch, run `pre-commit`, run tests, or fix CI. On `@sdk-loop` the
+  credential also enforces this (no `contents`, no `statuses` scope), but the
+  rule is not about the credential: a lane that *could* write still must not.
+  Do not treat such a 403 as something to work around.
 * **A capability you lack is not a defect to report.** Take the fallback,
   note it in the summary where the step says to, and continue. Retrying it,
   or filing it as a finding, spends a turn and tells the reader nothing.
@@ -259,11 +258,13 @@ BUDGET
     round that swallowed it would keep spending rounds on a branch no resolve
     phase can move.
 
-    **If `BEHIND`:** `requires: write-branch`. Where the table says yes,
-    **read only when:** the branch is actually `BEHIND` — then follow
-    `sections/branch-freshness.md`. Where it says no, review the branch as it
-    is and note it in the summary: a base merge cannot introduce a finding in
-    the PR's own hunks, which is what the review is about.
+    **If `BEHIND` — BOTH LANES: report it, never update it.** Review the
+    branch as it is and note it in the summary. Merging base into someone's
+    PR is a change to their branch they did not ask for, and it is not needed
+    to review: the review reads the diff against base, which is well-defined
+    whether or not base has moved. Do not call `update-branch`, on either
+    lane, whatever your credential allows. `sdk_loop_prep.py` holds write
+    scope and refuses for the same reason.
 9. **Do not read CI, on either lane.** `sdk-review-downgrade-on-ci-failure.yml`
    enforces CI against the verdict event-driven; the review cannot act on a
    check and its snapshot would be stale by the time anyone read it. Spend no

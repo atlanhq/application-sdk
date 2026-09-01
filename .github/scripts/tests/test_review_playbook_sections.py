@@ -146,12 +146,9 @@ def test_the_conflicting_rule_stays_in_the_router() -> None:
         "it and the loop lane's terminal-verdict handling depends on it"
     )
     assert "BOTH LANES" in step8
-    section = (SECTIONS / "branch-freshness.md").read_text(encoding="utf-8")
-    assert "update-branch" in section, "the BEHIND update belongs in the section"
-    assert "CONFLICTING" not in section.split("NOTE")[0].split("\n8.")[1], (
-        "the CONFLICTING path must not be duplicated into the section file — "
-        "two copies of a verdict rule drift"
-    )
+    # BEHIND is now identical on both lanes: report, never update. Nothing
+    # about step 8 is lane-conditional any more.
+    assert "BOTH LANES: report it, never update it" in step8
 
 
 def test_the_mandatory_read_list_stays_deduplicated() -> None:
@@ -207,7 +204,6 @@ def test_the_toolkit_section_is_gated_on_lane_not_just_scope() -> None:
 #: Every capability the Runtime table defines. A step may only cite one of
 #: these — a typo'd capability resolves to nothing and the step runs everywhere.
 CAPABILITIES = {
-    "write-branch",
     "clone-private",
     "reach-proxy",
     "given-scope",
@@ -222,7 +218,6 @@ CAPABILITIES = {
 LANE_CONDITIONAL_STEPS = {
     "4b–5. **Run guards**": "needs-run-guards",
     "6b/6c. **Prior review": "given-delta",
-    "**If `BEHIND`:**": "write-branch",
     "11. **Smart agent routing.**": "given-scope",
     "### 1b-toolkit.": "clone-private",
     "### 2b. Wave 2": "reach-proxy",
@@ -274,3 +269,44 @@ def test_rationale_lives_outside_the_agent_context() -> None:
     assert "DESIGN.md" not in step6, "DESIGN.md must not be in the read list"
     claude = (PLAYBOOK_DIR / "CLAUDE.md").read_text(encoding="utf-8")
     assert "DESIGN.md" not in claude
+
+
+def test_maintainer_rationale_points_at_sections_that_exist() -> None:
+    """DESIGN.md names sections when it explains them, and nothing reads it at
+    runtime — so a pointer that rots here fails more quietly than one in the
+    router: no Read fails mid-phase, because no agent ever follows it. It goes
+    unnoticed until a maintainer looking up why a rule exists is sent to a file
+    that was deleted, which is exactly what happened to the `update-branch`
+    bullet when its section went away.
+
+    Deliberately NOT folded into `_referenced()`: that helper also feeds
+    `test_every_section_is_reachable_from_the_router`, and a section pointed at
+    only from DESIGN.md would then count as reachable when the agent never
+    opens that file — turning the orphan check green on a dead section.
+    """
+    design = (PLAYBOOK_DIR / "DESIGN.md").read_text(encoding="utf-8")
+    dangling = set(re.findall(r"sections/([a-z0-9-]+\.md)", design)) - _section_files()
+    assert not dangling, (
+        f"DESIGN.md points at missing section(s): {sorted(dangling)}. "
+        "Refer to a deleted section by name in prose, never as a live path."
+    )
+
+
+def test_the_review_never_updates_a_behind_branch() -> None:
+    """`update-branch` writes to someone's PR branch, which the Runtime rule
+    forbids on both lanes — the two sentences coexisted in this playbook until
+    it was removed. sdk_loop_prep.py holds write scope and refuses for the
+    stated reason (a base merge is a change the author did not ask for, and
+    the review reads the diff against base regardless). No lane may re-add it,
+    so this asserts absence rather than a gate: a gate would just be the same
+    exception with a nicer name."""
+    corpus = _router() + "\n".join(
+        p.read_text(encoding="utf-8") for p in SECTIONS.iterdir()
+    )
+    # Absence of the CALL, not of the word — step 8 names `update-branch` in
+    # order to forbid it, and a test that cannot tell a prohibition from an
+    # invocation would force the rule to be written vaguely.
+    assert "pulls/$PR_NUMBER/update-branch" not in corpus
+    assert "-X PUT -f update_method" not in corpus
+    assert "never update it" in corpus
+    assert "no exceptions" in _router().split("## Time Budgets")[0]
