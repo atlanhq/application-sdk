@@ -43,6 +43,7 @@ Environment:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from dataclasses import dataclass, field
 
@@ -229,3 +230,51 @@ def needs_agent(result: PrepResult) -> bool:
     unrequested merge commit the playbook forbids.
     """
     return result.outcome == OUTCOME_RED and bool(result.failing)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """The deterministic pass, as a step of its own.
+
+    Split out so the workflow can decide whether to install anything. Prep is
+    normally a couple of `gh` reads and no model at all, but it was paying 18
+    seconds to `npm install opencode` first — on every run, for an agent it
+    almost never invokes. That is nearly half the phase spent preparing for a
+    branch it does not take.
+
+    Emits `needs_agent` so the workflow gates the install on it, and emits the
+    full result too: when no agent is needed this step IS the phase, and the
+    job can end here.
+    """
+    repo, pr = os.environ["REPO"], int(os.environ["PR_NUMBER"])
+    baseline = os.environ.get("BASE_SHA", "")
+
+    state = pr_state(repo, pr)
+    # Conflicts short-circuit BEFORE the checks read: nothing useful can be
+    # said about CI on a branch that cannot merge, and the read is a round
+    # trip spent to reach an answer that changes nothing.
+    conflicted = state is not None and (
+        state.get("mergeStateStatus") == "CONFLICTING"
+        or state.get("mergeable") == "CONFLICTING"
+    )
+    result = decide(state, () if conflicted else failing_checks(repo, pr), baseline)
+    wants = needs_agent(result)
+
+    path = os.environ.get("GITHUB_OUTPUT")
+    if path:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(f"needs_agent={'true' if wants else 'false'}\n")
+            handle.write(f"outcome={result.outcome}\n")
+            handle.write(f"new_base_sha={result.new_base_sha}\n")
+            handle.write(f"pushed_sha={result.pushed_sha}\n")
+            handle.write(f"ci_state={result.ci_state}\n")
+            handle.write(f"detail={result.detail}\n")
+            handle.write(f"failing={','.join(result.failing)}\n")
+
+    print(f"prep: {result.outcome} — {result.detail}")
+    if not wants:
+        print("prep: nothing for a model to do — skipping the opencode install")
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())
