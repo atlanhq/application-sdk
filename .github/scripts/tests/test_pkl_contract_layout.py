@@ -456,8 +456,6 @@ def test_export_contract_at_accepts_a_multi_root_archive(tmp_path, monkeypatch):
     app.pkl". Requiring app.pkl meant a one-root-per-entrypoint app never got
     a baseline, silently disabling override detection for exactly the apps
     whose generated trees are most likely to be post-processed."""
-    import subprocess as sp
-
     src = tmp_path / "src"
     (src / "contract").mkdir(parents=True)
     (src / "contract" / "crawler.pkl").write_text(
@@ -471,7 +469,7 @@ def test_export_contract_at_accepts_a_multi_root_archive(tmp_path, monkeypatch):
         ["add", "-A"],
         ["commit", "-qm", "c"],
     ):
-        sp.run(["git", *args], cwd=src, check=True, capture_output=True)
+        subprocess.run(["git", *args], cwd=src, check=True, capture_output=True)
 
     monkeypatch.chdir(src)
     dest = tmp_path / "dest"
@@ -488,6 +486,6 @@ def test_export_contract_at_accepts_a_multi_root_archive(tmp_path, monkeypatch):
         ["add", "-A"],
         ["commit", "-qm", "c"],
     ):
-        sp.run(["git", *args], cwd=src2, check=True, capture_output=True)
+        subprocess.run(["git", *args], cwd=src2, check=True, capture_output=True)
     monkeypatch.chdir(src2)
     assert mod.export_contract_at("HEAD", "contract", tmp_path / "dest2") is False
