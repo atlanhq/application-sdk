@@ -122,6 +122,23 @@ def test_k011_silent_when_app_id_present(tmp_path: Path) -> None:
     assert "K011" not in _ids(findings)
 
 
+def test_k011_fires_when_top_level_app_id_is_absent(tmp_path: Path) -> None:
+    atlan = "name: salesforce\nrelease_model: semver\n"
+    findings = _app_repo(tmp_path, atlan=atlan)
+    assert "K011" in _ids(findings)
+
+
+def test_k011_silent_when_top_level_app_id_has_whitespace_before_colon(
+    tmp_path: Path,
+) -> None:
+    atlan = (
+        'app_id : "019e0353-57c9-7070-81d5-5a48921f1c9c"\n'
+        "release_model: semver\n"
+    )
+    findings = _app_repo(tmp_path, atlan=atlan)
+    assert "K011" not in _ids(findings)
+
+
 def test_k011_anchored_in_atlan_yaml(tmp_path: Path) -> None:
     findings = _app_repo(tmp_path, atlan=_ATLAN_WITHOUT_APP_ID)
     k011 = [f for f in findings if f.rule_id == "K011"]
