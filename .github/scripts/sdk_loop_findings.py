@@ -515,7 +515,27 @@ def render_summary(
 
 
 def load_payload(text: str | bytes) -> dict[str, Any]:
-    """Parse the agent's `findings.json`, refusing anything ambiguous."""
+    """Parse the agent's `findings.json`, refusing anything ambiguous.
+
+    **Not yet the completion gate, and it must become one before anything
+    consumes this.** Nothing reads `findings.json` today — the reviewer still
+    posts its own comment — so this only has to parse. The moment the runner
+    renders and posts the verdict instead, an empty `findings` list means
+    `READY_TO_MERGE`, which means `sdk_review_approve.py` casts the `atlan-ci`
+    CODEOWNER approval. An agent that crashes or gives up *after* writing its
+    file would then produce a merge-ready verdict from a review that never
+    happened.
+
+    `PACK_ID` does not close that hole: it proves the pack loaded, not that the
+    work was done. The gate needs a positive assertion the model cannot emit by
+    accident — `status: "complete"` plus a `reviewed_files` list that actually
+    covers the pack's files — and an empty findings list must be accepted only
+    when that assertion is present and covering. `REVIEW.md` already instructs
+    the reviewer to emit both; this function does not yet require them.
+
+    Ship that requirement in the same change that moves posting to Python, not
+    after it.
+    """
     try:
         payload = json.loads(text)
     except json.JSONDecodeError as exc:
