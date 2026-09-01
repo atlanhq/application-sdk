@@ -132,8 +132,7 @@ def test_k011_silent_when_top_level_app_id_has_whitespace_before_colon(
     tmp_path: Path,
 ) -> None:
     atlan = (
-        'app_id : "019e0353-57c9-7070-81d5-5a48921f1c9c"\n'
-        "release_model: semver\n"
+        'app_id : "019e0353-57c9-7070-81d5-5a48921f1c9c"\n' "release_model: semver\n"
     )
     findings = _app_repo(tmp_path, atlan=atlan)
     assert "K011" not in _ids(findings)
