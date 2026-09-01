@@ -15,6 +15,7 @@ from ._helpers import (
     _filter_body_wrapped,
     _find_filter_method,
     _get_name,
+    _iter_function_body,
     _has_exc_info,
     _inherits_logging_filter,
     _is_gather_call,
@@ -48,6 +49,8 @@ class SilentSwallowMixin:
                     "Use 'except Exception:' at minimum.",
                 )
         elif is_pass_only:
+            if self._is_documented_best_effort(node):
+                return
             if isinstance(node.type, ast.Tuple):
                 names = [_get_name(e) or "?" for e in node.type.elts]
                 exc_type = "(" + ", ".join(names) + ")"
@@ -60,6 +63,73 @@ class SilentSwallowMixin:
                 "Acceptable only for genuinely trivial best-effort operations — "
                 "add a comment and log at DEBUG or use the suppression directive.",
             )
+
+    def _is_documented_best_effort(self, node: ast.ExceptHandler) -> bool:
+        """Recognize the small set of documented, result-preserving no-ops.
+
+        E002 is intentionally not made comment-driven: a comment alone cannot
+        establish that swallowing an exception is safe. These are the concrete
+        best-effort seams used by applications: heartbeat callbacks, JSON list
+        parsing that falls back to the original value, and destructor cleanup.
+        """
+        if not self._try_stack:
+            return False
+        try_node = self._try_stack[-1]
+        function = self._function_stack[-1] if self._function_stack else None
+        if function is None:
+            return False
+        comments = self._source.lower().splitlines()
+        start = max(0, function.lineno - 1)
+        end = min(len(comments), try_node.lineno - 1)
+        docstring = (
+            function.body[0].value
+            if function.body
+            and isinstance(function.body[0], ast.Expr)
+            and isinstance(function.body[0].value, ast.Constant)
+            and isinstance(function.body[0].value.value, str)
+            else ""
+        )
+        documented = any(
+            "best-effort" in line or "best effort" in line
+            for line in comments[max(start, end - 4) : end]
+        ) or "best-effort" in docstring.lower() or "best effort" in docstring.lower()
+        if not documented:
+            return False
+
+        # Heartbeat/rate-reporting callbacks are optional side effects.
+        if len(try_node.body) == 1 and isinstance(try_node.body[0], ast.Expr):
+            call = try_node.body[0].value
+            if isinstance(call, ast.Call) and _get_name(call.func) == "heartbeat_fn":
+                return True
+
+        # JSON list parsing may retain the original value when decoding fails.
+        if _get_name(node.type) in {"JSONDecodeError", "ValueError"}:
+            calls = [n for n in _iter_function_body([try_node]) if isinstance(n, ast.Call)]
+            if len(calls) == 1 and _get_name(calls[0].func) == "loads":
+                call = calls[0]
+                if (
+                    len(try_node.body) == 1
+                    and isinstance(try_node.body[0], ast.Return)
+                    and try_node.body[0].value is call
+                    and len(call.args) == 1
+                    and isinstance(call.args[0], ast.Name)
+                ):
+                    original_name = call.args[0].id
+                    return any(
+                        isinstance(n, ast.Return)
+                        and isinstance(n.value, ast.Name)
+                        and n.value.id == original_name
+                        and n.lineno > (try_node.end_lineno or try_node.lineno)
+                        for n in _iter_function_body(function.body)
+                    )
+
+        # Destructor cleanup releases a resource whose close failure is already
+        # handled and logged by the close method itself.
+        if function.name == "__del__" and len(try_node.body) == 1:
+            stmt = try_node.body[0]
+            if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
+                return _get_name(stmt.value.func) == "close"
+        return False
 
     # ── E003 ─────────────────────────────────────────────────────────────────
 

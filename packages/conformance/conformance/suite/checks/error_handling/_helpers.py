@@ -81,6 +81,15 @@ def _body_is_only_pass(stmts: list[ast.stmt]) -> bool:
     return len(real) == 1 and isinstance(real[0], ast.Pass)
 
 
+def _iter_function_body(stmts: list[ast.AST]) -> Iterator[ast.AST]:
+    """Walk a function body without entering nested function/class scopes."""
+    for stmt in stmts:
+        yield stmt
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        yield from _iter_function_body(list(ast.iter_child_nodes(stmt)))
+
+
 def _body_is_only_loop_control_no_logging(stmts: list[ast.stmt]) -> bool:
     """True if body only has continue/break/pass with no logging."""
     if _any_logging_in(stmts):

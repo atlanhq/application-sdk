@@ -27,11 +27,13 @@ class Checker(
     def __init__(
         self,
         filename: str,
+        source: str,
         directives: dict[int, _IgnoreDirective],
         atlan_ioerror_imported: bool,
         legacy_aliases: frozenset[str] = frozenset(),
     ) -> None:
         self._filename = filename
+        self._source = source
         self._directives = directives
         self._atlan_ioerror_imported = atlan_ioerror_imported
         self._legacy_aliases = legacy_aliases
@@ -39,6 +41,7 @@ class Checker(
         # Context stacks — managed by visit_* methods
         self._function_stack: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
         self._except_stack: list[ast.ExceptHandler] = []
+        self._try_stack: list[ast.Try | ast.TryStar] = []
         self._loop_stack: list[ast.For | ast.AsyncFor | ast.While] = []
         # Set True while generic_visit walks the children of a Raise node so
         # _check_p017_call can skip the inline Call (already covered by
@@ -70,9 +73,12 @@ class Checker(
         self._loop_stack = []
         self._except_stack = []
         self._function_stack.append(node)
+        saved_tries = self._try_stack
+        self._try_stack = []
         self._check_p010_in_function(node)
         self.generic_visit(node)
         self._function_stack.pop()
+        self._try_stack = saved_tries
         self._loop_stack = saved_loops
         self._except_stack = saved_excepts
 
@@ -82,9 +88,12 @@ class Checker(
         self._loop_stack = []
         self._except_stack = []
         self._function_stack.append(node)  # type: ignore[arg-type]
+        saved_tries = self._try_stack
+        self._try_stack = []
         self._check_p010_in_function(node)  # type: ignore[arg-type]
         self.generic_visit(node)
         self._function_stack.pop()
+        self._try_stack = saved_tries
         self._loop_stack = saved_loops
         self._except_stack = saved_excepts
 
@@ -118,6 +127,13 @@ class Checker(
         self._check_p014(node)
         self.generic_visit(node)
         self._except_stack.pop()
+
+    def visit_Try(self, node: ast.Try) -> None:
+        self._try_stack.append(node)
+        self.generic_visit(node)
+        self._try_stack.pop()
+
+    visit_TryStar = visit_Try
 
     def visit_Raise(self, node: ast.Raise) -> None:
         self._check_p012(node)

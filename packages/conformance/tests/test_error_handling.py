@@ -225,6 +225,34 @@ except ConnectionError:
     )
 
 
+def test_p002_documented_best_effort_heartbeat_is_silent() -> None:
+    _none(
+        """\
+def fetch(heartbeat_fn):
+    # Best-effort heartbeat reporting; failure must not affect fetched results.
+    try:
+        heartbeat_fn(1)
+    except RuntimeError:
+        pass
+    return [1]
+"""
+    )
+
+
+def test_p002_undocumented_heartbeat_noop_fires() -> None:
+    _single(
+        """\
+def fetch(heartbeat_fn):
+    try:
+        heartbeat_fn(1)
+    except RuntimeError:
+        pass
+    return [1]
+""",
+        "E002",
+    )
+
+
 # ── E003 — BroadContextlibSuppress ────────────────────────────────────────────
 
 

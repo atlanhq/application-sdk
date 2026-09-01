@@ -98,6 +98,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
     directives = _parse_directives(text)
     checker = Checker(
         filename=file,
+        source=text,
         directives=directives,
         atlan_ioerror_imported=atlan_ioerror,
         legacy_aliases=legacy_aliases,
