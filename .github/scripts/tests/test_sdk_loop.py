@@ -551,6 +551,9 @@ def test_every_agent_the_playbook_dispatches_is_registered() -> None:
 def test_the_review_prompt_names_the_delegation_tool_for_this_runtime() -> None:
     prompt = review_prompt(42, 1, "a" * 40, DismissalLedger())
     assert "`Task`" in prompt
+    # The multi-domain invariant, which survives the solo-scope change: when
+    # several agents ARE registered, collapsing them into one pass yields a
+    # worse verdict and says nothing about having done so.
     assert "Do NOT do their work yourself" in prompt
 
 
