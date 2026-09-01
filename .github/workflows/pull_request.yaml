@@ -716,19 +716,38 @@ jobs:
   # Real-cloud storage integration tests (S3 / Azure / GCS) — exercise
   # create_store_from_binding + CloudStore against real buckets/vaults using the
   # *_integration markers (excluded from default addopts; conftest skips when a
-  # cloud's creds are absent). Label-gated ('storage-integration') so it only
-  # runs on demand; the heavy/credentialed path stays off the per-PR hot path.
-  # Fork PRs are excluded (no secrets). Nightly counterpart lives in schedule.yaml.
+  # cloud's creds are absent). Fork PRs are excluded (no secrets). Nightly
+  # counterpart lives in schedule.yaml.
+  #
+  # FND-1153: gated on the SAME 'e2e' label as the other release-tier suites
+  # above, not on a private 'storage-integration' one, and deliberately NOT on
+  # the merge queue. Two reasons it stays off the required SDK Gate:
+  #
+  #   - The Entra federated identity credential is scoped to `pull_request`
+  #     subjects. A merge-queue run presents
+  #     `repo:atlanhq/application-sdk:ref:refs/heads/gh-readonly-queue/main/pr-N-<sha>`,
+  #     which matches no FIC, so the Azure login dies with AADSTS700213 about
+  #     30s in — before a single test runs. (AWS's trust policy is broad enough
+  #     to accept it; GCP's WIF attribute condition is unverified because the
+  #     step never got reached.) Re-gating this on merge_group requires fixing
+  #     those cloud-side subject conditions first.
+  #   - Even once that is fixed, the merge queue runs entries speculatively in
+  #     parallel, so every queued PR would pay three cloud logins plus real
+  #     S3 / Azure / GCS round trips whether or not it touched storage.
+  #
+  # The cost of this tier is real and accepted: the suite runs only when someone
+  # applies 'e2e', so a storage change can reach main without a real-cloud
+  # request. Apply the label on any PR touching application_sdk/storage/.
   storage-integration:
     name: Storage Integration Tests (S3 / Azure / GCS)
     # Same FND-48 shape as the e2e gates above — see build-sdk-base-image for the
     # full rationale. The previous form OR'd the event check with the state check,
     # which made the event arm redundant: `contains(...)` alone was already true
     # for the label-just-added case, so every unrelated label add on a PR carrying
-    # `storage-integration` re-ran the real-cloud suite. AND-ing it is the fix.
+    # the label re-ran the real-cloud suite. AND-ing it is the fix.
     if: |
-      contains(github.event.pull_request.labels.*.name, 'storage-integration') &&
-      (github.event.action != 'labeled' || github.event.label.name == 'storage-integration') &&
+      contains(github.event.pull_request.labels.*.name, 'e2e') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'e2e') &&
       github.event.pull_request.head.repo.fork != true
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -741,7 +760,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: "./.github/actions/setup-deps"
       - name: AWS — assume the integration role (OIDC)
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6
         with:
           role-to-assume: ${{ vars.AWS_INTEG_ROLE_ARN }}
           aws-region: ${{ vars.AWS_INTEG_REGION }}

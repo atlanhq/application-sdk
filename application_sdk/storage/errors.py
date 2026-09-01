@@ -21,6 +21,7 @@ from application_sdk.errors import (
     STORAGE_OPERATION,
     STORAGE_PERMISSION,
     STORAGE_PREFLIGHT,
+    STORAGE_RELOCATION,
     ErrorCode,
 )
 from application_sdk.errors.categories import Audience
@@ -74,6 +75,36 @@ class StorageError(DependencyUnavailableError):
         if self.cause:
             parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
         return " | ".join(parts)
+
+
+@dataclass(kw_only=True)
+class StorageBucketRelocationError(StorageError):
+    """A write was rejected because the bucket is being relocated.
+
+    GCS rejects multipart upload *initiation* for the whole window of a
+    dual-/multi-region bucket relocation (HTTP 400 ``PreconditionFailed``
+    naming the relocation) while plain single-request PUTs keep working. The
+    condition is temporary and entirely platform-side — no credential,
+    permission, or connector change fixes it — so it carries its own code
+    (the single definition; the preflight gate's storage check imports it as
+    its block stamp) instead of the generic
+    ``DEPENDENCY_UNAVAILABLE_STORAGE``, and a remediation hint saying to retry
+    after the relocation finishes.
+    """
+
+    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_RELOCATION
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        key: str | None = None,
+        cause: Exception | None = None,
+        suggested_action: str | None = None,
+    ) -> None:
+        StorageError.__init__(self, message, key=key, cause=cause)
+        self.suggested_action = suggested_action
 
 
 @dataclass(kw_only=True)

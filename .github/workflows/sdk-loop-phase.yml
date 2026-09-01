@@ -24,7 +24,7 @@ on:
       phase:
         type: string
         required: true
-        description: 'review | resolve'
+        description: 'prep | review | resolve'
       round:
         type: number
         required: true
@@ -56,12 +56,17 @@ on:
         type: string
         required: false
         default: ''
+        description: 'Sha the previous round reviewed, for delta labelling. Never narrows the review.'
       spent_so_far:
         type: string
         required: false
         default: ''
-        description: 'USD this run has spent already. The phase refuses to start once it reaches the allowance.'
-        description: 'Sha the previous round reviewed, for delta labelling. Never narrows the review.'
+        description: 'Tokens this run has used already. The phase refuses to start once it reaches the allowance.'
+      reaims_so_far:
+        type: string
+        required: false
+        default: ''
+        description: 'Consecutive re-aims so far. A re-aim is not progress, so it gets a budget of its own.'
     secrets:
       LITELLM_API_KEY:
         required: true
@@ -91,8 +96,14 @@ on:
         value: ${{ jobs.phase.outputs.ledger }}
       detail:
         value: ${{ jobs.phase.outputs.detail }}
+      ci_state:
+        value: ${{ jobs.phase.outputs.ci_state }}
       cost:
         value: ${{ jobs.phase.outputs.cost }}
+      usage:
+        value: ${{ jobs.phase.outputs.usage }}
+      reaims:
+        value: ${{ jobs.phase.outputs.reaims }}
       spent_total:
         value: ${{ jobs.phase.outputs.spent_total }}
 
@@ -101,21 +112,32 @@ permissions:
 
 jobs:
   phase:
+    # GitHub renders a reusable-workflow job as "<caller job> / <inner job>".
+    # The caller already says "Review 3"; repeating "phase" after it only adds
+    # noise to a 18-row job list, so the inner name echoes the phase instead.
+    name: ${{ inputs.phase }}
     runs-on: ubuntu-latest
     # Review is the slower phase: it walks the whole playbook, sub-agents
     # included. The headroom is for checkout and token minting, not the agent —
     # the agent's own budget is enforced inside sdk_loop_phase.py.
     timeout-minutes: ${{ inputs.phase == 'review' && 55 || 40 }}
     outputs:
-      outcome: ${{ steps.run.outputs.outcome }}
+      # `|| steps.prep.outputs.*` because a deterministic prep finishes before
+      # `run` exists — that step is skipped, and a skipped step's outputs are
+      # empty. Without the fallback a clean prep would report nothing, and
+      # Review 1 would checkout `ref: ''`.
+      outcome: ${{ steps.run.outputs.outcome || steps.prep.outputs.outcome }}
       verdict: ${{ steps.run.outputs.verdict }}
       verdict_url: ${{ steps.run.outputs.verdict_url }}
       reviewed_head: ${{ steps.run.outputs.reviewed_head }}
-      new_base_sha: ${{ steps.run.outputs.new_base_sha }}
-      pushed_sha: ${{ steps.run.outputs.pushed_sha }}
+      new_base_sha: ${{ steps.run.outputs.new_base_sha || steps.prep.outputs.new_base_sha }}
+      pushed_sha: ${{ steps.run.outputs.pushed_sha || steps.prep.outputs.pushed_sha }}
       ledger: ${{ steps.run.outputs.ledger }}
-      detail: ${{ steps.run.outputs.detail }}
+      detail: ${{ steps.run.outputs.detail || steps.prep.outputs.detail }}
+      ci_state: ${{ steps.run.outputs.ci_state || steps.prep.outputs.ci_state }}
       cost: ${{ steps.run.outputs.cost }}
+      usage: ${{ steps.run.outputs.usage }}
+      reaims: ${{ steps.run.outputs.reaims }}
       spent_total: ${{ steps.run.outputs.spent_total }}
     steps:
       - name: Mint a scoped App token
@@ -132,7 +154,12 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           # The whole read-only guarantee for the review phase is this line.
-          permission-contents: ${{ inputs.phase == 'resolve' && 'write' || 'read' }}
+          # `prep` joins `resolve` on the write side: it exists precisely to
+          # do the things the review cannot — update a branch that is behind,
+          # push a mechanical fix. The review keeps `read`, which is what
+          # makes its read-only contract a property of the credential rather
+          # than a promise in a prompt.
+          permission-contents: ${{ (inputs.phase == 'resolve' || inputs.phase == 'prep') && 'write' || 'read' }}
           permission-pull-requests: write
           # PR comments are an Issues-scope resource, which the existing lane
           # learned the hard way (see "Mint fleet App token" in sdk-review.yml).
@@ -144,8 +171,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.base_sha }}
-          # Full history: the review playbook diffs against the base branch.
+          # Full history for the base-branch diff, but only the refs this
+          # phase needs. `fetch-depth: 0` alone pulled 540 branches per job —
+          # every ref in the repo, three times a round, for a diff that needs
+          # two.
           fetch-depth: 0
+          filter: blob:none
           token: ${{ steps.app-token.outputs.token }}
           # The resolve phase pushes with this credential; the review phase
           # holds one that cannot.
@@ -153,28 +184,87 @@ jobs:
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: '3.14'
 
       # A loop is up to 17 phase jobs, each on a fresh runner, so anything
       # installed per job is paid for 17 times. Cache the global npm store so
       # only the first job of a run pays the download.
+      # 1.18.22, matching connector-pulse — the only lane with this pattern
+      # working in production. The first pin here was 0.6.3, an ancient release
+      # picked without checking, and it crashed before every single request:
+      #
+      #   Error: [DecimalError] Invalid argument: [object Object]
+      #
+      # Three theories were chased through three PRs — the dot in grok-4.6, the
+      # slash, an unpopulated cost table — before running the exact CI config
+      # against 1.18.22 locally, where it works untouched. The version was the
+      # whole bug.
+      #
+      # Installed from npm rather than opencode.ai's install script, which is
+      # `curl | bash` and barred by the org baseline.
+      # Prep's whole job is normally a couple of `gh` reads and no model
+      # at all. Running it BEFORE the installs lets the job skip them:
+      # opencode alone was 18s of a 41s prep, spent every run preparing
+      # for a branch prep almost never takes. When no agent is needed this
+      # step IS the phase, and everything below is skipped.
+      - name: Prep — deterministic pass
+        id: prep
+        if: inputs.phase == 'prep'
+        env:
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr }}
+          BASE_SHA: ${{ inputs.base_sha }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: python3 .github/scripts/sdk_loop_prep.py
+
       - name: Cache the opencode install
+        if: inputs.phase != 'prep' || steps.prep.outputs.needs_agent == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/.npm
-          key: opencode-${{ runner.os }}-0.6.3
+          # `~/.npm` is the package; `~/.local/share/opencode` is the ripgrep
+          # binary opencode downloads from GitHub Releases the first time an
+          # agent uses Glob or Grep. That download happened on EVERY job — up
+          # to 18 per run — and it is a network fetch on the critical path of
+          # the first search the reviewer makes.
+          path: |
+            ~/.npm
+            ~/.local/share/opencode/bin
+          key: opencode-${{ runner.os }}-1.18.22
 
       - name: Install opencode
-        run: npm install -g --prefer-offline opencode-ai@0.6.3
+        if: inputs.phase != 'prep' || steps.prep.outputs.needs_agent == 'true'
+        run: npm install -g --prefer-offline opencode-ai@1.18.22
 
-      - name: Configure git identity for the resolve phase
-        if: inputs.phase == 'resolve'
+      # uv is how this repo runs everything — `uv run pytest`,
+      # `uv run pre-commit`. Without it the resolve phase's own verification
+      # silently no-ops: a live round logged `uv: command not found` for both
+      # its pre-commit and pytest calls and then pushed the commit anyway.
+      # A resolver that cannot check its work is worse than one that does not
+      # try, because the output looks identical.
+      - name: Install uv
+        if: inputs.phase != 'prep' || steps.prep.outputs.needs_agent == 'true'
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+
+      - name: Configure git identity for the phases that push
+        if: >-
+          inputs.phase == 'resolve'
+          || (inputs.phase == 'prep'
+              && steps.prep.outputs.needs_agent == 'true')
+        # Commit as the App whose token is doing the pushing, not as atlan-ci.
+        # atlan-ci is a CODEOWNER and the identity that mints approvals, so
+        # attributing loop commits to it blurs "who wrote this" with "who
+        # approved it" — precisely the separation the merge gate depends on.
         run: |
-          git config user.name  "atlan-ci"
-          git config user.email "atlan-ci@users.noreply.github.com"
+          git config user.name  "atlan-app-fleet[bot]"
+          git config user.email "4265590+atlan-app-fleet[bot]@users.noreply.github.com"
 
+      # Skipped entirely when prep already finished deterministically —
+      # its outputs come straight from the step above.
       - name: Run the phase
         id: run
+        if: inputs.phase != 'prep' || steps.prep.outputs.needs_agent == 'true'
         # Untrusted-input discipline: nothing from the PR — title, body, diff,
         # comment text — is ever interpolated with ${{ }} into a shell that
         # holds the App token. Inputs ride env vars, which the shell treats as
@@ -192,7 +282,24 @@ jobs:
           VERDICT_URL: ${{ inputs.verdict_url }}
           PRIOR_SHA: ${{ inputs.prior_sha }}
           SPENT_SO_FAR: ${{ inputs.spent_so_far }}
-          SDK_LOOP_MAX_USD: ${{ vars.SDK_LOOP_MAX_USD }}
+          REAIMS_SO_FAR: ${{ inputs.reaims_so_far }}
+          SDK_LOOP_MAX_TOKENS: ${{ vars.SDK_LOOP_MAX_TOKENS }}
+          # $HEAD_SHA is referenced 9 times by the playbook (the
+          # moved-since-dispatch guard, the delta diff range, the commit-status
+          # POST) and was never being set. The agent recovers by running
+          # `git rev-parse HEAD` itself, so this is wasted turns rather than a
+          # wrong result — worth perhaps a minute of Phase 0, NOT the stall.
+          # $GHA_RUN_URL the playbook never references; it is passed only to
+          # save the agent re-fetching the started-comment for its own run URL.
+          HEAD_SHA: ${{ inputs.base_sha }}
+          # The phase already READ this ("answers_trigger") and never received
+          # it, so the ANSWERS_TRIGGER filter in `newest_verdict` silently ran
+          # with None on every round — meaning a verdict comment older than
+          # this invocation could be adopted as this phase's own. `github.event`
+          # is available inside a reusable workflow called from the same run,
+          # so this needs no new input.
+          COMMENT_ID: ${{ github.event.comment.id }}
+          GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
           LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL }}

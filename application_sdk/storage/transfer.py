@@ -36,6 +36,7 @@ identically for single files and directories.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import tempfile
 from pathlib import Path
@@ -169,6 +170,9 @@ async def _upload_from_store(
 
     Returns ``(transferred, reason)``.
     """
+    from application_sdk.storage.chunked import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _discard_transfer_state,
+    )
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         download_file_chunked,
         exists,
@@ -204,7 +208,7 @@ async def _upload_from_store(
         # file survives slow egress on the cross-store copy path. (BLDX-1513)
         # resume=False: mkstemp yields a fresh name per call, so a checkpoint
         # sidecar could never be reused — without this, a failed copy strands
-        # a {tmp}.transfer-state file in /tmp until pod restart.
+        # a checkpoint under /tmp until pod restart.
         await download_file_chunked(
             source_key, tmp, source_store, normalize=False, resume=False
         )
@@ -212,9 +216,21 @@ async def _upload_from_store(
         current_progress_tracker().mark_progress("storage.copy_file")
         return True, "uploaded"
     finally:
-        tmp.unlink(missing_ok=True)
-        # Belt-and-braces: never strand a checkpoint sidecar for a temp file.
-        Path(str(tmp) + ".transfer-state").unlink(missing_ok=True)
+        # Suppressed for the same reason _discard_transfer_state below is: this
+        # `finally` runs after a copy that may have already succeeded, so an
+        # undeletable temp must not turn `(True, "uploaded")` into an OSError.
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
+        # Belt-and-braces: never strand either staging file for a temp
+        # destination. `_discard_transfer_state` is the writer's own cleanup —
+        # what it runs on a 412/404 — so this site cannot drift from the
+        # staging layout the way spelling out the two deletions here would
+        # (CONNECT-1126). It deliberately leaves the destination alone, hence
+        # the separate unlink of `tmp` above. The part file is the half that
+        # can actually survive `resume=False`: a publish failure leaves it on
+        # disk as a valid resume state, and with a fresh mkstemp name no later
+        # attempt will ever claim it.
+        _discard_transfer_state(tmp)
 
 
 async def _download_one(
@@ -890,10 +906,16 @@ async def download(
             # (BLDX-1155 #5).
             if owns_temp:
                 try:
+                    from application_sdk.storage.chunked import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+                        _discard_transfer_state,
+                    )
+
                     dest.unlink(missing_ok=True)
-                    # Belt-and-braces: never strand a checkpoint sidecar for
-                    # a temp file either.
-                    Path(str(dest) + ".transfer-state").unlink(missing_ok=True)
+                    # Belt-and-braces: never strand either staging file for a
+                    # temp destination either — see the matching cleanup in
+                    # _upload_from_store for why this defers to the writer's
+                    # own discard rather than re-spelling the deletions.
+                    _discard_transfer_state(dest)
                 except OSError:  # conformance: ignore[E002] best-effort cleanup of partial download; original error re-raised below
                     pass
             raise

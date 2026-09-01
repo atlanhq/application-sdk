@@ -2268,6 +2268,81 @@ def fetch(resp):
 
 
 # ---------------------------------------------------------------------------
+# E004 / E005 — exc_info bound to the caught exception
+#
+# `exc_info` is not a boolean flag: logging accepts the exception instance and
+# attaches the same traceback. The predicate is shared with L004 via
+# `_ast_common.has_exc_info_traceback`, so the three rules agree on what counts
+# as a captured stack trace. Evidence: atlanhq/atlan-anomalo-app.
+# ---------------------------------------------------------------------------
+
+
+def test_e005_silent_when_exc_info_is_the_bound_exception() -> None:
+    src = (
+        "try:\n    x()\nexcept Exception as exc:\n"
+        "    logger.error('auth failed', exc_info=exc)\n"
+    )
+    assert "E005" not in _findings(src)
+
+
+def test_e005_fires_without_exc_info_on_a_bound_exception() -> None:
+    src = "try:\n    x()\nexcept Exception as exc:\n    logger.error('auth failed')\n"
+    assert "E005" in _findings(src)
+
+
+def test_e005_fires_when_exc_info_is_an_unrelated_name() -> None:
+    # Only the `except ... as` binding is provably the live exception; any
+    # other name could be a flag, a config value, or a stale variable.
+    src = (
+        "try:\n    x()\nexcept Exception as exc:\n"
+        "    logger.error('auth failed', exc_info=other)\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_fires_when_exc_info_is_false() -> None:
+    src = (
+        "try:\n    x()\nexcept Exception as exc:\n"
+        "    logger.error('auth failed', exc_info=False)\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e004_silent_when_broad_handler_logs_exc_info_bound_exception() -> None:
+    src = (
+        "try:\n    x()\nexcept Exception as exc:\n"
+        "    logger.error('worker loop failed', exc_info=exc)\n"
+    )
+    assert "E004" not in _findings(src)
+
+
+def test_e004_fires_when_broad_handler_logs_without_a_traceback() -> None:
+    src = (
+        "try:\n    x()\nexcept Exception as exc:\n"
+        "    logger.error('worker loop failed')\n"
+    )
+    assert "E004" in _findings(src)
+
+
+def test_e004_fires_when_exc_info_is_an_unrelated_name() -> None:
+    src = (
+        "try:\n    x()\nexcept Exception as exc:\n"
+        "    logger.error('worker loop failed', exc_info=other)\n"
+    )
+    assert "E004" in _findings(src)
+
+
+def test_e005_silent_for_bare_except_is_not_widened_by_the_name_match() -> None:
+    # A handler with no `as` binding has no name to match, so an `exc_info=<name>`
+    # there stays unrecognised rather than being accepted on faith.
+    src = (
+        "try:\n    x()\nexcept Exception:\n"
+        "    logger.error('failed', exc_info=exc)\n"
+    )
+    assert "E005" in _findings(src)
+
+
+# ---------------------------------------------------------------------------
 # E005 — sanitizer / redaction-boundary exemption (FND-59)
 # ---------------------------------------------------------------------------
 

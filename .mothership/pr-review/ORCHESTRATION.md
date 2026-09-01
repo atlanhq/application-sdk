@@ -4,6 +4,56 @@ Follow these phases EXACTLY. Do not skip phases. Do not reorder.
 Print `[Phase N complete]` after each phase, followed by `bash /tmp/budget.sh`
 (see Time Budgets — the elapsed number is measured, never estimated).
 
+## Runtime
+
+Two lanes run this playbook, and they differ in what the SURROUNDING system
+already guarantees. Everything about what a good review IS — routing, agents,
+severity, the verdict — is identical. Only the bookkeeping differs, and doing
+a lane's bookkeeping twice is not free: each step is a model round trip, and
+several of them cannot even succeed on the wrong lane.
+
+<!-- CONTRACT: the literal string `LANE: sdk-loop` below is emitted by
+     review_prompt() in .github/scripts/sdk_loop_phase.py. Two files, one
+     string — exactly the shape that rots silently, because a playbook that
+     waits for a line nobody sends does not error, it just quietly runs the
+     wrong lane's steps and eats the 403s. Renaming it on either side without
+     the other breaks lane detection with no failing test and no log line
+     saying so. test_the_lane_marker_matches_the_playbook_contract in
+     .github/scripts/tests/test_sdk_loop.py asserts both sides agree; if you
+     change this string, that test fails and tells you where the other half
+     lives. Do not "fix" the test by loosening it. -->
+
+**You are told which lane you are on. Do not work it out.** The dispatch
+prompt states it: the `@sdk-loop` harness emits the line `LANE: sdk-loop`,
+and its absence means the mothership sandbox. Inferring it instead — probing
+for `/workspace`, reading `pwd`, checking for a runner env var — costs a turn
+and can be wrong; a live transcript shows an agent spending one on
+`ls -la /workspace/application-sdk … || echo "NO /workspace/application-sdk"`
+before doing any review work.
+
+This matters because the difference is not cosmetic. Several steps below
+**cannot succeed** on the wrong lane: they need a write scope the `@sdk-loop`
+review token does not have, and they fail with a 403 after the model has
+already been paid for the turn that made the call.
+
+| | mothership sandbox | `@sdk-loop` (GitHub Actions) |
+|---|---|---|
+| Working directory | `/workspace/application-sdk` | the checkout you start in |
+| Duplicate triggers | A3/A4 guards | the Fence job, before any model runs |
+| Replay after a dropped stream | A3 guard | n/a — one invocation per job |
+| Stale / moved HEAD | A2 guard | the harness re-aims and restarts the round |
+| Per-run `/tmp` hygiene | A1 guard | fresh runner every phase |
+| Prior review + delta | you compute it (§6b, §6c) | handed to you in the prompt; still verify |
+| Branch update when BEHIND | §8 | your token has no write scope — report, do not attempt |
+| Commit status / labels / approval | the GHA layer (§3c) | the GHA layer (§3c) |
+
+**The review never writes to the branch on either lane.** It posts a summary
+comment and inline findings; it does not commit, push, run `pre-commit`, run
+tests, or fix CI. On `@sdk-loop` that is enforced by the credential rather
+than by this sentence: the review phase holds a token with no `contents` and
+no `statuses` scope, so an attempt fails with a 403 rather than doing harm.
+Do not treat such a 403 as something to work around.
+
 ## Time Budgets
 
 Budgets scale with PR size. Determine the tier in Phase 0, then use
@@ -63,14 +113,17 @@ PR_NUMBER, PR_URL, REPO, HEAD_SHA, BASE_REF, HEAD_REF,
 COMMENTER, COMMENT_ID, COMMENTER_INTENT
 ```
 
-1. **Set working directory** — mothership cloned the repo on the PR head
-   ref into `/workspace/application-sdk`:
-   ```bash
-   cd /workspace/application-sdk
+1. **Set working directory.** On the mothership sandbox the repo is cloned
+   on the PR head ref into `/workspace/application-sdk`, so `cd` there. Under
+   `@sdk-loop` you already start in the checkout — do not look for
+   `/workspace`, it does not exist on a runner and probing for it costs a turn.
 
-   # Background: install deps so uv run pre-commit/pytest don't wait
-   uv sync --all-extras 2>/dev/null &
-   ```
+   Do **not** warm dependencies. This playbook never runs `pytest` or
+   `pre-commit` — §9 is explicit that the review does not run them — so the
+   `uv sync --all-extras` that used to sit here bought nothing and competed
+   with the review for I/O on every single run. `pr-resolve` and
+   `sdk-evolution` DO run them and warm deps for that reason; this playbook
+   is not those.
 
 1b. **Start the budget clock** — do this before any other work, so the
     elapsed number covers the whole run. Defaults to the Small hard stop;
@@ -117,34 +170,26 @@ BUDGET
    gh pr diff "$PR_NUMBER" --repo "$REPO" > /tmp/DIFF.patch
    ```
 
-4b. **Reset per-run review artifacts** — these files are load-bearing signals
-    across later phases, so never let a prior iteration in the same sandbox
-    affect the current verdict or public post:
-    ```bash
-    mkdir -p /tmp/inline-comments
-    find /tmp/inline-comments -type f \( -name '*.md' -o -name '*.json' \) -delete
-    ```
-    The toolkit ledger files (`/tmp/TOOLKIT_*.md|txt`) are reset at the top of
-    Phase 1b-toolkit — the only place that writes them — so non-toolkit scopes
-    don't touch them at all.
-
-5. **Stale SHA guard** — bail if the PR has moved since dispatch:
-   ```bash
-   CURRENT_SHA=$(jq -r '.headRefOid' /tmp/PR.json)
-   if [ "$CURRENT_SHA" != "$HEAD_SHA" ]; then
-     echo "PR moved from $HEAD_SHA to $CURRENT_SHA since dispatch — aborting cleanly."
-     # Submit a minimal review so the status check doesn't stay pending,
-     # then exit. A fresh @sdk-review on the new HEAD gets a new session.
-     exit 0
-   fi
-   ```
+4b–5. **Sandbox-only run guards** — resetting `/tmp` artifacts and the
+   stale-SHA bail-out. Under `@sdk-loop` neither applies: every phase gets a
+   fresh runner with nothing to reset, and the harness owns HEAD movement
+   (`head_state`, and the Fence job). See Appendix A. On the sandbox, run
+   them.
 
 6. **Read in-repo orchestration assets** — these are the source of truth
    for SDK review behavior. All paths are relative to the repo root:
    - `.mothership/pr-review/CLAUDE.md`
    - `.mothership/pr-review/severity-rubric.yaml` (includes severity
      calibration + confidence floors — the single source for both)
-   - `.mothership/pr-review/agents/*.md`
+   - the brief for each agent §2a will dispatch, **by explicit path**
+     (`.mothership/pr-review/agents/<name>.md`) — not all of them, and
+     never via Glob. `Glob ".mothership/pr-review/agents/*.md"` returns
+     **0 matches**: the tool is ripgrep-backed and ripgrep skips
+     dot-directories. Two measured runs each burned a turn on that
+     zero-match. The same trap applies to any grep over `.mothership/**` —
+     an agent that searches the reference rules for prior art, gets nothing,
+     and concludes there is none will raise a finding the rules already
+     answer. That is the expensive failure; the wasted turn is the cheap one.
    - `.mothership/review-policy.md`
    - `.mothership/review.yaml`
 
@@ -200,107 +245,12 @@ BUDGET
     threads) the human's response, which materially changes what
     counts as a "new" finding vs a known-and-discussed one.
 
-    **Same-run replay guard — run this immediately after loading
-    `/tmp/PRIOR_REVIEW.md`, before anything else.** When the Claude
-    stream drops mid-run (sandbox VPN reconnect, container eviction,
-    transient API error), mothership recovers by re-running this prompt
-    **from the top in the same sandbox** — a fresh run, not a `--resume`.
-    If the first pass had already posted its summary, that retry loads
-    its own summary as `PRIOR_REVIEW`, sees an empty delta, and posts a
-    SECOND summary for the same HEAD. The PR then shows two reviews with
-    different wording from a single `@sdk-review` trigger, and the
-    workflow's soft-success check passes because *a* summary exists.
-
-    Every summary's footer carries the run URL that produced it (§3e),
-    and §3f posts the summary **last**, after the inline comments and the
-    commit status — so a summary bearing this run's URL means this run's
-    submission completed in full. Check *every* summary on the PR, not
-    just the one 6b loaded: that one is only the latest, and an unrelated
-    review landing between the first pass and the replay would hide this
-    run's footer behind it.
-
-    ```bash
-    # GHA_RUN_URL is given in the session prompt — substitute it literally,
-    # shell variables do not persist between Bash calls.
-    gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate --slurp 2>/dev/null \
-      | jq -r '[.[][] | select(.body | contains("<!-- SDK_REVIEW -->")) | .body] | join("\n")' \
-      | grep -qF '<GHA_RUN_URL>' \
-      && echo "REPLAY: this run already posted its review summary"
-    ```
-
-    If that prints `REPLAY`, **stop the entire run here**: post nothing,
-    set no commit status, resolve no threads, do not continue to Phase 1.
-    The review was already delivered by the pass that died.
-
-    Key the guard on the run URL, never on `HEAD_SHA` alone — a genuine
-    re-trigger against an unchanged HEAD comes from a *different* run and
-    must still produce a review.
-
-    This guard only catches a replay that re-enters the prompt from the top.
-    A provider-level retry that replays a single assistant *turn* re-executes
-    the `gh api … /comments -f body=…` call directly, with no prompt to
-    re-read — that is how #3276 collected the identical summary five times.
-    Nothing you can write here prevents it, so the workflow cleans up after
-    it: `sdk_review_dedupe_verdicts.py` runs once the stream closes, keeps the
-    newest summary this run posted and minimizes the rest (FND-636). It
-    identifies "this run's" summaries by the `<GHA_RUN_URL>` in the §3e
-    footer, the same key this guard greps — which is another reason that line
-    is not optional. Drop it and the collapse silently stops working.
-
-    **Bot-trigger dedupe guard — run immediately after the replay guard.**
-    This is now a *backstop*, not the authority. Since FND-636 the
-    authoritative check is the `Dedupe check` step at the top of
-    `sdk-review-dispatch`, which runs under the per-PR concurrency lock and
-    declines before a sandbox is booted at all — deciding it here meant the
-    sandbox had to start and reason before it could decline, so the run was
-    paid for either way, and a degraded model skipped the check entirely
-    (five duplicate triggers on #3285 became five runs). Keep this guard: it
-    costs one API call, and it still catches the case where the comment
-    landed between the workflow's read and the sandbox's start.
-
-    Check: if `COMMENTER` is an automated trigger (`mothership-ai[bot]`
-    or `atlan-ci`) **and** the newest summary's `<!-- REVIEWED_HEAD -->`
-    equals `HEAD_SHA`, this run is a duplicate. Stop without posting.
-    Humans (`COMMENTER` is any other login) are never stopped by this
-    guard — re-reading the same diff is a legitimate human request.
-
-    Use "newest summary" (the body already in `/tmp/PRIOR_REVIEW.md`),
-    never the oldest.
-
-    ```bash
-    # COMMENTER and HEAD_SHA are from the prompt header.
-    BOT_TRIGGERS="mothership-ai[bot] atlan-ci"
-    if echo "$BOT_TRIGGERS" | grep -qF "$COMMENTER"; then
-      NEWEST_REVIEWED_HEAD=$(grep -oE '<!-- REVIEWED_HEAD: [0-9a-f]{40} -->' /tmp/PRIOR_REVIEW.md \
-        | grep -oE '[0-9a-f]{40}' || true)
-      if [ -n "$NEWEST_REVIEWED_HEAD" ] && [ "$NEWEST_REVIEWED_HEAD" = "$HEAD_SHA" ]; then
-        echo "SKIP: bot-trigger dedupe — @${COMMENTER} re-triggered on HEAD ${HEAD_SHA} which the newest summary already reviewed. Backstop for the workflow's locked dedupe check. Stopping without posting."
-        # S4: Restore the commit status so the dispatch run's pending state
-        # does not linger after this no-op. The dispatch run always sets
-        # sdk-review to "pending" before the sandbox starts. If the sandbox
-        # exits here without posting a new verdict comment, the fast-path
-        # approve workflow never fires, and the pending status persists —
-        # which is misleading (the review was already delivered). Re-apply
-        # the status implied by the prior verdict.
-        PRIOR_VERDICT=$(grep -oE '<!-- VERDICT: [A-Z_]+ -->' /tmp/PRIOR_REVIEW.md \
-          | grep -oE '[A-Z_]+' | head -1 || true)
-        case "$PRIOR_VERDICT" in
-          "READY_TO_MERGE")
-            gh api "repos/${REPO}/statuses/${HEAD_SHA}" -X POST \
-              -f state=success -f context=sdk-review \
-              -f description="Approved (bot-retrigger skipped: already reviewed this HEAD)" 2>/dev/null || true;;
-          "")
-            : # No prior verdict found — leave status as-is to avoid stomping
-            ;;
-          *)
-            gh api "repos/${REPO}/statuses/${HEAD_SHA}" -X POST \
-              -f state=failure -f context=sdk-review \
-              -f description="Verdict: ${PRIOR_VERDICT} (bot-retrigger skipped: already reviewed this HEAD)" 2>/dev/null || true;;
-        esac
-        exit 0
-      fi
-    fi
-    ```
+    **Replay and duplicate-trigger guards are sandbox-only** — Appendix A.
+    They exist because mothership recovers a dropped stream by re-running
+    this prompt from the top in the SAME sandbox, and because a bot can
+    re-trigger a review of a HEAD already reviewed. `@sdk-loop` has neither
+    shape: opencode is invoked once per job, and its Fence job decides
+    duplicate triggers before any model runs.
 
 6c. **Compute the re-review delta (scope-cutter).** Each review summary
     stamps the HEAD it reviewed as `<!-- REVIEWED_HEAD: <sha> -->` (§3e).
@@ -381,14 +331,19 @@ BUDGET
    On a re-review with a known delta (step 6c), the *breadth* of Phases 1–2
    is cut to that delta per step 11b — the continuity rules are unchanged.
 
-   The review is **read-only**: it never commits or pushes to the PR branch.
 
 8. **Branch freshness + conflict resolution** (before reviewing):
    ```bash
    MERGE_STATUS=$(jq -r '.mergeStateStatus' /tmp/PR.json)
    ```
 
-   If `BEHIND`:
+   If `BEHIND` — **sandbox only.** `update-branch` writes to the PR branch and
+   needs `contents: write`; the `@sdk-loop` review phase holds a token without
+   it, so this 403s. On that lane, review the branch as it is and note it in
+   the summary — a base merge cannot introduce a finding in the PR's own
+   hunks, which is what the review is about. Do not retry, and do not report
+   the 403 as a defect.
+
    ```bash
    # Tier 1: GitHub-side update (merges base into the PR branch)
    gh api "repos/$REPO/pulls/$PR_NUMBER/update-branch" \
@@ -402,29 +357,21 @@ BUDGET
    ```
 
    If `CONFLICTING`: do NOT attempt a local merge or push — the review is
-   read-only and never commits or pushes to the PR branch (a
-   conflict-resolution merge is the author's decision, not the reviewer's;
-   this also keeps ORCHESTRATION consistent with CLAUDE.md's read-only
-   guarantee). Submit minimal review: "PR has merge conflicts. Please
+   read-only (see Runtime). A conflict-resolution merge is the author's
+   decision, not the reviewer's. Submit minimal review: "PR has merge conflicts. Please
    rebase or comment `@sdk-review` after resolving conflicts." Set the
    verdict in §3e to `NEEDS_REBASE` (the structured marker is
    `<!-- VERDICT: NEEDS_REBASE -->`); the GHA layer applies the
    `sdk-review-needs-rebase` label from there. EXIT.
 
-9. **CI status read** (summary line ONLY — CI is not a verdict input):
-   ```bash
-   FAILING=$(gh pr checks "$PR_NUMBER" --repo "$REPO" \
-     --json name,conclusion --jq '.[] | select(.conclusion=="failure") | .name' 2>/dev/null)
-   ```
-   Record `FAILING` for the `**CI:**` summary line and nothing else. The
-   review is **read-only**: it does NOT run pre-commit, read CI logs, fix CI,
-   commit, or push — and it does NOT gate the verdict on CI.
-   `sdk-review-downgrade-on-ci-failure.yml` enforces CI event-driven and
-   race-free: CI legs routinely finish AFTER the review posts, so a
-   reviewer-side CI gate is both racy (it reads a snapshot) and redundant
-   (the workflow strips any approval the moment a non-review check fails).
-   This is the only CI read in the review — there is no post-review
-   re-check.
+9. **Do not read CI.** Removed, not moved: the review cannot act on a check
+   either way — it holds no write scope on this lane — and
+   `sdk-review-downgrade-on-ci-failure.yml` already enforces CI against the
+   verdict event-driven, which is the only race-free way to do it. CI legs
+   routinely finish AFTER a review posts, so a reviewer-side snapshot was
+   always a stale fact reported next to a verdict it could not influence.
+   Under `@sdk-loop` the prep phase owns branch and check state before the
+   first review starts. Spend no turn on `gh pr checks`.
 
 10. Read the repo's `CLAUDE.md` for project conventions.
 
@@ -592,12 +539,16 @@ this HEAD run the same commands the reviewer used to re-run wholesale
 lint and SDK imports`). Read them instead:
 
 ```bash
-gh pr checks "$PR_NUMBER" --repo "$REPO" --json name,conclusion \
-  --jq '.[] | select(.name | startswith("Contract Toolkit")) | .name + " " + (.conclusion // "pending")' \
+# `bucket`, NOT `conclusion`. `gh pr checks --json` has no `conclusion`
+# field: it prints "Unknown JSON field" to stderr, EXITS 0, and writes
+# nothing to stdout — so this file would be empty and every leg would read
+# as missing. Buckets are pass / fail / skipping / pending.
+gh pr checks "$PR_NUMBER" --repo "$REPO" --json name,bucket \
+  --jq '.[] | select(.name | startswith("Contract Toolkit")) | .name + " " + .bucket' \
   > /tmp/TOOLKIT_CI_LEGS.txt
 ```
 
-- Every leg `success` → record the legs as the local-check evidence in the
+- Every leg `pass` → record the legs as the local-check evidence in the
   ledger. Run a local command ONLY as the substrate for probing CI cannot
   express — guard ablations, scratch collision contracts, comparing
   PR-generated artifacts against a consumer's expectations.
@@ -966,6 +917,13 @@ For `toolkit-review.md`, also pass `contract-toolkit/AGENTS.md`,
 present. The toolkit agent must not include private consumer repo names, paths,
 or SHAs in public findings.
 
+**A dispatch cannot be interrupted, so this is your LAST decision point.**
+Once Wave 1 is dispatched you regain control only when the agents return —
+`budget.sh` runs at phase boundaries, and the next boundary is after them.
+Measured: 43 minutes inside a single dispatch against a 15-minute hard stop,
+which then printed `OVER HARD STOP` to nobody who could act on it. Spend the
+check here or not at all.
+
 **Degradation priority** — run `bash /tmp/budget.sh` BEFORE dispatching
 Wave 1 and drop agents by the measured percentage, not by feel:
 
@@ -1187,11 +1145,9 @@ MEDIUM/LOW/INFO findings: one-line suggested_fix only. No path_forward.
 | NEEDS_FIXES | Critical, G4/G6, **any Important, any Nit** | REQUEST_CHANGES |
 | READY_TO_MERGE | **`### Findings` is empty — 0 Critical, 0 Important AND 0 Nit** | APPROVE |
 
-CI is deliberately NOT a verdict input. `sdk-review-downgrade-on-ci-failure.yml`
-strips an approval event-driven the moment any non-review check fails —
-the only race-free enforcement, since CI legs routinely finish after the
-review posts. The reviewer reports CI state on the `**CI:**` summary line
-(from the single Phase 0 step 9 read) and nothing more.
+CI is not a verdict input and is not reported. `sdk-review-downgrade-on-ci-failure.yml`
+strips an approval event-driven the moment any non-review check fails — the only
+race-free enforcement, since CI legs routinely finish after the review posts.
 
 `READY_TO_MERGE` is strict: **any** finding still listed under
 `### Findings` forces `NEEDS_FIXES`, whatever its tier. A single
@@ -1439,9 +1395,7 @@ scopes.
 <contents of /tmp/TOOLKIT_ROVER_NOTE.md>
 
 ---
-**CI:** all passing | N failing
-**Models:** <primary review model> (review) + <adversarial model — or "adversarial skipped (<reason>)">
-**Cross-model agreement:** X/Y confirmed by both
+**Models:** <primary review model>
 **Run:** [view workflow logs + cost](<GHA_RUN_URL>)
 ```
 
@@ -1528,12 +1482,15 @@ fi
 # /tmp/inline-comments/*.md and must have passed the redaction gate above.
 # Post inline comments by reading the body from that staged file only.
 
-# Commit status — set the sdk-review check explicitly.
-gh api "repos/$REPO/statuses/$HEAD_SHA" \
-  -f context="sdk-review" \
-  -f state="$STATE" \
-  -f description="$DESCRIPTION"
-# where STATE ∈ success|failure|pending and DESCRIPTION ≤ 140 chars
+# Commit status — NOT set here. §3c is the authority: the GHA layer owns the
+# verdict stamp, and `sdk-review-approve-on-verdict.yml` sets the sdk-review
+# status when it sees the summary's `<!-- VERDICT: X -->` marker. This block
+# used to POST it too, contradicting §3c and racing the workflow for the same
+# context. Under @sdk-loop it also 403s outright: that phase holds a token
+# with no `statuses` scope, by design.
+#
+# The one place the sandbox DOES set status is the §6b dedupe path, and only
+# because that path posts no summary, so nothing downstream would ever fire.
 
 # Stamp the reviewed HEAD SHA into the REVIEWED_HEAD marker — safety
 # net in case the LLM wrote the `<HEAD_SHA>` placeholder literally
@@ -1570,9 +1527,8 @@ Retry once on 5xx from the GitHub API. On 422 (malformed inline
 comment because the line is not in the diff), drop that one finding
 and continue with the rest.
 
-There is no post-review CI re-check: the `**CI:**` line comes from the
-single Phase 0 step 9 read, and `sdk-review-downgrade-on-ci-failure.yml`
-owns enforcement for anything that finishes after the review posts.
+The review reads no CI state at all — see Phase 0 step 9.
+`sdk-review-downgrade-on-ci-failure.yml` owns that entirely.
 
 Print: `[Phase 3 complete] Review submitted`
 
@@ -1593,3 +1549,140 @@ Submit minimal:
   "findings": []
 }
 ```
+
+
+---
+
+## Appendix A: Sandbox-only run guards
+
+Everything here is for the **mothership sandbox**. `@sdk-loop` skips this
+section entirely — its harness does the same jobs in Python, before any model
+runs, which is both cheaper and not subject to an agent deciding to skip a
+step. Kept out of the main flow so the common path stays readable rather than
+carrying ~120 lines that two thirds of runs must reason past.
+
+A1. **Reset per-run review artifacts** — these files are load-bearing signals
+    across later phases, so never let a prior iteration in the same sandbox
+    affect the current verdict or public post:
+    ```bash
+    mkdir -p /tmp/inline-comments
+    find /tmp/inline-comments -type f \( -name '*.md' -o -name '*.json' \) -delete
+    ```
+    The toolkit ledger files (`/tmp/TOOLKIT_*.md|txt`) are reset at the top of
+    Phase 1b-toolkit — the only place that writes them — so non-toolkit scopes
+    don't touch them at all.
+
+A2. **Stale SHA guard** — bail if the PR has moved since dispatch:
+   ```bash
+   CURRENT_SHA=$(jq -r '.headRefOid' /tmp/PR.json)
+   if [ "$CURRENT_SHA" != "$HEAD_SHA" ]; then
+     echo "PR moved from $HEAD_SHA to $CURRENT_SHA since dispatch — aborting cleanly."
+     # Submit a minimal review so the status check doesn't stay pending,
+     # then exit. A fresh @sdk-review on the new HEAD gets a new session.
+     exit 0
+   fi
+   ```
+
+
+**A3. Same-run replay guard — run this immediately after loading
+`/tmp/PRIOR_REVIEW.md`, before anything else.** When the Claude
+stream drops mid-run (sandbox VPN reconnect, container eviction,
+transient API error), mothership recovers by re-running this prompt
+**from the top in the same sandbox** — a fresh run, not a `--resume`.
+If the first pass had already posted its summary, that retry loads
+its own summary as `PRIOR_REVIEW`, sees an empty delta, and posts a
+SECOND summary for the same HEAD. The PR then shows two reviews with
+different wording from a single `@sdk-review` trigger, and the
+workflow's soft-success check passes because *a* summary exists.
+
+Every summary's footer carries the run URL that produced it (§3e),
+and §3f posts the summary **last**, after the inline comments and the
+commit status — so a summary bearing this run's URL means this run's
+submission completed in full. Check *every* summary on the PR, not
+just the one 6b loaded: that one is only the latest, and an unrelated
+review landing between the first pass and the replay would hide this
+run's footer behind it.
+
+```bash
+# GHA_RUN_URL is given in the session prompt — substitute it literally,
+# shell variables do not persist between Bash calls.
+gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate --slurp 2>/dev/null \
+  | jq -r '[.[][] | select(.body | contains("<!-- SDK_REVIEW -->")) | .body] | join("\n")' \
+  | grep -qF '<GHA_RUN_URL>' \
+  && echo "REPLAY: this run already posted its review summary"
+```
+
+If that prints `REPLAY`, **stop the entire run here**: post nothing,
+set no commit status, resolve no threads, do not continue to Phase 1.
+The review was already delivered by the pass that died.
+
+Key the guard on the run URL, never on `HEAD_SHA` alone — a genuine
+re-trigger against an unchanged HEAD comes from a *different* run and
+must still produce a review.
+
+This guard only catches a replay that re-enters the prompt from the top.
+A provider-level retry that replays a single assistant *turn* re-executes
+the `gh api … /comments -f body=…` call directly, with no prompt to
+re-read — that is how #3276 collected the identical summary five times.
+Nothing you can write here prevents it, so the workflow cleans up after
+it: `sdk_review_dedupe_verdicts.py` runs once the stream closes, keeps the
+newest summary this run posted and minimizes the rest (FND-636). It
+identifies "this run's" summaries by the `<GHA_RUN_URL>` in the §3e
+footer, the same key this guard greps — which is another reason that line
+is not optional. Drop it and the collapse silently stops working.
+
+**A4. Bot-trigger dedupe guard — run immediately after the replay guard.**
+This is now a *backstop*, not the authority. Since FND-636 the
+authoritative check is the `Dedupe check` step at the top of
+`sdk-review-dispatch`, which runs under the per-PR concurrency lock and
+declines before a sandbox is booted at all — deciding it here meant the
+sandbox had to start and reason before it could decline, so the run was
+paid for either way, and a degraded model skipped the check entirely
+(five duplicate triggers on #3285 became five runs). Keep this guard: it
+costs one API call, and it still catches the case where the comment
+landed between the workflow's read and the sandbox's start.
+
+Check: if `COMMENTER` is an automated trigger (`mothership-ai[bot]`
+or `atlan-ci`) **and** the newest summary's `<!-- REVIEWED_HEAD -->`
+equals `HEAD_SHA`, this run is a duplicate. Stop without posting.
+Humans (`COMMENTER` is any other login) are never stopped by this
+guard — re-reading the same diff is a legitimate human request.
+
+Use "newest summary" (the body already in `/tmp/PRIOR_REVIEW.md`),
+never the oldest.
+
+```bash
+# COMMENTER and HEAD_SHA are from the prompt header.
+BOT_TRIGGERS="mothership-ai[bot] atlan-ci"
+if echo "$BOT_TRIGGERS" | grep -qF "$COMMENTER"; then
+  NEWEST_REVIEWED_HEAD=$(grep -oE '<!-- REVIEWED_HEAD: [0-9a-f]{40} -->' /tmp/PRIOR_REVIEW.md \
+    | grep -oE '[0-9a-f]{40}' || true)
+  if [ -n "$NEWEST_REVIEWED_HEAD" ] && [ "$NEWEST_REVIEWED_HEAD" = "$HEAD_SHA" ]; then
+    echo "SKIP: bot-trigger dedupe — @${COMMENTER} re-triggered on HEAD ${HEAD_SHA} which the newest summary already reviewed. Backstop for the workflow's locked dedupe check. Stopping without posting."
+    # S4: Restore the commit status so the dispatch run's pending state
+    # does not linger after this no-op. The dispatch run always sets
+    # sdk-review to "pending" before the sandbox starts. If the sandbox
+    # exits here without posting a new verdict comment, the fast-path
+    # approve workflow never fires, and the pending status persists —
+    # which is misleading (the review was already delivered). Re-apply
+    # the status implied by the prior verdict.
+    PRIOR_VERDICT=$(grep -oE '<!-- VERDICT: [A-Z_]+ -->' /tmp/PRIOR_REVIEW.md \
+      | grep -oE '[A-Z_]+' | head -1 || true)
+    case "$PRIOR_VERDICT" in
+      "READY_TO_MERGE")
+        gh api "repos/${REPO}/statuses/${HEAD_SHA}" -X POST \
+          -f state=success -f context=sdk-review \
+          -f description="Approved (bot-retrigger skipped: already reviewed this HEAD)" 2>/dev/null || true;;
+      "")
+        : # No prior verdict found — leave status as-is to avoid stomping
+        ;;
+      *)
+        gh api "repos/${REPO}/statuses/${HEAD_SHA}" -X POST \
+          -f state=failure -f context=sdk-review \
+          -f description="Verdict: ${PRIOR_VERDICT} (bot-retrigger skipped: already reviewed this HEAD)" 2>/dev/null || true;;
+    esac
+    exit 0
+  fi
+fi
+```
+

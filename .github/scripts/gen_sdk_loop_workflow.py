@@ -105,9 +105,20 @@ concurrency:
 permissions:
   contents: read
   pull-requests: write
+  # The fence runs `gh run list` to find a loop already working this PR. An
+  # explicit permissions block makes everything unlisted `none`, so without
+  # this the duplicate check 403s, the fence raises before it can post, and
+  # the lane goes silent — the failure mode it exists to prevent.
+  actions: read
+  # Reactions are an Issues-scope resource, so the acknowledgement 403s
+  # without this. Caught by test_react_to_comment.py, which asserts every
+  # workflow calling the helper grants it — the same Issues-vs-PR distinction
+  # the fleet App token needed for posting the verdict comment.
+  issues: write
 
 jobs:
   fence:
+    name: Fence
     runs-on: ubuntu-latest
     timeout-minutes: 6
     if: >-
@@ -121,10 +132,10 @@ jobs:
       base_sha: ${{ steps.fence.outputs.base_sha }}
       reason: ${{ steps.fence.outputs.reason }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: '3.14'
       - name: Authorize, dismiss duplicates, pin the baseline
         id: fence
         env:
@@ -137,19 +148,34 @@ jobs:
           GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           WORKFLOW_FILE: sdk-loop.yml
         run: python3 .github/scripts/sdk_loop_fence.py
+
+      # The same acknowledgement the other two lanes give: an emoji within
+      # seconds, long before any verdict exists, so whoever typed @sdk-loop
+      # knows it registered. Runs after the fence so it can reflect the
+      # decision, and always() because the script exits 0 by design — a
+      # missing emoji must never take down the run it is decorating.
+      - name: React to the trigger comment
+        if: always() && github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          REACTION: ${{ steps.fence.outputs.proceed == 'true' && 'eyes' || 'confused' }}
+        run: python3 .github/scripts/react_to_comment.py
 """
 
 FOOTER = """
   finalize:
+    name: Summary
     needs: [fence, {all_phases}]
     if: always() && needs.fence.outputs.proceed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 6
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: '3.14'
       - name: Post the run summary
         env:
           GH_TOKEN: ${{{{ secrets.GITHUB_TOKEN }}}}
@@ -162,6 +188,34 @@ FOOTER = """
 """
 
 
+def prep_job() -> str:
+    """Branch and check hygiene, once, before the first review.
+
+    Holds write scope so it can push a MECHANICAL fix — formatting, lint,
+    generated drift — for a check the review could only have reported. It
+    does not update a behind branch and does not resolve conflicts: both are
+    changes to somebody's PR that they did not ask for, and neither is needed
+    to review, since the review reads the diff against base. Both are
+    reported and left alone.
+
+    Deterministic for a healthy PR — a few `gh` reads and no model at all.
+    """
+    return """
+  prep:
+    name: Prep
+    needs: [fence]
+    if: needs.fence.outputs.proceed == 'true'
+    uses: ./.github/workflows/sdk-loop-phase.yml
+    secrets: inherit
+    with:
+      phase: prep
+      round: 0
+      pr: ${{ needs.fence.outputs.pr }}
+      head_ref: ${{ needs.fence.outputs.head_ref }}
+      base_sha: ${{ needs.fence.outputs.base_sha }}
+"""
+
+
 def review_job(n: int) -> str:
     """Review round n.
 
@@ -171,13 +225,22 @@ def review_job(n: int) -> str:
     the branch is actually on, so a round that starts is never already stale.
     """
     if n == 1:
-        gate = "needs.fence.outputs.proceed == 'true'"
-        needs = "[fence]"
-        base = "${{ needs.fence.outputs.base_sha }}"
-        ours = "''"
+        # `!cancelled()` rather than a dependency on prep SUCCEEDING: a prep
+        # that could not tidy the branch must not cost the review. A branch
+        # left behind still reviews correctly.
+        gate = "!cancelled() && needs.fence.outputs.proceed == 'true'"
+        needs = "[fence, prep]"
+        # Fall back to the fence when prep skipped or failed — an empty
+        # `new_base_sha` would checkout `ref: ''`.
+        base = "${{ needs.prep.outputs.new_base_sha || needs.fence.outputs.base_sha }}"
+        # Prep pushes. Without carrying its sha as `ours`, round 1 sees
+        # live != baseline with an empty ours-list, calls it `moved_by_other`
+        # and re-aims — burning a round every time prep does its job.
+        ours = "${{ needs.prep.outputs.pushed_sha }}"
         ledger = "''"
         prior_sha = "''"
         spent = "''"
+        reaims = "''"
     else:
         prev_res, prev_rev = f"resolve-{n - 1}", f"review-{n - 1}"
         # Continue when the previous resolve made progress, or when either
@@ -201,8 +264,10 @@ def review_job(n: int) -> str:
             "${{ needs.%s.outputs.spent_total || needs.%s.outputs.spent_total }}"
             % (prev_res, prev_rev)
         )
+        reaims = "${{ needs.%s.outputs.reaims }}" % prev_rev
     return f"""
   review-{n}:
+    name: Review {n}
     needs: {needs}
     if: >-
       {gate}
@@ -218,6 +283,7 @@ def review_job(n: int) -> str:
       ledger: {ledger}
       prior_sha: {prior_sha}
       spent_so_far: {spent}
+      reaims_so_far: {reaims}
 """
 
 
@@ -230,9 +296,16 @@ def resolve_job(n: int) -> str:
     """
     prev = f"review-{n}"
     prev_res = f"resolve-{n - 1}" if n > 1 else None
+    # The ledger comes from the PREVIOUS resolve, so that job has to be in
+    # `needs` — GitHub rejects the whole workflow at parse time for a
+    # `needs.<job>` reference to a job the caller does not depend on, which
+    # means no jobs run and the fence never gets to say why. The `!cancelled()`
+    # in the gate keeps a skipped previous resolve from blocking this one.
+    needs = f"[fence, {prev}]" if prev_res is None else f"[fence, {prev}, {prev_res}]"
     return f"""
   resolve-{n}:
-    needs: [fence, {prev}]
+    name: Resolve {n}
+    needs: {needs}
     if: >-
       !cancelled() && needs.{prev}.outputs.outcome == 'ok'
     uses: ./.github/workflows/sdk-loop-phase.yml
@@ -272,21 +345,27 @@ def _rounds_expr() -> str:
                 '"verdict":"${{ needs.%s.outputs.verdict }}",'
                 '"sha":"${{ needs.%s.outputs.new_base_sha }}",'
                 '"detail":"${{ needs.%s.outputs.detail }}",'
-                '"cost":"${{ needs.%s.outputs.cost }}"}'
-                % (n, phase, job, job, job, job, job)
+                '"cost":"${{ needs.%s.outputs.cost }}",'
+                '"usage":"${{ needs.%s.outputs.usage }}"}'
+                % (n, phase, job, job, job, job, job, job)
             )
     return "'[" + ",".join(rows) + "]'"
 
 
 def build() -> str:
-    body = [HEADER]
+    body = [HEADER, prep_job()]
     for n in range(1, MAX_ROUNDS + 1):
         body.append(review_job(n))
         body.append(resolve_job(n))
+    # `prep` belongs in the Summary's `needs` too, or its row never reaches
+    # the round table and a branch update looks like it never happened.
     all_phases = ", ".join(
-        f"{phase}-{n}"
-        for n in range(1, MAX_ROUNDS + 1)
-        for phase in ("review", "resolve")
+        ["prep"]
+        + [
+            f"{phase}-{n}"
+            for n in range(1, MAX_ROUNDS + 1)
+            for phase in ("review", "resolve")
+        ]
     )
     body.append(
         FOOTER.format(
@@ -317,7 +396,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(content, encoding="utf-8")
-    print(f"wrote {OUT} ({MAX_ROUNDS} rounds, {2 * MAX_ROUNDS + 2} jobs)")
+    print(f"wrote {OUT} ({MAX_ROUNDS} rounds, {2 * MAX_ROUNDS + 3} jobs)")
     return 0
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 from pathlib import Path
@@ -13,6 +14,7 @@ import pytest
 
 from application_sdk import constants
 from application_sdk.storage.batch import download_prefix, list_keys
+from application_sdk.storage.chunked import _part_path, _transfer_state_path
 from application_sdk.storage.errors import StorageError, StorageNotFoundError
 from application_sdk.storage.factory import create_local_store, create_memory_store
 from application_sdk.storage.ops import (
@@ -881,7 +883,9 @@ class TestResumableChunkedDownload:
     CONTENT = bytes(range(38))  # 5 chunks at chunk_size=8 (last chunk 6 bytes)
 
     def _state_path(self, out: Path) -> Path:
-        return Path(str(out) + ".transfer-state")
+        state = _transfer_state_path(out)
+        state.parent.mkdir(parents=True, exist_ok=True)
+        return state
 
     async def test_fresh_download_pins_etag_and_removes_state(
         self, store, tmp_path
@@ -940,8 +944,8 @@ class TestResumableChunkedDownload:
                 normalize=False,
             )
 
-        # Partial file + checkpoint survive the failure (chunks 0,1 done).
-        assert out.exists()
+        assert _part_path(out).exists()
+        assert not out.exists()
         state = orjson.loads(self._state_path(out).read_bytes())
         assert state["done"] == [0, 1]
 
@@ -1341,7 +1345,6 @@ class TestResumableChunkedDownload:
     ) -> None:
         # gather() does not cancel siblings on first failure; the except path
         # must cancel + drain them BEFORE closing the fd (BLDX-1523 orphan fix).
-        import asyncio
 
         await _put("res/q.bin", self.CONTENT, store, normalize=False)
         out = tmp_path / "q.bin"
@@ -1388,7 +1391,6 @@ class TestResumableChunkedDownload:
         # must get the same sibling-drain + fd close as a chunk failure —
         # otherwise a long-lived worker leaks an fd (and an orphaned writer)
         # per cancelled download.
-        import asyncio
 
         await _put("res/s.bin", self.CONTENT, store, normalize=False)
         out = tmp_path / "s.bin"
@@ -1401,7 +1403,7 @@ class TestResumableChunkedDownload:
 
         def recording_open(p, *a, **kw):
             fd = real_open(p, *a, **kw)
-            if str(p) == str(out):
+            if str(p) == str(_part_path(out)):
                 opened_fds.append(fd)
             return fd
 
@@ -1442,8 +1444,8 @@ class TestResumableChunkedDownload:
 
         assert sibling_cancelled.is_set()
         assert opened_fds and all(fd in closed_fds for fd in opened_fds)
-        # Partial file stays on disk — a later retry resumes from checkpoint.
-        assert out.exists()
+        assert _part_path(out).exists()
+        assert not out.exists()
 
     async def test_50gb_equivalent_chunk_count_mechanics(self, store, tmp_path) -> None:
         # 50 GiB at the production 16 MiB chunk size is 3200 chunks. Validate
@@ -2250,3 +2252,57 @@ class TestUploadPartSizeConfiguration:
             await upload_file("k", f, store, normalize=False, verify=False)
 
         assert writer.call_args.kwargs["max_concurrency"] == 4
+
+
+class TestUploadFileRelocationClassification:
+    """A mid-run bucket relocation must surface typed, not as a generic StorageError.
+
+    Defence in depth for the preflight storage probe: a relocation that starts
+    *after* the gate passed still hits the upload path, and the failure must
+    carry the platform-attributed relocation code and remediation hint instead
+    of the generic DEPENDENCY_UNAVAILABLE_STORAGE.
+    """
+
+    _RELOCATION_MESSAGE = (
+        "Generic GCS error: Server returned non-2xx status code: 400 Bad "
+        "Request: <Error><Code>PreconditionFailed</Code><Message>Invalid "
+        "precondition during a custom dual-region, or multi-region bucket "
+        "relocation.</Message></Error>"
+    )
+
+    async def test_relocation_raises_typed_error(self, store, tmp_path) -> None:
+        from unittest import mock
+
+        from application_sdk.storage.errors import StorageBucketRelocationError
+
+        f = tmp_path / "column.json"
+        f.write_bytes(b"{}")
+        with mock.patch(
+            "application_sdk.storage.ops.obstore.open_writer_async",
+            side_effect=Exception(self._RELOCATION_MESSAGE),
+        ):
+            with pytest.raises(StorageBucketRelocationError) as excinfo:
+                await upload_file("test/column.json", f, store)
+        err = excinfo.value
+        assert err.code == "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
+        assert err.suggested_action and "relocation" in err.suggested_action
+        assert err.key == "test/column.json"
+        # The human-readable log line must carry the dedicated AAF code too —
+        # dashboards keyed on AAF-STR-* must be able to tell a relocation from
+        # the generic AAF-STR-004 the original incident was chased under.
+        assert "[AAF-STR-008]" in str(err)
+
+    async def test_ordinary_failure_still_generic(self, store, tmp_path) -> None:
+        from unittest import mock
+
+        from application_sdk.storage.errors import StorageError
+
+        f = tmp_path / "column.json"
+        f.write_bytes(b"{}")
+        with mock.patch(
+            "application_sdk.storage.ops.obstore.open_writer_async",
+            side_effect=Exception("connection reset by peer"),
+        ):
+            with pytest.raises(StorageError) as excinfo:
+                await upload_file("test/column.json", f, store)
+        assert excinfo.value.code == "DEPENDENCY_UNAVAILABLE_STORAGE"

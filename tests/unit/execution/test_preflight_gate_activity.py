@@ -77,8 +77,10 @@ class _StubHandler(Handler):
         return SqlMetadataOutput(objects=[])
 
 
-def _gate(handler: Handler):
-    activity = build_preflight_gate_activity(handler, app_name="myapp")
+def _gate(handler: Handler, *, verify_storage: bool = False):
+    activity = build_preflight_gate_activity(
+        handler, app_name="myapp", verify_storage=verify_storage
+    )
     assert getattr(activity, "__temporal_activity_definition").name == "myapp:preflight"
     return activity
 
@@ -1508,3 +1510,498 @@ class TestPersistenceCanNeverFailTheRun:
         with self._exploding():
             result = await gate(self._input())
         assert result.status is PreflightStatus.NOT_READY
+
+
+class TestPreflightGateStorageChecks:
+    """The per-app opt-in storage probe folded into the gate verdict."""
+
+    @staticmethod
+    def _reloc_result():
+        from application_sdk.storage.preflight import ObjectStoreCheckResult
+
+        return ObjectStoreCheckResult(
+            label="deployment",
+            binding_name="objectstore",
+            passed=False,
+            error_class="bucket relocation in progress",
+            cause="400 PreconditionFailed: bucket relocation",
+            hint="retry after the relocation finishes",
+            failed_operation="write-multipart",
+        )
+
+    @staticmethod
+    def _passed_result():
+        from application_sdk.storage.preflight import ObjectStoreCheckResult
+
+        return ObjectStoreCheckResult(
+            label="deployment", binding_name="objectstore", passed=True
+        )
+
+    @staticmethod
+    @contextmanager
+    def _storage_patches(probe_results, *, sdr_mode: bool = False):
+        import application_sdk.constants as constants_mod
+
+        with ExitStack() as stack:
+            stack.enter_context(
+                mock.patch.object(constants_mod, "ENABLE_ATLAN_UPLOAD", sdr_mode)
+            )
+            stack.enter_context(
+                mock.patch(f"{_GATE}.get_infrastructure", return_value=mock.MagicMock())
+            )
+            checker = stack.enter_context(
+                mock.patch(
+                    "application_sdk.storage.preflight.check_run_storage_access",
+                    new=mock.AsyncMock(return_value=probe_results),
+                )
+            )
+            yield checker
+
+    async def test_storage_checks_off_by_default(self) -> None:
+        """Without the opt-in, the gate never touches the storage checker."""
+        gate = _gate(_StubHandler())
+        with self._storage_patches([self._reloc_result()]) as checker:
+            result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.READY
+        checker.assert_not_awaited()
+
+    async def test_relocation_blocks_hard_gate_with_typed_code(self) -> None:
+        """A failed probe downgrades READY and blocks in hard mode, platform-attributed."""
+        gate = build_preflight_gate_activity(
+            _StubHandler(), app_name="myapp", enforce=True, verify_storage=True
+        )
+        with self._storage_patches([self._reloc_result()]):
+            with pytest.raises(ApplicationError) as excinfo:
+                await gate(PreflightGateInput())
+        assert excinfo.value.type == "PreflightFailed"
+        details = excinfo.value.details[0]
+        assert details.code == "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
+        assert details.audience is Audience.PLATFORM
+
+    async def test_relocation_soft_gate_reports_not_ready(self) -> None:
+        """Soft mode: verdict honestly NOT_READY, run proceeds (no raise)."""
+        gate = build_preflight_gate_activity(
+            _StubHandler(), app_name="myapp", enforce=False, verify_storage=True
+        )
+        with self._storage_patches([self._reloc_result()]):
+            result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.NOT_READY
+        names = [c.name for c in result.checks]
+        assert "objectStoreAccess:deployment" in names
+        failed = next(c for c in result.checks if not c.passed)
+        assert failed.error is not None
+        assert failed.error.code == "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
+
+    async def test_healthy_storage_appends_passed_check(self) -> None:
+        gate = build_preflight_gate_activity(
+            _StubHandler(), app_name="myapp", enforce=True, verify_storage=True
+        )
+        with self._storage_patches([self._passed_result()]):
+            result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.READY
+        check = next(
+            c for c in result.checks if c.name == "objectStoreAccess:deployment"
+        )
+        assert check.passed is True
+
+    async def test_storage_checks_skipped_when_handler_already_not_ready(self) -> None:
+        """A blocked run is blocked; no storage probe spends more of the slot."""
+        verdict = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="auth", passed=False, message="denied")],
+        )
+        gate = build_preflight_gate_activity(
+            _VerdictHandler(verdict),
+            app_name="myapp",
+            enforce=False,
+            verify_storage=True,
+        )
+        with self._storage_patches([self._passed_result()]) as checker:
+            result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.NOT_READY
+        checker.assert_not_awaited()
+
+    async def test_storage_checker_crash_fails_open(self) -> None:
+        """An unexpected checker failure must never eat the handler's verdict."""
+        import application_sdk.constants as constants_mod
+
+        gate = build_preflight_gate_activity(
+            _StubHandler(), app_name="myapp", enforce=True, verify_storage=True
+        )
+        with ExitStack() as stack:
+            stack.enter_context(
+                mock.patch.object(constants_mod, "ENABLE_ATLAN_UPLOAD", False)
+            )
+            stack.enter_context(
+                mock.patch(f"{_GATE}.get_infrastructure", return_value=mock.MagicMock())
+            )
+            stack.enter_context(
+                mock.patch(
+                    "application_sdk.storage.preflight.check_run_storage_access",
+                    new=mock.AsyncMock(side_effect=RuntimeError("boom")),
+                )
+            )
+            result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.READY
+
+    async def test_storage_checks_skipped_when_budget_exhausted(self) -> None:
+        """Below the time floor the probe is skipped — storage stays unverified."""
+        gate = build_preflight_gate_activity(
+            _StubHandler(),
+            app_name="myapp",
+            enforce=True,
+            budget_seconds=5,
+            verify_storage=True,
+        )
+        with (
+            self._storage_patches([self._reloc_result()]) as checker,
+            mock.patch(f"{_GATE}._STORAGE_CHECK_MIN_SECONDS", 10_000.0),
+        ):
+            result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.READY
+        checker.assert_not_awaited()
+
+    async def test_sdr_mode_uses_role_aware_mapping(self) -> None:
+        """In SDR mode the deployment store maps via the SDR role split (USER)."""
+        gate = build_preflight_gate_activity(
+            _StubHandler(), app_name="myapp", enforce=False, verify_storage=True
+        )
+        with self._storage_patches([self._reloc_result()], sdr_mode=True):
+            result = await gate(PreflightGateInput())
+        failed = next(c for c in result.checks if not c.passed)
+        assert failed.error is not None
+        assert failed.error.code == "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
+        # Role-aware: an SDR deployment store is the customer's own bucket.
+        assert failed.error.audience is Audience.USER
+
+    async def test_storage_failure_on_non_final_attempt_retries(self) -> None:
+        """A failed probe defers to the gate's retry policy before blocking.
+
+        One flaky probe must not abort a hard-mode run on the first attempt —
+        the block is only a verdict once the app's declared attempts are
+        exhausted (mirrors the handler no-verdict path).
+        """
+        from datetime import timedelta
+
+        from application_sdk.execution._temporal.preflight_gate import (
+            PREFLIGHT_NO_VERDICT_ERROR_TYPE,
+        )
+
+        gate = build_preflight_gate_activity(
+            _StubHandler(),
+            app_name="myapp",
+            enforce=True,
+            attempts=2,
+            verify_storage=True,
+        )
+        info = mock.MagicMock()
+        info.attempt = 1
+        info.start_to_close_timeout = timedelta(seconds=155)
+        with (
+            self._storage_patches([self._reloc_result()]),
+            mock.patch(f"{_GATE}.activity.info", return_value=info),
+        ):
+            with pytest.raises(ApplicationError) as excinfo:
+                await gate(PreflightGateInput())
+        assert excinfo.value.type == PREFLIGHT_NO_VERDICT_ERROR_TYPE
+        assert excinfo.value.non_retryable is False
+
+    async def test_storage_failure_on_final_attempt_blocks(self) -> None:
+        """Retries exhausted → the storage failure becomes the blocking verdict."""
+        from datetime import timedelta
+
+        gate = build_preflight_gate_activity(
+            _StubHandler(),
+            app_name="myapp",
+            enforce=True,
+            attempts=2,
+            verify_storage=True,
+        )
+        info = mock.MagicMock()
+        info.attempt = 2
+        info.start_to_close_timeout = timedelta(seconds=155)
+        with (
+            self._storage_patches([self._reloc_result()]),
+            mock.patch(f"{_GATE}.activity.info", return_value=info),
+        ):
+            with pytest.raises(ApplicationError) as excinfo:
+                await gate(PreflightGateInput())
+        assert excinfo.value.type == "PreflightFailed"
+        assert (
+            excinfo.value.details[0].code == "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
+        )
+
+    def test_every_classifier_bucket_maps_to_a_typed_leaf(self) -> None:
+        """The gate mapper covers every bucket the storage classifier can emit.
+
+        Iterates the classifier's own enumerable bucket set (the coupling the
+        storage module documents for exactly this purpose) so a rule added or
+        renamed there without gate handling fails here instead of silently
+        taking a default branch. Also pins the relocation stamp to the
+        *imported* bucket constant — the gate holds no copied literal.
+        """
+        from application_sdk.execution._temporal.preflight_gate import (
+            _storage_failure_details,
+        )
+        from application_sdk.storage.errors import StorageBucketRelocationError
+        from application_sdk.storage.preflight import (
+            _OBJECT_STORE_ERROR_CLASSES,
+            RELOCATION_BUCKET,
+            ObjectStoreCheckResult,
+        )
+
+        OBJECT_STORE_RELOCATION_CODE = StorageBucketRelocationError.code
+
+        assert RELOCATION_BUCKET in _OBJECT_STORE_ERROR_CLASSES
+        for label in ("deployment", "upstream"):
+            for bucket in _OBJECT_STORE_ERROR_CLASSES:
+                probe = ObjectStoreCheckResult(
+                    label=label,
+                    binding_name="objectstore",
+                    passed=False,
+                    error_class=bucket,
+                    cause="probe failed",
+                    hint="fix it",
+                    failed_operation="write-multipart",
+                )
+                for sdr_mode in (False, True):
+                    details = _storage_failure_details(probe, sdr_mode=sdr_mode)
+                    assert details.code, (label, bucket, sdr_mode)
+                    assert details.audience is not None, (label, bucket, sdr_mode)
+                    if bucket == RELOCATION_BUCKET:
+                        assert details.code == OBJECT_STORE_RELOCATION_CODE
+
+    async def test_relocation_code_not_shadowed_by_failed_advisory_check(self) -> None:
+        """Reviewer repro: READY-with-failed-advisory must not steal the banner.
+
+        ``_build_block_error`` prefers ``result.error`` over the first failed
+        check's error; the storage downgrade pins ``result.error`` so the block
+        is attributed to storage, not to the handler's advisory row.
+        """
+        import time as _time
+
+        from application_sdk.errors.leaves import PreconditionError
+        from application_sdk.execution._temporal.preflight_gate import (
+            _append_storage_checks,
+            _build_block_error,
+        )
+        from application_sdk.handler.contracts import PreflightOutput
+
+        advisory = PreflightCheck(
+            name="sourceAdvisory",
+            passed=False,
+            message="advisory",
+            error=PreconditionError(message="advisory").to_failure_details(),
+        )
+        result = PreflightOutput(status=PreflightStatus.READY, checks=[advisory])
+        with self._storage_patches([self._reloc_result()]):
+            failed = await _append_storage_checks(result, 150.0, _time.monotonic())
+        assert failed is True
+        assert result.status is PreflightStatus.NOT_READY
+        block = _build_block_error(result, "myapp")
+        assert block.details[0].code == "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
+
+    async def test_partial_verdict_is_downgraded(self) -> None:
+        """Reviewer repro: PARTIAL proceeds today, so it must downgrade too."""
+        import time as _time
+
+        from application_sdk.execution._temporal.preflight_gate import (
+            _append_storage_checks,
+        )
+        from application_sdk.handler.contracts import PreflightOutput
+
+        result = PreflightOutput(status=PreflightStatus.PARTIAL, checks=[])
+        with self._storage_patches([self._reloc_result()]):
+            failed = await _append_storage_checks(result, 150.0, _time.monotonic())
+        assert failed is True
+        assert result.status is PreflightStatus.NOT_READY
+
+    async def test_handler_budget_reserves_storage_floor(self) -> None:
+        """Opting in must reserve the storage floor out of the advertised budget.
+
+        A handler that sizes its probes to ``PreflightInput.timeout_seconds`` —
+        exactly what the docs tell it to do — must still leave the storage
+        check its floor, or the opt-in silently degrades to a no-op skip.
+        """
+        from application_sdk.execution._temporal.preflight_gate import (
+            _STORAGE_CHECK_MIN_SECONDS,
+            GATE_TIMEOUT_DEFAULT_SECONDS,
+        )
+
+        handler = _StubHandler()
+        gate = build_preflight_gate_activity(
+            handler, app_name="myapp", verify_storage=True
+        )
+        with self._storage_patches([self._passed_result()]):
+            await gate(PreflightGateInput())
+        assert handler.preflight_input is not None
+        assert (
+            handler.preflight_input.timeout_seconds
+            <= GATE_TIMEOUT_DEFAULT_SECONDS - _STORAGE_CHECK_MIN_SECONDS
+        )
+
+    async def test_budget_skip_appends_visible_row(self) -> None:
+        """A budget-starved skip must be visible, not a debug-level nothing.
+
+        An app owner who opted in (and connector-pulse) must be able to tell
+        'storage verified clean' from 'storage never probed'.
+        """
+        gate = build_preflight_gate_activity(
+            _StubHandler(),
+            app_name="myapp",
+            enforce=True,
+            budget_seconds=5,
+            verify_storage=True,
+        )
+        with (
+            self._storage_patches([self._reloc_result()]) as checker,
+            mock.patch(f"{_GATE}._STORAGE_CHECK_MIN_SECONDS", 10_000.0),
+        ):
+            result = await gate(PreflightGateInput())
+        checker.assert_not_awaited()
+        assert result.status is PreflightStatus.READY
+        skipped = [c for c in result.checks if c.name == "objectStoreAccess:skipped"]
+        assert len(skipped) == 1
+        assert skipped[0].passed is False
+        assert "not verified" in skipped[0].message
+
+    async def test_error_pin_overwrites_handler_partial_error(self) -> None:
+        """The pin must be unconditional: the storage failure IS the reason the
+        verdict became NOT_READY, even when the handler set an aggregate error
+        on its PARTIAL verdict."""
+        import time as _time
+
+        from application_sdk.errors.leaves import PreconditionError
+        from application_sdk.execution._temporal.preflight_gate import (
+            _append_storage_checks,
+            _build_block_error,
+        )
+        from application_sdk.handler.contracts import PreflightOutput
+
+        result = PreflightOutput(
+            status=PreflightStatus.PARTIAL,
+            checks=[],
+            error=PreconditionError(message="partial advisory").to_failure_details(),
+        )
+        with self._storage_patches([self._reloc_result()]):
+            await _append_storage_checks(result, 150.0, _time.monotonic())
+        assert result.status is PreflightStatus.NOT_READY
+        from application_sdk.storage.errors import StorageBucketRelocationError
+
+        block = _build_block_error(result, "myapp")
+        assert block.details[0].code == StorageBucketRelocationError.code
+
+    @pytest.mark.parametrize("declared", [5, 10, 16, 20, 30, 150, 300])
+    async def test_reserve_never_starves_the_handler(self, declared: int) -> None:
+        """The storage reserve must never take the handler below half its budget.
+
+        An uncapped reserve hands a small-budget app's source handler a single
+        second and then attributes the timeout to the source — the failure the
+        credential-resolution guard exists to prevent, reached through the
+        opt-in instead. Half is the same bound ``_min_handler_seconds`` uses.
+        """
+        from application_sdk.execution._temporal.preflight_gate import (
+            _effective_budget,
+            resolve_gate_budget_seconds,
+        )
+
+        budget = _effective_budget(resolve_gate_budget_seconds(declared))
+        handler = _StubHandler()
+        gate = build_preflight_gate_activity(
+            handler,
+            app_name="myapp",
+            budget_seconds=resolve_gate_budget_seconds(declared),
+            verify_storage=True,
+        )
+        with self._storage_patches([self._passed_result()]):
+            await gate(PreflightGateInput())
+        assert handler.preflight_input is not None
+        # Half the budget, less the second the advertised value loses to
+        # ``int()`` truncation and credential-resolution elapsed time. The bug
+        # this pins gave a 10s-budget app's handler 1s, not 4s.
+        assert handler.preflight_input.timeout_seconds >= budget / 2 - 1, (
+            declared,
+            handler.preflight_input.timeout_seconds,
+        )
+
+    async def test_unverified_row_is_distinguishable_from_a_probe_failure(
+        self,
+    ) -> None:
+        """A skip and a real outage must not be the same row to a consumer.
+
+        Both are failed ``objectStoreAccess:*`` checks, so the only thing that
+        separates "never measured" from "the store rejected the write" is the
+        typed code — and connector-pulse counts these.
+        """
+        from application_sdk.execution._temporal.preflight_gate import (
+            OBJECT_STORE_UNVERIFIED_CODE,
+        )
+        from application_sdk.storage.errors import StorageBucketRelocationError
+
+        skipped_gate = build_preflight_gate_activity(
+            _StubHandler(), app_name="myapp", budget_seconds=5, verify_storage=True
+        )
+        with (
+            self._storage_patches([self._reloc_result()]),
+            mock.patch(f"{_GATE}._STORAGE_CHECK_MIN_SECONDS", 10_000.0),
+        ):
+            skipped = await skipped_gate(PreflightGateInput())
+        (skip_row,) = [c for c in skipped.checks if c.name.startswith("objectStore")]
+        assert skip_row.error is not None
+        assert skip_row.error.code == OBJECT_STORE_UNVERIFIED_CODE
+        assert skip_row.error.code != StorageBucketRelocationError.code
+
+    async def test_absent_infrastructure_context_is_visible(self) -> None:
+        """No store to probe is 'unverified', not an empty clean matrix."""
+        from application_sdk.execution._temporal.preflight_gate import (
+            OBJECT_STORE_UNVERIFIED_CODE,
+        )
+
+        gate = _gate(_StubHandler(), verify_storage=True)
+        with self._storage_patches([]):
+            result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.READY
+        (row,) = [c for c in result.checks if c.name.startswith("objectStore")]
+        assert row.passed is False
+        assert row.error is not None
+        assert row.error.code == OBJECT_STORE_UNVERIFIED_CODE
+
+    async def test_checker_crash_leaves_a_visible_row(self) -> None:
+        """The fail-open must fail open on the verdict, not on the record."""
+        from application_sdk.execution._temporal.preflight_gate import (
+            OBJECT_STORE_UNVERIFIED_CODE,
+        )
+
+        gate = _gate(_StubHandler(), verify_storage=True)
+        with mock.patch(
+            f"{_GATE}.get_infrastructure", side_effect=RuntimeError("boom")
+        ):
+            result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.READY
+        (row,) = [c for c in result.checks if c.name.startswith("objectStore")]
+        assert row.passed is False
+        assert row.error is not None
+        assert row.error.code == OBJECT_STORE_UNVERIFIED_CODE
+
+
+def test_gate_module_import_does_not_load_obstore() -> None:
+    """Importing the gate module must not pull obstore into its import set.
+
+    The gate is imported inside the Temporal workflow sandbox
+    (``workflow.unsafe.imports_passed_through()``); every storage import in the
+    module is deliberately lazy so the heavy obstore extension (and
+    ``storage.ops``, which imports it at module load) only loads in the
+    activity frame. A fresh interpreter proves it — this suite's own imports
+    would mask the leak in-process.
+    """
+    import subprocess
+    import sys
+
+    code = (
+        "import sys; "
+        "import application_sdk.execution._temporal.preflight_gate; "
+        "assert 'obstore' not in sys.modules, 'obstore leaked'; "
+        "assert 'application_sdk.storage.ops' not in sys.modules, 'ops leaked'"
+    )
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr

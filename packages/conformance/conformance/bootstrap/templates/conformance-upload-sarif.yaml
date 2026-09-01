@@ -11,7 +11,13 @@ on:
     types: [completed]
     branches: [main]
 
+# A `permissions:` block is exhaustive, not additive: every scope it omits
+# is `none`, whatever the repository default is. `contents: read` is
+# therefore load-bearing — without it `actions/checkout` cannot read a
+# private repo, the probe script is absent, and the job this workflow
+# exists to keep green fails on exactly the 77 repos FND-1149 is about.
 permissions:
+  contents: read  # required to check out the availability probe script
   security-events: write
   actions: read  # required to download artifacts from the triggering run
 
@@ -33,6 +39,58 @@ jobs:
           - slug: optimizations
             name: "Upload Optimizations SARIF"
     steps:
+      # Code scanning is a GitHub Advanced Security feature: free on public
+      # repos, licensed on private ones. GHAS is disabled across the atlanhq
+      # private fleet, so `upload-sarif` fails the whole job with "Advanced
+      # Security must be enabled for this repository to use code scanning" —
+      # on 77 of the 82 repos carrying this workflow, once per matrix leg, on
+      # every push to main (FND-1149).
+      #
+      # Gate on the repository's actual eligibility rather than on visibility
+      # alone, so a private repo starts uploading the moment GHAS is licensed
+      # with no edit here. Public repos never carry an `advanced_security` key
+      # (the feature is inherent to them), hence the two-branch test.
+      #
+      # Caveat, deliberately accepted: `security_and_analysis` is admin-only on
+      # the repos endpoint, so a non-admin GITHUB_TOKEN may read `visibility`
+      # but see `advanced_security` as absent even on a licensed private repo —
+      # which would skip the upload. That direction is the safe one (it is
+      # today's behaviour minus the failing job) and it is not silent: the
+      # probe prints both values into the job log on every run, so the first
+      # licensed private repo shows up as `advanced_security=absent` rather
+      # than as a mystery. Querying code-scanning/analyses instead was
+      # rejected — it 404s on a repo with no analyses yet, which is exactly a
+      # newly-licensed repo, so the check would lock itself off permanently.
+      #
+      # Nothing downstream depends on this upload: connector-pulse ingests the
+      # k.atlan.dev mirror published by `update-dashboard.yml`, not the Security
+      # tab, so a skipped leg costs no fleet visibility.
+      #
+      # The decision itself is a tested Python script, not inlined shell:
+      # docs/standards/ci.md forbids conditional logic in `run:` blocks because
+      # those branches cannot be regression-tested, and `bootstrap` force-writes
+      # this workflow into every consumer repo — an untested branch here would
+      # propagate fleet-wide with no way for a consumer to fix it. The four
+      # cases (public, private+enabled, private+absent-or-disabled, and a probe
+      # that could not read the API) are covered in application-sdk by
+      # .github/scripts/tests/test_probe_code_scanning.py.
+      #
+      # The checkout is what makes the script reachable: `workflow_run` jobs
+      # start with an empty workspace, and it is sparse because this job needs
+      # exactly that one file.
+      - name: "Check out the availability probe"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts/probe_code_scanning.py
+          sparse-checkout-cone-mode: false
+
+      - name: "Check code scanning availability"
+        id: probe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python .github/scripts/probe_code_scanning.py
+
       - name: "Download SARIF artifact"
         id: download
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -51,7 +109,7 @@ jobs:
             "$SARIF_SLUG.sarif" > "$SARIF_SLUG-upload.sarif"
 
       - name: "Upload SARIF to Security tab"
-        if: steps.download.outcome == 'success'
+        if: steps.download.outcome == 'success' && steps.probe.outputs.available == 'true'
         uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
         with:
           sarif_file: ${{ matrix.slug }}-upload.sarif

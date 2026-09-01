@@ -48,6 +48,22 @@ dynamically is not flagged only if one of the three forms is literally present,
 and the miss direction is a false *negative*. A rule that nagged a repo which had
 in fact wired its miner up would get suppressed wholesale, which costs more than
 the occasional missed gap.
+
+What does *not* count: a prerequisite DAG run
+---------------------------------------------
+Since FND-1157 one e2e suite can run several entrypoint DAGs against one
+connection — ``BaseE2ETest.dag_runs``, a tuple of ``DAGSpec`` — so a miner suite
+whose lineage resolution needs a crawler-written entity cache runs the crawler
+DAG first. **That run is not coverage for the crawler**, and the decision is
+deliberate rather than an oversight: a prerequisite exists to produce state, it
+is graded against the *consuming* suite's intent, and the whole point of this
+rule is that one entrypoint's green run is no evidence about another's. Counting
+it would be precisely the false negative the rule prevents.
+
+So the guidance stands as **one collectable class per entrypoint, which may run
+prerequisite DAGs for others** — and holding that line needs no code here: a
+``DAGSpec(manifest_path=...)`` is a keyword argument inside a call, not one of
+the three class-body forms above, so ``_class_string_attrs`` never sees it.
 """
 
 from __future__ import annotations

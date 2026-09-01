@@ -72,7 +72,8 @@ AppError  (base — application_sdk.errors)
     ├── StorageError(DependencyUnavailableError)
     │   ├── StorageNotFoundError(NotFoundError, StorageError)
     │   ├── StoragePermissionError(AppPermissionDeniedError, StorageError)
-    │   └── StorageConfigError(InvalidInputError, StorageError)
+    │   ├── StorageConfigError(InvalidInputError, StorageError)
+    │   └── StorageBucketRelocationError(StorageError)                                 # platform-side, temporary
     └── SecretStoreError(DependencyUnavailableError)
         ├── SecretNotFoundError(NotFoundError, SecretStoreError)
         ├── SecretStoreUnavailableError(SecretStoreError, ColdStartRaceError)          # transient
@@ -83,6 +84,21 @@ The **categorical leaf** (listed first in the MRO) drives `category`, `audience`
 `default_retryable` on the wire. The **domain umbrella** (listed second) keeps legacy
 `except StorageError:` / `except CredentialError:` catch sites alive. A single exception
 instance satisfies both hierarchies simultaneously.
+
+### StorageBucketRelocationError — a write rejected by a bucket relocation
+
+`StorageBucketRelocationError(StorageError)` keeps the generic
+`DependencyUnavailableError` category and PLATFORM audience of its parent, but carries its own
+`code` (`DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION`) and `ErrorCode` (`AAF-STR-008`) rather than
+the generic `AAF-STR-004`. It exists because a dual-/multi-region bucket relocation makes a store
+reject multipart upload *initiation* for the whole move window while plain single-request PUTs
+keep working — so artifact uploads above the writer's part size fail while smaller ones succeed.
+
+Nothing the app or the customer controls fixes it: no credential, permission, or connector change
+shortens a relocation. That is why it is PLATFORM-attributed and `retryable=True`, and why its
+`suggested_action` says to retry once the relocation finishes. Both the preflight gate's
+`objectStoreAccess:<store>` check and a mid-run `upload_file` failure raise or stamp this one code,
+so a relocation lands in a single analytics bucket wherever it is caught.
 
 ### ColdStartRaceError — the cross-domain transient marker
 

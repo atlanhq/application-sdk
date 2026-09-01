@@ -84,6 +84,16 @@ semantically load-bearing.  All five draft a proposal for human review and never
 auto-apply.  (These rules are backed by a separate `suite.checks.determinism`
 check — see its module docs.)
 
+The persistence-seam rules (P048/P049, CONNECT-1275) are also P-series and
+suggest-only: P048 describes a migration onto
+`application_sdk.common.incremental.get_persistent_s3_prefix`, which relocates a
+connection's state directory and so cannot be applied without knowing whether
+existing markers must be read from the old location first; P049 asks the app to
+give up a stricter contract than the SDK's, and whether that strictness was
+deliberate is the developer's call.  Both draft a proposal for human review and
+never auto-apply.  (These rules are backed by a separate
+`suite.checks.persistence_seam` check — see its module docs.)
+
 The typed-boundary / state-seam / asset-modeling rules (P026–P028) are also
 P-series and suggest-only.  P026 (getattr-with-default on a typed contract param)
 has a concrete mechanical proposal — replace `getattr(input, "f", default)` with
@@ -439,14 +449,41 @@ drafting.
   residue for human confirmation.
 
 - **P023 BlockingCallInAsyncDef** — an event-loop re-entry bridge (`asyncio.run`/
-  `run_until_complete`), a blocking sync call (`requests.*`, `time.sleep`), or
+  `run_until_complete`), a blocking sync call (`requests.*`, `time.sleep`),
   tree-scale filesystem work (`shutil.rmtree`/`copytree`/`move`, incl. the
-  `SafeFileOps.rmtree`/`SafeFileOps.move` wrappers) runs inside an `async def`.  Draft: for a bridge,
-  `await` the coroutine directly instead of re-entering a loop; for blocking I/O,
-  `await` an async equivalent or offload it via `App.run_in_thread()` inside a
-  `@task`; for a tree op, `await run_in_thread(shutil.rmtree, path)` — the
-  callable is *passed*, not called, so the offloaded form is silent.  All are
-  restructures — route to residue with the proposed shape.
+  `SafeFileOps.rmtree`/`SafeFileOps.move` wrappers), tree traversal (`os.walk`/
+  `glob.glob`/`Path.glob`/`Path.rglob`), data-scale I/O (pandas and pyarrow
+  readers and writers, whole-file `Path.read_text`/`write_bytes`/…, file-handle
+  `json.load`/`json.dump`/`pickle`/`tomllib`), or a `subprocess.*` call runs
+  inside an `async def`.  Draft per category:
+
+  - *bridge* — `await` the coroutine directly instead of re-entering a loop.
+  - *blocking network / sleep* — `await` an async equivalent, or offload via
+    `App.run_in_thread()` inside a `@task`.
+  - *tree op, data-scale I/O, whole-file, serialization* — offload with the
+    callable *passed*, not called: `await run_in_thread(shutil.rmtree, path)`,
+    `await run_in_thread(pd.read_parquet, path)`,
+    `await run_in_thread(json.load, handle)`.  The offloaded form is silent
+    because the check only matches a call.
+  - *traversal* — same hop, but **materialise inside the thread**:
+    `await run_in_thread(lambda: list(root.rglob("*")))`.  Offloading the bare
+    `root.rglob("*")` returns a lazy generator and moves every syscall straight
+    back onto the loop, so the finding disappears while the defect does not.
+    Never propose the bare form.  The detector treats a `lambda` body as a sync
+    scope (as it does a nested `def`), so this proposal verifies clean — check
+    that before proposing any *other* shape, since a fix the rule re-flags is
+    worse than none.
+  - *subprocess* — prefer `asyncio.create_subprocess_exec` and `await` it;
+    offload only when the sync API is unavoidable.
+
+  Two conditions make the offload proposal wrong, and both must be checked
+  before drafting one: the call is already inside a sync `def` that is itself
+  handed to an offloader (it is the fix, not the defect — such a call is not
+  flagged, so a finding here means the closure is invoked directly), and the
+  enclosing function is a workflow method (P021's territory; P023 does not fire
+  there).  All of these are restructures — route to residue with the proposed
+  shape, and name the import the patch needs
+  (`from application_sdk.execution.heartbeat import run_in_thread`).
 
 - **P024 SyncAtlanClientInApp** — app code constructs pyatlan's sync `AtlanClient`
   (or a factory like `AtlanClient.from_token(...)`).  Draft a swap to the async
@@ -680,3 +717,101 @@ path component, and this rule governs that package's sources too).
   writing its own ASCII fixture and reading it back, where the locale cannot
   bite.  The one dangerous test-side shape — a test reading *repo sources* — is
   a much smaller population and is not graded by this rule.
+
+- **P048 AppDerivedPersistentArtifactPrefix** (WARN) — app code assembles the
+  connection-scoped layout `persistent-artifacts/apps/<app>/connection/…`
+  itself instead of asking the SDK where a connection's persistent state lives.
+  The finding is anchored at the expression that builds the path (a literal, an
+  f-string, a `+` chain or a `"/".join([...])` — the path is matched across the
+  whole expression, because the CONNECT-1136 defect carried the layout in no
+  single literal).
+
+  **Establish which of the two shapes this is before drafting anything.**  Read
+  the enclosing function, not just `finding.line`:
+
+  1. **The path is the SDK's connection directory** — the app is rebuilding
+     `persistent-artifacts/apps/{app}/connection/{connection_id}`.  Draft the
+     migration onto the seam::
+
+         from application_sdk.common.incremental import get_persistent_s3_prefix
+
+         prefix = get_persistent_s3_prefix(connection_qualified_name, app_name)
+
+     Import from the **package**, not from `.helpers` / `.marker`: the package
+     is the published surface (its `__all__`), the submodules are an
+     implementation detail that may move.  Where the app then reads or writes
+     the incremental marker beneath that prefix, propose
+     `fetch_marker_from_storage` / `persist_marker_to_storage` in the same
+     breath rather than leaving a hand-rolled marker key on top of an
+     SDK-derived prefix.  Return `outcome = "fix"`.
+
+  2. **The path only resembles the layout** — it is a *different* directory the
+     helper cannot produce and does not own.  The check matches the exact
+     four-segment sequence, so the shapes an earlier root-segment match caught
+     (`apps/<app>/state/…`, `apps/<app>/workflows/<id>/config.json`, the
+     Argo-compatibility `{cqn}/parquet/markers/<phase>`) no longer fire — but a
+     new one can.  Propose an inline
+     `# conformance: ignore[P048] <reason>` naming what the path *is*, and say
+     in the residue that the seam does not own it.  Return
+     `outcome = "suppress"`.
+
+  **Say the migration cost out loud.**  Moving off a hand-built prefix moves the
+  directory the app's cross-run state lives in, so the first run after the fix
+  reads no marker and behaves like a full crawl unless the old key is read as a
+  fallback (or the state is copied across).  A proposal that does not mention
+  this is not reviewable — a silent full re-crawl on a large connection is a
+  worse outcome than the drift the rule is reporting.  Never claim the edit is
+  mechanical.
+
+  **Do not propose "suppress" merely because the site is in another repo.**  The
+  tier is already WARN for exactly that reason: these are existing sites awaiting
+  a migration, not a merge block.
+
+- **P049 StrictConnectionQualifiedNameParse** (BLOCK) — a function takes a
+  `connection_qualified_name`, splits it apart itself, and can `raise` out of
+  its own body, without deriving the value through `get_persistent_s3_prefix`
+  or `extract_epoch_id_from_qualified_name`.  The SDK **warns and proceeds**
+  when the last segment is not an epoch; an app that raises on the same input
+  fails only for connections named rather than epoch-stamped, which is a
+  property of how a tenant provisions connections and of nothing under test.
+  The finding is anchored at the earliest `raise` in the function.
+
+  Draft, in order of preference:
+
+  1. **Delegate the parse (preferred)** — replace the local split with the seam
+     and let the SDK decide what is fatal::
+
+         from application_sdk.common.incremental import (
+             extract_epoch_id_from_qualified_name,
+             get_persistent_s3_prefix,
+         )
+
+     Use `get_persistent_s3_prefix` when the function wants the state
+     *location*, and `extract_epoch_id_from_qualified_name` when it wants the
+     connection id alone.  A typed app error raised *around* the SDK call —
+     catching the SDK's own error and re-raising the app's — is the correct
+     post-fix shape and clears the rule.  Return `outcome = "fix"`.
+
+  2. **Keep the parse, drop the strictness** — where the function genuinely
+     cannot call the seam (an import cycle, or the value is not a connection
+     qualified name after all), propose demoting the `raise` to the SDK's own
+     contract: `logger.warning(...)` with a `%`-style message and proceed with
+     the segment.  Matching the SDK's degradation is the point of the rule; the
+     local parse is not.  Return `outcome = "fix"`.
+
+  3. **Fallback** — only when the stricter contract is *deliberate* and the
+     app's own reason is stronger than the SDK's, draft an inline
+     `# conformance: ignore[P049] <reason>` on the `raise` line.  The
+     justification must say what breaks if the name-based qualified name is
+     accepted, not merely that the app prefers to raise.  Return
+     `outcome = "suppress"`.
+
+  **The layouts the helper does not own are not a P049 escape.**  The rule does
+  not care what path the function builds — only that it re-decides which
+  segment is the connection id and hard-fails.  A function whose parse feeds an
+  unrelated directory still diverges on exactly the input CONNECT-1136 broke on.
+
+  **This one is BLOCK, and finds zero violations across every connector app
+  today.**  So a P049 finding is new code, not inherited drift: treat a
+  suppression proposal as the exception it is, and never propose one without
+  reading the enclosing function.

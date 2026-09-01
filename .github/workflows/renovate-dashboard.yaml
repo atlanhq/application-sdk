@@ -8,16 +8,17 @@
 # fleet dashboard data to Kryptonite (k.atlan.dev/renovate-dashboard/).
 #
 # Mirrors the conformance dashboard job in update-dashboard.yaml for the S3
-# deployment pattern. This dashboard runs its own inline `gh search code`
-# discovery (see the discovery step below); the self-hosted renovate.yaml runner
-# instead uses the deterministic discover_org_consumers.py. Both target the same
-# signal — repos whose renovate.json extends the shared preset.
+# deployment pattern. Discovery is discover_org_consumers.py — the same
+# deterministic script the self-hosted renovate.yaml runner uses, against the
+# same signal (repos whose renovate.json extends the shared preset). It runs
+# here with a wider `--name-pattern` than the runner does: see the discovery
+# step for why the dashboard covers application-sdk and the runner must not.
 #
 # Two modes:
 #   Full-fleet (schedule / workflow_dispatch without repo input):
-#     Discovers all consumer repos via gh search code and scans the whole fleet.
-#     Updates per-repo data, fleet.json aggregate, repos.json manifest, and all
-#     history JSONL files.
+#     Discovers all consumer repos via discover_org_consumers.py and scans the
+#     whole fleet. Updates per-repo data, fleet.json aggregate, repos.json
+#     manifest, and all history JSONL files.
 #   Single-repo (workflow_dispatch with repo=<owner/name>):
 #     Scans only the specified repo. Skips fleet.json and fleet history so a
 #     partial scan never overwrites the full-fleet aggregate. Used by the
@@ -60,47 +61,66 @@ jobs:
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
           owner: atlanhq
 
-      - name: Discover atlan-application-sdk consumers
-        id: discover
+      # Push-based single-repo mode: skip fleet discovery entirely. Split from
+      # the full-fleet step so the mode branch lives in `if:` rather than inside
+      # a run: block, per docs/standards/ci.md.
+      - name: Scope to one repo
+        id: discover_single
+        if: inputs.repo != ''
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           SINGLE_REPO: ${{ inputs.repo }}
         run: |
           set -euo pipefail
+          echo "Single-repo scan: $SINGLE_REPO"
+          printf 'repos=["%s"]\n' "$SINGLE_REPO" >> "$GITHUB_OUTPUT"
 
-          if [ -n "${SINGLE_REPO:-}" ]; then
-            # Push-based single-repo mode: skip fleet discovery entirely.
-            repos=$(printf '["%s"]' "$SINGLE_REPO")
-            echo "Single-repo scan: $SINGLE_REPO"
-          else
-            # Full-fleet mode: discover repos that have Renovate configured
-            # with the application-sdk preset. Searching for the preset
-            # reference in renovate.json (rather than all pyproject.toml
-            # consumers) excludes repos that don't have Renovate set up —
-            # those always show 0 open PRs which would falsely read as
-            # "up to date" rather than "Renovate not configured".
-            repos=$(gh search code \
-              --owner atlanhq \
-              "application-sdk//renovate-config/default.json filename:renovate.json" \
-              --json repository \
-              --jq '.[].repository.nameWithOwner' \
-              --limit 1000 \
-              | sort -u \
-              | jq -R . | jq -cs '.' \
-              || echo "[]")
-
-            if [ "$repos" = "[]" ] || [ -z "$repos" ]; then
-              echo "::warning::No consumer repos discovered. Check the atlan-app-fleet App installation/permissions."
-            else
-              echo "Discovered $(echo "$repos" | jq '. | length') consumer repos"
-            fi
-          fi
-          echo "repos=${repos}" >> "$GITHUB_OUTPUT"
+      # Full-fleet mode uses the same deterministic discovery the Renovate
+      # runner does, so the dashboard lists the repos Renovate actually manages.
+      #
+      # This replaces a `gh search code` for the preset marker. That query only
+      # ever returned 1 repo (application-sdk itself) HERE, under the fleet App's
+      # installation token — the same query run with a user PAT returns ~75. The
+      # code-search index is not the problem; a server-to-server token's access
+      # to it is. So the failure was invisible in the one place it mattered:
+      # every scheduled run logged "Discovered 1 consumer repos" while the
+      # dashboard showed 616, because the writer unioned that collapsed scope
+      # with an org-wide PR search (see renovate_fleet_scan.py).
+      #
+      # Do not "fix" this by swapping the token — code search is also
+      # best-effort and unordered (a fleet rehearsal saw it return anywhere from
+      # 30 to ~90 results across calls, dropping a real consumer). discover_org_
+      # consumers.py lists with `gh repo list` and reads each renovate.json over
+      # the API, which the App token can do, deterministically, and with
+      # `--no-archived` — keeping departed repos off the dashboard (FND-960).
+      #
+      # --name-pattern is WIDER than the runner's default. The runner excludes
+      # application-sdk on purpose (it stays on the Mend-hosted app, which is
+      # what keeps its action pins updated), but Mend still publishes Renovate
+      # PRs against it and this repo carries the lock-PR lane the dashboard
+      # exists to watch. Excluded from the fleet runner, in scope for the fleet
+      # view. The connectors-{sql,api,pipeline} mirrors stay out of both: they
+      # extend the preset but no engine opens PRs on them, so they would only
+      # ever render as empty rows.
+      #
+      # --fail-on-empty because the dashboard's entire publish scope comes from
+      # this output, and a token that lost org read returns the same empty answer
+      # as a fleet with no consumers.
+      - name: Discover atlan-application-sdk consumers
+        id: discover_fleet
+        if: inputs.repo == ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/discover_org_consumers.py \
+            --owner atlanhq \
+            --name-pattern '^(atlan-[a-z0-9-]+-app|application-sdk)$' \
+            --fail-on-empty
 
       - name: Gather Renovate PR data
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          REPOS: ${{ steps.discover.outputs.repos }}
+          REPOS: ${{ steps.discover_fleet.outputs.repos || steps.discover_single.outputs.repos }}
           SINGLE_REPO: ${{ inputs.repo }}
         run: |
           set -euo pipefail
@@ -130,7 +150,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.7"
+          version: "0.12.8"
 
       - name: Run Renovate scanner
         run: |
@@ -145,7 +165,7 @@ jobs:
             --out /tmp/renovate-output
 
       - name: Setup AWS Credentials
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6
         with:
           aws-region: ap-south-1
           role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess

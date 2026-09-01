@@ -16,32 +16,47 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 import subprocess
 import sys
+import tempfile
+import threading
+import time
 
 import pytest
 import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from _gha_expr import evaluate  # noqa: E402
+from _gha_expr import evaluate, evaluate_operand  # noqa: E402
 from sdk_loop_common import (  # noqa: E402
+    AGENT_ENV_PASSTHROUGH,
     ALLOWED_MODELS,
-    DEFAULT_MAX_USD,
+    DEFAULT_MAX_TOKENS,
+    MAX_CONSECUTIVE_REAIMS,
     MAX_ROUNDS,
+    PHASE2_AGENTS,
     PROVIDER,
+    RESEARCH_DISCIPLINE,
     RESOLVE_MODEL,
     REVIEW_MODEL,
+    SUBAGENT_MAX_STEPS,
     AgentResult,
     DismissalLedger,
-    budget_exceeded,
+    _follow_opencode_log,
+    format_usage,
     gateway_base,
     head_state,
     opencode_config,
+    parse_opencode_usage,
     parse_reviewed_head,
     parse_verdict,
+    reaim_exhausted,
     run_agent,
-    run_budget,
+    token_budget,
+    token_budget_exceeded,
+    usage_total,
+    write_rg_config,
 )
 from sdk_loop_fence import (  # noqa: E402
     MARK_DECLINE,
@@ -55,11 +70,11 @@ from sdk_loop_fence import (  # noqa: E402
 )
 from sdk_loop_finalize import Round, parse_rounds, render  # noqa: E402
 from sdk_loop_phase import (  # noqa: E402
+    LANE_MARKER,
     OUTCOME_CLEAN,
     OUTCOME_FAILED,
     OUTCOME_NO_PROGRESS,
     OUTCOME_OK,
-    OUTCOME_REAIM,
     OUTCOME_TERMINAL_VERDICT,
     interpret_resolve,
     interpret_review,
@@ -274,11 +289,57 @@ def test_a_verdict_no_resolve_can_fix_stops_the_loop(verdict: str) -> None:
     assert outcome.outcome == OUTCOME_TERMINAL_VERDICT
 
 
-def test_a_verdict_stamped_against_another_sha_triggers_a_reaim() -> None:
+def test_a_verdict_stamped_against_another_sha_is_a_failure_not_a_reaim() -> None:
+    """Only this run's own verdict is accepted, and main() already fences the
+    head against the remote — so a stamp mismatch means the reviewer disobeyed,
+    not that the branch moved. Reporting it as a re-aim let a broken round
+    masquerade as progress: four rounds ran and none reviewed anything."""
     outcome = interpret_review(
         _ok(), _verdict_comment("NEEDS_FIXES", "b" * 40), "a" * 40
     )
-    assert outcome.outcome == OUTCOME_REAIM
+    assert outcome.outcome == OUTCOME_FAILED
+
+
+def test_an_aborted_agent_is_a_failure_whatever_it_left_behind() -> None:
+    """Live on the first run: `Error: [DecimalError] Invalid argument:
+    [object Object]` 11ms into round 1. opencode exited 0, the harness found an
+    unrelated verdict already on the PR, and called the round a re-aim."""
+    crashed = AgentResult(
+        exit_code=0,
+        stdout="I'll read the orchestration instructions.\n"
+        "Error: [DecimalError] Invalid argument: [object Object]\n",
+        stderr="",
+    )
+    assert not crashed.completed
+    assert "DecimalError" in crashed.abort_reason
+    outcome = interpret_review(
+        crashed, _verdict_comment("READY_TO_MERGE", "a" * 40), "a" * 40
+    )
+    assert outcome.outcome == OUTCOME_FAILED
+    assert "aborted" in outcome.detail
+
+
+def test_a_clean_transcript_is_not_read_as_an_abort() -> None:
+    # "Error" inside ordinary prose must not fail a round that worked.
+    fine = AgentResult(
+        exit_code=0,
+        stdout="Considered an ErrorHandler finding; dropped it.\n",
+        stderr="",
+    )
+    assert fine.completed
+
+
+def test_a_verdict_answering_someone_elses_trigger_is_not_ours() -> None:
+    """PRs carry old verdicts — from @sdk-review, from an earlier loop. Taking
+    the newest makes a phase that produced nothing look like it produced
+    whatever was lying there."""
+    mine = _verdict_comment("NEEDS_FIXES", "a" * 40, cid=9)
+    mine["body"] += "<!-- ANSWERS_TRIGGER: 555 -->\n"
+    theirs = _verdict_comment("READY_TO_MERGE", "b" * 40, cid=20)
+    theirs["body"] += "<!-- ANSWERS_TRIGGER: 111 -->\n"
+    picked = newest_verdict([mine, theirs], answers_trigger="555")
+    assert picked is not None and parse_verdict(picked["body"]) == "NEEDS_FIXES"
+    assert newest_verdict([theirs], answers_trigger="555") is None
 
 
 def test_newest_verdict_wins_over_an_older_one() -> None:
@@ -345,6 +406,155 @@ def test_the_delta_range_never_narrows_the_review() -> None:
     prompt = review_prompt(42, 3, "b" * 40, DismissalLedger(), prior_sha="a" * 40)
     assert "Do NOT narrow the review to it" in prompt
     assert "any line of the PR" in prompt
+
+
+def test_sub_agents_keep_opencodes_repetition_detector_switched_on() -> None:
+    """`doom_loop: allow` turns opencode's own loop detector OFF, and this lane
+    shipped it that way. A live ci-config sub-agent then spent 19 steps and 18
+    minutes on one question the repo already answers in a comment, re-reading
+    the same scratch file five times.
+
+    The parent keeps `allow` on purpose — its phase-boundary budget checks and
+    offset re-reads of the playbook are repetition by design, and nothing has
+    been observed looping there. The asymmetry is the point of this test.
+    """
+    monkey = pytest.MonkeyPatch()
+    monkey.setenv("LITELLM_BASE_URL", "https://gateway.example")
+    try:
+        cfg = opencode_config(REVIEW_MODEL, with_subagents=True)
+    finally:
+        monkey.undo()
+
+    for name, spec in cfg["agent"].items():
+        assert (
+            spec["permission"]["doom_loop"] == "deny"
+        ), f"{name} must not have opencode's repetition detector disabled"
+    assert cfg["permission"]["doom_loop"] == "allow", (
+        "the primary orchestrates by design-repeated steps; only sub-agents "
+        "were observed looping"
+    )
+
+
+def test_sub_agents_are_told_to_check_local_prior_art_before_researching() -> None:
+    """Not a ban on reading third-party source — that is how a reviewer catches
+    a wrong-semantics call. The rule is about order and bound: the run this is
+    written from went external to re-derive a fact its own repo documents, then
+    kept going after two sources had failed to settle it."""
+    monkey = pytest.MonkeyPatch()
+    monkey.setenv("LITELLM_BASE_URL", "https://gateway.example")
+    try:
+        cfg = opencode_config(REVIEW_MODEL, with_subagents=True)
+    finally:
+        monkey.undo()
+
+    for name, spec in cfg["agent"].items():
+        assert (
+            RESEARCH_DISCIPLINE in spec["prompt"]
+        ), f"{name} is missing the research-discipline preamble"
+    # The capability itself must survive: a ban would cost real findings.
+    assert "legitimate and encouraged" in RESEARCH_DISCIPLINE
+
+
+def test_the_sub_agent_step_cap_is_below_the_observed_runaway() -> None:
+    """Sizing this off a flat per-step cost was the original mistake. Measured
+    step latency climbed 14s, 35s, 68s, 58s, 121s as context accumulated, so 60
+    steps was never the ~13 minutes its comment claimed."""
+    assert (
+        SUBAGENT_MAX_STEPS <= 25
+    ), "a cap this lane cannot reach inside its own time budget is not a cap"
+
+
+def test_the_lane_marker_matches_the_playbook_contract() -> None:
+    """One string, two files — the shape that rots without anyone noticing.
+
+    The playbook's Runtime section skips its sandbox-only Appendix A when the
+    prompt announces `LANE: sdk-loop`. If either side renames the string, the
+    playbook simply waits for a line nobody sends: no exception, no log, just
+    a review quietly walking the other lane's steps and eating 403s from
+    write calls its token cannot make. Nothing else in the system would fail,
+    which is precisely why this assertion exists.
+    """
+    playbook = pathlib.Path(".mothership/pr-review/ORCHESTRATION.md").read_text(
+        encoding="utf-8"
+    )
+    assert LANE_MARKER in playbook, (
+        f"review_prompt() emits {LANE_MARKER!r} but ORCHESTRATION.md does not "
+        "mention it — lane detection is broken and nothing else will say so"
+    )
+    monkey = pytest.MonkeyPatch()
+    monkey.setenv("LITELLM_BASE_URL", "https://gateway.example")
+    try:
+        prompt = review_prompt(1, 1, "a" * 40, DismissalLedger())
+    finally:
+        monkey.undo()
+    assert LANE_MARKER in prompt, "the lane must be announced, never inferred"
+
+
+def test_the_phase_two_agents_are_registered_so_the_fan_out_can_happen() -> None:
+    """§2a dispatches domain agents via a delegation tool. Claude Code calls it
+    the Agent tool; opencode calls it Task and supports the same parallel
+    dispatch — but only to agents it knows about. Unregistered, the primary
+    agent has nothing to delegate to and Phase 2's fan-out silently collapses
+    into one agent covering every domain: still a verdict, just a worse one,
+    with nothing in the output saying so.
+    """
+    monkey = pytest.MonkeyPatch()
+    monkey.setenv("LITELLM_BASE_URL", "https://gateway.example")
+    try:
+        cfg = opencode_config(REVIEW_MODEL, with_subagents=True)
+        assert set(cfg["agent"]) == set(PHASE2_AGENTS)
+        for name, spec in cfg["agent"].items():
+            assert spec["mode"] == "subagent"
+            # Still the EXISTING file and no second copy in the repo — but read
+            # in Python rather than handed over as `{file:./.mothership/...}`.
+            # That template's resolution against a dot-directory was never
+            # verified here, and the same path returns zero matches through the
+            # agent's own Glob; a template that quietly resolved to nothing
+            # would give a domain agent no instructions while it still emitted
+            # a verdict. Asserting against the file's real bytes also proves
+            # the brief exists, which the string form never did.
+            brief = pathlib.Path(f".mothership/pr-review/agents/{name}.md")
+            assert (
+                brief.read_text(encoding="utf-8") in spec["prompt"]
+            ), f"{name}'s prompt must carry its playbook brief verbatim"
+            assert spec["prompt"].strip(), f"{name} brief is empty"
+            # Read-only in the agent as well as in the credential.
+            assert spec["permission"]["edit"] == "deny"
+            # And every tool the primary enumerates, because an unlisted tool
+            # is an "ask" that headless opencode cannot answer.
+            for tool in ("read", "glob", "grep", "bash"):
+                assert spec["permission"][tool] == "allow"
+            assert spec["maxSteps"] > 0
+        # Resolve gets none — it does not run Phase 2.
+        assert "agent" not in opencode_config(RESOLVE_MODEL)
+    finally:
+        monkey.undo()
+
+
+def test_every_agent_the_playbook_dispatches_is_registered() -> None:
+    """Both `Agent tool` sites in ORCHESTRATION.md must be satisfiable: §2a's
+    Wave 1 domain agents and the reachability dispatch at line 556."""
+    agents_dir = (
+        pathlib.Path(__file__).resolve().parents[3]
+        / ".mothership"
+        / "pr-review"
+        / "agents"
+    )
+    on_disk = {p.stem for p in agents_dir.glob("*.md")}
+    # Everything on disk is registered except adversarial, which Wave 2 uses
+    # and this lane skips — registering it would advertise a capability the
+    # phase is explicitly told not to use.
+    assert on_disk - set(PHASE2_AGENTS) == {"adversarial"}
+    assert "reachability" in PHASE2_AGENTS, "line 556 dispatches it by name"
+
+
+def test_the_review_prompt_names_the_delegation_tool_for_this_runtime() -> None:
+    prompt = review_prompt(42, 1, "a" * 40, DismissalLedger())
+    assert "`Task`" in prompt
+    # The multi-domain invariant, which survives the solo-scope change: when
+    # several agents ARE registered, collapsing them into one pass yields a
+    # worse verdict and says nothing about having done so.
+    assert "Do NOT do their work yourself" in prompt
 
 
 def test_the_review_prompt_references_the_playbook_and_never_restates_it() -> None:
@@ -451,6 +661,77 @@ def test_an_empty_ledger_adds_nothing_to_the_prompt() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_a_quiet_sub_agent_is_not_killed_while_its_internal_log_moves() -> None:
+    """The failure this nearly shipped: a HEALTHY dispatched sub-agent prints
+    nothing on the parent's stdout for its entire life — measured at 904s —
+    while the idle bound was 300s. Sizing the bound on parent-turn gaps (~29s)
+    measured the wrong thing, because the watchdog does not sit in those gaps;
+    it sits in the dispatch. Internal-log lines are the only progress signal
+    there, so they must refresh the deadline or the watchdog kills every
+    sub-agent that outlives the timeout.
+    """
+    deadline = [time.monotonic() - 10_000]  # far past any bound
+    stop = threading.Event()
+
+    with tempfile.TemporaryDirectory() as home:
+        log_dir = pathlib.Path(home) / "opencode" / "log"
+        log_dir.mkdir(parents=True)
+        (log_dir / "opencode.log").write_text(
+            "timestamp=... message=stream session.id=ses_sub\n", encoding="utf-8"
+        )
+        monkey = pytest.MonkeyPatch()
+        monkey.setenv("XDG_DATA_HOME", home)
+        try:
+            emitted: list[str] = []
+            worker = threading.Thread(
+                target=_follow_opencode_log,
+                args=(stop, emitted.append, 0.0, deadline),
+                daemon=True,
+            )
+            worker.start()
+            for _ in range(100):
+                if deadline[0] > time.monotonic() - 5_000:
+                    break
+                time.sleep(0.05)
+            stop.set()
+            worker.join(timeout=5)
+        finally:
+            monkey.undo()
+
+    assert deadline[0] > time.monotonic() - 5_000, (
+        "an internal-log line must refresh the idle deadline; without this a "
+        "working sub-agent is killed at the timeout"
+    )
+
+
+def test_a_stalled_agent_is_an_abort_not_a_note_in_the_transcript() -> None:
+    """A killed phase must not be able to adopt someone else's verdict.
+
+    `interpret_review` gates on `completed`, and opencode exits 0 even when
+    fatal — so if a stall only left prose in the transcript, the phase would
+    carry on and take whatever verdict comment was newest, which on a re-run
+    can be a prior @sdk-review for the same sha.
+    """
+    stalled = AgentResult(exit_code=0, stdout="some output", stderr="", stalled=True)
+    assert not stalled.completed
+    assert "stalled" in stalled.abort_reason
+
+    fine = AgentResult(exit_code=0, stdout="some output", stderr="", stalled=False)
+    assert fine.completed
+    assert fine.abort_reason == ""
+
+
+def test_the_phase_job_passes_the_triggering_comment_id() -> None:
+    """`newest_verdict` takes an ANSWERS_TRIGGER so it cannot mistake an older
+    comment for this invocation's verdict. The phase script always read
+    COMMENT_ID and the phase workflow never set it, so that filter ran with
+    None on every round."""
+    phase = pathlib.Path(".github/workflows/sdk-loop-phase.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "COMMENT_ID:" in phase, "the phase job must pass the triggering comment id"
+
+
 def test_the_agent_transcript_streams_rather_than_buffering(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
@@ -521,46 +802,48 @@ def test_the_transcript_is_uploaded_even_when_the_phase_died() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_default_ceiling_lets_a_healthy_loop_finish() -> None:
-    """Sized so a converging run completes and only a runaway is stopped.
-
-    61 stamped sdk-review runs: median $8.24. Typical convergence is 2-3
-    rounds, so ~3 reviews is ~$25 of review alone before any resolve. A
-    ceiling at $25 would guillotine a healthy loop at round 2 and teach people
-    to raise it blindly — worse than no ceiling at all.
-    """
-    median_review = 8.24
-    assert DEFAULT_MAX_USD > 3 * median_review, "must clear three reviews"
-    assert DEFAULT_MAX_USD < 130, "must still stop the eight-round runaway"
+def test_the_ceiling_is_a_runaway_guard_and_says_so() -> None:
+    """Deliberately generous and explicitly PROVISIONAL. No complete run has
+    reported a token count yet — the measurement landed in the same change that
+    removed the broken dollar path — and a ceiling that stops healthy runs is
+    worse than none, which the $25 -> $50 correction already demonstrated."""
+    assert DEFAULT_MAX_TOKENS >= 10_000_000
 
 
 def test_the_ceiling_is_tunable_without_a_code_change(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SDK_LOOP_MAX_USD", "40")
-    assert run_budget() == 40.0
+    monkeypatch.setenv("SDK_LOOP_MAX_TOKENS", "750000")
+    assert token_budget() == 750_000
 
 
-@pytest.mark.parametrize("raw", ["", "junk", "0", "-5"])
+@pytest.mark.parametrize("raw", ["", "junk", "0", "-5", "1.5"])
 def test_a_nonsense_ceiling_falls_back_rather_than_disabling_the_guard(
     raw: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A typo'd variable must not read as "unlimited".
-    monkeypatch.setenv("SDK_LOOP_MAX_USD", raw)
-    assert run_budget() == DEFAULT_MAX_USD
+    # A typo'd variable must never read as "unlimited".
+    monkeypatch.setenv("SDK_LOOP_MAX_TOKENS", raw)
+    assert token_budget() == DEFAULT_MAX_TOKENS
 
 
 def test_a_run_at_its_ceiling_is_refused() -> None:
-    assert budget_exceeded(50.0, 50.0)
-    assert budget_exceeded(51.0, 50.0)
-    assert not budget_exceeded(49.99, 50.0)
+    assert token_budget_exceeded(1000, 1000)
+    assert token_budget_exceeded(1001, 1000)
+    assert not token_budget_exceeded(999, 1000)
 
 
-def test_unmeasurable_spend_never_blocks_the_loop() -> None:
-    """A gateway that cannot report spend is a metrics outage, not evidence of
+def test_unmeasurable_usage_never_blocks_the_loop() -> None:
+    """A failed `opencode stats` read is a metrics outage, not evidence of
     overspend. Turning one into a stalled lane is the wrong trade — the round
     cap still bounds the worst case."""
-    assert not budget_exceeded(None, 25.0)
+    assert not token_budget_exceeded(None, 1000)
+
+
+def test_billable_tokens_do_not_double_count_cache_reads() -> None:
+    """Cache reads are already inside `input`; adding them again would inflate
+    exactly the quantity we want to watch shrink."""
+    assert usage_total({"input": 100, "output": 50, "cache_read": 90}) == 150
+    assert usage_total({}) is None
 
 
 def test_the_tally_treats_an_unmeasured_phase_as_a_gap_not_a_zero() -> None:
@@ -637,15 +920,61 @@ def test_an_unknown_model_fails_at_config_time_not_as_a_paid_400() -> None:
         opencode_config("gpt-nonexistent")
 
 
+def test_the_lane_reaches_exactly_two_models_and_has_no_fallback() -> None:
+    """Owner's decision: xai/grok-4.6 for review, gpt-5.6-luna for resolve,
+    nothing else.
+
+    Both existing lanes carry RETRY_MAIN_MODEL = claude-opus-5 as a second
+    attempt. This one deliberately does not: a failed phase is a failed phase,
+    and a silent retry on a different model makes cost and behaviour harder to
+    reason about across rounds. Pinned so a future edit adding a ladder has to
+    change this test and say why.
+    """
+    assert ALLOWED_MODELS == ("xai/grok-4.6", "gpt-5.6-luna")
+    assert len(set(ALLOWED_MODELS)) == 2
+
+
 def test_review_and_resolve_run_on_different_models() -> None:
     assert REVIEW_MODEL != RESOLVE_MODEL
+
+
+def test_every_tool_the_playbooks_use_is_permitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Headless opencode auto-REJECTS an ask, and an unlisted tool is an ask.
+
+    A live round died with "The user rejected permission to use this specific
+    tool call" and no indication which tool. `task` was missing: subagents were
+    registered but the primary agent was never allowed to dispatch them, so
+    Phase 2 could not fan out even with the registration in place.
+    """
+    monkeypatch.setenv("LITELLM_BASE_URL", "https://gateway.example")
+    perms = opencode_config(REVIEW_MODEL, with_subagents=True)["permission"]
+    for tool in ("task", "skill", "bash", "read", "edit", "glob", "grep", "lsp"):
+        assert perms[tool] == "allow", f"{tool} would be auto-rejected"
+    # Defaults are not uniform — these two ask unless listed, and the review
+    # playbook legitimately does both.
+    assert perms["external_directory"] == "allow"
+    assert perms["doom_loop"] == "allow"
+
+
+def test_subagents_are_read_only_and_offline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_BASE_URL", "https://gateway.example")
+    for spec in opencode_config(REVIEW_MODEL, with_subagents=True)["agent"].values():
+        assert spec["permission"]["edit"] == "deny"
+        assert spec["permission"]["webfetch"] == "deny"
 
 
 def test_the_agent_cannot_reach_the_web(monkeypatch: pytest.MonkeyPatch) -> None:
     # It reads untrusted PR content; an injected prompt must not meet an
     # outbound channel it can choose freely.
     monkeypatch.setenv("LITELLM_BASE_URL", "https://gateway.example")
-    assert opencode_config(RESOLVE_MODEL)["permission"]["webfetch"] == "deny"
+    perms = opencode_config(RESOLVE_MODEL)["permission"]
+    # Both outbound channels, and they must beat the wildcard: last rule wins.
+    assert perms["webfetch"] == "deny"
+    assert perms["websearch"] == "deny"
 
 
 # ---------------------------------------------------------------------------
@@ -702,6 +1031,260 @@ def test_a_dismissed_run_starts_no_rounds() -> None:
 # ---------------------------------------------------------------------------
 
 
+class _StrictLoader(yaml.SafeLoader):
+    """`yaml.safe_load` accepts duplicate keys and keeps the last.
+
+    That is precisely why a duplicate `description:` shipped: every test here
+    parsed the file happily while GitHub rejected it outright with
+    "'description' is already defined" — and a workflow GitHub will not parse
+    runs NO jobs, so the lane answered with silence.
+    """
+
+
+def _no_duplicate_keys(loader, node, deep=False):
+    seen, out = set(), {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in seen:
+            raise yaml.constructor.ConstructorError(
+                None,
+                None,
+                f"duplicate key {key!r} at line {key_node.start_mark.line + 1}",
+                key_node.start_mark,
+            )
+        seen.add(key)
+        out[key] = loader.construct_object(value_node, deep=deep)
+    return out
+
+
+_StrictLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_duplicate_keys
+)
+
+
+@pytest.mark.parametrize("wf", ["sdk-loop.yml", "sdk-loop-phase.yml"])
+def test_the_workflow_has_no_duplicate_keys(wf: str) -> None:
+    """GitHub rejects a duplicate key and runs nothing. Shipped once already."""
+    yaml.load((WORKFLOW.parent / wf).read_text(encoding="utf-8"), _StrictLoader)
+
+
+def _call_spec() -> dict:
+    return yaml.safe_load(PHASE_WF.read_text(encoding="utf-8"))[True]["workflow_call"]
+
+
+def _phase_callers() -> dict:
+    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    return {
+        n: j
+        for n, j in jobs.items()
+        if str(j.get("uses", "")).endswith("sdk-loop-phase.yml")
+    }
+
+
+def test_no_caller_passes_an_input_the_phase_does_not_declare() -> None:
+    declared = set(_call_spec().get("inputs") or {})
+    passed = set()
+    for job in _phase_callers().values():
+        passed |= set(job.get("with") or {})
+    assert not (passed - declared), f"undeclared inputs: {sorted(passed - declared)}"
+
+
+def test_every_output_the_chain_reads_is_actually_exported() -> None:
+    """A phase output added in the script but not surfaced by the reusable
+    workflow resolves to empty, which silently degrades the round rather than
+    failing it — the ledger would stop carrying, or the budget stop counting."""
+    exported = set(_call_spec().get("outputs") or {})
+    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    read = set()
+    for job in jobs.values():
+        read |= set(
+            re.findall(
+                r"needs\.(?:review|resolve)-\d+\.outputs\.([a-z_]+)", yaml.dump(job)
+            )
+        )
+    assert not (read - exported), f"not exported: {sorted(read - exported)}"
+
+
+def test_the_workflow_grants_every_scope_its_own_gh_calls_need() -> None:
+    """An explicit `permissions:` block makes everything unlisted `none`, and a
+    403 in the fence raises before it can post — so a missing scope shows up as
+    silence, not as an error. `gh run list` needs actions:read; `gh pr comment`
+    needs pull-requests:write."""
+    perms = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["permissions"]
+    fence = (
+        pathlib.Path(__file__).resolve().parents[1] / "sdk_loop_fence.py"
+    ).read_text(encoding="utf-8")
+    if '"run",' in fence and '"list",' in fence:
+        assert perms.get("actions") == "read", "gh run list needs actions: read"
+    if '"gh", "pr", "comment"' in fence:
+        assert perms.get("pull-requests") == "write"
+
+
+def test_no_job_reads_outputs_from_a_job_it_does_not_need() -> None:
+    """GitHub rejects the WHOLE workflow at parse time for this, so no job runs
+    and the fence never gets to say why — the user sees total silence from a
+    lane whose whole point is that it always answers.
+
+    Shipped exactly this way: resolve-N read needs.resolve-(N-1).outputs.ledger
+    while declaring only [fence, review-N]. Four live invocations produced a
+    startup failure with zero jobs and zero comments before it was found.
+    """
+    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    dangling = []
+    for name, job in jobs.items():
+        needs = job.get("needs") or []
+        needs = [needs] if isinstance(needs, str) else needs
+        body = yaml.dump({k: v for k, v in job.items() if k != "needs"})
+        for ref in sorted(set(re.findall(r"needs\.([A-Za-z0-9_-]+)\.", body))):
+            if ref not in needs:
+                dangling.append(f"{name} reads needs.{ref}, needs={needs}")
+    assert not dangling, "dangling needs references:\n  " + "\n  ".join(dangling)
+
+
+def test_the_action_pins_in_the_generator_match_the_generated_file() -> None:
+    """Renovate edits the generated workflow, not the template that produced
+    it, so a bump silently desyncs the two and the freshness gate goes red on
+    main. It did, within hours of merge."""
+    gen = (
+        pathlib.Path(__file__).resolve().parents[1] / "gen_sdk_loop_workflow.py"
+    ).read_text(encoding="utf-8")
+    wf = WORKFLOW.read_text(encoding="utf-8")
+    # Guard everything Renovate can bump in the OUTPUT, not just action SHAs:
+    # after the SHA drift it bumped python-version next, and a pins-only guard
+    # missed that exactly the way it had missed the SHAs.
+    for label, pattern in (
+        ("action pin", r"uses: (actions/[a-z-]+@[0-9a-f]{40})"),
+        ("python-version", r"python-version: ('[0-9.]+')"),
+    ):
+        drift = set(re.findall(pattern, gen)) - set(re.findall(pattern, wf))
+        assert not drift, f"{label} in generator but not in output: {sorted(drift)}"
+
+
+APPROVE_WF = WORKFLOW.parent / "sdk-review-approve-on-verdict.yml"
+
+
+def test_a_loop_verdict_can_become_an_atlan_ci_approval() -> None:
+    """The gate is on identity, and the loop posts as a different bot.
+
+    Its review phase emits the identical marker set using a token minted from
+    the fleet App, so without its login here a READY_TO_MERGE from the loop
+    never became an approval — the PR stayed blocked with nothing saying why.
+    """
+    jobs = yaml.safe_load(APPROVE_WF.read_text(encoding="utf-8"))["jobs"]
+    gate = next(j["if"] for j in jobs.values() if "if" in j)
+
+    def ctx(login: str) -> dict:
+        return {
+            "github": {
+                "event": {
+                    "issue": {"pull_request": {"n": 1}},
+                    "comment": {
+                        "user": {"login": login},
+                        "body": "<!-- SDK_REVIEW -->",
+                    },
+                }
+            }
+        }
+
+    assert evaluate(gate, ctx("atlan-app-fleet[bot]")) is True
+    # The existing lane must keep working.
+    assert evaluate(gate, ctx("mothership-ai[bot]")) is True
+    # Identity is still the gate — this widened who, not what.
+    assert evaluate(gate, ctx("some-random[bot]")) is False
+
+
+def test_the_trigger_comment_gets_an_acknowledgement() -> None:
+    """An emoji within seconds, before any verdict exists. The other two lanes
+    do this and its absence made the loop feel dead on invocation."""
+    fence = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["fence"]
+    react = next(
+        s for s in fence["steps"] if s.get("name") == "React to the trigger comment"
+    )
+    assert react["run"].endswith("react_to_comment.py")
+    # always(): the helper exits 0 by design, and a missing emoji must not take
+    # down the run it decorates.
+    assert "always()" in react["if"]
+
+
+def test_every_job_has_a_name_a_human_can_read() -> None:
+    """18 rows of `review-1 / phase` is not a progress display."""
+    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    assert jobs["review-1"]["name"] == "Review 1"
+    assert jobs["resolve-8"]["name"] == "Resolve 8"
+    assert jobs["fence"]["name"] == "Fence"
+    assert jobs["finalize"]["name"] == "Summary"
+
+
+def test_hidden_paths_are_searchable_structurally(tmp_path: pathlib.Path) -> None:
+    """opencode's Glob/Grep are ripgrep-backed and ripgrep skips dot-paths.
+
+    On the first complete run the reviewer got 0 matches TWICE — globbing its
+    own agent definitions, and grepping the reference rules for prior art on
+    the finding it was about to raise. It raised that finding anyway, without
+    the rules that exist to inform it, and said nothing about it.
+
+    ripgrep reads flags from RIPGREP_CONFIG_PATH, so this is fixed in the
+    environment rather than by asking the model to remember a prompt line.
+    """
+    path = write_rg_config(str(tmp_path))
+    assert pathlib.Path(path).read_text().strip() == "--hidden"
+    assert "RIPGREP_CONFIG_PATH" in AGENT_ENV_PASSTHROUGH
+
+
+def test_token_usage_is_parsed_and_a_cache_miss_is_called_out() -> None:
+    """`opencode stats` is the authoritative measurement: attributable to THIS
+    phase, unlike a gateway key several lanes share, and it reports
+    cache_read/cache_write — the one number that says whether the fixed ~90KB
+    playbook prefix is re-paid on every one of a phase's ~24 turns."""
+    usage = parse_opencode_usage(
+        "Input   1,234\nOutput  567\nCache Read  8,900\nCache Write 100"
+    )
+    assert usage == {
+        "input": 1234,
+        "output": 567,
+        "cache_read": 8900,
+        "cache_write": 100,
+    }
+    assert "cache r/w 8,900/100" in format_usage(usage)
+    # Zero cache is the finding, not an absence — say so rather than omit it.
+    assert "cache MISS" in format_usage({"input": 10, "output": 5})
+    assert format_usage({}) == "tokens unavailable"
+
+
+def test_a_failed_summary_post_is_reported(tmp_path: pathlib.Path) -> None:
+    """A live run generated the whole summary, exited 0, and posted nothing.
+    The summary is the only place a reader learns what the run did."""
+    src = (
+        pathlib.Path(__file__).resolve().parents[1] / "sdk_loop_finalize.py"
+    ).read_text(encoding="utf-8")
+    assert "::error::could not post the run summary" in src
+
+
+def test_uv_is_available_to_the_phases() -> None:
+    """The resolve playbook verifies its own fix with `uv run pre-commit` and
+    `uv run pytest`. A live round logged `uv: command not found` for both and
+    pushed the commit regardless — a resolver that cannot check its work is
+    worse than one that does not try, because the output looks the same."""
+    assert "astral-sh/setup-uv@" in PHASE_WF.read_text(encoding="utf-8")
+
+
+def test_the_resolver_commits_as_the_app_not_as_atlan_ci() -> None:
+    """atlan-ci is a CODEOWNER and the identity that mints approvals.
+    Attributing loop commits to it blurs "who wrote this" with "who approved
+    it" — the separation the merge gate rests on."""
+    text = PHASE_WF.read_text(encoding="utf-8")
+    assert 'user.name  "atlan-app-fleet[bot]"' in text
+    assert "atlan-ci@users.noreply.github.com" not in text
+
+
+def test_opencode_is_pinned_to_the_version_that_works() -> None:
+    """0.6.3 crashed before every request with a DecimalError. 1.18.22 is what
+    connector-pulse runs in production, and the exact CI config works against
+    it locally. Three PRs chased the model name before the version was checked.
+    """
+    assert "opencode-ai@1.18.22" in PHASE_WF.read_text(encoding="utf-8")
+
+
 def test_the_committed_workflow_matches_its_generator() -> None:
     proc = subprocess.run(
         [sys.executable, ".github/scripts/gen_sdk_loop_workflow.py", "--check"],
@@ -738,10 +1321,23 @@ def test_the_review_phase_token_cannot_push() -> None:
     token it holds has no write scope to push with.
     """
     text = PHASE_WF.read_text(encoding="utf-8")
-    assert (
-        "permission-contents: ${{ inputs.phase == 'resolve' && 'write' || 'read' }}"
-        in text
-    )
+    line = next(x for x in text.splitlines() if "permission-contents:" in x)
+    expr = line.split("permission-contents:", 1)[1].strip()
+
+    # EVALUATED, not string-matched. The previous form pinned one exact
+    # spelling, so adding `prep` to the write side failed it for a reason
+    # unrelated to what it protects — and the tempting repair is to paste in
+    # the new spelling, which pins the next one just as blindly. What must
+    # hold is the OUTCOME per phase, and only `review` has a claim to make.
+    for phase, expected in (
+        ("review", "read"),
+        ("resolve", "write"),
+        # prep updates a behind branch and pushes mechanical fixes; that is
+        # the whole reason it exists as a separate phase.
+        ("prep", "write"),
+    ):
+        got = evaluate_operand(expr, {"inputs": {"phase": phase}})
+        assert got == expected, f"{phase} must mint a {expected} token, got {got!r}"
 
 
 def test_the_minted_token_is_narrowed_not_the_apps_full_grant() -> None:
@@ -796,10 +1392,22 @@ def test_a_detail_containing_a_pipe_cannot_break_the_table() -> None:
     assert "a \\| b" in render(rounds, "failed", "http://run")
 
 
-def test_rounds_json_from_a_skipped_job_is_tolerated() -> None:
-    # Skipped jobs emit empty outputs; the summary must still render.
-    raw = json.dumps(
-        [{"number": 1, "phase": "review", "outcome": "", "verdict": "", "sha": ""}]
-    )
-    assert len(parse_rounds(raw)) == 1
+def test_a_skipped_round_is_not_reported_as_a_round() -> None:
+    """A skipped job still emits a row with every field empty. Counting them
+    produced "8 review · 8 resolve" for a run where three reviews ran and
+    nothing else did, then printed five blank rows implying work that never
+    happened."""
+    ran = {"number": 1, "phase": "review", "outcome": "reaim", "sha": "a" * 40}
+    skipped = {"number": 2, "phase": "resolve", "outcome": "", "verdict": "", "sha": ""}
+    assert len(parse_rounds(json.dumps([ran, skipped]))) == 1
     assert parse_rounds("not json") == []
+
+
+def test_a_reaim_streak_stops_the_run_before_it_eats_the_round_cap() -> None:
+    """A re-aim discards the round's work, so it is not progress and needs its
+    own budget. A live run burned three rounds on the identical mismatch, each
+    reporting `reaim` and advancing as though something had changed."""
+    assert not reaim_exhausted(0)
+    assert not reaim_exhausted(1)
+    assert reaim_exhausted(MAX_CONSECUTIVE_REAIMS)
+    assert MAX_CONSECUTIVE_REAIMS < MAX_ROUNDS, "must bite before the round cap"

@@ -12,6 +12,7 @@ from types import MappingProxyType
 from conformance.suite.rules.app_name_alignment import (
     RULES as _APP_NAME_ALIGNMENT_RULES,
 )
+from conformance.suite.rules.atomic_publish import RULES as _ATOMIC_PUBLISH_RULES
 from conformance.suite.rules.ci import RULES as _CI_RULES
 from conformance.suite.rules.client_seam import RULES as _CLIENT_SEAM_RULES
 from conformance.suite.rules.contract_toolkit import RULES as _CONTRACT_TOOLKIT_RULES
@@ -26,6 +27,7 @@ from conformance.suite.rules.error_seam import RULES as _ERROR_SEAM_RULES
 from conformance.suite.rules.logging import RULES as _L_RULES
 from conformance.suite.rules.optimizations import RULES as _O_RULES
 from conformance.suite.rules.orchestration import RULES as _ORCHESTRATION_RULES
+from conformance.suite.rules.persistence_seam import RULES as _PERSISTENCE_SEAM_RULES
 from conformance.suite.rules.portability import RULES as _PORTABILITY_RULES
 from conformance.suite.rules.preflight import RULES as _PREFLIGHT_RULES
 from conformance.suite.rules.prescriptions import RULES as _P_RULES
@@ -65,6 +67,7 @@ _ALL_SERIES: tuple[tuple[RuleDefinition, ...], ...] = (
     _ENTRYPOINT_RULES,
     _STORAGE_RULES,
     _CLIENT_SEAM_RULES,
+    _PERSISTENCE_SEAM_RULES,
     _EP_ALIGNMENT_RULES,
     _APP_NAME_ALIGNMENT_RULES,
     _SDR_RULES,
@@ -74,6 +77,7 @@ _ALL_SERIES: tuple[tuple[RuleDefinition, ...], ...] = (
     _CONTRACT_TOOLKIT_RULES,
     _S_RULES,
     _PORTABILITY_RULES,
+    _ATOMIC_PUBLISH_RULES,
 )
 
 

@@ -1,5 +1,25 @@
 # Changelog
 
+## v3.31.0 (August 31, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.30.0...v3.31.0
+
+### Features
+
+- shared integration conftest via integration_kit (FND-815, FND-817) (#3495) (by @sachi-atlan in [1a774f0](https://github.com/atlanhq/application-sdk/commit/1a774f0))
+- HttpFakeSource and one volatile-field set (FND-816, FND-819) (#3496) (by @sachi-atlan in [63f6263](https://github.com/atlanhq/application-sdk/commit/63f6263))
+- golden corpus, golden-diff assertion and fake-source pagination (FND-818, FND-820) (#3498) (by @sachi-atlan in [5017eed](https://github.com/atlanhq/application-sdk/commit/5017eed))
+- opt-in artifact-storage verification in the gate + relocation-aware multipart probe (#3522) (by @SwarnadeepChatterjee in [a57bfce](https://github.com/atlanhq/application-sdk/commit/a57bfce))
+- let one suite run N entrypoint DAGs against one connection (#3569) (by @cmgrote in [da1ed37](https://github.com/atlanhq/application-sdk/commit/da1ed37))
+
+### Bug Fixes
+
+- stop a reset of the logger init flags leaking to the next test (FND-976) (#3499) (by @cmgrote in [bfdc3af](https://github.com/atlanhq/application-sdk/commit/bfdc3af))
+- forward stdlib logs without holding the InterceptHandler lock (ARUN-1218) (#3501) (by @tczhao in [f1fbc98](https://github.com/atlanhq/application-sdk/commit/f1fbc98))
+- log gate blocks as ERROR with audience classification (FND-901) (#3492) (by @fyzanshaik-atlan in [22d2095](https://github.com/atlanhq/application-sdk/commit/22d2095))
+- atomic FileReference materialisation and per-path lock (CONNECT-1126) (#3520) (by @fyzanshaik-atlan in [24ba8fd](https://github.com/atlanhq/application-sdk/commit/24ba8fd))
+
+
 ## v3.30.0 (August 28, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.29.0...v3.30.0

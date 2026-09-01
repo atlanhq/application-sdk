@@ -2,6 +2,38 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.25.0] - 2026-08-31
+
+### Features
+
+- P023 covers the data-scale blocking calls the fleet actually makes (#3566) ([720ac0f](https://github.com/atlanhq/application-sdk/commit/720ac0f))
+- publish the persistent-artifacts seam and enforce it (CONNECT-1275) (#3523) ([d854e00](https://github.com/atlanhq/application-sdk/commit/d854e00))
+- ban locale-dependent text file IO (P046) (FND-924) (#3466) ([67c81f3](https://github.com/atlanhq/application-sdk/commit/67c81f3))
+- scaffold application_sdk/testing/harness/ (FND-238) (#3433) ([997b697](https://github.com/atlanhq/application-sdk/commit/997b697))
+
+### Bug fixes
+
+- atomic FileReference materialisation and per-path lock (CONNECT-1126) (#3520) ([24ba8fd](https://github.com/atlanhq/application-sdk/commit/24ba8fd))
+- gate conformance SARIF upload on code-scanning availability (FND-1149, FND-1150) (#3553) ([38b10af](https://github.com/atlanhq/application-sdk/commit/38b10af))
+- B005 false-positive shapes (#3477) ([7ef432e](https://github.com/atlanhq/application-sdk/commit/7ef432e))
+- I003 false-positive shapes (#3478) ([1e701b3](https://github.com/atlanhq/application-sdk/commit/1e701b3))
+- L004 false-positive shapes (#3474) ([678595d](https://github.com/atlanhq/application-sdk/commit/678595d))
+- B005 false positives from bare-class-name ledger identity (#3471) ([47c5f84](https://github.com/atlanhq/application-sdk/commit/47c5f84))
+- P014 false-positive shapes (#3472) ([13a63fc](https://github.com/atlanhq/application-sdk/commit/13a63fc))
+- log gate blocks as ERROR with audience classification (FND-901) (#3492) ([22d2095](https://github.com/atlanhq/application-sdk/commit/22d2095))
+- P013 false-positive shapes (#3475) ([38ba374](https://github.com/atlanhq/application-sdk/commit/38ba374))
+- alarm when a lock refusal outlives the reaper (FND-909) (#3505) ([a24b5ae](https://github.com/atlanhq/application-sdk/commit/a24b5ae))
+- P003 reads codes held in a module-level constant (#3473) ([13ce559](https://github.com/atlanhq/application-sdk/commit/13ce559))
+- D011 accepts an upper-bound-only specifier (#3468) ([f579514](https://github.com/atlanhq/application-sdk/commit/f579514))
+- update github/codeql-action digest to cdf488f (#3442) ([5fc6dbb](https://github.com/atlanhq/application-sdk/commit/5fc6dbb))
+
+### Other changes
+
+- chore(deps): update dependency ruff to v0.16.5 (#3518) ([5e9d9a7](https://github.com/atlanhq/application-sdk/commit/5e9d9a7))
+- chore(testing): freeze testing/full_dag and make it visible to B001 (FND-245) (#3485) ([ce69c07](https://github.com/atlanhq/application-sdk/commit/ce69c07))
+- refactor(testing): re-express BaseE2ETest over the shared harness, in place (FND-225) (#3476) ([4b50db6](https://github.com/atlanhq/application-sdk/commit/4b50db6))
+- refactor(testing): split e2e client.py into async Atlas and AE readers (FND-242) (#3438) ([75da7fb](https://github.com/atlanhq/application-sdk/commit/75da7fb))
+
 ## [0.24.0] - 2026-08-25
 
 ### Features

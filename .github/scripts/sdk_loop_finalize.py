@@ -23,6 +23,10 @@ import os
 import subprocess
 from dataclasses import dataclass
 
+# The one shared formatter. Finalize is otherwise stdlib-only, but duplicating
+# the token rendering is how the USD/token mismatch this fixes got in.
+from sdk_loop_common import format_tokens
+
 MARKER = "<!-- SDK_LOOP_SUMMARY -->"
 
 #: Every way a run can end, and the one-line explanation a reader gets. Keys
@@ -50,8 +54,13 @@ STOP_TEXT = {
     ),
     "budget_exhausted": (
         "**Allowance spent.** The run stopped at a round boundary rather than "
-        "starting a phase it could not afford. Raise `vars.SDK_LOOP_MAX_USD` and "
+        "starting a phase it could not afford. Raise `vars.SDK_LOOP_MAX_TOKENS` and "
         "re-invoke to continue from where it stopped."
+    ),
+    "reaim": (
+        "**Kept re-aiming.** Every round found the branch somewhere other than "
+        "where it had just reviewed, so no round ever got a clean pass at one "
+        "commit. Re-invoke once the branch settles."
     ),
     "failed": (
         "**A phase failed.** The run stopped rather than guessing at a result — "
@@ -75,6 +84,9 @@ class Round:
     detail: str = ""
     #: Gateway spend across this phase, or None when it could not be read.
     cost: float | None = None
+    #: Token counts from opencode itself — exact, and per-phase unlike the
+    #: shared gateway key. Carries the cache-hit signal.
+    usage: str = ""
 
 
 def parse_rounds(raw: str | None) -> list[Round]:
@@ -90,6 +102,12 @@ def parse_rounds(raw: str | None) -> list[Round]:
     for item in payload:
         if not isinstance(item, dict) or not item.get("phase"):
             continue
+        # A skipped job still emits a row, with every field empty. Counting
+        # those produced "8 review · 8 resolve" for a run where three reviews
+        # ran and nothing else did — the table then printed five blank rows
+        # implying work that never happened.
+        if not str(item.get("outcome", "")).strip():
+            continue
         rounds.append(
             Round(
                 number=int(item.get("number", 0) or 0),
@@ -99,6 +117,7 @@ def parse_rounds(raw: str | None) -> list[Round]:
                 sha=str(item.get("sha", "")),
                 detail=str(item.get("detail", "")),
                 cost=_as_cost(item.get("cost")),
+                usage=str(item.get("usage", "")),
             )
         )
     return rounds
@@ -135,41 +154,47 @@ def render_rounds(rounds: list[Round]) -> str:
     if not rounds:
         return "_No round completed._\n"
     lines = [
-        "| Round | Phase | Outcome | Verdict | Head | Cost | Detail |",
-        "|---|---|---|---|---|--:|---|",
+        "| Round | Phase | Outcome | Verdict | Head | Tokens | Breakdown | Detail |",
+        "|---|---|---|---|---|--:|---|---|",
     ]
     for r in rounds:
-        cost = "—" if r.cost is None else f"${r.cost:,.4f}"
+        cost = "—" if r.cost is None else format_tokens(int(r.cost))
         lines.append(
             f"| {r.number} | {r.phase} | `{r.outcome}` | {_cell(r.verdict)} "
-            f"| `{r.sha[:8] or '—'}` | {cost} | {_cell(r.detail)} |"
+            f"| `{r.sha[:8] or '—'}` | {cost} | {_cell(r.usage)} | {_cell(r.detail)} |"
         )
     return "\n".join(lines) + "\n"
 
 
 def render_cost(rounds: list[Round]) -> str:
-    """The run total, with the caveat that makes the number honest.
+    """The run's token total, with the caveat that keeps it honest.
 
-    Cost is measured as the movement in the gateway KEY's cumulative spend
-    across each phase. The key is the billing unit, not the run — and this lane
-    runs PRs in parallel and shares its key with other automation — so anything
-    else billing during a phase lands in that phase's figure. It is an upper
-    bound, and saying so is the difference between a useful number and a
-    misleading one.
+    Tokens, not dollars: the gateway's /key/info is unreadable with this lane's
+    non-admin key, and the key is shared, so a spend delta was an upper bound
+    over other lanes' traffic as well as this run's. `opencode stats` is
+    per-phase and exact by comparison.
+
+    The caveat that matters now is a different one. Two complete runs reported
+    a few hundred tokens for reviews lasting twenty and forty-five minutes,
+    because `opencode stats` does not attribute what a DISPATCHED SUB-AGENT
+    spends — and on a real review that is most of it. So this figure is a
+    floor, not a total, and it is labelled as one rather than presented as a
+    bill someone might reconcile against.
     """
     total, unmeasured = total_cost(rounds)
-    if not any(r.cost is not None for r in rounds):
+    measured = sum(1 for r in rounds if r.cost is not None)
+    if not measured:
         return (
-            "\n**Cost:** unavailable — the gateway did not report key spend. "
+            "\n**Tokens:** unavailable — `opencode stats` reported no usage. "
             "No figure is better than a wrong one.\n"
         )
-    line = f"\n**Cost:** ${total:,.4f} across {sum(1 for r in rounds if r.cost is not None)} phases"
+    line = f"\n**Tokens:** {format_tokens(int(total))} across {measured} phases"
     if unmeasured:
         line += f" ({unmeasured} phase(s) unmeasured)"
     return (
         line
-        + ". Measured as the movement in the gateway key's spend, so concurrent "
-        + "traffic on the same key is included — read it as an upper bound.\n"
+        + ". Billable input + output from `opencode stats`. Sub-agent usage is "
+        + "NOT attributed by that source, so read this as a floor.\n"
     )
 
 
@@ -214,12 +239,22 @@ def main(argv: list[str] | None = None) -> int:
 
     repo, pr = os.environ.get("REPO"), os.environ.get("PR_NUMBER")
     if repo and pr:
-        subprocess.run(
+        # NOT check=False-and-forget: a live run generated this whole summary,
+        # exited 0, and posted nothing — the failure was indistinguishable
+        # from success. The summary is the only place a reader learns what the
+        # run did, so a failed post is surfaced loudly even though it must not
+        # fail the job (the verdicts are already on the PR either way).
+        proc = subprocess.run(
             ["gh", "pr", "comment", pr, "--repo", repo, "--body", text],
             check=False,
             capture_output=True,
             text=True,
         )
+        if proc.returncode != 0:
+            print(
+                f"::error::could not post the run summary to #{pr}: "
+                f"{(proc.stderr or '').strip()[:300]}"
+            )
     print(text)
     return 0
 

@@ -32,6 +32,7 @@ from conformance.suite.checks import (
     artifact_schema_declared,
     artifact_schema_writer,
     asyncio_loop_scope,
+    atomic_publish,
     bootstrap_drift,
     client_seam,
     coverage_config,
@@ -58,6 +59,7 @@ from conformance.suite.checks import (
     manifest_contract,
     optimizations,
     orchestration,
+    persistence_seam,
     preflight,
     prescriptions,
     release_contract,
@@ -110,6 +112,11 @@ _CHECKS: list[CheckRegistration] = [
         series=client_seam.SERIES,
         discover=client_seam.discover,
         scan_path=client_seam.scan_path,
+    ),
+    CheckRegistration(
+        series=persistence_seam.SERIES,
+        discover=persistence_seam.discover,
+        scan_path=persistence_seam.scan_path,
     ),
     CheckRegistration(
         series=download_retry.SERIES,
@@ -325,6 +332,11 @@ _CHECKS: list[CheckRegistration] = [
         series=text_io_encoding.SERIES,
         discover=text_io_encoding.discover,
         scan_path=text_io_encoding.scan_path,
+    ),
+    CheckRegistration(
+        series=atomic_publish.SERIES,
+        discover=atomic_publish.discover,
+        scan_path=atomic_publish.scan_path,
     ),
 ]
 
