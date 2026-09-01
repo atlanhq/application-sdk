@@ -1,0 +1,30 @@
+/// Fixture: app whose typed publish step opts in to the non-data hand-off.
+///
+/// Exercises the pipeline path with `pipeline.publish.transformedNondataPrefix`
+/// set, which must thread the value through `generateDAG()` onto the generated
+/// publish node as `args["transformed_nondata_prefix"]` without disturbing any
+/// other publish arg.
+amends "../../src/App.pkl"
+
+name = "publish-nondata-prefix"
+displayName = "Publish Nondata Prefix"
+icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
+hasCredentialConfig = false
+
+pipeline = new Pipeline {
+  publish = new PublishStep {
+    transformedNondataPrefix = "$.extract.outputs.transformed_nondata_prefix"
+  }
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["connection"] = new ConnectionCreator {
+          placeholderText = "Connection Name"
+        }
+      }
+    }
+  }
+}

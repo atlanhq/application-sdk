@@ -911,6 +911,26 @@ open class PublishNode extends DAGNode {
   /// disable creation even when an entity is present.
   connectionCreationEnabled: Boolean = connectionEntity != null
 
+  /// Value emitted as `args["transformed_nondata_prefix"]` when non-null.
+  ///
+  /// Object-store prefix holding the run's transformed **non-data** payloads —
+  /// everything the app emits alongside the asset rows that publish handles on a
+  /// separate path from `transformed_data_prefix`. Normally an output reference
+  /// such as `"$.extract.outputs.transformed_nondata_prefix"`, but any literal
+  /// prefix or form placeholder is accepted.
+  ///
+  /// Defaults to `null`, which **omits the arg entirely** — generated manifests
+  /// for apps that do not set it are byte-identical to before. Set it only when
+  /// the upstream node actually emits non-data payloads; pointing it at an
+  /// output key the extract workflow never populates leaves publish resolving a
+  /// prefix that does not exist.
+  ///
+  /// Settable directly on the node (`extraNodes["publish"]`) or, for the typed
+  /// pipeline, via `PublishStep.transformedNondataPrefix`. Does not change
+  /// `transformed_data_prefix`, the publish state/current-state args, or any
+  /// other node.
+  transformedNondataPrefix: String? = null
+
   displayName = "Publish to Atlas"
   workflowType = "PublishWorkflow"
   appName = "publish"
@@ -922,6 +942,9 @@ open class PublishNode extends DAGNode {
     ["connection_creation_enabled"] = connectionCreationEnabled
     ["executor_enabled"] = executorEnabled
     when (connectionEntity != null) { ["connection_entity"] = connectionEntity }
+    when (transformedNondataPrefix != null) {
+      ["transformed_nondata_prefix"] = transformedNondataPrefix
+    }
     ["connection_cache_enabled"] = connectionCacheEnabled
     ["connection_cache_via_app_enabled"] = connectionCacheViaAppEnabled
     ["current_state_enabled"] = currentStateEnabled
@@ -1583,6 +1606,17 @@ class PublishStep {
   /// `false` on the generated publish node (the node links the two), so publish
   /// targets an existing connection and creates nothing.
   connectionEntity: String? = "{{connection}}"
+
+  /// Object-store prefix for the run's transformed non-data payloads, emitted as
+  /// the publish node's `args["transformed_nondata_prefix"]`.
+  ///
+  /// Defaults to `null`, which omits the arg entirely, so existing generated
+  /// manifests are unchanged. Set it — normally to an output reference such as
+  /// `"$.extract.outputs.transformed_nondata_prefix"` — only when the extract
+  /// workflow actually emits non-data payloads. See
+  /// `PublishNode.transformedNondataPrefix` for the full semantics; this
+  /// property is passed straight through to the generated node.
+  transformedNondataPrefix: String? = null
 
   /// Optional lineage-publish sub-step. When set, adds a `"lineage-publish"`
   /// node after the main publish step.
@@ -2544,6 +2578,7 @@ local function generateDAG(): Mapping<String, Any> = new Mapping {
           currentStateEnabled = ps.currentStateEnabled
           currentStateViaAppEnabled = ps.currentStateViaAppEnabled
           connectionEntity = ps.connectionEntity
+          transformedNondataPrefix = ps.transformedNondataPrefix
         })
   }
   when (pipeline.publish != null && pipeline.publish!!.lineagePublish != null) {

@@ -589,6 +589,7 @@ class PublishStep {
   executorEnabled: Boolean|String = true
   includeInputFields: Boolean = true     // generates output_dir/load_to_atlan/publish_dry_run in _input.py
   connectionEntity: String? = "{{connection}}"  // args["connection_entity"]; null omits it AND sets connection_creation_enabled=false
+  transformedNondataPrefix: String? = null      // args["transformed_nondata_prefix"]; null omits it
   lineagePublish: LineagePublishStep?    // opt-in lineage publish (default-off)
   errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
     startToCloseTimeoutSeconds = 259200  // 72h default — AE's 2h is too tight for large tenants
@@ -2145,6 +2146,7 @@ class PublishNode extends DAGNode {
   tagAttachmentsPrefix: String? = null
   connectionEntity: String? = "{{connection}}"
   connectionCreationEnabled: Boolean = connectionEntity != null
+  transformedNondataPrefix: String? = null
   displayName = "Publish to Atlas"
   workflowType = "PublishWorkflow"
   appName = "publish"
@@ -2156,6 +2158,9 @@ class PublishNode extends DAGNode {
     ["connection_creation_enabled"] = connectionCreationEnabled
     ["executor_enabled"] = executorEnabled
     when (connectionEntity != null) { ["connection_entity"] = connectionEntity }
+    when (transformedNondataPrefix != null) {
+      ["transformed_nondata_prefix"] = transformedNondataPrefix
+    }
   }
   dependsOn { upstream }
 }
@@ -2174,6 +2179,29 @@ Override `connectionCreationEnabled` explicitly to disable creation even when an
 entity is present. For the auto-generated default publish node, set the app-level
 `publishExecutorEnabled`; for `extraNodes["publish"] = new PublishNode { ... }`,
 set `executorEnabled` on that node.
+
+`transformedNondataPrefix` is the object-store prefix holding the run's
+transformed **non-data** payloads — what the app emits alongside the asset rows
+that publish reads from `transformed_data_prefix`. It is opt-in: the default
+`null` omits `transformed_nondata_prefix` from the args entirely, so apps that
+never set it generate byte-identical manifests. Set it on the node
+(`extraNodes["publish"]`) or via `pipeline.publish.transformedNondataPrefix`,
+normally to an output reference:
+
+```pkl
+pipeline {
+  publish {
+    transformedNondataPrefix = "$.extract.outputs.transformed_nondata_prefix"
+  }
+}
+```
+
+The value is passed through verbatim, so a literal prefix or a form placeholder
+works too. Set it only when the upstream node actually emits non-data payloads —
+pointing it at an output key the extract workflow never populates leaves publish
+resolving a prefix that does not exist. It does not affect
+`transformed_data_prefix`, the publish state / current-state args, or any other
+node. See [`examples/publish-controls/`](../examples/publish-controls/).
 
 If the workflow form contains `enable-tags`, `PublishNode` also emits
 `tag_pipeline_enabled = "{{enable-tags}}"` and

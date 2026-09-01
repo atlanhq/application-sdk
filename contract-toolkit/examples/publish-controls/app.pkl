@@ -1,6 +1,6 @@
 /// Minimal example demonstrating publish input opt-out, publish executor
-/// templating, compact activity labels, and workflow-safe error handling for
-/// toolkit-managed extract/publish nodes.
+/// templating, the optional non-data prefix hand-off, compact activity labels,
+/// and workflow-safe error handling for toolkit-managed extract/publish nodes.
 ///
 /// The app keeps the standard extract -> publish DAG, suppresses toolkit
 /// scaffolding fields from _input.py, and declares its own load-to-atlan UI
@@ -26,6 +26,10 @@ pipeline {
     includeInputFields = false
     executorEnabled = "{{load-to-atlan}}"
     displayName = "Publish"
+    // Opt in to the non-data hand-off: this app's extract workflow emits a
+    // `transformed_nondata_prefix` output alongside the asset rows. Apps that
+    // emit only asset rows leave this unset and the arg is omitted.
+    transformedNondataPrefix = "$.extract.outputs.transformed_nondata_prefix"
     errorHandling = new ErrorHandlingConfig {
       startToCloseTimeoutSeconds = 14400
     }
