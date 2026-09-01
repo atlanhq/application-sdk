@@ -655,9 +655,7 @@ def _check_i005(
                 f"'USER {token}' reverses that and exposes the container to "
                 "privilege-escalation risks, violating the non-root policy."
             )
-            findings.append(
-                _make_finding(RULE_I005, file, instr.line, msg, directives)
-            )
+            findings.append(_make_finding(RULE_I005, file, instr.line, msg, directives))
     return findings
 
 
