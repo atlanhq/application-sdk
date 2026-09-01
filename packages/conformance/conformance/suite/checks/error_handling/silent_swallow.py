@@ -15,10 +15,10 @@ from ._helpers import (
     _filter_body_wrapped,
     _find_filter_method,
     _get_name,
-    _iter_function_body,
     _has_exc_info,
     _inherits_logging_filter,
     _is_gather_call,
+    _iter_function_body,
     _iter_shallow,
 )
 
@@ -82,17 +82,21 @@ class SilentSwallowMixin:
         start = max(0, function.lineno - 1)
         end = min(len(comments), try_node.lineno - 1)
         docstring = (
-            function.body[0].value
+            function.body[0].value.value
             if function.body
             and isinstance(function.body[0], ast.Expr)
             and isinstance(function.body[0].value, ast.Constant)
             and isinstance(function.body[0].value.value, str)
             else ""
         )
-        documented = any(
-            "best-effort" in line or "best effort" in line
-            for line in comments[max(start, end - 4) : end]
-        ) or "best-effort" in docstring.lower() or "best effort" in docstring.lower()
+        documented = (
+            any(
+                "best-effort" in line or "best effort" in line
+                for line in comments[max(start, end - 4) : end]
+            )
+            or "best-effort" in docstring.lower()
+            or "best effort" in docstring.lower()
+        )
         if not documented:
             return False
 
@@ -103,14 +107,20 @@ class SilentSwallowMixin:
                 return True
 
         # JSON list parsing may retain the original value when decoding fails.
-        if _get_name(node.type) in {"JSONDecodeError", "ValueError"}:
-            calls = [n for n in _iter_function_body([try_node]) if isinstance(n, ast.Call)]
-            if len(calls) == 1 and _get_name(calls[0].func) == "loads":
-                call = calls[0]
+        caught_names = (
+            [_get_name(element) for element in node.type.elts]
+            if isinstance(node.type, ast.Tuple)
+            else [_get_name(node.type)]
+        )
+        if set(caught_names) & {"JSONDecodeError", "ValueError"}:
+            if len(try_node.body) == 1 and isinstance(try_node.body[0], ast.Assign):
+                assignment = try_node.body[0]
+                call = assignment.value
                 if (
-                    len(try_node.body) == 1
-                    and isinstance(try_node.body[0], ast.Return)
-                    and try_node.body[0].value is call
+                    len(assignment.targets) == 1
+                    and isinstance(assignment.targets[0], ast.Name)
+                    and isinstance(call, ast.Call)
+                    and _get_name(call.func) == "loads"
                     and len(call.args) == 1
                     and isinstance(call.args[0], ast.Name)
                 ):

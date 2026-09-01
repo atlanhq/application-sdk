@@ -253,6 +253,62 @@ def fetch(heartbeat_fn):
     )
 
 
+def test_p002_documented_json_fallback_is_silent() -> None:
+    _none(
+        """\
+def parse(value):
+    \"\"\"Best-effort JSON list parsing.\"\"\"
+    try:
+        value = loads(value)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    return value
+"""
+    )
+
+
+def test_p002_undocumented_json_fallback_fires() -> None:
+    _single(
+        """\
+def parse(value):
+    try:
+        value = loads(value)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    return value
+""",
+        "E002",
+    )
+
+
+def test_p002_documented_destructor_cleanup_is_silent() -> None:
+    _none(
+        """\
+class Resource:
+    def __del__(self):
+        \"\"\"Best-effort cleanup during interpreter shutdown.\"\"\"
+        try:
+            self.close()
+        except (OSError, RuntimeError):
+            pass
+"""
+    )
+
+
+def test_p002_undocumented_destructor_cleanup_fires() -> None:
+    _single(
+        """\
+class Resource:
+    def __del__(self):
+        try:
+            self.close()
+        except (OSError, RuntimeError):
+            pass
+""",
+        "E002",
+    )
+
+
 # ── E003 — BroadContextlibSuppress ────────────────────────────────────────────
 
 
