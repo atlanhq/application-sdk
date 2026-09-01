@@ -286,6 +286,26 @@ def __dir__() -> list[str]:
     return sorted({*globals(), *_LAZY_EXPORTS, *_LAZY_SUBMODULES})
 
 
+# ``lazy`` is the one name that is both a lazy export (the decorator) and a
+# submodule (its home). The lazy machinery cannot serve that collision: the
+# import system binds the *submodule* onto this package as a side effect of any
+# ``from .lazy import ...`` — ``runner`` does one — and an attribute already
+# present on the package means ``__getattr__`` is never consulted. So the
+# documented ``from application_sdk.testing.integration import lazy`` returned
+# the module, and every ``lazy(...)`` call site died with ``TypeError: 'module'
+# object is not callable`` — order-dependently, whenever anything touched a
+# ``.lazy``-importing submodule first (resolving ``BaseIntegrationTest`` from
+# this package is enough).
+#
+# Bind the callable eagerly instead. ``lazy.py`` imports nothing beyond the
+# stdlib, so this costs the laziness budget nothing — and it wins permanently:
+# the module-level name shadows ``__getattr__`` for good, and a later import of
+# the submodule is served from ``sys.modules`` without re-binding the parent
+# attribute. ``lazy`` stays in ``_LAZY_EXPORTS`` (and the ``TYPE_CHECKING``
+# block) so the three parallel lists keep matching; its entry is simply never
+# consulted at runtime.
+from .lazy import lazy as lazy  # noqa: E402
+
 # =============================================================================
 # Public API
 # =============================================================================
