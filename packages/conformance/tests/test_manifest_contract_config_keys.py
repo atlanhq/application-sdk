@@ -66,6 +66,16 @@ def _unsuppressed(findings: list, rule_id: str) -> list:
     return [f for f in findings if f.rule_id == rule_id and not f.suppressed]
 
 
+def _flagged(findings: list, rule_id: str) -> set[str]:
+    """The arg keys actually reported, read off the discriminator.
+
+    Never substring-match the message: it names ``ExtractionInput``'s fields as
+    remediation advice, so ``"include_filter" in message`` is true even on a
+    finding about something else entirely.
+    """
+    return {f.discriminator for f in findings if f.rule_id == rule_id}
+
+
 def _app_src(input_body: str, *, bases: str = "", decorators: str = "") -> str:
     """A single-entrypoint app whose Input contract is under test."""
     return (
@@ -120,12 +130,10 @@ def test_k018_fires_when_flat_arg_not_declared(tmp_path: Path) -> None:
         tmp_path / "app" / "generated" / "manifest.json",
         {"extract": _extract_node(_FLAT_FILTER_ARGS)},
     )
-    messages = {f.message for f in _only(scan_all(paths, tmp_path), "K018")}
-    assert any("include_filter" in m for m in messages)
-    assert any("exclude_filter" in m for m in messages)
-    assert not any(
-        "'connection'" in m for m in messages
-    ), "connection is declared — must not be flagged"
+    assert _flagged(scan_all(paths, tmp_path), "K018") == {
+        "include_filter",
+        "exclude_filter",
+    }, "connection is declared — must not be flagged"
 
 
 def test_k018_silent_when_every_arg_declared(tmp_path: Path) -> None:
@@ -165,11 +173,15 @@ def test_k018_silent_when_fields_come_from_sdk_extraction_input(
 # ---------------------------------------------------------------------------
 
 
-def test_k018_silent_when_before_validator_folds_flat_keys(tmp_path: Path) -> None:
-    """A mode='before' validator can fold any undeclared key — accept it.
+def test_k018_fires_despite_a_flat_to_metadata_folding_validator(
+    tmp_path: Path,
+) -> None:
+    """Folding flat keys back into ``metadata`` is the anti-pattern, not a fix.
 
-    This is the prescribed fix for the flattening break, so flagging it would
-    penalise exactly the apps that remediated correctly.
+    It makes the value reachable, so it looks remediated, but it rebuilds the
+    nested envelope the platform moved away from — the contract still does not
+    describe what the app consumes, and the next relocation breaks it the same
+    way. Flat args are the contract; declare them.
     """
     src = _app_src(
         "    metadata: dict = {}\n"
@@ -184,7 +196,11 @@ def test_k018_silent_when_before_validator_folds_flat_keys(tmp_path: Path) -> No
         tmp_path / "app" / "generated" / "manifest.json",
         {"extract": _extract_node(_FLAT_FILTER_ARGS)},
     )
-    assert _only(scan_all(paths, tmp_path), "K018") == []
+    assert _flagged(scan_all(paths, tmp_path), "K018") == {
+        "connection",
+        "include_filter",
+        "exclude_filter",
+    }
 
 
 def test_k018_still_fires_for_after_mode_validator(tmp_path: Path) -> None:
@@ -231,12 +247,9 @@ def test_k018_allow_unbounded_fields_does_not_satisfy(tmp_path: Path) -> None:
             )
         },
     )
-    findings = _unsuppressed(scan_all(paths, tmp_path), "K018")
-    messages = {f.message for f in findings}
-    assert any("fetch_partitions" in m for m in messages)
-    assert not any(
-        "include_filter" in m for m in messages
-    ), "include_filter comes from ExtractionInput — must not be flagged"
+    assert _flagged(_unsuppressed(scan_all(paths, tmp_path), "K018"), "K018") == {
+        "fetch_partitions"
+    }, "include_filter comes from ExtractionInput — must not be flagged"
 
 
 # ---------------------------------------------------------------------------
@@ -422,18 +435,16 @@ def test_k018_fires_without_entrypoint_decorator(tmp_path: Path) -> None:
         tmp_path / "app" / "generated" / "manifest.json",
         {"extract": _extract_node(_APP_SPECIFIC_ARGS)},
     )
-    messages = {f.message for f in _unsuppressed(scan_all(paths, tmp_path), "K018")}
-    assert any("fetch_partitions" in m for m in messages)
-    assert any("advanced_config" in m for m in messages)
-    assert not any(
-        "include_filter" in m for m in messages
-    ), "include_filter comes from ExtractionInput — must not be flagged"
+    assert _flagged(_unsuppressed(scan_all(paths, tmp_path), "K018"), "K018") == {
+        "fetch_partitions",
+        "advanced_config",
+    }, "include_filter comes from ExtractionInput — must not be flagged"
 
 
-def test_k018_inherited_entrypoint_silent_with_before_validator(
+def test_k018_fires_on_inherited_entrypoint_with_folding_validator(
     tmp_path: Path,
 ) -> None:
-    """Athena's actual post-remediation shape — a true negative, not a skip."""
+    """A folding validator does not exempt the BaseMetadataExtractor family either."""
     src = _INHERITED_ENTRYPOINT_APP.format(
         body=(
             "    @model_validator(mode='before')\n"
@@ -447,7 +458,10 @@ def test_k018_inherited_entrypoint_silent_with_before_validator(
         tmp_path / "app" / "generated" / "manifest.json",
         {"extract": _extract_node(_APP_SPECIFIC_ARGS)},
     )
-    assert _only(scan_all(paths, tmp_path), "K018") == []
+    assert _flagged(scan_all(paths, tmp_path), "K018") == {
+        "fetch_partitions",
+        "advanced_config",
+    }
 
 
 def test_k018_dead_generated_contract_does_not_block_resolution(

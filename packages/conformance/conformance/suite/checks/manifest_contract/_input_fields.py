@@ -22,27 +22,42 @@ on the write path (APPPLAT-371). K018 checks the other half: given whatever
 payload the Automation Engine does send, can the entrypoint receive it.
 Passing K018 says nothing about the upstream path.
 
-Three shapes all satisfy the contract, and the rule must accept every one —
-flagging any of them is how a WARN rule earns a reputation for noise and never
-graduates:
+**Flat args are the contract.** The Automation Engine sends the extract node's
+args flat, and the entrypoint is expected to receive them as declared fields.
+``ExtractionInput`` already declares the standard set flat
+(``include_filter`` / ``exclude_filter`` / ``temp_table_regex`` /
+``extraction_method``), and the SDK's own ``_normalize_ae_payload`` canonicalises
+a legacy nested payload *up* into those flat fields. So the whole stack converges
+on flat, and an app only has to declare what it consumes.
 
-1. the key is declared on the contract's resolved base chain;
+Two shapes therefore satisfy the rule:
+
+1. the key is declared on the contract's resolved base chain (inherited counts —
+   mixing in ``ExtractionInput`` is the normal way to get the standard set); or
 2. the contract (or an ancestor) sets real Pydantic ``extra="allow"``, which
-   preserves undeclared keys in ``model_extra`` for the app to read; or
-3. the contract (or an ancestor) defines a ``@model_validator(mode="before")``
-   — the prescribed remedy for the flattening break is exactly such a validator
-   folding flat keys into ``metadata`` *without* declaring each flat field.
+   keeps undeclared keys in ``model_extra`` for the app to read.
 
-``allow_unbounded_fields=True`` is deliberately **not** accepted as satisfying,
-and the distinction from (2) is the whole point: that SDK class kwarg only
-suppresses the unknown-key *error*, it does not set Pydantic ``extra="allow"``,
-so the keys are still dropped before ``model_dump()``. Conflating the two is the
-original misreading this rule exists to catch.
+**A ``@model_validator(mode="before")`` that folds flat keys back into a
+``metadata`` dict is deliberately not accepted.** It re-creates the nested
+envelope the platform moved away from, so the app keeps reading
+``workflow_args["metadata"]["some-kebab-key"]`` instead of a typed field — the
+value survives, but the contract still does not describe what the app consumes,
+and the next relocation breaks it again in exactly the same way. An app doing
+this should declare the flat fields instead; that is the fix, and the finding
+is how it gets found. Validators are not inspected at all: the rule keys purely
+on declared fields, so a legitimate normaliser (``_normalize_agent_json``, or
+the SDK's nested-to-flat lift) neither exempts an app nor implicates one.
+
+``allow_unbounded_fields=True`` is likewise **not** accepted, and the distinction
+from (2) is the whole point: that SDK class kwarg only suppresses the unknown-key
+*error*, it does not set Pydantic ``extra="allow"``, so the keys are still
+dropped before ``model_dump()``.
 """
 
 from __future__ import annotations
 
 import ast
+import dataclasses
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
@@ -78,12 +93,6 @@ from ._manifest_refs import manifest_paths_for_contract
 
 _RULE_ID = "K018"
 
-# Validator modes that see the raw inbound payload before field coercion, and
-# can therefore fold an undeclared key into a declared one.
-_RAW_PAYLOAD_MODES = frozenset({"before", "wrap"})
-
-_MODEL_VALIDATOR = "model_validator"
-
 # The SDK base every SQL connector's extraction contract derives from. Used as
 # the fallback anchor when no @entrypoint is declared in the app's own source.
 _EXTRACTION_INPUT_BASE = "ExtractionInput"
@@ -114,27 +123,6 @@ def _target_entrypoint(
     ep_name = Path(manifest_path).parent.name
     matches = [ep for ep in entrypoints if ep.wire_name == ep_name]
     return matches[0] if len(matches) == 1 else None
-
-
-def _is_raw_payload_validator(deco: ast.expr) -> bool:
-    """True for ``@model_validator(mode="before"|"wrap")`` in any aliased form."""
-    if not isinstance(deco, ast.Call):
-        return False
-    func = deco.func
-    name = (
-        func.attr
-        if isinstance(func, ast.Attribute)
-        else func.id
-        if isinstance(func, ast.Name)
-        else None
-    )
-    if name != _MODEL_VALIDATOR:
-        return False
-    for kw in deco.keywords:
-        if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
-            if kw.value.value in _RAW_PAYLOAD_MODES:
-                return True
-    return False
 
 
 def _is_extra_allow_keyword(kw: ast.keyword) -> bool:
@@ -194,15 +182,6 @@ def _class_allows_extra(classdef: ast.ClassDef) -> bool:
         if _is_extra_allow_mapping(value):
             return True
     return False
-
-
-def _class_has_raw_payload_validator(classdef: ast.ClassDef) -> bool:
-    return any(
-        _is_raw_payload_validator(deco)
-        for item in classdef.body
-        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
-        for deco in item.decorator_list
-    )
 
 
 def _is_known_sdk_contract(name: str) -> bool:
@@ -448,8 +427,6 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
             continue  # incomplete picture — stay silent rather than guess.
         if any(_class_allows_extra(node) for node in chain_nodes):
             continue  # real Pydantic extra="allow" keeps undeclared keys.
-        if any(_class_has_raw_payload_validator(node) for node in chain_nodes):
-            continue  # a before/wrap validator can fold any undeclared key.
 
         declared = _resolved_field_names(input_rec, file_aliases, by_name)
         directives = file_directives.get(input_rec.file, {})
@@ -473,27 +450,38 @@ def _make_finding(
         for a in manifest.args
         if a.key == arg_key
     )
-    return make_finding(
-        filename=input_rec.file,
-        rule_id=_RULE_ID,
-        node=input_rec.node,
-        message=(
-            f"'{manifest.manifest_path}' sends '{depth}.{arg_key}' to the extract "
-            f"node, but '{input_rec.name}' (the entrypoint's Input contract) does "
-            f"not declare a '{arg_key}' field — directly or via an inherited "
-            "base/mixin — and defines no @model_validator(mode='before'). Pydantic "
-            "drops the key before model_dump(), so the entrypoint runs on the "
-            f"field's default. For a filter that default is empty, and an empty "
-            "include-filter means crawl everything. Declare "
-            f"'{arg_key}' on '{input_rec.name}', mix in the SDK base that supplies "
-            "it (e.g. 'ExtractionInput' for the filter fields), or add a "
-            "@model_validator(mode='before') folding flat keys into 'metadata' — "
-            "let nested win over flat so pre-0.9.0 workflow specs still validate. "
-            "Note 'allow_unbounded_fields=True' does NOT satisfy this: it only "
-            "suppresses the unknown-key error, it does not set extra='allow'. "
-            "Never hand-edit the generated manifest.json to work around this — it "
-            "is a pkl eval output. Suppress with "
-            "'# conformance: ignore[K018] <reason>' on the Input class definition."
+    # discriminator = the arg key, so several findings anchored on the same
+    # Input class stay distinct fingerprints and can be suppressed one at a
+    # time via '# conformance: ignore[K018:<key>]'.
+    return dataclasses.replace(
+        make_finding(
+            filename=input_rec.file,
+            rule_id=_RULE_ID,
+            node=input_rec.node,
+            message=(
+                f"'{manifest.manifest_path}' sends '{depth}.{arg_key}' to the extract "
+                f"node, but '{input_rec.name}' (the entrypoint's Input contract) does "
+                f"not declare a '{arg_key}' field — directly or via an inherited "
+                "base/mixin. Pydantic "
+                "drops the key before model_dump(), so the entrypoint runs on the "
+                f"field's default. For a filter that default is empty, and an empty "
+                "include-filter means crawl everything. Declare "
+                f"'{arg_key}' on '{input_rec.name}' as a typed field, or mix in the SDK "
+                "base that supplies it ('ExtractionInput' carries include_filter, "
+                "exclude_filter, temp_table_regex and extraction_method). "
+                "Do NOT add a @model_validator(mode='before') that folds flat keys "
+                "into a 'metadata' dict: that rebuilds the nested envelope the "
+                "platform moved away from, leaves the contract still not describing "
+                "what the app consumes, and breaks the same way on the next "
+                "relocation. Flat args are the contract — receive them as declared "
+                "fields. Note 'allow_unbounded_fields=True' does NOT satisfy this "
+                "either: it only suppresses the unknown-key error, it does not set "
+                "extra='allow'. "
+                "Never hand-edit the generated manifest.json to work around this — it "
+                "is a pkl eval output. Suppress with "
+                "'# conformance: ignore[K018] <reason>' on the Input class definition."
+            ),
+            directives=directives,
         ),
-        directives=directives,
+        discriminator=arg_key,
     )

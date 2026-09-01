@@ -34,10 +34,8 @@ description: >
   receive) and K019 (a uiConfig form key with no matching {{...}} placeholder) are
   the inbound-config pair, and both are **detect-only: they route to residue and
   carry no prescription.**  Neither has a single mechanical fix.  K018 offers three
-  (declare the field, set extra="allow", or add a mode="before" validator) and
-  choosing between them -- plus the field's type and default, plus the
-  nested-wins-over-flat ordering that keeps re-validation idempotent -- is design
-  judgment.  K019's fix is either wiring the key into contract/app.pkl or deleting
+  (declare the field, or set extra="allow") and choosing between them -- plus the
+  field's type and default -- is design judgment.  K019's fix is either wiring the key into contract/app.pkl or deleting
   a control the product deliberately shows; the loop cannot tell which is wanted.
   Both also sit on surfaces the loop must not write blind: an entrypoint contract
   and a generated-artifact source.
@@ -771,17 +769,21 @@ with the proposed change in the note rather than hand-editing the generated file
 route every finding straight to residue with the rule's message.**
 
 These are reported for a human because neither has one mechanical answer, and a
-wrong guess is worse than the finding. K018 has three valid remedies — declare
-the field on the `Input` contract, set `model_config = ConfigDict(extra="allow")`,
-or add a `@model_validator(mode="before")` folding flat keys into `metadata` —
-and picking between them is an app-design decision, as are the field's type and
-default. The validator route additionally has to let nested win over flat, so
-pre-0.9.0 workflow specs that are still persisted and in flight keep validating
-and re-validation stays idempotent; that ordering is easy to get backwards and
-impossible to verify from the finding alone. K019's two remedies point opposite
-ways: wire the key into the `extract` node's args in `contract/app.pkl` and
-regenerate, *or* delete a control the product deliberately shows. Nothing in the
-finding says which the team wants.
+wrong guess is worse than the finding. K018 has two valid remedies — declare the
+field on the `Input` contract, or set `model_config = ConfigDict(extra="allow")`
+— and picking between them is an app-design decision, as are the field's type
+and default. Declaring is nearly always right; `extra="allow"` is for an app that
+deliberately reads arbitrary AE-supplied keys off `model_extra`.
+
+Never propose a `@model_validator(mode="before")` that folds flat keys into a
+`metadata` dict. The value becomes reachable, so it passes a naive read, but it
+rebuilds the nested envelope the platform moved away from and leaves the contract
+still not describing what the app consumes — the next key relocation breaks it
+identically. Flat args are the contract.
+
+K019's two remedies point opposite ways: wire the key into the `extract` node's
+args in `contract/app.pkl` and regenerate, *or* delete a control the product
+deliberately shows. Nothing in the finding says which the team wants.
 
 Both also sit on surfaces the loop must not write blind — a live entrypoint
 contract and a generated-artifact source — and K019's anchor is
