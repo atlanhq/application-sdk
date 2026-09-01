@@ -124,6 +124,21 @@ class TestGuardsOnTheCallPath:
 
         executor.backend.execute.assert_not_called()
 
+    def test_executor_fixture_wires_the_installed_context(self) -> None:
+        """The fixture must hand the installed context to the executor —
+        dropping the kwarg would silently disable the guard for every adopter."""
+        from application_sdk.testing.integration import fixtures as kit_fixtures
+
+        ctx = InfrastructureContext()
+        built = kit_fixtures.executor.__wrapped__(
+            temporal_client=mock.MagicMock(),
+            worker=None,
+            integration_task_queue="q",
+            infrastructure=ctx,
+        )
+
+        assert built.expected_infrastructure is ctx
+
     def test_registration_path_raises_on_a_mismatched_env(
         self, clean_app_registry, monkeypatch: pytest.MonkeyPatch
     ) -> None:

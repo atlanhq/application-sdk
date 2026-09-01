@@ -664,7 +664,9 @@ def temporary_path(
     The fixture therefore patches ``constants.TEMPORARY_PATH`` — which covers
     modules imported after it runs — and then every already-imported
     ``application_sdk`` module carrying its own binding of the old value. All
-    patches are undone on teardown rather than left set.
+    patches are undone on teardown rather than left set. The scan matches by
+    value, so a module that stored a *derived* path at import time (say, a
+    pre-computed abspath) would be missed — no current consumer does that.
     """
     from application_sdk import (  # noqa: PLC0415 — deferred by convention only; sibling fixtures import it the same way
         constants,
