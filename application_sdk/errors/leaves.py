@@ -95,7 +95,11 @@ class RateLimitedError(AppError):
     category: ClassVar[FailureCategory] = FailureCategory.RATE_LIMITED
     default_retryable: ClassVar[bool] = True
     code: ClassVar[str] = "RATE_LIMITED"
-    audience: ClassVar[Audience] = Audience.USER
+    # APP_OWNER, not USER: RATE_LIMITED is in the gate's _GATE_BROKEN_CATEGORIES,
+    # so the gate fails open on it rather than blaming the source. A 429 is our
+    # call rate against a customer-owned endpoint — the remediation is connector
+    # concurrency, which the customer cannot change (CONNECT-812 PF-29, P041).
+    audience: ClassVar[Audience] = Audience.APP_OWNER
 
 
 @dataclass(kw_only=True)

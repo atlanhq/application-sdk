@@ -652,6 +652,7 @@ def test_catalog_p_series_present() -> None:
         "P038",
         "P039",
         "P040",
+        "P041",
         "P042",
         "P043",
         "P044",

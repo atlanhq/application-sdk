@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**49 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.preflight` (P047), `suite.checks.atomic_publish` (P050) (all AST-based / cross-artifact)
+**50 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.preflight` (P047), `suite.checks.atomic_publish` (P050) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -63,6 +63,7 @@ reassigned.
 | [P038](#p038) | `SdrArtifactMisrooted` | `block` | `app` | `sdr-readiness` | — | 0.16.0 |
 | [P039](#p039) | `SdrAgentJsonDroppedByInputContract` | `block` | `app` | `sdr-readiness` | — | 0.16.0 |
 | [P040](#p040) | `TransformTemplateReservedKeyword` | `warn` | `app` | `transform-templates` | — | 0.18.0 |
+| [P041](#p041) | `GateBrokenCategoryUserAudience` | `warn` | `both` | `preflight-gate` | — | 0.25.0 |
 | [P042](#p042) | `SdrHandRolledUploadBridge` | `warn` | `app` | `sdr-readiness` | — | 0.18.0 |
 | [P043](#p043) | `NonPublicErrorControlFlow` | `warn` | `app` | `error-seam` | — | 0.21.0 |
 | [P044](#p044) | `DirectStoragePrefixTransfer` | `warn` | `app` | `storage-seam` | — | 0.21.0 |
@@ -1603,6 +1604,44 @@ value was the interim advice and it is worse than it looks on an unfixed SDK: be
 found nothing, and dropped the attribute from published output — a silent missing
 attribute in place of a loud `ParserException`. From 3.28.0 both spellings resolve and
 render identically, so the upgrade is the fix and the template edit is unnecessary.
+
+---
+
+## P041 — `GateBrokenCategoryUserAudience` {#p041}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.25.0
+
+> Typed leaf declares audience=USER on a category the gate treats as plumbing
+
+**Rationale:** The preflight gate puts DEPENDENCY_UNAVAILABLE, RATE_LIMITED, RESOURCE_EXHAUSTED and
+CANCELLED in _GATE_BROKEN_CATEGORIES so a failure in one of them fails open — the gate
+could not form a verdict, so the run proceeds rather than blaming the source. A leaf in
+one of those categories that also declares audience=USER says the opposite: that the
+customer caused it and must fix it. Both cannot be true. The audience decides which SLA
+a failure lands in and who gets paged, so a throttle attributed to the customer skews
+every ownership metric and hands them a remediation only Atlan can perform (CONNECT-812
+PF-29).
+
+`_GATE_BROKEN_CATEGORIES` (`application_sdk/execution/_temporal/preflight_gate.py`)
+marks the failure categories the gate must **not** convert into a source verdict. A
+typed leaf carrying one of those categories while declaring `audience:
+ClassVar[Audience] = Audience.USER` contradicts that treatment: the gate says *not the
+source's fault*, the leaf says *the customer's problem*.
+
+The check compares two constants the SDK already publishes — it makes no judgement about
+whether a message matches a category, which is the part that makes category-correctness
+undecidable in general.
+
+Remediation: `Audience.APP_OWNER` where the connector team owns the posture that
+produced it (a 429 is Atlan's call rate against a customer-owned endpoint — the customer
+cannot lower it), or `Audience.PLATFORM` where the unavailable dependency is Atlan-run.
+`wire.py` already resolves an unclear locus to `APP_OWNER`.
+
+Only an `audience` bound in the class body is flagged. An inherited `USER` is not
+resolved across the SDK boundary: once the leaf itself is correct, inheriting from it is
+the right answer, and modelling SDK internals from an app repo is the false-positive
+surface the P series avoids. A subclass that redeclares its own `category` leaves the
+gate-broken set and is not flagged here — P002 governs that redeclaration.
 
 ---
 

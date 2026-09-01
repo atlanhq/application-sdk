@@ -1,4 +1,4 @@
-"""Preflight-gate checks (P032–P035, P047, BLDX-1545, FND-901).
+"""Preflight-gate checks (P032–P035, P041, P047, BLDX-1545, FND-901, CONNECT-812).
 
 Cross-file only: ``scan_path`` is a no-op and ``scan_all`` builds one shared
 :class:`~._common.Registry` (single parse + import walk) then runs all rule
@@ -14,7 +14,13 @@ from pathlib import Path
 from conformance.suite.checks._ast_common import discover, make_cli_main
 from conformance.suite.schema.findings import Finding
 
-from . import _metadata_parity, _reserved_gate, _untyped_failure, _warning_log
+from . import (
+    _gate_broken_audience,
+    _metadata_parity,
+    _reserved_gate,
+    _untyped_failure,
+    _warning_log,
+)
 from ._common import build_registry
 
 SERIES = "P"
@@ -28,13 +34,14 @@ def scan_path(path: Path, root: Path) -> list[Finding]:  # noqa: ARG001
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:
-    """Run the P032–P035 + P047 preflight-gate passes over *paths*."""
+    """Run the P032–P035 + P041 + P047 preflight-gate passes over *paths*."""
     reg = build_registry(paths, root)
     findings: list[Finding] = []
     findings.extend(_reserved_gate.scan(reg))
     findings.extend(_untyped_failure.scan(reg))
     findings.extend(_metadata_parity.scan(reg))
     findings.extend(_warning_log.scan(reg))
+    findings.extend(_gate_broken_audience.scan(reg))
     return findings
 
 
