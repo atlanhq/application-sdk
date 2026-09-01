@@ -411,7 +411,10 @@ wrong as shipped — hence BLOCK, not WARN.
 
 Intentional `{{credential}}` / `{{connection}}` double-brace E2E runtime-substitution
 tokens are excluded, as is the legitimate `{deployment_name}` deploy-time token the
-current toolkit still emits verbatim; none of these are ever flagged.
+current toolkit still emits verbatim; none of these are ever flagged. In a YAML
+artifact, a token appearing only inside a `#` comment — e.g. an explanatory note
+documenting a runtime URL template such as `/workflows/v1/manifest?entrypoint={name}` —
+is prose, not a leftover, and is likewise never flagged.
 
 **Fix (required):** upgrade `app-contract-toolkit` to the latest published version (see
 K007), migrate off any legacy `NativeApp.pkl` base (see K001), and regenerate with `pkl
