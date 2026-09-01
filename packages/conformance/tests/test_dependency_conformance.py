@@ -1453,6 +1453,15 @@ _D010_PYPROJECT_SQL_EXTRA = (
     "]\n"
 )
 
+_D010_PYPROJECT_SQL_AMONG_MULTIPLE_EXTRAS = (
+    "[project]\n"
+    'name = "my-connector"\n'
+    'version = "0.1.0"\n'
+    "dependencies = [\n"
+    '    "atlan-application-sdk[iam-auth,sql,pandas,tests,workflows]==3.29.0",\n'
+    "]\n"
+)
+
 _D010_TRANSFORMER_IMPORT = (
     "from application_sdk.transformers.query import QueryBasedTransformer\n"
 )
@@ -1485,6 +1494,11 @@ name = "duckdb"
 version = "1.3.0"
 source = { registry = "https://pypi.org/simple" }
 """
+
+_D010_LOCK_SQL_EXTRA_PLURAL = _D010_LOCK_SQL_EXTRA.replace(
+    '{ name = "atlan-application-sdk", extra = ["sql"] }',
+    '{ name = "atlan-application-sdk", extras = ["iam-auth", "sql", "pandas", "tests", "workflows"] }',
+)
 
 # duckdb is in the graph, but only as a dev-group dependency of the app.
 _D010_LOCK_DUCKDB_DEV_ONLY = """\
@@ -1576,6 +1590,30 @@ def test_d010_silent_when_lock_resolves_duckdb_for_the_app(tmp_path: Path) -> No
         pyproject=_D010_PYPROJECT_SQL_EXTRA,
         source=_D010_TRANSFORMER_IMPORT,
         uv_lock=_D010_LOCK_SQL_EXTRA,
+    )
+    assert findings == []
+
+
+def test_d010_fires_when_plural_lock_extra_does_not_resolve_duckdb(
+    tmp_path: Path,
+) -> None:
+    """A plural ``extras`` edge still requires a reachable duckdb package."""
+    findings = _d010_scan(
+        tmp_path,
+        pyproject=_D010_PYPROJECT_SQL_AMONG_MULTIPLE_EXTRAS,
+        source=_D010_TRANSFORMER_IMPORT,
+        uv_lock=_D010_LOCK_SQL_EXTRA_PLURAL.replace('    { name = "duckdb" },\n', ""),
+    )
+    assert len(findings) == 1
+
+
+def test_d010_silent_when_plural_lock_extra_resolves_duckdb(tmp_path: Path) -> None:
+    """The app's multi-extra SDK dependency activates the SQL extra in uv.lock."""
+    findings = _d010_scan(
+        tmp_path,
+        pyproject=_D010_PYPROJECT_SQL_AMONG_MULTIPLE_EXTRAS,
+        source=_D010_TRANSFORMER_IMPORT,
+        uv_lock=_D010_LOCK_SQL_EXTRA_PLURAL,
     )
     assert findings == []
 
