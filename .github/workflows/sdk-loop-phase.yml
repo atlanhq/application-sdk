@@ -100,6 +100,8 @@ on:
         value: ${{ jobs.phase.outputs.ci_state }}
       cost:
         value: ${{ jobs.phase.outputs.cost }}
+      usd:
+        value: ${{ jobs.phase.outputs.usd }}
       usage:
         value: ${{ jobs.phase.outputs.usage }}
       reaims:
@@ -109,6 +111,25 @@ on:
 
 permissions:
   contents: read
+  # `actions: write` is what the CACHE needs, not what the phase does.
+  # actions/cache v6 talks to the v2 cache service, which authorizes a SAVE
+  # with the run's Actions token and rejects a read-only one. With
+  # `contents: read` alone every job logged
+  #
+  #   Failed to save: Unable to reserve cache with key opencode-Linux-1.18.22.
+  #   More details: cache write denied: token has no writable scopes
+  #
+  # for both the opencode install and setup-uv — so the cache was never
+  # populated, every restore missed, and all four jobs of every run
+  # re-downloaded ~20-30s of the same artifacts. The lookup-only half worked,
+  # which is why this stayed invisible.
+  #
+  # It does not widen what the AGENT can do. `agent_env()` passes an
+  # ALLOWLIST, and `GITHUB_TOKEN` is not on it — the agent gets `GH_TOKEN`,
+  # the separately minted App token, which for a review phase carries no write
+  # scope at all. This grant belongs to the job, and the only step that uses
+  # it is actions/cache.
+  actions: write
 
 jobs:
   phase:
@@ -136,6 +157,7 @@ jobs:
       detail: ${{ steps.run.outputs.detail || steps.prep.outputs.detail }}
       ci_state: ${{ steps.run.outputs.ci_state || steps.prep.outputs.ci_state }}
       cost: ${{ steps.run.outputs.cost }}
+      usd: ${{ steps.run.outputs.usd }}
       usage: ${{ steps.run.outputs.usage }}
       reaims: ${{ steps.run.outputs.reaims }}
       spent_total: ${{ steps.run.outputs.spent_total }}

@@ -33,8 +33,10 @@ from sdk_loop_common import (  # noqa: E402
     AGENT_ENV_PASSTHROUGH,
     ALLOWED_MODELS,
     DEFAULT_MAX_TOKENS,
+    IDLE_TIMEOUT_S,
     MAX_CONSECUTIVE_REAIMS,
     MAX_ROUNDS,
+    MODEL_PRICES_USD_PER_MTOK,
     PHASE2_AGENTS,
     PROVIDER,
     RESEARCH_DISCIPLINE,
@@ -45,9 +47,11 @@ from sdk_loop_common import (  # noqa: E402
     DismissalLedger,
     _follow_opencode_log,
     format_usage,
+    format_usd,
     gateway_base,
     head_state,
     opencode_config,
+    outstanding_subagents,
     parse_opencode_usage,
     parse_reviewed_head,
     parse_verdict,
@@ -55,6 +59,7 @@ from sdk_loop_common import (  # noqa: E402
     run_agent,
     token_budget,
     token_budget_exceeded,
+    usage_cost_usd,
     usage_total,
     write_rg_config,
 )
@@ -68,7 +73,13 @@ from sdk_loop_fence import (  # noqa: E402
     post_comment,
     start_comment,
 )
-from sdk_loop_finalize import Round, parse_rounds, render  # noqa: E402
+from sdk_loop_finalize import (  # noqa: E402
+    Round,
+    parse_rounds,
+    render,
+    render_cost,
+    total_usd,
+)
 from sdk_loop_phase import (  # noqa: E402
     LANE_MARKER,
     OUTCOME_CLEAN,
@@ -1115,7 +1126,14 @@ def test_the_workflow_grants_every_scope_its_own_gh_calls_need() -> None:
         pathlib.Path(__file__).resolve().parents[1] / "sdk_loop_fence.py"
     ).read_text(encoding="utf-8")
     if '"run",' in fence and '"list",' in fence:
-        assert perms.get("actions") == "read", "gh run list needs actions: read"
+        # read OR write: the fence only reads, but actions/cache v6 needs the
+        # write scope to SAVE, and a called workflow cannot exceed its caller.
+        # Pinning this to exactly "read" is what would silently re-break the
+        # cache, so the assertion is "at least read", not "exactly read".
+        assert perms.get("actions") in {
+            "read",
+            "write",
+        }, "gh run list needs at least actions: read"
     if '"gh", "pr", "comment"' in fence:
         assert perms.get("pull-requests") == "write"
 
@@ -1411,3 +1429,132 @@ def test_a_reaim_streak_stops_the_run_before_it_eats_the_round_cap() -> None:
     assert not reaim_exhausted(1)
     assert reaim_exhausted(MAX_CONSECUTIVE_REAIMS)
     assert MAX_CONSECUTIVE_REAIMS < MAX_ROUNDS, "must bite before the round cap"
+
+
+def test_humanised_token_counts_are_scaled_not_truncated() -> None:
+    """opencode renders every token cell through
+    `n >= 1e6 ? (n/1e6).toFixed(1)+"M" : n >= 1000 ? (n/1000).toFixed(1)+"K" : n`.
+    The original pattern was `([\\d,]+)`, which stops at the decimal point and
+    never sees the suffix — so a real 258,300 was stored as 258 and every token
+    figure this lane published understated by three orders of magnitude. The
+    tell in production was that across twelve measured phases no value ever
+    reached 1,000."""
+    usage = parse_opencode_usage(
+        "Input   258.3K\nOutput  4.1K\nCache Read  1.2M\nCache Write 0"
+    )
+    assert usage == {
+        "input": 258_300,
+        "output": 4_100,
+        "cache_read": 1_200_000,
+        "cache_write": 0,
+    }
+    # Un-suffixed values still parse exactly — opencode prints those verbatim
+    # below 1,000, and a scale factor must not be applied to them.
+    assert parse_opencode_usage("Input 999\nOutput 5")["input"] == 999
+
+
+def test_every_reachable_model_carries_a_real_price(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The prices were zeroes, declared to settle a DecimalError. That made
+    opencode's own `Total Cost` $0.00 by construction, and when the /key/info
+    fallback turned out to 403 there was no dollar figure left anywhere. A
+    model the lane can select but cannot price puts it straight back there."""
+    monkeypatch.setenv("LITELLM_BASE_URL", "https://gateway.example")
+    for model in ALLOWED_MODELS:
+        prices = MODEL_PRICES_USD_PER_MTOK[model]
+        assert set(prices) == {"input", "output", "cache_read", "cache_write"}
+        # input and output are never free on any real gateway; cache rates
+        # legitimately can be (xai bills no cache-write).
+        assert prices["input"] > 0 and prices["output"] > 0
+        assert opencode_config(model)["provider"][PROVIDER]["models"][model][
+            "cost"
+        ] == dict(prices)
+
+
+def test_a_phase_is_priced_from_its_own_tokens() -> None:
+    """Priced locally rather than read back from the gateway: /key/info 403s
+    with this lane's key and, when it did not, summed every lane sharing it."""
+    usage = {"input": 1_000_000, "output": 1_000_000, "cache_read": 0, "cache_write": 0}
+    assert usage_cost_usd(usage, "xai/grok-4.6") == pytest.approx(8.0)  # 2 + 6
+    assert usage_cost_usd(usage, "gpt-5.6-luna") == pytest.approx(1.4)  # 0.2 + 1.2
+    # None, never 0.0 — a phase that reports free is worse than one that
+    # reports unknown, which is the whole failure this replaces.
+    assert usage_cost_usd(usage, "some-unpriced-model") is None
+    assert usage_cost_usd({}, "xai/grok-4.6") is None
+    assert format_usd(None) == "unavailable"
+    # Four decimals: a resolve phase lands under a cent and "$0.00" reads as
+    # free.
+    assert format_usd(0.0007) == "$0.0007"
+
+
+def test_the_summary_reports_dollars_and_labels_them_as_list_price() -> None:
+    rounds = [
+        Round(1, "review", "ok", cost=100, usd=0.5),
+        Round(1, "resolve", "ok", cost=50, usd=0.01),
+    ]
+    assert total_usd(rounds) == (pytest.approx(0.51), 0)
+    out = render_cost(rounds)
+    assert "$0.5100" in out
+    assert "List price" in out and "not the gateway's bill" in out
+    # An unpriced run must say so rather than print $0.0000.
+    assert "unavailable" in render_cost([Round(1, "review", "ok", cost=100)])
+
+
+def test_a_stall_names_the_subagent_that_never_returned() -> None:
+    """PR #3529 dispatched four specialists; three printed the closing bullet
+    and `correctness` never did. Both runs then reported only "the phase did
+    not finish", naming nothing, and cost ~30 minutes each. opencode exposes no
+    per-dispatch deadline, so this does not prevent the hang — it makes it
+    attributable."""
+    transcript = (
+        "\x1b[0m• \x1b[0mcorrectness domain review\x1b[90m Correctness Agent\x1b[0m\n"
+        "\x1b[0m• \x1b[0mquality domain review\x1b[90m Quality Agent\x1b[0m\n"
+        "\x1b[0m✓ \x1b[0mquality domain review\x1b[90m Quality Agent\x1b[0m\n"
+    )
+    assert outstanding_subagents(transcript) == ["Correctness"]
+    assert outstanding_subagents(transcript.replace("• ", "✓ ")) == []
+    # `gh auth login` prints its own tick in EVERY transcript. Anchoring on the
+    # bullet alone would read it as a sub-agent finishing and hide a real one.
+    noise = "  ✓ Logged in to github.com account atlan-app-fleet[bot] (GH_TOKEN)\n"
+    assert outstanding_subagents(noise + transcript) == ["Correctness"]
+    result = AgentResult(exit_code=0, stdout=transcript, stderr="", stalled=True)
+    assert "Correctness" in result.abort_reason
+
+
+def test_the_cache_can_actually_be_written() -> None:
+    """`contents: read` alone made actions/cache v6 log "cache write denied:
+    token has no writable scopes" on every job, so the opencode and uv caches
+    never populated and all four jobs of every run re-downloaded them. A called
+    workflow cannot exceed its caller, so both halves have to grant it."""
+    root = pathlib.Path(__file__).resolve().parents[2]
+    phase = (root / "workflows" / "sdk-loop-phase.yml").read_text(encoding="utf-8")
+    caller = (root / "workflows" / "sdk-loop.yml").read_text(encoding="utf-8")
+    assert "actions: write" in phase
+    assert "actions: write" in caller
+    assert "actions: read" not in caller
+
+
+def test_the_review_prompt_bounds_its_own_turn_count() -> None:
+    """Turns, not tool time, are what this lane pays for: measured review turns
+    run ~10s early and 75-90s by turn 12. Each directive here removes at least
+    one round trip that was measured being spent for nothing."""
+    prompt = review_prompt(1, 1, "abc1234", DismissalLedger())
+    # Reading a brief for an agent you are about to dispatch: #3529 read four.
+    assert "Do NOT read the brief of" in prompt
+    # The playbook is ~1700 lines and a default Read truncates near 1048.
+    assert "in ONE call with an explicit `limit`" in prompt
+    # Phase 3 measured 1-3.5 min against the playbook's own "~30s".
+    assert "Emit it as ONE" in prompt
+
+
+def test_the_idle_bound_clears_the_worst_measured_healthy_turn() -> None:
+    """Run 33500595871: the watchdog killed a working toolkit review at
+    exactly 300s of silence — while the measured maximum gap in a phase that
+    went on to post a clean verdict was 304.7s. An idle bound below the
+    healthy maximum converts the lane's slowest successes into failures, at
+    the end of the phase, where the spend is already sunk. The genuine stall
+    this bound exists for measured 43 minutes; anything in [400s, 2000s]
+    separates the two populations."""
+    assert IDLE_TIMEOUT_S > 305, "below the measured max healthy turn gap"
+    assert IDLE_TIMEOUT_S < 2000, "no longer catches the 43-minute stall class"
