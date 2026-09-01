@@ -29,55 +29,46 @@ conformance-only `@sdk-loop` review all six conditions are false, which is
 original text verbatim, and a test asserts every one of them is still reachable
 from a pointer here.
 
-## Runtime
+## Runtime — lane capabilities
 
-Two lanes run this playbook, and they differ in what the SURROUNDING system
-already guarantees. Everything about what a good review IS — routing, agents,
-severity, the verdict — is identical. Only the bookkeeping differs, and doing
-a lane's bookkeeping twice is not free: each step is a model round trip, and
-several of them cannot even succeed on the wrong lane.
+Two lanes run this playbook. What a good review IS — routing, severity,
+convergence, the verdict — is identical on both. What DIFFERS is what the
+surrounding system can do, and every lane-conditional step below derives from
+this one table.
 
-<!-- CONTRACT: the literal string `LANE: sdk-loop` below is emitted by
-     review_prompt() in .github/scripts/sdk_loop_phase.py. Two files, one
-     string — exactly the shape that rots silently, because a playbook that
-     waits for a line nobody sends does not error, it just quietly runs the
-     wrong lane's steps and eats the 403s. Renaming it on either side without
-     the other breaks lane detection with no failing test and no log line
-     saying so. test_the_lane_marker_matches_the_playbook_contract in
-     .github/scripts/tests/test_sdk_loop.py asserts both sides agree; if you
-     change this string, that test fails and tells you where the other half
-     lives. Do not "fix" the test by loosening it. -->
+**You are told which lane you are on. Do not work it out.** The `@sdk-loop`
+harness emits the line `LANE: sdk-loop` in the dispatch prompt; its absence
+means the mothership sandbox. Probing for `/workspace` or a runner env var
+costs a turn and can be wrong.
 
-**You are told which lane you are on. Do not work it out.** The dispatch
-prompt states it: the `@sdk-loop` harness emits the line `LANE: sdk-loop`,
-and its absence means the mothership sandbox. Inferring it instead — probing
-for `/workspace`, reading `pwd`, checking for a runner env var — costs a turn
-and can be wrong; a live transcript shows an agent spending one on
-`ls -la /workspace/application-sdk … || echo "NO /workspace/application-sdk"`
-before doing any review work.
-
-This matters because the difference is not cosmetic. Several steps below
-**cannot succeed** on the wrong lane: they need a write scope the `@sdk-loop`
-review token does not have, and they fail with a 403 after the model has
-already been paid for the turn that made the call.
-
-| | mothership sandbox | `@sdk-loop` (GitHub Actions) |
+| Capability | mothership sandbox | `@sdk-loop` |
 |---|---|---|
-| Working directory | `/workspace/application-sdk` | the checkout you start in |
-| Duplicate triggers | A3/A4 guards | the Fence job, before any model runs |
-| Replay after a dropped stream | A3 guard | n/a — one invocation per job |
-| Stale / moved HEAD | A2 guard | the harness re-aims and restarts the round |
-| Per-run `/tmp` hygiene | A1 guard | fresh runner every phase |
-| Prior review + delta | you compute it (§6b, §6c) | handed to you in the prompt; still verify |
-| Branch update when BEHIND | §8 | your token has no write scope — report, do not attempt |
-| Commit status / labels / approval | the GHA layer (§3c) | the GHA layer (§3c) |
+| `write-branch` — push, update-branch, set commit status | yes | **no** (403) |
+| `clone-private` — clone other atlanhq repos | yes | **no** (no credential) |
+| `reach-proxy` — `$PROXY_BASE` / `$PROXY_JWT` | yes | **no** (unset) |
+| `given-scope` — `review_scope` arrives in the prompt | no — derive it | **yes** |
+| `given-delta` — prior review + delta arrive in the prompt | no — compute it | **yes** |
+| `needs-run-guards` — `/tmp` reset, replay + stale-SHA guards | yes | no — fresh runner, Fence job |
 
-**The review never writes to the branch on either lane.** It posts a summary
-comment and inline findings; it does not commit, push, run `pre-commit`, run
-tests, or fix CI. On `@sdk-loop` that is enforced by the credential rather
-than by this sentence: the review phase holds a token with no `contents` and
-no `statuses` scope, so an attempt fails with a 403 rather than doing harm.
-Do not treat such a 403 as something to work around.
+**How to use it.** A step tagged `requires: <capability>` runs only where this
+table says yes for your lane; where it says no, do what the step's fallback
+says and move on. A step tagged `given: <capability>` means the value is
+handed to you — verify it, never re-derive it. A step with neither tag runs
+identically on both lanes.
+
+**Two rules that hold on BOTH lanes regardless of capability:**
+
+* **The review never writes to the branch.** It posts a summary comment and
+  inline findings; it does not commit, push, run `pre-commit`, run tests, or
+  fix CI. On `@sdk-loop` the credential enforces this — a token with no
+  `contents` and no `statuses` scope. Do not treat such a 403 as something to
+  work around.
+* **A capability you lack is not a defect to report.** Take the fallback,
+  note it in the summary where the step says to, and continue. Retrying it,
+  or filing it as a finding, spends a turn and tells the reader nothing.
+
+Working directory: `/workspace/application-sdk` on the sandbox (`cd` there);
+on `@sdk-loop` you already start in the checkout.
 
 ## Time Budgets
 
@@ -138,25 +129,14 @@ PR_NUMBER, PR_URL, REPO, HEAD_SHA, BASE_REF, HEAD_REF,
 COMMENTER, COMMENT_ID, COMMENTER_INTENT
 ```
 
-1. **Set working directory.** On the mothership sandbox the repo is cloned
-   on the PR head ref into `/workspace/application-sdk`, so `cd` there. Under
-   `@sdk-loop` you already start in the checkout — do not look for
-   `/workspace`, it does not exist on a runner and probing for it costs a turn.
+1. **Set working directory** per the Runtime table. Do **not** warm
+   dependencies — this playbook never runs `pytest` or `pre-commit` (step 9).
 
-   Do **not** warm dependencies. This playbook never runs `pytest` or
-   `pre-commit` — §9 is explicit that the review does not run them — so the
-   `uv sync --all-extras` that used to sit here bought nothing and competed
-   with the review for I/O on every single run. `pr-resolve` and
-   `sdk-evolution` DO run them and warm deps for that reason; this playbook
-   is not those.
+1b. **Start the budget clock**, before any other work. Defaults to the
+    Small hard stop; step 12 raises it once the tier is known.
 
-1b. **Start the budget clock** — do this before any other work, so the
-    elapsed number covers the whole run. Defaults to the Small hard stop;
-    step 12 raises it once the tier is known.
-
-Run this block **exactly as written, unindented**. The heredoc terminator
-must sit at column 0 or `cat` never closes it and the shell hangs waiting
-for input:
+Run this block **exactly as written, unindented** — an indented heredoc
+terminator never closes and the shell hangs waiting for input:
 
 ```bash
 date +%s > /tmp/REVIEW_START_TS
@@ -177,11 +157,14 @@ printf '[budget] elapsed %dm %02ds / hard stop %dm (%d%%) — %s\n' \
 BUDGET
 ```
 
-2. **Auth setup** — `$GITHUB_TOKEN` is injected by mothership from its
-   GitHub App installation (see snapshots/_base). Make `gh` use it:
+2. **Auth setup.** On the mothership sandbox, `$GITHUB_TOKEN` is injected
+   from its GitHub App installation; make `gh` use it:
    ```bash
    echo "$GITHUB_TOKEN" | gh auth login --with-token 2>/dev/null
    ```
+   On `@sdk-loop`, `gh` is already authenticated from `GH_TOKEN` in the
+   environment — running the login above exits 1 there and buys nothing.
+   Skip it and go straight to step 3.
 
 3. **Fetch authoritative PR metadata** (no session/PR.md anymore):
    ```bash
@@ -195,11 +178,9 @@ BUDGET
    gh pr diff "$PR_NUMBER" --repo "$REPO" > /tmp/DIFF.patch
    ```
 
-4b–5. **Sandbox-only run guards** — resetting `/tmp` artifacts and the
-   stale-SHA bail-out. Under `@sdk-loop` neither applies: every phase gets a
-   fresh runner with nothing to reset, and the harness owns HEAD movement
-   (`head_state`, and the Fence job). See Appendix A. On the sandbox, run
-   them.
+4b–5. **Run guards** — `/tmp` reset and the stale-SHA bail-out.
+   `requires: needs-run-guards` → see Appendix A. Where the table says no,
+   skip both.
 
 6. **Read in-repo orchestration assets** — these are the source of truth
    for SDK review behavior. All paths are relative to the repo root:
@@ -207,35 +188,23 @@ BUDGET
    - `.mothership/pr-review/severity-rubric.yaml` (includes severity
      calibration + confidence floors — the single source for both)
    - the brief for each agent §2a will dispatch, **by explicit path**
-     (`.mothership/pr-review/agents/<name>.md`) — not all of them, and
-     never via Glob. `Glob ".mothership/pr-review/agents/*.md"` returns
-     **0 matches**: the tool is ripgrep-backed and ripgrep skips
-     dot-directories. Two measured runs each burned a turn on that
-     zero-match. The same trap applies to any grep over `.mothership/**` —
-     an agent that searches the reference rules for prior art, gets nothing,
-     and concludes there is none will raise a finding the rules already
-     answer. That is the expensive failure; the wasted turn is the cheap one.
+     (`.mothership/pr-review/agents/<name>.md`) — not all of them.
 
-   `review-policy.md` and `review.yaml` are gone from this list on purpose.
-   The by-design patterns that lived in `review-policy.md` are now part of
-   `references/retro-log.md` — the single do-not-flag source, consulted by
-   whoever raises findings — and `review.yaml`'s rules were a paraphrase of
-   the rubric and CLAUDE.md, which this step already loads. Two files, two
-   tool calls, ~750 tokens on every review, zero unique content.
+   **Never Glob or grep under `.mothership/**`.** The tool is ripgrep-backed
+   and ripgrep skips dot-directories, so it returns 0 matches and you cannot
+   tell that from "nothing there". An agent that searches the reference rules
+   for prior art, gets nothing, and concludes there is none will raise a
+   finding those rules already answer. Always read by explicit path.
 
-   **`references/*.md` is NOT read here.** It is ~125 KB — over half
-   everything this step would otherwise load — and it is consumed by the
-   Phase 2 agents, which receive their reference rules when dispatched
-   (§2a). Reading it up front pays for it twice, and pays for it at all on
-   reviews where no agent ever runs. Defer it to §6d.
+   This list is complete. Do not add `review-policy.md` or `review.yaml` —
+   both are delisted — and **do not read `references/*.md` here**; §6d
+   assigns those to whoever reviews that domain.
 
-6b/6c. **Prior review and the re-review delta.**
-
-    * `LANE: sdk-loop` — both are **handed to you in the dispatch prompt**: the
-      prior verdict, and the incremental range as `git diff <prior>..<head>`.
-      Verify them; do not recompute them.
-    * mothership sandbox — **read only when:** you are on that lane; then
-      follow 6b, 6c and 11b in `sections/prior-review-and-delta.md`.
+6b/6c. **Prior review and the re-review delta.** `given: given-delta` —
+    where the table says yes, the prior verdict and the incremental range
+    (`git diff <prior>..<head>`) arrive in the prompt; verify, do not
+    recompute. Otherwise **read only when:** your lane must compute them —
+    follow 6b, 6c and 11b in `sections/prior-review-and-delta.md`.
 6d. **Do NOT read `references/*.md`. The agents that use them read them.**
 
     Each Phase 2 agent now names the reference files it owns, at the top of
@@ -249,25 +218,12 @@ BUDGET
     | `ci-config.md`, `conformance.md` | `retro-log` |
     | `toolkit-review.md` | `toolkit-consumer-registry` |
 
-    The ownership is derived from each agent's own Domain Tags, not assigned
-    by hand: `[SEC]` → security-rules, `[QUAL]` → code-quality-rules, and so
-    on. A file owned by two agents is read by both — they are separate
-    contexts, and sharing costs nothing.
+    A file owned by two agents is read by both — separate contexts, sharing
+    costs nothing.
 
-    Why this is a real change and not tidying: these files are ~125 KB, the
-    single largest input to a review, and reading them here loaded ALL of them
-    for EVERY review no matter which agents ran. A `minor` PR dispatches only
-    `correctness` and paid for nine files to use two. Reading them at the point
-    of use also fixes an older ambiguity — §2a said each agent receives "their
-    reference rules" without anywhere defining which those were, so six of the
-    nine files were named by nothing at all and reached agents only because the
-    orchestrator had globbed everything.
-
-    You still read `severity-rubric.yaml`, `CLAUDE.md`, `review-policy.md` and
-    `review.yaml` in step 6: those govern YOUR decisions, not an agent's.
-
-    Exception: §1b-toolkit reads `toolkit-consumer-registry.md` directly,
-    because it needs the registry before any agent is dispatched.
+    You still read `severity-rubric.yaml` and `CLAUDE.md` in step 6: those
+    govern YOUR decisions, not an agent's. Exception: §1b-toolkit reads
+    `toolkit-consumer-registry.md` directly, before any agent is dispatched.
 
 7. **Always run a standard review.** There is a single mode. Ignore any
    free-form text after `@sdk-review` (`COMMENTER_INTENT`) — there are no
@@ -303,40 +259,28 @@ BUDGET
     round that swallowed it would keep spending rounds on a branch no resolve
     phase can move.
 
-    **If `BEHIND`:**
-
-    * `LANE: sdk-loop` — your token carries no write scope, so
-      `update-branch` 403s. Review the branch as it is and note it in the
-      summary. A base merge cannot introduce a finding in the PR's own hunks,
-      which is what the review is about. Do not retry, and do not report the
-      403 as a defect. Nothing further to read.
-    * mothership sandbox — **read only when:** you are on that lane AND the
-      branch is `BEHIND`; then follow `sections/branch-freshness.md`.
-9. **Do not read CI.** Removed, not moved: the review cannot act on a check
-   either way — it holds no write scope on this lane — and
-   `sdk-review-downgrade-on-ci-failure.yml` already enforces CI against the
-   verdict event-driven, which is the only race-free way to do it. CI legs
-   routinely finish AFTER a review posts, so a reviewer-side snapshot was
-   always a stale fact reported next to a verdict it could not influence.
-   Under `@sdk-loop` the prep phase owns branch and check state before the
-   first review starts. Spend no turn on `gh pr checks`.
+    **If `BEHIND`:** `requires: write-branch`. Where the table says yes,
+    **read only when:** the branch is actually `BEHIND` — then follow
+    `sections/branch-freshness.md`. Where it says no, review the branch as it
+    is and note it in the summary: a base merge cannot introduce a finding in
+    the PR's own hunks, which is what the review is about.
+9. **Do not read CI, on either lane.** `sdk-review-downgrade-on-ci-failure.yml`
+   enforces CI against the verdict event-driven; the review cannot act on a
+   check and its snapshot would be stale by the time anyone read it. Spend no
+   turn on `gh pr checks`.
 
 10. Read the repo's `CLAUDE.md` for project conventions.
 
 11. **Smart agent routing.** `review_scope` decides which specialists §2a
-    dispatches.
+    dispatches. `given: given-scope` — where the table says yes, the harness
+    computed it before the phase started; use it and do NOT re-derive it.
+    Otherwise **read only when:** your lane must derive it — follow
+    `sections/scope-classification.md`.
 
-    * `LANE: sdk-loop` — **you are told your scope. Do NOT derive it.** The
-      harness computed it in Python before the phase started, from the same
-      file-list arithmetic, and re-running that classification spends a turn to
-      reach the answer you already have.
-    * mothership sandbox — **read only when:** you are on that lane; then
-      follow `sections/scope-classification.md` to derive `review_scope`.
-
-    §2a's routing table below is the authority for scope-to-agent mapping on
-    both lanes, and stays here.
+    §2a's routing table is the authority for scope-to-agent mapping on both
+    lanes, and stays in this file.
 11b. **Re-review delta scoping** — **read only when:** `DELTA_KNOWN=1` from
-    step 6c, which only the sandbox lane computes. It lives at the end of
+    step 6c, i.e. your lane computed its own delta. It lives at the end of
     `sections/prior-review-and-delta.md`.
 12. Check diff size for tier, and raise the budget cap to match it
     (step 1b defaulted to the Small hard stop):
@@ -376,18 +320,13 @@ On a delta-scoped re-review (step 11b), run it over the delta files only.
 
 ### 1b-toolkit. Private Toolkit Consumer Setup
 
-**Read only when:** `review_scope` is `contract-toolkit` or
-`mixed-sdk-toolkit` AND you are on the mothership sandbox — then read
-`sections/toolkit-consumer-setup.md`.
+`requires: clone-private`. **Read only when:** `review_scope` is
+`contract-toolkit` or `mixed-sdk-toolkit` AND the Runtime table says your lane
+can clone private repos — then read `sections/toolkit-consumer-setup.md`.
 
-**On `LANE: sdk-loop`, do not read it and do not attempt any of it, even on a
-toolkit scope.** Its consumer validation clones private atlanhq repos, and
-this lane's credential cannot: `GH_TOKEN` is an App token scoped to THIS
-repository, and git has no other helper on the runner — so every clone dies
-with `fatal: could not read Username for 'https://github.com'`. A live
-toolkit-scope run (PR #3594) failed all five clones exactly this way, kept
-going, and was killed by the idle watchdog with no verdict after ~8 minutes.
-Instead, on this lane:
+Where it says no (`@sdk-loop`), **do not read it and do not attempt any of
+it, even on a toolkit scope.** Every clone dies with `fatal: could not read
+Username for 'https://github.com'`. Instead, on this lane:
 
 ```bash
 cat > /tmp/TOOLKIT_ROVER_NOTE.md <<'NOTE'
@@ -400,38 +339,20 @@ NOTE
 
 then review the toolkit surfaces from this repo's own diff and generated
 artifacts, and let §3e's Review Note block carry that note into the summary.
-The note downgrades confidence honestly; five guaranteed clone failures
-followed by a dead phase reports nothing at all.
+§2h turns a non-empty Rover note into `NEEDS_HUMAN`, so the gap is reported,
+not hidden.
 
-Skip the section entirely on every other scope — it is private-repo clone-and-validate setup for surfaces your scope
-does not touch, and on a two-file conformance PR it is the single largest
-block of context you would carry for no reason.
+Skip the section entirely on every other scope.
 ### 1c. Prepare Context by Tier
 
 **Token budgets (hard limits — never exceed). These bind the context of
 WHOEVER reviews, dispatched agent or not.**
 
-Written as "per agent call" when every review fanned out. It no longer does:
-§2a routes a single-specialist scope to the primary agent, and on twelve of
-fourteen measured `@sdk-loop` runs nothing was dispatched at all — so the only
-cap in this playbook applied to a code path those reviews never took, and the
-primary's own context went unbounded. Apply the same ceiling to yourself when
-you are the one reviewing.
-
-The ceiling is not the model's window and must not be raised to it. Two
-measured reasons:
-
-* **Latency.** Turn latency on the review model climbs with accumulated
-  context — ~10s early in a phase, 75-90s by turn 12 — so every token carried
-  is charged again on each of the remaining turns.
-* **Price.** `xai/grok-4.6` doubles its per-token rate above a 200K context.
-  A review that drifts over that line costs twice as much per token for the
-  rest of the phase, silently.
-
-Independently, PR-Agent caps its own input at 32K against models with far
-larger windows, on the stated grounds that "the AI model degrades in
-performance when the input is too long". Ours is deliberately looser than
-that; it is not looser than the numbers above.
+This ceiling applies to the context of whoever reviews — a dispatched agent,
+or you when nothing is dispatched. It is **not** the model's window and must
+not be raised to it: turn latency climbs from ~10s to 75-90s by turn 12 as
+context accumulates, and `xai/grok-4.6` doubles its per-token rate above a
+200K context.
 
 | Content | Max tokens (approx) |
 |---------|-------------------|
@@ -633,11 +554,8 @@ present. The toolkit agent must not include private consumer repo names, paths,
 or SHAs in public findings.
 
 **A dispatch cannot be interrupted, so this is your LAST decision point.**
-Once Wave 1 is dispatched you regain control only when the agents return —
-`budget.sh` runs at phase boundaries, and the next boundary is after them.
-Measured: 43 minutes inside a single dispatch against a 15-minute hard stop,
-which then printed `OVER HARD STOP` to nobody who could act on it. Spend the
-check here or not at all.
+Once Wave 1 is dispatched you regain control only when the agents return.
+Run the budget check here or not at all.
 
 **Degradation priority** — run `bash /tmp/budget.sh` BEFORE dispatching
 Wave 1 and drop agents by the measured percentage, not by feel:
@@ -655,12 +573,12 @@ Parse JSON findings from each agent response.
 
 ### 2b. Wave 2 — cross-model adversarial (via proxy)
 
-**Read only when:** you are on the mothership sandbox lane.
-On `LANE: sdk-loop`, skip `sections/adversarial-wave-2.md` entirely. It curls
-`$PROXY_BASE/proxy/litellm/...` with `$PROXY_JWT`; both are sandbox variables
-that do not exist on a GitHub Actions runner, so on the loop lane the step
-cannot succeed and reading it only pays for context. That lane's resolve phase
-contests every finding instead, so the challenge still happens.
+`requires: reach-proxy`. **Read only when:** the Runtime table says your
+lane can reach `$PROXY_BASE` — then follow `sections/adversarial-wave-2.md`.
+Where it says no, skip it: the step cannot succeed, and on `@sdk-loop` the
+resolve phase contests every finding instead, so the challenge still happens.
+Record the skip as the dispatch prompt tells you to — do not invent wording
+here, and never report it as "unavailable".
 ### 2c. De-Bias (deterministic)
 
 | Opus (Wave 1) | GPT (Wave 2) | Action |
@@ -677,13 +595,9 @@ If GPT was unavailable or skipped: keep all Opus findings >= 80%.
 
 ### 2d. Root-Cause Clustering & Class-Completeness Sweep
 
-Findings arrive atomized — one per file/line — but bugs travel in
-**classes**. If you report only the instances the agents happened to
-land on, the author fixes them one at a time and the same defect comes
-back for another review round (and another, and another). A single
-revert-scope bug once cost this repo five review rounds because each
-round fixed the one instance reported and never the class. Kill the
-whole class in one pass.
+Bugs travel in **classes**. Report only the instances the agents landed on
+and the author fixes them one at a time, round after round. Kill the class in
+one pass.
 
 Operate on the post-de-bias finding set, before locking the verdict:
 
@@ -722,15 +636,8 @@ Operate on the post-de-bias finding set, before locking the verdict:
    invariant, not the instances. This is the single highest-leverage step
    for holding a PR to 2-3 review rounds instead of 20+.
 
-**Scope — reviewer only.** This step targets the sdk-review reviewer, whose
-failure mode is *under*-generalization across serial human review rounds. Do
-not port it to the deterministic conformance remediation loop
-(`detect-fix-recheck`): that loop already fans out into independent,
-individually-gated per-finding fixes, and there per-site independence
-(fix-vs-suppress decided per site; uncorrelated model errors that recheck
-catches one at a time) is a feature, not a limitation. Clustering the *fixes*
-there would trade that robustness away for a round-count problem the
-self-iterating loop doesn't have.
+**Scope — reviewer only.** Do not port this to the conformance remediation
+loop (`detect-fix-recheck`); its per-site independence is a feature.
 
 ### 2e. Delta Tracking (if previous review exists)
 
@@ -756,19 +663,11 @@ what remains.
 
 ### 2e′. Nit convergence — keep the loop terminating AND the verdict reachable
 
-`@sdk-resolve` (the write counterpart, `.mothership/pr-resolve/`) drives a PR by
-looping review→fix→push until `### Findings` is **empty** (nits included). That
-loop only terminates if the *nit* stream is **bounded, diff-local, and
-actionable**. A reviewer that surfaces a fresh batch of pre-existing optional
-nits every pass — or lists observations it recommends no action on — makes that
-loop non-terminating: it spins round after round until the sandbox dies with no
-hand-off. The three rules below keep nits convergent.
-
-Since `READY_TO_MERGE` now requires an empty `### Findings` (§2h), these rules
-carry a second load: an unconvergent nit stream no longer just wastes resolver
-rounds, it withholds the approval indefinitely. A `Nit` that survives these
-three rules is one the resolver can clear; anything else must not be listed as a
-finding at all.
+`@sdk-resolve` loops review→fix→push until `### Findings` is **empty**, nits
+included, and `READY_TO_MERGE` requires that same empty list (§2h). So an
+unconvergent nit stream does not merely waste rounds — it withholds the
+approval indefinitely. A `Nit` that survives the three rules below is one the
+resolver can clear; anything else must not be listed as a finding at all.
 
 **They apply to `Nit`-tier findings ONLY.** Critical / High / Important
 findings — and any regression a pushed fix introduces — are ALWAYS raised, on
@@ -799,10 +698,7 @@ higher tiers is unchanged.
    never be cleared, so listing it would wedge the loop forever.
 
 Net effect: once the author's real fixes land, a re-review of the same
-substantive change returns an **empty** `### Findings` with `READY_TO_MERGE`, and
-the resolver converges — typically in 2–3 rounds — handing over a clean PR.
-`MAX_ROUNDS` stays the backstop for the rare case where a fix legitimately keeps
-spawning new work.
+substantive change returns an **empty** `### Findings` with `READY_TO_MERGE`.
 
 ### 2f. Guardrails G1-G7
 
@@ -831,34 +727,19 @@ MEDIUM/LOW/INFO findings: one-line suggested_fix only. No path_forward.
 | NEEDS_FIXES | Critical, G4/G6, **any Important, any Nit** | REQUEST_CHANGES |
 | READY_TO_MERGE | **`### Findings` is empty — 0 Critical, 0 Important AND 0 Nit** | APPROVE |
 
-CI is not a verdict input and is not reported. `sdk-review-downgrade-on-ci-failure.yml`
-strips an approval event-driven the moment any non-review check fails — the only
-race-free enforcement, since CI legs routinely finish after the review posts.
+CI is not a verdict input and is not reported.
 
-`READY_TO_MERGE` is strict: **any** finding still listed under
-`### Findings` forces `NEEDS_FIXES`, whatever its tier. A single
-Important does it; so does a single `Nit`. The verdict and the
-write-side resolver now agree on one bar — §2e′ already promises that
-"once the author's real fixes land, a re-review of the same substantive
-change returns an **empty** `### Findings` with `READY_TO_MERGE`", and
-the resolver has always looped until every finding "nits included" is
-cleared. Approving over an open nit made the reviewer the looser of the
-two and left the resolver still working on a PR that was already
-stamped.
+`READY_TO_MERGE` is strict: **any** finding still listed under `### Findings`
+forces `NEEDS_FIXES`, whatever its tier — a single Important does it, so does
+a single `Nit`.
 
-The load this puts on `Nit` discipline is the point, and §2e′ is what
-carries it: a `Nit` you list must be one the resolver can actually
-clear, or the loop wedges. **Before listing any `Nit`, apply the §2e′
-convergence rules** (diff-scope, re-review monotonicity, actionability).
-An observation that fails them is not a finding — put it in
-`### Strengths` or prose, never under `### Findings`. That was already
-the rule; it is now load-bearing for the verdict too.
+**Before listing any `Nit`, apply the §2e′ convergence rules** (diff-scope,
+re-review monotonicity, actionability). An observation that fails them is not
+a finding — put it in `### Strengths` or prose, never under `### Findings`.
 
-If you believe an Important should be downgraded, downgrade it
-explicitly in §2e with a one-line reason — do not silently approve over
-the top of it. Downgrading an Important to a `Nit` no longer buys an
-approval, so a finding you genuinely accept must be dropped with its
-reason, not demoted.
+To downgrade an Important, do it explicitly in §2e with a one-line reason.
+Demoting it to a `Nit` does not buy an approval, so a finding you genuinely
+accept must be DROPPED with its reason, not demoted.
 
 Print: `[Phase 2 complete] <N> findings across <C> classes, verdict=<verdict>`
 then `bash /tmp/budget.sh`.

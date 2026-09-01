@@ -191,9 +191,9 @@ def test_the_toolkit_section_is_gated_on_lane_not_just_scope() -> None:
     router = _router()
     idx = router.index("sections/toolkit-consumer-setup.md")
     stanza = router[max(0, idx - 400) : idx + 1800]
-    assert "mothership sandbox" in stanza, (
-        "the 1b-toolkit pointer no longer restricts consumer cloning to the "
-        "sandbox lane"
+    assert "requires: clone-private" in stanza, (
+        "the 1b-toolkit pointer no longer restricts consumer cloning to lanes "
+        "that can actually clone private repos"
     )
     assert "TOOLKIT_ROVER_NOTE" in stanza, (
         "the loop lane lost its fallback — without the Rover note, a toolkit "
@@ -202,3 +202,75 @@ def test_the_toolkit_section_is_gated_on_lane_not_just_scope() -> None:
     )
     section = (SECTIONS / "toolkit-consumer-setup.md").read_text(encoding="utf-8")
     assert "mothership sandbox only" in section
+
+
+#: Every capability the Runtime table defines. A step may only cite one of
+#: these — a typo'd capability resolves to nothing and the step runs everywhere.
+CAPABILITIES = {
+    "write-branch",
+    "clone-private",
+    "reach-proxy",
+    "given-scope",
+    "given-delta",
+    "needs-run-guards",
+}
+
+#: Steps that were lane-conditional before the redesign, by a stable anchor in
+#: their text. Each must still resolve against the Runtime table. Losing an
+#: annotation is silent: the step simply runs on a lane that cannot perform it,
+#: which is run 33500595871 exactly.
+LANE_CONDITIONAL_STEPS = {
+    "4b–5. **Run guards**": "needs-run-guards",
+    "6b/6c. **Prior review": "given-delta",
+    "**If `BEHIND`:**": "write-branch",
+    "11. **Smart agent routing.**": "given-scope",
+    "### 1b-toolkit.": "clone-private",
+    "### 2b. Wave 2": "reach-proxy",
+}
+
+
+def test_the_runtime_table_defines_every_capability() -> None:
+    """The matrix is the single axis every lane-conditional step resolves
+    against. A step citing a capability the table does not define resolves to
+    nothing, and "resolves to nothing" reads exactly like "no condition"."""
+    runtime = _router().split("## Runtime")[1].split("## Time Budgets")[0]
+    for cap in CAPABILITIES:
+        assert f"`{cap}`" in runtime, f"Runtime table does not define {cap}"
+    assert "mothership sandbox" in runtime and "sdk-loop" in runtime
+
+
+def test_every_lane_conditional_step_still_names_a_capability() -> None:
+    """The redesign's real risk. Before it, lane differences were spelled out
+    inline at each step; after it they are one word that has to be there. Two
+    bugs found today came from a step gated on the wrong axis — CONFLICTING
+    gated on lane when it needed neither, toolkit cloning gated on scope when
+    the credential decides. This asserts the mapping the matrix replaced."""
+    router = _router()
+    for anchor, capability in LANE_CONDITIONAL_STEPS.items():
+        assert anchor in router, f"step anchor vanished: {anchor!r}"
+        idx = router.index(anchor)
+        window = router[idx : idx + 1200]
+        assert capability in window, (
+            f"step {anchor!r} no longer names `{capability}` — it will run on "
+            "a lane that cannot perform it"
+        )
+
+
+def test_no_step_cites_an_undefined_capability() -> None:
+    """A typo'd tag is worse than a missing one: it looks gated and is not."""
+    cited = set(re.findall(r"(?:requires|given): ([a-z-]+)", _router()))
+    unknown = cited - CAPABILITIES
+    assert not unknown, f"steps cite capabilities the Runtime table lacks: {unknown}"
+
+
+def test_rationale_lives_outside_the_agent_context() -> None:
+    """DESIGN.md is maintainer-facing and must never enter a review's context:
+    it is not in Phase 0 step 6's read list and nothing may point the agent at
+    it. Rationale in the playbook is paid for on every turn after the read."""
+    design = (PLAYBOOK_DIR / "DESIGN.md").read_text(encoding="utf-8")
+    assert "The agent never reads this file" in design
+    router = _router()
+    step6 = router[router.index("6. **Read in-repo") : router.index("6b/6c.")]
+    assert "DESIGN.md" not in step6, "DESIGN.md must not be in the read list"
+    claude = (PLAYBOOK_DIR / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "DESIGN.md" not in claude
