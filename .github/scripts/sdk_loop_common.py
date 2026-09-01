@@ -452,23 +452,77 @@ def classify_scope(files: Sequence[str], changed_lines: int = 0) -> str:
     return "full"
 
 
-def solo_scope(scope: str) -> str:
-    """The one agent this scope routes to, or '' when it routes to 0 or 2+.
+#: Config paths that justify a `ci-config` partition agent. `uv.lock` alone
+#: does NOT: §2a skips the extra when the only config churn is an incidental
+#: lock bump with no `.github/`, `helm/` or `pyproject` change.
+_SUBSTANTIVE_CONFIG = r"^(\.github/|helm/|pyproject\.toml|\.pre-commit)"
+
+
+def dispatch_set(scope: str, files: Sequence[str] = ()) -> tuple[str, ...]:
+    """Every agent the playbook may `Task` for this PR — the registration set.
+
+    NOT just §2a's routing table. Registering exactly that table looked right
+    and was wrong in two ways, because the table is only the Wave 1 row:
+
+      * §1b dispatches `reachability` on `full` and `mixed-sdk-toolkit`. It is
+        named nowhere in §2a's table, so a table-only registration left the
+        parent instructed to dispatch an agent that did not exist.
+      * §2a's "Mixed partitions" rule and §11's `conformance-only` note add a
+        partition specialist when a PR ALSO touches config or conformance
+        files — `ci-config` or `conformance`, scoped to that slice only.
+
+    The invariant is "register exactly what the playbook will try to
+    dispatch", and these extras are part of that. They are deliberately kept
+    OUT of SCOPE_AGENTS: that mirrors §2a's markdown table and is asserted
+    against it, so stuffing derived agents in would break the very drift check
+    that keeps it honest.
+    """
+    agents = list(SCOPE_AGENTS.get(scope, ()))
+    paths = [f.strip() for f in files if f and f.strip()]
+
+    if scope in ("full", "mixed-sdk-toolkit") and "reachability" not in agents:
+        agents.append("reachability")
+
+    has_config = any(re.search(_SUBSTANTIVE_CONFIG, p) for p in paths)
+    has_conf = any(
+        re.search(r"^(packages/conformance/|remediation/)", p) for p in paths
+    )
+
+    if scope in ("full", "tests-focused"):
+        if has_config and "ci-config" not in agents:
+            agents.append("ci-config")
+        if has_conf and "conformance" not in agents:
+            agents.append("conformance")
+    elif scope == "conformance-only" and has_config and "ci-config" not in agents:
+        # §11: a conformance PR that also carries config files gets the CI
+        # specialist on that slice — so this scope is NOT always solo.
+        agents.append("ci-config")
+
+    return tuple(agents)
+
+
+def solo_scope(scope: str, files: Sequence[str] = ()) -> str:
+    """The one agent this PR routes to, or '' when it routes to 0 or 2+.
+
+    Computed from `dispatch_set`, never from SCOPE_AGENTS alone: a
+    `conformance-only` PR that also touches `.github/` picks up `ci-config`
+    and is a two-agent review, and treating it as solo would silently drop
+    the CI specialist from a PR that changes CI.
 
     A dispatch exists to run agents CONCURRENTLY. With one agent there is
     nothing to run alongside, so `Task` buys no parallelism and costs a cold
     start: the parent has already read the playbook, the diff and every
     changed file, and the sub-agent begins with none of it and re-reads its
     way back. Measured on three single-agent reviews — 904s, ~9min, and 26min
-    inside that one call, per-step latency climbing 4s → 58s → 185s → 526s as
-    the re-read context accumulated. The 26-minute one reached step 11 of 25
-    before it was killed; the parent covers the same ground in under a minute.
+    inside that one call, per-step latency climbing 4s to 526s as the re-read
+    context accumulated. The 26-minute one reached step 11 of 25 before it was
+    killed; the parent covers the same ground in under a minute.
 
-    Two or more agents is a different trade, and dispatch stays: a single
-    agent covering several domains produces a worse verdict, and nothing in
-    the output would say so.
+    Two or more is a different trade and dispatch stays: a single agent
+    covering several domains produces a worse verdict, and nothing in the
+    output would say so.
     """
-    agents = SCOPE_AGENTS.get(scope, ())
+    agents = dispatch_set(scope, files)
     return agents[0] if len(agents) == 1 else ""
 
 

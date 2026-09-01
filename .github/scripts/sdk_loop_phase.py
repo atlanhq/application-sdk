@@ -39,7 +39,7 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 from sdk_loop_common import (
     MAX_ROUNDS,
@@ -47,10 +47,10 @@ from sdk_loop_common import (
     PLAYBOOK_REVIEW,
     RESOLVE_MODEL,
     REVIEW_MODEL,
-    SCOPE_AGENTS,
     AgentResult,
     DismissalLedger,
     classify_scope,
+    dispatch_set,
     emit_outputs,
     format_usage,
     head_state,
@@ -224,6 +224,7 @@ def review_prompt(
     prior_sha: str = "",
     scope: str = "",
     solo: str = "",
+    agents: Sequence[str] = (),
 ) -> str:
     """Point the agent at the playbook. The playbook is NOT restated here.
 
@@ -316,10 +317,13 @@ def review_prompt(
             "",
         ]
     elif scope:
-        agents = ", ".join(SCOPE_AGENTS.get(scope, ()))
+        # The REGISTERED set, which is §2a's row plus §1b's reachability and
+        # any mixed-partition specialist — not the markdown table alone.
+        named = ", ".join(agents)
         parts += [
-            f"review_scope = `{scope}`. §2a routes it to: {agents or 'no agents'}.",
-            "Those, and only those, are registered — dispatch them in parallel.",
+            f"review_scope = `{scope}`. Registered for this PR: "
+            f"{named or 'no agents'}.",
+            "Those, and only those, can be dispatched — do them in parallel.",
             "",
         ]
 
@@ -694,8 +698,13 @@ def main(argv: list[str] | None = None) -> int:
         # paragraph. It did not follow the comparable "fetch once" paragraph.
         files = pr_files(repo, pr)
         scope = classify_scope(files, diff_lines(repo, pr))
-        solo = solo_scope(scope)
-        fan_out = SCOPE_AGENTS.get(scope, ())
+        # `dispatch_set`, not SCOPE_AGENTS: the table is only §2a's Wave 1 row.
+        # §1b adds `reachability` on full/mixed, and §2a's mixed-partition rule
+        # adds a `ci-config` or `conformance` specialist when the PR also
+        # carries those files. Registering the table alone left the parent
+        # instructed to dispatch agents that did not exist.
+        fan_out = dispatch_set(scope, files)
+        solo = solo_scope(scope, files)
         print(
             f"scope={scope} agents={len(fan_out)}" + (f" solo={solo}" if solo else "")
         )
@@ -711,6 +720,7 @@ def main(argv: list[str] | None = None) -> int:
                 os.environ.get("PRIOR_SHA", ""),
                 scope=scope,
                 solo=solo,
+                agents=fan_out,
             ),
             workspace,
             TIMEOUT_REVIEW_S,
