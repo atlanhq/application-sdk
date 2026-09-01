@@ -589,7 +589,7 @@ class PublishStep {
   executorEnabled: Boolean|String = true
   includeInputFields: Boolean = true     // generates output_dir/load_to_atlan/publish_dry_run in _input.py
   connectionEntity: String? = "{{connection}}"  // args["connection_entity"]; null omits it AND sets connection_creation_enabled=false
-  transformedNondataPrefix: String? = null      // args["transformed_nondata_prefix"]; null omits it
+  transformedNonDataPrefix: String? = null      // args["transformed_nondata_prefix"]; null omits it
   lineagePublish: LineagePublishStep?    // opt-in lineage publish (default-off)
   errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
     startToCloseTimeoutSeconds = 259200  // 72h default — AE's 2h is too tight for large tenants
@@ -2146,7 +2146,7 @@ class PublishNode extends DAGNode {
   tagAttachmentsPrefix: String? = null
   connectionEntity: String? = "{{connection}}"
   connectionCreationEnabled: Boolean = connectionEntity != null
-  transformedNondataPrefix: String? = null
+  transformedNonDataPrefix: String? = null
   displayName = "Publish to Atlas"
   workflowType = "PublishWorkflow"
   appName = "publish"
@@ -2158,8 +2158,8 @@ class PublishNode extends DAGNode {
     ["connection_creation_enabled"] = connectionCreationEnabled
     ["executor_enabled"] = executorEnabled
     when (connectionEntity != null) { ["connection_entity"] = connectionEntity }
-    when (transformedNondataPrefix != null) {
-      ["transformed_nondata_prefix"] = transformedNondataPrefix
+    when (transformedNonDataPrefix != null) {
+      ["transformed_nondata_prefix"] = transformedNonDataPrefix
     }
   }
   dependsOn { upstream }
@@ -2180,18 +2180,18 @@ entity is present. For the auto-generated default publish node, set the app-leve
 `publishExecutorEnabled`; for `extraNodes["publish"] = new PublishNode { ... }`,
 set `executorEnabled` on that node.
 
-`transformedNondataPrefix` is the object-store prefix holding the run's
+`transformedNonDataPrefix` is the object-store prefix holding the run's
 transformed **non-data** payloads — what the app emits alongside the asset rows
 that publish reads from `transformed_data_prefix`. It is opt-in: the default
 `null` omits `transformed_nondata_prefix` from the args entirely, so apps that
 never set it generate byte-identical manifests. Set it on the node
-(`extraNodes["publish"]`) or via `pipeline.publish.transformedNondataPrefix`,
+(`extraNodes["publish"]`) or via `pipeline.publish.transformedNonDataPrefix`,
 normally to an output reference:
 
 ```pkl
 pipeline {
   publish {
-    transformedNondataPrefix = "$.extract.outputs.transformed_nondata_prefix"
+    transformedNonDataPrefix = "$.extract.outputs.transformed_nondata_prefix"
   }
 }
 ```

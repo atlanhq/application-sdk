@@ -913,6 +913,11 @@ open class PublishNode extends DAGNode {
 
   /// Value emitted as `args["transformed_nondata_prefix"]` when non-null.
   ///
+  /// Note the deliberate asymmetry: the Pkl property reads `NonData` (non-data is
+  /// hyphenated, so `Nondata` scans badly), while the emitted arg key stays
+  /// `transformed_nondata_prefix` — that spelling is the wire contract the
+  /// publish app reads and is not ours to change here.
+  ///
   /// Object-store prefix holding the run's transformed **non-data** payloads —
   /// everything the app emits alongside the asset rows that publish handles on a
   /// separate path from `transformed_data_prefix`. Normally an output reference
@@ -926,10 +931,10 @@ open class PublishNode extends DAGNode {
   /// prefix that does not exist.
   ///
   /// Settable directly on the node (`extraNodes["publish"]`) or, for the typed
-  /// pipeline, via `PublishStep.transformedNondataPrefix`. Does not change
+  /// pipeline, via `PublishStep.transformedNonDataPrefix`. Does not change
   /// `transformed_data_prefix`, the publish state/current-state args, or any
   /// other node.
-  transformedNondataPrefix: String? = null
+  transformedNonDataPrefix: String? = null
 
   displayName = "Publish to Atlas"
   workflowType = "PublishWorkflow"
@@ -942,8 +947,8 @@ open class PublishNode extends DAGNode {
     ["connection_creation_enabled"] = connectionCreationEnabled
     ["executor_enabled"] = executorEnabled
     when (connectionEntity != null) { ["connection_entity"] = connectionEntity }
-    when (transformedNondataPrefix != null) {
-      ["transformed_nondata_prefix"] = transformedNondataPrefix
+    when (transformedNonDataPrefix != null) {
+      ["transformed_nondata_prefix"] = transformedNonDataPrefix
     }
     ["connection_cache_enabled"] = connectionCacheEnabled
     ["connection_cache_via_app_enabled"] = connectionCacheViaAppEnabled
@@ -1614,9 +1619,9 @@ class PublishStep {
   /// manifests are unchanged. Set it — normally to an output reference such as
   /// `"$.extract.outputs.transformed_nondata_prefix"` — only when the extract
   /// workflow actually emits non-data payloads. See
-  /// `PublishNode.transformedNondataPrefix` for the full semantics; this
+  /// `PublishNode.transformedNonDataPrefix` for the full semantics; this
   /// property is passed straight through to the generated node.
-  transformedNondataPrefix: String? = null
+  transformedNonDataPrefix: String? = null
 
   /// Optional lineage-publish sub-step. When set, adds a `"lineage-publish"`
   /// node after the main publish step.
@@ -2578,7 +2583,7 @@ local function generateDAG(): Mapping<String, Any> = new Mapping {
           currentStateEnabled = ps.currentStateEnabled
           currentStateViaAppEnabled = ps.currentStateViaAppEnabled
           connectionEntity = ps.connectionEntity
-          transformedNondataPrefix = ps.transformedNondataPrefix
+          transformedNonDataPrefix = ps.transformedNonDataPrefix
         })
   }
   when (pipeline.publish != null && pipeline.publish!!.lineagePublish != null) {

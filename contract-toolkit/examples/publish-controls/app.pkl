@@ -29,7 +29,7 @@ pipeline {
     // Opt in to the non-data hand-off: this app's extract workflow emits a
     // `transformed_nondata_prefix` output alongside the asset rows. Apps that
     // emit only asset rows leave this unset and the arg is omitted.
-    transformedNondataPrefix = "$.extract.outputs.transformed_nondata_prefix"
+    transformedNonDataPrefix = "$.extract.outputs.transformed_nondata_prefix"
     errorHandling = new ErrorHandlingConfig {
       startToCloseTimeoutSeconds = 14400
     }

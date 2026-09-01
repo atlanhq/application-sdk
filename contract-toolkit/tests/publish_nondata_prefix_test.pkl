@@ -4,9 +4,9 @@
 // Background: alongside the asset rows it reads from `transformed_data_prefix`,
 // publish can consume a run's transformed *non-data* payloads from a second
 // object-store prefix. Not every app emits them, so the arg is opt-in: the node
-// exposes a nullable `transformedNondataPrefix` (default `null`) and emits the
+// exposes a nullable `transformedNonDataPrefix` (default `null`) and emits the
 // arg only when it is non-null — both directly on the node and via the typed
-// `PublishStep.transformedNondataPrefix`. Apps that never set it generate
+// `PublishStep.transformedNonDataPrefix`. Apps that never set it generate
 // byte-identical manifests to before the property existed.
 
 amends "pkl:test"
@@ -24,7 +24,7 @@ local defaultPublishArgs = new json.Parser { useMapping = true }.parse(
   defaultPipelineApp.output.files["app/generated/manifest.json"].text
 )["dag"]["publish"]["inputs"]["args"]
 
-// Pipeline with `pipeline.publish.transformedNondataPrefix` set: arg present.
+// Pipeline with `pipeline.publish.transformedNonDataPrefix` set: arg present.
 local nondataPublishArgs = new json.Parser { useMapping = true }.parse(
   nondataPrefixApp.output.files["app/generated/manifest.json"].text
 )["dag"]["publish"]["inputs"]["args"]
@@ -44,28 +44,28 @@ facts {
 
   ["PublishNode emits transformed_nondata_prefix when set"] {
     new App.PublishNode {
-      transformedNondataPrefix = local_prefix
+      transformedNonDataPrefix = local_prefix
     }.args["transformed_nondata_prefix"] == local_prefix
   }
 
   // The value is passed through verbatim — a literal prefix or form placeholder
   // is as valid as an output reference.
-  ["PublishNode passes a literal transformedNondataPrefix through verbatim"] {
+  ["PublishNode passes a literal transformedNonDataPrefix through verbatim"] {
     new App.PublishNode {
-      transformedNondataPrefix = "artifacts/nondata"
+      transformedNonDataPrefix = "artifacts/nondata"
     }.args["transformed_nondata_prefix"] == "artifacts/nondata"
   }
 
   // Explicit null is the same shape as "never declared" — one omission, not two.
   ["PublishNode with an explicit null omits the arg"] {
     new App.PublishNode {
-      transformedNondataPrefix = null
+      transformedNonDataPrefix = null
     }.args.toMap().containsKey("transformed_nondata_prefix") == false
   }
 
   // Setting the non-data prefix must not disturb the data prefix or any sibling.
   ["PublishNode keeps transformed_data_prefix independent of the non-data prefix"] {
-    local node = new App.PublishNode { transformedNondataPrefix = local_prefix }
+    local node = new App.PublishNode { transformedNonDataPrefix = local_prefix }
     node.args["transformed_data_prefix"] == "$.extract.outputs.transformed_data_prefix"
     node.args["publish_state_prefix"] == "$.extract.outputs.publish_state_prefix"
     node.args["current_state_prefix"] == "$.extract.outputs.current_state_prefix"
@@ -74,8 +74,8 @@ facts {
 
   // ---- Typed pipeline (PublishStep) -------------------------------------------
 
-  ["PublishStep defaults transformedNondataPrefix to null"] {
-    new App.PublishStep {}.transformedNondataPrefix == null
+  ["PublishStep defaults transformedNonDataPrefix to null"] {
+    new App.PublishStep {}.transformedNonDataPrefix == null
   }
 
   ["Default pipeline generates a publish node without transformed_nondata_prefix"] {
@@ -85,7 +85,7 @@ facts {
   // Regression guard: `generateDAG()` copies PublishStep fields onto PublishNode
   // one by one, so a field missing from that copy block is silently dropped for
   // every app on the typed pipeline path.
-  ["PublishStep.transformedNondataPrefix reaches the generated publish node"] {
+  ["PublishStep.transformedNonDataPrefix reaches the generated publish node"] {
     nondataPublishArgs["transformed_nondata_prefix"] == local_prefix
   }
 

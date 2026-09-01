@@ -307,9 +307,9 @@ pipeline {
     // connectionEntity: default "{{connection}}". Set null to omit
     // connection_entity AND disable connection creation (see below).
     connectionEntity = null
-    // transformedNondataPrefix: default null (arg omitted). Set it when the
+    // transformedNonDataPrefix: default null (arg omitted). Set it when the
     // extract workflow emits non-data payloads (see below).
-    transformedNondataPrefix = "$.extract.outputs.transformed_nondata_prefix"
+    transformedNonDataPrefix = "$.extract.outputs.transformed_nondata_prefix"
   }
 }
 ```
@@ -320,7 +320,7 @@ Every node ships with a default `errorHandling.startToCloseTimeoutSeconds`: **1 
 
 `PublishStep.connectionEntity` (also settable directly on `PublishNode`) controls the publish node's `connection_entity` arg — the full connection entity JSON used for connection creation. It defaults to the `"{{connection}}"` form placeholder. Setting it to `null` omits `connection_entity` from the generated args entirely, and because the field is **linked** to `connection_creation_enabled` (which defaults to `connectionEntity != null`), a `null` entity also disables connection creation — publish then targets an already-existing connection and creates nothing. Override `connectionCreationEnabled` explicitly on the node to disable creation even when an entity is present.
 
-`PublishStep.transformedNondataPrefix` (also settable directly on `PublishNode`) controls the publish node's optional `transformed_nondata_prefix` arg — the object-store prefix holding the run's transformed **non-data** payloads, alongside the asset rows publish reads from `transformed_data_prefix`. It defaults to `null`, which omits the arg entirely, so apps that do not set it generate byte-identical manifests. Set it — normally to an output reference such as `"$.extract.outputs.transformed_nondata_prefix"`, though a literal prefix or form placeholder is passed through verbatim — only when the upstream node actually emits non-data payloads. It leaves `transformed_data_prefix` and every other publish arg untouched.
+`PublishStep.transformedNonDataPrefix` (also settable directly on `PublishNode`) controls the publish node's optional `transformed_nondata_prefix` arg — the object-store prefix holding the run's transformed **non-data** payloads, alongside the asset rows publish reads from `transformed_data_prefix`. It defaults to `null`, which omits the arg entirely, so apps that do not set it generate byte-identical manifests. Set it — normally to an output reference such as `"$.extract.outputs.transformed_nondata_prefix"`, though a literal prefix or form placeholder is passed through verbatim — only when the upstream node actually emits non-data payloads. It leaves `transformed_data_prefix` and every other publish arg untouched.
 
 The toolkit can append a run-level notification node when an app opts in:
 
