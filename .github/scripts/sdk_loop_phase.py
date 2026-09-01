@@ -71,7 +71,6 @@ from sdk_loop_prep import (  # noqa: E402
     failing_checks,
     needs_agent,
     pr_state,
-    update_branch,
 )
 
 #: Wall-clock per phase. Review is the slower of the two: it walks the whole
@@ -560,13 +559,15 @@ def main(argv: list[str] | None = None) -> int:
         # the loop current and green, so paying one to confirm that would be
         # the same waste this phase exists to remove from the review.
         state = pr_state(repo, pr)
-        updated = ""
-        if state.get("mergeStateStatus") == "BEHIND":
-            updated = update_branch(repo, pr, head_ref, state.get("headRefOid", ""))
-            if updated:
-                state = pr_state(repo, pr)
-        failing = failing_checks(repo, pr)
-        result = decide(state, failing, baseline, updated)
+        # Conflicts short-circuit BEFORE the checks read. There is nothing
+        # useful to say about CI on a branch that cannot merge, and the read
+        # is a round trip spent to reach an answer that changes nothing.
+        if state.get("mergeStateStatus") == "CONFLICTING" or (
+            state.get("mergeable") == "CONFLICTING"
+        ):
+            result = decide(state, (), baseline)
+        else:
+            result = decide(state, failing_checks(repo, pr), baseline)
 
         if needs_agent(result):
             # The one case worth a model: red checks a mechanical fix might

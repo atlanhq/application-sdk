@@ -12,8 +12,8 @@ So the duty moves here, to a phase that holds write scope, and runs once
 before Review 1.
 
 DETERMINISTIC FIRST, and usually deterministic ONLY. Everything this phase
-normally does — read merge state, update a behind branch, re-run failed
-checks — is a `gh` call with an unambiguous answer. A model adds nothing to
+normally does — read merge state, read failing checks — is a `gh` call with
+an unambiguous answer. A model adds nothing to
 "is mergeStateStatus BEHIND", and a clean PR is the common case, so paying an
 agent to confirm a clean PR is clean would be the same waste this lane has
 been trying to remove. The agent is invoked only when the deterministic pass
@@ -21,10 +21,11 @@ leaves something red that a mechanical fix might clear.
 
 WHAT IT DELIBERATELY DOES NOT DO:
 
-  * Resolve conflicts. A conflict resolution is the author's decision about
-    their own change, not a bot's — the review playbook has said so since
-    before this lane existed, and it stays true when the bot gains write
-    scope.
+  * Touch the branch on its own initiative. Neither a conflict resolution
+    nor a base merge is the loop's call to make: both are changes to
+    somebody's PR that they did not ask for. Neither is needed to review
+    either — the review reads the diff against base, which is well-defined
+    whether or not base has moved. Both are REPORTED and left alone.
   * Wait for green. "Wait until CI passes" has no terminating condition when
     a check is genuinely broken by the PR, and the failure mode is a phase
     that burns an hour discovering what the review would have said in one
@@ -43,14 +44,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-import time
 from dataclasses import dataclass, field
-
-#: How long to let GitHub recompute a merge state after `update-branch`.
-#: The API returns before the new head is visible, so a read straight after
-#: it sees the OLD sha and the phase reports it changed nothing.
-UPDATE_SETTLE_S = 10
-UPDATE_POLL_ATTEMPTS = 6
 
 #: Checks whose failure is mechanical often enough to be worth one automatic
 #: re-run. Everything else is left alone: re-running a genuine test failure
@@ -128,45 +122,18 @@ def failing_checks(repo: str, pr: int, runner=_sh) -> tuple[str, ...]:
     )
 
 
-def update_branch(repo: str, pr: int, head_ref: str, before: str, runner=_sh) -> str:
-    """Merge base into the PR branch. Returns the new head, or '' if unchanged.
+def decide(state: dict[str, str], failing: tuple[str, ...], before: str) -> PrepResult:
+    """What prep concluded, from facts alone. No model involved.
 
-    Polled rather than slept-once: the REST call returns before the new head
-    is observable, and a single read straight after it reports the old sha —
-    which would make a successful update look like a no-op and hand Review 1
-    a stale baseline.
-    """
-    runner(
-        [
-            "gh",
-            "api",
-            f"repos/{repo}/pulls/{pr}/update-branch",
-            "-X",
-            "PUT",
-            "-f",
-            "update_method=merge",
-        ]
-    )
-    for _ in range(UPDATE_POLL_ATTEMPTS):
-        time.sleep(UPDATE_SETTLE_S)
-        state = pr_state(repo, pr, runner=runner)
-        live = state.get("headRefOid", "")
-        if live and live != before:
-            return live
-    return ""
+    Conflicts short-circuit: there is nothing useful to say about checks on a
+    branch that cannot merge, and the review posts NEEDS_REBASE regardless.
 
-
-def decide(
-    state: dict[str, str],
-    failing: tuple[str, ...],
-    before: str,
-    updated_sha: str = "",
-) -> PrepResult:
-    """What prep concluded, given only facts. No model involved.
-
-    Conflicts short-circuit everything: there is nothing useful to say about
-    checks on a branch that cannot merge, and the review will post
-    NEEDS_REBASE regardless.
+    A branch that is merely BEHIND is REPORTED, never updated. Updating it
+    means pushing a merge commit into someone's PR on the loop's initiative,
+    which is a change to their branch they did not ask for — and it is not
+    needed to review: the diff against base is what the review reads, and
+    that is well-defined whether or not base has moved. `mergeStateStatus`
+    lands in the detail line so a human can act on it if they want to.
     """
     merge_state = state.get("mergeStateStatus", "")
     head = state.get("headRefOid", "") or before
@@ -179,31 +146,25 @@ def decide(
             detail="branch conflicts with base — the author resolves this, not the loop",
         )
 
-    ci_state = "red" if failing else "green"
-    detail_ci = f"{len(failing)} failing check(s)" if failing else "checks green"
+    behind = (
+        " · branch is behind base (reported, not updated)"
+        if merge_state == "BEHIND"
+        else ""
+    )
 
-    if updated_sha:
-        return PrepResult(
-            OUTCOME_UPDATED,
-            new_base_sha=updated_sha,
-            pushed_sha=updated_sha,
-            ci_state=ci_state,
-            detail=f"branch was behind base; updated to {updated_sha[:8]} · {detail_ci}",
-            failing=failing,
-        )
     if failing:
         return PrepResult(
             OUTCOME_RED,
             new_base_sha=head,
             ci_state="red",
-            detail=f"{detail_ci} — handed to the review as a fact, not a blocker",
+            detail=f"{len(failing)} failing check(s) — a fact for the review, not a blocker{behind}",
             failing=failing,
         )
     return PrepResult(
         OUTCOME_CLEAN,
         new_base_sha=head,
         ci_state="green",
-        detail="branch is current and checks are green — nothing to do",
+        detail=f"checks green{behind or ' and branch is current'} — nothing to do",
     )
 
 

@@ -14,7 +14,6 @@ from sdk_loop_prep import (  # noqa: E402
     OUTCOME_CLEAN,
     OUTCOME_CONFLICTS,
     OUTCOME_RED,
-    OUTCOME_UPDATED,
     decide,
     needs_agent,
 )
@@ -29,21 +28,22 @@ def test_a_healthy_pr_costs_no_model_call() -> None:
     assert clean.ci_state == "green"
     assert not needs_agent(clean), "a clean PR must not reach the model"
     assert clean.pushed_sha == "", "nothing was pushed, so claim nothing"
+    assert "behind" not in clean.detail.lower()
 
 
-def test_a_behind_branch_is_updated_and_the_push_is_owned() -> None:
-    """`pushed_sha` is not decoration. Review 1 receives it as `ours`; without
-    it the round sees live != baseline with an empty ours-list, calls it
-    `moved_by_other` and re-aims — burning a round every time prep works."""
-    out = decide(
-        {"mergeStateStatus": "CLEAN", "headRefOid": "b" * 40},
-        (),
-        "a" * 40,
-        updated_sha="b" * 40,
-    )
-    assert out.outcome == OUTCOME_UPDATED
-    assert out.pushed_sha == "b" * 40
-    assert out.new_base_sha == "b" * 40
+def test_a_behind_branch_is_reported_not_updated() -> None:
+    """Prep does not touch the branch on its own initiative.
+
+    Merging base into somebody's PR is a change to their branch they did not
+    ask for, and it is not needed to review: the review reads the diff
+    against base, which is well-defined whether or not base has moved. So
+    BEHIND is a line in the detail, not an action.
+    """
+    out = decide({"mergeStateStatus": "BEHIND", "headRefOid": "a" * 40}, (), "a" * 40)
+    assert out.outcome == OUTCOME_CLEAN
+    assert out.pushed_sha == "", "prep pushed nothing, so it must claim nothing"
+    assert out.new_base_sha == "a" * 40, "the review runs on the real head"
+    assert "behind" in out.detail.lower(), "a human should still be able to see it"
     assert not needs_agent(out)
 
 
