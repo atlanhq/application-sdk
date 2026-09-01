@@ -10,11 +10,18 @@ COMMENTER_INTENT, etc.). Follow
 
 ## Critical Files to Read First
 
-1. `.mothership/pr-review/ORCHESTRATION.md` — your playbook (MANDATORY)
-2. `.mothership/pr-review/severity-rubric.yaml` — pattern → severity map + severity calibration and confidence floors (single source for both)
-3. `.mothership/pr-review/references/retro-log.md` — **MANDATORY: do-not-flag list.** Every candidate finding MUST be checked against the patterns here; matches are withdrawn silently with no inline comment or auto-fix. This is the ONLY do-not-flag list — no other file may carry one.
-4. `.mothership/pr-review/references/*.md` + `agents/*.md`
-5. For `contract-toolkit/**` PRs: `contract-toolkit/AGENTS.md`, `.mothership/pr-review/agents/toolkit-review.md`, and `.mothership/pr-review/references/toolkit-consumer-registry.md`
+1. `.mothership/pr-review/ORCHESTRATION.md` — your playbook (MANDATORY).
+   Its Phase 0 step 6 is the ONLY read list; this file does not keep a
+   competing one. (An earlier revision here said to read `references/*.md`
+   and every agent brief — directly against §6d, which defers references to
+   whoever reviews that domain, and worth ~125 KB of context per review.)
+2. `.mothership/pr-review/severity-rubric.yaml` — pattern → severity map +
+   severity calibration and confidence floors (single source for both)
+3. `.mothership/pr-review/references/retro-log.md` — **the ONLY do-not-flag
+   list** (by-design patterns included). Whoever raises findings — a
+   dispatched specialist, or you when reviewing a domain inline — MUST check
+   candidates against it and withdraw matches silently. No other file may
+   carry a do-not-flag list.
 
 PR metadata and the authoritative diff are fetched in Phase 0 via
 `gh pr view` / `gh pr diff` and written to `/tmp/PR.json` and

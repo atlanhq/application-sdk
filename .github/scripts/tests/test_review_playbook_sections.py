@@ -152,3 +152,28 @@ def test_the_conflicting_rule_stays_in_the_router() -> None:
         "the CONFLICTING path must not be duplicated into the section file — "
         "two copies of a verdict rule drift"
     )
+
+
+def test_the_mandatory_read_list_stays_deduplicated() -> None:
+    """Round 2 of the trim removed two whole-file reads from Phase 0 step 6:
+    review-policy.md (merged into retro-log.md, which CLAUDE.md declares the
+    ONLY do-not-flag list) and review.yaml (a paraphrase of the rubric and
+    CLAUDE.md). Each was a tool call plus ~750 tokens on every review. The
+    regression this guards is the quiet re-add — one line in a read list looks
+    harmless, and nothing else would fail.
+    """
+    router = _router()
+    step6 = router[router.index("6. **Read in-repo") : router.index("6b/6c.")]
+    assert "- `.mothership/review-policy.md`" not in step6
+    assert "- `.mothership/review.yaml`" not in step6
+    # The merge target must actually carry the merged content, or the
+    # by-design patterns silently stop protecting anything.
+    retro = (PLAYBOOK_DIR / "references" / "retro-log.md").read_text(encoding="utf-8")
+    assert "By-design patterns" in retro
+    assert "ThreadPoolExecutor" in retro, (
+        "review-policy.md's patterns are gone from retro-log.md — the "
+        "do-not-flag merge has been undone without a replacement"
+    )
+    # And CLAUDE.md must not resurrect its blanket references/*.md read.
+    claude = (PLAYBOOK_DIR / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "4. `.mothership/pr-review/references/*.md`" not in claude
