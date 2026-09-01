@@ -72,6 +72,7 @@ from application_sdk.storage.errors import (
     ObjectStorePreflightError,
     StorageBindingBrokenError,
     StorageBindingNotFoundError,
+    StorageBucketRelocationError,
     StorageConfigError,
     StorageError,
     StorageIntegrityError,
@@ -94,6 +95,7 @@ from application_sdk.storage.ops import (
 from application_sdk.storage.preflight import (
     ObjectStoreCheckResult,
     check_object_store_access,
+    check_run_storage_access,
     verify_object_store_access,
 )
 
@@ -133,6 +135,7 @@ __all__ = [
     "StorageIntegrityError",
     "StorageNotFoundError",
     "StoragePermissionError",
+    "StorageBucketRelocationError",
     "StoragePreconditionError",
     "StorageConfigError",
     "StorageBindingNotFoundError",
@@ -147,5 +150,6 @@ __all__ = [
     # SDR preflight
     "verify_object_store_access",
     "check_object_store_access",
+    "check_run_storage_access",
     "ObjectStoreCheckResult",
 ]

@@ -9,6 +9,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
+from application_sdk.common._listing import prune_internal_dirs
 from application_sdk.observability.logger_adaptor import get_logger
 
 _logger = get_logger(__name__)
@@ -152,7 +153,10 @@ def _walk(path: str) -> tuple[int, int, bool]:
 
     total = 0
     files = 0
-    for root, _dirs, names in os.walk(path):
+    for root, dirs, names in os.walk(path):
+        # SDK staging dirs hold in-flight duplicates of the artifacts beside
+        # them — counting both would double the sizing metric.
+        prune_internal_dirs(dirs)
         for name in names:
             if files >= _MAX_FILES_WALKED:
                 return total, files, True

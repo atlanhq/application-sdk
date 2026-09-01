@@ -189,6 +189,49 @@ def test_a_real_outage_stays_retryable_even_when_the_key_contains_412() -> None:
     assert fd.evidence["http_status"] == 503
 
 
+def test_bucket_relocation_wins_over_the_precondition_rule() -> None:
+    """Ordering is safety-critical, not stylistic.
+
+    A bucket mid-relocation is rejected with the same HTTP 400 /
+    ``PreconditionFailed`` pair that would otherwise route to
+    ``StoragePreconditionError`` — but the verdicts are opposites. A relocation
+    is temporary and platform-side: it clears when the move finishes, so it must
+    stay retryable and PLATFORM-attributed. If the precondition rule won, a
+    self-healing condition would be marked permanently failed and billed to the
+    connector.
+    """
+    exc = _GenericError(
+        "Generic GCS error: Error performing POST "
+        "https://storage.googleapis.com/example-bucket/k?uploads= in 53ms - "
+        "Server returned non-2xx status code: 400 Bad Request: "
+        "<Error><Code>PreconditionFailed</Code><Message>Invalid precondition "
+        "due to bucket relocation in progress</Message></Error>"
+    )
+    err = _storage_error_for(exc, "artifacts/t.json", "upload failed")
+    fd = err.to_failure_details()
+    assert type(err).__name__ == "StorageBucketRelocationError"
+    assert fd.retryable is True
+    assert fd.audience is Audience.PLATFORM
+    assert fd.suggested_action is not None
+
+
+def test_a_plain_precondition_is_not_mistaken_for_a_relocation() -> None:
+    """The converse guard: the relocation rule needs BOTH tokens.
+
+    An etag/if-match 412 says "precondition" and nothing about a relocation, so
+    it must still reach the non-retryable precondition leaf.
+    """
+    exc = _GenericError(
+        "Generic MicrosoftAzure error: Error performing PUT "
+        "https://acct.blob.core.windows.net/c/k in 40ms - Server returned "
+        "non-2xx status code: 412 Precondition Failed: "
+        "<Error><Code>ConditionNotMet</Code></Error>"
+    )
+    err = _storage_error_for(exc, "artifacts/t.json", "upload failed")
+    assert isinstance(err, StoragePreconditionError)
+    assert err.to_failure_details().retryable is False
+
+
 @pytest.mark.parametrize(
     ("status", "provider_code"),
     [("403 Forbidden", "AccessDenied"), ("404 Not Found", "NoSuchKey")],

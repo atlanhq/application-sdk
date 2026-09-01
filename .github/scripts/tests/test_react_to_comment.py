@@ -456,6 +456,7 @@ EXPECTED_CALLERS = {
     ("sdk-resolve.yml", "sdk-resolve-dispatch", "Acknowledge with a reaction"),
     ("auto-fix-vulnerabilities.yaml", "auto-fix", "React to comment"),
     ("capability-manifest-regen.yaml", "regen", "React to comment"),
+    ("sdk-loop.yml", "fence", "React to the trigger comment"),
 }
 
 

@@ -26,3 +26,10 @@ class FakeSourceNotRunningError(PreconditionError):
     """``base_url`` or ``port`` was read before the server was started."""
 
     code: ClassVar[str] = "PRECONDITION_FAKE_SOURCE_NOT_RUNNING"
+
+
+@dataclass(kw_only=True)
+class CursorPageLimitError(InvalidInputError):
+    """``cursor_page`` was configured with a non-positive page limit."""
+
+    code: ClassVar[str] = "INVALID_INPUT_CURSOR_PAGE_LIMIT"

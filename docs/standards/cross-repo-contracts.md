@@ -88,3 +88,39 @@ route:
   leaves the literal `{app_name}` token visible, rather than manufacturing
   `atlan-default-<deployment>`, which reads as a legitimate queue and hangs the
   run silently.
+
+## The connection-scoped `persistent-artifacts` layout
+
+| | |
+|---|---|
+| **Produced by** | `get_persistent_s3_prefix()` in `application_sdk/common/incremental/helpers.py`, from `PERSISTENT_ARTIFACTS_S3_PREFIX_TEMPLATE` in `application_sdk/constants.py`; local counterpart `get_persistent_artifacts_path()` |
+| **Layout** | `persistent-artifacts/apps/{application_name}/connection/{connection_id}/`, where `connection_id` is the **last** segment of `connection_qualified_name` |
+| **Written under it** | `marker.txt` (the incremental watermark, via `persist_marker_to_storage`), `current-state/`, and per-app siblings such as a miner's own marker file |
+| **Read by** | Every connector app doing incremental extraction — the crawler and the miner of the same connection both key off this prefix, in separate repos, and must agree; the object store retains it across runs, so past runs read what past SDK versions wrote |
+| **Pinned by** | `TestExtractEpochId` and `TestGetPersistentS3Prefix` in `tests/unit/common/incremental/test_helpers.py`; conformance `P048`/`P049` enforce that apps derive it from here rather than re-deriving it |
+
+This prefix is **state, not just a path**. It is the address of a watermark that
+outlives the run that wrote it, so a change to how it is derived does not fail —
+it silently relocates every existing connection's marker. The next run finds no
+marker at the new address, treats itself as a first run, and re-extracts from
+the beginning; the old marker is orphaned where nothing will look for it again.
+Nothing errors, and the only visible symptom is a full extraction where an
+incremental one was expected.
+
+Two consequences for changes here:
+
+- **Changing the segment choice, the template, or the `application_name`
+  fallback is a data migration**, not a refactor. Existing markers live at the
+  old address. `ATLAN_APPLICATION_NAME` is not set in every app's `atlan.yaml`,
+  so apps that pass `application_name` explicitly and apps that rely on the
+  fallback resolve different directories for the same connection — aligning
+  those two is exactly such a migration and needs its own plan.
+- **A non-epoch last segment must keep warning rather than raising.**
+  Connections named after a workflow (`default/oracle/some-name`) are produced
+  by tenants that provision programmatically; they crawl normally, so failing
+  them here would fail one leg of a connection whose other leg works. An app
+  that re-derives the segment and raises reintroduces CONNECT-1136, where a
+  miner rejected names its own crawler accepted and one tenant's query lineage
+  went missing with every test green. The one rejected case is an *empty* last
+  segment, which is not a name and would collapse every such connection onto a
+  single shared directory.

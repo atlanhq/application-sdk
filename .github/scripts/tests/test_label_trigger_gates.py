@@ -277,10 +277,17 @@ def test_sdr_k8s_e2e_only_reacts_to_the_e2e_label_being_added() -> None:
     )
 
 
-def test_storage_integration_only_reacts_to_its_own_label_being_added() -> None:
-    _assert_gate(
-        _gate("pull_request.yaml", "storage-integration"), "storage-integration", {}
-    )
+def test_storage_integration_only_reacts_to_the_e2e_label_being_added() -> None:
+    """FND-1153: the real-cloud storage suite rides the 'e2e' release tier.
+
+    It briefly moved onto the merge-queue-blocking SDK Gate and had to come
+    back: the Entra federated credential has no subject for a
+    `gh-readonly-queue/*` ref, so every queue entry red-lined on AADSTS700213
+    before a test ran. Asserting the label here pins the tier — a silent flip
+    back to a private 'storage-integration' label would make the suite opt-in
+    via a label nothing applies, which is how it went ~never-run before.
+    """
+    _assert_gate(_gate("pull_request.yaml", "storage-integration"), "e2e", {})
 
 
 # ── The paths the fix must not disturb ───────────────────────────────────────

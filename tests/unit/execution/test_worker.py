@@ -20,6 +20,7 @@ from application_sdk.errors.leaves import (
     DependencyUnavailableError,
     RateLimitedError,
 )
+from application_sdk.execution._temporal import preflight_gate as _preflight_gate_module
 from application_sdk.execution._temporal._activity_errors import (
     WorkerActivityNameCollisionError,
     WorkerInterceptorDuplicateError,
@@ -29,6 +30,7 @@ from application_sdk.execution._temporal.worker import (
     AppWorker,
     _log_worker_fatal_error,
     _resolve_gate_enforcement,
+    _resolve_verify_storage,
     create_worker,
     describe_exception_chain,
     read_core_poller_counts,
@@ -1679,3 +1681,85 @@ class TestArtifactValidationPostureAtBoot:
                 return _WorkerOutput()
 
         assert len(self._build(monkeypatch)) == 1
+
+
+class TestPreflightVerifyStorageWiring:
+    """``App.preflight_verify_storage`` -> the gate activity's ``verify_storage``.
+
+    The activity-level suite passes ``verify_storage=True`` straight to
+    ``build_preflight_gate_activity``, so nothing there exercises the ClassVar or
+    the worker glue that reads it: both could regress to permanently-off with
+    every existing test still green.
+    """
+
+    def setup_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    @staticmethod
+    def _captured_verify_storage(monkeypatch) -> list[bool]:
+        """Build a worker, returning the ``verify_storage`` of every gate built."""
+        monkeypatch.delenv("ATLAN_PREFLIGHT_GATE_MODE", raising=False)
+        seen: list[bool] = []
+        real = _preflight_gate_module.build_preflight_gate_activity
+
+        def spy(*args, **kwargs):
+            seen.append(kwargs["verify_storage"])
+            return real(*args, **kwargs)
+
+        with (
+            mock.patch.object(
+                _preflight_gate_module, "build_preflight_gate_activity", spy
+            ),
+            mock.patch("application_sdk.execution._temporal.worker.Worker"),
+        ):
+            create_worker(_make_mock_client())
+        return seen
+
+    def test_declared_true_reaches_the_gate(self, monkeypatch) -> None:
+        """The ClassVar is the opt-in: declaring it must switch the gate on."""
+
+        class _VerifyingApp(App):
+            preflight_verify_storage = True
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        assert self._captured_verify_storage(monkeypatch) == [True]
+
+    def test_default_is_off(self, monkeypatch) -> None:
+        """An app that declares nothing must not be probing storage."""
+
+        class _PlainApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        assert self._captured_verify_storage(monkeypatch) == [False]
+
+    def test_resolver_handles_an_unresolvable_app(self) -> None:
+        """``app_cls`` is ``None`` when no app is SDR-registered.
+
+        ``gate_app_names`` falls back to the resolved service name while
+        ``name_to_app_cls`` stays empty, so the gate is still registered with no
+        class to read. Reading the ClassVar directly off ``None`` would raise and
+        take out worker boot.
+        """
+        assert _resolve_verify_storage(None) is False
+
+    def test_resolver_reads_the_declared_classvar(self) -> None:
+        class _On(App):
+            preflight_verify_storage = True
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        class _Off(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        assert _resolve_verify_storage(_On) is True
+        assert _resolve_verify_storage(_Off) is False

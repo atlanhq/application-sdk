@@ -75,13 +75,20 @@ RETIRED_WORKFLOWS: tuple[str, ...] = ("docstring-coverage.yaml",)
 # Non-workflow files that must also be vendored into every consumer repo,
 # keyed by (repo-root-relative dest path, template filename in templates/).
 #
-# ``conformance-reusable.yaml`` references these via a local ``uses: ./...``
-# step and a ``$GITHUB_ACTION_PATH``-relative script path. GitHub resolves
-# both against the *caller's* checkout, not application-sdk's — so every
-# consumer app needs its own copy or the C/D-series (and any other series
-# whose changed-files filter matches) legs fail with "Can't find action.yml"
-# the first time they actually run. Static templates (no per-repo params),
-# always-overwrite like MANAGED_WORKFLOWS.
+# ``conformance-reusable.yaml`` references the first two via a local
+# ``uses: ./...`` step and a ``$GITHUB_ACTION_PATH``-relative script path.
+# GitHub resolves both against the *caller's* checkout, not application-sdk's
+# — so every consumer app needs its own copy or the C/D-series (and any other
+# series whose changed-files filter matches) legs fail with "Can't find
+# action.yml" the first time they actually run. Static templates (no per-repo
+# params), always-overwrite like MANAGED_WORKFLOWS.
+#
+# ``probe_code_scanning.py`` is here for the same reason at one remove:
+# ``conformance-upload-sarif.yaml`` invokes it from the consumer's own
+# checkout to decide whether the repo can accept a SARIF upload at all
+# (FND-1149). It lives in a script rather than in that workflow's ``run:``
+# because docs/standards/ci.md forbids conditional logic in inlined shell —
+# untestable branches, and this file is force-written fleet-wide.
 #
 # Because these are always-overwrite, they have to satisfy the *caller's*
 # linters, not just this repo's: a consumer whose pre-commit rejects one of
@@ -90,7 +97,7 @@ RETIRED_WORKFLOWS: tuple[str, ...] = ("docstring-coverage.yaml",)
 # got re-wrapped by ``ruff format`` at a 100-column line length, leaving a
 # connector with a permanently red pre-commit and ``checks.yml``.
 # ``tests/test_bootstrap_scaffold_lint.py`` holds that line for every
-# force-written artifact: the template-rendered ones (these two plus the
+# force-written artifact: the template-rendered ones (these plus the
 # MANAGED_WORKFLOWS shims and the remediate SKILL.md) under a config
 # stricter than this repo's, and ``.github/ci-system-deps.txt``, whose
 # bytes come from the ``--system-deps`` flag rather than a template,
@@ -101,6 +108,7 @@ MANAGED_ACTION_FILES: tuple[tuple[str, str], ...] = (
         "run-conformance-detect-action.yaml",
     ),
     (".github/scripts/build_conformance_args.py", "build_conformance_args.py"),
+    (".github/scripts/probe_code_scanning.py", "probe_code_scanning.py"),
 )
 
 

@@ -58,22 +58,20 @@ _URL_USERINFO_RE = re.compile(r"([a-z][a-z0-9+.-]*://)(?:[^@\s]+@)+", re.IGNOREC
 # failure. It also has no word boundary in this alternation, so it would match
 # the tail of ``run_guid=`` and ``correlation_uuid=`` — redacting the exact
 # correlation IDs an on-call needs.
-# ``signature`` and ``sig`` cover the presigned-URL query params every cloud
-# store uses for bearer-equivalent material: ``X-Goog-Signature`` (GCS),
-# ``X-Amz-Signature`` (S3) and ``sig`` (Azure SAS). None of them matched the
-# keyword list before, so a signed URL embedded in a driver error survived
-# redaction intact — while ``X-Goog-Credential`` next to it was redacted,
-# because it happens to end in ``credential``. The alternation has no left-hand
-# word boundary, so bare ``signature`` also covers the ``X-Goog-``/``X-Amz-``
-# prefixed forms. ``signature`` precedes ``sig`` for readability only: the
-# mandatory ``=`` means a short alternative cannot shadow a longer one.
-#
-# A generic ``token`` is deliberately NOT here, for the same reason ``uid`` is
-# not: it would redact ``next_token=`` / ``page_token=`` /
-# ``continuation_token=``, which are the pagination cursors an on-call needs to
-# see. The list stays an enumeration of things that are only ever credentials.
+# A generic ``token`` is deliberately NOT here, for the same reason ``uid``
+# is not: it would redact ``next_token=`` / ``page_token=`` /
+# ``continuation_token=``, the pagination cursors an on-call needs to see.
+# The list stays an enumeration of things that are only ever credentials.
+# ``signature`` and ``sig`` cover presigned object-store URLs, which object-store
+# errors quote verbatim in their message: AWS SigV4 ``X-Amz-Signature``, GCS
+# ``X-Goog-Signature``, and Azure SAS ``sig``. ``credential`` already matched
+# ``X-Amz-Credential`` (an access-key id plus scope), but the signature is the
+# part that actually authorises the request, so redacting only the credential
+# left the usable half in the string. ``sig`` carries a lookbehind because it is
+# short enough to appear as the tail of a longer word; the other tokens are
+# distinctive enough not to need one.
 _SECRET_PARAM_RE = re.compile(
-    r"(?i)((?:api_key|access_token|auth_token|password|passwd|pwd|secret|credential|private_key|signature|sig)=)(?:\{[^}]*\}|[^\s&,;#]+)",
+    r"(?i)((?:api_key|access_token|auth_token|password|passwd|pwd|secret|credential|private_key|signature|(?<![a-z0-9_])sig)=)(?:\{[^}]*\}|[^\s&,;#]+)",
 )
 
 

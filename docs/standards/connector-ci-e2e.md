@@ -1091,6 +1091,71 @@ beneath it. Never point a suite at a long-lived shared connection to skip the
 seeding work: a left-over, half-set-up connection is exactly what greens a later
 run that should have failed.
 
+### When the state is an artifact only another DAG produces
+
+`seed_prerequisites()` writes to Atlas through pyatlan, so it can seed only what
+pyatlan can write. Some entrypoints consume something else entirely: a query-history
+miner resolves lineage against an **entity-cache artifact in object storage** that
+nothing but a crawl of the same connection writes. Seeding the Connection in Atlas
+does not produce it, and the miner then runs to four green DAG nodes and zero
+lineage — a pass that asserts nothing.
+
+For that shape, declare the crawl as a run of its own. `dag_runs` is an ordered
+tuple of `DAGSpec`s, each submitted, polled and graded on its own, all against the
+one connection the suite mints:
+
+```python
+from application_sdk.testing.e2e import DAGSpec
+
+
+class TestMyConnMinerE2E(MinerGeneratedE2EBase):
+    mode = RunMode.AGENT
+
+    dag_runs = (
+        # Produce what the miner consumes: a real crawl of this connection.
+        DAGSpec(
+            manifest_path="app/generated/crawler/manifest.json",
+            expect_connection=True,
+            require_nonempty_assets=True,
+            required_dag_nodes=("extract", "publish"),
+        ),
+        # Then this suite's own entrypoint, from the class attributes.
+        DAGSpec(),
+    )
+```
+
+Four things to know:
+
+- **A spec overrides only what it sets.** Every field defaults to `None`, meaning
+  "inherit the class attribute of the same name", so a suite that declares nothing
+  runs exactly the one DAG it always did. `dag_runs = ()` is the default and the
+  single-run path is unchanged — no signature break, no new required ClassVar.
+- **Expectations are per run, not just identity.** They decide which Atlas probes
+  *run at all*: `expect_connection` gates the connection poll and every count under
+  it. A crawl declared inside a miner suite (`expect_connection = False`) would
+  otherwise never observe the connection it just landed.
+- **One connection, one teardown.** All runs share the suite's minted
+  `connection_qualified_name`, and cleanup stays a single purge in
+  `teardown_method` — which pytest runs on pass, fail **and** error. That
+  guarantee is the reason this lives inside one pytest process instead of two
+  ordered CI legs sharing a connection, where teardown would have to move to an
+  `if: always()` job a cancelled workflow can still skip, on a leased shared tenant.
+- **Grade each run on its own** by overriding `assert_dag_outcome(dag, outcome)`
+  and branching on `dag.label` (the entrypoint name unless you set `DAGSpec.label`).
+  The default is the standard ladder, resolved against that run. Outcomes
+  accumulate on `self.dag_outcomes` in run order; they are never merged into a
+  composite verdict, because a crawl outcome and a mine outcome assert different
+  things.
+
+**Cost.** The runs are serial by nature — each adds its own wall clock to that leg
+(a postgres crawl is ≈5m40s; its miner is ≈3m plus a 5m lineage poll). Chain a run
+only when a later one genuinely cannot work without it.
+
+**This is not extra T025 coverage.** A prerequisite crawl inside a miner suite does
+not count as the crawler's e2e suite, deliberately: it exists to seed, and it is
+graded against the consuming suite's intent. The rule stays *one collectable class
+per entrypoint, which may run prerequisite DAGs for others*.
+
 ## Onboarding checklist for a new connector
 
 1. **Action manifest**: `app.yaml` at repo root (3 lines).

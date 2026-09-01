@@ -365,6 +365,41 @@ def test_redact_secrets_userinfo_and_params() -> None:
     assert "abc123" not in out and "hunter2" not in out
 
 
+def test_redact_secrets_redacts_presigned_url_signatures() -> None:
+    """A presigned object-store URL must not survive in a log or a cause.
+
+    Object-store errors quote the request URL verbatim, so a failure against a
+    presigned URL carries the signature that authorises it. ``credential``
+    already matched ``X-Amz-Credential`` (key id plus scope) — the signature is
+    the half that grants access.
+    """
+    from application_sdk.errors import redact_secrets
+
+    aws = redact_secrets(
+        "error sending request for url (https://b.s3.amazonaws.com/k"
+        "?X-Amz-Signature=deadbeefcafe&X-Amz-Credential=AKIAEX%2Fscope)"
+    )
+    assert "deadbeefcafe" not in aws
+    assert "X-Amz-Signature=***" in aws
+
+    gcs = redact_secrets("https://storage.googleapis.com/k?X-Goog-Signature=abc123")
+    assert "abc123" not in gcs
+
+    azure = redact_secrets("https://a.blob.core.windows.net/k?sv=2021&sig=s3cr3t&se=x")
+    assert "s3cr3t" not in azure
+    assert "sig=***" in azure
+    # The non-secret parts an on-call reads stay intact.
+    assert "sv=2021" in azure and "se=x" in azure
+
+
+def test_redact_secrets_leaves_words_ending_in_sig_alone() -> None:
+    """``sig`` is short, so it carries a lookbehind: only a real param matches."""
+    from application_sdk.errors import redact_secrets
+
+    for benign in ("design=modern", "config=prod", "assign=me"):
+        assert redact_secrets(benign) == benign
+
+
 def test_redact_secrets_consumes_at_in_password() -> None:
     """A raw `@` inside the password must not leave the tail exposed."""
     from application_sdk.errors import redact_secrets

@@ -75,6 +75,30 @@ class TestExtractEpochId:
         with pytest.raises(ConnectionQualifiedNameFormatError):
             extract_epoch_id_from_qualified_name("just-one")
 
+    @pytest.mark.parametrize(
+        "qualified_name",
+        ["default/oracle/", "a/b/c/", "default/oracle//"],
+    )
+    def test_empty_last_segment_raises(self, qualified_name):
+        """An empty last segment is rejected, not warned through.
+
+        It passes the segment-count check but yields ".../connection/", a
+        directory every such connection would share — so two connections would
+        overwrite each other's marker and silently move each other's extraction
+        window. Failing loudly beats that.
+        """
+        with pytest.raises(ConnectionQualifiedNameFormatError):
+            extract_epoch_id_from_qualified_name(qualified_name)
+
+    def test_named_last_segment_still_accepted(self):
+        """A non-epoch *name* is still accepted — only an empty segment is not.
+
+        This is the CONNECT-1136 contract: connections named after a workflow
+        crawl fine, so the SDK must not start failing them. Guards the empty-
+        segment rejection above against over-reaching into a strictness change.
+        """
+        assert extract_epoch_id_from_qualified_name("default/oracle/rppsfj") == "rppsfj"
+
 
 # ---------------------------------------------------------------------------
 # get_persistent_s3_prefix

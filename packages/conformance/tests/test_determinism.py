@@ -397,6 +397,310 @@ def test_p023_dedup_workflow_rmtree_is_p021_not_p023() -> None:
     assert _rule(src, "P023") == []
 
 
+# ── P023 data-scale inventory ────────────────────────────────────────────────
+#
+# Every pattern below was found blocking a loop in a real connector during the
+# fleet sweep that motivated the extension; the app is named in each docstring
+# so a future reader can check the finding is still worth having.
+
+
+def test_p023_flags_pandas_read_sql() -> None:
+    """A connector fallback path ran pd.read_sql per database on the loop."""
+    body = (
+        "import pandas as pd\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def dbs(self, input):\n"
+        "        return pd.read_sql(query, engine)\n"
+    )
+    assert len(_rule(body, "P023")) == 1
+
+
+def test_p023_flags_pandas_read_parquet_and_frame_writer() -> None:
+    """A connector read parquet on the loop; the writer half is a method call."""
+    body = (
+        "import pandas as pd\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def out(self, input):\n"
+        "        df = pd.read_parquet(path)\n"
+        "        df.to_parquet(other)\n"
+    )
+    assert len(_rule(body, "P023")) == 2
+
+
+def test_p023_flags_pyarrow_parquet_read_table() -> None:
+    """A connector called pq.read_table straight from an enrichment activity."""
+    body = (
+        "from pyarrow import parquet as pq\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def enrich(self, input):\n"
+        "        return pq.read_table(path)\n"
+    )
+    assert len(_rule(body, "P023")) == 1
+
+
+def test_p023_flags_tree_traversal() -> None:
+    """The sweep the module docstring deferred. All four forms occur in the
+    fleet; Path.glob / Path.rglob are the most common finding of any pattern."""
+    body = (
+        "import glob\n"
+        "import os\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def scan(self, input):\n"
+        "        a = os.walk(root)\n"
+        "        b = glob.glob(pattern)\n"
+        "        c = root.glob('*.json')\n"
+        "        d = root.rglob('*')\n"
+    )
+    assert len(_rule(body, "P023")) == 4
+
+
+def test_p023_traversal_reports_glob_glob_once() -> None:
+    """`glob.glob` matches the exact set AND the `.glob` suffix — exact wins,
+    and the early return keeps it a single finding."""
+    body = (
+        "import glob\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def scan(self, input):\n"
+        "        return glob.glob(pattern)\n"
+    )
+    assert len(_rule(body, "P023")) == 1
+
+
+def test_p023_flags_whole_file_pathlib_accessors() -> None:
+    """A connector rewrote each JSON file in place with read_text/write_text."""
+    body = (
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def fix(self, input):\n"
+        "        text = path.read_text()\n"
+        "        path.write_text(text)\n"
+    )
+    assert len(_rule(body, "P023")) == 2
+
+
+def test_p023_flags_file_handle_serialization() -> None:
+    """json.dump / json.load against an open handle, per output file."""
+    body = (
+        "import json\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def write(self, input):\n"
+        "        json.dump(payload, handle)\n"
+        "        return json.load(handle)\n"
+    )
+    assert len(_rule(body, "P023")) == 2
+
+
+def test_p023_silent_for_in_memory_json_string_forms() -> None:
+    """`loads`/`dumps` are CPU on a small payload, not file-scale I/O."""
+    body = (
+        "import json\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def write(self, input):\n"
+        "        blob = json.dumps(payload)\n"
+        "        return json.loads(blob)\n"
+    )
+    assert _rule(body, "P023") == []
+
+
+def test_p023_silent_for_serializers_with_no_load_loads_split() -> None:
+    """Only (de)serializers whose *name* guarantees a file object are matched.
+
+    PyYAML and `csv` have no `load`/`loads` split — `yaml.safe_load` and
+    `csv.reader` take a string or a plain iterable as readily as a handle — so
+    matching them by name would flag exactly the in-memory parsing that
+    `json.loads` is deliberately allowed to do.  Neither appeared in the fleet
+    sweep either.  This pins the exclusion so the names cannot drift back into
+    the exact set without a file-handle heuristic to justify them.
+    """
+    body = (
+        "import csv\n"
+        "import yaml\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def parse(self, input):\n"
+        "        cfg = yaml.safe_load(blob)\n"
+        "        out = yaml.dump(cfg)\n"
+        "        rows = list(csv.reader(lines))\n"
+        "        return cfg, out, rows\n"
+    )
+    assert _rule(body, "P023") == []
+
+
+def test_p023_flags_serializers_that_require_a_handle() -> None:
+    """The counterpart: `pickle.load` and `tomllib.load` have no string form
+    that shares their name, so a match is always file work."""
+    body = (
+        "import pickle\n"
+        "import tomllib\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def read(self, input):\n"
+        "        a = pickle.load(handle)\n"
+        "        b = tomllib.load(handle)\n"
+        "        return a, b\n"
+    )
+    assert len(_rule(body, "P023")) == 2
+
+
+def test_p023_flags_subprocess() -> None:
+    body = (
+        "import subprocess\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def build(self, input):\n"
+        "        subprocess.run(['ls'])\n"
+    )
+    assert len(_rule(body, "P023")) == 1
+
+
+def test_p023_silent_for_awaited_lookalikes() -> None:
+    """An awaited `read_text`/`glob`/`to_sql` is an async API (anyio.Path, an
+    async ORM) wearing a blocking name. The name cannot tell them apart; the
+    `await` can, so an awaited call is never flagged."""
+    body = (
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def read(self, input):\n"
+        "        text = await path.read_text()\n"
+        "        rows = await path.glob('*')\n"
+        "        return text, rows\n"
+    )
+    assert _rule(body, "P023") == []
+
+
+def test_p023_await_guard_also_covers_the_exact_matches() -> None:
+    """The guard runs before the first match, not just before the suffix half.
+
+    `pandas.read_parquet` and `json.load` are exact-set entries; an awaited one
+    is a wrapper returning a coroutine, and flagging it would contradict the
+    documented exclusion.
+    """
+    body = (
+        "import json\n"
+        "import pandas as pd\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def read(self, input):\n"
+        "        df = await pd.read_parquet(path)\n"
+        "        cfg = await json.load(handle)\n"
+        "        return df, cfg\n"
+    )
+    assert _rule(body, "P023") == []
+
+
+def test_p023_silent_for_async_for_iteration() -> None:
+    """An `async for` iterable is never an Await operand, so it needs marking in
+    its own right — `path.glob` matches `_TRAVERSAL_SUFFIXES`, so without
+    `visit_AsyncFor` an async iterator reads as blocking traversal.
+
+    Deliberately no `async with` case: nothing in the inventory is plausible as
+    an async context expression (`.open` is excluded on purpose), so such an
+    assertion would pass whether or not the visitor handled it.
+    """
+    body = (
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def read(self, input):\n"
+        "        async for entry in path.glob('*'):\n"
+        "            pass\n"
+    )
+    assert _rule(body, "P023") == []
+
+
+def test_p023_prescribed_traversal_offload_is_silent() -> None:
+    """The exact snippet `_TRAVERSAL_HINT` tells a remediator to write.
+
+    A rule whose own prescribed fix is a finding is un-satisfiable, so this
+    pins the lambda form specifically — it is the shape the hint and the
+    remediation program both name, and it is the one that materialises the
+    iterator inside the thread.
+    """
+    body = (
+        "from application_sdk.execution.heartbeat import run_in_thread\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def scan(self, input):\n"
+        "        return await run_in_thread(lambda: list(root.rglob('*')))\n"
+    )
+    assert _rule(body, "P023") == []
+
+
+def test_p023_lambda_body_is_a_sync_scope_like_a_nested_def() -> None:
+    """Both offload shapes must be silent, and for the same reason."""
+    lam = (
+        "import shutil\n"
+        "from application_sdk.execution.heartbeat import run_in_thread\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def clean(self, input):\n"
+        "        return await run_in_thread(lambda: shutil.rmtree(path))\n"
+    )
+    nested = (
+        "import shutil\n"
+        "from application_sdk.execution.heartbeat import run_in_thread\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def clean(self, input):\n"
+        "        def _clean():\n"
+        "            shutil.rmtree(path)\n"
+        "        return await run_in_thread(_clean)\n"
+    )
+    assert _rule(lam, "P023") == []
+    assert _rule(nested, "P023") == []
+
+
+def test_p023_still_flags_the_unoffloaded_traversal_it_prescribes_a_fix_for() -> None:
+    """The negative side of the two tests above: silencing the lambda must not
+    silence the defect the lambda is the fix for."""
+    body = (
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def scan(self, input):\n"
+        "        return list(root.rglob('*'))\n"
+    )
+    assert len(_rule(body, "P023")) == 1
+
+
+def test_p023_silent_when_data_io_is_offloaded() -> None:
+    """`run_in_thread(pd.read_parquet, path)` passes the callable, never calls it."""
+    body = (
+        "import pandas as pd\n"
+        "from application_sdk.execution.heartbeat import run_in_thread\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def read(self, input):\n"
+        "        return await run_in_thread(pd.read_parquet, path)\n"
+    )
+    assert _rule(body, "P023") == []
+
+
+def test_p023_data_io_silent_in_sync_def() -> None:
+    """The offload closure itself is a sync def — flagging it would flag the fix."""
+    body = (
+        "import pandas as pd\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def read(self, input):\n"
+        "        def _read():\n"
+        "            return pd.read_parquet(path)\n"
+        "        return await self.task_context.run_in_thread(_read)\n"
+    )
+    assert _rule(body, "P023") == []
+
+
+def test_p023_dedup_workflow_data_io_is_p021_not_p023() -> None:
+    """Data-scale I/O in workflow context stays P021's, like the FS work."""
+    src = "import pandas as pd\n" + _wrap_run("pd.read_parquet('/tmp/f')")
+    assert _rule(src, "P023") == []
+
+
 # ── P024 SyncAtlanClientInApp ────────────────────────────────────────────────
 
 

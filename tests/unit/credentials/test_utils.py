@@ -250,10 +250,10 @@ class TestResolveCredentialFile:
     # ------------------------------------------------------------------
 
     @patch(
-        "application_sdk.credentials.utils.download_file",
+        "application_sdk.storage.ops.download_file",
         new_callable=AsyncMock,
     )
-    @patch("application_sdk.credentials.utils.create_store_from_binding")
+    @patch("application_sdk.storage.binding.create_store_from_binding")
     async def test_objectstore_prefix_downloads_via_deployment_binding(
         self, mock_create_store, mock_download, tmp_path
     ):
@@ -279,10 +279,10 @@ class TestResolveCredentialFile:
         assert result == os.path.join(str(tmp_path), "keytab.keytab")
 
     @patch(
-        "application_sdk.credentials.utils.download_file",
+        "application_sdk.storage.ops.download_file",
         new_callable=AsyncMock,
     )
-    @patch("application_sdk.credentials.utils.create_store_from_binding")
+    @patch("application_sdk.storage.binding.create_store_from_binding")
     async def test_objectstore_prefix_strips_whitespace(
         self, mock_create_store, mock_download, tmp_path
     ):
@@ -324,10 +324,10 @@ class TestResolveCredentialFile:
         assert result is None
 
     @patch(
-        "application_sdk.credentials.utils.download_file",
+        "application_sdk.storage.ops.download_file",
         new_callable=AsyncMock,
     )
-    @patch("application_sdk.credentials.utils.create_store_from_binding")
+    @patch("application_sdk.storage.binding.create_store_from_binding")
     async def test_objectstore_download_failure_returns_none(
         self, mock_create_store, mock_download, tmp_path
     ):
