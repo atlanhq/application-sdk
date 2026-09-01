@@ -380,6 +380,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "K015",
         "K016",
         "K017",
+        "K018",
+        "K019",
+        "K020",
         "P004",
         "P005",
         "P008",
@@ -749,6 +752,9 @@ def test_catalog_k_series_present() -> None:
         "K015",
         "K016",
         "K017",
+        "K018",
+        "K019",
+        "K020",
     }
     missing = expected - k_ids
     assert not missing, f"Missing K-series rules: {missing}"

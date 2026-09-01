@@ -628,30 +628,34 @@ def _check_i005(
     file: str,
     directives: dict[int, tuple[frozenset[str] | None, str | None]],
 ) -> list[Finding]:
-    """I005: USER root or USER 0 must not appear in the final stage.
+    """I005: the effective USER in the final stage must not be root.
 
     The user spec may include a group component (``user:group``), e.g.
     ``USER 0:0``, ``USER root:root``, ``USER root:0``, ``USER 0:1000``.
     Only the user portion (before the first ``:``) is checked so that
-    group-qualified root specs are not silently bypassed.
+    group-qualified root specs are not silently bypassed. A temporary root
+    user is allowed when a later USER instruction restores a non-root user.
     """
     final_start = _final_stage_start_idx(instructions)
     findings: list[Finding] = []
+    final_user: tuple[str, _Instruction] | None = None
     for instr in instructions[final_start:]:
         if instr.keyword == "USER":
             token = instr.args.split()[0] if instr.args.split() else ""
-            # Split user:group — only the user part determines identity.
-            user = token.split(":", 1)[0]
-            if user.lower() in ("root", "0"):
-                msg = (
-                    f"USER {token} is not permitted in the final stage. "
-                    "The base image (app-runtime-base) already runs as 'appuser'; "
-                    f"'USER {token}' reverses that and exposes the container to "
-                    "privilege-escalation risks, violating the non-root policy."
-                )
-                findings.append(
-                    _make_finding(RULE_I005, file, instr.line, msg, directives)
-                )
+            final_user = (token, instr)
+
+    if final_user is not None:
+        token, instr = final_user
+        # Split user:group — only the user part determines identity.
+        user = token.split(":", 1)[0]
+        if user.lower() in ("root", "0"):
+            msg = (
+                f"USER {token} is not permitted in the final stage. "
+                "The base image (app-runtime-base) already runs as 'appuser'; "
+                f"'USER {token}' reverses that and exposes the container to "
+                "privilege-escalation risks, violating the non-root policy."
+            )
+            findings.append(_make_finding(RULE_I005, file, instr.line, msg, directives))
     return findings
 
 
