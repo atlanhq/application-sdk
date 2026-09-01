@@ -48,8 +48,10 @@ from sdk_loop_common import (
     PLAYBOOK_REVIEW,
     RESOLVE_MODEL,
     REVIEW_MODEL,
+    SCOPE_AGENTS,
     AgentResult,
     DismissalLedger,
+    classify_scope,
     emit_outputs,
     format_usage,
     head_state,
@@ -60,6 +62,7 @@ from sdk_loop_common import (
     parse_verdict,
     reaim_exhausted,
     run_agent,
+    solo_scope,
     token_budget,
     token_budget_exceeded,
     usage_total,
@@ -188,12 +191,40 @@ def prep_prompt(pr: int, failing: tuple[str, ...]) -> str:
     )
 
 
+def pr_files(repo: str, pr: int) -> list[str]:
+    """Paths the PR touches. Deleted files included — classifying from
+    `+++ b/` diff headers alone would miss them, as §11 warns."""
+    out = _sh(
+        [
+            "gh",
+            "pr",
+            "view",
+            str(pr),
+            "--repo",
+            repo,
+            "--json",
+            "files",
+            "--jq",
+            ".files[].path",
+        ]
+    ).stdout
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+def diff_lines(repo: str, pr: int) -> int:
+    """Added + removed lines, for the `minor` fast-path threshold."""
+    out = _sh(["gh", "pr", "diff", str(pr), "--repo", repo]).stdout
+    return sum(1 for line in out.splitlines() if line[:1] in "+-")
+
+
 def review_prompt(
     pr: int,
     round_no: int,
     sha: str,
     ledger: DismissalLedger,
     prior_sha: str = "",
+    scope: str = "",
+    solo: str = "",
 ) -> str:
     """Point the agent at the playbook. The playbook is NOT restated here.
 
@@ -223,12 +254,30 @@ def review_prompt(
         "You are READ-ONLY. Your token carries no write scope — do not attempt",
         "to push, and do not treat a push failure as something to work around.",
         "",
-        "§2a says to dispatch the domain agents via the Agent tool. On this runtime",
-        "that tool is called `Task`, and the agents are already registered —",
-        f"{', '.join(PHASE2_AGENTS)}. Dispatch them in parallel exactly as §2a",
-        "routes them by review_scope. Do NOT do their work yourself in one pass:",
-        "a single agent covering every domain still produces a verdict, just a",
-        "worse one, and nothing in the output would say so.",
+        "§2a dispatches domain agents via the Agent tool. On this runtime that",
+        "tool is called `Task`. Only the agents §2a routes YOUR scope to are",
+        "registered — never all of them — so `Task` cannot reach a specialist",
+        "the routing did not choose.",
+        "",
+        "When two or more ARE registered, dispatch them in parallel.",
+        "Do NOT do their work yourself in one pass: a single agent covering",
+        "several domains still produces a verdict, just a worse one, and",
+        "nothing in the output would say so.",
+        "",
+        "**Your review_scope is already settled — do NOT re-derive it.** §11's",
+        "classification is file-list arithmetic with no judgement in it, so the",
+        "harness computed it before you started. Running that sixty-line bash",
+        "block again spends a turn to reach the same answer.",
+        "",
+        "The second rule is measured, not stylistic. A dispatch with one agent",
+        "buys no parallelism — there is nothing to run alongside — and costs a",
+        "cold start: you have already read the playbook, the diff and every",
+        "changed file, and the sub-agent begins with none of it and re-reads",
+        "its way back. Three `config-only`/`conformance-only` reviews spent",
+        "904s, ~9min and 26min inside that one call, with per-step latency",
+        "climbing 4s → 58s → 185s → 526s as the re-read context accumulated.",
+        "The 26-minute one reached step 11 of 25 before it was killed. The",
+        "parent reaches the same point in under a minute.",
         "",
         "SKIP §2b (the Wave 2 cross-model adversarial). Two reasons, and either",
         "alone is sufficient:",
@@ -247,6 +296,34 @@ def review_prompt(
         "phase contests findings)`, NOT as unavailable.",
         "",
     ]
+    if solo:
+        parts += [
+            f"review_scope = `{scope}`, which §2a routes to exactly ONE",
+            f"specialist: `{solo}`.",
+            "",
+            "**Do not dispatch it.** No sub-agents are registered for this run —",
+            "`Task` has nothing to delegate to. Read",
+            f"`.mothership/pr-review/agents/{solo}.md`, adopt that brief as your",
+            "own, review as that specialist, and go straight to §2c.",
+            "",
+            "A dispatch runs agents CONCURRENTLY. With one agent there is nothing",
+            "to run alongside, so it buys no parallelism and costs a cold start:",
+            "you have already read the playbook, the diff and every changed file,",
+            "and a sub-agent would begin with none of it and re-read its way back.",
+            "Three single-agent reviews spent 904s, ~9 minutes and 26 minutes",
+            "inside that one call, per-step latency climbing 4s to 526s as the",
+            "re-read context piled up. The 26-minute one reached step 11 of 25",
+            "before it was killed.",
+            "",
+        ]
+    elif scope:
+        agents = ", ".join(SCOPE_AGENTS.get(scope, ()))
+        parts += [
+            f"review_scope = `{scope}`. §2a routes it to: {agents or 'no agents'}.",
+            "Those, and only those, are registered — dispatch them in parallel.",
+            "",
+        ]
+
     if prior_sha:
         # Handed over so §2e labelling and the §2e′ nit rules do not have to
         # re-derive the range. It is ADDITIONAL context, never a substitute for
@@ -609,16 +686,38 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if phase == "review":
+        # Classify BEFORE the model starts. §11's routing is pure file-list
+        # arithmetic, so the harness can settle it deterministically — and it
+        # has to, because whether registering sub-agents makes any sense is
+        # decided by the answer. A scope that routes to ONE agent gets none
+        # registered: `Task` then has nothing to dispatch to, and the rule
+        # holds by construction rather than by the model choosing to follow a
+        # paragraph. It did not follow the comparable "fetch once" paragraph.
+        files = pr_files(repo, pr)
+        scope = classify_scope(files, diff_lines(repo, pr))
+        solo = solo_scope(scope)
+        fan_out = SCOPE_AGENTS.get(scope, ())
+        print(
+            f"scope={scope} agents={len(fan_out)}" + (f" solo={solo}" if solo else "")
+        )
+
         print(f"::group::review round {round_no} — agent transcript")
         result = run_agent(
             REVIEW_MODEL,
             review_prompt(
-                pr, round_no, state.live, ledger, os.environ.get("PRIOR_SHA", "")
+                pr,
+                round_no,
+                state.live,
+                ledger,
+                os.environ.get("PRIOR_SHA", ""),
+                scope=scope,
+                solo=solo,
             ),
             workspace,
             TIMEOUT_REVIEW_S,
             transcript_path=transcript,
-            subagents=True,
+            subagents=not solo and bool(fan_out),
+            subagent_names=fan_out,
         )
         print("::endgroup::")
         comments = json.loads(
