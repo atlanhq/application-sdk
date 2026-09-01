@@ -365,6 +365,15 @@ class TestMainBootstrap:
         monkeypatch.setattr(conformance_release, "VERSION_PY", str(version_py))
         monkeypatch.setattr(conformance_release, "CHANGELOG", str(changelog))
         monkeypatch.setattr(conformance_release, "RELEASE_NOTES_FILE", str(relnotes))
+        # Keep main() hermetic. The already-released guard would otherwise run a
+        # real `git fetch` against origin on every one of these tests. The guard
+        # itself is covered by test_release_guard.py; its wiring into main() is
+        # covered by TestAlreadyReleasedGuard below.
+        monkeypatch.setattr(
+            conformance_release.release_guard,
+            "already_released",
+            lambda *_a, **_k: (False, None),
+        )
         return pyproject, version_py, changelog, relnotes
 
     def test_first_release_falls_back_to_initial_commit(
@@ -451,6 +460,15 @@ class TestMainExistingTag:
         monkeypatch.setattr(conformance_release, "VERSION_PY", str(version_py))
         monkeypatch.setattr(conformance_release, "CHANGELOG", str(changelog))
         monkeypatch.setattr(conformance_release, "RELEASE_NOTES_FILE", str(relnotes))
+        # Keep main() hermetic. The already-released guard would otherwise run a
+        # real `git fetch` against origin on every one of these tests. The guard
+        # itself is covered by test_release_guard.py; its wiring into main() is
+        # covered by TestAlreadyReleasedGuard below.
+        monkeypatch.setattr(
+            conformance_release.release_guard,
+            "already_released",
+            lambda *_a, **_k: (False, None),
+        )
         return pyproject, version_py, changelog, relnotes
 
     def test_no_commits_sets_skip_true(
@@ -533,6 +551,104 @@ class TestMainExistingTag:
 
         assert outputs["new"] == "0.3.0"  # minor bump from 0.2.0
         assert 'version = "0.3.0"' in pyproject.read_text()
+
+
+class TestAlreadyReleasedGuard:
+    """main() must not mint a version origin/main already carries.
+
+    Reproduces application-sdk#3570: a run whose checkout is a frozen merge ref
+    predating the release merge reads a stale current version, recomputes the
+    version that was just published, and opens a duplicate release PR.
+    """
+
+    def _setup(
+        self, version: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> tuple:
+        pyproject = _pyproject(version, tmp_path)
+        version_py = _version_py(version, tmp_path)
+        changelog = tmp_path / "CHANGELOG.md"
+        changelog.write_text("# Changelog\n")
+        relnotes = tmp_path / "release-notes.md"
+
+        monkeypatch.setattr(conformance_release, "PYPROJECT", str(pyproject))
+        monkeypatch.setattr(conformance_release, "VERSION_PY", str(version_py))
+        monkeypatch.setattr(conformance_release, "CHANGELOG", str(changelog))
+        monkeypatch.setattr(conformance_release, "RELEASE_NOTES_FILE", str(relnotes))
+
+        def fake_run(cmd, **_kw):
+            if "--format=%s" in cmd:
+                return "feat: add new check"
+            if "--format=%B" in cmd:
+                return ""
+            if any("--format=%H" in str(c) for c in cmd):
+                return "abc9999\x00feat: add new check\x00\x1e"
+            return ""
+
+        monkeypatch.setattr(conformance_release, "tag_exists", lambda _tag: True)
+        monkeypatch.setattr(conformance_release, "_run", fake_run)
+        return pyproject, version_py, changelog, relnotes
+
+    def test_skips_and_leaves_every_file_untouched(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        # Stale checkout says 0.24.0, so main() computes 0.25.0 — but origin/main
+        # is already at 0.25.0 because the release PR merged moments ago.
+        pyproject, version_py, changelog, relnotes = self._setup(
+            "0.24.0", tmp_path, monkeypatch
+        )
+        before = (pyproject.read_text(), version_py.read_text(), changelog.read_text())
+
+        monkeypatch.setattr(
+            conformance_release.release_guard,
+            "already_released",
+            lambda *_a, **_k: (True, "0.25.0"),
+        )
+
+        outputs: dict = {}
+        monkeypatch.setattr(
+            conformance_release, "_set_output", lambda k, v: outputs.update({k: v})
+        )
+
+        conformance_release.main()
+
+        # The workflow gates every downstream step on skip != 'true', so this
+        # single output is what prevents the push and the duplicate PR.
+        assert outputs.get("skip") == "true"
+        assert "new" not in outputs
+        # Nothing may be mutated: the guard runs before any file is written.
+        assert (
+            pyproject.read_text(),
+            version_py.read_text(),
+            changelog.read_text(),
+        ) == before
+        assert not relnotes.exists()
+        assert "already been published" in capsys.readouterr().out
+
+    def test_guard_is_asked_about_the_computed_version(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The guard must be handed the *new* version, not the current one."""
+        self._setup("0.24.0", tmp_path, monkeypatch)
+
+        seen: dict = {}
+
+        def fake_guard(path, new_version, **_kw):
+            seen["path"] = path
+            seen["new_version"] = new_version
+            return False, None
+
+        monkeypatch.setattr(
+            conformance_release.release_guard, "already_released", fake_guard
+        )
+        monkeypatch.setattr(conformance_release, "_set_output", lambda _k, _v: None)
+
+        conformance_release.main()
+
+        assert seen["new_version"] == "0.25.0"
+        assert seen["path"] == conformance_release.PYPROJECT
 
 
 # ---------------------------------------------------------------------------
