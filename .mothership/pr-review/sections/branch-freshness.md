@@ -1,16 +1,10 @@
-# Phase 0 step 8 — Branch freshness and conflict resolution
+# Phase 0 step 8 (BEHIND branch) — mothership sandbox only
 
-8. **Branch freshness + conflict resolution** (before reviewing):
-   ```bash
-   MERGE_STATUS=$(jq -r '.mergeStateStatus' /tmp/PR.json)
-   ```
+The `CONFLICTING` half of step 8 stays in ORCHESTRATION.md: it applies to both
+lanes, and `@sdk-loop` depends on the `NEEDS_REBASE` verdict it produces. Only
+the `BEHIND` update lives here, because only the sandbox lane can perform it.
 
-   If `BEHIND` — **sandbox only.** `update-branch` writes to the PR branch and
-   needs `contents: write`; the `@sdk-loop` review phase holds a token without
-   it, so this 403s. On that lane, review the branch as it is and note it in
-   the summary — a base merge cannot introduce a finding in the PR's own
-   hunks, which is what the review is about. Do not retry, and do not report
-   the 403 as a defect.
+8. **Branch is `BEHIND` — update it, then re-read what changed.**
 
    ```bash
    # Tier 1: GitHub-side update (merges base into the PR branch)
@@ -24,10 +18,10 @@
    gh pr diff "$PR_NUMBER" --repo "$REPO" > /tmp/DIFF.patch
    ```
 
-   If `CONFLICTING`: do NOT attempt a local merge or push — the review is
-   read-only (see Runtime). A conflict-resolution merge is the author's
-   decision, not the reviewer's. Submit minimal review: "PR has merge conflicts. Please
-   rebase or comment `@sdk-review` after resolving conflicts." Set the
-   verdict in §3e to `NEEDS_REBASE` (the structured marker is
-   `<!-- VERDICT: NEEDS_REBASE -->`); the GHA layer applies the
-   `sdk-review-needs-rebase` label from there. EXIT.
+   NOTE — unresolved tension, do not silently "fix" it either way. `update-branch`
+   is a WRITE to the PR branch, and the Runtime section of ORCHESTRATION.md
+   states flatly that "the review never writes to the branch on either lane".
+   Both statements are currently in the playbook. On `@sdk-loop` the question is
+   moot (no write scope, and FND-1185 moved branch duty to the prep phase, which
+   has one). On the sandbox lane it is a live contradiction and wants a decision
+   from a human, not a reviewer picking one sentence over the other mid-run.

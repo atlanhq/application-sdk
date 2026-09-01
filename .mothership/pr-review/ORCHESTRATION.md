@@ -281,11 +281,31 @@ BUDGET
 
 8. **Branch freshness + conflict resolution.**
 
-    * `LANE: sdk-loop` — your token carries no write scope. **Report a behind
-      or conflicted branch as a finding and attempt nothing.** A push fails
-      with a 403 after the turn has already been paid for.
-    * mothership sandbox — **read only when:** you are on that lane; then
-      follow `sections/branch-freshness.md`.
+    ```bash
+    MERGE_STATUS=$(jq -r '.mergeStateStatus' /tmp/PR.json)
+    ```
+
+    **If `CONFLICTING` — BOTH LANES, and this stays here rather than behind a
+    pointer.** Do NOT attempt a local merge or push: resolving a conflict is
+    the author's decision, not the reviewer's. Submit a minimal review — "PR
+    has merge conflicts. Please rebase or comment `@sdk-review` after
+    resolving conflicts." — set the §3e verdict to `NEEDS_REBASE` (marker
+    `<!-- VERDICT: NEEDS_REBASE -->`), and EXIT. The GHA layer applies the
+    `sdk-review-needs-rebase` label from that marker, and `@sdk-loop` reads
+    `NEEDS_REBASE` as one of its terminal verdicts
+    (`VERDICTS_TERMINAL` in `.github/scripts/sdk_loop_common.py`) — a loop
+    round that swallowed it would keep spending rounds on a branch no resolve
+    phase can move.
+
+    **If `BEHIND`:**
+
+    * `LANE: sdk-loop` — your token carries no write scope, so
+      `update-branch` 403s. Review the branch as it is and note it in the
+      summary. A base merge cannot introduce a finding in the PR's own hunks,
+      which is what the review is about. Do not retry, and do not report the
+      403 as a defect. Nothing further to read.
+    * mothership sandbox — **read only when:** you are on that lane AND the
+      branch is `BEHIND`; then follow `sections/branch-freshness.md`.
 9. **Do not read CI.** Removed, not moved: the review cannot act on a check
    either way — it holds no write scope on this lane — and
    `sdk-review-downgrade-on-ci-failure.yml` already enforces CI against the

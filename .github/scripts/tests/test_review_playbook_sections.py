@@ -127,3 +127,28 @@ def test_the_context_budget_binds_whoever_reviews() -> None:
         "§1c must keep the measured reasons for the ceiling — without them the "
         "next reader raises it to the model's context window"
     )
+
+
+def test_the_conflicting_rule_stays_in_the_router() -> None:
+    """`NEEDS_REBASE` is a terminal verdict on the LOOP lane —
+    `VERDICTS_TERMINAL` in sdk_loop_common.py, acted on in sdk_loop_phase.py.
+    An early draft of the split filed all of step 8 behind a "mothership only"
+    pointer, which would have left the loop lane with no instruction to emit
+    that verdict: a conflicted PR would draw ordinary findings, no
+    `sdk-review-needs-rebase` label, and the loop would spend rounds on a
+    branch no resolve phase can move. Only the sandbox-only BEHIND update
+    belongs in a section file.
+    """
+    router = _router()
+    step8 = router[router.index("8. **Branch freshness") :][:2600]
+    assert "NEEDS_REBASE" in step8, (
+        "the CONFLICTING -> NEEDS_REBASE rule must stay inline: both lanes need "
+        "it and the loop lane's terminal-verdict handling depends on it"
+    )
+    assert "BOTH LANES" in step8
+    section = (SECTIONS / "branch-freshness.md").read_text(encoding="utf-8")
+    assert "update-branch" in section, "the BEHIND update belongs in the section"
+    assert "CONFLICTING" not in section.split("NOTE")[0].split("\n8.")[1], (
+        "the CONFLICTING path must not be duplicated into the section file — "
+        "two copies of a verdict rule drift"
+    )
