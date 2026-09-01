@@ -372,6 +372,35 @@ def test_k009_placeholder_in_yaml(tmp_path: Path) -> None:
     assert findings[0].file == "atlan.yaml"
 
 
+def test_k009_manifest_url_placeholder_comment_with_literal_entrypoints_is_silent(
+    tmp_path: Path,
+) -> None:
+    """A runtime URL template in a comment is not an unresolved artifact value."""
+    files = _clean_files()
+    files["atlan.yaml"] = (
+        _BANNER
+        + "# GET /workflows/v1/manifest?entrypoint={name}\n"
+        + "entrypoints:\n"
+        + "  - crawler\n"
+        + "  - miner\n"
+    )
+    assert [f for f in _scan(tmp_path, files) if f.rule_id == "K009"] == []
+
+
+def test_k009_manifest_url_placeholder_in_value_still_fires(tmp_path: Path) -> None:
+    """The same scaffold token remains a finding when it is an artifact value."""
+    files = _clean_files()
+    files["atlan.yaml"] = (
+        _BANNER
+        + "# GET /workflows/v1/manifest?entrypoint={name}\n"
+        + "entrypoint: {name}\n"
+        + "available_entrypoint: crawler\n"
+    )
+    findings = [f for f in _scan(tmp_path, files) if f.rule_id == "K009"]
+    assert len(findings) == 1
+    assert findings[0].line == 3
+
+
 def test_k009_placeholder_in_json(tmp_path: Path) -> None:
     files = _clean_files()
     files["app/generated/manifest.json"] = '{"conn": "{connection_name}"}\n'

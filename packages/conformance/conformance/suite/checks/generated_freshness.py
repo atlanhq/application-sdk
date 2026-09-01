@@ -112,6 +112,12 @@ _SCAFFOLD_PLACEHOLDER_RE = re.compile(
     r"|fetch_task_name|connection_name)\}(?!\})"
 )
 
+# This comment documents the runtime manifest endpoint; ``{name}`` is replaced
+# by the caller, not emitted into the generated artifact.
+_MANIFEST_URL_TEMPLATE_COMMENT_RE = re.compile(
+    r"^\s*#.*?/workflows/v1/manifest\?entrypoint=\{name\}(?:\s|$)"
+)
+
 # K010 — E2E scaffolding module that ``pkl eval`` emits for a single-entrypoint app.
 _E2E_BASE_OUTPUT = "app/generated/_e2e_base.py"
 
@@ -613,6 +619,10 @@ def _scan_placeholders(root: Path, present: set[str]) -> list[Finding]:
             continue
         lines = text.splitlines()
         for i, line in enumerate(lines, start=1):
+            # A comment-only URL template documents the runtime endpoint; it is
+            # not a value emitted into the generated artifact.
+            if _MANIFEST_URL_TEMPLATE_COMMENT_RE.match(line):
+                continue
             for m in _SCAFFOLD_PLACEHOLDER_RE.finditer(line):
                 suppressed, justification = _line_hash_suppressed(lines, i, "K009")
                 findings.append(
