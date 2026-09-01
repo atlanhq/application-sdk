@@ -6,10 +6,12 @@ import pathlib
 import re
 import sys
 
+import pytest
 import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+import sdk_loop_prep  # noqa: E402
 from sdk_loop_prep import (  # noqa: E402
     BUCKET_FAIL,
     CHECK_FIELDS,
@@ -210,3 +212,60 @@ def test_an_unreadable_state_is_unknown_and_never_green() -> None:
     assert unknown_state.outcome == OUTCOME_UNKNOWN
     assert unknown_state.new_base_sha == "a" * 40, "the review still runs"
     assert unknown_state.outcome != OUTCOME_CLEAN
+
+
+def test_a_clean_prep_installs_nothing() -> None:
+    """Prep is normally two `gh` reads and no model. It was still paying
+    `npm install -g opencode` first — 18 seconds of a 41-second phase, every
+    run, preparing for a branch it almost never takes.
+
+    So the deterministic pass runs BEFORE the installs and gates them. This
+    asserts the wiring, because the saving is invisible from the Python side:
+    the script cannot tell whether the workflow installed anything.
+    """
+    wf = pathlib.Path(".github/workflows/sdk-loop-phase.yml").read_text(
+        encoding="utf-8"
+    )
+    gate = "inputs.phase != 'prep' || steps.prep.outputs.needs_agent == 'true'"
+
+    # The deterministic step must come first, or gating it is impossible.
+    assert wf.index("Prep — deterministic pass") < wf.index("Install opencode")
+
+    for step in ("Cache the opencode install", "Install opencode", "Install uv"):
+        head = wf.index(f"- name: {step}")
+        assert gate in wf[head : head + 400], f"{step} is not gated on needs_agent"
+
+    # A skipped `run` step has empty outputs, so the job must fall back to the
+    # deterministic step — otherwise a clean prep reports nothing and Review 1
+    # checks out `ref: ''`.
+    for key in ("outcome", "new_base_sha", "pushed_sha", "ci_state", "detail"):
+        assert (
+            f"steps.run.outputs.{key} || steps.prep.outputs.{key}" in wf
+        ), f"job output {key} has no fallback for a deterministic prep"
+
+
+def test_the_deterministic_cli_reports_whether_an_agent_is_wanted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """`needs_agent` is what the workflow gates on, so it has to be emitted
+    even on the happy path — an absent output reads as false, which is right
+    here, but only by accident. Assert it is written explicitly."""
+    out = tmp_path / "gh_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    monkeypatch.setenv("REPO", "o/r")
+    monkeypatch.setenv("PR_NUMBER", "1")
+    monkeypatch.setenv("BASE_SHA", "a" * 40)
+    monkeypatch.setattr(
+        sdk_loop_prep,
+        "pr_state",
+        lambda r, p, **k: {"mergeStateStatus": "CLEAN", "headRefOid": "a" * 40},
+    )
+    monkeypatch.setattr(sdk_loop_prep, "failing_checks", lambda r, p, **k: ())
+    assert sdk_loop_prep.main([]) == 0
+
+    written = dict(
+        line.split("=", 1) for line in out.read_text().splitlines() if "=" in line
+    )
+    assert written["needs_agent"] == "false", "a clean PR must not trigger the install"
+    assert written["outcome"] == "clean"
+    assert written["new_base_sha"] == "a" * 40
