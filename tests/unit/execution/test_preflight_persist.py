@@ -12,7 +12,7 @@ from application_sdk import constants
 from application_sdk.contracts.base import Input
 from application_sdk.contracts.types import ConnectionRef
 from application_sdk.credentials.spec import AgentCredentialSpec
-from application_sdk.errors.categories import FailureCategory
+from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import AuthError
 from application_sdk.errors.wire import FailureDetails
 from application_sdk.execution._temporal import preflight_persist as persist
@@ -353,6 +353,45 @@ class TestNothingSecretReachesTheStore:
         assert row is not None
         assert "db-prod.internal:5432" not in row.model_dump_json()
         assert "cause_repr" not in row.payload["preflight"]["checks"][0]["error"]
+
+    def test_the_aggregate_verdicts_own_failure_is_narrowed_the_same_way(self):
+        # `PreflightOutput.error` is the second place a typed failure enters the
+        # relay, and it is narrowed on its own branch rather than through
+        # `_check_payload`. The SDR preflight populates it when it downgrades a
+        # READY verdict on a blocking infra-access row, so the aggregate reason
+        # carries every free-text field a check's does — plus `app_name` and
+        # `run_id`, which the store attributes from the row itself.
+        secret = "db://svc:hunter2@example-host:3306"
+        verdict = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            error=FailureDetails(
+                category=FailureCategory.AUTH,
+                code="AUTH",
+                retryable=False,
+                audience=Audience.USER,
+                message=f"secret store refused for {secret}",
+                suggested_action=f"re-grant access at {secret}",
+                evidence={"dsn": secret},
+                app_name="example-app",
+                run_id="wf-run-0001",
+                cause_repr="OperationalError: db-prod.internal:5432 refused",
+            ),
+        )
+        row = persist.build_check_result(_gate(workflow_slug=SLUG), verdict)
+        assert row is not None
+        dumped = row.model_dump_json()
+        assert "hunter2" not in dumped
+        assert "db-prod.internal:5432" not in dumped
+        error = row.payload["preflight"]["error"]
+        # Set equality, not a list of absences: a field added to `FailureDetails`
+        # later fails here until it is named in the allowlist.
+        assert set(error) == persist._ERROR_WIRE_FIELDS
+        assert error == {
+            "category": "AUTH",
+            "code": "AUTH",
+            "retryable": False,
+            "audience": "USER",
+        }
 
     def test_a_field_added_to_the_contract_later_does_not_cross_by_default(self):
         # The allowlist's whole point: it fails closed. A new field on any of these
