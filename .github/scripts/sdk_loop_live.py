@@ -95,9 +95,12 @@ class LiveResult:
 def completion_gate(payload: dict[str, Any], pack: Pack) -> str | None:
     """A reason the review did not happen, or None when it did.
 
-    `reviewed_files` is checked against the pack's *source* files — not tests,
-    not deletions. A reviewer is not asked to re-read a deleted file, and
-    listing tests is welcome but not required.
+    `reviewed_files` is checked against every non-deleted, non-test pack file,
+    not just Python. A reviewer is not asked to re-read a deleted file, and
+    listing tests is welcome but not required. When that set is empty (a
+    tests-only or deletions-only pack), the remaining pack paths must be
+    covered rather than any non-empty list — otherwise a workflow/Helm pack
+    would mint READY_TO_MERGE from a dummy reviewed_files entry.
     """
     status = str(payload.get("status") or "").strip().lower()
     if status not in (STATUS_COMPLETE, STATUS_PARTIAL):
@@ -111,11 +114,9 @@ def completion_gate(payload: dict[str, Any], pack: Pack) -> str | None:
         return "reviewed_files is missing or empty — nothing asserts the diff was read"
 
     if status == STATUS_COMPLETE:
-        expected = {
-            f.path
-            for f in pack.files
-            if f.is_python and not f.is_test and not f.is_deleted
-        }
+        expected = {f.path for f in pack.files if not f.is_test and not f.is_deleted}
+        if not expected:
+            expected = {f.path for f in pack.files}
         missing = sorted(expected - {str(p) for p in reviewed})
         if missing:
             return (

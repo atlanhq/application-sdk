@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import pathlib
 import re
 import sys
@@ -18,6 +19,7 @@ class _Done:
     stdout = ""
 
 
+import sdk_loop_live as live  # noqa: E402
 import sdk_loop_phase  # noqa: E402
 from sdk_loop_common import (  # noqa: E402
     REVIEW_MODEL,
@@ -118,6 +120,75 @@ def test_main_passes_no_subagents_for_a_solo_scope(
         "can dispatch, and the cold-start cost this change removes comes back"
     )
     assert "no sub-agents are registered" in str(captured.get("prompt", ""))
+
+
+def test_a_failed_post_does_not_adopt_a_stale_verdict(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """If `post_comment` returns no URL, the round failed. Reading comments
+    that were already on the PR would turn that into READY_TO_MERGE from a
+    stale same-SHA verdict — especially on workflow_dispatch, where
+    COMMENT_ID is empty and the ANSWERS_TRIGGER filter is a no-op."""
+    out = tmp_path / "outputs"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+
+    def fake_run_agent(model, prompt, cwd, timeout_s, **kwargs):
+        path = pathlib.Path(cwd) / ".sdk-loop" / "findings.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}", encoding="utf-8")
+        return sdk_loop_phase.AgentResult(exit_code=0, stdout="", stderr="")
+
+    def fake_deliver(**_kw):
+        return live.LiveResult(
+            body="<!-- SDK_REVIEW -->\n<!-- VERDICT: READY_TO_MERGE -->",
+            verdict="READY_TO_MERGE",
+        )
+
+    stale = {
+        "id": 99,
+        "html_url": "https://x/stale",
+        "body": (
+            "<!-- SDK_REVIEW -->\n<!-- VERDICT: READY_TO_MERGE -->\n"
+            f"<!-- REVIEWED_HEAD: {'a' * 40} -->\n"
+        ),
+    }
+
+    class _Comments:
+        returncode = 0
+        stdout = json.dumps([stale])
+
+    def fake_sh(args, **_kw):
+        joined = " ".join(str(a) for a in args)
+        if "comments" in joined:
+            return _Comments()
+        return _Done()
+
+    monkeypatch.setattr(sdk_loop_phase, "run_agent", fake_run_agent)
+    monkeypatch.setattr(sdk_loop_phase, "deliver", fake_deliver)
+    monkeypatch.setattr(sdk_loop_phase, "post_comment", lambda *a, **k: "")
+    monkeypatch.setattr(
+        sdk_loop_phase, "pr_files", lambda r, p: [".github/workflows/x.yaml"]
+    )
+    monkeypatch.setattr(sdk_loop_phase, "diff_lines", lambda r, p: 85)
+    monkeypatch.setattr(sdk_loop_phase, "live_head", lambda r, h: "a" * 40)
+    monkeypatch.setattr(sdk_loop_phase, "_sh", fake_sh)
+    monkeypatch.setattr(sdk_loop_phase, "opencode_usage", lambda w: {})
+    monkeypatch.setenv("PHASE", "review")
+    monkeypatch.setenv("ROUND", "1")
+    monkeypatch.setenv("REPO", "o/r")
+    monkeypatch.setenv("PR_NUMBER", "1")
+    monkeypatch.setenv("HEAD_REF", "b")
+    monkeypatch.setenv("BASE_SHA", "a" * 40)
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("LITELLM_BASE_URL", "https://gateway.example")
+    # workflow_dispatch: no COMMENT_ID, so ANSWERS_TRIGGER cannot save us.
+    monkeypatch.delenv("COMMENT_ID", raising=False)
+
+    rc = sdk_loop_phase.main([])
+    assert rc == 1
+    text = out.read_text(encoding="utf-8")
+    assert "outcome=failed" in text
+    assert "https://x/stale" not in text
 
 
 def test_the_registration_set_covers_everything_the_playbook_dispatches() -> None:

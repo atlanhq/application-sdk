@@ -840,6 +840,25 @@ def main(argv: list[str] | None = None) -> int:
                     f"posted {live.verdict}: {len(live.kept)} findings, "
                     f"{live.dropped} dropped, challenge={live.challenged} {url}"
                 )
+                if not url:
+                    # A failed post must not be read as success from a stale
+                    # comment. Without COMMENT_ID (workflow_dispatch) the
+                    # ANSWERS_TRIGGER filter is a no-op, so newest_verdict
+                    # would adopt an older same-SHA verdict on the PR.
+                    emit_outputs(
+                        outcome=OUTCOME_FAILED,
+                        detail=(
+                            "the review comment did not land — refusing to "
+                            "adopt an existing verdict"
+                        ),
+                        new_base_sha=state.live,
+                        reaims="0",
+                    )
+                    print(
+                        f"review round {round_no}: {OUTCOME_FAILED} "
+                        "post produced no URL"
+                    )
+                    return 1
             else:
                 print(f"::warning::review not posted — {live.failure}")
         elif result.completed:

@@ -29,7 +29,7 @@ import sdk_loop_refute as refute  # noqa: E402
 from sdk_loop_by_design import load_by_design  # noqa: E402
 from sdk_loop_common import parse_reviewed_head, parse_verdict  # noqa: E402
 from sdk_loop_findings import Finding, load_severity  # noqa: E402
-from sdk_loop_pack import build_pack  # noqa: E402
+from sdk_loop_pack import ChangedFile, Pack, build_pack  # noqa: E402
 from sdk_loop_phase import DismissalLedger, review_prompt  # noqa: E402
 from sdk_loop_routing import load_routing  # noqa: E402
 
@@ -162,6 +162,75 @@ def test_complete_must_actually_cover_the_pack(pack, sev) -> None:
 def test_empty_reviewed_files_fails_the_gate(pack, sev) -> None:
     result = _deliver(pack, sev, _payload(reviewed_files=[]))
     assert not result.should_post
+
+
+def _file(path: str, *, deleted: bool = False) -> ChangedFile:
+    return ChangedFile(
+        path=path,
+        added=() if deleted else (1,),
+        removed_count=1 if deleted else 0,
+        is_deleted=deleted,
+    )
+
+
+def _pack_of(*files: ChangedFile) -> Pack:
+    return Pack(scope="config-only", mode="single_pass", agents=(), files=files)
+
+
+def test_complete_covers_every_non_test_pack_file_not_just_python(sev) -> None:
+    """A workflow/Helm pack has no Python source, so the old is_python filter
+    left `expected` empty and any dummy reviewed_files list minted
+    READY_TO_MERGE. Coverage is every non-deleted, non-test pack file."""
+    pack = _pack_of(
+        _file(".github/workflows/sdk-loop.yml"),
+        _file("helm/chart.yaml"),
+        _file("pyproject.toml"),
+    )
+    result = _deliver(pack, sev, _payload(reviewed_files=["not/the/file.py"]))
+    assert not result.should_post
+    assert "omits" in result.failure
+    covered = _deliver(
+        pack,
+        sev,
+        _payload(
+            reviewed_files=[
+                ".github/workflows/sdk-loop.yml",
+                "helm/chart.yaml",
+                "pyproject.toml",
+            ]
+        ),
+    )
+    assert covered.should_post
+    assert covered.verdict == "READY_TO_MERGE"
+
+
+def test_a_tests_only_pack_must_cover_the_remaining_paths(sev) -> None:
+    """When every non-deleted file is a test, `expected` is empty. Requiring
+    the remaining pack paths (the tests themselves) stops any non-empty list
+    from counting as a complete review of nothing in particular."""
+    pack = _pack_of(_file("tests/test_a.py"), _file(".github/scripts/tests/test_b.py"))
+    result = _deliver(pack, sev, _payload(reviewed_files=["unrelated.py"]))
+    assert not result.should_post
+    assert "omits" in result.failure
+    covered = _deliver(
+        pack,
+        sev,
+        _payload(
+            reviewed_files=[
+                "tests/test_a.py",
+                ".github/scripts/tests/test_b.py",
+            ]
+        ),
+    )
+    assert covered.should_post
+
+
+def test_deleted_files_are_not_required_in_reviewed_files(sev) -> None:
+    pack = _pack_of(
+        _file("application_sdk/app/base.py"), _file("gone.py", deleted=True)
+    )
+    result = _deliver(pack, sev, _payload())
+    assert result.should_post
 
 
 def test_a_partial_review_posts_but_may_not_approve(pack, sev) -> None:
@@ -334,3 +403,10 @@ def test_post_comment_sends_the_body_on_stdin() -> None:
     assert json.loads(seen["input"])["body"].startswith("BODY")
     assert not any(a.startswith("body=") for a in seen["args"])
     assert url == "https://x/1"
+
+
+def test_post_comment_returns_empty_when_gh_writes_nothing() -> None:
+    class R:
+        stdout = ""
+
+    assert live.post_comment("o/r", 7, "BODY", lambda *a, **k: R()) == ""
