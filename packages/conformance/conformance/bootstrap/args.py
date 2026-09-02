@@ -71,6 +71,7 @@ TRISTATE_FLAGS = (
 # by omission — see ``_sync_gitignore`` and ``_sync_contract_ledger``.
 PRESENCE_FLAGS = {
     "--resync": "resync",
+    "--connector-review-kit": "connector_review_kit",
 }
 
 # Flags that used to exist, mapped to why they are gone. A caller still
@@ -351,6 +352,12 @@ options:
                               app's own ignores) and contract_schema.lock.json
                               (append-only, owned by `gen-contract-ledger`, with B005/
                               B006 tracking its drift).
+  --connector-review-kit      install or update the centrally-managed local connector
+                              review kit (skill, non-blocking reminder, and rule-fetch
+                              script). This is
+                              opt-in so a normal bootstrap run never changes local
+                              Claude configuration. Existing unmarked review blocks
+                              stop for manual migration rather than being overwritten.
   --json                       after the normal output, print one final JSON line:
                               {"skipped": bool, "touched": [...], "unchanged": [...]}.
                               `touched` lists every path this invocation actually wrote

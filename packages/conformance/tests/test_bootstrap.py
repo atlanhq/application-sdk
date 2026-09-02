@@ -8,8 +8,10 @@ tests exercise the same code path a caller would use.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import re
+import subprocess
 
 import pytest
 from conformance.bootstrap import extract as extract_mod
@@ -18,7 +20,9 @@ from conformance.bootstrap.autodetect import derive_app_name_from_dir
 from conformance.bootstrap.command import _bootstrap_file
 from conformance.bootstrap.render import (
     MANAGED_ACTION_FILES,
+    MANAGED_CONNECTOR_REVIEW_FILES,
     MANAGED_WORKFLOWS,
+    RETIRED_CONNECTOR_REVIEW_FILES,
     RETIRED_WORKFLOWS,
     render,
 )
@@ -90,6 +94,18 @@ def test_bootstrap_file_does_not_rewrite_unchanged_content(
     assert dest.stat().st_mtime_ns == mtime_before
 
 
+def test_bootstrap_file_corrects_managed_executable_mode(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A re-run fixes a non-executable hook even when its bytes already match."""
+    dest = tmp_path / "hook.sh"
+    dest.write_text("#!/usr/bin/env bash\n")
+    os.chmod(dest, 0o644)
+
+    assert _bootstrap_file(dest, dest.read_text(), executable=True) == "updated"
+    assert os.stat(dest).st_mode & 0o777 == 0o755
+
+
 # ---------------------------------------------------------------------------
 # parse_bootstrap_args
 # ---------------------------------------------------------------------------
@@ -118,6 +134,7 @@ def test_parse_bootstrap_args_defaults() -> None:
         # Presence flag: "false" unless --resync is passed, so a bare
         # re-run never rewrites the write-if-absent tests.yaml scaffold.
         "resync": "false",
+        "connector_review_kit": "false",
     }
 
 
@@ -2455,6 +2472,121 @@ def test_cmd_bootstrap_rerun_with_no_changes_reports_no_managed_file_as_updated(
         assert f"ok (up to date): {tmp_path / dest_rel}" in out
     skill_md = tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md"
     assert f"ok (up to date): {skill_md}" in out
+
+
+def test_cmd_bootstrap_installs_connector_review_kit_additively(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The opt-in kit retires only its old state and preserves user settings."""
+    claude = tmp_path / "CLAUDE.md"
+    claude.write_text("# App notes\n")
+    settings = tmp_path / ".claude" / "settings.json"
+    settings.parent.mkdir()
+    settings.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "SessionStart": [
+                        {"matcher": "keep-me"},
+                        {
+                            "hooks": [
+                                {"command": ".claude/hooks/review-rules-freshness.sh"}
+                            ]
+                        },
+                    ],
+                    "PreToolUse": [
+                        {
+                            "matcher": "Bash",
+                            "hooks": [
+                                {
+                                    "command": ".claude/hooks/check-review-before-commit.sh"
+                                },
+                                {"command": "scripts/keep-me.sh"},
+                            ],
+                        }
+                    ],
+                }
+            }
+        )
+        + "\n"
+    )
+    for dest_rel in RETIRED_CONNECTOR_REVIEW_FILES:
+        dest = tmp_path / dest_rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text("legacy\n")
+    gitignore = tmp_path / ".gitignore"
+    gitignore.write_text("custom-cache/\n")
+
+    monkeypatch.chdir(tmp_path)
+    assert _cmd_bootstrap(["--connector-review-kit"]) == 0
+
+    for dest_rel, template_name, executable in MANAGED_CONNECTOR_REVIEW_FILES:
+        dest = tmp_path / dest_rel
+        assert dest.read_text() == render(template_name)
+        if executable:
+            assert os.stat(dest).st_mode & 0o777 == 0o755
+
+    merged_settings = json.loads(settings.read_text())
+    assert merged_settings["hooks"]["SessionStart"][0] == {"matcher": "keep-me"}
+    assert merged_settings["hooks"]["SessionStart"][1]["hooks"][0]["command"] == (
+        ".claude/hooks/connector-review-reminder.sh"
+    )
+    assert merged_settings["hooks"]["PreToolUse"] == [
+        {"matcher": "Bash", "hooks": [{"command": "scripts/keep-me.sh"}]}
+    ]
+    for dest_rel in RETIRED_CONNECTOR_REVIEW_FILES:
+        assert not (tmp_path / dest_rel).exists()
+    assert "# App notes" in claude.read_text()
+    assert "BEGIN APPLICATION SDK CONNECTOR REVIEW" in claude.read_text()
+    assert (
+        "write-connector-review-marker"
+        not in (tmp_path / ".claude/skills/connector-review/SKILL.md").read_text()
+    )
+    assert ".mothership/.cache/" in gitignore.read_text().splitlines()
+
+
+def test_cmd_bootstrap_connector_review_kit_migrates_eof_legacy_block(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The known old kit block was appended at EOF, so it can be replaced safely."""
+    (tmp_path / "CLAUDE.md").write_text("## Mandatory pre-commit review (L1-L4)\n")
+    monkeypatch.chdir(tmp_path)
+
+    assert _cmd_bootstrap(["--connector-review-kit"]) == 0
+    text = (tmp_path / "CLAUDE.md").read_text()
+    assert "L1-L4)" not in text
+    assert "BEGIN APPLICATION SDK CONNECTOR REVIEW" in text
+    settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+    assert settings["hooks"]["SessionStart"][0]["hooks"][0]["command"] == (
+        ".claude/hooks/connector-review-reminder.sh"
+    )
+
+
+def test_conformance_template_runs_on_every_pr_update() -> None:
+    """A GitHub pull_request workflow receives each push to an open PR."""
+    assert "pull_request: {}" in render("conformance.yaml")
+
+
+@pytest.mark.parametrize(
+    "_dest_rel,template_name",
+    [
+        (dest_rel, template_name)
+        for dest_rel, template_name, executable in MANAGED_CONNECTOR_REVIEW_FILES
+        if executable
+    ],
+)
+def test_connector_review_shell_template_is_valid(
+    _dest_rel: str, template_name: str, tmp_path: pathlib.Path
+) -> None:
+    """Every centrally-written hook/script must pass the shell parser first."""
+    script = tmp_path / template_name
+    script.write_text(render(template_name))
+    proc = subprocess.run(
+        ["bash", "-n", str(script)], capture_output=True, check=False, text=True
+    )
+    assert proc.returncode == 0, proc.stderr
 
 
 # ---------------------------------------------------------------------------

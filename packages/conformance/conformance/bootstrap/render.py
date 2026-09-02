@@ -70,7 +70,14 @@ MANAGED_WORKFLOWS: tuple[str, ...] = (
 # shim's shape was wrong outright.  Every call therefore failed at startup:
 # conclusion ``failure``, zero jobs, no check run, no logs.  Retired rather
 # than repointed — the check is not wanted on connectors.
-RETIRED_WORKFLOWS: tuple[str, ...] = ("docstring-coverage.yaml",)
+# Retirements are repo-root-relative so the same mechanism can remove a
+# previously-managed hook or script, not only a workflow.
+RETIRED_FILES: tuple[str, ...] = (".github/workflows/docstring-coverage.yaml",)
+RETIRED_WORKFLOWS: tuple[str, ...] = tuple(
+    path.removeprefix(".github/workflows/")
+    for path in RETIRED_FILES
+    if path.startswith(".github/workflows/")
+)
 
 # Non-workflow files that must also be vendored into every consumer repo,
 # keyed by (repo-root-relative dest path, template filename in templates/).
@@ -111,6 +118,27 @@ MANAGED_ACTION_FILES: tuple[tuple[str, str], ...] = (
     (".github/scripts/probe_code_scanning.py", "probe_code_scanning.py"),
 )
 
+# Opt-in local connector-review kit. These paths are owned by bootstrap after
+# the fleet rollout invokes ``bootstrap --connector-review-kit``.
+# (destination, template, must be executable)
+MANAGED_CONNECTOR_REVIEW_FILES: tuple[tuple[str, str, bool], ...] = (
+    ("scripts/fetch-review-rules.sh", "fetch-review-rules.sh", True),
+    (
+        ".claude/hooks/connector-review-reminder.sh",
+        "connector-review-reminder.sh",
+        True,
+    ),
+    (".claude/skills/connector-review/SKILL.md", "connector-review.md", False),
+)
+
+# Retire the marker and PreToolUse gate only when the opt-in kit is requested.
+# They were self-attestation: an agent could write PASS without proving review.
+RETIRED_CONNECTOR_REVIEW_FILES: tuple[str, ...] = (
+    "scripts/write-connector-review-marker.sh",
+    ".claude/hooks/check-review-before-commit.sh",
+    ".claude/hooks/review-rules-freshness.sh",
+)
+
 
 def _load_template(name: str) -> str:
     """Read a template file from the embedded templates directory."""
@@ -126,7 +154,10 @@ def _load_template(name: str) -> str:
 # variable-start delimiter (Jinja matches it starting at the *second* `<`,
 # then fails deep in the following line looking for the closing ` >>`).
 _STATIC_TEMPLATES: frozenset[str] = frozenset(
-    template_name for _, template_name in MANAGED_ACTION_FILES
+    [
+        *(template_name for _, template_name in MANAGED_ACTION_FILES),
+        *(template_name for _, template_name, _ in MANAGED_CONNECTOR_REVIEW_FILES),
+    ]
 )
 
 
