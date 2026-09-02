@@ -34,6 +34,21 @@ SEVERITY = ROOT / ".mothership/pr-loop/data/severity.yaml"
 CHARS_PER_TOKEN = 4
 PLAYBOOK_TOKEN_CEILING = 2_600
 
+# Bound to the emit sentence, not every backtick in the file. A closed
+# allowlist regex (`BLOCKING|CRITICAL|...`) cannot fail on a seventh
+# spelling — `IMPORTANT` is already in the file as a negative example
+# and the equality still holds. Capture whatever that sentence offers.
+_EMIT_VOCABULARY = re.compile(
+    r"exactly one of\s+((?:`[^`]+`[,\s]*)+)\.",
+    re.DOTALL,
+)
+
+
+def _emitted_vocabulary(text: str) -> set[str]:
+    match = _EMIT_VOCABULARY.search(text)
+    assert match is not None, "playbook is missing the 'exactly one of' emit sentence"
+    return set(re.findall(r"`([^`]+)`", match.group(1)))
+
 
 def test_the_playbook_stays_small() -> None:
     text = PLAYBOOK.read_text(encoding="utf-8")
@@ -85,16 +100,23 @@ def test_the_emitted_vocabulary_matches_the_runner_data() -> None:
     reviewer what to emit; `severity.yaml` tells the runner what to accept. If
     they disagree, every finding of the mismatched tier fails the round.
     """
-    listed = set(
-        re.findall(
-            r"`(BLOCKING|CRITICAL|HIGH|MEDIUM|LOW|INFO)`",
-            PLAYBOOK.read_text(encoding="utf-8"),
-        )
-    )
+    listed = _emitted_vocabulary(PLAYBOOK.read_text(encoding="utf-8"))
     accepted = set(yaml.safe_load(SEVERITY.read_text(encoding="utf-8"))["display"])
     assert (
         listed == accepted
     ), f"playbook offers {sorted(listed)}, runner accepts {sorted(accepted)}"
+
+
+def test_the_vocabulary_gate_catches_a_seventh_spelling() -> None:
+    """The closed-allowlist regex this replaces could not fail on `IMPORTANT`."""
+    fake = (
+        "severity — exactly one of `BLOCKING`, `CRITICAL`, `HIGH`, "
+        "`MEDIUM`, `LOW`, `INFO`, `IMPORTANT`. No other spelling."
+    )
+    listed = _emitted_vocabulary(fake)
+    accepted = set(yaml.safe_load(SEVERITY.read_text(encoding="utf-8"))["display"])
+    assert "IMPORTANT" in listed
+    assert listed != accepted
 
 
 def test_the_playbook_names_the_completion_assertion() -> None:
