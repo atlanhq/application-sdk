@@ -151,12 +151,13 @@ instruction may interact with others.
   line.  No replacement is needed; the variable is supplied at deploy time by
   the deployment manifest.
 
-- **I005 DockerfileRootUser** — delete the `USER root` or `USER 0` line.  The
-  base image already runs as `appuser`; the line is always wrong in the final
-  stage.  If a `RUN` step immediately follows that depends on root access
+- **I005 DockerfileRootUser** — if the last `USER` in the final stage is root
+  or `0`, append `USER appuser` after the privileged `RUN` step.  Only delete a
+  root `USER` instruction when it is the effective (last) `USER` and there is
+  no restore.  If a `RUN` step immediately follows that depends on root access
   (e.g. `apt-get install`), note in residue that the install must move to an
-  earlier build stage — do **not** add a compensating `USER appuser` to hide
-  the `USER root`.
+  earlier build stage, or append `USER appuser` after it to restore the runtime
+  user.
 
 **Judgment rules** (`autofixable = false`, `classification = "judgment"`):
 

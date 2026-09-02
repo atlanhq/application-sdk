@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**49 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.preflight` (P047), `suite.checks.atomic_publish` (P050) (all AST-based / cross-artifact)
+**50 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.preflight` (P047), `suite.checks.atomic_publish` (P050) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -72,6 +72,7 @@ reassigned.
 | [P048](#p048) | `AppDerivedPersistentArtifactPrefix` | `warn` | `app` | `persistence-seam` | — | 0.24.0 |
 | [P049](#p049) | `StrictConnectionQualifiedNameParse` | `block` | `app` | `persistence-seam` | — | 0.24.0 |
 | [P050](#p050) | `NonAtomicDestinationWrite` | `warn` | `sdk` | `storage-atomicity` | — | 0.25.0 |
+| [P051](#p051) | `SdrPreflightUnavailable` | `warn` | `app` | `sdr-readiness` | — | 0.25.0 |
 
 ---
 
@@ -164,6 +165,13 @@ The check resolves inheritance transitively: an intermediate class with no `code
 don't silently inherit the bare leaf's code.  Suppress with `# conformance: ignore[P003]
 <reason>` at the declaration when an intermediate is genuinely abstract — see
 typed-error-prescription §4 and BLDX-1431.
+
+Exempt: classes whose own MRO overrides `to_failure_details()` — usually via a shared
+connector error mixin.  Those build the wire envelope themselves, so `code` is not what
+a dashboard reads and prefixing it would change nothing observable.  The exemption is
+inherited, so the override may sit on the mixin rather than on each exception class.
+Overriding `qualified_code` alone does NOT exempt: that is the log surface, and the wire
+code still collapses to the leaf.
 
 ---
 
@@ -440,6 +448,12 @@ Violations include: missing annotation, a primitive / container type (`dict`, `l
 that exists in the scanned source tree but does not transitively subclass
 `Input`/`Output` (e.g. a plain `pydantic.BaseModel` subclass or a dataclass).
 
+Annotations resolve against the *defining module* first: when two files declare the same
+class name, the one in the file being scanned wins, matching Python. A base that
+de-aliases to the class's own name (`class X(_X)` over `from generated import X as _X`)
+is an import of a same-named class, so the chain reads as unresolvable rather than as a
+proven non-contract.
+
 Suppressed declarations are still emitted to the SARIF report. This rule is `BLOCK`
 (suppress-only): an unsuppressed violation fails the conformance gate — suppress with `#
 conformance: ignore[P013] <reason>` at the method definition.
@@ -471,6 +485,12 @@ Violations include: missing annotation, a primitive / container type (`dict`, `l
 `str`, `Any`, etc. — even subscripted/bounded forms like `dict[str, str]`), or a class
 that exists in the scanned source tree but does not transitively subclass
 `Input`/`Output` (e.g. a plain `pydantic.BaseModel` subclass or a dataclass).
+
+Annotations resolve against the *defining module* first: when two files declare the same
+class name, the one in the file being scanned wins, matching Python. A base that
+de-aliases to the class's own name (`class X(_X)` over `from generated import X as _X`)
+is an import of a same-named class, so the chain reads as unresolvable rather than as a
+proven non-contract.
 
 Suppressed declarations are still emitted to the SARIF report. This rule is `BLOCK`
 (suppress-only): an unsuppressed violation fails the conformance gate — suppress with `#
@@ -2065,5 +2085,76 @@ pattern and passes.
 Land as `WARN`: a justified inline `# conformance: ignore[P050] <reason>` records any
 single-consumer exception (e.g. a signal handler's diagnostic dump) and stays visible in
 SARIF.
+
+---
+
+## P051 — `SdrPreflightUnavailable` {#p051}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.25.0
+
+> SDR app locks application-sdk below the 3.30.0 floor for interactive setup (test auth / preflight / metadata browsing)
+
+**Rationale:** The SDR interactive setup surfaces — test authentication, preflight checks, and metadata
+browsing (the sdr:* worker activities) — first ship in application-sdk 3.30.0. heracles
+rejects interactive dispatch to a worker below that floor (its BelowFloorError guard)
+and the frontend hides the widgets, so an app that declares self_deployed_runtime: true
+but locks application-sdk below 3.30.0 can offer none of the onboarding experience the
+customer expects. This rule reads the version actually locked in uv.lock (not the
+pyproject specifier) so it reflects what the deployed worker ships. It is a readiness
+nudge, not a broken-crawl or data-loss failure — an app below the floor still extracts
+and publishes normally, it only lacks the interactive setup UX — so it lands at WARN.
+
+For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, `uv.lock` must resolve
+`atlan-application-sdk` to `3.30.0` or newer — the floor at which the SDR interactive
+setup surfaces become available on the worker:
+
+* **test authentication** (`sdr:test_auth`), * **preflight checks**
+(`sdr:preflight_check`), and * **metadata browsing** (`sdr:fetch_metadata`).
+
+Both sides of the platform gate on this floor. heracles rejects an interactive dispatch
+to a worker running an older application-sdk (`BelowFloorError` → a 4xx with an upgrade
+message), and the frontend hides the interactive widgets unless the agent reports an
+`sdk_version` at or above the floor. So an SDR app pinned lower can offer none of the
+onboarding experience — the customer sees no preflight result, no test-authentication,
+and a plain input in place of the include/exclude metadata tree.
+
+The check reads the **locked** version from `uv.lock` — the version the deployed worker
+actually ships — rather than the `pyproject.toml` specifier, which may be a range that
+resolves higher.  A version that cannot be resolved (no `uv.lock`, no
+`atlan-application-sdk` entry in it, or an unparseable lock) is left **silent**: it
+cannot be confirmed below the floor, and the D-series already governs a missing or
+unbounded SDK declaration.
+
+This is a WARN, not a BLOCK: an app below the floor still extracts and publishes assets
+normally — it is only missing the interactive setup UX, not losing data or failing runs.
+
+**Remediation:** raise the `atlan-application-sdk` pin to `>= 3.30.0` in
+`pyproject.toml` and re-lock:
+
+```python
+uv lock --upgrade-package atlan-application-sdk
+```
+
+then rebuild and redeploy the SDR worker image so the deployed agent reports the new
+`sdk_version`.  A merged bump alone does not enable the interactive surfaces — the
+platform reads the version off the running worker.
+
+**The floor is necessary but not sufficient.**  Clearing it only lets the platform
+*offer* each surface; they are switched on in the app's own contract (`contract/app.pkl`
+→ `pkl eval` to regenerate):
+
+* **Preflight checks** — declare a `preflight-check` widget   (`Config.SageV2` with its
+`checks {}`) in the entrypoint's form and   list `"preflight-check"` in that
+entrypoint's `required` UIRule.   It is per entrypoint: one that omits the widget runs
+no preflight (a   miner may leave it out deliberately). * **Test authentication** — set
+`allowTestAuthentication = true` on the   credential / agent widget in the entrypoint
+form. The toolkit emits it   as `ui.showTestAuthentication` in the generated manifest,
+and the   setup UI shows the Test Authentication button only when that flag is set   AND
+the agent clears this floor. Emitting it needs an   `app-contract-toolkit` version that
+supports   `allowTestAuthentication`. * **Include / exclude metadata filters** — once
+the agent clears the floor   these render the interactive metadata picker; below it (or
+when the   version can't be read) the picker falls back to a plain text box. This
+follows the same floor gate automatically — no per-connector change   beyond declaring
+the filter widget.
 
 ---

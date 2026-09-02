@@ -335,6 +335,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # transform YAML templates consumed by the query transformer.
     # P042: hand-rolled upload_to_atlan bridge in an SDR app — same gating as
     # P030, which it was split out of.
+    # P051: SDR interactive-setup SDK floor — only apps declare
+    # self_deployed_runtime and lock a consumed application-sdk version; the SDK
+    # itself is neither an SDR app nor a consumer of its own wheel (DISTR-752).
     # P043/P045: error-seam — apps must build control flow on the SDK's public
     # error surface (application_sdk.errors.__all__), not on an internal error
     # class that can move, or stop being the one a boundary raises, in a minor
@@ -352,6 +355,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P047",
         "P048",
         "P049",
+        "P051",
         "C002",
         "D001",
         "D002",
@@ -380,6 +384,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "K015",
         "K016",
         "K017",
+        "K018",
+        "K019",
+        "K020",
         "P004",
         "P005",
         "P008",
@@ -606,6 +613,10 @@ def test_catalog_p_series_present() -> None:
     text-mode open() with no encoding= decode using the locale's codec, which is
     cp1252 on the Windows legs of the SDK's unit matrix and UTF-8 everywhere
     else (FND-924).
+    P051 is SdrPreflightUnavailable — an SDR app whose uv.lock resolves
+    application-sdk below 3.30.0, the floor at which the interactive setup
+    surfaces (test auth / preflight / metadata browsing) become available; a WARN
+    readiness nudge, not a data-loss bug (DISTR-752).
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -661,6 +672,7 @@ def test_catalog_p_series_present() -> None:
         "P048",
         "P049",
         "P050",
+        "P051",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
@@ -749,6 +761,9 @@ def test_catalog_k_series_present() -> None:
         "K015",
         "K016",
         "K017",
+        "K018",
+        "K019",
+        "K020",
     }
     missing = expected - k_ids
     assert not missing, f"Missing K-series rules: {missing}"

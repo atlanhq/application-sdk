@@ -138,7 +138,7 @@ jobs:
       # here would show up as unexplained lock churn.
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.8"
+          version: "0.12.9"
 
       # For the npm half of the bound. Pinned to the same major as renovate.yaml
       # rather than taking whatever the runner image ships: npm's major decides
